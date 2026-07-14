@@ -3,8 +3,12 @@ package yier.bubu.redis.storage.memory;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
+import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.WrongTypeException;
@@ -24,23 +28,79 @@ import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
 public class CollectionDirectOpsTest {
     @Test
+    public void collectionWriteAdmissionCoversRootAdaptersInLaterAllocatorMetadataSegments() {
+        assertCollectionWriteAdmissionCoversPhysicalGrowth(
+                "hash",
+                db -> db.writes().hashes().hset(b("hash"), List.of(b("field"), b("value")))
+        );
+        assertCollectionWriteAdmissionCoversPhysicalGrowth(
+                "set",
+                db -> db.writes().sets().sadd(b("set"), List.of(b("member")))
+        );
+        assertCollectionWriteAdmissionCoversPhysicalGrowth(
+                "list",
+                db -> db.writes().lists().rpush(b("list"), List.of(b("value")))
+        );
+    }
+
+    @Test
+    public void collectionReplacementAdmissionCoversRootAdaptersInLaterAllocatorMetadataSegments() {
+        assertCollectionReplacementAdmissionCoversPhysicalGrowth(
+                "hash replacement",
+                db -> {
+                    db.writes().hashes().hset(b("hash"), List.of(b("field"), b("before")));
+                    db.writes().hashes().hset(b("hash-keeper"), List.of(b("field"), b("keeper")));
+                },
+                db -> db.writes().hashes().hset(b("hash"), List.of(b("next"), b("value")))
+        );
+        assertCollectionReplacementAdmissionCoversPhysicalGrowth(
+                "set replacement",
+                db -> {
+                    db.writes().sets().sadd(b("set"), List.of(b("before")));
+                    db.writes().sets().sadd(b("set-keeper"), List.of(b("keeper")));
+                },
+                db -> db.writes().sets().sadd(b("set"), List.of(b("next")))
+        );
+        assertCollectionReplacementAdmissionCoversPhysicalGrowth(
+                "list replacement",
+                db -> {
+                    db.writes().lists().rpush(b("list"), List.of(b("before")));
+                    db.writes().lists().rpush(b("list-keeper"), List.of(b("keeper")));
+                },
+                db -> db.writes().lists().rpush(b("list"), List.of(b("next")))
+        );
+        assertCollectionReplacementAdmissionCoversPhysicalGrowth(
+                "list partial pop",
+                db -> {
+                    db.writes().lists().rpush(b("list-pop"), List.of(b("first"), b("second")));
+                    db.writes().lists().rpush(b("list-pop-keeper"), List.of(b("keeper")));
+                },
+                db -> {
+                    try (PoppedValueSequence ignored = db.writes().lists().lpop(b("list-pop"), 1).value()) {
+                        Assert.assertFalse(ignored.isNull());
+                    }
+                }
+        );
+    }
+
+    @Test
     public void hashHlenAndHdelCoverMissingNoOpWrongTypeAndTtl() {
         withDb(db -> {
             Assert.assertEquals(0L, db.reads().hashes().hlen(b("missing")));
-            Assert.assertNull(db.reads().hashes().hget(b("missing"), b("f")));
+            Assert.assertTrue(OwnedReplyValueAssertions.isNull(db.reads().hashes().hget(b("missing"), b("f"))));
             Assert.assertEquals(0, db.reads().hashes().hgetall(b("missing")).pairCount());
             Assert.assertEquals(0L, db.writes().hashes().hdel(b("missing"), List.of(b("f"))).value().longValue());
 
             Assert.assertEquals(2L, db.writes().hashes().hset(b("h"), List.of(b("a"), b("1"), b("b"), b("2"))).value().longValue());
             Assert.assertEquals(2L, db.reads().hashes().hlen(b("h")));
-            Assert.assertArrayEquals(b("1"), db.reads().hashes().hget(b("h"), b("a")));
-            Assert.assertNull(db.reads().hashes().hget(b("h"), b("missing-field")));
+            Assert.assertArrayEquals(b("1"), OwnedReplyValueAssertions.bytes(db.reads().hashes().hget(b("h"), b("a"))));
+            Assert.assertTrue(OwnedReplyValueAssertions.isNull(db.reads().hashes().hget(b("h"), b("missing-field"))));
             Assert.assertEquals(2, db.reads().hashes().hgetall(b("h")).pairCount());
 
             db.writes().ttl().pexpire(view("h"), 5000);
             Assert.assertTrue(db.reads().ttl().ttlMillis(view("h")) > 0L);
             Assert.assertEquals(0L, db.writes().hashes().hset(b("h"), List.of(b("a"), b("updated"))).value().longValue());
-            Assert.assertArrayEquals(b("updated"), db.reads().hashes().hget(b("h"), b("a")));
+            Assert.assertArrayEquals(b("updated"), OwnedReplyValueAssertions.bytes(db.reads().hashes().hget(b("h"), b("a"))));
             Assert.assertTrue(db.reads().ttl().ttlMillis(view("h")) > 0L);
 
             Assert.assertEquals(0L, db.writes().hashes().hdel(b("h"), List.of(b("x"))).value().longValue());
@@ -261,6 +321,57 @@ public class CollectionDirectOpsTest {
         }
     }
 
+    private static void assertCollectionWriteAdmissionCoversPhysicalGrowth(
+            String label,
+            DbMutation mutation
+    ) {
+        assertCollectionReplacementAdmissionCoversPhysicalGrowth(label, db -> {
+        }, mutation);
+    }
+
+    private static void assertCollectionReplacementAdmissionCoversPhysicalGrowth(
+            String label,
+            DbMutation setup,
+            DbMutation mutation
+    ) {
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntimeAndNativeSlotCapacity(
+                0L,
+                yier.bubu.redis.storage.api.MaxmemoryPolicy.NOEVICTION,
+                5,
+                5L,
+                5L,
+                null,
+                8_192
+        );
+        List<NativeHandle> fillers = new ArrayList<>();
+        try {
+            db.bindToCurrentThread();
+            setup.apply(db);
+            NativeAllocator allocator = db.nativeAllocator();
+            while (allocator.stats().activeMetadataSegments() < 2L) {
+                fillers.add(allocator.allocate(NativeObjectKind.GENERIC, 1));
+            }
+
+            RecordingMaxmemoryCoordinator coordinator = new RecordingMaxmemoryCoordinator();
+            db.attachMaxmemoryCoordinator(coordinator);
+            long before = db.memoryUsage().effectiveBytesForMaxmemory();
+            mutation.apply(db);
+            long after = db.memoryUsage().effectiveBytesForMaxmemory();
+
+            Assert.assertTrue(label + " write must grow the physical snapshot", after > before);
+            Assert.assertTrue(
+                    label + " admission did not cover committed physical growth: admission="
+                            + coordinator.maximumEstimatedExtraBytes() + ", growth=" + (after - before),
+                    coordinator.maximumEstimatedExtraBytes() >= after - before
+            );
+        } finally {
+            for (NativeHandle filler : fillers) {
+                db.nativeAllocator().free(filler);
+            }
+            db.shutdown();
+        }
+    }
+
     private static List<String> sequence(BulkStringSequence sequence) {
         RecordingBulkStringSink sink = new RecordingBulkStringSink();
         sequence.emitTo(sink);
@@ -319,6 +430,11 @@ public class CollectionDirectOpsTest {
     }
 
     @FunctionalInterface
+    private interface DbMutation {
+        void apply(YierdisDb db);
+    }
+
+    @FunctionalInterface
     private interface ThrowingRunnable {
         void run();
     }
@@ -327,7 +443,7 @@ public class CollectionDirectOpsTest {
         private int prepareWrites;
 
         @Override
-        public void prepareWrite(long estimatedExtraBytes) {
+        public void prepareWrite(MaxmemoryParticipant requester, long estimatedExtraBytes) {
             prepareWrites++;
             if (estimatedExtraBytes > 0) {
                 throw new YierdisCommandException(MaxmemoryErrors.OOM_ERR);
@@ -341,6 +457,27 @@ public class CollectionDirectOpsTest {
 
         private int prepareWrites() {
             return prepareWrites;
+        }
+    }
+
+    private static final class RecordingMaxmemoryCoordinator implements MaxmemoryCoordinator {
+        private long maximumEstimatedExtraBytes;
+        private boolean prepareWriteCalled;
+
+        @Override
+        public void prepareWrite(MaxmemoryParticipant requester, long estimatedExtraBytes) {
+            prepareWriteCalled = true;
+            maximumEstimatedExtraBytes = Math.max(maximumEstimatedExtraBytes, estimatedExtraBytes);
+        }
+
+        @Override
+        public long nextLruClock() {
+            return 0L;
+        }
+
+        private long maximumEstimatedExtraBytes() {
+            Assert.assertTrue("collection write did not reserve admission", prepareWriteCalled);
+            return maximumEstimatedExtraBytes;
         }
     }
 

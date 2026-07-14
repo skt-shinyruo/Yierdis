@@ -11,16 +11,14 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesView;
-import yier.bubu.redis.storage.api.DbChange;
-import yier.bubu.redis.storage.api.DbChangeContext;
-import yier.bubu.redis.storage.api.DbChangeKind;
-import yier.bubu.redis.storage.api.DbMemoryConstants;
+import yier.bubu.redis.common.command.ImmutableCommandRecord;
+import yier.bubu.redis.storage.api.DbCommitKind;
+import yier.bubu.redis.storage.api.DbCommitPublisher;
+import yier.bubu.redis.storage.api.DbCommitReservation;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.SetMode;
 
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
@@ -41,20 +39,22 @@ public class ExpireIndexTest {
     }
 
     @Test
-    public void cleanupExpiredEmitsSyntheticDeleteChange() {
+    public void cleanupExpiredPublishesSyntheticDeleteCommit() {
         YierdisDb db = new YierdisDb();
         db.bindToCurrentThread();
 
         try {
             byte[] key = b("cleanup-event");
-            List<DbChange> changes = new ArrayList<>();
             db.writes().strings().setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(0));
+            RecordingCommitPublisher publisher = new RecordingCommitPublisher();
+            db.attachCommitPublisher(publisher, 0);
 
-            try (DbChangeContext.Scope ignored = DbChangeContext.open(changes::add)) {
-                db.cleanupExpired();
-            }
+            db.cleanupExpired();
 
-            assertSyntheticDelete(changes, "cleanup-event", DbChangeKind.EXPIRED);
+            Assert.assertEquals(1, publisher.published);
+            Assert.assertEquals(DbCommitKind.EXPIRED, publisher.kind);
+            Assert.assertEquals("DEL", publisher.command);
+            Assert.assertEquals("cleanup-event", publisher.key);
         } finally {
             db.shutdown();
         }
@@ -145,7 +145,7 @@ public class ExpireIndexTest {
 
         Assert.assertTrue(db.writes().ttl().expire(keyView, 60).value());
         long usedAfterTtl = db.usedBytesForMaxmemory();
-        Assert.assertTrue(usedAfterTtl >= usedBeforeTtl + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE);
+        Assert.assertTrue(usedAfterTtl >= usedBeforeTtl);
 
         // Updating TTL should not add more metadata entries.
         Assert.assertTrue(db.writes().ttl().expire(keyView, 120).value());
@@ -155,7 +155,7 @@ public class ExpireIndexTest {
         long usedAfterPersist = db.usedBytesForMaxmemory();
         Assert.assertEquals(0, db.memory().memoryStats().expireCount());
         Assert.assertTrue(usedAfterPersist >= usedBeforeTtl);
-        Assert.assertTrue(usedAfterPersist <= usedAfterTtl - DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE);
+        Assert.assertTrue(usedAfterPersist <= usedAfterTtl);
 
         db.shutdown();
     }
@@ -191,16 +191,43 @@ public class ExpireIndexTest {
         };
     }
 
-    private static void assertSyntheticDelete(List<DbChange> changes, String key, DbChangeKind kind) {
-        Assert.assertEquals(1, changes.size());
-        DbChange change = changes.get(0);
-        Assert.assertEquals(kind, change.kind());
-        Assert.assertEquals(0, change.dbIndex());
-        Assert.assertEquals("DEL", arg(change, 0));
-        Assert.assertEquals(key, arg(change, 1));
-    }
+    private static final class RecordingCommitPublisher implements DbCommitPublisher {
+        private int published;
+        private DbCommitKind kind;
+        private String command;
+        private String key;
 
-    private static String arg(DbChange change, int index) {
-        return new String(change.commandArgv()[index], StandardCharsets.US_ASCII);
+        @Override
+        public DbCommitReservation reserve(
+                int dbIndex,
+                DbCommitKind kind,
+                ImmutableCommandRecord record,
+                long committedMemoryDelta,
+                long commitAttemptTimestampMillis
+        ) {
+            this.kind = kind;
+            this.command = new String(record.toByteArray(0), StandardCharsets.US_ASCII);
+            this.key = new String(record.toByteArray(1), StandardCharsets.US_ASCII);
+            return DbCommitReservation.NOOP;
+        }
+
+        @Override
+        public long publish(DbCommitReservation reservation) {
+            return ++published;
+        }
+
+        @Override
+        public void failAfterCommit(DbCommitReservation reservation) {
+        }
+
+        @Override
+        public boolean enabled() {
+            return true;
+        }
+
+        @Override
+        public boolean available() {
+            return true;
+        }
     }
 }

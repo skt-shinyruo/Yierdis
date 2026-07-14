@@ -1,19 +1,13 @@
 package yier.bubu.redis.app.server;
 
-import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
-import io.netty.channel.ChannelFutureListener;
-import io.netty.util.AttributeKey;
 import yier.bubu.redis.bytes.BytesSink;
-import yier.bubu.redis.bytes.netty.NettyByteBufSink;
 import yier.bubu.redis.execution.executor.ExecutionIoAdapter;
+import yier.bubu.redis.protocol.resp.netty.InboundReadCreditHandler;
 
 import java.util.Objects;
 
 final class NettyExecutionIoAdapter implements ExecutionIoAdapter<NettyExecutionConnection> {
-    private static final AttributeKey<ByteBuf> PENDING_REPLY_BUFFER =
-            AttributeKey.valueOf("yierdis.pendingReplyBuffer");
-
     @Override
     public boolean isActive(NettyExecutionConnection connection) {
         return connection != null && connection.channel().isActive();
@@ -26,12 +20,26 @@ final class NettyExecutionIoAdapter implements ExecutionIoAdapter<NettyExecution
 
     @Override
     public void disableInput(NettyExecutionConnection connection) {
-        withChannel(connection, channel -> channel.eventLoop().execute(() -> safeSetAutoRead(channel, false)));
+        withChannel(connection, channel -> channel.eventLoop().execute(() -> {
+            InboundReadCreditHandler readCredits = channel.pipeline().get(InboundReadCreditHandler.class);
+            if (readCredits != null) {
+                readCredits.pauseExecutorInput();
+                return;
+            }
+            safeSetAutoRead(channel, false);
+        }));
     }
 
     @Override
     public void enableInput(NettyExecutionConnection connection) {
-        withChannel(connection, channel -> channel.eventLoop().execute(() -> safeSetAutoRead(channel, true)));
+        withChannel(connection, channel -> channel.eventLoop().execute(() -> {
+            InboundReadCreditHandler readCredits = channel.pipeline().get(InboundReadCreditHandler.class);
+            if (readCredits != null) {
+                readCredits.resumeExecutorInput();
+                return;
+            }
+            safeSetAutoRead(channel, true);
+        }));
     }
 
     @Override
@@ -43,45 +51,23 @@ final class NettyExecutionIoAdapter implements ExecutionIoAdapter<NettyExecution
     }
 
     @Override
+    public void closeConnection(NettyExecutionConnection connection) {
+        withChannel(connection, channel -> channel.eventLoop().execute(channel::close));
+    }
+
+    @Override
     public BytesSink newReplySink(NettyExecutionConnection connection) {
-        Objects.requireNonNull(connection, "connection");
-        Channel channel = connection.channel();
-        ByteBuf out = channel.alloc().buffer();
-        ByteBuf previous = channel.attr(PENDING_REPLY_BUFFER).getAndSet(out);
-        if (previous != null) {
-            previous.release();
-        }
-        return new NettyByteBufSink(out);
+        throw new IllegalStateException("Netty replies require a registered ordered reply slot");
     }
 
     @Override
     public void writeBufferedReply(NettyExecutionConnection connection, boolean closeAfterReply) {
-        Objects.requireNonNull(connection, "connection");
-        Channel channel = connection.channel();
-        ByteBuf out = channel.attr(PENDING_REPLY_BUFFER).getAndSet(null);
-        if (out == null) {
-            return;
-        }
-        if (closeAfterReply) {
-            channel.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
-            return;
-        }
-        channel.write(out, channel.voidPromise());
+        throw new IllegalStateException("Netty replies require a registered ordered reply slot");
     }
 
     @Override
     public void flushPending(Iterable<NettyExecutionConnection> touchedConnections) {
-        if (touchedConnections == null) {
-            return;
-        }
-        NettyReplyFlushBatch batch = new NettyReplyFlushBatch();
-        for (NettyExecutionConnection connection : touchedConnections) {
-            if (connection == null) {
-                continue;
-            }
-            batch.record(connection.channel());
-        }
-        batch.flushAll();
+        // 已注册回复由 ConnectionReplySequencer 在最后一个 chunk 上 flush。
     }
 
     private static void withChannel(NettyExecutionConnection connection, java.util.function.Consumer<Channel> action) {

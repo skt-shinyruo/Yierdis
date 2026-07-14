@@ -23,9 +23,16 @@ public final class YierdisServerArgNames {
     public static final String PROTOCOL_MAX_ARGS = "--protocolMaxArgs";
     public static final String PROTOCOL_MAX_LINE_BYTES = "--protocolMaxLineBytes";
     public static final String PROTOCOL_MAX_COMMAND_BYTES = "--protocolMaxCommandBytes";
+    public static final String PROTOCOL_GLOBAL_IN_FLIGHT_BYTES = "--protocolGlobalInFlightBytes";
     public static final String CLIENT_IDLE_TIMEOUT_MILLIS = "--client-idle-timeout-millis";
     public static final String CLIENT_OUTPUT_BUFFER_LIMIT_BYTES = "--client-output-buffer-limit-bytes";
     public static final String CLIENT_OUTPUT_BUFFER_OVER_LIMIT_MILLIS = "--client-output-buffer-over-limit-millis";
+    public static final String REPLY_GLOBAL_CAPACITY_BYTES = "--replyGlobalCapacityBytes";
+    public static final String REPLY_PER_CONNECTION_CAPACITY_BYTES = "--replyPerConnectionCapacityBytes";
+    public static final String REPLY_MAX_TOTAL_BYTES = "--replyMaxTotalBytes";
+    public static final String REPLY_CHUNK_PAYLOAD_BYTES = "--replyChunkPayloadBytes";
+    public static final String REPLY_CONTROL_RESERVATION_BYTES = "--replyControlReservationBytes";
+    public static final String REPLY_DRAIN_TIMEOUT_MILLIS = "--replyDrainTimeoutMillis";
 
     public static final String MAXMEMORY_BYTES = "--maxmemoryBytes";
     public static final String MAXMEMORY_SCOPE = "--maxmemoryScope";

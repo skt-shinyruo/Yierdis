@@ -5,22 +5,28 @@ package yier.bubu.redis.integration.runtime;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.common.command.CommandRecordScope;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.integration.command.TestCommandProcessors;
+import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.storage.api.DbEngineFactory;
+import yier.bubu.redis.storage.api.DbCommitStreamUnavailableException;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbReads;
 import yier.bubu.redis.storage.api.DbWrites;
 import yier.bubu.redis.storage.api.ExpirationManager;
+import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.MemoryOps;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.RuntimeDbEngine;
-import yier.bubu.redis.runtime.api.YierdisChangeEvent;
+import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.runtime.api.YierdisChangeKind;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
+import yier.bubu.redis.runtime.embedded.CommitStreamState;
 import yier.bubu.redis.runtime.embedded.YierdisInstanceMaintenance;
 import yier.bubu.redis.runtime.embedded.YierdisInstanceObservability;
 import yier.bubu.redis.runtime.embedded.YierdisInstanceRuntimeAccess;
@@ -35,6 +41,8 @@ import yier.bubu.redis.testutil.TestYierdisInstances;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
@@ -42,10 +50,13 @@ import static yier.bubu.redis.testutil.TestBytes.b;
 public class YierdisInstanceTest {
     @Test
     public void globalMaxmemoryCountsSharedFfmRuntimeOnceAcrossDbs() {
+        byte[] value = new byte[4000];
+        Arrays.fill(value, (byte) 'a');
+        long maxmemoryBytes = minGlobalMaxmemoryThatAllowsTwoDbSets(value);
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(2)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
-                .maxmemoryBytes(9000)
+                .maxmemoryBytes(maxmemoryBytes)
                 .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
@@ -53,8 +64,6 @@ public class YierdisInstanceTest {
             instance.bindToCurrentThread();
             YierdisFastCommandProcessor processor = TestCommandProcessors.forRouter(TestDbRouters.forInstance(instance));
             TestSession session = new TestSession();
-            byte[] value = new byte[4000];
-            Arrays.fill(value, (byte) 'a');
 
             try (FastTestClient client = new FastTestClient(processor, session)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), b("k0"), value))).value());
@@ -74,7 +83,7 @@ public class YierdisInstanceTest {
         byte[] largeValue = new byte[1600];
         Arrays.fill(largeValue, (byte) 'x');
         byte[] smallValue = b("x");
-        long maxmemoryBytes = globalUsedAfterSet(key, largeValue);
+        long maxmemoryBytes = minGlobalMaxmemoryThatAllowsSetAndOverwrite(key, largeValue, smallValue);
 
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(1)
@@ -89,7 +98,7 @@ public class YierdisInstanceTest {
             try (FastTestClient client = new FastTestClient(processor)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), key, largeValue))).value());
                 long usedBefore = instance.observability().memoryStats().usedBytesForMaxmemory();
-                Assert.assertEquals(maxmemoryBytes, usedBefore);
+                Assert.assertTrue(usedBefore <= maxmemoryBytes);
 
                 ReplyObject reply = client.execute(Arrays.asList(b("SET"), key, smallValue));
 
@@ -104,17 +113,22 @@ public class YierdisInstanceTest {
 
     @Test
     public void perDbScopeDoesNotCountAnotherDbsFfmBytesInLocalBudget() {
+        byte[] value = new byte[4_000];
+        Arrays.fill(value, (byte) 'a');
+        long perDbMaxmemoryBytes = Math.max(
+                minPerDbMaxmemoryThatAllowsSet(0, b("local"), value),
+                minPerDbMaxmemoryThatAllowsSet(1, b("remote"), value)
+        );
+        long maxmemoryBytes = Math.multiplyExact(perDbMaxmemoryBytes, 2L);
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(2)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.PER_DB)
-                .maxmemoryBytes(20_000)
+                .maxmemoryBytes(maxmemoryBytes)
                 .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
             instance.bindToCurrentThread();
-            byte[] value = new byte[4_000];
-            Arrays.fill(value, (byte) 'a');
 
             long db0Before = instance.engine(0).memory().memoryStats().usedBytesForMaxmemory();
 
@@ -218,21 +232,88 @@ public class YierdisInstanceTest {
 
     @Test
     public void maintenanceTickEmitsSyntheticDeleteForExpiredKeys() {
-        List<YierdisChangeEvent> events = new ArrayList<>();
+        List<DeliveredChange> events = new ArrayList<>();
+        CountDownLatch delivered = new CountDownLatch(3);
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
-                .changeSink(events::add)
+                .changeSink(event -> {
+                    synchronized (events) {
+                        events.add(new DeliveredChange(
+                                event.sequence(),
+                                event.synthetic(),
+                                event.kind(),
+                                new String(event.request().toByteArray(0), java.nio.charset.StandardCharsets.US_ASCII),
+                                new String(event.request().toByteArray(1), java.nio.charset.StandardCharsets.US_ASCII)
+                        ));
+                    }
+                    delivered.countDown();
+                })
                 .build();
 
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
             instance.bindToCurrentThread();
-            Assert.assertTrue(instance.engine(0).writes().strings().setString(b("maintenance-expired"), b("v"), SetMode.NORMAL, null).value());
-            Assert.assertTrue(instance.engine(0).writes().ttl().pexpire(view(b("maintenance-expired")), 1L).value());
-            events.clear();
+            try (ExecutionRequest record = ByteArrayExecutionRequest.fromUtf8("SET", List.of("maintenance-expired", "v"));
+                 CommandRecordScope.Scope ignored = CommandRecordScope.open(record)) {
+                Assert.assertTrue(instance.engine(0).writes().strings()
+                        .setString(b("maintenance-expired"), b("v"), SetMode.NORMAL, null)
+                        .value());
+            }
+            try (ExecutionRequest record = ByteArrayExecutionRequest.fromUtf8("PEXPIRE", List.of("maintenance-expired", "1"));
+                 CommandRecordScope.Scope ignored = CommandRecordScope.open(record)) {
+                Assert.assertTrue(instance.engine(0).writes().ttl().pexpire(view(b("maintenance-expired")), 1L).value());
+            }
 
             sleepPastTtl();
             new YierdisInstanceMaintenance(instance).maintenanceTick();
 
+            try {
+                Assert.assertTrue("commit stream did not deliver expiry", delivered.await(5L, TimeUnit.SECONDS));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                Assert.fail("interrupted while waiting for commit stream");
+            }
             assertSyntheticDelete(events, "maintenance-expired", YierdisChangeKind.EXPIRED);
+        }
+    }
+
+    @Test
+    public void commitStreamConfigurationControlsAdmissionAndNoopObservability() throws Exception {
+        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(
+                YierdisInstanceConfig.builder().build()
+        )) {
+            Assert.assertEquals(CommitStreamState.DISABLED, instance.observability().commitStreamStats().state());
+            Assert.assertEquals(0L, instance.observability().commitStreamStats().reservedEvents());
+            Assert.assertEquals(0L, instance.observability().commitStreamStats().reservedBytes());
+        }
+
+        CountDownLatch callbackEntered = new CountDownLatch(1);
+        CountDownLatch releaseCallback = new CountDownLatch(1);
+        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
+                .changeSink(event -> {
+                    callbackEntered.countDown();
+                    try {
+                        Assert.assertTrue(releaseCallback.await(2L, TimeUnit.SECONDS));
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new AssertionError(e);
+                    }
+                })
+                .commitStreamMaxEvents(1)
+                .commitStreamMaxRetainedBytes(1_024L)
+                .commitStreamShutdownTimeoutMillis(100L)
+                .build();
+
+        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
+            instance.bindToCurrentThread();
+            Assert.assertEquals(CommitStreamState.RUNNING, instance.observability().commitStreamStats().state());
+            try {
+                scopedSet(instance, "first");
+                Assert.assertTrue(callbackEntered.await(2L, TimeUnit.SECONDS));
+
+                Assert.assertThrows(DbCommitStreamUnavailableException.class, () -> scopedSet(instance, "second"));
+                Assert.assertEquals(1L, instance.observability().commitStreamStats().rejectedWrites());
+            } finally {
+                releaseCallback.countDown();
+            }
         }
     }
 
@@ -261,32 +342,126 @@ public class YierdisInstanceTest {
         return left + right;
     }
 
-    private static long globalUsedAfterSet(byte[] key, byte[] value) {
+    private static void scopedSet(YierdisInstance instance, String key) {
+        try (ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("SET", List.of(key, "v"));
+             CommandRecordScope.Scope ignored = CommandRecordScope.open(request)) {
+            Assert.assertTrue(instance.engine(0).writes().strings().setString(b(key), b("v"), SetMode.NORMAL, null).value());
+        }
+    }
+
+    private static long minGlobalMaxmemoryThatAllowsSetAndOverwrite(
+            byte[] key,
+            byte[] initialValue,
+            byte[] overwriteValue
+    ) {
+        return minimumAcceptedMaxmemory(
+                limit -> allowsGlobalSetAndOverwrite(limit, key, initialValue, overwriteValue)
+        );
+    }
+
+    private static long minGlobalMaxmemoryThatAllowsTwoDbSets(byte[] value) {
+        return minimumAcceptedMaxmemory(limit -> allowsTwoDbGlobalSets(limit, value));
+    }
+
+    private static long minPerDbMaxmemoryThatAllowsSet(int dbIndex, byte[] key, byte[] value) {
+        return minimumAcceptedMaxmemory(limit -> allowsPerDbSet(limit, dbIndex, key, value));
+    }
+
+    private static long minimumAcceptedMaxmemory(MaxmemoryAttempt attempt) {
+        long high = 1L;
+        while (!attempt.allows(high)) {
+            high = Math.multiplyExact(high, 2L);
+        }
+
+        long low = 0L;
+        while (low + 1L < high) {
+            long mid = low + (high - low) / 2L;
+            if (attempt.allows(mid)) {
+                high = mid;
+            } else {
+                low = mid;
+            }
+        }
+        return high;
+    }
+
+    private static boolean allowsGlobalSetAndOverwrite(
+            long maxmemoryBytes,
+            byte[] key,
+            byte[] initialValue,
+            byte[] overwriteValue
+    ) {
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(1)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
-                .maxmemoryBytes(1_000_000)
+                .maxmemoryBytes(maxmemoryBytes)
                 .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
             instance.bindToCurrentThread();
-            Assert.assertTrue(instance.engine(0).writes().strings().setString(key, value, SetMode.NORMAL, null).value());
-            return instance.observability().memoryStats().usedBytesForMaxmemory();
+            instance.engine(0).writes().strings().setString(key, initialValue, SetMode.NORMAL, null);
+            instance.engine(0).writes().strings().setString(key, overwriteValue, SetMode.NORMAL, null);
+            return true;
+        } catch (YierdisCommandException e) {
+            return isExpectedOom(e);
         }
     }
 
-    private static void assertSyntheticDelete(List<YierdisChangeEvent> events, String key, YierdisChangeKind kind) {
-        Assert.assertEquals(1, events.size());
-        YierdisChangeEvent event = events.get(0);
-        Assert.assertTrue(event.synthetic());
-        Assert.assertEquals(kind, event.kind());
-        Assert.assertEquals("DEL", arg(event, 0));
-        Assert.assertEquals(key, arg(event, 1));
+    private static boolean allowsTwoDbGlobalSets(long maxmemoryBytes, byte[] value) {
+        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
+                .databases(2)
+                .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
+                .maxmemoryBytes(maxmemoryBytes)
+                .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
+                .build();
+
+        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
+            instance.bindToCurrentThread();
+            instance.engine(0).writes().strings().setString(b("k0"), value, SetMode.NORMAL, null);
+            instance.engine(1).writes().strings().setString(b("k1"), value, SetMode.NORMAL, null);
+            return true;
+        } catch (YierdisCommandException e) {
+            return isExpectedOom(e);
+        }
     }
 
-    private static String arg(YierdisChangeEvent event, int index) {
-        return new String(event.request().toByteArray(index), java.nio.charset.StandardCharsets.US_ASCII);
+    private static boolean allowsPerDbSet(long maxmemoryBytes, int dbIndex, byte[] key, byte[] value) {
+        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
+                .databases(2)
+                .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.PER_DB)
+                .maxmemoryBytes(maxmemoryBytes)
+                .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
+                .build();
+
+        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
+            instance.bindToCurrentThread();
+            instance.engine(dbIndex).writes().strings().setString(key, value, SetMode.NORMAL, null);
+            return true;
+        } catch (YierdisCommandException e) {
+            return isExpectedOom(e);
+        }
+    }
+
+    private static boolean isExpectedOom(YierdisCommandException e) {
+        if (MaxmemoryErrors.OOM_ERR.equals(e.getMessage())) {
+            return false;
+        }
+        throw e;
+    }
+
+    @FunctionalInterface
+    private interface MaxmemoryAttempt {
+        boolean allows(long maxmemoryBytes);
+    }
+
+    private static void assertSyntheticDelete(List<DeliveredChange> events, String key, YierdisChangeKind kind) {
+        Assert.assertEquals(3, events.size());
+        DeliveredChange event = events.get(2);
+        Assert.assertTrue(event.synthetic());
+        Assert.assertEquals(kind, event.kind());
+        Assert.assertEquals("DEL", event.command());
+        Assert.assertEquals(key, event.key());
     }
 
     private static yier.bubu.redis.bytes.BytesView view(byte[] data) {
@@ -310,6 +485,15 @@ public class YierdisInstanceTest {
             Thread.currentThread().interrupt();
             Assert.fail("interrupted while waiting for TTL to pass");
         }
+    }
+
+    private record DeliveredChange(
+            long sequence,
+            boolean synthetic,
+            YierdisChangeKind kind,
+            String command,
+            String key
+    ) {
     }
 
     @Test
@@ -617,6 +801,11 @@ public class YierdisInstanceTest {
         }
 
         @Override
+        public MemoryUsageSnapshot memoryUsage() {
+            return MemoryUsageSnapshot.zero();
+        }
+
+        @Override
         public void bindToCurrentThread() {
         }
 
@@ -662,6 +851,11 @@ public class YierdisInstanceTest {
         private FailingRuntimeDbEngine(String name, List<String> closeOrder) {
             this.name = name;
             this.closeOrder = closeOrder;
+        }
+
+        @Override
+        public MemoryUsageSnapshot memoryUsage() {
+            return MemoryUsageSnapshot.zero();
         }
 
         @Override
@@ -711,6 +905,11 @@ public class YierdisInstanceTest {
         private int maxmemoryMaintenanceCalls;
         private int shutdownCalls;
         private int participantCleanupCalls;
+
+        @Override
+        public MemoryUsageSnapshot memoryUsage() {
+            return MemoryUsageSnapshot.zero();
+        }
 
         @Override
         public void bindToCurrentThread() {

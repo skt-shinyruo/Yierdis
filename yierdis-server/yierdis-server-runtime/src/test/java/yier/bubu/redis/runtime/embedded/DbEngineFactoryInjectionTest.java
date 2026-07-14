@@ -2,6 +2,7 @@ package yier.bubu.redis.runtime.embedded;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.storage.api.DbReads;
 import yier.bubu.redis.storage.api.DbWrites;
 import yier.bubu.redis.storage.api.DbEngineFactory;
@@ -133,10 +134,9 @@ public class DbEngineFactoryInjectionTest {
     }
 
     @Test
-    public void globalMaxmemoryUsesCheapSharedOffHeapUsagePath() {
-        Object sharedIdentity = new Object();
-        SharedOffHeapTrackingEngine first = new SharedOffHeapTrackingEngine(sharedIdentity, 40L);
-        SharedOffHeapTrackingEngine second = new SharedOffHeapTrackingEngine(sharedIdentity, 40L);
+    public void globalMaxmemoryUsesDbPhysicalSnapshotsForAdmission() {
+        PhysicalTrackingEngine first = new PhysicalTrackingEngine(new MemoryUsageSnapshot(10L, 0L, 0L, 0L, 0L));
+        PhysicalTrackingEngine second = new PhysicalTrackingEngine(new MemoryUsageSnapshot(10L, 0L, 0L, 0L, 0L));
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(2)
                 .engineFactory((dbIndex,
@@ -154,18 +154,24 @@ public class DbEngineFactoryInjectionTest {
             MaxmemoryCoordinator coordinator = first.attachedCoordinator;
             Assert.assertNotNull("global scope should attach a coordinator", coordinator);
             Assert.assertSame("all DBs should share the same coordinator", coordinator, second.attachedCoordinator);
-            coordinator.prepareWrite(50L);
+            coordinator.prepareWrite(null, 80L);
+            try {
+                coordinator.prepareWrite(null, 81L);
+                Assert.fail("expected physical snapshots to be enforced");
+            } catch (RuntimeException expected) {
+                // expected OOM
+            }
         }
 
-        Assert.assertEquals("shared runtime bytes should be sampled once for the shared identity", 1, first.sharedOffHeapUsageCalls.get() + second.sharedOffHeapUsageCalls.get());
-        Assert.assertEquals("global shared-off-heap hot path must not touch engine memory ops", 0, first.memoryAccessCalls.get() + second.memoryAccessCalls.get());
+        Assert.assertTrue("global governor should sample participant physical usage", first.memoryUsageCalls.get() > 0);
+        Assert.assertTrue("global governor should sample participant physical usage", second.memoryUsageCalls.get() > 0);
+        Assert.assertEquals("maxmemory admission must not touch engine memory ops", 0, first.memoryAccessCalls.get() + second.memoryAccessCalls.get());
     }
 
     @Test
-    public void globalObservabilityCountsSharedOffHeapOnceAcrossDatabases() {
-        Object sharedIdentity = new Object();
-        ObservabilityTrackingEngine first = new ObservabilityTrackingEngine(sharedIdentity, 40L, 10L, 1, 1);
-        ObservabilityTrackingEngine second = new ObservabilityTrackingEngine(sharedIdentity, 40L, 20L, 2, 0);
+    public void globalObservabilitySumsDbPhysicalStatsAcrossDatabases() {
+        ObservabilityTrackingEngine first = new ObservabilityTrackingEngine(40L, 10L, 1, 1);
+        ObservabilityTrackingEngine second = new ObservabilityTrackingEngine(40L, 20L, 2, 0);
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(2)
                 .engineFactory((dbIndex,
@@ -181,17 +187,21 @@ public class DbEngineFactoryInjectionTest {
         try (YierdisInstance instance = YierdisInstance.create(config)) {
             YierdisMemoryStats stats = instance.observability().memoryStats();
 
-            Assert.assertEquals("instance/global off-heap should count the shared runtime once", 40L, stats.offHeapUsedBytes());
-            Assert.assertEquals("global usedBytesForMaxmemory should be heap plus shared off-heap once", 70L, stats.usedBytesForMaxmemory());
-            Assert.assertEquals("global effectiveUsedBytesForMaxmemory should include reserved bytes on top of shared off-heap once", 70L, stats.effectiveUsedBytesForMaxmemory());
+            Assert.assertEquals("instance/global off-heap should sum each DB's physical off-heap", 80L, stats.offHeapUsedBytes());
+            Assert.assertEquals("global usedBytesForMaxmemory should equal summed physical usage", 110L, stats.usedBytesForMaxmemory());
+            Assert.assertEquals("global effectiveUsedBytesForMaxmemory should match summed physical usage without reservations", 110L, stats.effectiveUsedBytesForMaxmemory());
             Assert.assertEquals(30L, stats.heapDataBytesEstimate());
             Assert.assertEquals(3, stats.keyCount());
             Assert.assertEquals(1, stats.expireCount());
-            Assert.assertEquals("shared off-heap usage should be sampled once for observability too", 1, first.sharedOffHeapUsageCalls.get() + second.sharedOffHeapUsageCalls.get());
         }
     }
 
     private static final class StubEngine implements RuntimeDbEngine {
+        @Override
+        public MemoryUsageSnapshot memoryUsage() {
+            return MemoryUsageSnapshot.zero();
+        }
+
         @Override
         public void bindToCurrentThread() {
         }
@@ -240,6 +250,11 @@ public class DbEngineFactoryInjectionTest {
         }
 
         @Override
+        public MemoryUsageSnapshot memoryUsage() {
+            return MemoryUsageSnapshot.zero();
+        }
+
+        @Override
         public void bindToCurrentThread() {
         }
 
@@ -278,17 +293,14 @@ public class DbEngineFactoryInjectionTest {
         }
     }
 
-    private static final class SharedOffHeapTrackingEngine implements RuntimeDbEngine {
-        private final Object sharedIdentity;
-        private final long sharedOffHeapUsedBytes;
-
+    private static final class PhysicalTrackingEngine implements RuntimeDbEngine {
+        private final MemoryUsageSnapshot usage;
         private MaxmemoryCoordinator attachedCoordinator;
-        private final AtomicInteger sharedOffHeapUsageCalls = new AtomicInteger();
+        private final AtomicInteger memoryUsageCalls = new AtomicInteger();
         private final AtomicInteger memoryAccessCalls = new AtomicInteger();
 
-        private SharedOffHeapTrackingEngine(Object sharedIdentity, long sharedOffHeapUsedBytes) {
-            this.sharedIdentity = sharedIdentity;
-            this.sharedOffHeapUsedBytes = sharedOffHeapUsedBytes;
+        private PhysicalTrackingEngine(MemoryUsageSnapshot usage) {
+            this.usage = usage;
         }
 
         @Override
@@ -309,19 +321,9 @@ public class DbEngineFactoryInjectionTest {
         }
 
         @Override
-        public long usedBytesForMaxmemory() {
-            return 0L;
-        }
-
-        @Override
-        public Object globalSharedOffHeapUsageIdentity() {
-            return sharedIdentity;
-        }
-
-        @Override
-        public long globalSharedOffHeapUsedBytes() {
-            sharedOffHeapUsageCalls.incrementAndGet();
-            return sharedOffHeapUsedBytes;
+        public MemoryUsageSnapshot memoryUsage() {
+            memoryUsageCalls.incrementAndGet();
+            return usage;
         }
 
         @Override
@@ -369,28 +371,25 @@ public class DbEngineFactoryInjectionTest {
     }
 
     private static final class ObservabilityTrackingEngine implements RuntimeDbEngine {
-        private final Object sharedIdentity;
-        private final long sharedOffHeapUsedBytes;
         private final YierdisMemoryStats stats;
-        private final AtomicInteger sharedOffHeapUsageCalls = new AtomicInteger();
+        private final MemoryUsageSnapshot usage;
 
         private ObservabilityTrackingEngine(
-                Object sharedIdentity,
-                long sharedOffHeapUsedBytes,
+                long offHeapBytes,
                 long heapBytes,
                 int keyCount,
                 int expireCount
         ) {
-            this.sharedIdentity = sharedIdentity;
-            this.sharedOffHeapUsedBytes = sharedOffHeapUsedBytes;
+            long physical = heapBytes + offHeapBytes;
+            this.usage = new MemoryUsageSnapshot(heapBytes, 0L, offHeapBytes, offHeapBytes, 0L);
             this.stats = new YierdisMemoryStats(
                     100L,
+                    physical,
                     heapBytes,
-                    heapBytes,
-                    sharedOffHeapUsedBytes,
+                    offHeapBytes,
                     0L,
-                    heapBytes,
-                    false,
+                    physical,
+                    true,
                     true,
                     keyCount,
                     expireCount,
@@ -403,7 +402,7 @@ public class DbEngineFactoryInjectionTest {
                     0,
                     0L,
                     0L,
-                    heapBytes + sharedOffHeapUsedBytes,
+                    physical,
                     0L,
                     0L,
                     0L,
@@ -415,8 +414,17 @@ public class DbEngineFactoryInjectionTest {
                     0L,
                     0L,
                     0L,
-                    0L
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    offHeapBytes
             );
+        }
+
+        @Override
+        public MemoryUsageSnapshot memoryUsage() {
+            return usage;
         }
 
         @Override
@@ -429,17 +437,6 @@ public class DbEngineFactoryInjectionTest {
 
         @Override
         public void shutdown() {
-        }
-
-        @Override
-        public Object globalSharedOffHeapUsageIdentity() {
-            return sharedIdentity;
-        }
-
-        @Override
-        public long globalSharedOffHeapUsedBytes() {
-            sharedOffHeapUsageCalls.incrementAndGet();
-            return sharedOffHeapUsedBytes;
         }
 
         @Override

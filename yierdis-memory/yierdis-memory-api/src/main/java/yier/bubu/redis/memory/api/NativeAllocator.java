@@ -24,7 +24,21 @@ public interface NativeAllocator extends AutoCloseable {
         throw new UnsupportedOperationException("native allocation scopes are not supported");
     }
 
+    default long estimateAllocationScopeBookkeepingBytes(int expectedAllocationCount) {
+        if (expectedAllocationCount < 0) {
+            throw new IllegalArgumentException("expectedAllocationCount must be >= 0");
+        }
+        return 0L;
+    }
+
     NativeObjectView resolve(NativeHandle handle, NativeAccessMode mode);
+
+    /**
+     * Resolves a read-only view while the caller retains a separate pin on the handle.
+     */
+    default NativeObjectView resolvePinned(NativeHandle handle, NativeAccessMode mode) {
+        return resolve(handle, mode);
+    }
 
     NativeDefragResult defragOne(NativeHandle handle, long maxMoveBytes);
 
@@ -47,6 +61,10 @@ public interface NativeAllocator extends AutoCloseable {
 
     default NativeAllocationGrowth estimateAdditionalGrowth(int... requestedBytes) {
         throw new UnsupportedOperationException("native allocation growth estimation is not supported");
+    }
+
+    default NativeAllocationGrowth estimateConservativeAdditionalGrowth(int... requestedBytes) {
+        return estimateAdditionalGrowth(requestedBytes);
     }
 
     @Override

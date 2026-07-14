@@ -19,22 +19,9 @@ public final class YierdisFastCommandProcessor {
 
     private final CommandRegistry registry;
     private final TransactionQueuePolicy transactionQueuePolicy = new TransactionQueuePolicy();
-    private final CommandChangeEmitter changeEmitter;
     private final CommandExceptionTranslator exceptionTranslator = new CommandExceptionTranslator();
 
     public YierdisFastCommandProcessor(CommandRegistry registry) {
-        this(CommandChangeEmitter.noop(), registry);
-    }
-
-    public YierdisFastCommandProcessor(
-            YierdisCommandProcessorOptions options,
-            CommandRegistry registry
-    ) {
-        this(CommandChangeEmitter.fromOptions(options), registry);
-    }
-
-    private YierdisFastCommandProcessor(CommandChangeEmitter changeEmitter, CommandRegistry registry) {
-        this.changeEmitter = Objects.requireNonNull(changeEmitter, "changeEmitter");
         this.registry = Objects.requireNonNull(registry, "registry");
     }
 
@@ -80,7 +67,7 @@ public final class YierdisFastCommandProcessor {
                 out.error(CommandRequestSupport.unknownCommandMessage(request));
                 return;
             }
-            changeEmitter.execute(request, ctx, () -> executeSpec(spec, request, ctx));
+            executeSpec(spec, request, ctx);
         });
     }
 

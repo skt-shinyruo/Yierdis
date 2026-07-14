@@ -43,6 +43,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
         internals.checkThread();
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
+        reclaimExpiredBeforeMutation(keyBytes, now);
         return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
@@ -53,12 +54,6 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
             public PreparedDbMutation<WriteResult<Integer>> prepare() {
                 CurrentEntry currentEntry = currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
-                if (current != null && keyLifecycle.isKeyExpired(currentEntry.keyHandle(), now)) {
-                    keyLifecycle.removeIfExpired(currentEntry.keyHandle(), current, now);
-                    currentEntry = currentEntry(keyBytes);
-                    current = currentEntry.record();
-                }
-
                 byte[] currentBytes = null;
                 if (current != null) {
                     requireString(current);
@@ -146,6 +141,10 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
         }
 
         long now = System.currentTimeMillis();
+        reclaimExpiredBeforeMutation(destKeyBytes, now);
+        for (byte[] sourceKey : sourceKeys) {
+            reclaimExpiredBeforeMutation(sourceKey, now);
+        }
         return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
@@ -154,15 +153,9 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
 
             @Override
             public PreparedDbMutation<WriteResult<Void>> prepare() {
-                MergeRegisters merged = mergeSourceRegisters(sourceKeys);
+                MergeRegisters merged = mergeSourceRegisters(sourceKeys, now);
                 CurrentEntry currentEntry = currentEntry(destKeyBytes);
                 EntryRecord current = currentEntry.record();
-                if (current != null && keyLifecycle.isKeyExpired(currentEntry.keyHandle(), now)) {
-                    keyLifecycle.removeIfExpired(currentEntry.keyHandle(), current, now);
-                    currentEntry = currentEntry(destKeyBytes);
-                    current = currentEntry.record();
-                }
-
                 byte[] currentBytes = null;
                 ValueHandle currentHandle = null;
                 if (current != null) {
@@ -347,11 +340,11 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
         return bytes;
     }
 
-    private MergeRegisters mergeSourceRegisters(List<byte[]> sourceKeys) {
+    private MergeRegisters mergeSourceRegisters(List<byte[]> sourceKeys, long nowMillis) {
         int[] registers = new int[YierdisHyperLogLog.REGISTERS];
         long copiedBytes = 0L;
         for (byte[] sourceKey : sourceKeys) {
-            EntryRecord record = liveStringRecord(sourceKey);
+            EntryRecord record = liveStringRecordForPrepare(sourceKey, nowMillis);
             if (record == null) {
                 continue;
             }
@@ -364,12 +357,22 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
 
     private EntryRecord liveStringRecord(byte[] keyBytes) {
         KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
-        EntryRecord record = keyLifecycle.liveEntryRecord(keyBytes);
+        EntryRecord record = internals.liveEntryRecord(keyHandle);
         if (record == null) {
             return null;
         }
         requireString(record);
         return keyLifecycle.touchRecord(keyHandle, record);
+    }
+
+    private EntryRecord liveStringRecordForPrepare(byte[] keyBytes, long nowMillis) {
+        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+        EntryRecord record = keyLifecycle.entryRecord(keyHandle);
+        if (record == null || keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
+            return null;
+        }
+        requireString(record);
+        return record;
     }
 
     private EntryRecord hllRecord(KeyHandle keyHandle, ValueHandle handle, long expireAtMillis, EntryRecord previous) {
@@ -410,6 +413,17 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
         EntryRecord record = entryHandle == null ? null : keyLifecycle.entryRecord(entryHandle);
         KeyHandle keyHandle = entryHandle == null ? null : keyLifecycle.keyHandle(keyBytes);
         return new CurrentEntry(entryHandle, keyHandle, record);
+    }
+
+    private void reclaimExpiredBeforeMutation(byte[] keyBytes, long nowMillis) {
+        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+        if (keyHandle == null) {
+            return;
+        }
+        EntryRecord record = keyLifecycle.entryRecord(keyHandle);
+        if (record != null && keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
+            internals.reclaimExpired(keyHandle, record, nowMillis);
+        }
     }
 
     private StagedEntry stageNewEntry(byte[] keyBytes) {
@@ -486,10 +500,10 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
         }
     }
 
-    private static long withScopeBookkeeping(long upperBound) {
+    private long withScopeBookkeeping(long upperBound) {
         return Math.max(
                 Math.max(0L, upperBound),
-                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes()
+                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(keyLifecycle.nativeAllocator(), 0)
         );
     }
 

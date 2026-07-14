@@ -7,16 +7,14 @@ import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.engine.YierdisEngine;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.ExecutionConnectionContext;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
-import yier.bubu.redis.protocol.resp.RespCommandRequest;
 import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
-import yier.bubu.redis.protocol.resp.netty.RespCommandAdapter;
-import yier.bubu.redis.protocol.resp.netty.RespProtocolError;
 import yier.bubu.redis.protocol.resp.netty.RespProtocolErrorReplyHandler;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
@@ -53,20 +51,21 @@ public class ClosingSkipSideEffectsIntegrationTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel ch = new EmbeddedChannel(
-                protocolErrorHandler(replyWriterFactory),
-                new RespCommandAdapter(),
-                new YierdisFastCommandHandler(executor, replyWriterFactory)
-        );
+        OrderedReplyTestFixture replies = OrderedReplyTestFixture.open(executor, replyWriterFactory);
         try {
-            NettyExecutionConnection connection = NettyExecutionConnection.getOrCreate(ch, 16, 1024);
-            ch.writeInbound(request("PING"));
+            EmbeddedChannel ch = replies.channel();
+            NettyExecutionConnection connection = replies.connection();
+            replies.write(request("PING"));
             Assert.assertNull("expected no reply while executor is blocked", readOutbound(ch));
 
             ExecutionConnectionContext context = connection.context();
             Assert.assertEquals(1L, context.statsSnapshot().commandsEnqueued());
 
-            Assert.assertFalse(ch.writeInbound(new RespProtocolError("ERR Protocol error: invalid inline command", true)));
+            replies.writeProtocolError("ERR Protocol error: invalid inline command");
+            Assert.assertNull("terminal reply must wait for the earlier registered slot", readOutbound(ch));
+
+            unblock.countDown();
+            awaitCounter(context, c -> c.statsSnapshot().commandsSkippedClosing(), 1L, 1000);
             Assert.assertArrayEquals(
                     ascii("-ERR Protocol error: invalid inline command\r\n"),
                     awaitOutbound(ch, 1000)
@@ -76,9 +75,6 @@ public class ClosingSkipSideEffectsIntegrationTest {
             ch.runScheduledPendingTasks();
             Assert.assertFalse("protocol error handler should close after replying", ch.isOpen());
 
-            unblock.countDown();
-
-            awaitCounter(context, c -> c.statsSnapshot().commandsSkippedClosing(), 1L, 1000);
             Assert.assertEquals(0L, context.statsSnapshot().commandsExecuted());
             Assert.assertNull("no command reply should be produced after protocol close begins", readOutbound(ch));
         } finally {
@@ -86,7 +82,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
             executor.shutdownGracefully().join();
             executor.executeOwnerTask(instance::close).join();
             group.shutdownGracefully().syncUninterruptibly();
-            ch.finishAndReleaseAll();
+            replies.close();
         }
     }
 
@@ -127,9 +123,10 @@ public class ClosingSkipSideEffectsIntegrationTest {
         );
         executor.start();
 
-        EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor, replyWriterFactory));
+        OrderedReplyTestFixture replies = OrderedReplyTestFixture.open(executor, replyWriterFactory);
         try {
-            NettyExecutionConnection connection = NettyExecutionConnection.getOrCreate(ch, 16, 1024);
+            EmbeddedChannel ch = replies.channel();
+            NettyExecutionConnection connection = replies.connection();
 
             ch.pipeline().fireExceptionCaught(new DecoderException(
                     new IllegalArgumentException("Protocol error: invalid inline command")
@@ -144,7 +141,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
             executor.shutdownGracefully().join();
             executor.executeOwnerTask(instance::close).join();
             group.shutdownGracefully().syncUninterruptibly();
-            ch.finishAndReleaseAll();
+            replies.close();
         }
     }
 
@@ -176,12 +173,13 @@ public class ClosingSkipSideEffectsIntegrationTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandAdapter(), new YierdisFastCommandHandler(executor, replyWriterFactory));
+        OrderedReplyTestFixture replies = OrderedReplyTestFixture.open(executor, replyWriterFactory);
         try {
-            NettyExecutionConnection connection = NettyExecutionConnection.getOrCreate(ch, 16, 1024);
+            EmbeddedChannel ch = replies.channel();
+            NettyExecutionConnection connection = replies.connection();
             // Enqueue commands while executor is blocked (no replies yet).
-            ch.writeInbound(request("PING"));
-            ch.writeInbound(request("PING"));
+            replies.write(request("PING"));
+            replies.write(request("PING"));
             Assert.assertNull("expected no reply while executor is blocked", readOutbound(ch));
 
             ExecutionConnectionContext context = connection.context();
@@ -189,16 +187,16 @@ public class ClosingSkipSideEffectsIntegrationTest {
 
             // Trigger an internal error: handler should mark closing and close the channel after replying.
             ch.pipeline().fireExceptionCaught(new RuntimeException("boom"));
-            Assert.assertArrayEquals(
-                    ascii("-ERR internal error\r\n"),
-                    awaitOutbound(ch, 1000)
-            );
             Assert.assertTrue("expected runtime closing flag to be set", context.statsSnapshot().closing());
 
             // Allow the executor to drain: already-queued commands must be skipped to avoid side effects.
             unblock.countDown();
 
             awaitCounter(context, c -> c.statsSnapshot().commandsSkippedClosing(), 2L, 1000);
+            Assert.assertArrayEquals(
+                    ascii("-ERR internal error\r\n"),
+                    awaitOutbound(ch, 1000)
+            );
             Assert.assertEquals(0L, context.statsSnapshot().commandsExecuted());
             Assert.assertNull("no command reply should be produced after closing is requested", readOutbound(ch));
         } finally {
@@ -206,7 +204,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
             executor.shutdownGracefully().join();
             executor.executeOwnerTask(instance::close).join();
             group.shutdownGracefully().syncUninterruptibly();
-            ch.finishAndReleaseAll();
+            replies.close();
         }
     }
 
@@ -238,12 +236,13 @@ public class ClosingSkipSideEffectsIntegrationTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandAdapter(), new YierdisFastCommandHandler(executor, replyWriterFactory));
+        OrderedReplyTestFixture replies = OrderedReplyTestFixture.open(executor, replyWriterFactory);
         try {
-            NettyExecutionConnection connection = NettyExecutionConnection.getOrCreate(ch, 16, 1024);
+            EmbeddedChannel ch = replies.channel();
+            NettyExecutionConnection connection = replies.connection();
             // Enqueue commands while executor is blocked (no replies yet).
-            ch.writeInbound(new ExplodingCommand());
-            ch.writeInbound(request("PING"));
+            replies.write(new ExplodingCommand());
+            replies.write(request("PING"));
             Assert.assertNull("expected no reply while executor is blocked", readOutbound(ch));
 
             ExecutionConnectionContext context = connection.context();
@@ -267,7 +266,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
             executor.shutdownGracefully().join();
             executor.executeOwnerTask(instance::close).join();
             group.shutdownGracefully().syncUninterruptibly();
-            ch.finishAndReleaseAll();
+            replies.close();
         }
     }
 
@@ -376,27 +375,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
         }
     }
 
-    private static RespProtocolErrorReplyHandler protocolErrorHandler(RespReplyWriterFactory replyWriterFactory) {
-        return new RespProtocolErrorReplyHandler(
-                replyWriterFactory,
-                ctx -> {
-                    NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
-                    return connection == null ? null : connection.session();
-                },
-                ctx -> {
-                    NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
-                    return connection != null && connection.context().isClosing();
-                },
-                ctx -> {
-                    NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
-                    if (connection != null && connection.markClosing()) {
-                        ctx.channel().config().setAutoRead(false);
-                    }
-                }
-        );
-    }
-
-    private static RespCommandRequest request(String cmd, String... args) {
+    private static ByteArrayExecutionRequest request(String cmd, String... args) {
         byte[][] argv = new byte[args.length + 1][];
         int retainedBytes = 0;
         argv[0] = ascii(cmd);
@@ -405,6 +384,6 @@ public class ClosingSkipSideEffectsIntegrationTest {
             argv[i + 1] = ascii(args[i]);
             retainedBytes += argv[i + 1].length;
         }
-        return RespCommandRequest.wrapReadOnly(argv, retainedBytes);
+        return ByteArrayExecutionRequest.wrapReadOnly(argv, retainedBytes);
     }
 }

@@ -8,9 +8,8 @@
 
 ```text
 RESP bytes
-  -> RespCommandRequest
-  -> RespExecutionAdapter
-  -> ExecutionRequest
+  -> RespRequestDecoder
+  -> RetainedRespExecutionRequest / ExecutionRequest
   -> YierdisFastCommandHandler
   -> CommandExecutor
   -> DefaultYierdisEngine
@@ -129,7 +128,7 @@ RESP 协议层现在会把 array 里的 `$-1` 忠实解成 `ExecutionRequest` �
 
 ### 协议错误不在这里处理
 
-RESP frame 级别的 protocol error 发生在 `RespRequestDecoder` / `RespProtocolErrorReplyHandler` 边界，由协议层回错并关闭连接；它不会进入 `RespCommandAdapter`、`ExecutionRequest` 或 command-kernel。
+RESP frame 级别的 protocol error 发生在 `RespRequestDecoder` / `RespProtocolErrorReplyHandler` 边界，由协议层回错并关闭连接；它不会进入 `ExecutionRequest` 或 command-kernel。
 
 ## 事务排队前的复用规则
 

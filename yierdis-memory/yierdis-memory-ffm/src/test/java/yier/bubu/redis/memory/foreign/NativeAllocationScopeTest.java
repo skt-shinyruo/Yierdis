@@ -47,4 +47,76 @@ public class NativeAllocationScopeTest {
             Assert.assertEquals(0L, allocator.stats().liveObjects());
         }
     }
+
+    @Test
+    public void scopeBookkeepingEstimateCoversLargeTrackedHandleArray() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-bookkeeping-estimate-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 2_048)) {
+            allocator.bindToCurrentThread();
+            NativeHandle anchor = allocator.allocate(NativeObjectKind.STRING_BYTES, 32);
+            try {
+                MemoryUsageSnapshot before = allocator.memoryUsage();
+                int allocationCount = 1_024;
+                long expectedBookkeeping = allocator.estimateAllocationScopeBookkeepingBytes(allocationCount);
+                Assert.assertTrue(expectedBookkeeping > 4_096L);
+
+                try (NativeAllocationScope scope = allocator.beginAllocationScope()) {
+                    for (int i = 0; i < allocationCount; i++) {
+                        allocator.allocate(NativeObjectKind.STRING_BYTES, 32);
+                    }
+                    Assert.assertEquals(expectedBookkeeping, scope.growth().heapEstimatedBytes());
+                    scope.abort();
+                }
+
+                Assert.assertEquals(before, allocator.memoryUsage());
+            } finally {
+                allocator.free(anchor);
+            }
+        }
+    }
+
+    @Test
+    public void abortDoesNotAllocateWhileRecoveringPageDirectoryIds() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-abort-directory-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 128)) {
+            allocator.bindToCurrentThread();
+            MemoryUsageSnapshot before = allocator.memoryUsage();
+            NativeAllocationScope scope = allocator.beginAllocationScope();
+            for (int i = 0; i < 17; i++) {
+                allocator.allocate(NativeObjectKind.STRING_BYTES, 70_000);
+            }
+
+            allocator.armAllocationScopeAbortAllocationTrackingForTesting();
+            try {
+                scope.abort();
+            } finally {
+                allocator.disarmAllocationScopeAbortAllocationTrackingForTesting();
+            }
+
+            Assert.assertFalse(allocator.allocationScopeAbortAllocatedForTesting());
+            Assert.assertEquals(before, allocator.memoryUsage());
+        }
+    }
+
+    @Test
+    public void memorySnapshotUsesRetainedAllocatorCountersWithoutWalkingPagesOrSegments() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-o1-snapshot-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 256)) {
+            allocator.bindToCurrentThread();
+            NativeHandle[] handles = new NativeHandle[64];
+            for (int i = 0; i < handles.length; i++) {
+                handles[i] = allocator.allocate(NativeObjectKind.STRING_BYTES, 70_000);
+            }
+
+            allocator.armMemoryUsageIterationTrapsForTesting();
+            try {
+                Assert.assertTrue(allocator.memoryUsage().heapEstimatedBytes() > 0L);
+            } finally {
+                allocator.disarmMemoryUsageIterationTrapsForTesting();
+                for (NativeHandle handle : handles) {
+                    allocator.free(handle);
+                }
+            }
+        }
+    }
 }

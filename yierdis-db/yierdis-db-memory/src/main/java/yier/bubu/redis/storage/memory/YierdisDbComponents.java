@@ -21,6 +21,8 @@ public final class YierdisDbComponents {
     final EntryTable entries;
     final NativeKeyDirectory keyDirectory;
     final YierdisDbConfig config;
+    final YierdisDbHealth health;
+    final DbComponentMemoryUsage memoryUsage;
     final YierdisDbMemoryLedger ledger;
     final YierdisDbMutationExecutor mutationExecutor;
     final YierdisDbExpirationSupport expirationSupport;
@@ -50,6 +52,8 @@ public final class YierdisDbComponents {
             EntryTable entries,
             NativeKeyDirectory keyDirectory,
             YierdisDbConfig config,
+            YierdisDbHealth health,
+            DbComponentMemoryUsage memoryUsage,
             YierdisDbMemoryLedger ledger,
             YierdisDbMutationExecutor mutationExecutor,
             YierdisDbExpirationSupport expirationSupport,
@@ -78,6 +82,8 @@ public final class YierdisDbComponents {
         this.entries = entries;
         this.keyDirectory = keyDirectory;
         this.config = config;
+        this.health = health;
+        this.memoryUsage = memoryUsage;
         this.ledger = ledger;
         this.mutationExecutor = mutationExecutor;
         this.expirationSupport = expirationSupport;

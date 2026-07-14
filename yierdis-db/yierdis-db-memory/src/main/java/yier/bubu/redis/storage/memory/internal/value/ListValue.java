@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
 
-public final class ListValue implements YierdisValue, NativeHandleOwner {
+public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTrackedValue {
     private static final int QUICKLIST_NODE_MAX_BYTES = YierdisEncodingThresholds.LIST_MAX_LISTPACK_BYTES;
     private static final int QUICKLIST_NODE_RECORD_BYTES = 48;
     private static final int QUICKLIST_NODE_OWNER_ROOT_OFFSET = 0;
@@ -26,6 +26,11 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
     private static final int QUICKLIST_NODE_ENCODED_BYTES_OFFSET = 36;
     private static final int QUICKLIST_NODE_FLAGS_OFFSET = 40;
     private static final int QUICKLIST_NODE_RESERVED_OFFSET = 44;
+    private static final long FIXED_HEAP_BYTES = 88L;
+    private static final long ARRAY_HEADER_BYTES = 16L;
+    private static final long REFERENCE_BYTES = 8L;
+    private static final long ARRAY_DEQUE_HEAP_BYTES = 40L;
+    private static final int INITIAL_QUICKLIST_DEQUE_CAPACITY = 16;
 
     private final NativeAllocator nativeAllocator;
     private final NativeByteStore byteStore;
@@ -33,7 +38,11 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
 
     private NativeListpack listpack;
     private ArrayDeque<ListNode> quicklist;
+    private int quicklistDequeCapacity;
+    private long quicklistNodeHeapBytes;
     private int totalSize;
+    private Runnable heapChangeListener = () -> {
+    };
 
     public ListValue(NativeAllocator nativeAllocator, NativeHandle rootHandle) {
         this.nativeAllocator = Objects.requireNonNull(nativeAllocator, "nativeAllocator");
@@ -68,9 +77,37 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
         return totalSize;
     }
 
+    public long preparedCopyHeapUpperBound(List<byte[]> values) {
+        return heapUpperBoundForElementCount(addSaturating(totalSize, valueCount(values)));
+    }
+
+    public static long preparedHeapUpperBoundForElementCount(long expectedElements) {
+        return heapUpperBoundForElementCount(expectedElements);
+    }
+
+    public static long preparedNewHeapUpperBound(List<byte[]> values) {
+        return heapUpperBoundForElementCount(valueCount(values));
+    }
+
     public long estimatedBytes() {
         long nodeBytes = quicklist == null ? 0L : (long) quicklist.size() * QUICKLIST_NODE_RECORD_BYTES;
         return byteStore.nativeBytes() + nodeBytes;
+    }
+
+    @Override
+    public long heapEstimatedBytes() {
+        if (quicklist == null) {
+            return FIXED_HEAP_BYTES + (listpack == null ? 0L : listpack.heapEstimatedBytes());
+        }
+        return FIXED_HEAP_BYTES
+                + ARRAY_DEQUE_HEAP_BYTES
+                + ARRAY_HEADER_BYTES + (long) quicklistDequeCapacity * REFERENCE_BYTES
+                + quicklistNodeHeapBytes;
+    }
+
+    @Override
+    public void setHeapChangeListener(Runnable listener) {
+        heapChangeListener = Objects.requireNonNull(listener, "listener");
     }
 
     public int[] nativePayloadSizes() {
@@ -434,6 +471,8 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
                 }
             }
             quicklist = null;
+            quicklistDequeCapacity = 0;
+            quicklistNodeHeapBytes = 0L;
         }
         if (failure != null) {
             throw failure;
@@ -464,6 +503,8 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
                 }
             }
             quicklist = null;
+            quicklistDequeCapacity = 0;
+            quicklistNodeHeapBytes = 0L;
         }
         if (failure != null) {
             throw failure;
@@ -511,7 +552,9 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
             return;
         }
 
-        ArrayDeque<ListNode> out = new ArrayDeque<>();
+        ArrayDeque<ListNode> out = new ArrayDeque<>(INITIAL_QUICKLIST_DEQUE_CAPACITY);
+        int outDequeCapacity = INITIAL_QUICKLIST_DEQUE_CAPACITY + 1;
+        long outNodeHeapBytes = 0L;
         ListNode node = null;
         try {
             node = newListNode();
@@ -519,13 +562,21 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
             while (c.next()) {
                 int entryBytes = entryEncodedBytes(c.isNull() ? -1 : c.length());
                 if (!node.canAddEntry(entryBytes)) {
+                    if (out.size() + 1 >= outDequeCapacity) {
+                        outDequeCapacity = nextArrayDequeCapacity(outDequeCapacity);
+                    }
                     out.addLast(node);
+                    outNodeHeapBytes += node.heapEstimatedBytes();
                     node = newListNode();
                 }
                 node.addLast(c.toByteArray());
             }
             if (!node.isEmpty()) {
+                if (out.size() + 1 >= outDequeCapacity) {
+                    outDequeCapacity = nextArrayDequeCapacity(outDequeCapacity);
+                }
                 out.addLast(node);
+                outNodeHeapBytes += node.heapEstimatedBytes();
             } else {
                 try {
                     node.close();
@@ -539,6 +590,8 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
             packed.close();
             listpack = null;
             quicklist = out;
+            quicklistDequeCapacity = outDequeCapacity;
+            quicklistNodeHeapBytes = outNodeHeapBytes;
         } catch (RuntimeException | Error e) {
             closeNodes(out, e);
             if (node != null) {
@@ -550,20 +603,24 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
 
     private void qlAddFirst(byte[] v) {
         if (quicklist.isEmpty() || !quicklist.peekFirst().canAdd(v)) {
-            quicklist.addFirst(newListNode());
+            addQuicklistFirst(newListNode());
         }
         ListNode n = quicklist.peekFirst();
+        long before = n.heapEstimatedBytes();
         n.addFirst(v);
+        refreshQuicklistNodeHeap(before, n);
         totalSize++;
         refreshNodeMetadataLinks();
     }
 
     private void qlAddLast(byte[] v) {
         if (quicklist.isEmpty() || !quicklist.peekLast().canAdd(v)) {
-            quicklist.addLast(newListNode());
+            addQuicklistLast(newListNode());
         }
         ListNode n = quicklist.peekLast();
+        long before = n.heapEstimatedBytes();
         n.addLast(v);
+        refreshQuicklistNodeHeap(before, n);
         totalSize++;
         refreshNodeMetadataLinks();
     }
@@ -579,6 +636,7 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
         Throwable failure = null;
         if (n.isEmpty()) {
             removedNode = quicklist.removeFirst();
+            quicklistNodeHeapBytes -= removedNode.heapEstimatedBytes();
         }
         try {
             if (removedNode != null) {
@@ -608,6 +666,7 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
         Throwable failure = null;
         if (n.isEmpty()) {
             removedNode = quicklist.removeLast();
+            quicklistNodeHeapBytes -= removedNode.heapEstimatedBytes();
         }
         try {
             if (removedNode != null) {
@@ -633,8 +692,11 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
         ListNode first = quicklist.peekFirst();
         ListNode second = secondNodeFromFirst();
         if (first.canAppendAll(second)) {
+            long firstHeapBytes = first.heapEstimatedBytes();
             first.appendAll(second);
             quicklist.remove(second);
+            refreshQuicklistNodeHeap(firstHeapBytes, first);
+            quicklistNodeHeapBytes -= second.heapEstimatedBytes();
             Throwable failure = null;
             try {
                 refreshNodeMetadataLinks();
@@ -656,8 +718,11 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
         ListNode last = quicklist.peekLast();
         ListNode prev = secondNodeFromLast();
         if (prev.canAppendAll(last)) {
+            long previousHeapBytes = prev.heapEstimatedBytes();
             prev.appendAll(last);
             quicklist.remove(last);
+            refreshQuicklistNodeHeap(previousHeapBytes, prev);
+            quicklistNodeHeapBytes -= last.heapEstimatedBytes();
             Throwable failure = null;
             try {
                 refreshNodeMetadataLinks();
@@ -674,6 +739,34 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
 
     private ListNode newListNode() {
         return new ListNode(byteStore, nativeAllocator, rootHandle);
+    }
+
+    private void addQuicklistFirst(ListNode node) {
+        ensureQuicklistDequeCapacityForAdd();
+        quicklist.addFirst(node);
+        quicklistNodeHeapBytes += node.heapEstimatedBytes();
+    }
+
+    private void addQuicklistLast(ListNode node) {
+        ensureQuicklistDequeCapacityForAdd();
+        quicklist.addLast(node);
+        quicklistNodeHeapBytes += node.heapEstimatedBytes();
+    }
+
+    private void refreshQuicklistNodeHeap(long previousHeapBytes, ListNode node) {
+        quicklistNodeHeapBytes += node.heapEstimatedBytes() - previousHeapBytes;
+    }
+
+    private void ensureQuicklistDequeCapacityForAdd() {
+        if (quicklist.size() + 1 < quicklistDequeCapacity) {
+            return;
+        }
+        quicklistDequeCapacity = nextArrayDequeCapacity(quicklistDequeCapacity);
+    }
+
+    private static int nextArrayDequeCapacity(int capacity) {
+        int increment = capacity < 64 ? capacity + 2 : capacity >>> 1;
+        return Math.addExact(capacity, increment);
     }
 
     private void refreshNodeMetadataLinks() {
@@ -791,6 +884,43 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
         return varIntSize(headerValue) + Math.max(0, len);
     }
 
+    private static long heapUpperBoundForElementCount(long expectedElements) {
+        if (expectedElements < 0L || expectedElements > Integer.MAX_VALUE) {
+            return Long.MAX_VALUE;
+        }
+        long packedBytes = addSaturating(
+                FIXED_HEAP_BYTES,
+                NativeListpack.heapUpperBoundForEntries(expectedElements)
+        );
+        if (expectedElements == 0L) {
+            return packedBytes;
+        }
+        long nodeBytes = addSaturating(80L, NativeListpack.heapUpperBoundForEntries(1L));
+        long nodesBytes = multiplySaturating(expectedElements, nodeBytes);
+        long quicklistBytes = addSaturating(
+                FIXED_HEAP_BYTES + ARRAY_DEQUE_HEAP_BYTES + ARRAY_HEADER_BYTES,
+                multiplySaturating(arrayDequeCapacityForElements(expectedElements), REFERENCE_BYTES)
+        );
+        quicklistBytes = addSaturating(quicklistBytes, nodesBytes);
+        return Math.max(packedBytes, quicklistBytes);
+    }
+
+    private static long arrayDequeCapacityForElements(long elements) {
+        long capacity = INITIAL_QUICKLIST_DEQUE_CAPACITY + 1L;
+        while (capacity <= elements) {
+            long increment = capacity < 64L ? capacity + 2L : capacity >>> 1;
+            if (capacity > Integer.MAX_VALUE - increment) {
+                return Integer.MAX_VALUE;
+            }
+            capacity += increment;
+        }
+        return capacity;
+    }
+
+    private static long valueCount(List<byte[]> values) {
+        return values == null ? 0L : values.size();
+    }
+
     private static int varIntSize(int value) {
         if (value < 0) {
             throw new IllegalArgumentException("value must be >= 0");
@@ -812,6 +942,13 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
             return Long.MAX_VALUE;
         }
         return left + right;
+    }
+
+    private static long multiplySaturating(long left, long right) {
+        if (left == 0L || right == 0L) {
+            return 0L;
+        }
+        return left > Long.MAX_VALUE / right ? Long.MAX_VALUE : left * right;
     }
 
     private record RangeBounds(int start, int stop) {
@@ -865,6 +1002,10 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
 
         boolean isEmpty() {
             return liveListpack().isEmpty();
+        }
+
+        long heapEstimatedBytes() {
+            return 80L + listpack.heapEstimatedBytes();
         }
 
         NativeListpack.Cursor cursor() {

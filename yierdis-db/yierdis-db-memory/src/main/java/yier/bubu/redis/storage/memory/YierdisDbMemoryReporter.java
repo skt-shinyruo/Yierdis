@@ -12,6 +12,7 @@ import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.ledger.MemoryLedger;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
@@ -21,6 +22,7 @@ import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
 import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
@@ -28,33 +30,39 @@ import java.util.function.Supplier;
 public final class YierdisDbMemoryReporter {
     // 聚合 ledger、TTL index 和 native allocator 的观测口径；它服务 MEMORY/INFO/maxmemory，不替代 ledger 的两阶段预算账本。
     private final Runnable threadChecker;
+    private final YierdisDbInternals internals;
+    private final DbComponentMemoryUsage componentMemoryUsage;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final YierdisExpireIndex expires;
+    private final HashTableMaintenanceRegistry hashTableMaintenanceRegistry;
     private final long maxmemoryBytes;
     private final MemoryLedger ledger;
-    private final BooleanSupplier offHeapIncludedInMaxmemorySupplier;
     private final YierdisDbMemoryEstimator memoryEstimator;
     private final Supplier<NativeDefragReport> nativeDefragReportSupplier;
 
     YierdisDbMemoryReporter(
             Runnable threadChecker,
+            YierdisDbInternals internals,
+            DbComponentMemoryUsage componentMemoryUsage,
             YierdisDbKeyLifecycle keyLifecycle,
             YierdisExpireIndex expires,
+            HashTableMaintenanceRegistry hashTableMaintenanceRegistry,
             long maxmemoryBytes,
             MemoryLedger ledger,
-            BooleanSupplier offHeapIncludedInMaxmemorySupplier,
             YierdisDbMemoryEstimator memoryEstimator,
             Supplier<NativeDefragReport> nativeDefragReportSupplier
     ) {
         this.threadChecker = java.util.Objects.requireNonNull(threadChecker, "threadChecker");
+        this.internals = internals;
+        this.componentMemoryUsage = java.util.Objects.requireNonNull(componentMemoryUsage, "componentMemoryUsage");
         this.keyLifecycle = java.util.Objects.requireNonNull(keyLifecycle, "keyLifecycle");
         this.expires = java.util.Objects.requireNonNull(expires, "expires");
+        this.hashTableMaintenanceRegistry = java.util.Objects.requireNonNull(
+                hashTableMaintenanceRegistry,
+                "hashTableMaintenanceRegistry"
+        );
         this.maxmemoryBytes = maxmemoryBytes;
         this.ledger = java.util.Objects.requireNonNull(ledger, "ledger");
-        this.offHeapIncludedInMaxmemorySupplier = java.util.Objects.requireNonNull(
-                offHeapIncludedInMaxmemorySupplier,
-                "offHeapIncludedInMaxmemorySupplier"
-        );
         this.memoryEstimator = java.util.Objects.requireNonNull(memoryEstimator, "memoryEstimator");
         this.nativeDefragReportSupplier = java.util.Objects.requireNonNull(
                 nativeDefragReportSupplier,
@@ -64,12 +72,12 @@ public final class YierdisDbMemoryReporter {
 
     long memoryUsage(BytesView keyView) {
         threadChecker.run();
-        EntryRecord record = keyLifecycle.liveEntryRecord(keyView);
+        KeyHandle keyHandle = keyLifecycle.keyHandle(keyView);
+        EntryRecord record = liveEntryRecord(keyHandle);
         if (record == null) {
             return -1;
         }
         long keyLen = keyView == null ? 0 : Math.max(0L, (long) keyView.length());
-        var keyHandle = keyLifecycle.keyHandle(keyView);
         return metadataEstimatedBytes(keyHandle, record) + estimateNativeBytesForMemoryUsage(keyLen, record);
     }
 
@@ -78,43 +86,38 @@ public final class YierdisDbMemoryReporter {
         if (keyBytes == null) {
             return -1;
         }
-        EntryRecord record = keyLifecycle.liveEntryRecord(keyBytes);
+        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+        EntryRecord record = liveEntryRecord(keyHandle);
         if (record == null) {
             return -1;
         }
-        var keyHandle = keyLifecycle.keyHandle(keyBytes);
         return metadataEstimatedBytes(keyHandle, record) + estimateNativeBytesForMemoryUsage(keyBytes.length, record);
     }
 
     YierdisMemoryStats memoryStats() {
         threadChecker.run();
+        MemoryUsageSnapshot usage = memoryUsage();
         return DbMemoryAccounting.snapshot(
                 maxmemoryBytes,
-                ledger.usedBytes(),
+                usage,
                 ledger.reservedBytes(),
-                directNativeBytes(),
                 keyLifecycle.keyCount(),
                 expires,
+                hashTableMaintenanceRegistry,
                 true,
-                offHeapIncludedInMaxmemorySupplier.getAsBoolean(),
                 safeNativeAllocatorStats(),
                 nativeDefragReportSupplier.get()
         );
     }
 
+    MemoryUsageSnapshot memoryUsage() {
+        threadChecker.run();
+        return componentMemoryUsage.snapshot();
+    }
+
     long usedBytesForMaxmemory() {
         threadChecker.run();
-        // maxmemory 以 ledger 提交值为基线，再按当前部署模式追加 native 与 TTL index 的估算开销。
-        long nativeBytes = offHeapIncludedInMaxmemorySupplier.getAsBoolean() ? nativeBytesForMaxmemory() : 0L;
-        long ttlBytes = estimateTtlBytesForMaxmemory();
-        long total = ledger.usedBytes() + nativeBytes;
-        if (ttlBytes <= 0) {
-            return total;
-        }
-        if (Long.MAX_VALUE - total < ttlBytes) {
-            return Long.MAX_VALUE;
-        }
-        return total + ttlBytes;
+        return memoryUsage().effectiveBytesForMaxmemory();
     }
 
     long estimatedUsedBytes() {
@@ -130,6 +133,13 @@ public final class YierdisDbMemoryReporter {
             size = 0;
         }
         return Math.max(0, size);
+    }
+
+    private EntryRecord liveEntryRecord(KeyHandle keyHandle) {
+        if (internals != null) {
+            return internals.liveEntryRecord(keyHandle);
+        }
+        return keyLifecycle.liveEntryRecord(keyHandle);
     }
 
     private long metadataEstimatedBytes(KeyHandle keyHandle, EntryRecord record) {
@@ -212,46 +222,6 @@ public final class YierdisDbMemoryReporter {
         }
     }
 
-    private long nativeBytesForMaxmemory() {
-        return directNativeBytes();
-    }
-
-    private long directNativeBytes() {
-        long total = safeNativeAllocatorLogicalBytes();
-        if (expires instanceof YierdisFfmExpireIndex ffmExpires) {
-            total = addSaturating(total, ffmExpires.nativeBytes());
-        }
-        NativeKeyDirectory keyDirectory = keyLifecycle.keyDirectory();
-        if (keyDirectory != null) {
-            total = addSaturating(total, keyDirectory.nativeBytes());
-        }
-        HashRoot hashRoot = keyLifecycle.hashRoot();
-        if (hashRoot != null) {
-            total = addSaturating(total, hashRoot.nativeBytes());
-        }
-        SetRoot setRoot = keyLifecycle.setRoot();
-        if (setRoot != null) {
-            total = addSaturating(total, setRoot.nativeBytes());
-        }
-        ZSetRoot zsetRoot = keyLifecycle.zsetRoot();
-        if (zsetRoot != null) {
-            total = addSaturating(total, zsetRoot.nativeBytes());
-        }
-        return total;
-    }
-
-    private long safeNativeAllocatorLogicalBytes() {
-        var allocator = keyLifecycle.nativeAllocator();
-        if (allocator == null) {
-            return 0L;
-        }
-        try {
-            return Math.max(0L, allocator.logicalUsedBytes());
-        } catch (Throwable ignored) {
-            return 0L;
-        }
-    }
-
     private NativeAllocatorStats safeNativeAllocatorStats() {
         var allocator = keyLifecycle.nativeAllocator();
         if (allocator == null) {
@@ -264,13 +234,4 @@ public final class YierdisDbMemoryReporter {
         }
     }
 
-    private static long addSaturating(long left, long right) {
-        if (left < 0 || right < 0) {
-            return Long.MAX_VALUE;
-        }
-        if (Long.MAX_VALUE - left < right) {
-            return Long.MAX_VALUE;
-        }
-        return left + right;
-    }
 }

@@ -3,6 +3,8 @@ package yier.bubu.redis.execution.executor;
 import org.junit.Assert;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.ReplyPlan;
+import yier.bubu.redis.execution.api.ReplyReservationSink;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.api.Session;
@@ -255,6 +257,13 @@ final class SimpleReplyWriter implements RedisReplyWriter {
     }
 
     @Override
+    public void requireReply(ReplyPlan plan) {
+        if (out instanceof ReplyReservationSink reservationSink) {
+            reservationSink.require(plan);
+        }
+    }
+
+    @Override
     public void simpleString(String value) {
         write(value == null ? "(null)" : value);
     }
@@ -346,11 +355,6 @@ final class SimpleReplyWriter implements RedisReplyWriter {
     }
 
     @Override
-    public void bulkStringArray(List<byte[]> values) {
-        throw new UnsupportedOperationException("bulkStringArray");
-    }
-
-    @Override
     public void emptyArray() {
         write("[]");
     }
@@ -409,6 +413,11 @@ final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
     @Override
     public void onClose(TestConnection connection, Runnable callback) {
         state(connection).closeCallback = callback;
+    }
+
+    @Override
+    public void closeConnection(TestConnection connection) {
+        state(connection).closeCalls++;
     }
 
     @Override
@@ -471,6 +480,10 @@ final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
         return state(connection).flushCount;
     }
 
+    int closeCalls(TestConnection connection) {
+        return state(connection).closeCalls;
+    }
+
     void setActive(TestConnection connection, boolean active) {
         state(connection).active = active;
     }
@@ -496,5 +509,6 @@ final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
         private boolean inputDisabled;
         private boolean inputEnabledAgain;
         private int flushCount;
+        private int closeCalls;
     }
 }

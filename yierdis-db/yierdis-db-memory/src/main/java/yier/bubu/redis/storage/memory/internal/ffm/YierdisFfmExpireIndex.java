@@ -1,6 +1,5 @@
 package yier.bubu.redis.storage.memory.internal.ffm;
 
-import java.util.ArrayDeque;
 import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 import yier.bubu.redis.bytes.BytesView;
@@ -13,17 +12,23 @@ import yier.bubu.redis.memory.foreign.YierdisFfmRegion;
 import yier.bubu.redis.memory.foreign.YierdisFfmSpan;
 import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
 import yier.bubu.redis.storage.memory.internal.expire.YierdisExpireIndex;
+import yier.bubu.redis.storage.memory.internal.hash.HashCapacityPolicy;
+import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMetrics;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkResult;
+import yier.bubu.redis.storage.memory.internal.hash.SipHash24;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
 
-public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
+public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoCloseable, HashTableMaintenanceRegistry.Participant {
     @FunctionalInterface
     public interface RegionAllocator {
         YierdisFfmRegion allocateRegion(String owner, int bytes);
     }
 
-    private static final float LOAD_FACTOR = 0.75f;
-    private static final int MIN_CAPACITY = 16;
+    private static final HashTableWorkBudget ACCESS_REHASH_BUDGET = HashTableWorkBudget.of(1L, Long.MAX_VALUE);
     private static final byte STATE_EMPTY = 0;
     private static final byte STATE_FILLED = 1;
     private static final byte STATE_TOMBSTONE = 2;
@@ -33,14 +38,37 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
 
     private final NativeAllocator nativeAllocator;
     private final RegionAllocator regionAllocator;
-    private final ArrayDeque<Table> retiredTables = new ArrayDeque<>();
+    private final HashSeed hashSeed;
+    private final HashTableMaintenanceRegistry maintenanceRegistry;
+    private final HashTableMaintenanceRegistry.Registration maintenanceRegistration;
 
     private Table table0;
     private Table table1;
     private int rehashIndex = -1;
+    private long generation;
+    private long completedRehashes;
+    private int maximumProbeLength;
+    private boolean maintenanceDebt;
 
     public YierdisFfmExpireIndex(YierdisFfmMemoryRuntime memoryRuntime, NativeAllocator nativeAllocator) {
-        this(memoryRuntime, nativeAllocator, memoryRuntime::allocateRegion);
+        this(memoryRuntime, nativeAllocator, HashSeed.random(), memoryRuntime::allocateRegion);
+    }
+
+    public YierdisFfmExpireIndex(
+            YierdisFfmMemoryRuntime memoryRuntime,
+            NativeAllocator nativeAllocator,
+            HashSeed hashSeed
+    ) {
+        this(memoryRuntime, nativeAllocator, hashSeed, memoryRuntime::allocateRegion, null);
+    }
+
+    public YierdisFfmExpireIndex(
+            YierdisFfmMemoryRuntime memoryRuntime,
+            NativeAllocator nativeAllocator,
+            HashSeed hashSeed,
+            HashTableMaintenanceRegistry maintenanceRegistry
+    ) {
+        this(memoryRuntime, nativeAllocator, hashSeed, memoryRuntime::allocateRegion, maintenanceRegistry);
     }
 
     public YierdisFfmExpireIndex(
@@ -48,14 +76,35 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             NativeAllocator nativeAllocator,
             RegionAllocator regionAllocator
     ) {
+        this(memoryRuntime, nativeAllocator, HashSeed.random(), regionAllocator, null);
+    }
+
+    public YierdisFfmExpireIndex(
+            YierdisFfmMemoryRuntime memoryRuntime,
+            NativeAllocator nativeAllocator,
+            HashSeed hashSeed,
+            RegionAllocator regionAllocator
+    ) {
+        this(memoryRuntime, nativeAllocator, hashSeed, regionAllocator, null);
+    }
+
+    public YierdisFfmExpireIndex(
+            YierdisFfmMemoryRuntime memoryRuntime,
+            NativeAllocator nativeAllocator,
+            HashSeed hashSeed,
+            RegionAllocator regionAllocator,
+            HashTableMaintenanceRegistry maintenanceRegistry
+    ) {
         Objects.requireNonNull(memoryRuntime, "memoryRuntime");
         this.nativeAllocator = Objects.requireNonNull(nativeAllocator, "nativeAllocator");
+        this.hashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
         this.regionAllocator = Objects.requireNonNull(regionAllocator, "regionAllocator");
+        this.maintenanceRegistry = maintenanceRegistry;
+        this.maintenanceRegistration = maintenanceRegistry == null ? null : maintenanceRegistry.registration(this);
     }
 
     @Override
     public int size() {
-        closeRetiredTables();
         Table t0 = table0;
         if (t0 == null) {
             return 0;
@@ -66,6 +115,109 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
 
     public boolean isRehashing() {
         return table1 != null;
+    }
+
+    public HashTableMetrics metrics() {
+        Table active = table1 == null ? table0 : table1;
+        int activeSize = active == null ? 0 : active.size;
+        int activeFilled = active == null ? 0 : active.used;
+        return new HashTableMetrics(
+                active == null ? 0 : active.capacity,
+                tableSize(table0) + tableSize(table1),
+                activeFilled,
+                activeFilled - activeSize,
+                table1 != null,
+                table1 == null || table0 == null ? 0 : table0.capacity,
+                table1 == null ? 0 : rehashIndex,
+                generation,
+                completedRehashes,
+                maximumProbeLength
+        );
+    }
+
+    @Override
+    public boolean hasMaintenanceDebt() {
+        return maintenanceDebt || table1 != null;
+    }
+
+    @Override
+    public long estimatedMaintenanceGrowthBytes() {
+        if (table0 == null || table1 != null) {
+            return 0L;
+        }
+        HashCapacityPolicy.Decision decision = maintenanceDecision(table0);
+        return decision.action() == HashCapacityPolicy.Action.NONE
+                ? 0L
+                : MemoryUsageSnapshot.addSaturating(
+                        tableRegionBytes(decision.targetCapacity()),
+                        tableHeapBytes(decision.targetCapacity())
+                );
+    }
+
+    @Override
+    public HashTableMaintenanceRegistry.MaintenancePreparation prepareMaintenance() {
+        StagedResize staged = stageMaintenanceResize();
+        if (staged == null) {
+            return null;
+        }
+        return new HashTableMaintenanceRegistry.MaintenancePreparation() {
+            private StagedResize pending = staged;
+
+            @Override
+            public long stagedNonNativeGrowthBytes() {
+                return requirePending().stagedNonNativeGrowthBytes();
+            }
+
+            @Override
+            public void commit() {
+                StagedResize current = requirePending();
+                pending = null;
+                publishStagedResize(current);
+            }
+
+            @Override
+            public void abort() {
+                StagedResize current = pending;
+                pending = null;
+                if (current != null) {
+                    current.close();
+                }
+            }
+
+            private StagedResize requirePending() {
+                if (pending == null) {
+                    throw new IllegalStateException("staged expiry-index maintenance resize is closed");
+                }
+                return pending;
+            }
+        };
+    }
+
+    public StagedResize stageMaintenanceResize() {
+        Table source = table0;
+        if (source == null || table1 != null) {
+            return null;
+        }
+        HashCapacityPolicy.Decision decision = maintenanceDecision(source);
+        if (decision.action() == HashCapacityPolicy.Action.NONE) {
+            maintenanceDebt = false;
+            refreshMaintenanceRegistration();
+            return null;
+        }
+        return new StagedResize(source, new Table(decision.targetCapacity()));
+    }
+
+    public void publishStagedResize(StagedResize staged) {
+        Objects.requireNonNull(staged, "staged");
+        staged.ensureActive();
+        if (table1 != null || table0 != staged.source) {
+            throw new IllegalStateException("staged expiry-index resize is no longer current");
+        }
+        publishStagedRehash(staged.publish());
+    }
+
+    public long heapEstimatedBytes() {
+        return MemoryUsageSnapshot.addSaturating(tableHeapBytes(table0), tableHeapBytes(table1));
     }
 
     public int table0Capacity() {
@@ -84,6 +236,15 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         return estimatedTableOverheadBytes();
     }
 
+    public MemoryUsageSnapshot memoryUsage() {
+        long heap = MemoryUsageSnapshot.addSaturating(
+                tableHeapBytes(table0),
+                tableHeapBytes(table1)
+        );
+        long nativeBytes = nativeBytes();
+        return new MemoryUsageSnapshot(heap, 0L, nativeBytes, nativeBytes, 0L);
+    }
+
     public long estimatedInsertFfmRegionGrowthBytes() {
         int capacity = tableCapacityAllocatedByNextInsert();
         return capacity <= 0 ? 0L : tableRegionBytes(capacity);
@@ -100,7 +261,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         if (replacementSize <= 0) {
             replacementSize = 1;
         }
-        int capacity = Math.max(MIN_CAPACITY, tableSizeFor(replacementSize, LOAD_FACTOR));
+        int capacity = tableSizeFor(replacementSize);
         return MemoryUsageSnapshot.addSaturating(tableRegionBytes(capacity), tableHeapBytes(capacity));
     }
 
@@ -154,6 +315,16 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
     public Long get(KeyHandle keyHandle) {
         Objects.requireNonNull(keyHandle, "keyHandle");
         rehashStep();
+        return getWithoutRehash(keyHandle);
+    }
+
+    @Override
+    public Long getForScan(KeyHandle keyHandle) {
+        Objects.requireNonNull(keyHandle, "keyHandle");
+        return getWithoutRehash(keyHandle);
+    }
+
+    private Long getWithoutRehash(KeyHandle keyHandle) {
         Table t0 = table0;
         if (t0 == null) {
             return null;
@@ -211,12 +382,26 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
 
     @Override
     public void clear() {
-        closeRetiredTables();
+        Table empty = new Table(HashCapacityPolicy.MIN_CAPACITY);
+        clearTable(table0);
+        clearTable(table1);
+        table0 = empty;
+        table1 = null;
+        rehashIndex = -1;
+        maintenanceDebt = false;
+        refreshMaintenanceRegistration();
+        generation++;
+    }
+
+    @Override
+    public void close() {
         clearTable(table0);
         clearTable(table1);
         table0 = null;
         table1 = null;
         rehashIndex = -1;
+        maintenanceDebt = false;
+        refreshMaintenanceRegistration();
     }
 
     @Override
@@ -225,7 +410,6 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         KeyRef ref = keyRef(keyHandle);
         ensureTable0();
         rehashStep();
-        maybeStartRehashForInsert();
 
         int h = hash(keyHandle);
         int idx = findIndex(table0, keyHandle, h);
@@ -242,6 +426,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             }
         }
 
+        maybeStartRehashForInsert(ref, h);
         if (table1 != null) {
             insertNewIntoTable1(ref, h, expireAtMillis);
             return;
@@ -282,7 +467,6 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
     @Override
     public PreparedTtlMutation prepareSetExpireAtMillis(KeyHandle keyHandle, long expireAtMillis) {
         Objects.requireNonNull(keyHandle, "keyHandle");
-        closeRetiredTables();
         KeyRef targetRef = keyRef(keyHandle);
         int targetHash = hash(keyHandle);
         return prepareReplacement(targetRef, targetHash, expireAtMillis);
@@ -291,7 +475,6 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
     @Override
     public PreparedTtlMutation prepareRemoveExpire(KeyHandle keyHandle) {
         Objects.requireNonNull(keyHandle, "keyHandle");
-        closeRetiredTables();
         int targetHash = hash(keyHandle);
         int index = findIndex(table0, keyHandle, targetHash);
         if (index >= 0) {
@@ -306,24 +489,39 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
 
     private void ensureTable0() {
         if (table0 == null) {
-            table0 = new Table(MIN_CAPACITY);
+            table0 = new Table(HashCapacityPolicy.MIN_CAPACITY);
         }
     }
 
     private int tableCapacityAllocatedByNextInsert() {
         Table t0 = table0;
         if (t0 == null) {
-            return MIN_CAPACITY;
+            return HashCapacityPolicy.MIN_CAPACITY;
         }
         Table t1 = table1;
         if (t1 != null) {
-            return t1.used + 2 > t1.threshold ? t1.capacity << 1 : 0;
+            return targetCapacityForPotentialInsert(t1);
         }
-        if (t0.used + 1 <= t0.threshold) {
+        return targetCapacityForPotentialInsert(t0);
+    }
+
+    private static int targetCapacityForPotentialInsert(Table table) {
+        int projectedFilled = Math.min(table.capacity, table.used + 1);
+        int projectedSize = table.size + 1;
+        int projectedTombstones = projectedFilled - projectedSize;
+        if (projectedTombstones < 0) {
             return 0;
         }
-        int target = tableSizeFor(t0.size + 1, LOAD_FACTOR);
-        return Math.max(target, MIN_CAPACITY);
+        HashCapacityPolicy.Decision decision = HashCapacityPolicy.nextAction(
+                table.capacity,
+                projectedSize,
+                projectedFilled,
+                projectedTombstones
+        );
+        return decision.action() == HashCapacityPolicy.Action.GROW
+                        || decision.action() == HashCapacityPolicy.Action.COMPACT
+                ? decision.targetCapacity()
+                : 0;
     }
 
     private long tableBytes(Table table) {
@@ -331,6 +529,13 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             return 0L;
         }
         return tableRegionBytes(table.capacity);
+    }
+
+    private long tableHeapBytes(Table table) {
+        if (table == null) {
+            return 0L;
+        }
+        return tableHeapBytes(table.capacity);
     }
 
     private static long tableRegionBytes(int capacity) {
@@ -408,58 +613,75 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         return null;
     }
 
-    private void maybeStartRehashForInsert() {
+    private void maybeStartRehashForInsert(KeyRef ref, int hash) {
         if (table1 != null) {
             return;
         }
         Table t0 = table0;
-        if (t0.used + 1 <= t0.threshold) {
+        int location = findOrInsertLocation(t0, ref, hash);
+        if (location >= 0) {
+            throw new IllegalStateException("expire index key already exists during resize preparation");
+        }
+        int insertionIndex = -location - 1;
+        int projectedSize = t0.size + 1;
+        int projectedFilled = t0.used + (t0.stateAt(insertionIndex) == STATE_EMPTY ? 1 : 0);
+        int projectedTombstones = projectedFilled - projectedSize;
+        HashCapacityPolicy.Decision decision = HashCapacityPolicy.nextAction(
+                t0.capacity,
+                projectedSize,
+                projectedFilled,
+                projectedTombstones
+        );
+        if (decision.action() == HashCapacityPolicy.Action.NONE) {
             return;
         }
-        int target = tableSizeFor(t0.size + 1, LOAD_FACTOR);
-        startRehash(Math.max(target, MIN_CAPACITY));
+        startRehash(decision.targetCapacity());
     }
 
-    private void maybeStartRehashForDeleteOrTombstones() {
-        if (table1 != null) {
-            return;
-        }
-        Table t0 = table0;
-        if (t0 == null) {
-            return;
-        }
-        int cap = t0.capacity;
-        if (t0.size == 0) {
-            retireTable(t0);
-            table0 = null;
-            return;
-        }
-        if (cap <= MIN_CAPACITY) {
-            return;
-        }
-        int tombstones = t0.used - t0.size;
-        if (t0.size < cap / 8) {
-            int target = tableSizeFor(t0.size, LOAD_FACTOR);
-            if (target < MIN_CAPACITY) {
-                target = MIN_CAPACITY;
-            }
-            if (target < cap) {
-                startRehash(target);
-                return;
-            }
-        }
-        if (tombstones > cap / 4) {
-            int target = tableSizeFor(t0.size, LOAD_FACTOR);
-            if (target < MIN_CAPACITY) {
-                target = MIN_CAPACITY;
-            }
-            startRehash(target);
-        }
+    private HashCapacityPolicy.Decision maintenanceDecision(Table table) {
+        return HashCapacityPolicy.nextAction(
+                table.capacity,
+                table.size,
+                table.used,
+                table.used - table.size
+        );
+    }
+
+    private void recordMaintenanceDebt() {
+        maintenanceDebt = table1 != null
+                || (table0 != null && maintenanceDecision(table0).action() != HashCapacityPolicy.Action.NONE);
+        refreshMaintenanceRegistration();
     }
 
     private void startRehash(int capacity) {
-        table1 = new Table(capacity);
+        if (table1 != null) {
+            throw new IllegalStateException("expire index is already rehashing");
+        }
+        publishStagedRehash(new Table(capacity));
+    }
+
+    private void publishStagedRehash(Table staged) {
+        if (table1 != null) {
+            throw new IllegalStateException("expire index is already rehashing");
+        }
+        table1 = Objects.requireNonNull(staged, "staged");
         rehashIndex = 0;
+        maintenanceDebt = true;
+        refreshMaintenanceRegistration();
+        generation++;
+    }
+
+    private void refreshMaintenanceRegistration() {
+        if (maintenanceRegistration == null) {
+            return;
+        }
+        if (maintenanceDebt || table1 != null) {
+            if (!maintenanceRegistration.registered()) {
+                maintenanceRegistry.register(maintenanceRegistration);
+            }
+        } else {
+            maintenanceRegistry.unregister(maintenanceRegistration);
+        }
     }
 
     private PreparedTtlMutation prepareReplacement(KeyRef targetRef, int targetHash, Long expireAtMillis) {
@@ -469,7 +691,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         int replacementSize = currentSize - (targetExists ? 1 : 0) + (expireAtMillis == null ? 0 : 1);
         Table replacement = null;
         if (replacementSize > 0) {
-            int capacity = Math.max(MIN_CAPACITY, tableSizeFor(replacementSize, LOAD_FACTOR));
+            int capacity = tableSizeFor(replacementSize);
             replacement = new Table(capacity);
             copyTableExcluding(table0, replacement, targetRef, targetHash);
             copyTableExcluding(table1, replacement, targetRef, targetHash);
@@ -521,7 +743,8 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         }
         int mask = table.capacity - 1;
         int idx = hash & mask;
-        while (true) {
+        for (int probes = 1; probes <= table.capacity; probes++) {
+            recordProbe(probes);
             byte state = table.stateAt(idx);
             if (state == STATE_EMPTY) {
                 return -1;
@@ -531,6 +754,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             }
             idx = (idx + 1) & mask;
         }
+        return -1;
     }
 
     private static int tableSize(Table table) {
@@ -538,74 +762,72 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
     }
 
     private void rehashStep() {
-        closeRetiredTables();
+        advanceRehash(ACCESS_REHASH_BUDGET);
+    }
+
+    @Override
+    public HashTableWorkResult advanceRehash(HashTableWorkBudget budget) {
+        Objects.requireNonNull(budget, "budget");
         if (table1 == null) {
-            return;
+            return new HashTableWorkResult(0L, 0L, true, HashTableWorkResult.StopReason.NOT_REHASHING);
         }
-        int steps = 1;
-        while (steps-- > 0 && table1 != null) {
-            Table t0 = table0;
-            while (rehashIndex < t0.capacity && t0.stateAt(rehashIndex) != STATE_FILLED) {
-                rehashIndex++;
+
+        long inspected = 0L;
+        long migrated = 0L;
+        long startedAt = System.nanoTime();
+        Table source = table0;
+        while (rehashIndex < source.capacity) {
+            if (inspected >= budget.maxInspectedSlots()) {
+                return new HashTableWorkResult(inspected, migrated, false, HashTableWorkResult.StopReason.SLOT_LIMIT);
             }
-            if (rehashIndex >= t0.capacity) {
-                finishRehash();
-                return;
+            if (timeLimitReached(startedAt, budget.timeLimitNanos())) {
+                return new HashTableWorkResult(inspected, migrated, false, HashTableWorkResult.StopReason.TIME_LIMIT);
             }
 
-            int idx = rehashIndex;
-            KeyRef ref = t0.refs[idx];
-            int hash = t0.hashAt(idx);
-            long expireAt = t0.expireAt(idx);
-
-            t0.setState(idx, STATE_TOMBSTONE);
-            t0.setHash(idx, 0);
-            t0.setExpireAt(idx, 0L);
-            t0.refs[idx] = null;
-            t0.size--;
-
-            insertExistingIntoTable1(ref, hash, expireAt);
-            rehashIndex++;
+            int index = rehashIndex++;
+            inspected++;
+            if (source.stateAt(index) == STATE_FILLED) {
+                moveOldSlotToTable1(source, index);
+                migrated++;
+            }
         }
+
+        finishRehash();
+        return new HashTableWorkResult(inspected, migrated, true, HashTableWorkResult.StopReason.COMPLETE);
     }
 
     private void finishRehash() {
         Table old0 = table0;
         Table new0 = table1;
-        retireTable(old0);
         table0 = new0;
         table1 = null;
         rehashIndex = -1;
-    }
-
-    private void retireTable(Table table) {
-        if (table != null) {
-            retiredTables.addLast(table);
+        completedRehashes++;
+        generation++;
+        recordMaintenanceDebt();
+        Throwable failure = closeTable(old0, null);
+        if (failure != null) {
+            rethrow(failure);
         }
     }
 
-    private void closeRetiredTables() {
-        while (!retiredTables.isEmpty()) {
-            retiredTables.removeFirst().close();
-        }
-    }
+    private void moveOldSlotToTable1(Table source, int sourceIndex) {
+        KeyRef ref = source.refs[sourceIndex];
+        int hash = source.hashAt(sourceIndex);
+        long expireAtMillis = source.expireAt(sourceIndex);
+        ensureTable1CapacityForInsert(ref, hash);
 
-    private void insertExistingIntoTable1(KeyRef ref, int hash, long expireAtMillis) {
-        Table t1 = table1;
-        if (t1.used + 1 > t1.threshold) {
-            growTable1();
-            t1 = table1;
-        }
-        insertIntoTable(t1, ref, hash, expireAtMillis);
+        source.setState(sourceIndex, STATE_TOMBSTONE);
+        source.setHash(sourceIndex, 0);
+        source.setExpireAt(sourceIndex, 0L);
+        source.refs[sourceIndex] = null;
+        source.size--;
+        insertIntoTable(table1, ref, hash, expireAtMillis);
     }
 
     private void insertNewIntoTable1(KeyRef ref, int hash, long expireAtMillis) {
-        Table t1 = table1;
-        if (t1.used + 1 > t1.threshold) {
-            growTable1();
-            t1 = table1;
-        }
-        insertNewIntoTable(t1, ref, hash, expireAtMillis);
+        ensureTable1CapacityForInsert(ref, hash);
+        insertNewIntoTable(table1, ref, hash, expireAtMillis);
     }
 
     private void insertNewIntoTable(Table table, KeyRef ref, int hash, long expireAtMillis) {
@@ -626,10 +848,32 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         table.size++;
     }
 
-    private void growTable1() {
+    private void ensureTable1CapacityForInsert(KeyRef ref, int hash) {
+        Table target = table1;
+        int location = findOrInsertLocation(target, ref, hash);
+        if (location >= 0) {
+            return;
+        }
+        int insertionIndex = -location - 1;
+        int projectedSize = target.size + 1;
+        int projectedFilled = target.used + (target.stateAt(insertionIndex) == STATE_EMPTY ? 1 : 0);
+        int projectedTombstones = projectedFilled - projectedSize;
+        HashCapacityPolicy.Decision decision = HashCapacityPolicy.nextAction(
+                target.capacity,
+                projectedSize,
+                projectedFilled,
+                projectedTombstones
+        );
+        if (decision.action() == HashCapacityPolicy.Action.GROW
+                || decision.action() == HashCapacityPolicy.Action.COMPACT) {
+            resizeTable1(decision.targetCapacity());
+        }
+    }
+
+    private void resizeTable1(int capacity) {
         Table old = table1;
         int oldSize = old.size;
-        Table next = new Table(old.capacity << 1);
+        Table next = new Table(capacity);
         for (int i = 0; i < old.capacity; i++) {
             if (old.stateAt(i) != STATE_FILLED) {
                 continue;
@@ -648,7 +892,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         if (next.size != oldSize) {
             old.close();
             next.close();
-            throw new IllegalStateException("rehash size mismatch");
+            throw new IllegalStateException("expire-index destination resize size mismatch");
         }
         old.close();
         table1 = next;
@@ -683,45 +927,15 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
     }
 
     private int hash(byte[] key) {
-        return mix(contentHash(key));
+        return SipHash24.foldToInt(SipHash24.hash(hashSeed, key));
     }
 
     private int hash(BytesView key) {
-        return mix(contentHash(key));
+        return SipHash24.foldToInt(SipHash24.hash(hashSeed, key));
     }
 
     private int hash(KeyHandle keyHandle) {
-        return mix(contentHash(keyHandle));
-    }
-
-    private static int contentHash(byte[] key) {
-        int h = 1;
-        for (byte b : key) {
-            h = 31 * h + b;
-        }
-        return h;
-    }
-
-    private static int contentHash(BytesView key) {
-        int len = key.length();
-        if (len < 0) {
-            throw new IllegalArgumentException("key length must be non-negative");
-        }
-        int h = 1;
-        for (int i = 0; i < len; i++) {
-            h = 31 * h + key.getByte(i);
-        }
-        return h;
-    }
-
-    private static int mix(int base) {
-        int h = base;
-        h ^= (h >>> 16);
-        h *= 0x7feb352d;
-        h ^= (h >>> 15);
-        h *= 0x846ca68b;
-        h ^= (h >>> 16);
-        return h == 0 ? 1 : h;
+        return SipHash24.foldToInt(SipHash24.hash(hashSeed, keyHandle));
     }
 
     private int findIndex(Table table, byte[] key, int hash) {
@@ -730,7 +944,8 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         }
         int mask = table.capacity - 1;
         int idx = hash & mask;
-        while (true) {
+        for (int probes = 1; probes <= table.capacity; probes++) {
+            recordProbe(probes);
             byte state = table.stateAt(idx);
             if (state == STATE_EMPTY) {
                 return -1;
@@ -740,6 +955,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             }
             idx = (idx + 1) & mask;
         }
+        return -1;
     }
 
     private int findIndex(Table table, BytesView key, int hash) {
@@ -748,7 +964,8 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         }
         int mask = table.capacity - 1;
         int idx = hash & mask;
-        while (true) {
+        for (int probes = 1; probes <= table.capacity; probes++) {
+            recordProbe(probes);
             byte state = table.stateAt(idx);
             if (state == STATE_EMPTY) {
                 return -1;
@@ -758,6 +975,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             }
             idx = (idx + 1) & mask;
         }
+        return -1;
     }
 
     private int findIndex(Table table, KeyHandle keyHandle, int hash) {
@@ -767,7 +985,8 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         KeyRef handleRef = keyRefOrNull(keyHandle);
         int mask = table.capacity - 1;
         int idx = hash & mask;
-        while (true) {
+        for (int probes = 1; probes <= table.capacity; probes++) {
+            recordProbe(probes);
             byte state = table.stateAt(idx);
             if (state == STATE_EMPTY) {
                 return -1;
@@ -783,13 +1002,15 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             }
             idx = (idx + 1) & mask;
         }
+        return -1;
     }
 
     private int findOrInsertLocation(Table table, KeyRef ref, int hash) {
         int mask = table.capacity - 1;
         int idx = hash & mask;
         int firstTombstone = -1;
-        while (true) {
+        for (int probes = 1; probes <= table.capacity; probes++) {
+            recordProbe(probes);
             byte state = table.stateAt(idx);
             if (state == STATE_EMPTY) {
                 int target = firstTombstone >= 0 ? firstTombstone : idx;
@@ -804,6 +1025,10 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             }
             idx = (idx + 1) & mask;
         }
+        if (firstTombstone >= 0) {
+            return -(firstTombstone + 1);
+        }
+        throw new IllegalStateException("expire index has no insertion slot");
     }
 
     private boolean sameRef(KeyRef left, KeyRef right) {
@@ -826,13 +1051,25 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         return null;
     }
 
-    private static int tableSizeFor(int expectedSize, float loadFactor) {
-        int cap = 1;
-        int needed = Math.max(4, (int) Math.ceil(expectedSize / loadFactor));
-        while (cap < needed) {
-            cap <<= 1;
+    private static int tableSizeFor(int expectedSize) {
+        int capacity = HashCapacityPolicy.MIN_CAPACITY;
+        while (expectedSize > capacity - capacity / 4) {
+            if (capacity == HashCapacityPolicy.MAX_CAPACITY) {
+                HashCapacityPolicy.nextAction(capacity, capacity, capacity, 0);
+            }
+            capacity <<= 1;
         }
-        return cap;
+        return capacity;
+    }
+
+    private void recordProbe(int probes) {
+        if (probes > maximumProbeLength) {
+            maximumProbeLength = probes;
+        }
+    }
+
+    private static boolean timeLimitReached(long startedAt, long timeLimitNanos) {
+        return timeLimitNanos != Long.MAX_VALUE && System.nanoTime() - startedAt >= timeLimitNanos;
     }
 
     private final class Location {
@@ -855,9 +1092,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             if (ref != null) {
                 ref.releaseFromIndex();
             }
-            if (table == 0) {
-                maybeStartRehashForDeleteOrTombstones();
-            }
+            recordMaintenanceDebt();
         }
     }
 
@@ -895,6 +1130,9 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             rehashIndex = -1;
             replacement = null;
             committed = true;
+            maintenanceDebt = false;
+            refreshMaintenanceRegistration();
+            generation++;
         }
 
         @Override
@@ -961,17 +1199,16 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             table.setExpireAt(index, 0L);
             table.refs[index] = null;
             table.size--;
-            if (table == table0) {
-                maybeStartRehashForDeleteOrTombstones();
-            }
+            recordMaintenanceDebt();
             committed = true;
         }
 
         @Override
         public void releaseSuperseded() {
-            if (removedRef != null) {
-                removedRef.releaseFromIndex();
-                removedRef = null;
+            KeyRef ref = removedRef;
+            removedRef = null;
+            if (ref != null) {
+                ref.releaseFromIndex();
             }
         }
 
@@ -981,6 +1218,53 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
                 return;
             }
             aborted = true;
+        }
+    }
+
+    public final class StagedResize implements AutoCloseable {
+        private final Table source;
+        private Table replacement;
+        private boolean terminal;
+
+        private StagedResize(Table source, Table replacement) {
+            this.source = Objects.requireNonNull(source, "source");
+            this.replacement = Objects.requireNonNull(replacement, "replacement");
+        }
+
+        public long stagedNonNativeGrowthBytes() {
+            ensureActive();
+            return MemoryUsageSnapshot.addSaturating(
+                    tableRegionBytes(replacement.capacity),
+                    tableHeapBytes(replacement.capacity)
+            );
+        }
+
+        private Table publish() {
+            ensureActive();
+            Table published = replacement;
+            replacement = null;
+            terminal = true;
+            return published;
+        }
+
+        private void ensureActive() {
+            if (terminal || replacement == null) {
+                throw new IllegalStateException("staged expiry-index resize is closed");
+            }
+        }
+
+        @Override
+        public void close() {
+            if (terminal) {
+                return;
+            }
+            terminal = true;
+            Table current = replacement;
+            replacement = null;
+            Throwable failure = closeTable(current, null);
+            if (failure != null) {
+                rethrow(failure);
+            }
         }
     }
 
@@ -996,7 +1280,6 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
 
         private int size;
         private int used;
-        private final int threshold;
 
         private Table(int capacity) {
             this.capacity = capacity;
@@ -1028,7 +1311,6 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             this.expireAtRegion = stagedExpireAtRegion;
             this.expireAt = stagedExpireAt;
             this.refs = stagedRefs;
-            this.threshold = (int) (capacity * LOAD_FACTOR);
         }
 
         private byte stateAt(int index) {

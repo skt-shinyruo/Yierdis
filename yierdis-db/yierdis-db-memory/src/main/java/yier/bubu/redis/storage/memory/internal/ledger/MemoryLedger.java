@@ -16,6 +16,10 @@ public interface MemoryLedger {
 
     long reservedBytes();
 
+    default boolean maxmemoryEnabled() {
+        return limitBytes() > 0L;
+    }
+
     public default long effectiveUsedBytes() {
         return usedBytes() + reservedBytes();
     }

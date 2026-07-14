@@ -42,10 +42,9 @@ public final class HllCommands implements CommandModule {
         int elementsLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, elementsLen);
         try {
-            long changed = support.recordWriteValue(
-                    ctx,
-                    support.commandDb(ctx).writes().hll().pfadd(request.readOnlyByteArray(1), support.slice())
-            );
+            long changed = support.commandDb(ctx).writes().hll()
+                    .pfadd(request.readOnlyByteArray(1), support.slice())
+                    .value();
             out.integer(changed);
         } finally {
             support.clearScratch(elementsLen);
@@ -76,10 +75,9 @@ public final class HllCommands implements CommandModule {
         int sourcesLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, sourcesLen);
         try {
-            support.recordWriteValue(
-                    ctx,
-                    support.commandDb(ctx).writes().hll().pfmerge(request.readOnlyByteArray(1), support.slice())
-            );
+            support.commandDb(ctx).writes().hll()
+                    .pfmerge(request.readOnlyByteArray(1), support.slice())
+                    .value();
         } finally {
             support.clearScratch(sourcesLen);
         }

@@ -71,6 +71,57 @@ public class ZSetValueTest {
     }
 
     @Test
+    public void skiplistRangeRemovalUsesMeasuredNativeMemberLookup() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-remove-skiplist");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+            ZSetValue zv = new ZSetValue(allocator);
+            try {
+                ArrayList<byte[]> pairs = new ArrayList<>();
+                for (int i = 0; i < 200; i++) {
+                    pairs.add(b(Integer.toString(i)));
+                    pairs.add(b("m" + i));
+                }
+                Assert.assertEquals(200, zv.zaddMany(pairs));
+                Assert.assertEquals(ValueEncoding.ZSET_SKIPLIST, zv.encoding());
+
+                Assert.assertEquals(100, zv.countRemovalsByRank(50, 149));
+                Assert.assertEquals(100, zv.zremrangeByRank(50, 149));
+                Assert.assertEquals(100, zv.size());
+                Assert.assertEquals(50, zv.countRemovalsByScore(0, false, 49, false));
+                Assert.assertEquals(50, zv.zremrangeByScore(0, false, 49, false));
+                Assert.assertEquals(50, zv.size());
+            } finally {
+                zv.close();
+            }
+        }
+    }
+
+    @Test
+    public void preparedCopyHeapUpperBoundCoversListpackToSkiplistUpgrade() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-prepared-heap");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+            ZSetValue source = new ZSetValue(allocator);
+            ZSetValue replacement = new ZSetValue(allocator);
+            try {
+                List<byte[]> sourcePairs = List.of(
+                        b("1"), b("alpha"), b("2"), b("beta"), b("3"), b("gamma")
+                );
+                source.zaddMany(sourcePairs);
+                List<byte[]> addition = List.of(b("4"), new byte[256]);
+                long upperBound = source.preparedCopyHeapUpperBound(addition);
+
+                replacement.zaddMany(sourcePairs);
+                replacement.prepareAdd(addition);
+
+                Assert.assertTrue(replacement.heapEstimatedBytes() <= upperBound);
+            } finally {
+                replacement.close();
+                source.close();
+            }
+        }
+    }
+
+    @Test
     public void packedZSetStreamsMembersThroughNativeBytesSlice() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-stream-packed");
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {

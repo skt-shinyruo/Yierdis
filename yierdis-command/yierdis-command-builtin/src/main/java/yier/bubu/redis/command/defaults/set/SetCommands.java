@@ -9,10 +9,9 @@ import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
-import yier.bubu.redis.command.defaults.BulkStringReplyAdapter;
 import yier.bubu.redis.command.defaults.CommandSupport;
 
-import yier.bubu.redis.storage.api.result.BulkStringSequence;
+import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequence;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
@@ -45,10 +44,9 @@ public final class SetCommands implements CommandModule {
         int membersLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, membersLen);
         try {
-            long added = support.recordWriteValue(
-                    ctx,
-                    support.commandDb(ctx).writes().sets().sadd(request.readOnlyByteArray(1), support.slice())
-            );
+            long added = support.commandDb(ctx).writes().sets()
+                    .sadd(request.readOnlyByteArray(1), support.slice())
+                    .value();
             out.integer(added);
         } finally {
             support.clearScratch(membersLen);
@@ -64,10 +62,9 @@ public final class SetCommands implements CommandModule {
         int membersLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, membersLen);
         try {
-            long removed = support.recordWriteValue(
-                    ctx,
-                    support.commandDb(ctx).writes().sets().srem(request.readOnlyByteArray(1), support.slice())
-            );
+            long removed = support.commandDb(ctx).writes().sets()
+                    .srem(request.readOnlyByteArray(1), support.slice())
+                    .value();
             out.integer(removed);
         } finally {
             support.clearScratch(membersLen);
@@ -82,13 +79,8 @@ public final class SetCommands implements CommandModule {
         }
 
         byte[] key = request.readOnlyByteArray(1);
-        BulkStringSequence seq = support.commandDb(ctx).reads().sets().smembers(key);
-        int count = seq.count();
-        out.arrayHeader(count);
-        if (count == 0) {
-            return;
-        }
-        seq.emitTo(new BulkStringReplyAdapter(out));
+        MeasuredBulkStringSequence seq = support.commandDb(ctx).reads().sets().smembers(key);
+        CommandSupport.writeMeasuredBulkStringArray(out, seq);
     }
 
     private void sismember(ExecutionRequest request, CommandContext ctx) {

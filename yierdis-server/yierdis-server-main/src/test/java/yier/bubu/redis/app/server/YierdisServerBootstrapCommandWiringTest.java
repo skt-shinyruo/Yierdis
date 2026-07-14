@@ -25,10 +25,11 @@ import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
-import yier.bubu.redis.protocol.resp.netty.RespCommandAdapter;
+import yier.bubu.redis.protocol.resp.netty.InboundByteAccountingHandler;
+import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
+import yier.bubu.redis.protocol.resp.netty.InboundReadCreditHandler;
 import yier.bubu.redis.protocol.resp.netty.RespRequestDecoder;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
-import yier.bubu.redis.command.kernel.YierdisCommandProcessorOptions;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
@@ -76,12 +77,30 @@ public class YierdisServerBootstrapCommandWiringTest {
                 Map<String, Object> info = respMap(roundTrip(out, in, "INFO", "yierdis"));
                 Assert.assertEquals("yierdis", asString(info.get("server")));
                 Assert.assertTrue("expected structured INFO fields", info.containsKey("executor_policy"));
+                Assert.assertTrue("expected INFO to expose ingress capacity", info.containsKey("inbound_capacity_bytes"));
+                Assert.assertTrue("expected INFO to expose reply capacity", info.containsKey("reply_global_capacity_bytes"));
+                Assert.assertTrue("expected INFO to expose reply drain timeout", info.containsKey("reply_drain_timeout_millis"));
+                Assert.assertTrue("expected INFO to expose outbound reservations", info.containsKey("outbound_reserved_bytes"));
+                Assert.assertEquals("DISABLED", asString(info.get("commit_stream_state")));
+                Assert.assertTrue(info.containsKey("commit_stream_reserved_events"));
+                Assert.assertTrue(info.containsKey("commit_stream_first_failure_type"));
 
                 Map<String, Object> stats = respMap(roundTrip(out, in, "STATS"));
                 Assert.assertTrue(stats.containsKey("queued_tasks"));
                 Assert.assertTrue(stats.containsKey("commands_executed_total"));
                 Assert.assertTrue(stats.containsKey("conn_commands_enqueued"));
                 Assert.assertTrue(stats.containsKey("conn_commands_executed"));
+                Assert.assertTrue(stats.containsKey("inbound_capacity_bytes"));
+                Assert.assertTrue(stats.containsKey("inbound_reserved_bytes"));
+                Assert.assertTrue(stats.containsKey("inbound_waiting_connections"));
+                Assert.assertTrue(stats.containsKey("outbound_active_slots"));
+                Assert.assertTrue(stats.containsKey("outbound_active_chunks"));
+                Assert.assertTrue(stats.containsKey("live_child_channels"));
+                Assert.assertTrue(stats.containsKey("reply_shutdown_timeouts"));
+                Assert.assertEquals("DISABLED", asString(stats.get("commit_stream_state")));
+                Assert.assertTrue(stats.containsKey("commit_stream_reserved_events"));
+                Assert.assertTrue(stats.containsKey("commit_stream_last_acknowledged_sequence"));
+                Assert.assertTrue(stats.containsKey("commit_stream_first_failure_message"));
                 Assert.assertTrue(asLong(stats.get("conn_commands_enqueued")) > 0L);
                 Assert.assertTrue(asLong(stats.get("conn_commands_executed")) > 0L);
                 Assert.assertTrue(
@@ -119,7 +138,6 @@ public class YierdisServerBootstrapCommandWiringTest {
                     runtimeConfig(0, 0, 1024, 0, 4, 5)
             );
             YierdisFastCommandProcessor processor = ServerCommandComposition.createProcessor(
-                    YierdisCommandProcessorOptions.DEFAULT,
                     TestDbRouters.forInstance(instance),
                     infoProvider,
                     SlowCommandGovernor.DEFAULT
@@ -282,15 +300,16 @@ public class YierdisServerBootstrapCommandWiringTest {
 
                 RespRequestDecoder decoder = byteLimitedChannel.pipeline().get(RespRequestDecoder.class);
                 Assert.assertNotNull(decoder);
-                Assert.assertNotNull(byteLimitedChannel.pipeline().get(RespCommandAdapter.class));
+                Assert.assertNotNull(byteLimitedChannel.pipeline().get(InboundReadCreditHandler.class));
+                Assert.assertNotNull(byteLimitedChannel.pipeline().get(InboundByteAccountingHandler.class));
                 List<String> pipelineNames = byteLimitedChannel.pipeline().names();
                 Object backpressureHandler = byteLimitedChannel.pipeline().get("writeBufferBackpressure");
                 int backpressureIndex = pipelineNames.indexOf("writeBufferBackpressure");
                 int idleTimeoutIndex = pipelineNames.indexOf("idleTimeout");
                 int idleTimeoutCloserIndex = pipelineNames.indexOf("idleTimeoutCloser");
+                int readCreditIndex = pipelineNames.indexOf("inboundReadCredit");
+                int byteAccountingIndex = pipelineNames.indexOf("inboundByteAccounting");
                 int decoderIndex = pipelineNames.indexOf("respRequestDecoder");
-                int adapterIndex = pipelineNames.indexOf("respCommandAdapter");
-                int protocolErrorIndex = pipelineNames.indexOf("respProtocolErrorReply");
                 int commandHandlerIndex = pipelineNames.indexOf("commandHandler");
                 Assert.assertNotNull(backpressureHandler);
                 Assert.assertTrue(backpressureIndex >= 0);
@@ -298,9 +317,10 @@ public class YierdisServerBootstrapCommandWiringTest {
                 Assert.assertTrue(idleTimeoutCloserIndex > idleTimeoutIndex);
                 Assert.assertTrue(decoderIndex > backpressureIndex);
                 Assert.assertTrue(decoderIndex > idleTimeoutCloserIndex);
-                Assert.assertTrue(protocolErrorIndex > decoderIndex);
-                Assert.assertTrue(adapterIndex > protocolErrorIndex);
-                Assert.assertTrue(commandHandlerIndex > adapterIndex);
+                Assert.assertTrue(readCreditIndex > idleTimeoutCloserIndex);
+                Assert.assertTrue(byteAccountingIndex > readCreditIndex);
+                Assert.assertTrue(decoderIndex > byteAccountingIndex);
+                Assert.assertTrue(commandHandlerIndex > decoderIndex);
                 Assert.assertEquals(3, intField(decoder, "maxBulkBytes"));
                 Assert.assertEquals(2, intField(decoder, "maxArgs"));
                 Assert.assertEquals(4, intField(decoder, "maxInlineBytes"));
@@ -311,6 +331,50 @@ public class YierdisServerBootstrapCommandWiringTest {
                 Assert.assertEquals(67108864, waterMark.high());
             } finally {
                 byteLimitedChannel.unsafe().closeForcibly();
+            }
+        }
+    }
+
+    @Test
+    public void channelInitializerRegistersChildrenBeforeBuildingTheCommandPipeline() throws Exception {
+        try (InitializerTestEnv env = new InitializerTestEnv()) {
+            YierdisServerRuntimeConfig config = runtimeConfig(0, 0, 1024, 16, 128, 1024);
+            ChildChannelRegistry acceptingRegistry = new ChildChannelRegistry();
+            NioSocketChannel accepted = new NioSocketChannel();
+            try {
+                new YierdisServerChannelInitializer(
+                        config,
+                        env.executor,
+                        env.replyWriterFactory,
+                        new InboundMemoryBudget(config.protocolGlobalInFlightBytes()),
+                        new OutboundMemoryBudget(config.replyGlobalCapacityBytes()),
+                        acceptingRegistry
+                ).initChannel(accepted);
+
+                Assert.assertEquals(1, acceptingRegistry.activeChannelCount());
+                Assert.assertNotNull(accepted.pipeline().get("commandHandler"));
+            } finally {
+                accepted.unsafe().closeForcibly();
+            }
+
+            ChildChannelRegistry closingRegistry = new ChildChannelRegistry();
+            closingRegistry.beginShutdown();
+            NioSocketChannel rejected = new NioSocketChannel();
+            try {
+                new YierdisServerChannelInitializer(
+                        config,
+                        env.executor,
+                        env.replyWriterFactory,
+                        new InboundMemoryBudget(config.protocolGlobalInFlightBytes()),
+                        new OutboundMemoryBudget(config.replyGlobalCapacityBytes()),
+                        closingRegistry
+                ).initChannel(rejected);
+
+                Assert.assertNull(NettyExecutionConnection.get(rejected));
+                Assert.assertNull(rejected.pipeline().get("commandHandler"));
+                Assert.assertEquals(0, closingRegistry.activeChannelCount());
+            } finally {
+                rejected.unsafe().closeForcibly();
             }
         }
     }
@@ -475,6 +539,12 @@ public class YierdisServerBootstrapCommandWiringTest {
                 300000,
                 67108864,
                 10000,
+                256L * 1024L * 1024L,
+                128L * 1024L * 1024L,
+                64L * 1024L * 1024L,
+                64 * 1024,
+                4L * 1024L,
+                5_000L,
                 0,
                 YierdisServerRuntimeConfig.MaxmemoryScope.GLOBAL,
                 MaxmemoryPolicy.NOEVICTION,
@@ -487,7 +557,8 @@ public class YierdisServerBootstrapCommandWiringTest {
                 1,
                 0,
                 0,
-                0
+                0,
+                128L * 1024L * 1024L
         );
     }
 
@@ -581,10 +652,6 @@ public class YierdisServerBootstrapCommandWiringTest {
             List<Object> values = new ArrayList<>(count);
             this.arrayValues = values;
             this.activeAggregate = values;
-        }
-
-        @Override
-        public void bulkStringArray(List<byte[]> values) {
         }
 
         @Override

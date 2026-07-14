@@ -5,6 +5,9 @@ import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.BulkStringValue;
+import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.value.HashValue;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
@@ -14,9 +17,25 @@ import java.util.function.Consumer;
 
 public final class HashRoot implements TypeRoot {
     private final NativeCollectionRootTable<HashValue> hashes;
+    private final HashSeed hashSeed;
+    private final HashTableMaintenanceRegistry maintenanceRegistry;
     private boolean closed;
 
     public HashRoot(NativeAllocator allocator) {
+        this(allocator, HashSeed.random());
+    }
+
+    public HashRoot(NativeAllocator allocator, HashSeed hashSeed) {
+        this(allocator, hashSeed, null);
+    }
+
+    public HashRoot(
+            NativeAllocator allocator,
+            HashSeed hashSeed,
+            HashTableMaintenanceRegistry maintenanceRegistry
+    ) {
+        this.hashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
+        this.maintenanceRegistry = maintenanceRegistry;
         this.hashes = new NativeCollectionRootTable<>(
                 Objects.requireNonNull(allocator, "allocator"),
                 NativeObjectKind.HASH_ROOT,
@@ -59,7 +78,7 @@ public final class HashRoot implements TypeRoot {
         ValueHandle handle = create();
         boolean ok = false;
         try {
-            requireHash(handle).hsetMany(value.hgetallPairs());
+            hsetMany(handle, value.hgetallPairs());
             ok = true;
             return handle;
         } finally {
@@ -71,12 +90,22 @@ public final class HashRoot implements TypeRoot {
 
     public synchronized int hsetMany(ValueHandle handle, List<byte[]> fieldValuePairs) {
         ensureOpen();
-        return requireHash(handle).hsetMany(fieldValuePairs);
+        HashValue value = requireHash(handle);
+        try {
+            return value.hsetMany(fieldValuePairs);
+        } finally {
+            hashes.refreshAdapter(handle);
+        }
     }
 
     public synchronized int hset(ValueHandle handle, byte[] field, byte[] value) {
         ensureOpen();
-        return requireHash(handle).hset(field, value);
+        HashValue hash = requireHash(handle);
+        try {
+            return hash.hset(field, value);
+        } finally {
+            hashes.refreshAdapter(handle);
+        }
     }
 
     public synchronized byte[] hget(ValueHandle handle, byte[] field) {
@@ -84,9 +113,19 @@ public final class HashRoot implements TypeRoot {
         return requireHash(handle).hget(field);
     }
 
+    public synchronized BulkStringValue hgetValue(ValueHandle handle, byte[] field) {
+        ensureOpen();
+        return requireHash(handle).hgetValue(field);
+    }
+
     public synchronized int hdel(ValueHandle handle, List<byte[]> fields) {
         ensureOpen();
-        return requireHash(handle).hdel(fields);
+        HashValue hash = requireHash(handle);
+        try {
+            return hash.hdel(fields);
+        } finally {
+            hashes.refreshAdapter(handle);
+        }
     }
 
     public synchronized int countExistingFields(ValueHandle handle, List<byte[]> fields) {
@@ -119,6 +158,29 @@ public final class HashRoot implements TypeRoot {
         return requireHash(handle).size();
     }
 
+    public synchronized long estimatedPreparedSetHeapGrowthBytes(
+            ValueHandle source,
+            List<byte[]> fieldValuePairs,
+            int expectedNativeAllocationCount
+    ) {
+        ensureOpen();
+        Objects.requireNonNull(fieldValuePairs, "fieldValuePairs");
+        long replacementHeapBytes = source == null
+                ? HashValue.preparedNewHeapUpperBound(fieldValuePairs)
+                : requireHash(source).preparedCopyHeapUpperBound(fieldValuePairs);
+        return hashes.estimatedNewAdapterHeapGrowthBytes(replacementHeapBytes, expectedNativeAllocationCount);
+    }
+
+    public synchronized long retainedHeapBytes() {
+        ensureOpen();
+        long registryHeapBytes = maintenanceRegistry == null ? 0L : maintenanceRegistry.heapEstimatedBytes();
+        return addSaturating(hashes.heapBytes(), registryHeapBytes);
+    }
+
+    public synchronized long positiveRetainedHeapGrowthBytes(long before) {
+        return positiveDelta(retainedHeapBytes(), before);
+    }
+
     @Override
     public synchronized long estimatedBytes(ValueHandle handle) {
         ensureOpen();
@@ -127,6 +189,19 @@ public final class HashRoot implements TypeRoot {
 
     public synchronized long nativeBytes() {
         return hashes.adapterBytes(HashValue::estimatedBytes);
+    }
+
+    public synchronized long heapBytes() {
+        ensureOpen();
+        return hashes.heapBytes();
+    }
+
+    public synchronized void armIterationTrapForTesting() {
+        hashes.armIterationTrapForTesting();
+    }
+
+    public synchronized void disarmIterationTrapForTesting() {
+        hashes.disarmIterationTrapForTesting();
     }
 
     public synchronized void forEachNativeHandle(ValueHandle handle, Consumer<NativeHandle> consumer) {
@@ -159,7 +234,15 @@ public final class HashRoot implements TypeRoot {
     }
 
     private HashValue newHashValue() {
-        return new HashValue(hashes.allocator());
+        return new HashValue(hashes.allocator(), hashSeed, maintenanceRegistry);
+    }
+
+    private static long positiveDelta(long after, long before) {
+        return after > before ? after - before : 0L;
+    }
+
+    private static long addSaturating(long left, long right) {
+        return left > Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
     }
 
     private void ensureOpen() {

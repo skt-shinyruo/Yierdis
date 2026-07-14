@@ -30,7 +30,7 @@ public class ContractsIntegrationSmokeTest {
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(2)
                 .maxmemoryScope(scope)
-                .maxmemoryBytes(2_000)
+                .maxmemoryBytes(2_000_000)
                 .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
@@ -43,7 +43,8 @@ public class ContractsIntegrationSmokeTest {
                 // TTL family: basic Redis-like conventions.
                 Assert.assertEquals(-2L, ((ReplyInteger) client.execute(Arrays.asList(b("TTL"), b("missing")))).value());
 
-                client.execute(Arrays.asList(b("SET"), b("k"), b("v")));
+                Object setReply = client.execute(Arrays.asList(b("SET"), b("k"), b("v")));
+                Assert.assertFalse("initial SET failed: " + replyDescription(setReply), setReply instanceof ReplyError);
                 Assert.assertEquals(-1L, ((ReplyInteger) client.execute(Arrays.asList(b("PTTL"), b("k")))).value());
                 Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("EXPIRE"), b("k"), b("60")))).value());
                 Assert.assertTrue(((ReplyInteger) client.execute(Arrays.asList(b("TTL"), b("k")))).value() > 0L);
@@ -68,7 +69,7 @@ public class ContractsIntegrationSmokeTest {
                 Assert.assertEquals(0L, cursor);
 
                 // maxmemory/off-heap OOM: rejection happens before reply is written (no double reply) and is stable.
-                byte[] big = new byte[900];
+                byte[] big = new byte[900_000];
                 Arrays.fill(big, (byte) 'a');
                 boolean sawOom = false;
                 for (int i = 0; i < 50; i++) {
@@ -92,6 +93,10 @@ public class ContractsIntegrationSmokeTest {
         ReplyBulkString cursorOut = (ReplyBulkString) reply.values().get(0);
         Assert.assertNotNull(cursorOut.data());
         return Long.parseLong(new String(cursorOut.data(), StandardCharsets.US_ASCII));
+    }
+
+    private static String replyDescription(Object reply) {
+        return reply instanceof ReplyError error ? error.message() : String.valueOf(reply);
     }
 
     private static final class TestSession implements

@@ -10,8 +10,9 @@ public interface MaxmemoryCoordinator {
     /**
      * Prepare for a write that may grow the maxmemory-accounted dataset.
      * <p>
-     * Callers must pass a best-effort estimate of additional bytes the write could add. The value must be
-     * non-negative; {@code 0} means "no dataset growth" (e.g. in-place update).
+     * Callers must pass the DB participant requesting admission plus a best-effort estimate of additional bytes
+     * the write could add. The value must be non-negative; {@code 0} means "no dataset growth"
+     * (e.g. in-place update).
      * <p>
      * Implementations may perform eviction and/or expired-key cleanup to make room. If the write cannot be
      * admitted under the configured policy, this method must throw a runtime exception (typically with
@@ -19,11 +20,12 @@ public interface MaxmemoryCoordinator {
      * <p>
      * Threading: callers may invoke this concurrently; implementations should be thread-safe.
      *
+     * @param requester           participant requesting admission; may be {@code null} for maintenance probes
      * @param estimatedExtraBytes estimated extra bytes (>= 0)
      * @throws IllegalArgumentException if {@code estimatedExtraBytes < 0}
      * @throws RuntimeException         if the write is rejected (OOM / policy)
      */
-    void prepareWrite(long estimatedExtraBytes);
+    void prepareWrite(MaxmemoryParticipant requester, long estimatedExtraBytes);
 
     /**
      * Returns the next monotonically increasing LRU clock value for global LRU comparability.

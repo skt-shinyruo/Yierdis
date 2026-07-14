@@ -32,17 +32,16 @@
  *     <li>MemoryOps - API. Audience: server INFO/STATS adapters, runtime observability, tests.</li>
  *     <li>ExpirationManager - API. Audience: runtime maintenance and DB implementations.</li>
  *     <li>DbLifecycleOps - API. Audience: runtime lifecycle and DB implementations.</li>
- *     <li>DbChange - SPI. Audience: storage implementations and runtime/command change-event bridges.</li>
- *     <li>DbChangeKind - SPI. Audience: storage implementations and runtime/command change-event bridges.</li>
- *     <li>DbChangeContext - SPI. Audience: runtime/command scoped collection of DB-internal lifecycle changes.</li>
- *     <li>DbChangeListener - SPI. Audience: runtime/command scoped collection of DB-internal lifecycle changes.</li>
+ *     <li>DbHealthSnapshot - API. Audience: command handlers, runtime observability, tests.</li>
+ *     <li>PostCommitMutationException - API. Audience: command error mapping and DB implementations.</li>
+ *     <li>DbCommitPublisher - SPI. Audience: runtime composition and DB mutation implementations.</li>
+ *     <li>DbCommitEvent - SPI callback payload. Audience: commit stream implementations.</li>
  *     <li>RuntimeDbEngine - SPI. Audience: runtime assembly and DB factories.</li>
  *     <li>DbEngineFactory - SPI. Audience: runtime assembly and storage implementations.</li>
  *     <li>MaxmemoryCoordinator - SPI. Audience: runtime maxmemory governor and participants.</li>
  *     <li>MaxmemoryCoordinatorAware - SPI. Audience: storage implementations joining maxmemory coordination.</li>
  *     <li>MaxmemoryParticipant - SPI. Audience: runtime governor and participating storage engines.</li>
- *     <li>MaxmemoryUsageSource - SPI. Audience: runtime maxmemory accounting.</li>
- *     <li>MaxmemoryCandidate - SPI. Audience: maxmemory coordination and tests; key identity uses KeyHandle.</li>
+     *     <li>MaxmemoryCandidate - SPI. Audience: maxmemory coordination and tests; key identity uses KeyHandle.</li>
  *     <li>MaxmemoryPolicy - API. Audience: CLI args, runtime config, storage implementations, tests.</li>
  *     <li>MaxmemoryErrors - API. Audience: storage implementations and command error mapping.</li>
  *     <li>DbMemoryConstants - SPI. Audience: storage accounting and focused tests.</li>

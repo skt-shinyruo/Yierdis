@@ -5,17 +5,12 @@ import org.junit.Test;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRecord;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.storage.api.DbChange;
-import yier.bubu.redis.storage.api.DbChangeKind;
-import yier.bubu.redis.storage.api.DbChangeListener;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
 import java.nio.charset.StandardCharsets;
 import java.lang.reflect.Method;
 import java.lang.reflect.Field;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 
 public class YierdisChangeSinkTest {
     @Test
@@ -31,22 +26,6 @@ public class YierdisChangeSinkTest {
         Assert.assertArrayEquals("SET".getBytes(StandardCharsets.US_ASCII), event.request().toByteArray(0));
         Assert.assertArrayEquals("key".getBytes(StandardCharsets.US_ASCII), event.request().toByteArray(1));
         Assert.assertArrayEquals("value".getBytes(StandardCharsets.US_ASCII), event.request().toByteArray(2));
-    }
-
-    @Test
-    public void changeEventBridgeConvertsDbChangesToSyntheticEvents() {
-        List<YierdisChangeEvent> events = new ArrayList<>();
-        DbChangeListener bridge = YierdisChangeEventBridge.forSink(events::add);
-
-        bridge.onDbChange(DbChange.syntheticDelete(2, DbChangeKind.EXPIRED, bytes("dead")));
-
-        Assert.assertEquals(1, events.size());
-        YierdisChangeEvent event = events.get(0);
-        Assert.assertEquals(2, event.dbIndex());
-        Assert.assertEquals(YierdisChangeKind.EXPIRED, event.kind());
-        Assert.assertTrue(event.synthetic());
-        Assert.assertEquals("DEL", arg(event, 0));
-        Assert.assertEquals("dead", arg(event, 1));
     }
 
     @Test
@@ -88,6 +67,9 @@ public class YierdisChangeSinkTest {
         Assert.assertEquals(64L * 1024L, config.nativeDefragMaxMoveBytes());
         Assert.assertEquals(64L, config.nativeDefragMaxObjects());
         Assert.assertEquals(1L, config.nativeDefragTimeLimitMillis());
+        Assert.assertEquals(8_192, config.commitStreamMaxEvents());
+        Assert.assertEquals(64L * 1024L * 1024L, config.commitStreamMaxRetainedBytes());
+        Assert.assertEquals(5_000L, config.commitStreamShutdownTimeoutMillis());
 
         YierdisInstanceConfig defragConfig = YierdisInstanceConfig.builder()
                 .nativeDefragEnabled(true)
@@ -99,6 +81,15 @@ public class YierdisChangeSinkTest {
         Assert.assertEquals(1024L, defragConfig.nativeDefragMaxMoveBytes());
         Assert.assertEquals(7L, defragConfig.nativeDefragMaxObjects());
         Assert.assertEquals(3L, defragConfig.nativeDefragTimeLimitMillis());
+
+        YierdisInstanceConfig streamConfig = YierdisInstanceConfig.builder()
+                .commitStreamMaxEvents(7)
+                .commitStreamMaxRetainedBytes(8_192L)
+                .commitStreamShutdownTimeoutMillis(13L)
+                .build();
+        Assert.assertEquals(7, streamConfig.commitStreamMaxEvents());
+        Assert.assertEquals(8_192L, streamConfig.commitStreamMaxRetainedBytes());
+        Assert.assertEquals(13L, streamConfig.commitStreamShutdownTimeoutMillis());
 
         Assert.assertEquals(
                 MaxmemoryPolicy.ALLKEYS_LRU,
@@ -123,6 +114,12 @@ public class YierdisChangeSinkTest {
                 () -> YierdisInstanceConfig.builder().nativeDefragMaxObjects(-1).build());
         expectIllegalArgument("nativeDefragTimeLimitMillis must be >= 0",
                 () -> YierdisInstanceConfig.builder().nativeDefragTimeLimitMillis(-1).build());
+        expectIllegalArgument("commitStreamMaxEvents must be > 0",
+                () -> YierdisInstanceConfig.builder().commitStreamMaxEvents(0).build());
+        expectIllegalArgument("commitStreamMaxRetainedBytes must be > 0",
+                () -> YierdisInstanceConfig.builder().commitStreamMaxRetainedBytes(0L).build());
+        expectIllegalArgument("commitStreamShutdownTimeoutMillis must be > 0",
+                () -> YierdisInstanceConfig.builder().commitStreamShutdownTimeoutMillis(0L).build());
     }
 
     @Test
@@ -162,11 +159,4 @@ public class YierdisChangeSinkTest {
         }
     }
 
-    private static String arg(YierdisChangeEvent event, int index) {
-        return new String(event.request().toByteArray(index), StandardCharsets.US_ASCII);
-    }
-
-    private static byte[] bytes(String value) {
-        return value.getBytes(StandardCharsets.US_ASCII);
-    }
 }

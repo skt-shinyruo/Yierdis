@@ -5,6 +5,9 @@ import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMetrics;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -13,14 +16,18 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
 
-public final class SetValue implements YierdisValue, NativeHandleOwner {
+public final class SetValue implements YierdisValue, NativeHandleOwner, HeapTrackedValue {
     // Redis uses intset for small integer-only sets and upgrades to hashtable as needed.
     private static final byte[] LONG_MIN_VALUE_BYTES = "-9223372036854775808".getBytes(StandardCharsets.US_ASCII);
     private static final int LONG_BYTES = Long.BYTES;
+    private static final long FIXED_HEAP_BYTES = 80L;
+    private static final long ARRAY_HEADER_BYTES = 16L;
 
     private static final Object PRESENT = new Object();
 
     private final NativeByteStore memberStore;
+    private final HashSeed hashSeed;
+    private final HashTableMaintenanceRegistry maintenanceRegistry;
 
     private short[] intset16 = new short[0];
     private int[] intset32;
@@ -29,9 +36,25 @@ public final class SetValue implements YierdisValue, NativeHandleOwner {
     private int intsetSize = 0;
 
     private NativeByteMap<Object> members;
+    private Runnable heapChangeListener = () -> {
+    };
 
     public SetValue(NativeAllocator allocator) {
+        this(allocator, HashSeed.random());
+    }
+
+    public SetValue(NativeAllocator allocator, HashSeed hashSeed) {
+        this(allocator, hashSeed, null);
+    }
+
+    public SetValue(
+            NativeAllocator allocator,
+            HashSeed hashSeed,
+            HashTableMaintenanceRegistry maintenanceRegistry
+    ) {
         this.memberStore = new NativeByteStore(Objects.requireNonNull(allocator, "allocator"), NativeObjectKind.SET_MEMBER_BYTES);
+        this.hashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
+        this.maintenanceRegistry = maintenanceRegistry;
     }
 
     @Override
@@ -51,6 +74,22 @@ public final class SetValue implements YierdisValue, NativeHandleOwner {
         return intsetSize;
     }
 
+    public long preparedCopyHeapUpperBound(List<byte[]> candidates) {
+        return heapUpperBoundForEntryCount(addSaturating(size(), candidateCount(candidates)));
+    }
+
+    public static long preparedNewHeapUpperBound(List<byte[]> candidates) {
+        return heapUpperBoundForEntryCount(candidateCount(candidates));
+    }
+
+    public HashTableMetrics memberTableMetrics() {
+        return members == null ? null : members.metrics();
+    }
+
+    public boolean hasMemberTableMaintenanceDebt() {
+        return members != null && members.hasMaintenanceDebt();
+    }
+
     public long estimatedBytes() {
         if (members != null) {
             return memberStore.nativeBytes();
@@ -66,6 +105,25 @@ public final class SetValue implements YierdisValue, NativeHandleOwner {
             return (long) (intset64 == null ? 0 : intset64.length) * Long.BYTES;
         }
         return 0;
+    }
+
+    @Override
+    public long heapEstimatedBytes() {
+        if (members != null) {
+            return FIXED_HEAP_BYTES + members.heapEstimatedBytes();
+        }
+        if (intsetEncodingBytes == Short.BYTES) {
+            return FIXED_HEAP_BYTES + primitiveArrayHeapBytes(intset16 == null ? 0 : intset16.length, Short.BYTES);
+        }
+        if (intsetEncodingBytes == Integer.BYTES) {
+            return FIXED_HEAP_BYTES + primitiveArrayHeapBytes(intset32 == null ? 0 : intset32.length, Integer.BYTES);
+        }
+        return FIXED_HEAP_BYTES + primitiveArrayHeapBytes(intset64 == null ? 0 : intset64.length, Long.BYTES);
+    }
+
+    @Override
+    public void setHeapChangeListener(Runnable listener) {
+        heapChangeListener = Objects.requireNonNull(listener, "listener");
     }
 
     public int addAll(List<byte[]> members) {
@@ -229,7 +287,13 @@ public final class SetValue implements YierdisValue, NativeHandleOwner {
         if (members != null) {
             return;
         }
-        NativeByteMap<Object> out = new NativeByteMap<>(memberStore, NativeObjectKind.SET_MEMBER_BYTES);
+        NativeByteMap<Object> out = new NativeByteMap<>(
+                memberStore,
+                NativeObjectKind.SET_MEMBER_BYTES,
+                hashSeed,
+                maintenanceRegistry,
+                this::notifyHeapChanged
+        );
         boolean ok = false;
         try {
             for (int i = 0; i < intsetSize; i++) {
@@ -249,6 +313,7 @@ public final class SetValue implements YierdisValue, NativeHandleOwner {
         this.intset64 = null;
         this.intsetEncodingBytes = 0;
         this.intsetSize = 0;
+        notifyHeapChanged();
     }
 
     private boolean intsetContains(long v) {
@@ -451,6 +516,44 @@ public final class SetValue implements YierdisValue, NativeHandleOwner {
             System.arraycopy(in, 0, out, 0, in.length);
         }
         return out;
+    }
+
+    private static long primitiveArrayHeapBytes(int length, int elementBytes) {
+        return ARRAY_HEADER_BYTES + (long) length * elementBytes;
+    }
+
+    private static long heapUpperBoundForEntryCount(long expectedEntries) {
+        if (expectedEntries < 0L) {
+            return Long.MAX_VALUE;
+        }
+        long hashTableBytes = addSaturating(
+                FIXED_HEAP_BYTES,
+                NativeByteMap.heapUpperBoundForEntries(expectedEntries)
+        );
+        long intsetBytes = addSaturating(
+                FIXED_HEAP_BYTES,
+                addSaturating(ARRAY_HEADER_BYTES, multiplySaturating(expectedEntries, Long.BYTES))
+        );
+        return Math.max(hashTableBytes, intsetBytes);
+    }
+
+    private static long candidateCount(List<byte[]> candidates) {
+        return candidates == null ? 0L : candidates.size();
+    }
+
+    private static long addSaturating(long left, long right) {
+        return left > Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
+    }
+
+    private static long multiplySaturating(long left, long right) {
+        if (left == 0L || right == 0L) {
+            return 0L;
+        }
+        return left > Long.MAX_VALUE / right ? Long.MAX_VALUE : left * right;
+    }
+
+    private void notifyHeapChanged() {
+        heapChangeListener.run();
     }
 
     private static int[] growIntArray(int[] in, int desired) {

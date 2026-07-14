@@ -117,6 +117,11 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
                     public boolean clearAutoReadDisabledByExecutor(C key) {
                         return key.context().clearAutoReadDisabledByExecutor();
                     }
+
+                    @Override
+                    public boolean inputPausedByReply(C key) {
+                        return key.context().inputPausedByReply();
+                    }
                 },
                 new ExecutorBackpressureObserver<>() {
                     @Override
@@ -176,6 +181,11 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
         return submitter.trySubmit(connection, request, drainLoop::scheduleDrain);
     }
 
+    public SubmitRejectReason trySubmit(C connection, ExecutionRequest request, ExecutionReply reply) {
+        Objects.requireNonNull(reply, "reply");
+        return submitter.trySubmit(connection, request, reply, drainLoop::scheduleDrain);
+    }
+
     public StatsSnapshot statsSnapshot() {
         return new StatsSnapshot(
                 executionSupport.commandsExecuted(),
@@ -194,7 +204,9 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
                 backpressureEnter.sum(),
                 backpressureExit.sum(),
                 drainLoop.drainLimitedByMaxCommands(),
-                drainLoop.drainLimitedByTimeBudget()
+                drainLoop.drainLimitedByTimeBudget(),
+                taskQueue.deferredFairHeads(),
+                taskQueue.deferredGlobalHeads()
         );
     }
 
@@ -268,7 +280,9 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
             long backpressureEnter,
             long backpressureExit,
             long drainLimitedByMaxCommands,
-            long drainLimitedByTimeBudget
+            long drainLimitedByTimeBudget,
+            long deferredFairReplyHeads,
+            long deferredGlobalReplyHeads
     ) {
     }
 

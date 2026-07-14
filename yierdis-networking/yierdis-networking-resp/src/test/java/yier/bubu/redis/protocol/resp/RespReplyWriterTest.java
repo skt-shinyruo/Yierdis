@@ -6,6 +6,7 @@ import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class RespReplyWriterTest {
     @Test
@@ -106,6 +107,45 @@ public class RespReplyWriterTest {
                 return 0;
             }
         }));
+    }
+
+    @Test
+    public void measuredReplyVisitorsReserveShapeWriteElementsAndReleaseDetachedSources() {
+        AtomicInteger arrayCloses = new AtomicInteger();
+        ByteArraySink arraySink = new ByteArraySink();
+        RespReplyWriter arrayWriter = new RespReplyWriter(arraySink, RespProtocolVersion.RESP2);
+
+        arrayWriter.writeMeasuredBulkStringArray(
+                2,
+                15L,
+                0L,
+                arrayCloses::incrementAndGet,
+                out -> {
+                    out.bulkString(bytes("a"));
+                    out.bulkString(bytes("bb"));
+                }
+        );
+
+        Assert.assertEquals("*2\r\n$1\r\na\r\n$2\r\nbb\r\n", arraySink.utf8());
+        Assert.assertEquals(1, arrayCloses.get());
+
+        AtomicInteger mapCloses = new AtomicInteger();
+        ByteArraySink mapSink = new ByteArraySink();
+        RespReplyWriter mapWriter = new RespReplyWriter(mapSink, RespProtocolVersion.RESP2);
+
+        mapWriter.writeMeasuredBulkStringMap(
+                1,
+                14L,
+                0L,
+                mapCloses::incrementAndGet,
+                out -> {
+                    out.bulkString(bytes("f"));
+                    out.bulkString(bytes("v"));
+                }
+        );
+
+        Assert.assertEquals("*2\r\n$1\r\nf\r\n$1\r\nv\r\n", mapSink.utf8());
+        Assert.assertEquals(1, mapCloses.get());
     }
 
     private static String write2(WriterAction action) {

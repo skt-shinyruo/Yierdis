@@ -1,6 +1,5 @@
 package yier.bubu.redis.execution.engine;
 
-import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ClientMetadataSession;
 import yier.bubu.redis.execution.api.ConnectionStatsSession;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
@@ -175,22 +174,28 @@ public final class EngineSession implements
             }
 
             long estimatedBytes = Math.max(0L, request.retainedBytes());
-            if (maxQueuedBytes > 0 && estimatedBytes > 0 && queuedBytes + estimatedBytes > maxQueuedBytes) {
+            if (exceedsQueuedBytesLimit(estimatedBytes)) {
                 aborted = true;
                 return "ERR Transaction queue is full";
             }
 
-            ExecutionRequest snapshot = ByteArrayExecutionRequest.copyOf(request);
-            long requestBytes = Math.max(0L, snapshot.retainedBytes());
-            if (maxQueuedBytes > 0 && queuedBytes + requestBytes > maxQueuedBytes) {
+            ExecutionRequest retained = request.retain();
+            long requestBytes = Math.max(0L, retained.retainedBytes());
+            if (exceedsQueuedBytesLimit(requestBytes)) {
                 aborted = true;
-                snapshot.close();
+                retained.close();
                 return "ERR Transaction queue is full";
             }
 
-            queue.add(snapshot);
+            queue.add(retained);
             queuedBytes += requestBytes;
             return null;
+        }
+
+        private boolean exceedsQueuedBytesLimit(long requestBytes) {
+            return maxQueuedBytes > 0
+                    && requestBytes > 0L
+                    && (requestBytes > maxQueuedBytes || queuedBytes > maxQueuedBytes - requestBytes);
         }
 
         @Override

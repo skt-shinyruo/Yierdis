@@ -12,11 +12,14 @@ import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.defaults.BulkStringReplyAdapter;
 import yier.bubu.redis.command.defaults.CommandSupport;
 
-import yier.bubu.redis.storage.api.result.BulkStringSequence;
+import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequence;
 import yier.bubu.redis.storage.api.result.PoppedValueSequence;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.ReplyPlan;
+import yier.bubu.redis.execution.api.ReplyPlans;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.common.command.ResultUnknownException;
 
 import java.util.Objects;
 
@@ -62,12 +65,10 @@ public final class ListCommands implements CommandModule {
         int valuesLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, valuesLen);
         try {
-            long length = support.recordWriteValue(
-                    ctx,
-                    left
-                            ? support.commandDb(ctx).writes().lists().lpush(request.readOnlyByteArray(1), support.slice())
-                            : support.commandDb(ctx).writes().lists().rpush(request.readOnlyByteArray(1), support.slice())
-            );
+            long length = (left
+                    ? support.commandDb(ctx).writes().lists().lpush(request.readOnlyByteArray(1), support.slice())
+                    : support.commandDb(ctx).writes().lists().rpush(request.readOnlyByteArray(1), support.slice()))
+                    .value();
             out.integer(length);
         } finally {
             support.clearScratch(valuesLen);
@@ -84,13 +85,8 @@ public final class ListCommands implements CommandModule {
         int stop = CommandSupport.parseIntClamped(request, 3, "stop");
 
         byte[] key = request.readOnlyByteArray(1);
-        BulkStringSequence seq = support.commandDb(ctx).reads().lists().lrange(key, start, stop);
-        int count = seq.count();
-        out.arrayHeader(count);
-        if (count == 0) {
-            return;
-        }
-        seq.emitTo(new BulkStringReplyAdapter(out));
+        MeasuredBulkStringSequence seq = support.commandDb(ctx).reads().lists().lrange(key, start, stop);
+        CommandSupport.writeMeasuredBulkStringArray(out, seq);
     }
 
     private void pop(ExecutionRequest request, CommandContext ctx, boolean left) {
@@ -113,19 +109,48 @@ public final class ListCommands implements CommandModule {
             }
         }
 
-        PoppedValueSequence popped = support.recordWriteValue(
-                ctx,
-                left
-                        ? support.commandDb(ctx).writes().lists().lpop(request.readOnlyByteArray(1), count)
-                        : support.commandDb(ctx).writes().lists().rpop(request.readOnlyByteArray(1), count)
-        );
+        ReplyPlan preflight = null;
+        if (hasCount) {
+            try (PoppedValueSequence preview = support.commandDb(ctx).reads().lists()
+                    .previewPop(request.readOnlyByteArray(1), count, left)) {
+                preflight = popReplyPlan(preview, true);
+                out.requireReply(preflight);
+            }
+        }
+
+        PoppedValueSequence popped = (left
+                ? support.commandDb(ctx).writes().lists().lpop(request.readOnlyByteArray(1), count)
+                : support.commandDb(ctx).writes().lists().rpop(request.readOnlyByteArray(1), count))
+                .value();
+        boolean ownershipTransferred = false;
         try {
+            if (preflight != null && !matchesPreflight(preflight, popped)) {
+                throw new ResultUnknownException("counted pop reply source changed after mutation");
+            }
             popResponse(out, popped, hasCount);
-        } finally {
             if (popped != null) {
+                out.transferReplyOwnership(popped);
+                ownershipTransferred = true;
+            }
+        } finally {
+            if (popped != null && !ownershipTransferred) {
                 popped.close();
             }
         }
+    }
+
+    private static ReplyPlan popReplyPlan(PoppedValueSequence popped, boolean hasCount) {
+        if (!hasCount) {
+            throw new IllegalArgumentException("only counted pop replies have a preflight plan");
+        }
+        if (popped == null || popped.isNull()) {
+            return ReplyPlans.raw(5L, 0L);
+        }
+        return ReplyPlans.bulkStringArray(popped.count(), popped.encodedElementBytes(), popped.retainedMemoryBytes());
+    }
+
+    private static boolean matchesPreflight(ReplyPlan plan, PoppedValueSequence popped) {
+        return popReplyPlan(popped, true).equals(plan);
     }
 
     private static void popResponse(RedisReplyWriter out, PoppedValueSequence popped, boolean hasCount) {

@@ -28,9 +28,26 @@ public final class TestDbs {
     }
 
     public static void forEachDbWithMaxmemory(long maxmemoryBytes, MaxmemoryPolicy maxmemoryPolicy, int maxmemorySamples, Consumer<YierdisDb> test) {
+        forEachDbWithMaxmemory(maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, 5, test);
+    }
+
+    public static void forEachDbWithMaxmemory(
+            long maxmemoryBytes,
+            MaxmemoryPolicy maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            Consumer<YierdisDb> test
+    ) {
         Objects.requireNonNull(test, "test");
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("test-db")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, 5, 5);
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
+                    runtime,
+                    maxmemoryBytes,
+                    maxmemoryPolicy,
+                    maxmemorySamples,
+                    evictionTimeLimitMillis,
+                    5
+            );
             try {
                 db.bindToCurrentThread();
                 test.accept(db);

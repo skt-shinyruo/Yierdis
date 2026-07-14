@@ -1,6 +1,7 @@
 package yier.bubu.redis.memory.foreign;
 
 import java.util.Arrays;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 
 final class YierdisNativePageDirectory {
@@ -8,7 +9,7 @@ final class YierdisNativePageDirectory {
     private static final int INITIAL_DIRECTORY_SEGMENTS = 16;
     private static final int INITIAL_FREE_IDS = 16;
     private static final long ARRAY_HEADER_BYTES = 16L;
-    private static final long CHECKPOINT_OBJECT_BYTES = 48L;
+    private static final long CHECKPOINT_OBJECT_BYTES = 56L;
     private static final long REFERENCE_BYTES = 8L;
     private static final long INT_BYTES = 4L;
 
@@ -18,6 +19,14 @@ final class YierdisNativePageDirectory {
     private int freeIdCount;
     private int nextId = 1;
     private int liveEntries;
+    private long retainedHeapBytes;
+    private boolean heapIterationTrapForTesting;
+    private boolean allocationScopeAbortAllocationTracking;
+    private boolean allocationScopeAbortAllocated;
+
+    YierdisNativePageDirectory() {
+        retainedHeapBytes = baseHeapBytes();
+    }
 
     int add(Object entry) {
         if (entry == null) {
@@ -39,6 +48,7 @@ final class YierdisNativePageDirectory {
         if (segment == null) {
             segment = new Object[ENTRIES_PER_SEGMENT];
             segments[segmentIndex] = segment;
+            retainedHeapBytes = MemoryUsageSnapshot.addSaturating(retainedHeapBytes, segmentHeapBytes());
         }
         int offset = segmentOffset(pageId);
         if (segment[offset] != null) {
@@ -62,6 +72,10 @@ final class YierdisNativePageDirectory {
     }
 
     void remove(int pageId, Object expected) {
+        remove(pageId, expected, true);
+    }
+
+    void remove(int pageId, Object expected, boolean recycleId) {
         int segmentIndex = segmentIndex(pageId);
         if (segmentIndex >= segments.length || segments[segmentIndex] == null) {
             throw new IllegalStateException("unknown page id: " + pageId);
@@ -75,6 +89,10 @@ final class YierdisNativePageDirectory {
         liveEntries--;
         if (segmentCounts[segmentIndex] == 0) {
             segments[segmentIndex] = null;
+            subtractRetainedHeapBytes(segmentHeapBytes());
+        }
+        if (!recycleId) {
+            return;
         }
         ensureFreeIdCapacity(freeIdCount + 1);
         freeIds[freeIdCount++] = pageId;
@@ -89,15 +107,28 @@ final class YierdisNativePageDirectory {
     }
 
     long heapEstimatedBytes() {
-        long bytes = ARRAY_HEADER_BYTES + (long) segments.length * REFERENCE_BYTES;
-        bytes += ARRAY_HEADER_BYTES + (long) segmentCounts.length * INT_BYTES;
-        bytes += ARRAY_HEADER_BYTES + (long) freeIds.length * INT_BYTES;
-        for (Object[] segment : segments) {
-            if (segment != null) {
-                bytes += ARRAY_HEADER_BYTES + (long) segment.length * REFERENCE_BYTES;
-            }
-        }
-        return bytes;
+        return retainedHeapBytes;
+    }
+
+    void armHeapIterationTrapForTesting() {
+        heapIterationTrapForTesting = true;
+    }
+
+    void disarmHeapIterationTrapForTesting() {
+        heapIterationTrapForTesting = false;
+    }
+
+    void armAllocationScopeAbortAllocationTrackingForTesting() {
+        allocationScopeAbortAllocationTracking = true;
+        allocationScopeAbortAllocated = false;
+    }
+
+    void disarmAllocationScopeAbortAllocationTrackingForTesting() {
+        allocationScopeAbortAllocationTracking = false;
+    }
+
+    boolean allocationScopeAbortAllocatedForTesting() {
+        return allocationScopeAbortAllocated;
     }
 
     long estimateAdditionalHeapBytes(int additionalEntries) {
@@ -133,6 +164,16 @@ final class YierdisNativePageDirectory {
         return bytes;
     }
 
+    long worstCaseSegmentRematerializationHeapBytes(int additionalEntries) {
+        if (additionalEntries <= 0) {
+            return 0L;
+        }
+        long segmentBytes = ARRAY_HEADER_BYTES + ENTRIES_PER_SEGMENT * REFERENCE_BYTES;
+        return Long.MAX_VALUE / segmentBytes < additionalEntries
+                ? Long.MAX_VALUE
+                : segmentBytes * additionalEntries;
+    }
+
     AllocationScopeCheckpoint allocationScopeCheckpoint() {
         return new AllocationScopeCheckpoint(
                 segments.clone(),
@@ -140,7 +181,16 @@ final class YierdisNativePageDirectory {
                 freeIds.clone(),
                 freeIdCount,
                 nextId,
-                liveEntries
+                liveEntries,
+                retainedHeapBytes
+        );
+    }
+
+    long allocationScopeCheckpointHeapEstimatedBytes() {
+        return allocationScopeCheckpointHeapEstimatedBytes(
+                segments.length,
+                segmentCounts.length,
+                freeIds.length
         );
     }
 
@@ -156,6 +206,7 @@ final class YierdisNativePageDirectory {
         freeIds = checkpoint.freeIds;
         freeIdCount = checkpoint.freeIdCount;
         nextId = checkpoint.nextId;
+        retainedHeapBytes = checkpoint.retainedHeapBytes;
     }
 
     void clear() {
@@ -165,22 +216,30 @@ final class YierdisNativePageDirectory {
         freeIdCount = 0;
         nextId = 1;
         liveEntries = 0;
+        retainedHeapBytes = baseHeapBytes();
     }
 
     private void ensureDirectoryCapacity(int required) {
         if (required <= segments.length) {
             return;
         }
+        long previousHeapBytes = directoryArrayHeapBytes();
         int capacity = grownCapacity(segments.length, required);
         segments = Arrays.copyOf(segments, capacity);
         segmentCounts = Arrays.copyOf(segmentCounts, capacity);
+        replaceRetainedHeapBytes(previousHeapBytes, directoryArrayHeapBytes());
     }
 
     private void ensureFreeIdCapacity(int required) {
         if (required <= freeIds.length) {
             return;
         }
+        if (allocationScopeAbortAllocationTracking) {
+            allocationScopeAbortAllocated = true;
+        }
+        long previousHeapBytes = arrayHeapBytes(freeIds.length, INT_BYTES);
         freeIds = Arrays.copyOf(freeIds, grownCapacity(freeIds.length, required));
+        replaceRetainedHeapBytes(previousHeapBytes, arrayHeapBytes(freeIds.length, INT_BYTES));
     }
 
     private static int grownCapacity(int current, int required) {
@@ -199,6 +258,36 @@ final class YierdisNativePageDirectory {
         return (pageId - 1) / ENTRIES_PER_SEGMENT;
     }
 
+    private long baseHeapBytes() {
+        return MemoryUsageSnapshot.addSaturating(
+                directoryArrayHeapBytes(),
+                arrayHeapBytes(freeIds.length, INT_BYTES)
+        );
+    }
+
+    private long directoryArrayHeapBytes() {
+        return MemoryUsageSnapshot.addSaturating(
+                arrayHeapBytes(segments.length, REFERENCE_BYTES),
+                arrayHeapBytes(segmentCounts.length, INT_BYTES)
+        );
+    }
+
+    private static long segmentHeapBytes() {
+        return arrayHeapBytes(ENTRIES_PER_SEGMENT, REFERENCE_BYTES);
+    }
+
+    private void replaceRetainedHeapBytes(long previousHeapBytes, long nextHeapBytes) {
+        subtractRetainedHeapBytes(previousHeapBytes);
+        retainedHeapBytes = MemoryUsageSnapshot.addSaturating(retainedHeapBytes, nextHeapBytes);
+    }
+
+    private void subtractRetainedHeapBytes(long bytes) {
+        if (bytes < 0L || retainedHeapBytes < bytes) {
+            throw new IllegalStateException("native page-directory heap accounting underflow");
+        }
+        retainedHeapBytes -= bytes;
+    }
+
     private static int segmentOffset(int pageId) {
         return (pageId - 1) % ENTRIES_PER_SEGMENT;
     }
@@ -209,17 +298,30 @@ final class YierdisNativePageDirectory {
             int[] freeIds,
             int freeIdCount,
             int nextId,
-            int liveEntries
+            int liveEntries,
+            long retainedHeapBytes
     ) {
         long heapEstimatedBytes() {
-            return CHECKPOINT_OBJECT_BYTES
-                    + arrayHeapBytes(segments.length, REFERENCE_BYTES)
-                    + arrayHeapBytes(segmentCounts.length, INT_BYTES)
-                    + arrayHeapBytes(freeIds.length, INT_BYTES);
+            return allocationScopeCheckpointHeapEstimatedBytes(
+                    segments.length,
+                    segmentCounts.length,
+                    freeIds.length
+            );
         }
     }
 
     private static long arrayHeapBytes(int length, long elementBytes) {
         return ARRAY_HEADER_BYTES + (long) length * elementBytes;
+    }
+
+    private static long allocationScopeCheckpointHeapEstimatedBytes(
+            int segmentsLength,
+            int segmentCountsLength,
+            int freeIdsLength
+    ) {
+        return CHECKPOINT_OBJECT_BYTES
+                + arrayHeapBytes(segmentsLength, REFERENCE_BYTES)
+                + arrayHeapBytes(segmentCountsLength, INT_BYTES)
+                + arrayHeapBytes(freeIdsLength, INT_BYTES);
     }
 }

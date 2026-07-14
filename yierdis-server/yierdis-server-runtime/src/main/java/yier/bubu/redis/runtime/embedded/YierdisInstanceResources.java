@@ -14,16 +14,19 @@ final class YierdisInstanceResources implements AutoCloseable {
     private final RuntimeDbEngine[] dbs;
     private final List<AutoCloseable> ownedResources;
     private final YierdisGlobalMaxmemoryGovernor globalMaxmemoryGovernor;
+    private final CommitStream commitStream;
 
     YierdisInstanceResources(
             RuntimeDbEngine[] dbs,
             List<AutoCloseable> ownedResources,
-            YierdisGlobalMaxmemoryGovernor globalMaxmemoryGovernor
+            YierdisGlobalMaxmemoryGovernor globalMaxmemoryGovernor,
+            CommitStream commitStream
     ) {
         Objects.requireNonNull(dbs, "dbs");
         this.dbs = dbs.clone();
         this.ownedResources = ownedResources == null ? List.of() : List.copyOf(ownedResources);
         this.globalMaxmemoryGovernor = globalMaxmemoryGovernor;
+        this.commitStream = commitStream;
     }
 
     int databases() {
@@ -52,6 +55,10 @@ final class YierdisInstanceResources implements AutoCloseable {
         }
     }
 
+    CommitStream commitStream() {
+        return commitStream;
+    }
+
     void bindToCurrentThread() {
         for (RuntimeDbEngine engine : dbs) {
             if (engine == null) {
@@ -63,6 +70,15 @@ final class YierdisInstanceResources implements AutoCloseable {
 
     void shutdownAll() {
         Throwable failure = null;
+        if (commitStream != null) {
+            try {
+                if (!commitStream.shutdown()) {
+                    failure = recordFailure(failure, new IllegalStateException("commit stream did not drain"));
+                }
+            } catch (Throwable t) {
+                failure = recordFailure(failure, t);
+            }
+        }
         for (RuntimeDbEngine engine : dbs) {
             if (engine == null) {
                 continue;

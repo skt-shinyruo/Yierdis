@@ -20,8 +20,7 @@ YierdisServer
   -> YierdisInstance
   -> YierdisServerChannelInitializer
   -> RespRequestDecoder
-  -> RespCommandAdapter
-  -> RespExecutionAdapter
+  -> RetainedRespExecutionRequest
   -> YierdisFastCommandHandler
   -> CommandExecutor
   -> DefaultYierdisEngine
@@ -84,17 +83,17 @@ YierdisServer
 - `EngineSession`
 - `ExecutionConnectionContext`
 
-pipeline 的关键点是 `RespRequestDecoder` 和 `RespCommandAdapter`。它们把 RESP bytes 变成 `ExecutionRequest`，再交给提交层。
+pipeline 的关键点是 `RespRequestDecoder`。它在完成 ingress admission 后把 RESP bytes 直接变成带 lease 的 `ExecutionRequest`，再交给提交层。
 
-## 5. RESP 适配
+## 5. RESP 解码
 
-继续看 [`RespRequestDecoder.java`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java)、[`RespCommandAdapter.java`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java) 和 [`RespExecutionAdapter.java`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespExecutionAdapter.java)。
+继续看 [`RespRequestDecoder.java`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java) 和 [`RetainedRespExecutionRequest.java`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RetainedRespExecutionRequest.java)。
 
 它们的职责很窄：
 
 - decoder 识别 RESP 帧
-- `RespCommandAdapter.channelRead(...)` 接收 `RespCommandRequest` 后调用 `RespExecutionAdapter.toExecutionRequest(...)`
-- `RespExecutionAdapter.toExecutionRequest(...)` 返回的具体对象是 `ByteArrayExecutionRequest`，对外类型是 `ExecutionRequest`
+- decoder 在分配 argv/payload 前取得 ingress admission，并直接构造 `RetainedRespExecutionRequest`
+- `RetainedRespExecutionRequest` 对外类型是 `ExecutionRequest`；其 lease 可在 executor 或事务 replay 的最后一个消费者处释放
 
 这一步之后，协议层就不再继续往里走。
 

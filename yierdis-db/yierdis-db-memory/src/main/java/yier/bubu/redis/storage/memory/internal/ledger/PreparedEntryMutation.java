@@ -15,13 +15,15 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
     private final EntryRecord oldRecord;
     private final EntryRecord newRecord;
     private final boolean releaseReplacedValue;
-    private final Runnable releaseReplacedValueHook;
+    private Runnable releaseReplacedValueHook;
     private final PreparedTtlMutation ttlMutation;
+    private AutoCloseable abortResource;
 
     private EntryHandle existingEntryHandle;
     private EntryHandle stagedEntryHandle;
     private NativeKeyDirectory.StagedInsert stagedKey;
     private boolean entryPublished;
+    private boolean replacedValueReleaseClaimed;
 
     public PreparedEntryMutation(
             YierdisDbKeyLifecycle keyLifecycle,
@@ -50,7 +52,8 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
                 newRecord,
                 releaseReplacedValue,
                 null,
-                ttlMutation
+                ttlMutation,
+                null
         );
     }
 
@@ -68,6 +71,40 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
             boolean releaseReplacedValue,
             Runnable releaseReplacedValueHook,
             PreparedTtlMutation ttlMutation
+    ) {
+        this(
+                keyLifecycle,
+                result,
+                actualDeltaBytes,
+                stagedNonNativeGrowthBytes,
+                outcome,
+                existingEntryHandle,
+                stagedEntryHandle,
+                stagedKey,
+                oldRecord,
+                newRecord,
+                releaseReplacedValue,
+                releaseReplacedValueHook,
+                ttlMutation,
+                null
+        );
+    }
+
+    public PreparedEntryMutation(
+            YierdisDbKeyLifecycle keyLifecycle,
+            T result,
+            long actualDeltaBytes,
+            long stagedNonNativeGrowthBytes,
+            MutationOutcome outcome,
+            EntryHandle existingEntryHandle,
+            EntryHandle stagedEntryHandle,
+            NativeKeyDirectory.StagedInsert stagedKey,
+            EntryRecord oldRecord,
+            EntryRecord newRecord,
+            boolean releaseReplacedValue,
+            Runnable releaseReplacedValueHook,
+            PreparedTtlMutation ttlMutation,
+            AutoCloseable abortResource
     ) {
         super(
                 actualDeltaBytes,
@@ -87,6 +124,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
         this.releaseReplacedValue = releaseReplacedValue;
         this.releaseReplacedValueHook = releaseReplacedValueHook;
         this.ttlMutation = ttlMutation == null ? PreparedTtlMutation.NONE : ttlMutation;
+        this.abortResource = abortResource;
     }
 
     @Override
@@ -126,14 +164,18 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
             failure = e;
         }
         if (releaseReplacedValueHook != null) {
+            Runnable releaseHook = releaseReplacedValueHook;
+            releaseReplacedValueHook = null;
             try {
-                releaseReplacedValueHook.run();
+                releaseHook.run();
             } catch (RuntimeException | Error e) {
                 failure = addFailure(failure, e);
             }
         } else if (releaseReplacedValue
                 && oldRecord != null
-                && (newRecord == null || !sameValue(oldRecord, newRecord))) {
+                && (newRecord == null || !sameValue(oldRecord, newRecord))
+                && !replacedValueReleaseClaimed) {
+            replacedValueReleaseClaimed = true;
             try {
                 keyLifecycle.releaseValue(oldRecord);
             } catch (RuntimeException | Error e) {
@@ -177,6 +219,17 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
                 keyLifecycle.releaseValue(newRecord);
             } catch (RuntimeException | Error e) {
                 failure = addFailure(failure, e);
+            }
+        }
+        if (abortResource != null) {
+            try {
+                abortResource.close();
+            } catch (RuntimeException | Error e) {
+                failure = addFailure(failure, e);
+            } catch (Exception e) {
+                failure = addFailure(failure, new IllegalStateException("prepared result cleanup failed", e));
+            } finally {
+                abortResource = null;
             }
         }
         if (failure != null) {

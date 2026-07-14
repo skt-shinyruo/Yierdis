@@ -10,6 +10,9 @@ import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.execution.executor.CommandExecutor;
+import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
+import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudgetStats;
+import yier.bubu.redis.runtime.embedded.CommitStreamStats;
 import yier.bubu.redis.runtime.embedded.YierdisInstanceObservability;
 
 import java.nio.charset.StandardCharsets;
@@ -40,6 +43,47 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     private static final byte[] KEY_EXECUTOR_DRAIN_MILLIS = ascii("executor_drain_millis");
     private static final byte[] KEY_STARTED_MILLIS = ascii("started_millis");
     private static final byte[] KEY_UPTIME_MILLIS = ascii("uptime_millis");
+    private static final byte[] KEY_INBOUND_CAPACITY_BYTES = ascii("inbound_capacity_bytes");
+    private static final byte[] KEY_INBOUND_RESERVED_BYTES = ascii("inbound_reserved_bytes");
+    private static final byte[] KEY_INBOUND_PEAK_RESERVED_BYTES = ascii("inbound_peak_reserved_bytes");
+    private static final byte[] KEY_INBOUND_WAITING_CONNECTIONS = ascii("inbound_waiting_connections");
+    private static final byte[] KEY_INBOUND_BACKPRESSURED = ascii("inbound_backpressured");
+    private static final byte[] KEY_INBOUND_REJECTED_CONNECTIONS = ascii("inbound_rejected_connections");
+    private static final byte[] KEY_INBOUND_CLOSED = ascii("inbound_closed");
+    private static final byte[] KEY_COMMIT_STREAM_STATE = ascii("commit_stream_state");
+    private static final byte[] KEY_COMMIT_STREAM_RESERVED_EVENTS = ascii("commit_stream_reserved_events");
+    private static final byte[] KEY_COMMIT_STREAM_RESERVED_BYTES = ascii("commit_stream_reserved_bytes");
+    private static final byte[] KEY_COMMIT_STREAM_REJECTED_WRITES = ascii("commit_stream_rejected_writes");
+    private static final byte[] KEY_COMMIT_STREAM_LAST_ASSIGNED_SEQUENCE = ascii("commit_stream_last_assigned_sequence");
+    private static final byte[] KEY_COMMIT_STREAM_LAST_ACKNOWLEDGED_SEQUENCE = ascii("commit_stream_last_acknowledged_sequence");
+    private static final byte[] KEY_COMMIT_STREAM_CALLBACK_ACTIVE = ascii("commit_stream_callback_active");
+    private static final byte[] KEY_COMMIT_STREAM_SHUTDOWN_TIMED_OUT = ascii("commit_stream_shutdown_timed_out");
+    private static final byte[] KEY_COMMIT_STREAM_FIRST_FAILURE_TYPE = ascii("commit_stream_first_failure_type");
+    private static final byte[] KEY_COMMIT_STREAM_FIRST_FAILURE_MESSAGE = ascii("commit_stream_first_failure_message");
+    private static final byte[] KEY_REPLY_GLOBAL_CAPACITY_BYTES = ascii("reply_global_capacity_bytes");
+    private static final byte[] KEY_REPLY_PER_CONNECTION_CAPACITY_BYTES = ascii("reply_per_connection_capacity_bytes");
+    private static final byte[] KEY_REPLY_MAX_TOTAL_BYTES = ascii("reply_max_total_bytes");
+    private static final byte[] KEY_REPLY_CHUNK_PAYLOAD_BYTES = ascii("reply_chunk_payload_bytes");
+    private static final byte[] KEY_REPLY_CONTROL_RESERVATION_BYTES = ascii("reply_control_reservation_bytes");
+    private static final byte[] KEY_REPLY_DRAIN_TIMEOUT_MILLIS = ascii("reply_drain_timeout_millis");
+    private static final byte[] KEY_OUTBOUND_RESERVED_BYTES = ascii("outbound_reserved_bytes");
+    private static final byte[] KEY_OUTBOUND_ALLOCATED_BYTES = ascii("outbound_allocated_bytes");
+    private static final byte[] KEY_OUTBOUND_PEAK_RESERVED_BYTES = ascii("outbound_peak_reserved_bytes");
+    private static final byte[] KEY_OUTBOUND_PEAK_ALLOCATED_BYTES = ascii("outbound_peak_allocated_bytes");
+    private static final byte[] KEY_OUTBOUND_CAPACITY_REJECTS = ascii("outbound_capacity_rejects");
+    private static final byte[] KEY_OUTBOUND_WAITING_CONNECTIONS = ascii("outbound_waiting_connections");
+    private static final byte[] KEY_OUTBOUND_ACTIVE_CONNECTIONS = ascii("outbound_active_connections");
+    private static final byte[] KEY_OUTBOUND_ACTIVE_SLOTS = ascii("outbound_active_slots");
+    private static final byte[] KEY_OUTBOUND_CLOSED = ascii("outbound_closed");
+    private static final byte[] KEY_OUTBOUND_ACTIVE_CHUNKS = ascii("outbound_active_chunks");
+    private static final byte[] KEY_OUTBOUND_ACTIVE_SOURCES = ascii("outbound_active_sources");
+    private static final byte[] KEY_OUTBOUND_OVERSIZED_REPLIES = ascii("outbound_oversized_replies");
+    private static final byte[] KEY_OUTBOUND_CANCELLED_SLOTS = ascii("outbound_cancelled_slots");
+    private static final byte[] KEY_OUTBOUND_FAILED_SLOTS = ascii("outbound_failed_slots");
+    private static final byte[] KEY_OUTBOUND_WRITE_FAILURES = ascii("outbound_write_failures");
+    private static final byte[] KEY_RESULT_UNKNOWN_CLOSES = ascii("result_unknown_closes");
+    private static final byte[] KEY_REPLY_SHUTDOWN_TIMEOUTS = ascii("reply_shutdown_timeouts");
+    private static final byte[] KEY_LIVE_CHILD_CHANNELS = ascii("live_child_channels");
 
     private static final byte[] KEY_QUEUED_TASKS = ascii("queued_tasks");
     private static final byte[] KEY_QUEUED_BYTES = ascii("queued_bytes");
@@ -57,6 +101,8 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     private static final byte[] KEY_BACKPRESSURE_EXIT_TOTAL = ascii("backpressure_exit_total");
     private static final byte[] KEY_DRAIN_LIMITED_MAX_COMMANDS_TOTAL = ascii("drain_limited_max_commands_total");
     private static final byte[] KEY_DRAIN_LIMITED_TIME_BUDGET_TOTAL = ascii("drain_limited_time_budget_total");
+    private static final byte[] KEY_DEFERRED_FAIR_REPLY_HEADS = ascii("deferred_fair_reply_heads");
+    private static final byte[] KEY_DEFERRED_GLOBAL_REPLY_HEADS = ascii("deferred_global_reply_heads");
 
     private static final byte[] KEY_CONN_PENDING = ascii("conn_pending");
     private static final byte[] KEY_CONN_PENDING_BYTES = ascii("conn_pending_bytes");
@@ -74,6 +120,10 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     private final long startedMillis;
     private volatile CommandExecutor<NettyExecutionConnection> executor;
     private volatile YierdisInstanceObservability observability;
+    private volatile InboundMemoryBudget inboundMemoryBudget;
+    private volatile OutboundMemoryBudget outboundMemoryBudget;
+    private volatile ChildChannelRegistry childChannelRegistry;
+    private volatile ReplyEgressStats replyEgressStats;
 
     NettyServerInfoProvider(YierdisServerRuntimeConfig config) {
         this.config = Objects.requireNonNull(config, "config");
@@ -90,6 +140,22 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
 
     void bindObservability(YierdisInstanceObservability observability) {
         this.observability = Objects.requireNonNull(observability, "observability");
+    }
+
+    void bindInboundMemoryBudget(InboundMemoryBudget inboundMemoryBudget) {
+        this.inboundMemoryBudget = Objects.requireNonNull(inboundMemoryBudget, "inboundMemoryBudget");
+    }
+
+    void bindOutboundMemoryBudget(OutboundMemoryBudget outboundMemoryBudget) {
+        this.outboundMemoryBudget = Objects.requireNonNull(outboundMemoryBudget, "outboundMemoryBudget");
+    }
+
+    void bindChildChannelRegistry(ChildChannelRegistry childChannelRegistry) {
+        this.childChannelRegistry = Objects.requireNonNull(childChannelRegistry, "childChannelRegistry");
+    }
+
+    void bindReplyEgressStats(ReplyEgressStats replyEgressStats) {
+        this.replyEgressStats = Objects.requireNonNull(replyEgressStats, "replyEgressStats");
     }
 
     @Override
@@ -123,8 +189,12 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
 
         CommandExecutor.StatsSnapshot s = ex.statsSnapshot();
         ConnectionStatsView stats = connectionStats(ctx);
+        InboundMemoryBudgetStats inboundStats = inboundStats();
+        CommitStreamStats streamStats = commitStreamStats();
+        OutboundMemoryBudgetStats outboundStats = outboundStats();
+        ReplyEgressStats.Snapshot egressStats = replyEgressStats();
 
-        int pairs = 16 + (stats == null ? 0 : 11);
+        int pairs = 59 + (stats == null ? 0 : 11);
         writeHeader(out, pairs);
 
         writePair(out, KEY_QUEUED_TASKS, s.queuedTasks());
@@ -143,6 +213,11 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         writePair(out, KEY_BACKPRESSURE_EXIT_TOTAL, s.backpressureExit());
         writePair(out, KEY_DRAIN_LIMITED_MAX_COMMANDS_TOTAL, s.drainLimitedByMaxCommands());
         writePair(out, KEY_DRAIN_LIMITED_TIME_BUDGET_TOTAL, s.drainLimitedByTimeBudget());
+        writePair(out, KEY_DEFERRED_FAIR_REPLY_HEADS, s.deferredFairReplyHeads());
+        writePair(out, KEY_DEFERRED_GLOBAL_REPLY_HEADS, s.deferredGlobalReplyHeads());
+        writeInboundStats(out, inboundStats);
+        writeCommitStreamStats(out, streamStats);
+        writeOutboundStats(out, outboundStats, egressStats, liveChildChannels());
 
         if (stats == null) {
             return;
@@ -174,7 +249,11 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         long nowMillis = System.currentTimeMillis();
         long uptimeMillis = Math.max(0, nowMillis - startedMillis);
 
-        int pairs = 15;
+        InboundMemoryBudgetStats inboundStats = inboundStats();
+        CommitStreamStats streamStats = commitStreamStats();
+        OutboundMemoryBudgetStats outboundStats = outboundStats();
+        ReplyEgressStats.Snapshot egressStats = replyEgressStats();
+        int pairs = 58;
         writeHeader(out, pairs);
 
         writePair(out, KEY_SERVER, VALUE_SERVER);
@@ -192,6 +271,11 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         writePair(out, KEY_EXECUTOR_DRAIN_MILLIS, config.executorDrainTimeLimitMillis());
         writePair(out, KEY_STARTED_MILLIS, startedMillis);
         writePair(out, KEY_UPTIME_MILLIS, uptimeMillis);
+        writePair(out, KEY_DEFERRED_FAIR_REPLY_HEADS, s.deferredFairReplyHeads());
+        writePair(out, KEY_DEFERRED_GLOBAL_REPLY_HEADS, s.deferredGlobalReplyHeads());
+        writeInboundStats(out, inboundStats);
+        writeCommitStreamStats(out, streamStats);
+        writeOutboundStats(out, outboundStats, egressStats, liveChildChannels());
     }
 
     private String buildRedisInfo(String section, CommandExecutor<NettyExecutionConnection> ex) {
@@ -220,7 +304,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
 
         if (clients) {
             sb.append("# Clients\r\n");
-            sb.append("connected_clients:0\r\n");
+            sb.append("connected_clients:").append(liveChildChannels()).append("\r\n");
             sb.append("blocked_clients:0\r\n");
             sb.append("\r\n");
         }
@@ -268,6 +352,10 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
 
         if (stats) {
+            InboundMemoryBudgetStats inboundStats = inboundStats();
+            CommitStreamStats streamStats = commitStreamStats();
+            OutboundMemoryBudgetStats outboundStats = outboundStats();
+            ReplyEgressStats.Snapshot egressStats = replyEgressStats();
             sb.append("# Stats\r\n");
             sb.append("total_commands_processed:").append(s.commandsExecuted()).append("\r\n");
             sb.append("rejected_connections:0\r\n");
@@ -275,6 +363,54 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             sb.append("instantaneous_ops_per_sec:0\r\n");
             sb.append("yierdis_queued_tasks:").append(s.queuedTasks()).append("\r\n");
             sb.append("yierdis_queued_bytes:").append(s.queuedBytes()).append("\r\n");
+            sb.append("yierdis_inbound_capacity_bytes:").append(inboundStats.capacityBytes()).append("\r\n");
+            sb.append("yierdis_inbound_reserved_bytes:").append(inboundStats.reservedBytes()).append("\r\n");
+            sb.append("yierdis_inbound_peak_reserved_bytes:").append(inboundStats.peakReservedBytes()).append("\r\n");
+            sb.append("yierdis_inbound_waiting_connections:").append(inboundStats.waitingConnections()).append("\r\n");
+            sb.append("yierdis_inbound_backpressured:").append(inboundStats.backpressured() ? 1 : 0).append("\r\n");
+            sb.append("yierdis_inbound_rejected_connections:").append(inboundStats.rejectedConnections()).append("\r\n");
+            sb.append("yierdis_inbound_closed:").append(inboundStats.closed() ? 1 : 0).append("\r\n");
+            sb.append("yierdis_commit_stream_state:").append(streamStats.state()).append("\r\n");
+            sb.append("yierdis_commit_stream_reserved_events:").append(streamStats.reservedEvents()).append("\r\n");
+            sb.append("yierdis_commit_stream_reserved_bytes:").append(streamStats.reservedBytes()).append("\r\n");
+            sb.append("yierdis_commit_stream_rejected_writes:").append(streamStats.rejectedWrites()).append("\r\n");
+            sb.append("yierdis_commit_stream_last_assigned_sequence:").append(streamStats.lastAssignedSequence()).append("\r\n");
+            sb.append("yierdis_commit_stream_last_acknowledged_sequence:")
+                    .append(streamStats.lastAcknowledgedSequence()).append("\r\n");
+            sb.append("yierdis_commit_stream_callback_active:").append(streamStats.callbackActive() ? 1 : 0).append("\r\n");
+            sb.append("yierdis_commit_stream_shutdown_timed_out:")
+                    .append(streamStats.shutdownTimedOut() ? 1 : 0).append("\r\n");
+            sb.append("yierdis_commit_stream_first_failure_type:")
+                    .append(streamStats.firstFailureType() == null ? "" : streamStats.firstFailureType()).append("\r\n");
+            sb.append("yierdis_commit_stream_first_failure_message:")
+                    .append(streamStats.firstFailureMessage() == null ? "" : streamStats.firstFailureMessage()).append("\r\n");
+            sb.append("yierdis_reply_global_capacity_bytes:").append(config.replyGlobalCapacityBytes()).append("\r\n");
+            sb.append("yierdis_reply_per_connection_capacity_bytes:")
+                    .append(config.replyPerConnectionCapacityBytes()).append("\r\n");
+            sb.append("yierdis_reply_max_total_bytes:").append(config.replyMaxTotalBytes()).append("\r\n");
+            sb.append("yierdis_reply_chunk_payload_bytes:").append(config.replyChunkPayloadBytes()).append("\r\n");
+            sb.append("yierdis_reply_control_reservation_bytes:")
+                    .append(config.replyControlReservationBytes()).append("\r\n");
+            sb.append("yierdis_reply_drain_timeout_millis:").append(config.replyDrainTimeoutMillis()).append("\r\n");
+            sb.append("yierdis_outbound_reserved_bytes:").append(outboundStats.reservedBytes()).append("\r\n");
+            sb.append("yierdis_outbound_allocated_bytes:").append(outboundStats.allocatedBytes()).append("\r\n");
+            sb.append("yierdis_outbound_peak_reserved_bytes:").append(outboundStats.peakReservedBytes()).append("\r\n");
+            sb.append("yierdis_outbound_peak_allocated_bytes:").append(outboundStats.peakAllocatedBytes()).append("\r\n");
+            sb.append("yierdis_outbound_capacity_rejects:").append(outboundStats.capacityRejects()).append("\r\n");
+            sb.append("yierdis_outbound_waiting_connections:").append(outboundStats.waitingConnections()).append("\r\n");
+            sb.append("yierdis_outbound_active_connections:").append(outboundStats.activeConnections()).append("\r\n");
+            sb.append("yierdis_outbound_active_slots:").append(outboundStats.activeSlots()).append("\r\n");
+            sb.append("yierdis_outbound_active_chunks:").append(egressStats.activeChunks()).append("\r\n");
+            sb.append("yierdis_outbound_active_sources:").append(egressStats.activeSources()).append("\r\n");
+            sb.append("yierdis_outbound_oversized_replies:").append(egressStats.oversizedReplies()).append("\r\n");
+            sb.append("yierdis_outbound_cancelled_slots:").append(egressStats.cancelledSlots()).append("\r\n");
+            sb.append("yierdis_outbound_failed_slots:").append(egressStats.failedSlots()).append("\r\n");
+            sb.append("yierdis_outbound_write_failures:").append(egressStats.writeFailures()).append("\r\n");
+            sb.append("yierdis_result_unknown_closes:").append(egressStats.resultUnknownCloses()).append("\r\n");
+            sb.append("yierdis_reply_shutdown_timeouts:").append(egressStats.shutdownTimeouts()).append("\r\n");
+            sb.append("yierdis_live_child_channels:").append(liveChildChannels()).append("\r\n");
+            sb.append("yierdis_deferred_fair_reply_heads:").append(s.deferredFairReplyHeads()).append("\r\n");
+            sb.append("yierdis_deferred_global_reply_heads:").append(s.deferredGlobalReplyHeads()).append("\r\n");
             sb.append("\r\n");
         }
 
@@ -349,6 +485,114 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             return null;
         }
         return ctx.connectionStatsSession().connectionStats();
+    }
+
+    private InboundMemoryBudgetStats inboundStats() {
+        InboundMemoryBudget budget = inboundMemoryBudget;
+        if (budget != null) {
+            return budget.stats();
+        }
+        return new InboundMemoryBudgetStats(
+                config.protocolGlobalInFlightBytes(),
+                0L,
+                0,
+                false,
+                0L,
+                0L,
+                0L,
+                0L,
+                0L,
+                false
+        );
+    }
+
+    private CommitStreamStats commitStreamStats() {
+        YierdisInstanceObservability runtimeObservability = observability;
+        return runtimeObservability == null ? CommitStreamStats.disabled() : runtimeObservability.commitStreamStats();
+    }
+
+    private OutboundMemoryBudgetStats outboundStats() {
+        OutboundMemoryBudget budget = outboundMemoryBudget;
+        if (budget != null) {
+            return budget.stats();
+        }
+        return new OutboundMemoryBudgetStats(
+                config.replyGlobalCapacityBytes(),
+                0L,
+                0L,
+                0L,
+                0L,
+                0L,
+                0,
+                0,
+                0L,
+                false
+        );
+    }
+
+    private ReplyEgressStats.Snapshot replyEgressStats() {
+        ReplyEgressStats stats = replyEgressStats;
+        return stats == null ? ReplyEgressStats.noop().snapshot() : stats.snapshot();
+    }
+
+    private int liveChildChannels() {
+        ChildChannelRegistry registry = childChannelRegistry;
+        return registry == null ? 0 : registry.activeChannelCount();
+    }
+
+    private void writeOutboundStats(
+            RedisReplyWriter out,
+            OutboundMemoryBudgetStats outboundStats,
+            ReplyEgressStats.Snapshot egressStats,
+            int liveChildChannels
+    ) {
+        writePair(out, KEY_REPLY_GLOBAL_CAPACITY_BYTES, config.replyGlobalCapacityBytes());
+        writePair(out, KEY_REPLY_PER_CONNECTION_CAPACITY_BYTES, config.replyPerConnectionCapacityBytes());
+        writePair(out, KEY_REPLY_MAX_TOTAL_BYTES, config.replyMaxTotalBytes());
+        writePair(out, KEY_REPLY_CHUNK_PAYLOAD_BYTES, config.replyChunkPayloadBytes());
+        writePair(out, KEY_REPLY_CONTROL_RESERVATION_BYTES, config.replyControlReservationBytes());
+        writePair(out, KEY_REPLY_DRAIN_TIMEOUT_MILLIS, config.replyDrainTimeoutMillis());
+        writePair(out, KEY_OUTBOUND_RESERVED_BYTES, outboundStats.reservedBytes());
+        writePair(out, KEY_OUTBOUND_ALLOCATED_BYTES, outboundStats.allocatedBytes());
+        writePair(out, KEY_OUTBOUND_PEAK_RESERVED_BYTES, outboundStats.peakReservedBytes());
+        writePair(out, KEY_OUTBOUND_PEAK_ALLOCATED_BYTES, outboundStats.peakAllocatedBytes());
+        writePair(out, KEY_OUTBOUND_CAPACITY_REJECTS, outboundStats.capacityRejects());
+        writePair(out, KEY_OUTBOUND_WAITING_CONNECTIONS, outboundStats.waitingConnections());
+        writePair(out, KEY_OUTBOUND_ACTIVE_CONNECTIONS, outboundStats.activeConnections());
+        writePair(out, KEY_OUTBOUND_ACTIVE_SLOTS, outboundStats.activeSlots());
+        writePair(out, KEY_OUTBOUND_CLOSED, outboundStats.closed() ? 1L : 0L);
+        writePair(out, KEY_OUTBOUND_ACTIVE_CHUNKS, egressStats.activeChunks());
+        writePair(out, KEY_OUTBOUND_ACTIVE_SOURCES, egressStats.activeSources());
+        writePair(out, KEY_OUTBOUND_OVERSIZED_REPLIES, egressStats.oversizedReplies());
+        writePair(out, KEY_OUTBOUND_CANCELLED_SLOTS, egressStats.cancelledSlots());
+        writePair(out, KEY_OUTBOUND_FAILED_SLOTS, egressStats.failedSlots());
+        writePair(out, KEY_OUTBOUND_WRITE_FAILURES, egressStats.writeFailures());
+        writePair(out, KEY_RESULT_UNKNOWN_CLOSES, egressStats.resultUnknownCloses());
+        writePair(out, KEY_REPLY_SHUTDOWN_TIMEOUTS, egressStats.shutdownTimeouts());
+        writePair(out, KEY_LIVE_CHILD_CHANNELS, liveChildChannels);
+    }
+
+    private static void writeInboundStats(RedisReplyWriter out, InboundMemoryBudgetStats stats) {
+        writePair(out, KEY_INBOUND_CAPACITY_BYTES, stats.capacityBytes());
+        writePair(out, KEY_INBOUND_RESERVED_BYTES, stats.reservedBytes());
+        writePair(out, KEY_INBOUND_PEAK_RESERVED_BYTES, stats.peakReservedBytes());
+        writePair(out, KEY_INBOUND_WAITING_CONNECTIONS, stats.waitingConnections());
+        writePair(out, KEY_INBOUND_BACKPRESSURED, stats.backpressured() ? 1L : 0L);
+        writePair(out, KEY_INBOUND_REJECTED_CONNECTIONS, stats.rejectedConnections());
+        writePair(out, KEY_INBOUND_CLOSED, stats.closed() ? 1L : 0L);
+    }
+
+    private static void writeCommitStreamStats(RedisReplyWriter out, CommitStreamStats stats) {
+        writePair(out, KEY_COMMIT_STREAM_STATE, ascii(stats.state().name()));
+        writePair(out, KEY_COMMIT_STREAM_RESERVED_EVENTS, stats.reservedEvents());
+        writePair(out, KEY_COMMIT_STREAM_RESERVED_BYTES, stats.reservedBytes());
+        writePair(out, KEY_COMMIT_STREAM_REJECTED_WRITES, stats.rejectedWrites());
+        writePair(out, KEY_COMMIT_STREAM_LAST_ASSIGNED_SEQUENCE, stats.lastAssignedSequence());
+        writePair(out, KEY_COMMIT_STREAM_LAST_ACKNOWLEDGED_SEQUENCE, stats.lastAcknowledgedSequence());
+        writePair(out, KEY_COMMIT_STREAM_CALLBACK_ACTIVE, stats.callbackActive() ? 1L : 0L);
+        writePair(out, KEY_COMMIT_STREAM_SHUTDOWN_TIMED_OUT, stats.shutdownTimedOut() ? 1L : 0L);
+        writePair(out, KEY_COMMIT_STREAM_FIRST_FAILURE_TYPE, ascii(stats.firstFailureType()));
+        writePair(out, KEY_COMMIT_STREAM_FIRST_FAILURE_MESSAGE, ascii(stats.firstFailureMessage()));
     }
 
     private static void writeHeader(RedisReplyWriter out, int pairs) {

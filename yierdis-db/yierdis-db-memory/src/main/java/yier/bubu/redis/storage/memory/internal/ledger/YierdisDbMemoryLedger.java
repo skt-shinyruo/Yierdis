@@ -5,6 +5,7 @@ import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
+import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 
@@ -15,6 +16,7 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
     private final LongConsumer evictUntilUnder;
     private final LongSupplier usedBytesForMaxmemory;
     private final Supplier<MaxmemoryCoordinator> maxmemoryCoordinatorSupplier;
+    private final Supplier<MaxmemoryParticipant> maxmemoryParticipantSupplier;
 
     private long usedBytes;
     private long reservedBytes;
@@ -27,12 +29,33 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
             LongSupplier usedBytesForMaxmemory,
             Supplier<MaxmemoryCoordinator> maxmemoryCoordinatorSupplier
     ) {
+        this(
+                limitBytes,
+                maxmemoryPolicy,
+                cleanupExpired,
+                evictUntilUnder,
+                usedBytesForMaxmemory,
+                maxmemoryCoordinatorSupplier,
+                () -> null
+        );
+    }
+
+    public YierdisDbMemoryLedger(
+            long limitBytes,
+            MaxmemoryPolicy maxmemoryPolicy,
+            Runnable cleanupExpired,
+            LongConsumer evictUntilUnder,
+            LongSupplier usedBytesForMaxmemory,
+            Supplier<MaxmemoryCoordinator> maxmemoryCoordinatorSupplier,
+            Supplier<MaxmemoryParticipant> maxmemoryParticipantSupplier
+    ) {
         this.limitBytes = Math.max(0L, limitBytes);
         this.maxmemoryPolicy = Objects.requireNonNull(maxmemoryPolicy, "maxmemoryPolicy");
         this.cleanupExpired = Objects.requireNonNull(cleanupExpired, "cleanupExpired");
         this.evictUntilUnder = Objects.requireNonNull(evictUntilUnder, "evictUntilUnder");
         this.usedBytesForMaxmemory = Objects.requireNonNull(usedBytesForMaxmemory, "usedBytesForMaxmemory");
         this.maxmemoryCoordinatorSupplier = Objects.requireNonNull(maxmemoryCoordinatorSupplier, "maxmemoryCoordinatorSupplier");
+        this.maxmemoryParticipantSupplier = Objects.requireNonNull(maxmemoryParticipantSupplier, "maxmemoryParticipantSupplier");
     }
 
     @Override
@@ -51,6 +74,11 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
     }
 
     @Override
+    public boolean maxmemoryEnabled() {
+        return limitBytes > 0L || maxmemoryCoordinatorSupplier.get() != null;
+    }
+
+    @Override
     public MemoryReservation reserve(long estimatedExtraBytes) {
         if (estimatedExtraBytes < 0) {
             throw new IllegalArgumentException("estimatedExtraBytes must be >= 0");
@@ -60,7 +88,7 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
         if (coordinator != null) {
             try {
                 // coordinator 接管跨 DB/全局预算判定；本地 ledger 仍保留 reservation，保证 commit/rollback 对账。
-                coordinator.prepareWrite(estimatedExtraBytes);
+                coordinator.prepareWrite(maxmemoryParticipantSupplier.get(), estimatedExtraBytes);
             } catch (YierdisCommandException e) {
                 throw new MemoryLedgerOutOfMemoryException();
             }
@@ -84,15 +112,15 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
                 limit = 0;
             }
             if (usedBytesForMaxmemory.getAsLong() > limit) {
-                if (maxmemoryPolicy == MaxmemoryPolicy.NOEVICTION) {
-                    if (estimatedExtraBytes > 0) {
-                        throw new MemoryLedgerOutOfMemoryException();
-                    }
-                    return NoopReservation.INSTANCE;
-                }
-                // 淘汰只把 usedBytesForMaxmemory 拉到为本次写入预留后的 limit，真实增量仍由 commit 结算。
+                // 回调会先做物理 trim；NOEVICTION 策略下不会选择 victim，但仍允许空页释放避免误 OOM。
                 evictUntilUnder.accept(limit);
                 if (usedBytesForMaxmemory.getAsLong() > limit) {
+                    if (maxmemoryPolicy == MaxmemoryPolicy.NOEVICTION) {
+                        if (estimatedExtraBytes > 0) {
+                            throw new MemoryLedgerOutOfMemoryException();
+                        }
+                        return NoopReservation.INSTANCE;
+                    }
                     if (estimatedExtraBytes > 0) {
                         throw new MemoryLedgerOutOfMemoryException();
                     }
@@ -116,7 +144,9 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
         ReservationToken token = ReservationToken.validate(reservation, this);
         long reserved = token == null ? 0L : token.reservedBytes;
         if (requiredBytes > reserved) {
-            throw new IllegalStateException("prepared mutation exceeded its reservation");
+            throw new IllegalStateException(
+                    "prepared mutation exceeded its reservation: required=" + requiredBytes + ", reserved=" + reserved
+            );
         }
         if (token != null && requiredBytes < reserved) {
             reservedBytes -= reserved - requiredBytes;

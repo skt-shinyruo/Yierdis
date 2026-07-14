@@ -8,13 +8,15 @@ import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.api.YierdisDbRouter;
 import yier.bubu.redis.storage.api.DbEngine;
-import yier.bubu.redis.storage.api.MutationOutcome;
-import yier.bubu.redis.storage.api.WriteResult;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.DbIndexSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.ReplyPlans;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.storage.api.result.BulkStringMapMetrics;
+import yier.bubu.redis.storage.api.result.BulkStringValue;
+import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequence;
 
 import java.nio.charset.StandardCharsets;
 import java.util.AbstractList;
@@ -58,19 +60,6 @@ public final class CommandSupport {
     public CommandDb commandDb(CommandContext ctx) {
         java.util.Objects.requireNonNull(ctx, "ctx");
         return commandDb.reset(dbRouter.dbFor(ctx.dbIndexSession()));
-    }
-
-    public void recordMutation(CommandContext ctx, MutationOutcome outcome) {
-        if (outcome == null) {
-            return;
-        }
-        ctx.recordMutation(outcome.valueChanged(), outcome.ttlChanged());
-    }
-
-    public <T> T recordWriteValue(CommandContext ctx, WriteResult<T> result) {
-        java.util.Objects.requireNonNull(result, "result");
-        recordMutation(ctx, result.mutationOutcome());
-        return result.value();
     }
 
     public int databases() {
@@ -149,6 +138,46 @@ public final class CommandSupport {
 
     public static void wrongArity(RedisReplyWriter out, String cmdLower) {
         out.error("ERR wrong number of arguments for '" + cmdLower + "' command");
+    }
+
+    public static void writeOwnedBulkString(RedisReplyWriter out, BulkStringValue value) {
+        java.util.Objects.requireNonNull(out, "out");
+        java.util.Objects.requireNonNull(value, "value");
+        boolean ownershipTransferred = false;
+        try {
+            out.requireReply(ReplyPlans.bulkString(value.payloadLength(), value.retainedMemoryBytes()));
+            value.writeTo(new BulkStringReplyAdapter(out));
+            out.transferReplyOwnership(value);
+            ownershipTransferred = true;
+        } finally {
+            if (!ownershipTransferred) {
+                value.close();
+            }
+        }
+    }
+
+    public static void writeMeasuredBulkStringArray(RedisReplyWriter out, MeasuredBulkStringSequence source) {
+        java.util.Objects.requireNonNull(out, "out");
+        java.util.Objects.requireNonNull(source, "source");
+        out.writeMeasuredBulkStringArray(
+                source.count(),
+                source.encodedElementBytes(),
+                source.retainedMemoryBytes(),
+                source,
+                reply -> source.emitTo(new BulkStringReplyAdapter(reply))
+        );
+    }
+
+    public static void writeMeasuredBulkStringMap(RedisReplyWriter out, BulkStringMapMetrics source) {
+        java.util.Objects.requireNonNull(out, "out");
+        java.util.Objects.requireNonNull(source, "source");
+        out.writeMeasuredBulkStringMap(
+                source.pairCount(),
+                source.encodedElementBytes(),
+                source.retainedMemoryBytes(),
+                source,
+                reply -> source.emitPairsTo(new BulkStringReplyAdapter(reply))
+        );
     }
 
     public static String utf8(ExecutionRequest request, int argIndex) {

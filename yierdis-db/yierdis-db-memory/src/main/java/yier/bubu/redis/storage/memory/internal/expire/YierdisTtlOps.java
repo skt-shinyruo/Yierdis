@@ -193,7 +193,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
     }
 
     private WriteResult<Boolean> deleteImmediately(KeyHandle handle, EntryRecord record) {
-        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<WriteResult<Boolean>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return 0;
@@ -205,17 +205,37 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<WriteResult<Boolean>> apply() {
-                long deltaBytes = 0;
-                long removalBytes = keyLifecycle.estimatedBytesForRemoval(handle, record);
-                keyLifecycle.removeExpireIndexOnly(handle);
-                if (keyLifecycle.removeEntry(handle, record)) {
-                    deltaBytes -= removalBytes;
+            public PreparedEntryMutation<WriteResult<Boolean>> prepare() {
+                EntryHandle entryHandle = keyLifecycle.entryHandle(keyLifecycle.copyKeyBytes(handle));
+                EntryRecord current = entryHandle == null ? null : keyLifecycle.entryRecord(entryHandle);
+                if (current == null || !record.equals(current)) {
+                    return preparedNoEntry(WriteResult.unchanged(Boolean.FALSE), MutationOutcome.NONE);
                 }
-                return YierdisDbMutationExecutor.MutationResult.of(
-                        WriteResult.of(Boolean.TRUE, MutationOutcome.VALUE_CHANGED),
-                        deltaBytes
-                );
+                PreparedTtlMutation ttlMutation = PreparedTtlMutation.NONE;
+                try {
+                    ttlMutation = keyLifecycle.prepareRemoveExpire(handle);
+                    return new PreparedEntryMutation<>(
+                            keyLifecycle,
+                            WriteResult.of(Boolean.TRUE, MutationOutcome.VALUE_CHANGED),
+                            -keyLifecycle.estimatedBytesForRemoval(handle, current),
+                            0L,
+                            MutationOutcome.VALUE_CHANGED,
+                            entryHandle,
+                            null,
+                            null,
+                            current,
+                            null,
+                            true,
+                            ttlMutation
+                    );
+                } catch (RuntimeException | Error failure) {
+                    try {
+                        ttlMutation.abort();
+                    } catch (RuntimeException | Error abortFailure) {
+                        failure.addSuppressed(abortFailure);
+                    }
+                    throw failure;
+                }
             }
         });
     }
@@ -279,7 +299,11 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             return null;
         }
         long nowMillis = System.currentTimeMillis();
-        return keyLifecycle.removeIfExpired(handle, record, nowMillis) ? null : record;
+        if (keyLifecycle.isKeyExpired(handle, nowMillis)) {
+            internals.reclaimExpired(handle, record, nowMillis);
+            return null;
+        }
+        return record;
     }
 
     private static long safeExpireAtMillis(long nowMillis, long seconds) {

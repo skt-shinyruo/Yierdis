@@ -1,6 +1,6 @@
 package yier.bubu.redis.execution.api;
 
-import java.util.List;
+import java.util.Objects;
 
 /**
  * Redis command reply model used by the command layer.
@@ -11,6 +11,95 @@ import java.util.List;
  * active wire format without making command handlers depend on protocol packages.
  */
 public interface RedisReplyWriter extends ReplySink {
+    @FunctionalInterface
+    interface MeasuredReplyVisitor {
+        void writeTo(RedisReplyWriter out);
+    }
+
+    /**
+     * 在生成回复字节前请求容量；不支持容量管理的 detached writer 保持兼容性 no-op。
+     */
+    default void requireReply(ReplyPlan plan) {
+    }
+
+    /**
+     * 将异步回复完成前仍需保留的来源转交给 writer；同步 writer 会在此处关闭它。
+     */
+    default void transferReplyOwnership(AutoCloseable resource) {
+        if (resource == null) {
+            return;
+        }
+        try {
+            resource.close();
+        } catch (RuntimeException | Error failure) {
+            throw failure;
+        } catch (Exception failure) {
+            throw new IllegalStateException("reply source close failed", failure);
+        }
+    }
+
+    default void writeMeasuredBulkStringArray(
+            int count,
+            long encodedElementBytes,
+            long retainedSourceBytes,
+            AutoCloseable source,
+            MeasuredReplyVisitor visitor
+    ) {
+        Objects.requireNonNull(source, "source");
+        Objects.requireNonNull(visitor, "visitor");
+        boolean ownershipTransferred = false;
+        try {
+            if (count < 0) {
+                throw new IllegalArgumentException("measured array count must be non-negative");
+            }
+            requireReply(ReplyPlans.bulkStringArray(count, encodedElementBytes, retainedSourceBytes));
+            arrayHeader(count);
+            visitor.writeTo(this);
+            transferReplyOwnership(source);
+            ownershipTransferred = true;
+        } finally {
+            if (!ownershipTransferred) {
+                closeReplySource(source);
+            }
+        }
+    }
+
+    default void writeMeasuredBulkStringMap(
+            int pairCount,
+            long encodedElementBytes,
+            long retainedSourceBytes,
+            AutoCloseable source,
+            MeasuredReplyVisitor visitor
+    ) {
+        Objects.requireNonNull(source, "source");
+        Objects.requireNonNull(visitor, "visitor");
+        boolean ownershipTransferred = false;
+        try {
+            if (pairCount < 0 || pairCount > Integer.MAX_VALUE / 2) {
+                throw new IllegalArgumentException("measured map pair count cannot be represented as a RESP2 array: " + pairCount);
+            }
+            requireReply(ReplyPlans.bulkStringArray(pairCount * 2, encodedElementBytes, retainedSourceBytes));
+            mapHeader(pairCount);
+            visitor.writeTo(this);
+            transferReplyOwnership(source);
+            ownershipTransferred = true;
+        } finally {
+            if (!ownershipTransferred) {
+                closeReplySource(source);
+            }
+        }
+    }
+
+    private static void closeReplySource(AutoCloseable source) {
+        try {
+            source.close();
+        } catch (RuntimeException | Error failure) {
+            throw failure;
+        } catch (Exception failure) {
+            throw new IllegalStateException("reply source close failed", failure);
+        }
+    }
+
     void requestCloseAfterReply();
 
     boolean closeAfterReplyRequested();
@@ -57,8 +146,6 @@ public interface RedisReplyWriter extends ReplySink {
     void nullArray();
 
     void arrayHeader(int count);
-
-    void bulkStringArray(List<byte[]> values);
 
     void emptyArray();
 

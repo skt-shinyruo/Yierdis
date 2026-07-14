@@ -10,6 +10,10 @@ public interface ConnectionStatsView {
 
     boolean inputDisabledByExecutor();
 
+    default boolean inputPausedByReply() {
+        return false;
+    }
+
     boolean closing();
 
     long commandsEnqueued();

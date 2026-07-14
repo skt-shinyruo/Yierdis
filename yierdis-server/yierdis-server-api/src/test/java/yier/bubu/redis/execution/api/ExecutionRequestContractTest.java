@@ -8,6 +8,8 @@ import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import yier.bubu.redis.common.command.CommandRecordView;
+import yier.bubu.redis.common.command.ImmutableCommandRecord;
 
 public class ExecutionRequestContractTest {
     @Test
@@ -56,12 +58,35 @@ public class ExecutionRequestContractTest {
                 ByteArrayExecutionRequest.fromUtf8("SET", List.of("key"))
         );
 
-        byte[] leaked = readOnlyByteArray(record.request(), 0);
+        byte[] leaked = record.request().toByteArray(0);
         leaked[0] = (byte) 'G';
 
         Assert.assertArrayEquals(ascii("SET"), record.request().toByteArray(0));
-        Assert.assertArrayEquals(ascii("SET"), readOnlyByteArray(record.request(), 0));
-        Assert.assertNotSame(leaked, readOnlyByteArray(record.request(), 0));
+        Assert.assertArrayEquals(ascii("SET"), record.request().toByteArray(0));
+        Assert.assertNotSame(leaked, record.request().toByteArray(0));
+    }
+
+    @Test
+    public void executionRequestIsAnOwnedImmutableCommandRecord() {
+        boolean found = false;
+        for (Class<?> type : ExecutionRequest.class.getInterfaces()) {
+            found |= type == ImmutableCommandRecord.class;
+        }
+        Assert.assertTrue(found);
+        ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("SET", List.of("key"));
+        Assert.assertEquals(request.admittedMemoryBytes(), request.retainedMemoryBytes());
+        request.close();
+    }
+
+    @Test
+    public void borrowedExecutionRecordKeepsTheExactViewWithoutRetainingIt() {
+        ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("SET", List.of("key"));
+        CommandRecordView view = request;
+        ExecutionRecord record = ExecutionRecord.borrowed(-1, view);
+
+        Assert.assertEquals(0, record.dbIndex());
+        Assert.assertSame(view, record.request());
+        request.close();
     }
 
     @Test

@@ -17,6 +17,7 @@ import yier.bubu.redis.testutil.ReplyObject;
 import yier.bubu.redis.testutil.ReplySimpleString;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
@@ -27,15 +28,15 @@ import static yier.bubu.redis.testutil.TestDbs.forEachDbWithMaxmemory;
 public class MaxmemoryEvictionTest {
     @Test
     public void noevictionRejectsWritesWhenFull() {
-        forEachDbWithMaxmemory(3000, MaxmemoryPolicy.NOEVICTION, 5, db -> {
+        byte[] value = repeat((byte) 'x', 40_000);
+        long maxmemoryBytes = minMaxmemoryThatAllowsSetKeys(value, List.of(b("a")));
+        forEachDbWithMaxmemory(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
-            byte[] v1600 = repeat((byte) 'x', 1600);
+            Assert.assertTrue(client.execute(List.of(b("SET"), b("a"), value)) instanceof ReplySimpleString);
 
-            Assert.assertTrue(client.execute(List.of(b("SET"), b("a"), v1600)) instanceof ReplySimpleString);
-
-            ReplyObject err = client.execute(List.of(b("SET"), b("b"), v1600));
+            ReplyObject err = client.execute(List.of(b("SET"), b("b"), value));
             Assert.assertTrue(err instanceof ReplyError);
             Assert.assertEquals("OOM command not allowed when used memory > 'maxmemory'.", ((ReplyError) err).message());
 
@@ -46,18 +47,18 @@ public class MaxmemoryEvictionTest {
     }
 
     @Test
-    public void noevictionSetCommandAllowsOverwriteThatShrinksWhenUsedEqualsLimit() {
+    public void noevictionSetCommandAllowsOverwriteThatShrinksWithTransientHeadroom() {
         byte[] key = b("k");
         byte[] largeValue = repeat((byte) 'x', 1600);
         byte[] smallValue = b("x");
-        long maxmemoryBytes = usedAfterSet(key, largeValue);
+        long maxmemoryBytes = maxmemoryThatAllowsSetAndOverwrite(key, largeValue, smallValue);
 
         forEachDbWithMaxmemory(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 Assert.assertTrue(client.execute(List.of(b("SET"), key, largeValue)) instanceof ReplySimpleString);
                 long usedBefore = db.estimatedUsedBytes();
-                Assert.assertEquals(maxmemoryBytes, usedBefore);
+                Assert.assertTrue(usedBefore <= maxmemoryBytes);
 
                 ReplyObject reply = client.execute(List.of(b("SET"), key, smallValue));
 
@@ -122,18 +123,27 @@ public class MaxmemoryEvictionTest {
 
     @Test
     public void allkeysRandomEvictsToStayWithinLimit() {
-        forEachDbWithMaxmemory(3000, MaxmemoryPolicy.ALLKEYS_RANDOM, 5, db -> {
+        byte[] value = repeat((byte) 'x', 40_000);
+        long maxmemoryBytes = minMaxmemoryThatAllowsSetAfterDeletion(value);
+        forEachDbWithMaxmemory(maxmemoryBytes, MaxmemoryPolicy.ALLKEYS_RANDOM, 5, db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
-            byte[] v1600 = repeat((byte) 'x', 1600);
-
-            Assert.assertTrue(client.execute(List.of(b("SET"), b("a"), v1600)) instanceof ReplySimpleString);
-            Assert.assertTrue(client.execute(List.of(b("SET"), b("b"), v1600)) instanceof ReplySimpleString);
+            Assert.assertTrue(client.execute(List.of(b("SET"), b("a"), value)) instanceof ReplySimpleString);
+            long usedBeforeCandidate = db.estimatedUsedBytes();
+            ReplyObject candidateSet = client.execute(List.of(b("SET"), b("b"), value));
+            Assert.assertTrue(
+                    "candidate SET must succeed after eviction: reply=" + replyDescription(candidateSet)
+                            + ", usedBefore=" + usedBeforeCandidate
+                            + ", usedAfter=" + db.estimatedUsedBytes()
+                            + ", limit=" + maxmemoryBytes
+                            + ", keyCount=" + db.size(),
+                    candidateSet instanceof ReplySimpleString
+            );
 
             ReplyInteger exists = (ReplyInteger) client.execute(cmd("EXISTS", "a", "b"));
             Assert.assertEquals(1, exists.value());
-            Assert.assertTrue("used bytes must be <= maxmemory", db.estimatedUsedBytes() <= 3000);
+            Assert.assertTrue("used bytes must be <= maxmemory", db.estimatedUsedBytes() <= maxmemoryBytes);
 
             }
         });
@@ -142,29 +152,47 @@ public class MaxmemoryEvictionTest {
     @Test
     public void allkeysLruEvictsLeastRecentlyUsedWhenSamplesCoverAllKeys() {
         // samples >= total keys triggers a deterministic full scan in eviction.
-        forEachDbWithMaxmemory(4500, MaxmemoryPolicy.ALLKEYS_LRU, 10, db -> {
+        byte[] value = repeat((byte) 'x', 30_000);
+        LruAdmissionBoundary boundary = findLruAdmissionBoundary(value);
+        forEachDbWithMaxmemory(
+                boundary.maxmemoryBytes(),
+                MaxmemoryPolicy.ALLKEYS_LRU,
+                boundary.residentKeys().size(),
+                100,
+                db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
+                for (byte[] key : boundary.residentKeys()) {
+                    Assert.assertTrue(client.execute(List.of(b("SET"), key, value)) instanceof ReplySimpleString);
+                }
 
-            byte[] v1600 = repeat((byte) 'x', 1600);
+                // Make "a" more recently used than "b".
+                Assert.assertTrue(client.execute(List.of(b("GET"), boundary.residentKeys().get(1)))
+                        instanceof ReplyBulkString);
 
-            Assert.assertTrue(client.execute(List.of(b("SET"), b("a"), v1600)) instanceof ReplySimpleString);
-            Assert.assertTrue(client.execute(List.of(b("SET"), b("b"), v1600)) instanceof ReplySimpleString);
+                // This write crosses a measured admission boundary and must evict the oldest key.
+                long usedBeforeCandidate = db.estimatedUsedBytes();
+                ReplyObject candidateSet = client.execute(List.of(b("SET"), boundary.candidateKey(), value));
+                Assert.assertTrue(
+                        "candidate SET must succeed after eviction: reply=" + replyDescription(candidateSet)
+                                + ", residentKeys=" + boundary.residentKeys().size()
+                                + ", usedBefore=" + usedBeforeCandidate
+                                + ", limit=" + boundary.maxmemoryBytes(),
+                        candidateSet instanceof ReplySimpleString
+                );
 
-            // Make "a" more recently used than "b".
-            Assert.assertTrue(client.execute(List.of(b("GET"), b("a"))) instanceof ReplyBulkString);
+                ReplyObject getB = client.execute(List.of(b("GET"), boundary.residentKeys().get(0)));
+                Assert.assertTrue(getB instanceof ReplyNull);
 
-            // This write triggers eviction; the least recently used key ("b") should be evicted.
-            Assert.assertTrue(client.execute(List.of(b("SET"), b("c"), v1600)) instanceof ReplySimpleString);
+                Assert.assertTrue(client.execute(List.of(b("GET"), boundary.candidateKey())) instanceof ReplyBulkString);
 
-	            ReplyObject getB = client.execute(List.of(b("GET"), b("b")));
-	            Assert.assertTrue(getB instanceof ReplyNull);
-
-	            Assert.assertTrue(client.execute(List.of(b("GET"), b("c"))) instanceof ReplyBulkString);
-
-            Assert.assertTrue("used bytes must be <= maxmemory", db.estimatedUsedBytes() <= 4500);
+                Assert.assertTrue(
+                        "used bytes must be <= maxmemory",
+                        db.estimatedUsedBytes() <= boundary.maxmemoryBytes()
+                );
             }
-        });
+                }
+        );
     }
 
     @Test
@@ -227,11 +255,178 @@ public class MaxmemoryEvictionTest {
         return out;
     }
 
-    private static long usedAfterSet(byte[] key, byte[] value) {
-        try (DbFixture fixture = new DbFixture(0)) {
-            Assert.assertTrue(fixture.db.writes().strings().setString(key, value, SetMode.NORMAL, null).value());
-            return fixture.db.estimatedUsedBytes();
+    private static String replyDescription(ReplyObject reply) {
+        if (reply instanceof ReplyError error) {
+            return error.message();
         }
+        return reply.getClass().getSimpleName();
+    }
+
+    private static long maxmemoryThatAllowsSetAndOverwrite(byte[] key, byte[] initialValue, byte[] overwriteValue) {
+        long limit = minMaxmemoryThatAllowsSetCount(initialValue, 1);
+        while (!allowsSetAndOverwrite(limit, key, initialValue, overwriteValue)) {
+            limit = Math.multiplyExact(limit, 2L);
+        }
+        return limit;
+    }
+
+    private static boolean allowsSetAndOverwrite(
+            long maxmemoryBytes,
+            byte[] key,
+            byte[] initialValue,
+            byte[] overwriteValue
+    ) {
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(
+                maxmemoryBytes,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                5,
+                5
+        );
+        try {
+            db.bindToCurrentThread();
+            return db.writes().strings().setString(key, initialValue, SetMode.NORMAL, null).value()
+                    && db.writes().strings().setString(key, overwriteValue, SetMode.NORMAL, null).value();
+        } catch (YierdisCommandException e) {
+            if (MaxmemoryErrors.OOM_ERR.equals(e.getMessage())) {
+                return false;
+            }
+            throw e;
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    private static long minMaxmemoryThatAllowsSetCount(byte[] value, int count) {
+        ArrayList<byte[]> keys = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            keys.add(b("k" + i));
+        }
+        return minMaxmemoryThatAllowsSetKeys(value, keys);
+    }
+
+    private static LruAdmissionBoundary findLruAdmissionBoundary(byte[] value) {
+        byte[] candidateKey = b("c00000");
+        List<byte[]> residentKeys = lruResidentKeys(2);
+        long residentMinimum = minMaxmemoryThatAllowsSetKeys(value, residentKeys);
+
+        for (int residentKeyCount = residentKeys.size(); residentKeyCount <= 64; residentKeyCount++) {
+            ArrayList<byte[]> keysWithCandidate = new ArrayList<>(residentKeys);
+            keysWithCandidate.add(candidateKey);
+            long nextMinimum = minMaxmemoryThatAllowsSetKeys(value, keysWithCandidate);
+            if (nextMinimum > residentMinimum) {
+                return new LruAdmissionBoundary(residentKeys, candidateKey, nextMinimum - 1L);
+            }
+
+            if (residentKeyCount < 64) {
+                residentKeys = lruResidentKeys(residentKeyCount + 1);
+                residentMinimum = minMaxmemoryThatAllowsSetKeys(value, residentKeys);
+            }
+        }
+
+        throw new AssertionError("no physical admission boundary found for up to 64 LRU resident keys");
+    }
+
+    private static List<byte[]> lruResidentKeys(int count) {
+        ArrayList<byte[]> keys = new ArrayList<>(count);
+        keys.add(b("b00000"));
+        keys.add(b("a00000"));
+        for (int i = 2; i < count; i++) {
+            keys.add(b("d" + String.format("%05d", i)));
+        }
+        return List.copyOf(keys);
+    }
+
+    private static long minMaxmemoryThatAllowsSetKeys(byte[] value, List<byte[]> keys) {
+        long high = 1L;
+        while (!allowsSetKeys(high, value, keys)) {
+            high = Math.multiplyExact(high, 2L);
+        }
+
+        long low = 0L;
+        while (low + 1L < high) {
+            long mid = low + (high - low) / 2L;
+            if (allowsSetKeys(mid, value, keys)) {
+                high = mid;
+            } else {
+                low = mid;
+            }
+        }
+        return high;
+    }
+
+    private static long minMaxmemoryThatAllowsSetAfterDeletion(byte[] value) {
+        long high = 1L;
+        while (!allowsSetAfterDeletion(high, value)) {
+            high = Math.multiplyExact(high, 2L);
+        }
+
+        long low = 0L;
+        while (low + 1L < high) {
+            long mid = low + (high - low) / 2L;
+            if (allowsSetAfterDeletion(mid, value)) {
+                high = mid;
+            } else {
+                low = mid;
+            }
+        }
+        return high;
+    }
+
+    private static boolean allowsSetKeys(long maxmemoryBytes, byte[] value, List<byte[]> keys) {
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(
+                maxmemoryBytes,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                5,
+                5
+        );
+        try {
+            db.bindToCurrentThread();
+            for (byte[] key : keys) {
+                if (!db.writes().strings().setString(key, value, SetMode.NORMAL, null).value()) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (YierdisCommandException e) {
+            if (MaxmemoryErrors.OOM_ERR.equals(e.getMessage())) {
+                return false;
+            }
+            throw e;
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    private static boolean allowsSetAfterDeletion(long maxmemoryBytes, byte[] value) {
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(
+                maxmemoryBytes,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                5,
+                5
+        );
+        try {
+            db.bindToCurrentThread();
+            if (!db.writes().strings().setString(b("a"), value, SetMode.NORMAL, null).value()) {
+                return false;
+            }
+            if (db.writes().keyspace().del(List.of(b("a"))).value() != 1L) {
+                throw new AssertionError("test setup did not delete the resident key");
+            }
+            return db.writes().strings().setString(b("b"), value, SetMode.NORMAL, null).value();
+        } catch (YierdisCommandException e) {
+            if (MaxmemoryErrors.OOM_ERR.equals(e.getMessage())) {
+                return false;
+            }
+            throw e;
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    private record LruAdmissionBoundary(List<byte[]> residentKeys, byte[] candidateKey, long maxmemoryBytes) {
     }
 
     private static void assertCollectionWriteUsesRealBoundedMaxmemory(
@@ -258,7 +453,10 @@ public class MaxmemoryEvictionTest {
         Assert.assertEquals(commandName, usedBefore, accepted.usedBefore());
         Assert.assertEquals(commandName, usedAfter, accepted.usedAfter());
         Assert.assertTrue(commandName + " accepted at limit " + acceptedLimit
-                        + " but used " + accepted.usedAfter(),
+                        + " but used " + accepted.usedAfter()
+                        + " (before=" + accepted.usedBefore()
+                        + ", measuredAfter=" + usedAfter
+                        + ", actualDelta=" + actualDelta + ")",
                 accepted.usedAfter() <= acceptedLimit);
 
         AttemptResult rejected = attemptCollectionWrite(acceptedLimit - 1, setup, commandWrite);

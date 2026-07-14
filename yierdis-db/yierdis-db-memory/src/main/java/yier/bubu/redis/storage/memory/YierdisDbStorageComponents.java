@@ -10,6 +10,8 @@ import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmExpireIndex;
+import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
@@ -23,6 +25,7 @@ public final class YierdisDbStorageComponents {
     final YierdisFfmMemoryRuntime memoryRuntime;
     final NativeAllocator nativeAllocator;
     final YierdisDbOwnedResources resources;
+    final HashTableMaintenanceRegistry hashTableMaintenanceRegistry;
     final YierdisExpireIndex expires;
     final EntryTable entries;
     final NativeKeyDirectory keyDirectory;
@@ -36,6 +39,7 @@ public final class YierdisDbStorageComponents {
             YierdisFfmMemoryRuntime memoryRuntime,
             NativeAllocator nativeAllocator,
             YierdisDbOwnedResources resources,
+            HashTableMaintenanceRegistry hashTableMaintenanceRegistry,
             YierdisExpireIndex expires,
             EntryTable entries,
             NativeKeyDirectory keyDirectory,
@@ -48,6 +52,7 @@ public final class YierdisDbStorageComponents {
         this.memoryRuntime = memoryRuntime;
         this.nativeAllocator = nativeAllocator;
         this.resources = resources;
+        this.hashTableMaintenanceRegistry = hashTableMaintenanceRegistry;
         this.expires = expires;
         this.entries = entries;
         this.keyDirectory = keyDirectory;
@@ -62,7 +67,7 @@ public final class YierdisDbStorageComponents {
             YierdisFfmMemoryRuntime memoryRuntime,
             boolean ownsMemoryRuntime
     ) {
-        return create(memoryRuntime, ownsMemoryRuntime, 0);
+        return create(memoryRuntime, ownsMemoryRuntime, 0, HashSeed.random());
     }
 
     static YierdisDbStorageComponents create(
@@ -70,6 +75,16 @@ public final class YierdisDbStorageComponents {
             boolean ownsMemoryRuntime,
             int nativeSlotCapacity
     ) {
+        return create(memoryRuntime, ownsMemoryRuntime, nativeSlotCapacity, HashSeed.random());
+    }
+
+    static YierdisDbStorageComponents create(
+            YierdisFfmMemoryRuntime memoryRuntime,
+            boolean ownsMemoryRuntime,
+            int nativeSlotCapacity,
+            HashSeed hashSeed
+    ) {
+        HashSeed resolvedHashSeed = java.util.Objects.requireNonNull(hashSeed, "hashSeed");
         YierdisFfmMemoryRuntime resolvedRuntime =
                 memoryRuntime == null ? new YierdisFfmMemoryRuntime("db") : memoryRuntime;
         boolean resolvedOwnsRuntime = memoryRuntime == null || ownsMemoryRuntime;
@@ -89,18 +104,29 @@ public final class YierdisDbStorageComponents {
                 resolvedOwnsRuntime,
                 true
         );
+        HashTableMaintenanceRegistry hashTableMaintenanceRegistry = new HashTableMaintenanceRegistry();
         EntryTable entries = new EntryTable(resolvedRuntime, nativeAllocator);
-        NativeKeyDirectory keyDirectory = new NativeKeyDirectory(nativeAllocator);
+        NativeKeyDirectory keyDirectory = new NativeKeyDirectory(
+                nativeAllocator,
+                resolvedHashSeed,
+                hashTableMaintenanceRegistry
+        );
         StringRoot stringRoot = new StringRoot(nativeAllocator);
         ListRoot listRoot = new ListRoot(nativeAllocator);
-        HashRoot hashRoot = new HashRoot(nativeAllocator);
-        SetRoot setRoot = new SetRoot(nativeAllocator);
-        ZSetRoot zsetRoot = new ZSetRoot(nativeAllocator);
+        HashRoot hashRoot = new HashRoot(nativeAllocator, resolvedHashSeed, hashTableMaintenanceRegistry);
+        SetRoot setRoot = new SetRoot(nativeAllocator, resolvedHashSeed, hashTableMaintenanceRegistry);
+        ZSetRoot zsetRoot = new ZSetRoot(nativeAllocator, resolvedHashSeed, hashTableMaintenanceRegistry);
         return new YierdisDbStorageComponents(
                 resolvedRuntime,
                 nativeAllocator,
                 resources,
-                new YierdisFfmExpireIndex(resolvedRuntime, nativeAllocator),
+                hashTableMaintenanceRegistry,
+                new YierdisFfmExpireIndex(
+                        resolvedRuntime,
+                        nativeAllocator,
+                        resolvedHashSeed,
+                        hashTableMaintenanceRegistry
+                ),
                 entries,
                 keyDirectory,
                 stringRoot,

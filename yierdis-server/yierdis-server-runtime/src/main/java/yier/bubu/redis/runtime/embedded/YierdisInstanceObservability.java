@@ -2,9 +2,9 @@ package yier.bubu.redis.runtime.embedded;
 
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 
 import java.util.ArrayList;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Objects;
 
@@ -21,26 +21,26 @@ public final class YierdisInstanceObservability {
         this.instance = Objects.requireNonNull(instance, "instance");
     }
 
+    public CommitStreamStats commitStreamStats() {
+        CommitStream stream = instance.commitStream();
+        return stream == null ? CommitStreamStats.disabled() : stream.stats();
+    }
+
     public YierdisMemoryStats memoryStats() {
-        boolean globalScope = instance.config().maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.GLOBAL;
         int databases = Math.max(0, instance.databases());
         if (databases == 0) {
             // With no DBs, off-heap is effectively 0; treat it as included to avoid surprising UI/metrics.
             return emptyStats(instance.config().maxmemoryBytes(), true);
         }
 
-        long heap = 0;
+        MemoryUsageSnapshot physicalUsage = MemoryUsageSnapshot.zero();
         long keyspaceOverhead = 0;
         long expireOverhead = 0;
         long expireValueObjects = 0;
-        long offHeap = 0;
         long reserved = 0;
-        long usedBytesForMaxmemory = 0;
-        long effectiveUsedBytesForMaxmemory = 0;
         int keyCount = 0;
         int expireCount = 0;
         boolean keysStoredOffHeap = false;
-        boolean offHeapIncludedInMaxmemory = true;
         boolean keyspaceRehashing = false;
         boolean expireRehashing = false;
         int keyspaceCap0 = 0;
@@ -59,71 +59,62 @@ public final class YierdisInstanceObservability {
         long nativeDefragQuarantineBytes = 0;
         long nativeStaleHandleDetections = 0;
         long nativeDefragReclaimedPages = 0;
+        int pendingHashTableCount = 0;
+        String lastHashTableMaintenanceStopReason = "COMPLETE";
 
         for (int dbIndex = 0; dbIndex < databases; dbIndex++) {
-            YierdisMemoryStats s = instance.runtimeEngine(dbIndex).memory().memoryStats();
-            heap += s.heapDataBytesEstimate();
-            keyspaceOverhead += s.keyspaceTableOverheadBytesEstimate();
-            expireOverhead += s.expireTableOverheadBytesEstimate();
-            expireValueObjects += s.expireValueObjectsBytesEstimate();
-            long dbOffHeap = Math.max(0L, s.offHeapUsedBytes());
-            if (globalScope) {
-                // Per-DB stats in global scope may still expose shared off-heap; instance/global aggregation
-                // must source that shared usage once at the runtime identity boundary instead of summing DB views.
-            } else {
-                // PER_DB: each DB owns its runtime, so sum.
-                offHeap = addSaturating(offHeap, dbOffHeap);
+            var engine = instance.runtimeEngine(dbIndex);
+            MemoryUsageSnapshot dbUsage = engine.memoryUsage();
+            if (dbUsage != null) {
+                physicalUsage = physicalUsage.plus(dbUsage);
             }
-            reserved += s.reservedBytes();
-            keyCount += s.keyCount();
-            expireCount += s.expireCount();
+            YierdisMemoryStats s = engine.memory().memoryStats();
+            keyspaceOverhead = addSaturating(keyspaceOverhead, s.keyspaceTableOverheadBytesEstimate());
+            expireOverhead = addSaturating(expireOverhead, s.expireTableOverheadBytesEstimate());
+            expireValueObjects = addSaturating(expireValueObjects, s.expireValueObjectsBytesEstimate());
+            reserved = addSaturating(reserved, Math.max(0L, s.reservedBytes()));
+            keyCount = addSaturating(keyCount, s.keyCount());
+            expireCount = addSaturating(expireCount, s.expireCount());
             keysStoredOffHeap |= s.keysStoredOffHeap();
             keyspaceRehashing |= s.keyspaceRehashing();
             expireRehashing |= s.expireRehashing();
-            keyspaceCap0 += s.keyspaceTable0Capacity();
-            keyspaceCap1 += s.keyspaceTable1Capacity();
-            expireCap0 += s.expireTable0Capacity();
-            expireCap1 += s.expireTable1Capacity();
-            nativeDefragLastScannedObjects += s.nativeDefragLastScannedObjects();
-            nativeDefragLastMovedObjects += s.nativeDefragLastMovedObjects();
-            nativeDefragLastMovedBytes += s.nativeDefragLastMovedBytes();
-            nativeDefragLastSkippedPinnedObjects += s.nativeDefragLastSkippedPinnedObjects();
-            nativeDefragLastSkippedBudgetObjects += s.nativeDefragLastSkippedBudgetObjects();
-            nativeDefragLastFailedMoves += s.nativeDefragLastFailedMoves();
-            nativeDefragMovedBytes += s.nativeDefragMovedBytes();
-            nativeDefragSkippedPinnedObjects += s.nativeDefragSkippedPinnedObjects();
-            nativeDefragQuarantinedObjects += s.nativeDefragQuarantinedObjects();
-            nativeDefragQuarantineBytes += s.nativeDefragQuarantineBytes();
-            nativeStaleHandleDetections += s.nativeStaleHandleDetections();
-            nativeDefragReclaimedPages += s.nativeDefragReclaimedPages();
-            if (!globalScope) {
-                usedBytesForMaxmemory += s.usedBytesForMaxmemory();
-                effectiveUsedBytesForMaxmemory += s.effectiveUsedBytesForMaxmemory();
-                offHeapIncludedInMaxmemory &= s.offHeapIncludedInMaxmemory();
+            keyspaceCap0 = addSaturating(keyspaceCap0, s.keyspaceTable0Capacity());
+            keyspaceCap1 = addSaturating(keyspaceCap1, s.keyspaceTable1Capacity());
+            expireCap0 = addSaturating(expireCap0, s.expireTable0Capacity());
+            expireCap1 = addSaturating(expireCap1, s.expireTable1Capacity());
+            nativeDefragLastScannedObjects = addSaturating(nativeDefragLastScannedObjects, s.nativeDefragLastScannedObjects());
+            nativeDefragLastMovedObjects = addSaturating(nativeDefragLastMovedObjects, s.nativeDefragLastMovedObjects());
+            nativeDefragLastMovedBytes = addSaturating(nativeDefragLastMovedBytes, s.nativeDefragLastMovedBytes());
+            nativeDefragLastSkippedPinnedObjects = addSaturating(nativeDefragLastSkippedPinnedObjects, s.nativeDefragLastSkippedPinnedObjects());
+            nativeDefragLastSkippedBudgetObjects = addSaturating(nativeDefragLastSkippedBudgetObjects, s.nativeDefragLastSkippedBudgetObjects());
+            nativeDefragLastFailedMoves = addSaturating(nativeDefragLastFailedMoves, s.nativeDefragLastFailedMoves());
+            nativeDefragMovedBytes = addSaturating(nativeDefragMovedBytes, s.nativeDefragMovedBytes());
+            nativeDefragSkippedPinnedObjects = addSaturating(nativeDefragSkippedPinnedObjects, s.nativeDefragSkippedPinnedObjects());
+            nativeDefragQuarantinedObjects = addSaturating(nativeDefragQuarantinedObjects, s.nativeDefragQuarantinedObjects());
+            nativeDefragQuarantineBytes = addSaturating(nativeDefragQuarantineBytes, s.nativeDefragQuarantineBytes());
+            nativeStaleHandleDetections = addSaturating(nativeStaleHandleDetections, s.nativeStaleHandleDetections());
+            nativeDefragReclaimedPages = addSaturating(nativeDefragReclaimedPages, s.nativeDefragReclaimedPages());
+            pendingHashTableCount = addSaturating(pendingHashTableCount, s.pendingHashTableCount());
+            if (!"COMPLETE".equals(s.lastHashTableMaintenanceStopReason())) {
+                lastHashTableMaintenanceStopReason = s.lastHashTableMaintenanceStopReason();
             }
         }
 
-        if (globalScope) {
-            // GLOBAL: DB participants exclude off-heap while the shared source counts actual native usage once.
-            offHeap = sharedOffHeapUsedBytes(databases);
-            usedBytesForMaxmemory = addSaturating(heap, offHeap);
-            effectiveUsedBytesForMaxmemory = addSaturating(usedBytesForMaxmemory, Math.max(0L, reserved));
-            offHeapIncludedInMaxmemory = true;
-        }
-
-        long totalEstimatedBytes = addSaturating(
-                addSaturating(addSaturating(heap, offHeap), keyspaceOverhead),
-                addSaturating(expireOverhead, expireValueObjects)
+        long offHeap = MemoryUsageSnapshot.addSaturating(
+                physicalUsage.nativeMetadataCommittedBytes(),
+                physicalUsage.nativeDataCommittedBytes()
         );
+        long totalEstimatedBytes = physicalUsage.effectiveBytesForMaxmemory();
+        long effectiveUsedBytesForMaxmemory = MemoryUsageSnapshot.addSaturating(totalEstimatedBytes, reserved);
 
         return new YierdisMemoryStats(
                 instance.config().maxmemoryBytes(),
-                usedBytesForMaxmemory,
-                heap,
+                totalEstimatedBytes,
+                physicalUsage.heapEstimatedBytes(),
                 offHeap,
                 reserved,
                 effectiveUsedBytesForMaxmemory,
-                offHeapIncludedInMaxmemory,
+                true,
                 keysStoredOffHeap,
                 keyCount,
                 expireCount,
@@ -148,7 +139,13 @@ public final class YierdisInstanceObservability {
                 nativeDefragQuarantinedObjects,
                 nativeDefragQuarantineBytes,
                 nativeStaleHandleDetections,
-                nativeDefragReclaimedPages
+                nativeDefragReclaimedPages,
+                physicalUsage.nativeMetadataCommittedBytes(),
+                physicalUsage.nativeDataCommittedBytes(),
+                physicalUsage.nativeDataLiveBytes(),
+                physicalUsage.nativeReclaimableBytes(),
+                pendingHashTableCount,
+                lastHashTableMaintenanceStopReason
         );
     }
 
@@ -212,25 +209,13 @@ public final class YierdisInstanceObservability {
         return left + right;
     }
 
-    private long sharedOffHeapUsedBytes(int databases) {
-        long total = 0L;
-        IdentityHashMap<Object, Boolean> seen = new IdentityHashMap<>();
-        for (int dbIndex = 0; dbIndex < databases; dbIndex++) {
-            Object identity = instance.runtimeEngine(dbIndex).globalSharedOffHeapUsageIdentity();
-            if (identity == null || seen.put(identity, Boolean.TRUE) != null) {
-                continue;
-            }
-            long used;
-            try {
-                used = instance.runtimeEngine(dbIndex).globalSharedOffHeapUsedBytes();
-            } catch (Throwable ignored) {
-                used = 0L;
-            }
-            if (used <= 0L) {
-                continue;
-            }
-            total = addSaturating(total, used);
+    private static int addSaturating(int left, int right) {
+        if (right <= 0) {
+            return left;
         }
-        return total;
+        if (left >= Integer.MAX_VALUE - right) {
+            return Integer.MAX_VALUE;
+        }
+        return left + right;
     }
 }

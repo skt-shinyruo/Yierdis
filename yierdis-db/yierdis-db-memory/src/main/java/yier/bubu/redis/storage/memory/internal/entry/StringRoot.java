@@ -12,6 +12,8 @@ import yier.bubu.redis.memory.api.StaleNativeHandleException;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.ValueType;
+import yier.bubu.redis.storage.api.result.BulkStringValue;
+import yier.bubu.redis.storage.memory.internal.value.NativeBytesSlice;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.util.Arrays;
@@ -211,6 +213,34 @@ public final class StringRoot implements TypeRoot {
             return EMPTY_SLICE;
         }
         return new HeapBackedBytesSlice(copy);
+    }
+
+    public BulkStringValue retainedValue(ValueHandle handle) {
+        ensureOpen();
+        NativeHandle nativeHandle = requireStringHandle(handle);
+        int payloadLength;
+        long retainedBytes;
+        try (NativeObjectView view = allocator.resolve(nativeHandle, NativeAccessMode.READ_ONLY)) {
+            payloadLength = view.size();
+            retainedBytes = view.capacity();
+        }
+
+        allocator.pin(nativeHandle);
+        boolean ownershipTransferred = false;
+        try {
+            BulkStringValue value = BulkStringValue.owned(
+                    NativeBytesSlice.retained(allocator, nativeHandle, 0, payloadLength),
+                    payloadLength,
+                    retainedBytes,
+                    () -> allocator.unpin(nativeHandle)
+            );
+            ownershipTransferred = true;
+            return value;
+        } finally {
+            if (!ownershipTransferred) {
+                allocator.unpin(nativeHandle);
+            }
+        }
     }
 
     public byte[] copy(ValueHandle handle) {

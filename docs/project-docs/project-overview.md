@@ -46,8 +46,8 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 | `yierdis-common/yierdis-common-bytes` | 共享 byte/key 工具、字节视图和底层数据转换。 |
 | `yierdis-memory/yierdis-memory-api` | memory 抽象、handle 和访问边界。 |
 | `yierdis-memory/yierdis-memory-ffm` | JDK FFM allocator/runtime、native segment 管理和 stable handle 支撑。 |
-| `yierdis-networking/yierdis-networking-resp` | RESP request/reply model、`RespCommandRequest`、`RespExecutionAdapter`、`RespReplyWriter`。 |
-| `yierdis-networking/yierdis-networking-netty` | Netty decoder、channel handler、protocol error 和 TCP write-back。 |
+| `yierdis-networking/yierdis-networking-resp` | RESP reply model、`RespReplyWriter` 和 inline command parsing。 |
+| `yierdis-networking/yierdis-networking-netty` | Netty decoder、带 admission lease 的 `RetainedRespExecutionRequest`、channel handler、protocol error 和 TCP write-back。 |
 | `yierdis-server/yierdis-server-api` | `ExecutionRequest`、`ByteArrayExecutionRequest`、`RedisReplyWriter` 等执行层公共契约。 |
 | `yierdis-server/yierdis-server-core` | engine、execution context 和 server-side command dispatch glue。 |
 | `yierdis-server/yierdis-server-executor` | `CommandExecutor`、队列、背压和执行线程模型。 |
@@ -70,10 +70,8 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 
 ```text
 Netty inbound bytes
-  -> RespCommandRequest
-  -> RespExecutionAdapter
-  -> ByteArrayExecutionRequest
-  -> ExecutionRequest
+  -> RespRequestDecoder
+  -> RetainedRespExecutionRequest / ExecutionRequest
   -> CommandExecutor
   -> engine
   -> command processor
@@ -85,9 +83,9 @@ Netty inbound bytes
 
 这条链的边界含义是：
 
-- `RespCommandRequest` 表示协议层解出的命令请求。
-- `RespExecutionAdapter` 把 RESP 请求转成执行层能理解的请求。
-- `ByteArrayExecutionRequest` 是以字节参数承载命令的执行请求实现。
+- `RespRequestDecoder` 在分配前执行 ingress admission，并直接构造执行请求。
+- `RetainedRespExecutionRequest` 是网络主链的字节参数请求实现，持有可跨线程释放的 memory lease。
+- `ByteArrayExecutionRequest` 是 heap 输入和 retained snapshot 使用的执行请求实现。
 - `ExecutionRequest` 是 server/command 层之间的统一请求契约。
 - `CommandExecutor` 把请求从 I/O 线程切到执行线程，并施加队列和背压约束。
 - engine 持有执行上下文和命令入口，command processor 做命令解析、校验和分发。
@@ -118,8 +116,8 @@ DB 内部读 [`db-internals.md`](./db-internals.md)，FFM runtime 和 native-mem
 - `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServer.java`
 - `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
 - `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java`
-- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespCommandRequest.java`
-- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespExecutionAdapter.java`
+- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java`
+- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RetainedRespExecutionRequest.java`
 - `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java`
 - `yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/DefaultYierdisEngine.java`
 - `yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`

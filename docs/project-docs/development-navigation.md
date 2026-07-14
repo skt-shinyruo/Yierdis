@@ -18,8 +18,8 @@
 先打开：
 
 - [`RespRequestDecoder.java`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java)
-- [`RespCommandAdapter.java`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java)
-- [`RespExecutionAdapter.java`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespExecutionAdapter.java)
+- [`RetainedRespExecutionRequest.java`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RetainedRespExecutionRequest.java)
+- [`InboundMemoryBudget.java`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/InboundMemoryBudget.java)
 - [`RespReplyWriter.java`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java)
 - [`NettyExecutionIoAdapter.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionIoAdapter.java)
 
@@ -32,7 +32,7 @@
 测试优先级：
 
 - `RespRequestDecoderTest`
-- `RespExecutionAdapterTest`
+- `RespIngressAdmissionTest`
 - `RespReplyWriterTest`
 - `RespProtocolIntegrationTest`
 - `RespProtocolErrorIntegrationTest`

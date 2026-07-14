@@ -7,8 +7,8 @@ import yier.bubu.redis.command.api.CommandDescriptor;
 import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.kernel.CommandRegistries;
 import yier.bubu.redis.command.kernel.CommandRegistry;
-import yier.bubu.redis.command.kernel.YierdisCommandProcessorOptions;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.common.command.CommandRecordScope;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ClientMetadataSession;
 import yier.bubu.redis.execution.api.ConnectionStatsSession;
@@ -74,6 +74,70 @@ public class DefaultYierdisEngineTest {
     }
 
     @Test
+    public void executeOpensTheRequestRecordScopeAndRestoresItAfterFailures() {
+        CommandRegistry registry = CommandRegistries.from(
+                registration -> {
+                    registration.register(
+                            "SCOPED",
+                            CommandDescriptor.of(1, 0, 0, 0),
+                            CommandParsers.exactRequest(1, "scoped"),
+                            (request, ctx) -> {
+                                Assert.assertSame(request, CommandRecordScope.current());
+                                ctx.out().simpleString("OK");
+                            }
+                    );
+                    registration.register(
+                            "FAIL",
+                            CommandDescriptor.of(1, 0, 0, 0),
+                            CommandParsers.exactRequest(1, "fail"),
+                            (request, ctx) -> {
+                                Assert.assertSame(request, CommandRecordScope.current());
+                                throw new IllegalStateException("injected");
+                            }
+                    );
+                }
+        );
+        YierdisEngine engine = new DefaultYierdisEngine(new YierdisFastCommandProcessor(registry), () -> {
+        });
+        EngineSession session = new EngineSession(16, 1024);
+
+        engine.execute(session, ByteArrayExecutionRequest.fromUtf8("SCOPED", List.of()), new CapturingReplyWriter());
+        Assert.assertNull(CommandRecordScope.current());
+
+        Assert.assertThrows(
+                IllegalStateException.class,
+                () -> engine.execute(session, ByteArrayExecutionRequest.fromUtf8("FAIL", List.of()), new CapturingReplyWriter())
+        );
+        Assert.assertNull(CommandRecordScope.current());
+    }
+
+    @Test
+    public void transactionReplayUsesTheQueuedRequestAsItsCurrentRecord() {
+        CommandRegistry registry = new CommandRegistry();
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
+        CommandRegistries.registerTransactionSupport(registry, processor::execute);
+        registry.register(
+                "SCOPED",
+                CommandDescriptor.of(1, 0, 0, 0),
+                CommandParsers.exactRequest(1, "scoped"),
+                (request, ctx) -> {
+                    Assert.assertSame(request, CommandRecordScope.current());
+                    ctx.out().simpleString("OK");
+                }
+        );
+        YierdisEngine engine = new DefaultYierdisEngine(processor, () -> {
+        });
+        EngineSession session = new EngineSession(16, 1024);
+        CapturingReplyWriter out = new CapturingReplyWriter();
+
+        engine.execute(session, ByteArrayExecutionRequest.fromUtf8("MULTI", List.of()), out);
+        engine.execute(session, ByteArrayExecutionRequest.fromUtf8("SCOPED", List.of()), out);
+        engine.execute(session, ByteArrayExecutionRequest.fromUtf8("EXEC", List.of()), out);
+
+        Assert.assertNull(CommandRecordScope.current());
+    }
+
+    @Test
     public void executeAcceptsNarrowCommandSessionCapabilities() {
         CommandRegistry registry = CommandRegistries.from(
                 registration -> registration.register(
@@ -99,48 +163,6 @@ public class DefaultYierdisEngineTest {
 
         Assert.assertEquals("DB_7", out.simpleStringValue);
         Assert.assertNull(out.errorValue);
-    }
-
-    @Test
-    public void configuredChangeObserverReceivesUserCommandChangesFromCommandPath() {
-        ArrayList<String> events = new ArrayList<>();
-        CommandRegistry registry = CommandRegistries.from(
-                registration -> registration.register(
-                        "MUTATE",
-                        CommandDescriptor.of(1, 0, 0, 0),
-                        CommandParsers.exactRequest(1, "mutate"),
-                        (request, ctx) -> {
-                            ctx.recordMutation(true, false);
-                            ctx.out().simpleString("OK");
-                        }
-                )
-        );
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
-                YierdisCommandProcessorOptions.builder()
-                        .changeObserver((dbIndex, request) ->
-                                events.add(dbIndex + ":" + utf8(request.toByteArray(0))))
-                        .build(),
-                registry
-        );
-        YierdisEngine engine = new DefaultYierdisEngine(processor, () -> {
-        });
-
-        EngineSession session = new EngineSession(16, 1024);
-        session.setDbIndex(3);
-        CapturingReplyWriter out = new CapturingReplyWriter();
-
-        engine.execute(
-                session,
-                ByteArrayExecutionRequest.fromUtf8("MUTATE", List.of()),
-                out
-        );
-
-        Assert.assertEquals("OK", out.simpleStringValue);
-        Assert.assertEquals(List.of("3:MUTATE"), events);
-    }
-
-    private static String utf8(byte[] value) {
-        return new String(value, StandardCharsets.UTF_8);
     }
 
     @Test
@@ -253,12 +275,6 @@ public class DefaultYierdisEngineTest {
 
         @Override
         public void arrayHeader(int count) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public void bulkStringArray(List<byte[]> values) {
-            throw new UnsupportedOperationException();
         }
 
         @Override

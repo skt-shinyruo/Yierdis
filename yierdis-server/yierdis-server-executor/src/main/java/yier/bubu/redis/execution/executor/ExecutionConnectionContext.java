@@ -14,6 +14,7 @@ public final class ExecutionConnectionContext {
     private final AtomicLong pendingBytes = new AtomicLong(0);
     private final AtomicBoolean closing = new AtomicBoolean(false);
     private final AtomicBoolean inputDisabledByExecutor = new AtomicBoolean(false);
+    private final AtomicBoolean inputPausedByReply = new AtomicBoolean(false);
     private final AtomicLong commandsEnqueued = new AtomicLong(0);
     private final AtomicLong commandsExecuted = new AtomicLong(0);
     private final AtomicLong commandsRejected = new AtomicLong(0);
@@ -88,11 +89,24 @@ public final class ExecutionConnectionContext {
         return inputDisabledByExecutor.compareAndSet(true, false);
     }
 
+    public boolean markInputPausedByReply() {
+        return inputPausedByReply.compareAndSet(false, true);
+    }
+
+    public boolean inputPausedByReply() {
+        return inputPausedByReply.get();
+    }
+
+    public boolean clearInputPausedByReply() {
+        return inputPausedByReply.compareAndSet(true, false);
+    }
+
     public ConnectionStatsSnapshot statsSnapshot() {
         return new ConnectionStatsSnapshot(
                 pending.get(),
                 pendingBytes.get(),
                 inputDisabledByExecutor.get(),
+                inputPausedByReply.get(),
                 closing.get(),
                 commandsEnqueued.get(),
                 commandsExecuted.get(),
@@ -108,6 +122,7 @@ public final class ExecutionConnectionContext {
             int pending,
             long pendingBytes,
             boolean inputDisabledByExecutor,
+            boolean inputPausedByReply,
             boolean closing,
             long commandsEnqueued,
             long commandsExecuted,
@@ -122,6 +137,8 @@ public final class ExecutionConnectionContext {
     private static final class QueueState implements ExecutorKeyState<Object> {
         private final ConcurrentLinkedQueue<Object> queue = new ConcurrentLinkedQueue<>();
         private final AtomicBoolean scheduled = new AtomicBoolean(false);
+        private final java.util.concurrent.atomic.AtomicReference<Object> blockedHead = new java.util.concurrent.atomic.AtomicReference<>();
+        private final AtomicBoolean blockedHeadReady = new AtomicBoolean(false);
 
         @Override
         public Queue<Object> queue() {
@@ -131,6 +148,16 @@ public final class ExecutionConnectionContext {
         @Override
         public AtomicBoolean scheduled() {
             return scheduled;
+        }
+
+        @Override
+        public java.util.concurrent.atomic.AtomicReference<Object> blockedHead() {
+            return blockedHead;
+        }
+
+        @Override
+        public AtomicBoolean blockedHeadReady() {
+            return blockedHeadReady;
         }
     }
 }

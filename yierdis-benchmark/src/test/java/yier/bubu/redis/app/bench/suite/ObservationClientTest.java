@@ -74,6 +74,35 @@ public class ObservationClientTest {
     }
 
     @Test
+    public void extractsOutboundReplyGaugesFromYierdisInfoWithoutDiscardingRawInfo() {
+        String info = "# Stats\n"
+                + "yierdis_outbound_reserved_bytes:128\n"
+                + "yierdis_outbound_allocated_bytes:64\n"
+                + "yierdis_outbound_peak_reserved_bytes:1024\n"
+                + "yierdis_outbound_peak_allocated_bytes:512\n"
+                + "yierdis_outbound_capacity_rejects:3\n"
+                + "yierdis_outbound_waiting_connections:2\n"
+                + "yierdis_outbound_write_failures:1\n"
+                + "yierdis_outbound_active_slots:not-a-number\n";
+
+        ObservationSnapshot snapshot = new ObservationSnapshot(Map.of("INFO", info),
+                ObservationClient.extractOutboundReplyGauges(info));
+
+        Assert.assertEquals(info, snapshot.values().get("INFO"));
+        Assert.assertEquals(Map.of(
+                "outbound_reserved_bytes", 128L,
+                "outbound_allocated_bytes", 64L,
+                "outbound_peak_reserved_bytes", 1_024L,
+                "outbound_peak_allocated_bytes", 512L,
+                "outbound_capacity_rejects", 3L,
+                "outbound_waiting_connections", 2L,
+                "outbound_write_failures", 1L
+        ), snapshot.outboundReplyGauges());
+        Assert.assertThrows(UnsupportedOperationException.class,
+                () -> snapshot.outboundReplyGauges().put("outbound_reserved_bytes", 0L));
+    }
+
+    @Test
     public void captureRejectsInvalidHostAndPort() {
         ObservationClient client = new ObservationClient();
 

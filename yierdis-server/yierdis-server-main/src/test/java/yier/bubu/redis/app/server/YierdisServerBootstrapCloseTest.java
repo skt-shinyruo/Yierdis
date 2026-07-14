@@ -1,9 +1,16 @@
 package yier.bubu.redis.app.server;
 
+import io.netty.buffer.Unpooled;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelOutboundHandlerAdapter;
+import io.netty.channel.ChannelPromise;
+import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.ImmediateEventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.execution.engine.YierdisEngine;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
@@ -22,13 +29,113 @@ import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class YierdisServerBootstrapCloseTest {
+    @Test
+    public void closeDrainsAcceptedChildrenBeforeClosingTheOutboundBudget() throws Exception {
+        YierdisServerBootstrap bootstrap = YierdisServerBootstrap.start(
+                "--port", "0",
+                "--replyDrainTimeoutMillis", "2000"
+        );
+        try (Socket child = new Socket()) {
+            child.connect(new InetSocketAddress("127.0.0.1", bootstrap.port()), 2_000);
+            child.setSoTimeout(2_000);
+
+            ChildChannelRegistry registry = bootstrap.childChannelRegistryForTests();
+            OutboundMemoryBudget outboundBudget = bootstrap.outboundMemoryBudgetForTests();
+            awaitChildRegistration(registry);
+
+            bootstrap.close();
+
+            Assert.assertTrue(registry.drainedFuture().isDone());
+            Assert.assertEquals(0, registry.activeChannelCount());
+            Assert.assertEquals(0L, outboundBudget.stats().reservedBytes());
+            Assert.assertEquals(0L, outboundBudget.stats().allocatedBytes());
+            Assert.assertEquals(0L, outboundBudget.stats().activeSlots());
+            Assert.assertEquals(-1, child.getInputStream().read());
+        } finally {
+            bootstrap.close();
+        }
+    }
+
+    @Test
+    public void replyDrainTimeoutReportsLiveOwnershipThenForceCloseReleasesIt() throws Exception {
+        YierdisServerBootstrap bootstrap = newBootstrap(ServerConfig.fromArgs(new String[]{
+                "--replyDrainTimeoutMillis", "25"
+        }));
+        ChildChannelRegistry registry = new ChildChannelRegistry();
+        OutboundMemoryBudget budget = new OutboundMemoryBudget(8_192L);
+        ReplyEgressStats egressStats = new ReplyEgressStats();
+        HoldingWriteHandler holdingWrites = new HoldingWriteHandler();
+        EmbeddedChannel child = new EmbeddedChannel(holdingWrites);
+        child.closeFuture().addListener(ignored -> holdingWrites.failHeldWrite());
+        setField(bootstrap, "childChannelRegistry", registry);
+        setField(bootstrap, "outboundMemoryBudget", budget);
+        setField(bootstrap, "replyEgressStats", egressStats);
+        Assert.assertTrue(registry.register(child));
+
+        OutboundConnectionMemory connectionMemory = budget.openConnection(8_192L);
+        ConnectionReplySequencer sequencer = new ConnectionReplySequencer(
+                child,
+                connectionMemory,
+                () -> { },
+                slot -> {
+                    throw new IllegalStateException("test does not create a reply sink");
+                },
+                egressStats
+        );
+        NettyExecutionConnection connection = NettyExecutionConnection.getOrCreate(child, 16, 1_024L);
+        connection.bindReplyGate(new NettyReplyDecodedMessageGate(
+                4_096L,
+                4_096L,
+                connectionMemory,
+                sequencer
+        ));
+        ReplySlot slot = sequencer.register(connectionMemory.reserve(4_096L, 4_096L).orElseThrow()).orElseThrow();
+        slot.addChunk(Unpooled.wrappedBuffer(new byte[]{'+', 'O', 'K', '\r', '\n'}));
+        slot.markReady(false);
+        child.runPendingTasks();
+        Assert.assertEquals(ReplySlotState.WRITING, slot.state());
+
+        AtomicReference<Throwable> closeFailure = new AtomicReference<>();
+        Thread closer = Thread.ofPlatform().start(() -> {
+            try {
+                bootstrap.close();
+            } catch (Throwable failure) {
+                closeFailure.set(failure);
+            }
+        });
+        while (closer.isAlive()) {
+            child.runPendingTasks();
+            child.runScheduledPendingTasks();
+            Thread.sleep(1L);
+        }
+        closer.join();
+
+        try {
+            Throwable failure = closeFailure.get();
+            Assert.assertTrue(failure instanceof IllegalStateException);
+            Assert.assertTrue(failure.getMessage().contains("reply shutdown timed out"));
+            Assert.assertEquals(1L, egressStats.snapshot().shutdownTimeouts());
+            Assert.assertEquals(0L, budget.stats().reservedBytes());
+            Assert.assertEquals(0L, budget.stats().allocatedBytes());
+            Assert.assertEquals(0L, budget.stats().activeSlots());
+            Assert.assertEquals(0, registry.activeChannelCount());
+        } finally {
+            holdingWrites.failHeldWrite();
+            child.finishAndReleaseAll();
+            sequencer.close();
+        }
+    }
+
     @Test
     public void closeAggregatesGroupShutdownFailures() throws Exception {
         List<String> closeOrder = Collections.synchronizedList(new ArrayList<>());
@@ -139,6 +246,14 @@ public class YierdisServerBootstrapCloseTest {
         return ctor.newInstance(config);
     }
 
+    private static void awaitChildRegistration(ChildChannelRegistry registry) throws InterruptedException {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2L);
+        while (registry.activeChannelCount() == 0 && System.nanoTime() < deadline) {
+            Thread.sleep(10L);
+        }
+        Assert.assertEquals("accepted child was not registered", 1, registry.activeChannelCount());
+    }
+
     private static void setField(Object target, String fieldName, Object value) throws Exception {
         Field field = target.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
@@ -194,6 +309,28 @@ public class YierdisServerBootstrapCloseTest {
         throw new UnsupportedOperationException("Unexpected method: " + methodName);
     }
 
+    private static final class HoldingWriteHandler extends ChannelOutboundHandlerAdapter {
+        private final AtomicReference<Object> message = new AtomicReference<>();
+        private final AtomicReference<ChannelPromise> promise = new AtomicReference<>();
+
+        @Override
+        public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise writePromise) {
+            message.set(msg);
+            promise.set(writePromise);
+        }
+
+        private void failHeldWrite() {
+            Object heldMessage = message.getAndSet(null);
+            if (heldMessage != null) {
+                ReferenceCountUtil.release(heldMessage);
+            }
+            ChannelPromise heldPromise = promise.getAndSet(null);
+            if (heldPromise != null) {
+                heldPromise.tryFailure(new IllegalStateException("channel closed during drain"));
+            }
+        }
+    }
+
     private static final class FailingRuntimeDbEngine implements RuntimeDbEngine {
         private final String name;
         private final List<String> closeOrder;
@@ -201,6 +338,11 @@ public class YierdisServerBootstrapCloseTest {
         private FailingRuntimeDbEngine(String name, List<String> closeOrder) {
             this.name = name;
             this.closeOrder = closeOrder;
+        }
+
+        @Override
+        public MemoryUsageSnapshot memoryUsage() {
+            return MemoryUsageSnapshot.zero();
         }
 
         @Override

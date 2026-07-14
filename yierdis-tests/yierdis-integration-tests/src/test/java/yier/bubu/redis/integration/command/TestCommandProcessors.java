@@ -3,7 +3,6 @@ package yier.bubu.redis.integration.command;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.YierdisDbRouter;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
-import yier.bubu.redis.runtime.api.YierdisChangeSink;
 import yier.bubu.redis.storage.api.DbEngine;
 
 public final class TestCommandProcessors {
@@ -14,19 +13,11 @@ public final class TestCommandProcessors {
         return TestCommandComposition.createProcessor(db, extraModules);
     }
 
-    public static YierdisFastCommandProcessor forDbWithChangeSink(
-            DbEngine db,
-            YierdisChangeSink changeSink,
-            CommandModule... extraModules
-    ) {
-        return TestCommandComposition.createProcessor(singleDbRouter(db), changeSink, extraModules);
-    }
-
     public static YierdisFastCommandProcessor forRouter(
             YierdisDbRouter dbRouter,
             CommandModule... extraModules
     ) {
-        return TestCommandComposition.createProcessor(dbRouter, YierdisChangeSink.NOOP, extraModules);
+        return TestCommandComposition.createProcessor(dbRouter, extraModules);
     }
 
     private static YierdisDbRouter singleDbRouter(DbEngine db) {

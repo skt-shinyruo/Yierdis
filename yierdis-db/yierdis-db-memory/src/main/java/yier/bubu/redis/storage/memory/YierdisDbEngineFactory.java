@@ -13,6 +13,7 @@ import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.DbEngineFactory;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.RuntimeDbEngine;
+import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 
 import java.util.Objects;
 
@@ -23,29 +24,34 @@ public final class YierdisDbEngineFactory implements DbEngineFactory {
     private final YierdisFfmMemoryRuntime memoryRuntime;
     private final NativeDefragOptions nativeDefragOptions;
     private final int nativeSlotCapacity;
+    private final HashSeed hashSeed;
 
     public YierdisDbEngineFactory() {
         this.memoryRuntime = null;
         this.nativeDefragOptions = null;
         this.nativeSlotCapacity = 0;
+        this.hashSeed = HashSeed.random();
     }
 
     public YierdisDbEngineFactory(NativeDefragOptions nativeDefragOptions) {
         this.memoryRuntime = null;
         this.nativeDefragOptions = nativeDefragOptions;
         this.nativeSlotCapacity = 0;
+        this.hashSeed = HashSeed.random();
     }
 
     public YierdisDbEngineFactory(NativeDefragOptions nativeDefragOptions, int nativeSlotCapacity) {
         this.memoryRuntime = null;
         this.nativeDefragOptions = nativeDefragOptions;
         this.nativeSlotCapacity = nativeSlotCapacity;
+        this.hashSeed = HashSeed.random();
     }
 
     public YierdisDbEngineFactory(YierdisFfmMemoryRuntime memoryRuntime) {
         this.memoryRuntime = Objects.requireNonNull(memoryRuntime, "memoryRuntime");
         this.nativeDefragOptions = null;
         this.nativeSlotCapacity = 0;
+        this.hashSeed = HashSeed.random();
     }
 
     public YierdisDbEngineFactory(YierdisFfmMemoryRuntime memoryRuntime, NativeDefragOptions nativeDefragOptions) {
@@ -60,6 +66,7 @@ public final class YierdisDbEngineFactory implements DbEngineFactory {
         this.memoryRuntime = Objects.requireNonNull(memoryRuntime, "memoryRuntime");
         this.nativeDefragOptions = nativeDefragOptions;
         this.nativeSlotCapacity = nativeSlotCapacity;
+        this.hashSeed = HashSeed.random();
     }
 
     @Override
@@ -82,7 +89,8 @@ public final class YierdisDbEngineFactory implements DbEngineFactory {
                         expireCleanupTimeLimitMillis,
                         nativeDefragOptions,
                         nativeSlotCapacity,
-                        dbIndex
+                        dbIndex,
+                        hashSeed
                 );
             }
             return YierdisDb.createWithOwnedFfmRuntime(
@@ -92,7 +100,9 @@ public final class YierdisDbEngineFactory implements DbEngineFactory {
                     evictionTimeLimitMillis,
                     expireCleanupTimeLimitMillis,
                     nativeDefragOptions,
-                    dbIndex
+                    0,
+                    dbIndex,
+                    hashSeed
             );
         }
         if (nativeSlotCapacity <= 0) {
@@ -104,8 +114,10 @@ public final class YierdisDbEngineFactory implements DbEngineFactory {
                     evictionTimeLimitMillis,
                     expireCleanupTimeLimitMillis,
                     nativeDefragOptions,
-                    dbIndex
-                );
+                    0,
+                    dbIndex,
+                    hashSeed
+            );
         }
         return YierdisDb.createWithSharedFfmRuntime(
                 memoryRuntime,
@@ -116,7 +128,8 @@ public final class YierdisDbEngineFactory implements DbEngineFactory {
                 expireCleanupTimeLimitMillis,
                 nativeDefragOptions,
                 nativeSlotCapacity,
-                dbIndex
+                dbIndex,
+                hashSeed
         );
     }
 }

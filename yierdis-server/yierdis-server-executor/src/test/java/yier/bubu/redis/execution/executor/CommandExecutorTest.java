@@ -3,13 +3,17 @@ package yier.bubu.redis.execution.executor;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
+import yier.bubu.redis.common.command.ResultUnknownException;
+import yier.bubu.redis.execution.api.ReplyTooLargeException;
 
+import java.io.ByteArrayOutputStream;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class CommandExecutorTest {
     @Test
@@ -268,6 +272,79 @@ public class CommandExecutorTest {
     }
 
     @Test
+    public void resultUnknownFailureCancelsTheRegisteredReplyAndClosesWithoutReplacementReply() {
+        RecordingIoAdapter io = new RecordingIoAdapter();
+        ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+        CommandExecutionEngine engine = (session, request, out) -> {
+            throw new ResultUnknownException("mutation result may already be visible");
+        };
+        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+                () -> { },
+                engine,
+                ownerExecutor,
+                ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                io,
+                new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+        );
+        ExecutorCoreTestSupport.startExecutor(executor, ownerExecutor);
+
+        TestConnection connection = ExecutorCoreTestSupport.newConnection("c-1");
+        TrackingExecutionRequest request = TrackingExecutionRequest.ofUtf8("SET", "key", "value");
+        TrackingReply reply = new TrackingReply();
+        try {
+            Assert.assertNull(executor.trySubmit(connection, request, reply));
+
+            ownerExecutor.runAll();
+
+            Assert.assertTrue(connection.context().statsSnapshot().closing());
+            Assert.assertEquals(1, request.closeCalls());
+            Assert.assertEquals(1, reply.cancelCalls());
+            Assert.assertEquals(0, reply.readyCalls());
+            Assert.assertEquals(0, reply.writtenBytes());
+            Assert.assertEquals(1, io.closeCalls(connection));
+        } finally {
+            executor.close();
+        }
+    }
+
+    @Test
+    public void oversizedReplyCancelsTheRegisteredReplyAndClosesWithoutReplacementReply() {
+        RecordingIoAdapter io = new RecordingIoAdapter();
+        ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+        CommandExecutionEngine engine = (session, request, out) -> {
+            throw new ReplyTooLargeException("reply exceeds configured single-reply capacity");
+        };
+        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+                () -> { },
+                engine,
+                ownerExecutor,
+                ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                io,
+                new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+        );
+        ExecutorCoreTestSupport.startExecutor(executor, ownerExecutor);
+
+        TestConnection connection = ExecutorCoreTestSupport.newConnection("c-1");
+        TrackingExecutionRequest request = TrackingExecutionRequest.ofUtf8("GET", "large");
+        TrackingReply reply = new TrackingReply();
+        try {
+            Assert.assertNull(executor.trySubmit(connection, request, reply));
+
+            ownerExecutor.runAll();
+
+            Assert.assertTrue(connection.context().statsSnapshot().closing());
+            Assert.assertEquals(1, request.closeCalls());
+            Assert.assertEquals(1, reply.cancelCalls());
+            Assert.assertEquals(0, reply.readyCalls());
+            Assert.assertEquals(0, reply.writtenBytes());
+            Assert.assertEquals("", io.bufferedReply(connection));
+            Assert.assertEquals(1, io.closeCalls(connection));
+        } finally {
+            executor.close();
+        }
+    }
+
+    @Test
     public void executorRejectsAlreadyClosingConnectionBeforeReservingBacklogBudget() {
         RecordingIoAdapter io = new RecordingIoAdapter();
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
@@ -380,6 +457,49 @@ public class CommandExecutorTest {
             Assert.fail("Expected " + expected.getSimpleName());
         } catch (Throwable error) {
             Assert.assertEquals(expected, error.getClass());
+        }
+    }
+
+    private static final class TrackingReply implements ExecutionReply {
+        private final ByteArrayOutputStream output = new ByteArrayOutputStream();
+        private final AtomicInteger readyCalls = new AtomicInteger();
+        private final AtomicInteger cancelCalls = new AtomicInteger();
+
+        @Override
+        public BytesSink sink() {
+            return output::write;
+        }
+
+        @Override
+        public void markReady(boolean closeAfterReply) {
+            readyCalls.incrementAndGet();
+        }
+
+        @Override
+        public void cancel() {
+            cancelCalls.incrementAndGet();
+        }
+
+        @Override
+        public boolean hasWrittenBytes() {
+            return output.size() > 0;
+        }
+
+        @Override
+        public void close() {
+            cancel();
+        }
+
+        private int readyCalls() {
+            return readyCalls.get();
+        }
+
+        private int cancelCalls() {
+            return cancelCalls.get();
+        }
+
+        private int writtenBytes() {
+            return output.size();
         }
     }
 }

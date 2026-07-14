@@ -15,13 +15,14 @@ import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.hash.HashCapacityPolicy;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMetrics;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkResult;
 import yier.bubu.redis.storage.memory.internal.hash.SipHash24;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 
-public final class NativeKeyDirectory implements AutoCloseable {
+public final class NativeKeyDirectory implements AutoCloseable, HashTableMaintenanceRegistry.Participant {
     private static final byte STATE_EMPTY = 0;
     private static final byte STATE_FILLED = 1;
     private static final byte STATE_TOMBSTONE = 2;
@@ -34,6 +35,8 @@ public final class NativeKeyDirectory implements AutoCloseable {
     private final NativeAllocator allocator;
     private final boolean ownsAllocator;
     private final HashSeed hashSeed;
+    private final HashTableMaintenanceRegistry maintenanceRegistry;
+    private final HashTableMaintenanceRegistry.Registration maintenanceRegistration;
     private Table active;
     private Table old;
     private int rehashCursor;
@@ -43,27 +46,43 @@ public final class NativeKeyDirectory implements AutoCloseable {
     private int maximumProbeLength;
     private boolean maintenanceDebt;
     private boolean closed;
+    private boolean iterationTrapForTesting;
 
     public NativeKeyDirectory(YierdisFfmMemoryRuntime runtime) {
         this(runtime, HashSeed.random());
     }
 
     public NativeKeyDirectory(YierdisFfmMemoryRuntime runtime, HashSeed hashSeed) {
-        this(new YierdisStableNativeAllocator(Objects.requireNonNull(runtime, "runtime"), 4096), true, hashSeed);
+        this(new YierdisStableNativeAllocator(Objects.requireNonNull(runtime, "runtime"), 4096), true, hashSeed, null);
     }
 
     public NativeKeyDirectory(NativeAllocator allocator) {
-        this(allocator, false, HashSeed.random());
+        this(allocator, false, HashSeed.random(), null);
     }
 
     public NativeKeyDirectory(NativeAllocator allocator, HashSeed hashSeed) {
-        this(allocator, false, hashSeed);
+        this(allocator, false, hashSeed, null);
     }
 
-    private NativeKeyDirectory(NativeAllocator allocator, boolean ownsAllocator, HashSeed hashSeed) {
+    public NativeKeyDirectory(
+            NativeAllocator allocator,
+            HashSeed hashSeed,
+            HashTableMaintenanceRegistry maintenanceRegistry
+    ) {
+        this(allocator, false, hashSeed, maintenanceRegistry);
+    }
+
+    private NativeKeyDirectory(
+            NativeAllocator allocator,
+            boolean ownsAllocator,
+            HashSeed hashSeed,
+            HashTableMaintenanceRegistry maintenanceRegistry
+    ) {
         this.allocator = Objects.requireNonNull(allocator, "allocator");
         this.ownsAllocator = ownsAllocator;
         this.hashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
+        this.maintenanceRegistry = maintenanceRegistry;
+        this.maintenanceRegistration = maintenanceRegistry == null ? null : maintenanceRegistry.registration(this);
         this.active = new Table(HashCapacityPolicy.MIN_CAPACITY);
     }
 
@@ -119,6 +138,12 @@ public final class NativeKeyDirectory implements AutoCloseable {
         );
     }
 
+    public synchronized long tableGeneration() {
+        ensureOpen();
+        return generation;
+    }
+
+    @Override
     public synchronized boolean hasMaintenanceDebt() {
         ensureOpen();
         return maintenanceDebt || old != null;
@@ -132,9 +157,61 @@ public final class NativeKeyDirectory implements AutoCloseable {
         HashCapacityPolicy.Decision decision = maintenanceDecision();
         if (decision.action() == HashCapacityPolicy.Action.NONE) {
             maintenanceDebt = false;
+            refreshMaintenanceRegistration();
             return null;
         }
         return new StagedResize(active, new Table(decision.targetCapacity()));
+    }
+
+    @Override
+    public synchronized long estimatedMaintenanceGrowthBytes() {
+        ensureOpen();
+        if (old != null) {
+            return 0L;
+        }
+        HashCapacityPolicy.Decision decision = maintenanceDecision();
+        return decision.action() == HashCapacityPolicy.Action.NONE
+                ? 0L
+                : heapBytesForCapacity(decision.targetCapacity());
+    }
+
+    @Override
+    public synchronized HashTableMaintenanceRegistry.MaintenancePreparation prepareMaintenance() {
+        StagedResize staged = stageMaintenanceResize();
+        if (staged == null) {
+            return null;
+        }
+        return new HashTableMaintenanceRegistry.MaintenancePreparation() {
+            private StagedResize pending = staged;
+
+            @Override
+            public long stagedNonNativeGrowthBytes() {
+                return requirePending().stagedHeapBytes();
+            }
+
+            @Override
+            public void commit() {
+                StagedResize current = requirePending();
+                pending = null;
+                publishStagedResize(current);
+            }
+
+            @Override
+            public void abort() {
+                StagedResize current = pending;
+                pending = null;
+                if (current != null) {
+                    current.close();
+                }
+            }
+
+            private StagedResize requirePending() {
+                if (pending == null) {
+                    throw new IllegalStateException("staged key-directory maintenance resize is closed");
+                }
+                return pending;
+            }
+        };
     }
 
     public synchronized void publishStagedResize(StagedResize staged) {
@@ -147,6 +224,7 @@ public final class NativeKeyDirectory implements AutoCloseable {
         publishStagedDirectory(staged.publish());
     }
 
+    @Override
     public synchronized HashTableWorkResult advanceRehash(HashTableWorkBudget budget) {
         Objects.requireNonNull(budget, "budget");
         ensureOpen();
@@ -217,33 +295,71 @@ public final class NativeKeyDirectory implements AutoCloseable {
     public synchronized void forEachEntry(EntryConsumer consumer) {
         Objects.requireNonNull(consumer, "consumer");
         ensureOpen();
+        if (iterationTrapForTesting) {
+            throw new AssertionError("key-directory iteration is forbidden while taking a memory snapshot");
+        }
         forEachEntry(active, consumer);
         forEachEntry(old, consumer);
     }
 
+    public synchronized void armIterationTrapForTesting() {
+        iterationTrapForTesting = true;
+    }
+
+    public synchronized void disarmIterationTrapForTesting() {
+        iterationTrapForTesting = false;
+    }
+
     public synchronized ScanCursorV2 scan(ScanCursorV2 cursor, int maxSteps, ScanConsumer consumer) {
+        return scanWithWork(cursor, Math.max(0L, maxSteps), consumer).nextCursor();
+    }
+
+    public synchronized ScanResult scanWithWork(ScanCursorV2 cursor, long maxSteps, ScanConsumer consumer) {
         Objects.requireNonNull(cursor, "cursor");
         Objects.requireNonNull(consumer, "consumer");
         ensureOpen();
-        if (maxSteps <= 0 || size == 0) {
-            return ScanCursorV2.start();
+        if (maxSteps < 0L) {
+            throw new IllegalArgumentException("maxSteps must be >= 0");
         }
 
-        long totalSlots = active.capacity + (long) (old == null ? 0 : old.capacity);
-        long position = Math.min(cursor.position(), totalSlots);
-        int inspected = 0;
-        while (position < totalSlots && inspected < maxSteps) {
-            Table table = position < active.capacity ? active : old;
-            int index = (int) (position < active.capacity ? position : position - active.capacity);
-            inspected++;
-            if (table.states[index] == STATE_FILLED
-                    && !consumer.accept(keyHandleAt(table, index), table.handles[index])) {
-                position++;
-                return nextLegacyCursor(position, totalSlots);
-            }
-            position++;
+        ScanCursorV2 start = normalizeScanCursor(cursor);
+        if (size == 0) {
+            return new ScanResult(start, ScanCursorV2.start(), 0L, generation);
         }
-        return nextLegacyCursor(position, totalSlots);
+
+        int phase = start.phase();
+        long position = start.position();
+        long inspected = 0L;
+        while (true) {
+            Table table = tableForPhase(phase);
+            if (table == null || position >= table.capacity) {
+                if (phase == 0 && old != null) {
+                    phase = 1;
+                    position = 0L;
+                    continue;
+                }
+                return new ScanResult(start, ScanCursorV2.start(), inspected, generation);
+            }
+
+            if (inspected >= maxSteps) {
+                return new ScanResult(start, cursorFor(phase, position), inspected, generation);
+            }
+
+            int index = (int) position;
+            position++;
+            inspected++;
+            byte state = table.states[index];
+            boolean visible = state == STATE_FILLED || (phase == 1 && state == STATE_MIGRATED_SCAN_SHADOW);
+            if (visible && !consumer.accept(keyHandleAt(table, index), table.handles[index])) {
+                if (position >= table.capacity) {
+                    if (phase == 0 && old != null) {
+                        return new ScanResult(start, cursorFor(1, 0L), inspected, generation);
+                    }
+                    return new ScanResult(start, ScanCursorV2.start(), inspected, generation);
+                }
+                return new ScanResult(start, cursorFor(phase, position), inspected, generation);
+            }
+        }
     }
 
     public synchronized EntryHandle compute(
@@ -458,8 +574,28 @@ public final class NativeKeyDirectory implements AutoCloseable {
         return KeyHandle.forNative(allocator, table.keyHandles[index], table.hashes[index]);
     }
 
-    private ScanCursorV2 nextLegacyCursor(long nextPosition, long totalSlots) {
-        return nextPosition >= totalSlots ? ScanCursorV2.start() : ScanCursorV2.of(nextPosition);
+    private ScanCursorV2 normalizeScanCursor(ScanCursorV2 cursor) {
+        int currentGeneration = wireGeneration();
+        // wire token 只有 generation 的低 29 位；代数不匹配时旧表可能已经退休，只能从当前 active 表重启。
+        if (cursor.value() == 0L || cursor.generation() != currentGeneration) {
+            return ScanCursorV2.of(currentGeneration, 0, 0L);
+        }
+        if (cursor.phase() == 1 && old == null) {
+            return ScanCursorV2.of(currentGeneration, 0, 0L);
+        }
+        return cursor;
+    }
+
+    private Table tableForPhase(int phase) {
+        return phase == 0 ? active : old;
+    }
+
+    private ScanCursorV2 cursorFor(int phase, long position) {
+        return ScanCursorV2.of(wireGeneration(), phase, position);
+    }
+
+    private int wireGeneration() {
+        return (int) (generation & 0x1fff_ffffL);
     }
 
     private void clearInternal() {
@@ -479,6 +615,7 @@ public final class NativeKeyDirectory implements AutoCloseable {
         rehashCursor = 0;
         size = 0;
         maintenanceDebt = false;
+        refreshMaintenanceRegistration();
         generation++;
         if (failure != null) {
             rethrow(failure);
@@ -538,6 +675,7 @@ public final class NativeKeyDirectory implements AutoCloseable {
         active = Objects.requireNonNull(staged, "staged");
         rehashCursor = 0;
         maintenanceDebt = true;
+        refreshMaintenanceRegistration();
         generation++;
     }
 
@@ -621,9 +759,24 @@ public final class NativeKeyDirectory implements AutoCloseable {
     private void recordMaintenanceDebt() {
         if (old != null) {
             maintenanceDebt = true;
+            refreshMaintenanceRegistration();
             return;
         }
         maintenanceDebt = maintenanceDecision().action() != HashCapacityPolicy.Action.NONE;
+        refreshMaintenanceRegistration();
+    }
+
+    private void refreshMaintenanceRegistration() {
+        if (maintenanceRegistration == null) {
+            return;
+        }
+        if (maintenanceDebt || old != null) {
+            if (!maintenanceRegistration.registered()) {
+                maintenanceRegistry.register(maintenanceRegistration);
+            }
+        } else {
+            maintenanceRegistry.unregister(maintenanceRegistration);
+        }
     }
 
     private void invalidateOldShadow(NativeHandle keyHandle, int hash) {
@@ -803,6 +956,14 @@ public final class NativeKeyDirectory implements AutoCloseable {
     @FunctionalInterface
     public interface EntryConsumer {
         void accept(KeyHandle keyHandle, EntryHandle entryHandle);
+    }
+
+    public record ScanResult(
+            ScanCursorV2 startCursor,
+            ScanCursorV2 nextCursor,
+            long inspectedSlots,
+            long tableGeneration
+    ) {
     }
 
     @FunctionalInterface

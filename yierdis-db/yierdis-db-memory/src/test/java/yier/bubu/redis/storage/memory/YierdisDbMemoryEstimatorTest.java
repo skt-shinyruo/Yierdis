@@ -11,7 +11,9 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeAllocationScope;
 import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
@@ -24,6 +26,7 @@ import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 
 public class YierdisDbMemoryEstimatorTest {
@@ -80,6 +83,53 @@ public class YierdisDbMemoryEstimatorTest {
 
         Assert.assertEquals(setExpected, YierdisDbMemoryEstimator.estimateSetWriteUpperBound(1, List.of(b("a"), b("bc"))));
         Assert.assertEquals(zsetExpected, YierdisDbMemoryEstimator.estimateZSetWriteUpperBound(1, List.of(b("1"), b("aa"), b("2"), b("bb"))));
+    }
+
+    @Test
+    public void nativePeakUsesTheAllocatorScopeBookkeepingEstimate() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-estimator");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 2_048)) {
+            allocator.bindToCurrentThread();
+            NativeHandle anchor = allocator.allocate(NativeObjectKind.STRING_BYTES, 32);
+            try {
+                int[] allocations = new int[1_024];
+                Arrays.fill(allocations, 32);
+                long scopeBookkeeping = allocator.estimateAllocationScopeBookkeepingBytes(allocations.length);
+
+                Assert.assertTrue(scopeBookkeeping > 4_096L);
+                Assert.assertEquals(
+                        scopeBookkeeping,
+                        MutationMemoryEstimator.peakAdditionalBytes(allocator, 0L, 0L, allocations)
+                );
+            } finally {
+                allocator.free(anchor);
+            }
+        }
+    }
+
+    @Test
+    public void nativePeakMatchesTheKnownAllocationScopePeakAfterPageTrim() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-peak-after-trim");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 2_048)) {
+            allocator.bindToCurrentThread();
+            int[] allocations = {1, 56, 40_000};
+            NativeHandle key = allocator.allocate(NativeObjectKind.KEY_BYTES, allocations[0]);
+            NativeHandle entry = allocator.allocate(NativeObjectKind.ENTRY_RECORD, allocations[1]);
+            NativeHandle value = allocator.allocate(NativeObjectKind.STRING_BYTES, allocations[2]);
+            allocator.free(key);
+            allocator.free(entry);
+            allocator.free(value);
+            allocator.trimEmptyPages(MemoryPressureBudget.unlimited());
+
+            long expectedPeak = MutationMemoryEstimator.peakAdditionalBytes(allocator, 0L, 0L, allocations);
+            try (NativeAllocationScope scope = allocator.beginAllocationScope()) {
+                allocator.allocate(NativeObjectKind.KEY_BYTES, allocations[0]);
+                allocator.allocate(NativeObjectKind.ENTRY_RECORD, allocations[1]);
+                allocator.allocate(NativeObjectKind.STRING_BYTES, allocations[2]);
+
+                Assert.assertEquals(expectedPeak, scope.growth().effectiveBytes());
+            }
+        }
     }
 
     private static byte[] b(String value) {

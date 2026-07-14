@@ -19,12 +19,19 @@ public final class YierdisServerArgs {
     private static final int DEFAULT_PROTOCOL_MAX_ARGS = RespProtocolLimits.DEFAULT_MAX_ARGS;
     private static final int DEFAULT_PROTOCOL_MAX_LINE_BYTES = RespProtocolLimits.DEFAULT_MAX_INLINE_BYTES;
     private static final int DEFAULT_PROTOCOL_MAX_COMMAND_BYTES = RespProtocolLimits.DEFAULT_MAX_COMMAND_BYTES;
+    private static final long MIN_PROTOCOL_GLOBAL_IN_FLIGHT_BYTES = 128L * 1024L * 1024L;
 
     private static final long DEFAULT_EXECUTOR_QUEUE_MAX_BYTES = 64L * 1024 * 1024; // 64 MiB
     private static final int DEFAULT_TRANSACTION_QUEUE_MAX_COMMANDS = 1024;
     private static final long DEFAULT_TRANSACTION_QUEUE_MAX_BYTES = DEFAULT_EXECUTOR_QUEUE_MAX_BYTES;
     private static final long DEFAULT_BACKPRESSURE_BYTES_HIGH = 16L * 1024 * 1024; // 16 MiB
     private static final long DEFAULT_BACKPRESSURE_BYTES_LOW = 8L * 1024 * 1024; // 8 MiB
+    private static final long DEFAULT_REPLY_GLOBAL_CAPACITY_BYTES = 256L * 1024L * 1024L;
+    private static final long DEFAULT_REPLY_PER_CONNECTION_CAPACITY_BYTES = 128L * 1024L * 1024L;
+    private static final long DEFAULT_REPLY_MAX_TOTAL_BYTES = 64L * 1024L * 1024L;
+    private static final int DEFAULT_REPLY_CHUNK_PAYLOAD_BYTES = 64 * 1024;
+    private static final long DEFAULT_REPLY_CONTROL_RESERVATION_BYTES = 4L * 1024L;
+    private static final long DEFAULT_REPLY_DRAIN_TIMEOUT_MILLIS = 5_000L;
 
     @Option(names = {"-h", "--help"}, usageHelp = true, description = "Show this help message and exit.")
     public boolean help;
@@ -142,6 +149,13 @@ public final class YierdisServerArgs {
     public int protocolMaxCommandBytes = DEFAULT_PROTOCOL_MAX_COMMAND_BYTES;
 
     @Option(
+            names = YierdisServerArgNames.PROTOCOL_GLOBAL_IN_FLIGHT_BYTES,
+            defaultValue = "0",
+            description = "Global RESP ingress in-flight memory limit (0 derives from executor queue bytes)."
+    )
+    public long protocolGlobalInFlightBytes;
+
+    @Option(
             names = YierdisServerArgNames.CLIENT_IDLE_TIMEOUT_MILLIS,
             defaultValue = "300000",
             description = "Close clients idle for this many milliseconds (0 disables)."
@@ -161,6 +175,48 @@ public final class YierdisServerArgs {
             description = "Slow-client grace period above output buffer limit in milliseconds."
     )
     public long clientOutputBufferOverLimitMillis = 10000;
+
+    @Option(
+            names = YierdisServerArgNames.REPLY_GLOBAL_CAPACITY_BYTES,
+            defaultValue = "" + DEFAULT_REPLY_GLOBAL_CAPACITY_BYTES,
+            description = "Hard global RESP reply capacity in bytes."
+    )
+    public long replyGlobalCapacityBytes = DEFAULT_REPLY_GLOBAL_CAPACITY_BYTES;
+
+    @Option(
+            names = YierdisServerArgNames.REPLY_PER_CONNECTION_CAPACITY_BYTES,
+            defaultValue = "" + DEFAULT_REPLY_PER_CONNECTION_CAPACITY_BYTES,
+            description = "Hard per-connection RESP reply capacity in bytes."
+    )
+    public long replyPerConnectionCapacityBytes = DEFAULT_REPLY_PER_CONNECTION_CAPACITY_BYTES;
+
+    @Option(
+            names = YierdisServerArgNames.REPLY_MAX_TOTAL_BYTES,
+            defaultValue = "" + DEFAULT_REPLY_MAX_TOTAL_BYTES,
+            description = "Hard total charge for one top-level RESP reply in bytes."
+    )
+    public long replyMaxTotalBytes = DEFAULT_REPLY_MAX_TOTAL_BYTES;
+
+    @Option(
+            names = YierdisServerArgNames.REPLY_CHUNK_PAYLOAD_BYTES,
+            defaultValue = "" + DEFAULT_REPLY_CHUNK_PAYLOAD_BYTES,
+            description = "Fixed RESP reply chunk payload capacity in bytes."
+    )
+    public int replyChunkPayloadBytes = DEFAULT_REPLY_CHUNK_PAYLOAD_BYTES;
+
+    @Option(
+            names = YierdisServerArgNames.REPLY_CONTROL_RESERVATION_BYTES,
+            defaultValue = "" + DEFAULT_REPLY_CONTROL_RESERVATION_BYTES,
+            description = "Per-request RESP reply control reservation in bytes."
+    )
+    public long replyControlReservationBytes = DEFAULT_REPLY_CONTROL_RESERVATION_BYTES;
+
+    @Option(
+            names = YierdisServerArgNames.REPLY_DRAIN_TIMEOUT_MILLIS,
+            defaultValue = "" + DEFAULT_REPLY_DRAIN_TIMEOUT_MILLIS,
+            description = "Graceful RESP reply drain timeout in milliseconds."
+    )
+    public long replyDrainTimeoutMillis = DEFAULT_REPLY_DRAIN_TIMEOUT_MILLIS;
 
     @Option(names = YierdisServerArgNames.MAXMEMORY_BYTES, defaultValue = "0", description = "Maxmemory in bytes (0 disables eviction).")
     public long maxmemoryBytes = 0;
@@ -310,6 +366,9 @@ public final class YierdisServerArgs {
         if (protocolMaxCommandBytes > RespProtocolLimits.MAX_COMMAND_BYTES) {
             throw new IllegalArgumentException("protocolMaxCommandBytes must be <= " + RespProtocolLimits.MAX_COMMAND_BYTES);
         }
+        if (protocolGlobalInFlightBytes < 0) {
+            throw new IllegalArgumentException("protocolGlobalInFlightBytes must be >= 0");
+        }
         if (clientIdleTimeoutMillis < 0) {
             throw new IllegalArgumentException("clientIdleTimeoutMillis must be >= 0");
         }
@@ -321,6 +380,43 @@ public final class YierdisServerArgs {
         }
         if (clientOutputBufferLimitBytes > 0 && clientOutputBufferOverLimitMillis <= 0) {
             throw new IllegalArgumentException("clientOutputBufferOverLimitMillis must be > 0 when clientOutputBufferLimitBytes is enabled");
+        }
+        if (replyGlobalCapacityBytes <= 0L) {
+            throw new IllegalArgumentException("replyGlobalCapacityBytes must be > 0");
+        }
+        if (replyPerConnectionCapacityBytes <= 0L) {
+            throw new IllegalArgumentException("replyPerConnectionCapacityBytes must be > 0");
+        }
+        if (replyMaxTotalBytes <= 0L) {
+            throw new IllegalArgumentException("replyMaxTotalBytes must be > 0");
+        }
+        if (replyChunkPayloadBytes <= 0) {
+            throw new IllegalArgumentException("replyChunkPayloadBytes must be > 0");
+        }
+        if (replyControlReservationBytes <= 0L) {
+            throw new IllegalArgumentException("replyControlReservationBytes must be > 0");
+        }
+        if (replyControlReservationBytes <= YierdisServerRuntimeConfig.REPLY_FIXED_OVERHEAD_BYTES) {
+            throw new IllegalArgumentException("replyControlReservationBytes must exceed reply fixed overhead");
+        }
+        if (replyDrainTimeoutMillis <= 0L) {
+            throw new IllegalArgumentException("replyDrainTimeoutMillis must be > 0");
+        }
+        if (replyControlReservationBytes > replyMaxTotalBytes) {
+            throw new IllegalArgumentException("replyControlReservationBytes must be <= replyMaxTotalBytes");
+        }
+        if (replyMaxTotalBytes > replyPerConnectionCapacityBytes) {
+            throw new IllegalArgumentException("replyMaxTotalBytes must be <= replyPerConnectionCapacityBytes");
+        }
+        if (replyPerConnectionCapacityBytes > replyGlobalCapacityBytes) {
+            throw new IllegalArgumentException("replyPerConnectionCapacityBytes must be <= replyGlobalCapacityBytes");
+        }
+        long minimumReplyCharge = saturatedAdd(
+                saturatedAdd(replyControlReservationBytes, replyChunkPayloadBytes),
+                YierdisServerRuntimeConfig.REPLY_FIXED_OVERHEAD_BYTES
+        );
+        if (minimumReplyCharge > replyMaxTotalBytes) {
+            throw new IllegalArgumentException("reply chunk, control, and fixed overhead must fit replyMaxTotalBytes");
         }
         if (maxmemoryBytes < 0) {
             throw new IllegalArgumentException("maxmemoryBytes must be >= 0");
@@ -379,9 +475,16 @@ public final class YierdisServerArgs {
         out.protocolMaxArgs = protocolMaxArgs;
         out.protocolMaxLineBytes = protocolMaxLineBytes;
         out.protocolMaxCommandBytes = protocolMaxCommandBytes;
+        out.protocolGlobalInFlightBytes = protocolGlobalInFlightBytes;
         out.clientIdleTimeoutMillis = clientIdleTimeoutMillis;
         out.clientOutputBufferLimitBytes = clientOutputBufferLimitBytes;
         out.clientOutputBufferOverLimitMillis = clientOutputBufferOverLimitMillis;
+        out.replyGlobalCapacityBytes = replyGlobalCapacityBytes;
+        out.replyPerConnectionCapacityBytes = replyPerConnectionCapacityBytes;
+        out.replyMaxTotalBytes = replyMaxTotalBytes;
+        out.replyChunkPayloadBytes = replyChunkPayloadBytes;
+        out.replyControlReservationBytes = replyControlReservationBytes;
+        out.replyDrainTimeoutMillis = replyDrainTimeoutMillis;
         out.maxmemoryBytes = maxmemoryBytes;
         out.maxmemoryScope = maxmemoryScope;
         out.maxmemoryPolicy = maxmemoryPolicy;
@@ -427,6 +530,12 @@ public final class YierdisServerArgs {
                 clientIdleTimeoutMillis,
                 clientOutputBufferLimitBytes,
                 clientOutputBufferOverLimitMillis,
+                replyGlobalCapacityBytes,
+                replyPerConnectionCapacityBytes,
+                replyMaxTotalBytes,
+                replyChunkPayloadBytes,
+                replyControlReservationBytes,
+                replyDrainTimeoutMillis,
                 maxmemoryBytes,
                 YierdisServerRuntimeConfig.MaxmemoryScope.fromArgvValue(maxmemoryScope),
                 MaxmemoryPolicy.parse(maxmemoryPolicy),
@@ -439,7 +548,8 @@ public final class YierdisServerArgs {
                 nativeDefragTimeLimitMillis,
                 nativeSlotCapacity,
                 keysTimeBudgetMillis,
-                keysMaxResults
+                keysMaxResults,
+                deriveProtocolGlobalInFlightBytes(executorQueueMaxBytes, protocolGlobalInFlightBytes)
         );
     }
 
@@ -503,6 +613,8 @@ public final class YierdisServerArgs {
         out.add(Integer.toString(protocolMaxLineBytes));
         out.add(YierdisServerArgNames.PROTOCOL_MAX_COMMAND_BYTES);
         out.add(Integer.toString(protocolMaxCommandBytes));
+        out.add(YierdisServerArgNames.PROTOCOL_GLOBAL_IN_FLIGHT_BYTES);
+        out.add(Long.toString(protocolGlobalInFlightBytes));
 
         out.add(YierdisServerArgNames.CLIENT_IDLE_TIMEOUT_MILLIS);
         out.add(Long.toString(clientIdleTimeoutMillis));
@@ -510,6 +622,19 @@ public final class YierdisServerArgs {
         out.add(Long.toString(clientOutputBufferLimitBytes));
         out.add(YierdisServerArgNames.CLIENT_OUTPUT_BUFFER_OVER_LIMIT_MILLIS);
         out.add(Long.toString(clientOutputBufferOverLimitMillis));
+
+        out.add(YierdisServerArgNames.REPLY_GLOBAL_CAPACITY_BYTES);
+        out.add(Long.toString(replyGlobalCapacityBytes));
+        out.add(YierdisServerArgNames.REPLY_PER_CONNECTION_CAPACITY_BYTES);
+        out.add(Long.toString(replyPerConnectionCapacityBytes));
+        out.add(YierdisServerArgNames.REPLY_MAX_TOTAL_BYTES);
+        out.add(Long.toString(replyMaxTotalBytes));
+        out.add(YierdisServerArgNames.REPLY_CHUNK_PAYLOAD_BYTES);
+        out.add(Integer.toString(replyChunkPayloadBytes));
+        out.add(YierdisServerArgNames.REPLY_CONTROL_RESERVATION_BYTES);
+        out.add(Long.toString(replyControlReservationBytes));
+        out.add(YierdisServerArgNames.REPLY_DRAIN_TIMEOUT_MILLIS);
+        out.add(Long.toString(replyDrainTimeoutMillis));
 
         out.add(YierdisServerArgNames.MAXMEMORY_BYTES);
         out.add(Long.toString(maxmemoryBytes));
@@ -555,5 +680,21 @@ public final class YierdisServerArgs {
 
     private static String normalizeMaxmemoryPolicy(String rawValue) {
         return MaxmemoryPolicy.parse(rawValue).redisName();
+    }
+
+    private static long deriveProtocolGlobalInFlightBytes(long executorQueueMaxBytes, long configuredBytes) {
+        if (configuredBytes > 0L) {
+            return configuredBytes;
+        }
+        long queueBytes = Math.max(0L, executorQueueMaxBytes);
+        long doubled = queueBytes > Long.MAX_VALUE / 2L ? Long.MAX_VALUE : queueBytes * 2L;
+        return Math.max(MIN_PROTOCOL_GLOBAL_IN_FLIGHT_BYTES, doubled);
+    }
+
+    private static long saturatedAdd(long left, long right) {
+        if (left < 0L || right < 0L || left > Long.MAX_VALUE - right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 }

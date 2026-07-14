@@ -10,6 +10,7 @@ import yier.bubu.redis.execution.api.TransactionState;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class EngineSessionTest {
@@ -122,6 +123,23 @@ public class EngineSessionTest {
         Assert.assertEquals("ERR Transaction queue is full", session.transaction().tryEnqueue(underestimated));
         Assert.assertTrue(session.transaction().aborted());
         Assert.assertEquals(0, session.transaction().size());
+    }
+
+    @Test
+    public void transactionKeepsOneRetainedRequestViewUntilDiscard() {
+        EngineSession session = new EngineSession(4, 64);
+        RetainedRequestState state = new RetainedRequestState();
+        ExecutionRequest original = new RetainedTrackingExecutionRequest(state);
+
+        session.transaction().begin();
+        Assert.assertNull(session.transaction().tryEnqueue(original));
+        Assert.assertEquals(1, state.retainCalls.get());
+
+        original.close();
+        Assert.assertEquals(0, state.finalReleases.get());
+
+        session.transaction().discard();
+        Assert.assertEquals(1, state.finalReleases.get());
     }
 
     @Test
@@ -264,6 +282,71 @@ public class EngineSessionTest {
         @Override
         public void close() {
             closeCounter.incrementAndGet();
+        }
+    }
+
+    private static final class RetainedRequestState {
+        private final AtomicInteger references = new AtomicInteger(1);
+        private final AtomicInteger retainCalls = new AtomicInteger();
+        private final AtomicInteger finalReleases = new AtomicInteger();
+    }
+
+    private static final class RetainedTrackingExecutionRequest implements ExecutionRequest {
+        private final RetainedRequestState state;
+        private final AtomicBoolean closed = new AtomicBoolean();
+
+        private RetainedTrackingExecutionRequest(RetainedRequestState state) {
+            this.state = state;
+        }
+
+        @Override
+        public int argc() {
+            return 1;
+        }
+
+        @Override
+        public boolean isNull(int index) {
+            return false;
+        }
+
+        @Override
+        public int len(int index) {
+            return 3;
+        }
+
+        @Override
+        public byte byteAt(int index, int offset) {
+            return "GET".getBytes(java.nio.charset.StandardCharsets.US_ASCII)[offset];
+        }
+
+        @Override
+        public void copyToByteArray(int index, byte[] dst, int dstOff) {
+            byte[] source = "GET".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+            System.arraycopy(source, 0, dst, dstOff, source.length);
+        }
+
+        @Override
+        public byte[] toByteArray(int index) {
+            return "GET".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        }
+
+        @Override
+        public int retainedBytes() {
+            return 3;
+        }
+
+        @Override
+        public ExecutionRequest retain() {
+            state.retainCalls.incrementAndGet();
+            state.references.incrementAndGet();
+            return new RetainedTrackingExecutionRequest(state);
+        }
+
+        @Override
+        public void close() {
+            if (closed.compareAndSet(false, true) && state.references.decrementAndGet() == 0) {
+                state.finalReleases.incrementAndGet();
+            }
         }
     }
 }

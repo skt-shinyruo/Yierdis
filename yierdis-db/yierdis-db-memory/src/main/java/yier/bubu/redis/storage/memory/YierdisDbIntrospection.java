@@ -21,16 +21,22 @@ import java.util.Objects;
 
 public final class YierdisDbIntrospection implements YierdisSnapshot {
     private final Runnable threadChecker;
+    private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
 
-    YierdisDbIntrospection(Runnable threadChecker, YierdisDbKeyLifecycle keyLifecycle) {
+    YierdisDbIntrospection(
+            Runnable threadChecker,
+            YierdisDbInternals internals,
+            YierdisDbKeyLifecycle keyLifecycle
+    ) {
         this.threadChecker = Objects.requireNonNull(threadChecker, "threadChecker");
+        this.internals = internals;
         this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
     }
 
     String objectEncoding(BytesView keyView) {
         threadChecker.run();
-        EntryRecord record = keyLifecycle.liveEntryRecord(keyView);
+        EntryRecord record = liveEntryRecord(keyLifecycle.keyHandle(keyView));
         if (record == null) {
             return null;
         }
@@ -42,11 +48,18 @@ public final class YierdisDbIntrospection implements YierdisSnapshot {
         if (keyBytes == null) {
             return null;
         }
-        EntryRecord record = keyLifecycle.liveEntryRecord(keyBytes);
+        EntryRecord record = liveEntryRecord(keyLifecycle.keyHandle(keyBytes));
         if (record == null) {
             return null;
         }
         return encodingName(record.encoding());
+    }
+
+    private EntryRecord liveEntryRecord(yier.bubu.redis.storage.memory.internal.key.KeyHandle keyHandle) {
+        if (internals != null) {
+            return internals.liveEntryRecord(keyHandle);
+        }
+        return keyLifecycle.liveEntryRecord(keyHandle);
     }
 
     @Override

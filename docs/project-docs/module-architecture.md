@@ -135,7 +135,7 @@ protocol owns wire shape and reply encoding, not DB semantics.
 
 ### `yierdis-networking-netty`
 
-这个模块只负责把 RESP 放进 Netty pipeline。它能看到 `RespRequestDecoder`、`RespCommandAdapter` 这类适配器，但不能拥有命令语义或 DB 访问逻辑。
+这个模块只负责把 RESP 放进 Netty pipeline。它拥有 `RespRequestDecoder`、ingress admission 和 `RetainedRespExecutionRequest`，但不能拥有命令语义或 DB 访问逻辑。
 
 ## execution 和 server 车道
 

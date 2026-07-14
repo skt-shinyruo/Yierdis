@@ -1,7 +1,6 @@
 package yier.bubu.redis.app.server;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutor;
 import org.junit.Assert;
@@ -13,9 +12,7 @@ import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.ExecutionConnectionContext;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
-import yier.bubu.redis.protocol.resp.RespCommandRequest;
 import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
-import yier.bubu.redis.protocol.resp.netty.RespCommandAdapter;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 
@@ -27,49 +24,41 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class NettyExecutionAdapterIntegrationTest {
     @Test
-    public void handlerSubmitsThroughNettyExecutionConnection() {
+    public void registeredRequestSubmitsThroughNettyExecutionConnection() {
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build())) {
             YierdisEngine engine = TestYierdisEngines.forInstance(instance);
-            NettyExecutionIoAdapter ioAdapter = new NettyExecutionIoAdapter();
+            RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
                     engine::execute,
                     Runnable::run,
-                    new RespReplyWriterFactory(),
-                    ioAdapter,
+                    replyWriterFactory,
+                    new NettyExecutionIoAdapter(),
                     new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
             );
             executor.start();
-
-            EmbeddedChannel channel = new EmbeddedChannel(
-                    new YierdisFastCommandHandler(executor, new RespReplyWriterFactory())
-            );
+            OrderedReplyTestFixture fixture = OrderedReplyTestFixture.open(executor, replyWriterFactory);
             try {
-                NettyExecutionConnection.getOrCreate(channel, 16, 1024);
-                channel.writeInbound(ByteArrayExecutionRequest.fromUtf8("PING", List.of()));
+                fixture.write(ByteArrayExecutionRequest.fromUtf8("PING", List.of()));
+                fixture.drain();
 
-                Assert.assertArrayEquals(
-                        "+PONG\r\n".getBytes(StandardCharsets.UTF_8),
-                        readOutbound(channel)
-                );
+                Assert.assertArrayEquals(ascii("+PONG\r\n"), readOutbound(fixture));
             } finally {
-                channel.finishAndReleaseAll();
+                fixture.close();
                 executor.close();
             }
         }
     }
 
     @Test
-    public void queueFullReturnsBusyAndClosesRejectedExecutionRequest() throws Exception {
+    public void queueFullWritesBusyIntoTheRejectedRequestsRegisteredSlot() throws Exception {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
-
         YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build());
-        YierdisEngine engine = TestYierdisEngines.forInstance(instance);
         RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
-                engine::execute,
+                TestYierdisEngines.forInstance(instance)::execute,
                 eventExecutor,
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
@@ -86,49 +75,44 @@ public class NettyExecutionAdapterIntegrationTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel channel = new EmbeddedChannel(new YierdisFastCommandHandler(executor, replyWriterFactory));
+        OrderedReplyTestFixture fixture = OrderedReplyTestFixture.open(executor, replyWriterFactory);
         try {
-            NettyExecutionConnection connection = NettyExecutionConnection.getOrCreate(channel, 16, 1024);
-
-            channel.writeInbound(ByteArrayExecutionRequest.fromUtf8("PING", List.of()));
-            Assert.assertNull("first command should stay queued while owner executor is blocked", channel.readOutbound());
-
+            fixture.write(ByteArrayExecutionRequest.fromUtf8("PING", List.of()));
             TrackingExecutionRequest rejected = TrackingExecutionRequest.ofUtf8("PING");
-            channel.writeInbound(rejected);
+            fixture.write(rejected);
 
-            ExecutionConnectionContext context = connection.context();
+            ExecutionConnectionContext context = fixture.connection().context();
             Assert.assertEquals(1L, context.statsSnapshot().commandsEnqueued());
             Assert.assertEquals(1L, context.statsSnapshot().commandsRejected());
             Assert.assertEquals(1, rejected.closeCalls());
-            Assert.assertArrayEquals(
-                    "-ERR busy queue_full\r\n"
-                            .getBytes(StandardCharsets.UTF_8),
-                    readOutbound(channel)
-            );
+            Assert.assertNull(fixture.channel().readOutbound());
+
+            unblock.countDown();
+
+            Assert.assertArrayEquals(ascii("+PONG\r\n"), awaitOutbound(fixture, 1_000));
+            Assert.assertArrayEquals(ascii("-ERR busy queue_full\r\n"), awaitOutbound(fixture, 1_000));
         } finally {
             unblock.countDown();
             executor.shutdownGracefully().join();
             executor.executeOwnerTask(instance::close).join();
             group.shutdownGracefully().syncUninterruptibly();
-            channel.finishAndReleaseAll();
+            fixture.close();
         }
     }
 
     @Test
-    public void quitClosesConnectionAndSkipsFollowupCommands() throws Exception {
+    public void quitClosesAfterItsRegisteredReplyAndSkipsTheLaterSlot() throws Exception {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
-
         YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build());
-        YierdisEngine engine = TestYierdisEngines.forInstance(instance);
         RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
-                engine::execute,
+                TestYierdisEngines.forInstance(instance)::execute,
                 eventExecutor,
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
-                new CommandExecutorConfig(1024, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+                new CommandExecutorConfig(1_024, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
         );
         executor.start();
 
@@ -141,28 +125,18 @@ public class NettyExecutionAdapterIntegrationTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel channel = new EmbeddedChannel(
-                new RespCommandAdapter(),
-                new YierdisFastCommandHandler(executor, replyWriterFactory)
-        );
+        OrderedReplyTestFixture fixture = OrderedReplyTestFixture.open(executor, replyWriterFactory);
         try {
-            NettyExecutionConnection connection = NettyExecutionConnection.getOrCreate(channel, 16, 1024);
-
-            channel.writeInbound(request("QUIT"));
-            channel.writeInbound(request("PING"));
-
+            fixture.write(request("QUIT"));
+            fixture.write(request("PING"));
             unblock.countDown();
 
-            Assert.assertArrayEquals(
-                    "+OK\r\n".getBytes(StandardCharsets.UTF_8),
-                    awaitOutbound(channel, 1000)
-            );
-            Assert.assertNull("follow-up command should be skipped after close-after-reply", channel.readOutbound());
+            Assert.assertArrayEquals(ascii("+OK\r\n"), awaitOutbound(fixture, 1_000));
+            fixture.drain();
+            Assert.assertNull(fixture.channel().readOutbound());
+            Assert.assertFalse(fixture.channel().isOpen());
 
-            channel.runPendingTasks();
-            channel.runScheduledPendingTasks();
-
-            ExecutionConnectionContext context = connection.context();
+            ExecutionConnectionContext context = fixture.connection().context();
             Assert.assertEquals(1L, context.statsSnapshot().closeAfterReply());
             Assert.assertEquals(1L, context.statsSnapshot().commandsExecuted());
             Assert.assertEquals(1L, context.statsSnapshot().commandsSkippedClosing());
@@ -171,83 +145,80 @@ public class NettyExecutionAdapterIntegrationTest {
             executor.shutdownGracefully().join();
             executor.executeOwnerTask(instance::close).join();
             group.shutdownGracefully().syncUninterruptibly();
-            channel.finishAndReleaseAll();
+            fixture.close();
         }
     }
 
     @Test
-    public void echoNullBulkStringSurvivesRespAdapterAndWritesNullReply() {
+    public void echoNullBulkStringUsesTheRegisteredRequestSlot() {
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build())) {
-            YierdisEngine engine = TestYierdisEngines.forInstance(instance);
-            NettyExecutionIoAdapter ioAdapter = new NettyExecutionIoAdapter();
+            RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
-                    engine::execute,
+                    TestYierdisEngines.forInstance(instance)::execute,
                     Runnable::run,
-                    new RespReplyWriterFactory(),
-                    ioAdapter,
+                    replyWriterFactory,
+                    new NettyExecutionIoAdapter(),
                     new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
             );
             executor.start();
-
-            EmbeddedChannel channel = new EmbeddedChannel(
-                    new RespCommandAdapter(),
-                    new YierdisFastCommandHandler(executor, new RespReplyWriterFactory())
-            );
+            OrderedReplyTestFixture fixture = OrderedReplyTestFixture.open(executor, replyWriterFactory);
             try {
-                NettyExecutionConnection.getOrCreate(channel, 16, 1024);
-                channel.writeInbound(RespCommandRequest.wrapReadOnly(
-                        new byte[][]{utf8("ECHO"), null},
-                        4
-                ));
+                fixture.write(ByteArrayExecutionRequest.wrapReadOnly(new byte[][]{ascii("ECHO"), null}, 4));
+                fixture.drain();
 
-                Assert.assertArrayEquals("$-1\r\n".getBytes(StandardCharsets.UTF_8), readOutbound(channel));
+                Assert.assertArrayEquals(ascii("$-1\r\n"), readOutbound(fixture));
             } finally {
-                channel.finishAndReleaseAll();
+                fixture.close();
                 executor.close();
             }
         }
     }
 
     @Test
-    public void setNullBulkStringSurvivesRespAdapterAndHitsCommandError() {
+    public void setNullBulkStringUsesTheRegisteredRequestSlot() {
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build())) {
-            YierdisEngine engine = TestYierdisEngines.forInstance(instance);
-            NettyExecutionIoAdapter ioAdapter = new NettyExecutionIoAdapter();
+            RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
-                    engine::execute,
+                    TestYierdisEngines.forInstance(instance)::execute,
                     Runnable::run,
-                    new RespReplyWriterFactory(),
-                    ioAdapter,
+                    replyWriterFactory,
+                    new NettyExecutionIoAdapter(),
                     new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
             );
             executor.start();
-
-            EmbeddedChannel channel = new EmbeddedChannel(
-                    new RespCommandAdapter(),
-                    new YierdisFastCommandHandler(executor, new RespReplyWriterFactory())
-            );
+            OrderedReplyTestFixture fixture = OrderedReplyTestFixture.open(executor, replyWriterFactory);
             try {
-                NettyExecutionConnection.getOrCreate(channel, 16, 1024);
-                channel.writeInbound(RespCommandRequest.wrapReadOnly(
-                        new byte[][]{utf8("SET"), utf8("k"), null},
+                fixture.write(ByteArrayExecutionRequest.wrapReadOnly(
+                        new byte[][]{ascii("SET"), ascii("k"), null},
                         4
                 ));
+                fixture.drain();
 
-                Assert.assertArrayEquals(
-                        "-ERR Protocol error: null bulk string\r\n".getBytes(StandardCharsets.UTF_8),
-                        readOutbound(channel)
-                );
+                Assert.assertArrayEquals(ascii("-ERR Protocol error: null bulk string\r\n"), readOutbound(fixture));
             } finally {
-                channel.finishAndReleaseAll();
+                fixture.close();
                 executor.close();
             }
         }
     }
 
-    private static byte[] readOutbound(EmbeddedChannel channel) {
-        ByteBuf out = channel.readOutbound();
+    private static ByteArrayExecutionRequest request(String command, String... arguments) {
+        byte[][] argv = new byte[arguments.length + 1][];
+        int retainedBytes = 0;
+        argv[0] = ascii(command);
+        retainedBytes += argv[0].length;
+        for (int i = 0; i < arguments.length; i++) {
+            argv[i + 1] = ascii(arguments[i]);
+            retainedBytes += argv[i + 1].length;
+        }
+        return ByteArrayExecutionRequest.wrapReadOnly(argv, retainedBytes);
+    }
+
+    private static byte[] readOutbound(OrderedReplyTestFixture fixture) {
+        fixture.drain();
+        ByteBuf out = fixture.channel().readOutbound();
         Assert.assertNotNull("expected reply", out);
         try {
             byte[] bytes = new byte[out.readableBytes()];
@@ -258,12 +229,11 @@ public class NettyExecutionAdapterIntegrationTest {
         }
     }
 
-    private static byte[] awaitOutbound(EmbeddedChannel channel, long timeoutMillis) throws InterruptedException {
+    private static byte[] awaitOutbound(OrderedReplyTestFixture fixture, long timeoutMillis) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
         for (; ; ) {
-            channel.runPendingTasks();
-            channel.runScheduledPendingTasks();
-            ByteBuf out = channel.readOutbound();
+            fixture.drain();
+            ByteBuf out = fixture.channel().readOutbound();
             if (out != null) {
                 try {
                     byte[] bytes = new byte[out.readableBytes()];
@@ -280,16 +250,8 @@ public class NettyExecutionAdapterIntegrationTest {
         }
     }
 
-    private static RespCommandRequest request(String cmd, String... args) {
-        byte[][] argv = new byte[args.length + 1][];
-        int retainedBytes = 0;
-        argv[0] = utf8(cmd);
-        retainedBytes += argv[0].length;
-        for (int i = 0; i < args.length; i++) {
-            argv[i + 1] = utf8(args[i]);
-            retainedBytes += argv[i + 1].length;
-        }
-        return RespCommandRequest.wrapReadOnly(argv, retainedBytes);
+    private static byte[] ascii(String value) {
+        return value.getBytes(StandardCharsets.UTF_8);
     }
 
     private static final class TrackingExecutionRequest implements ExecutionRequest {
@@ -300,11 +262,11 @@ public class NettyExecutionAdapterIntegrationTest {
             this.argv = argv;
         }
 
-        static TrackingExecutionRequest ofUtf8(String cmd, String... args) {
-            byte[][] argv = new byte[args.length + 1][];
-            argv[0] = utf8(cmd);
-            for (int i = 0; i < args.length; i++) {
-                argv[i + 1] = args[i] == null ? null : utf8(args[i]);
+        static TrackingExecutionRequest ofUtf8(String command, String... arguments) {
+            byte[][] argv = new byte[arguments.length + 1][];
+            argv[0] = ascii(command);
+            for (int i = 0; i < arguments.length; i++) {
+                argv[i + 1] = ascii(arguments[i]);
             }
             return new TrackingExecutionRequest(argv);
         }
@@ -325,8 +287,7 @@ public class NettyExecutionAdapterIntegrationTest {
 
         @Override
         public int len(int index) {
-            byte[] arg = argv[index];
-            return arg == null ? -1 : arg.length;
+            return argv[index] == null ? -1 : argv[index].length;
         }
 
         @Override
@@ -335,37 +296,27 @@ public class NettyExecutionAdapterIntegrationTest {
         }
 
         @Override
-        public void copyToByteArray(int index, byte[] dst, int dstOff) {
-            byte[] arg = argv[index];
-            System.arraycopy(arg, 0, dst, dstOff, arg.length);
+        public void copyToByteArray(int index, byte[] destination, int destinationOffset) {
+            System.arraycopy(argv[index], 0, destination, destinationOffset, argv[index].length);
         }
 
         @Override
         public byte[] toByteArray(int index) {
-            byte[] arg = argv[index];
-            return arg == null ? null : arg.clone();
+            return argv[index] == null ? null : argv[index].clone();
         }
 
         @Override
         public int retainedBytes() {
-            int retainedBytes = 0;
-            for (byte[] arg : argv) {
-                retainedBytes += arg == null ? 0 : arg.length;
+            int bytes = 0;
+            for (byte[] argument : argv) {
+                bytes += argument == null ? 0 : argument.length;
             }
-            return retainedBytes;
+            return bytes;
         }
 
         @Override
         public void close() {
             closeCalls.incrementAndGet();
         }
-
-        private static byte[] utf8(String value) {
-            return value.getBytes(StandardCharsets.UTF_8);
-        }
-    }
-
-    private static byte[] utf8(String value) {
-        return value.getBytes(StandardCharsets.UTF_8);
     }
 }

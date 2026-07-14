@@ -28,10 +28,10 @@ public final class SuiteMarkdownWriter {
         out.append('\n');
 
         out.append("## Scenarios\n\n");
-        out.append("| Scenario | Display Name | Workload | Requests | Clients | Pipeline | Latency |\n");
-        out.append("| --- | --- | --- | ---: | ---: | ---: | --- |\n");
+        out.append("| Scenario | Display Name | Workload | Comparison Role | Requests | Clients | Pipeline | Latency |\n");
+        out.append("| --- | --- | --- | --- | ---: | ---: | ---: | --- |\n");
         for (ScenarioDefinition scenario : result.scenarios()) {
-            row(out, scenario.id(), scenario.displayName(), scenario.workload().name(),
+            row(out, scenario.id(), scenario.displayName(), scenario.workload().name(), scenario.comparisonRole().name(),
                     Integer.toString(scenario.requests()), Integer.toString(scenario.clients()),
                     Integer.toString(scenario.pipeline()), Boolean.toString(scenario.latency()));
         }
@@ -82,8 +82,11 @@ public final class SuiteMarkdownWriter {
                         SuiteCsvWriter.number(current.mean()), SuiteCsvWriter.number(entry.getValue()),
                         comparisonStatus(metric, entry.getValue()).toUpperCase(java.util.Locale.ROOT));
             }
+            appendProductionHardeningMedianQpsGateRow(out, comparison);
         }
         out.append('\n');
+
+        appendOutboundReplyDiagnostics(out, result);
 
         if (result.artifacts().stream().anyMatch(artifact -> artifact.kind() == SuiteArtifact.Kind.EXTERNAL_REDIS)) {
             out.append("## Redis Comparison Summary\n\n");
@@ -110,6 +113,50 @@ public final class SuiteMarkdownWriter {
             return "warning";
         }
         return "ok";
+    }
+
+    private static void appendProductionHardeningMedianQpsGateRow(StringBuilder out, ScenarioComparison comparison) {
+        if (comparison.scenario().comparisonRole()
+                != ScenarioDefinition.ComparisonRole.PRODUCTION_HARDENING_MEDIAN_QPS_GATE) {
+            return;
+        }
+        MetricSummary baseline = comparison.baseline().summaries().get("qps");
+        MetricSummary current = comparison.current().summaries().get("qps");
+        if (baseline == null || current == null || baseline.median() == 0.0) {
+            return;
+        }
+        double ratio = current.median() / baseline.median();
+        double minimum = ThresholdPolicy.defaults().productionHardeningMinimumMedianQpsRatio();
+        row(out, comparison.scenario().id(), "median_qps_ratio", SuiteCsvWriter.number(baseline.median()),
+                SuiteCsvWriter.number(current.median()), SuiteCsvWriter.number((ratio - 1.0) * 100.0),
+                ratio < minimum ? "CRITICAL" : "OK");
+    }
+
+    private static void appendOutboundReplyDiagnostics(StringBuilder out, SuiteRunResult result) {
+        boolean hasGauges = result.passes().stream().anyMatch(pass -> !pass.before().outboundReplyGauges().isEmpty()
+                || !pass.after().outboundReplyGauges().isEmpty());
+        if (!hasGauges) {
+            return;
+        }
+        out.append("## Outbound Reply Diagnostics\n\n");
+        out.append("| Artifact | Scenario | Phase | Gauge | Value |\n");
+        out.append("| --- | --- | --- | --- | ---: |\n");
+        for (ScenarioPassResult pass : result.passes()) {
+            appendOutboundReplyGauges(out, pass, "before", pass.before().outboundReplyGauges());
+            appendOutboundReplyGauges(out, pass, "after", pass.after().outboundReplyGauges());
+        }
+        out.append('\n');
+    }
+
+    private static void appendOutboundReplyGauges(
+            StringBuilder out,
+            ScenarioPassResult pass,
+            String phase,
+            Map<String, Long> gauges
+    ) {
+        for (String gauge : gauges.keySet().stream().sorted().toList()) {
+            row(out, pass.artifactLabel(), pass.scenario().id(), phase, gauge, Long.toString(gauges.get(gauge)));
+        }
     }
 
     private static void row(StringBuilder out, String... cells) {

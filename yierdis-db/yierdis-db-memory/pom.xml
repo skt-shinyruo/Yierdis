@@ -24,11 +24,6 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-server-runtime-api</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-common-bytes</artifactId>
         </dependency>
 

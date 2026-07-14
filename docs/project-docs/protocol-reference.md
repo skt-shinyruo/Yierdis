@@ -11,14 +11,11 @@ Yierdis 的公开网络入口是 Redis RESP 风格的 TCP 协议。协议层负�
 ```text
 Netty ByteBuf
   -> RespRequestDecoder
-  -> RespCommandRequest
-  -> RespCommandAdapter
-  -> RespExecutionAdapter
-  -> ByteArrayExecutionRequest
+  -> RetainedRespExecutionRequest / ExecutionRequest
   -> command processor
 ```
 
-`RespRequestDecoder` 只处理 RESP / inline 字节、协议上限和协议错误；`RespExecutionAdapter` 把协议 DTO 转成传输无关的 `ExecutionRequest`。因此同一个命令实现不需要知道请求来自 RESP array 还是 inline command，也不需要自己拼 RESP 回包。
+`RespRequestDecoder` 只处理 RESP / inline 字节、协议上限、ingress admission 和协议错误；它直接产出传输无关的 `ExecutionRequest`。因此同一个命令实现不需要知道请求来自 RESP array 还是 inline command，也不需要自己拼 RESP 回包。
 
 ## RESP2 请求
 
@@ -159,3 +156,7 @@ Yierdis 支持 Redis 风格 RESP 入口和一组基础握手命令，但不声�
 - 命令语义以当前已实现命令为准。
 
 不应从协议兼容推出完整 Redis 命令集、ACL、复制、集群、Pub/Sub、Lua、模块系统或完整 RESP3 客户端生态能力已经实现。
+
+## Bounded Transport Ownership
+
+decoder-side protocol limits and `--protocolGlobalInFlightBytes` bound admitted request ownership. Reply encoding has a separate receive-order, bounded chunk path; protocol errors also receive an ordered slot so they cannot overtake an earlier reply. Oversized or result-unknown output closes the transport rather than bypassing that path. The exact reply defaults and operator diagnostics are in [`production-hardening-operations.md`](./production-hardening-operations.md).

@@ -74,6 +74,9 @@ public final class ExecutorBackpressureController<K> {
         if (key == null) {
             return;
         }
+        if (runtime.inputPausedByReply(key)) {
+            return;
+        }
         // If the connection is not writable, keep autoRead disabled to avoid reading more requests than we can reply.
         if (!io.isWritable(key)) {
             return;
@@ -120,6 +123,9 @@ public final class ExecutorBackpressureController<K> {
             if (runtime.isClosing(key)) {
                 continue;
             }
+            if (runtime.inputPausedByReply(key)) {
+                continue;
+            }
 
             int pending = runtime.pending(key);
             long pendingBytes = runtime.pendingBytes(key);
@@ -160,4 +166,3 @@ public final class ExecutorBackpressureController<K> {
         }
     }
 }
-

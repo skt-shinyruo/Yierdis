@@ -2,9 +2,11 @@ package yier.bubu.redis.storage.memory;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
+import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
@@ -58,44 +60,27 @@ public class YierdisDbMemoryReporterTest {
     }
 
     @Test
-    public void memoryStatsCountsSharedNativeAllocatorLogicalBytesOnce() {
+    public void memoryStatsReportsPhysicalCommittedBytesAndDisablesSharedRuntimeSampling() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("memory-stats-shared-native")) {
             YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 1_000_000L, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
             db.bindToCurrentThread();
             try {
                 db.writes().strings().setString(bytes("k"), bytes("value"), SetMode.NORMAL, null);
-                db.attachMaxmemoryCoordinator(TestMaxmemoryCoordinator.INSTANCE);
 
-                YierdisDbKeyLifecycle lifecycle = db.keyLifecycle();
-                long entryBytes = lifecycle.entryTable().nativeBytes();
-                long expectedNative = lifecycle.nativeAllocator().stats().logicalUsedBytes()
-                        + lifecycle.keyDirectory().nativeBytes()
-                        + lifecycle.listRoot().nativeBytes()
-                        + lifecycle.hashRoot().nativeBytes()
-                        + lifecycle.setRoot().nativeBytes()
-                        + lifecycle.zsetRoot().nativeBytes();
+                MemoryUsageSnapshot usage = db.memoryUsage();
+                YierdisMemoryStats stats = db.memory().memoryStats();
 
-                Assert.assertTrue("entry records must be present for double-count regression coverage", entryBytes > 0L);
-                Assert.assertEquals(expectedNative, db.memory().memoryStats().offHeapUsedBytes());
-                Assert.assertEquals(runtime.usedBytes(), db.globalSharedOffHeapUsedBytes());
-            } finally {
-                db.shutdown();
-            }
-            Assert.assertEquals(0L, runtime.usedBytes());
-        }
-    }
-
-    @Test
-    public void globalSharedOffHeapUsedBytesUsesSharedRuntimeCounter() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("memory-shared-runtime-counter")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 1_000_000L, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
-            db.bindToCurrentThread();
-            try {
-                db.writes().strings().setString(bytes("k"), bytes("value"), SetMode.NORMAL, null);
-                db.attachMaxmemoryCoordinator(TestMaxmemoryCoordinator.INSTANCE);
-
-                Assert.assertSame(runtime, db.globalSharedOffHeapUsageIdentity());
-                Assert.assertEquals(runtime.usedBytes(), db.globalSharedOffHeapUsedBytes());
+                Assert.assertEquals(usage.nativeMetadataCommittedBytes(), stats.nativeMetadataCommittedBytes());
+                Assert.assertEquals(usage.nativeDataCommittedBytes(), stats.nativeDataCommittedBytes());
+                Assert.assertEquals(usage.nativeDataLiveBytes(), stats.nativeDataLiveBytes());
+                Assert.assertEquals(usage.nativeReclaimableBytes(), stats.nativeReclaimableBytes());
+                Assert.assertEquals(
+                        MemoryUsageSnapshot.addSaturating(
+                                usage.nativeMetadataCommittedBytes(),
+                                usage.nativeDataCommittedBytes()
+                        ),
+                        stats.offHeapUsedBytes()
+                );
             } finally {
                 db.shutdown();
             }
@@ -125,7 +110,7 @@ public class YierdisDbMemoryReporterTest {
         INSTANCE;
 
         @Override
-        public void prepareWrite(long estimatedExtraBytes) {
+        public void prepareWrite(MaxmemoryParticipant requester, long estimatedExtraBytes) {
         }
 
         @Override

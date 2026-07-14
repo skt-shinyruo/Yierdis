@@ -149,6 +149,11 @@ public final class YierdisBench {
             println("  " + suiteConfig.reportDir().resolve("comparisons.csv"));
             println("  " + suiteConfig.reportDir().resolve("report.md"));
             println("");
+            if (result.hasCriticalFindings()) {
+                throw new IllegalStateException("benchmark suite failed with " + result.findings().stream()
+                        .filter(finding -> finding.level() == yier.bubu.redis.app.bench.suite.ThresholdFinding.Level.CRITICAL)
+                        .count() + " critical finding(s)");
+            }
             println("完成。");
             return;
         }

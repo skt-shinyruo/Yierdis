@@ -57,6 +57,32 @@ public class CollectionRootTest {
     }
 
     @Test
+    public void preparedZsetAddReportsItsStagedRetainedHeapGrowth() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("prepared-zset-heap");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+             ZSetRoot zset = new ZSetRoot(allocator)) {
+            ValueHandle source = zset.create();
+            zset.zadd(source, List.of(b("1"), b("alpha"), b("2"), b("beta"), b("3"), b("gamma")));
+            long before = zset.heapBytes();
+
+            ZSetRoot.PreparedAddResult prepared = zset.prepareAdd(
+                    source,
+                    List.of(b("4"), new byte[256])
+            );
+            try {
+                Assert.assertTrue(prepared.stagedNonNativeGrowthBytes() > 0L);
+                Assert.assertEquals(
+                        zset.heapBytes() - before,
+                        prepared.stagedNonNativeGrowthBytes()
+                );
+            } finally {
+                zset.release(prepared.handle());
+                zset.release(source);
+            }
+        }
+    }
+
+    @Test
     public void collectionRootHandlesAreAllocatorBackedAndStaleAfterRelease() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("collection-root-native-handles");
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 32);
@@ -114,6 +140,38 @@ public class CollectionRootTest {
             zset.release(zsetHandle);
             for (NativeHandle filler : fillers) {
                 allocator.free(filler);
+            }
+        }
+    }
+
+    @Test
+    public void newAdapterHeapEstimateCoversLaterAllocatorSlotSegment() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("collection-root-estimate-segments");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 8192)) {
+            NativeCollectionRootTable<CountingListValue> table = new NativeCollectionRootTable<>(
+                    allocator,
+                    NativeObjectKind.LIST_ROOT,
+                    "list",
+                    false
+            );
+            ValueHandle first = table.create(ignored -> new CountingListValue());
+            NativeHandle[] fillers = new NativeHandle[4095];
+            for (int i = 0; i < fillers.length; i++) {
+                fillers[i] = allocator.allocate(NativeObjectKind.GENERIC, 1);
+            }
+
+            long before = table.heapBytes();
+            long estimate = table.estimatedNewAdapterHeapGrowthBytes(0L);
+            ValueHandle second = table.create(ignored -> new CountingListValue());
+
+            try {
+                Assert.assertTrue(table.heapBytes() - before <= estimate);
+            } finally {
+                table.release(second);
+                table.release(first);
+                for (NativeHandle filler : fillers) {
+                    allocator.free(filler);
+                }
             }
         }
     }

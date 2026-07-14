@@ -3,13 +3,16 @@ package yier.bubu.redis.integration.command;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.memory.YierdisDb;
-import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
+import yier.bubu.redis.storage.api.SetMode;
+import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyError;
+import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplyNull;
 import yier.bubu.redis.testutil.ReplyObject;
 import yier.bubu.redis.testutil.ReplySimpleString;
@@ -20,83 +23,35 @@ import static yier.bubu.redis.testutil.TestBytes.b;
 
 public class TtlMaxmemoryTest {
     @Test
-    public void expireIsRejectedWhenItWouldAddTtlMetadataUnderNoeviction() {
-        byte[] key = b("k");
-        byte[] value = b("v");
-        long maxmemoryBytes = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + key.length + value.length;
-
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
-        db.bindToCurrentThread();
-
-        YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-        try (FastTestClient client = new FastTestClient(processor)) {
-            Assert.assertTrue(client.execute(List.of(b("SET"), key, value)) instanceof ReplySimpleString);
-
-            ReplyObject expire = client.execute(List.of(b("EXPIRE"), key, b("60")));
-            Assert.assertTrue(expire instanceof ReplyError);
-            Assert.assertEquals(MaxmemoryErrors.OOM_ERR, ((ReplyError) expire).message());
-
-            ReplyObject get = client.execute(List.of(b("GET"), key));
-            Assert.assertTrue(get instanceof ReplyBulkString);
-        } finally {
-            db.shutdown();
-        }
+    public void expireAccountsForPhysicalTtlGrowthUnderNoeviction() {
+        assertTtlMutationAccountsForPhysicalGrowth(
+                List.of(b("EXPIRE"), b("k"), b("60")),
+                db -> db.writes().ttl().expire(view(b("k")), 60L).value()
+        );
     }
 
     @Test
-    public void pexpireIsRejectedWhenItWouldAddTtlMetadataUnderNoeviction() {
-        byte[] key = b("k");
-        byte[] value = b("v");
-        long maxmemoryBytes = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + key.length + value.length;
-
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
-        db.bindToCurrentThread();
-
-        YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-        try (FastTestClient client = new FastTestClient(processor)) {
-            Assert.assertTrue(client.execute(List.of(b("SET"), key, value)) instanceof ReplySimpleString);
-
-            ReplyObject expire = client.execute(List.of(b("PEXPIRE"), key, b("60000")));
-            Assert.assertTrue(expire instanceof ReplyError);
-            Assert.assertEquals(MaxmemoryErrors.OOM_ERR, ((ReplyError) expire).message());
-
-            ReplyObject get = client.execute(List.of(b("GET"), key));
-            Assert.assertTrue(get instanceof ReplyBulkString);
-        } finally {
-            db.shutdown();
-        }
+    public void pexpireAccountsForPhysicalTtlGrowthUnderNoeviction() {
+        assertTtlMutationAccountsForPhysicalGrowth(
+                List.of(b("PEXPIRE"), b("k"), b("60000")),
+                db -> db.writes().ttl().pexpire(view(b("k")), 60_000L).value()
+        );
     }
 
     @Test
-    public void pexpireatIsRejectedWhenItWouldAddTtlMetadataUnderNoeviction() {
-        byte[] key = b("k");
-        byte[] value = b("v");
-        long maxmemoryBytes = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + key.length + value.length;
-
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
-        db.bindToCurrentThread();
-
-        YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-        try (FastTestClient client = new FastTestClient(processor)) {
-            Assert.assertTrue(client.execute(List.of(b("SET"), key, value)) instanceof ReplySimpleString);
-
-            long unixMillis = System.currentTimeMillis() + 60_000L;
-            ReplyObject expire = client.execute(List.of(b("PEXPIREAT"), key, b(Long.toString(unixMillis))));
-            Assert.assertTrue(expire instanceof ReplyError);
-            Assert.assertEquals(MaxmemoryErrors.OOM_ERR, ((ReplyError) expire).message());
-
-            ReplyObject get = client.execute(List.of(b("GET"), key));
-            Assert.assertTrue(get instanceof ReplyBulkString);
-        } finally {
-            db.shutdown();
-        }
+    public void pexpireatAccountsForPhysicalTtlGrowthUnderNoeviction() {
+        long unixMillis = System.currentTimeMillis() + 60_000L;
+        assertTtlMutationAccountsForPhysicalGrowth(
+                List.of(b("PEXPIREAT"), b("k"), b(Long.toString(unixMillis))),
+                db -> db.writes().ttl().expireAtMillis(view(b("k")), unixMillis).value()
+        );
     }
 
     @Test
     public void setWithExpireOptionIsRejectedWhenItWouldAddTtlMetadataUnderNoeviction() {
         byte[] key = b("k");
         byte[] value = b("v");
-        long maxmemoryBytes = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + key.length + value.length;
+        long maxmemoryBytes = minMaxmemoryThatAllowsSetWithTtl(key, value) - 1L;
 
         YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
         db.bindToCurrentThread();
@@ -112,5 +67,146 @@ public class TtlMaxmemoryTest {
         } finally {
             db.shutdown();
         }
+    }
+
+    private static void assertTtlMutationAccountsForPhysicalGrowth(
+            List<byte[]> ttlCommand,
+            TtlMutation ttlMutation
+    ) {
+        byte[] key = b("k");
+        byte[] value = b("v");
+        long maxmemoryBytes = minMaxmemoryThatAllowsPlainSetAndTtlMutation(key, value, ttlMutation);
+
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        db.bindToCurrentThread();
+
+        YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
+        try (FastTestClient client = new FastTestClient(processor)) {
+            Assert.assertTrue(client.execute(List.of(b("SET"), key, value)) instanceof ReplySimpleString);
+            long usedBefore = db.memory().memoryStats().usedBytesForMaxmemory();
+            long nativeDataBefore = db.memory().memoryStats().nativeDataCommittedBytes();
+
+            ReplyObject expire = client.execute(ttlCommand);
+            Assert.assertTrue(expire instanceof ReplyInteger);
+            Assert.assertEquals(1L, ((ReplyInteger) expire).value());
+
+            long usedAfter = db.memory().memoryStats().usedBytesForMaxmemory();
+            long nativeDataAfter = db.memory().memoryStats().nativeDataCommittedBytes();
+            Assert.assertTrue("TTL metadata must appear in physical maxmemory usage", usedAfter > usedBefore);
+            Assert.assertTrue("TTL FFM regions must appear in committed native data", nativeDataAfter > nativeDataBefore);
+            Assert.assertTrue("physical usage must stay within the admitted maxmemory budget", usedAfter <= maxmemoryBytes);
+
+            ReplyObject get = client.execute(List.of(b("GET"), key));
+            Assert.assertTrue(get instanceof ReplyBulkString);
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    private static long minMaxmemoryThatAllowsPlainSetAndTtlMutation(
+            byte[] key,
+            byte[] value,
+            TtlMutation ttlMutation
+    ) {
+        long high = 1L;
+        while (!allowsPlainSetAndTtlMutation(high, key, value, ttlMutation)) {
+            high = Math.multiplyExact(high, 2L);
+        }
+
+        long low = 0L;
+        while (low + 1L < high) {
+            long mid = low + (high - low) / 2L;
+            if (allowsPlainSetAndTtlMutation(mid, key, value, ttlMutation)) {
+                high = mid;
+            } else {
+                low = mid;
+            }
+        }
+        return high;
+    }
+
+    private static long minMaxmemoryThatAllowsSetWithTtl(byte[] key, byte[] value) {
+        long high = 1L;
+        while (!allowsSetWithTtl(high, key, value)) {
+            high = Math.multiplyExact(high, 2L);
+        }
+
+        long low = 0L;
+        while (low + 1L < high) {
+            long mid = low + (high - low) / 2L;
+            if (allowsSetWithTtl(mid, key, value)) {
+                high = mid;
+            } else {
+                low = mid;
+            }
+        }
+        return high;
+    }
+
+    private static boolean allowsSetWithTtl(long maxmemoryBytes, byte[] key, byte[] value) {
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(
+                maxmemoryBytes,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                5,
+                5
+        );
+        try {
+            db.bindToCurrentThread();
+            return db.writes().strings().setString(key, value, SetMode.NORMAL, ExpireOption.px(60_000L)).value();
+        } catch (YierdisCommandException e) {
+            if (MaxmemoryErrors.OOM_ERR.equals(e.getMessage())) {
+                return false;
+            }
+            throw e;
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    private static boolean allowsPlainSetAndTtlMutation(
+            long maxmemoryBytes,
+            byte[] key,
+            byte[] value,
+            TtlMutation ttlMutation
+    ) {
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(
+                maxmemoryBytes,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                5,
+                5
+        );
+        try {
+            db.bindToCurrentThread();
+            return db.writes().strings().setString(key, value, SetMode.NORMAL, null).value()
+                    && ttlMutation.apply(db);
+        } catch (YierdisCommandException e) {
+            if (MaxmemoryErrors.OOM_ERR.equals(e.getMessage())) {
+                return false;
+            }
+            throw e;
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    private static yier.bubu.redis.bytes.BytesView view(byte[] data) {
+        return new yier.bubu.redis.bytes.BytesView() {
+            @Override
+            public int length() {
+                return data.length;
+            }
+
+            @Override
+            public byte getByte(int index) {
+                return data[index];
+            }
+        };
+    }
+
+    @FunctionalInterface
+    private interface TtlMutation {
+        boolean apply(YierdisDb db);
     }
 }

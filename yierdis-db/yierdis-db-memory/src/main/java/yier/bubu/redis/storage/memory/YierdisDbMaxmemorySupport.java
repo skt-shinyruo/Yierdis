@@ -10,7 +10,8 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
-import yier.bubu.redis.storage.api.DbChangeKind;
+import yier.bubu.redis.common.memory.MemoryPressureBudget;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
@@ -18,32 +19,36 @@ import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import java.util.Objects;
 import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 
 public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
     private final Runnable threadChecker;
+    private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final LongSupplier usedBytesForMaxmemory;
+    private final Supplier<MemoryUsageSnapshot> memoryUsageSupplier;
     private final LongConsumer cleanupExpired;
-    private final LongConsumer adjustUsedBytes;
     private final MaxmemoryPolicy maxmemoryPolicy;
     private final int maxmemorySamples;
     private final long evictionTimeLimitNanos;
 
     YierdisDbMaxmemorySupport(
             Runnable threadChecker,
+            YierdisDbInternals internals,
             YierdisDbKeyLifecycle keyLifecycle,
             LongSupplier usedBytesForMaxmemory,
+            Supplier<MemoryUsageSnapshot> memoryUsageSupplier,
             LongConsumer cleanupExpired,
-            LongConsumer adjustUsedBytes,
             MaxmemoryPolicy maxmemoryPolicy,
             int maxmemorySamples,
             long evictionTimeLimitNanos
     ) {
         this.threadChecker = Objects.requireNonNull(threadChecker, "threadChecker");
+        this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
         this.usedBytesForMaxmemory = Objects.requireNonNull(usedBytesForMaxmemory, "usedBytesForMaxmemory");
+        this.memoryUsageSupplier = Objects.requireNonNull(memoryUsageSupplier, "memoryUsageSupplier");
         this.cleanupExpired = Objects.requireNonNull(cleanupExpired, "cleanupExpired");
-        this.adjustUsedBytes = Objects.requireNonNull(adjustUsedBytes, "adjustUsedBytes");
         this.maxmemoryPolicy = Objects.requireNonNull(maxmemoryPolicy, "maxmemoryPolicy");
         this.maxmemorySamples = maxmemorySamples;
         this.evictionTimeLimitNanos = evictionTimeLimitNanos;
@@ -54,6 +59,7 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
         if (limitBytes < 0) {
             limitBytes = 0;
         }
+        keyLifecycle.nativeAllocator().trimEmptyPages(MemoryPressureBudget.unlimited());
         if (usedBytesForMaxmemory() <= limitBytes) {
             return;
         }
@@ -75,11 +81,27 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
             if (record == null) {
                 continue;
             }
-            if (keyLifecycle.removeIfExpired(victim, record, nowMillis)) {
+            if (internals.reclaimExpired(victim, record, nowMillis)) {
+                keyLifecycle.nativeAllocator().trimEmptyPages(MemoryPressureBudget.unlimited());
+                if (usedBytesForMaxmemory() <= limitBytes) {
+                    return;
+                }
                 continue;
             }
-            removeRecord(victim, record);
+            if (internals.evict(victim, record)) {
+                keyLifecycle.nativeAllocator().trimEmptyPages(MemoryPressureBudget.unlimited());
+            }
         }
+        keyLifecycle.nativeAllocator().trimEmptyPages(MemoryPressureBudget.unlimited());
+        if (usedBytesForMaxmemory() <= limitBytes) {
+            return;
+        }
+    }
+
+    @Override
+    public MemoryUsageSnapshot memoryUsage() {
+        threadChecker.run();
+        return memoryUsageSupplier.get();
     }
 
     @Override
@@ -168,10 +190,10 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
         if (record == null) {
             return false;
         }
-        if (keyLifecycle.removeIfExpired(key, record, nowMillis)) {
+        if (internals.reclaimExpired(key, record, nowMillis)) {
             return true;
         }
-        return removeRecord(key, record);
+        return internals.evict(key, record);
     }
 
     private KeyHandle pickEvictionKey(long nowMillis) {
@@ -226,19 +248,6 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
             }
         }
         return bestKey;
-    }
-
-    private boolean removeRecord(KeyHandle keyHandle, EntryRecord record) {
-        // 删除 entry 会释放 key handle，事件流需要的 key bytes 必须在释放前固定下来。
-        byte[] keyBytes = keyLifecycle.copyKeyBytes(keyHandle);
-        long removalBytes = keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
-        keyLifecycle.removeExpireIndexOnly(keyHandle);
-        if (keyLifecycle.removeEntry(keyHandle, record)) {
-            adjustUsedBytes.accept(-removalBytes);
-            keyLifecycle.emitSyntheticDelete(keyBytes, DbChangeKind.EVICTED);
-            return true;
-        }
-        return false;
     }
 
     private static final class BestLruCandidate {

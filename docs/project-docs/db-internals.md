@@ -236,3 +236,7 @@ ledger reservation、`usedBytes` / `reservedBytes` 口径、per-DB 与 global sc
 - 改 memory/object 命令：看 `YierdisDbMemoryReporter`、`YierdisDbIntrospection` 和 `DbMemoryAccounting`。
 
 边界也要守住：command 层不要依赖 `YierdisDb`；ops 不要绕过 mutation executor 做增长型写入；删除 key 不要绕过 lifecycle；TTL index 和 `EntryRecord.expireAtMillis` 不要只更新一边；DB hot path 不要缓存 allocator physical address 或长生命周期 `NativeObjectView`。
+
+## Production Mutation Outcome
+
+reply preflight 是 mutation 之前的一个独立安全边界：可以精确估算的回复先完成 admission，再进入 mutation executor。若 mutation 已经 commit 或失败点无法判断客户端是否已看到结果，执行层不能猜测成功或失败，而是关闭连接作为 result-unknown。该行为与 maxmemory rollback、native allocation accounting、回复所有权和客户端恢复步骤的完整说明在 [`production-hardening-operations.md`](./production-hardening-operations.md)。

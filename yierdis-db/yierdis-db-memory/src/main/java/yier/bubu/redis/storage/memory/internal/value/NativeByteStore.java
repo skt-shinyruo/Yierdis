@@ -7,6 +7,7 @@ import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
+import yier.bubu.redis.storage.api.result.BulkStringValue;
 
 import java.util.Objects;
 
@@ -158,6 +159,28 @@ public final class NativeByteStore {
     public BytesSlice slice(NativeHandle handle) {
         Objects.requireNonNull(handle, "handle");
         return new NativeBytesSlice(allocator, handle, 0, length(handle));
+    }
+
+    public BulkStringValue retainedValue(NativeHandle handle) {
+        Objects.requireNonNull(handle, "handle");
+        int length = length(handle);
+        long retainedBytes = allocatedBytes(handle);
+        allocator.pin(handle);
+        boolean transferred = false;
+        try {
+            BulkStringValue value = BulkStringValue.owned(
+                    NativeBytesSlice.retained(allocator, handle, 0, length),
+                    length,
+                    retainedBytes,
+                    () -> allocator.unpin(handle)
+            );
+            transferred = true;
+            return value;
+        } finally {
+            if (!transferred) {
+                allocator.unpin(handle);
+            }
+        }
     }
 
     public long nativeBytes() {

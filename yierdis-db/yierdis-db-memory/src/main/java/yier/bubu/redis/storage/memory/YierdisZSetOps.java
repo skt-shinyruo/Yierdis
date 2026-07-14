@@ -7,17 +7,19 @@ import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.WriteResult;
 import yier.bubu.redis.storage.api.ZSetReadOps;
 import yier.bubu.redis.storage.api.ZSetWriteOps;
-import yier.bubu.redis.storage.api.result.BulkStringSequence;
+import yier.bubu.redis.storage.api.result.BulkStringMetrics;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequence;
+import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequences;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.EntryMutationResult;
 import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
+import yier.bubu.redis.storage.memory.internal.ledger.PreparedCallbackMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
@@ -26,7 +28,6 @@ import yier.bubu.redis.storage.memory.internal.value.ZSetValue.ZAddResult;
 
 import java.util.List;
 import java.util.Objects;
-import java.util.function.IntSupplier;
 
 public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
     private static final int ENTRY_RECORD_NATIVE_BYTES = 56;
@@ -50,6 +51,7 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
         }
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
+        reclaimExpiredBeforeMutation(keyBytes, now);
         return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
@@ -60,11 +62,6 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
             public PreparedDbMutation<WriteResult<Long>> prepare() {
                 CurrentEntry currentEntry = currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
-                if (current != null && keyLifecycle.isKeyExpired(currentEntry.keyHandle(), now)) {
-                    keyLifecycle.removeIfExpired(currentEntry.keyHandle(), current, now);
-                    currentEntry = currentEntry(keyBytes);
-                    current = currentEntry.record();
-                }
                 if (current != null) {
                     requireZSet(current);
                 }
@@ -103,7 +100,10 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                             keyLifecycle,
                             result,
                             deltaBytes,
-                            staged == null ? 0L : staged.stagedHeapBytes(),
+                            addSaturating(
+                                    staged == null ? 0L : staged.stagedHeapBytes(),
+                                    preparedAdd.stagedNonNativeGrowthBytes()
+                            ),
                             outcome,
                             currentEntry.entryHandle(),
                             staged == null ? null : staged.entryHandle(),
@@ -202,10 +202,10 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
         );
     }
 
-    private static long withScopeBookkeeping(long upperBound) {
+    private long withScopeBookkeeping(long upperBound) {
         return Math.max(
                 Math.max(0L, upperBound),
-                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes()
+                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(keyLifecycle.nativeAllocator(), 0)
         );
     }
 
@@ -276,12 +276,19 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
     }
 
     private long newZSetUpperBound(byte[] keyBytes, List<byte[]> scoreMemberPairs) {
-        long stagedHeapBytes = keyLifecycle.keyDirectory().estimatedInsertHeapGrowthBytes();
         int[] allocationSizes = zsetAllocationSizes(
                 true,
                 keyBytes,
                 new int[0],
                 scoreMemberPairs
+        );
+        long stagedHeapBytes = addSaturating(
+                keyLifecycle.keyDirectory().estimatedInsertHeapGrowthBytes(),
+                zsetRoot.estimatedPreparedAddHeapGrowthBytes(
+                        null,
+                        scoreMemberPairs,
+                        allocationSizes.length
+                )
         );
         long nativeUpperBound = nativePeak(stagedHeapBytes, allocationSizes);
         long logicalUpperBound = YierdisDbMemoryEstimator.estimateZSetWriteUpperBound(
@@ -303,7 +310,12 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                 zsetRoot.nativePayloadSizes(handle),
                 scoreMemberPairs
         );
-        long nativeUpperBound = nativePeak(0L, allocationSizes);
+        long stagedHeapBytes = zsetRoot.estimatedPreparedAddHeapGrowthBytes(
+                handle,
+                scoreMemberPairs,
+                allocationSizes.length
+        );
+        long nativeUpperBound = nativePeak(stagedHeapBytes, allocationSizes);
         long logicalUpperBound = addSaturating(
                 YierdisDbMemoryEstimator.estimateZSetWriteUpperBound(0, scoreMemberPairs),
                 zsetRoot.estimatedBytes(handle)
@@ -356,25 +368,29 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
     }
 
     @Override
-    public BulkStringSequence zrange(byte[] keyBytes, long start, long stop, boolean withScores) {
+    public MeasuredBulkStringSequence zrange(byte[] keyBytes, long start, long stop, boolean withScores) {
         internals.checkThread();
-        return sequenceOf(
-                () -> zrangeCount(keyBytes, start, stop, withScores),
-                out -> zrangeWriteTo(keyBytes, start, stop, withScores, out)
-        );
+        EntryRecord record = liveZSetRecord(keyBytes);
+        if (record == null) {
+            return sequenceOf(out -> { });
+        }
+        ValueHandle handle = requireZSetHandle(record);
+        return sequenceOf(out -> zsetRoot.zrangeWriteTo(handle, start, stop, withScores, out));
     }
 
     @Override
-    public BulkStringSequence zrevrange(byte[] keyBytes, long start, long stop, boolean withScores) {
+    public MeasuredBulkStringSequence zrevrange(byte[] keyBytes, long start, long stop, boolean withScores) {
         internals.checkThread();
-        return sequenceOf(
-                () -> zrevrangeCount(keyBytes, start, stop, withScores),
-                out -> zrevrangeWriteTo(keyBytes, start, stop, withScores, out)
-        );
+        EntryRecord record = liveZSetRecord(keyBytes);
+        if (record == null) {
+            return sequenceOf(out -> { });
+        }
+        ValueHandle handle = requireZSetHandle(record);
+        return sequenceOf(out -> zsetRoot.zrevrangeWriteTo(handle, start, stop, withScores, out));
     }
 
     @Override
-    public BulkStringSequence zrangeByScore(
+    public MeasuredBulkStringSequence zrangeByScore(
             byte[] keyBytes,
             double min,
             boolean minExclusive,
@@ -385,14 +401,26 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
             long count
     ) {
         internals.checkThread();
-        return sequenceOf(
-                () -> zrangeByScoreCount(keyBytes, min, minExclusive, max, maxExclusive, withScores, offset, count),
-                out -> zrangeByScoreWriteTo(keyBytes, min, minExclusive, max, maxExclusive, withScores, offset, count, out)
-        );
+        EntryRecord record = liveZSetRecord(keyBytes);
+        if (record == null) {
+            return sequenceOf(out -> { });
+        }
+        ValueHandle handle = requireZSetHandle(record);
+        return sequenceOf(out -> zsetRoot.zrangeByScoreWriteTo(
+                handle,
+                min,
+                minExclusive,
+                max,
+                maxExclusive,
+                withScores,
+                offset,
+                count,
+                out
+        ));
     }
 
     @Override
-    public BulkStringSequence zrevrangeByScore(
+    public MeasuredBulkStringSequence zrevrangeByScore(
             byte[] keyBytes,
             double min,
             boolean minExclusive,
@@ -403,38 +431,83 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
             long count
     ) {
         internals.checkThread();
-        return sequenceOf(
-                () -> zrevrangeByScoreCount(keyBytes, min, minExclusive, max, maxExclusive, withScores, offset, count),
-                out -> zrevrangeByScoreWriteTo(keyBytes, min, minExclusive, max, maxExclusive, withScores, offset, count, out)
-        );
+        EntryRecord record = liveZSetRecord(keyBytes);
+        if (record == null) {
+            return sequenceOf(out -> { });
+        }
+        ValueHandle handle = requireZSetHandle(record);
+        return sequenceOf(out -> zsetRoot.zrevrangeByScoreWriteTo(
+                handle,
+                min,
+                minExclusive,
+                max,
+                maxExclusive,
+                withScores,
+                offset,
+                count,
+                out
+        ));
     }
 
     @Override
     public WriteResult<Long> zrem(byte[] keyBytes, List<byte[]> members) {
         internals.checkThread();
         long now = System.currentTimeMillis();
-        return removeInternal(keyBytes, now, handle -> zsetRoot.zrem(handle, members));
+        reclaimExpiredBeforeMutation(keyBytes, now);
+        return removeInternal(keyBytes, new ZSetRemoval() {
+            @Override
+            public int count(ValueHandle handle) {
+                return zsetRoot.countExistingMembers(handle, members);
+            }
+
+            @Override
+            public int remove(ValueHandle handle) {
+                return zsetRoot.zrem(handle, members);
+            }
+        });
     }
 
     @Override
     public WriteResult<Long> zremrangeByRank(byte[] keyBytes, long start, long stop) {
         internals.checkThread();
         long now = System.currentTimeMillis();
-        return removeInternal(keyBytes, now, handle -> zsetRoot.zremrangeByRank(handle, start, stop));
+        reclaimExpiredBeforeMutation(keyBytes, now);
+        return removeInternal(keyBytes, new ZSetRemoval() {
+            @Override
+            public int count(ValueHandle handle) {
+                return zsetRoot.countRemovalsByRank(handle, start, stop);
+            }
+
+            @Override
+            public int remove(ValueHandle handle) {
+                return zsetRoot.zremrangeByRank(handle, start, stop);
+            }
+        });
     }
 
     @Override
     public WriteResult<Long> zremrangeByScore(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive) {
         internals.checkThread();
         long now = System.currentTimeMillis();
-        return removeInternal(keyBytes, now, handle -> zsetRoot.zremrangeByScore(handle, min, minExclusive, max, maxExclusive));
+        reclaimExpiredBeforeMutation(keyBytes, now);
+        return removeInternal(keyBytes, new ZSetRemoval() {
+            @Override
+            public int count(ValueHandle handle) {
+                return zsetRoot.countRemovalsByScore(handle, min, minExclusive, max, maxExclusive);
+            }
+
+            @Override
+            public int remove(ValueHandle handle) {
+                return zsetRoot.zremrangeByScore(handle, min, minExclusive, max, maxExclusive);
+            }
+        });
     }
 
-    private WriteResult<Long> removeInternal(byte[] keyBytes, long now, ZSetRemoval removal) {
-        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<>() {
+    private WriteResult<Long> removeInternal(byte[] keyBytes, ZSetRemoval removal) {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
-                return 0;
+                return 0L;
             }
 
             @Override
@@ -443,100 +516,65 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
-                YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> mutation =
-                        keyLifecycle.computeIfPresentWithHandleResult(keyBytes, (k, oldRecord) -> {
-                            EntryRecord current = oldRecord;
-                            long oldEstimate = estimateRecordBytes(k, current);
-                            long deltaBytes = 0L;
-                            if (keyLifecycle.isKeyExpired(k, now)) {
-                                keyLifecycle.removeExpire(k);
-                                deltaBytes -= oldEstimate;
-                                return mutationResult(null, WriteResult.of(0L, MutationOutcome.NONE), deltaBytes);
+            public PreparedDbMutation<WriteResult<Long>> prepare() {
+                CurrentEntry currentEntry = currentEntry(keyBytes);
+                EntryRecord current = currentEntry.record();
+                if (current == null) {
+                    return preparedNoEntry(WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
+                }
+                requireZSet(current);
+                ValueHandle handle = requireZSetHandle(current);
+                int removed = removal.count(handle);
+                if (removed == 0) {
+                    return preparedNoEntry(WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
+                }
+
+                MutationOutcome outcome = MutationOutcome.VALUE_CHANGED;
+                WriteResult<Long> result = WriteResult.of((long) removed, outcome);
+                if (removed >= zsetRoot.size(handle)) {
+                    PreparedTtlMutation ttlMutation = PreparedTtlMutation.NONE;
+                    try {
+                        ttlMutation = keyLifecycle.prepareRemoveExpire(currentEntry.keyHandle());
+                        return preparedDelete(currentEntry, current, result, outcome, ttlMutation);
+                    } catch (RuntimeException | Error failure) {
+                        try {
+                            ttlMutation.abort();
+                        } catch (RuntimeException | Error abortFailure) {
+                            failure.addSuppressed(abortFailure);
+                        }
+                        throw failure;
+                    }
+                }
+
+                EntryRecord next = zsetRecord(
+                        currentEntry.keyHandle(),
+                        handle,
+                        current.expireAtMillis(),
+                        current
+                );
+                long deltaBytes = estimateRecordBytes(currentEntry.keyHandle(), next)
+                        - estimateRecordBytes(currentEntry.keyHandle(), current);
+                if (deltaBytes > 0L) {
+                    throw new IllegalStateException("prepared zset removal must not commit positive growth");
+                }
+                return new PreparedCallbackMutation<>(
+                        result,
+                        deltaBytes,
+                        0L,
+                        outcome,
+                        () -> {
+                            int actualRemoved = removal.remove(handle);
+                            if (actualRemoved != removed) {
+                                throw new IllegalStateException("prepared zset removal removed " + actualRemoved
+                                        + " members instead of " + removed);
                             }
-                            requireZSet(current);
-                            ValueHandle handle = requireZSetHandle(current);
-                            int removed = removal.remove(handle);
-                            MutationOutcome outcome = removed > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
-                            if (zsetRoot.size(handle) == 0) {
-                                keyLifecycle.removeExpire(k);
-                                deltaBytes -= oldEstimate;
-                                return mutationResult(null, WriteResult.of((long) removed, outcome), deltaBytes);
-                            }
-                            EntryRecord next = zsetRecord(k, handle, current.expireAtMillis(), current);
-                            deltaBytes -= oldEstimate;
-                            deltaBytes += estimateRecordBytes(k, next);
-                            return mutationResult(next, WriteResult.of((long) removed, outcome), deltaBytes);
-                        });
-                return mutation == null
-                        ? YierdisDbMutationExecutor.MutationResult.of(WriteResult.of(0L, MutationOutcome.NONE), 0L)
-                        : mutation;
+                            keyLifecycle.entryTable().replace(currentEntry.entryHandle(), next);
+                        },
+                        null,
+                        null
+                );
             }
         });
-    }
-
-    private int zrangeCount(byte[] keyBytes, long start, long stop, boolean withScores) {
-        EntryRecord record = liveZSetRecord(keyBytes);
-        if (record == null) {
-            return 0;
-        }
-        return zsetRoot.zrangeCount(requireZSetHandle(record), start, stop, withScores);
-    }
-
-    private void zrangeWriteTo(byte[] keyBytes, long start, long stop, boolean withScores, BulkStringSink out) {
-        EntryRecord record = liveZSetRecord(keyBytes);
-        if (record == null) {
-            return;
-        }
-        zsetRoot.zrangeWriteTo(requireZSetHandle(record), start, stop, withScores, out);
-    }
-
-    private int zrevrangeCount(byte[] keyBytes, long start, long stop, boolean withScores) {
-        EntryRecord record = liveZSetRecord(keyBytes);
-        if (record == null) {
-            return 0;
-        }
-        return zsetRoot.zrevrangeCount(requireZSetHandle(record), start, stop, withScores);
-    }
-
-    private void zrevrangeWriteTo(byte[] keyBytes, long start, long stop, boolean withScores, BulkStringSink out) {
-        EntryRecord record = liveZSetRecord(keyBytes);
-        if (record == null) {
-            return;
-        }
-        zsetRoot.zrevrangeWriteTo(requireZSetHandle(record), start, stop, withScores, out);
-    }
-
-    private int zrangeByScoreCount(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        EntryRecord record = liveZSetRecord(keyBytes);
-        if (record == null) {
-            return 0;
-        }
-        return zsetRoot.zrangeByScoreCount(requireZSetHandle(record), min, minExclusive, max, maxExclusive, withScores, offset, count);
-    }
-
-    private void zrangeByScoreWriteTo(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, BulkStringSink out) {
-        EntryRecord record = liveZSetRecord(keyBytes);
-        if (record == null) {
-            return;
-        }
-        zsetRoot.zrangeByScoreWriteTo(requireZSetHandle(record), min, minExclusive, max, maxExclusive, withScores, offset, count, out);
-    }
-
-    private int zrevrangeByScoreCount(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        EntryRecord record = liveZSetRecord(keyBytes);
-        if (record == null) {
-            return 0;
-        }
-        return zsetRoot.zrevrangeByScoreCount(requireZSetHandle(record), min, minExclusive, max, maxExclusive, withScores, offset, count);
-    }
-
-    private void zrevrangeByScoreWriteTo(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, BulkStringSink out) {
-        EntryRecord record = liveZSetRecord(keyBytes);
-        if (record == null) {
-            return;
-        }
-        zsetRoot.zrevrangeByScoreWriteTo(requireZSetHandle(record), min, minExclusive, max, maxExclusive, withScores, offset, count, out);
     }
 
     private long estimateZSetWriteUpperBoundForMutation(byte[] keyBytes, List<byte[]> scoreMemberPairs) {
@@ -564,12 +602,46 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
 
     private EntryRecord liveZSetRecord(byte[] keyBytes) {
         KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
-        EntryRecord record = keyLifecycle.liveEntryRecord(keyBytes);
+        EntryRecord record = internals.liveEntryRecord(keyHandle);
         if (record == null) {
             return null;
         }
         requireZSet(record);
         return keyLifecycle.touchRecord(keyHandle, record);
+    }
+
+    private void reclaimExpiredBeforeMutation(byte[] keyBytes, long nowMillis) {
+        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+        if (keyHandle == null) {
+            return;
+        }
+        EntryRecord record = keyLifecycle.entryRecord(keyHandle);
+        if (record != null && keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
+            internals.reclaimExpired(keyHandle, record, nowMillis);
+        }
+    }
+
+    private <T> PreparedEntryMutation<T> preparedDelete(
+            CurrentEntry currentEntry,
+            EntryRecord current,
+            T result,
+            MutationOutcome outcome,
+            PreparedTtlMutation ttlMutation
+    ) {
+        return new PreparedEntryMutation<>(
+                keyLifecycle,
+                result,
+                -estimateRecordBytes(currentEntry.keyHandle(), current),
+                0L,
+                outcome,
+                currentEntry.entryHandle(),
+                null,
+                null,
+                current,
+                null,
+                true,
+                ttlMutation
+        );
     }
 
     private EntryRecord zsetRecord(KeyHandle keyHandle, ValueHandle handle, long expireAtMillis, EntryRecord previous) {
@@ -602,29 +674,16 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
         return keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
     }
 
-    private static BulkStringSequence sequenceOf(IntSupplier countSupplier, BulkEmitter emitter) {
-        Objects.requireNonNull(countSupplier, "countSupplier");
+    private static MeasuredBulkStringSequence sequenceOf(BulkEmitter emitter) {
         Objects.requireNonNull(emitter, "emitter");
-        return new BulkStringSequence() {
-            @Override
-            public int count() {
-                int count = countSupplier.getAsInt();
-                return Math.max(count, 0);
-            }
-
-            @Override
-            public void emitTo(BulkStringSink out) {
-                emitter.emitTo(out);
-            }
-        };
-    }
-
-    private static <T> EntryMutationResult<YierdisDbMutationExecutor.MutationResult<T>> mutationResult(
-            EntryRecord record,
-            T value,
-            long deltaBytes
-    ) {
-        return EntryMutationResult.of(record, YierdisDbMutationExecutor.MutationResult.of(value, deltaBytes));
+        BulkStringMetrics metrics = new BulkStringMetrics();
+        emitter.emitTo(metrics);
+        return MeasuredBulkStringSequences.of(
+                metrics.count(),
+                metrics.encodedElementBytes(),
+                0L,
+                emitter::emitTo
+        );
     }
 
     @FunctionalInterface
@@ -632,8 +691,9 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
         void emitTo(BulkStringSink out);
     }
 
-    @FunctionalInterface
     private interface ZSetRemoval {
+        int count(ValueHandle handle);
+
         int remove(ValueHandle handle);
     }
 }

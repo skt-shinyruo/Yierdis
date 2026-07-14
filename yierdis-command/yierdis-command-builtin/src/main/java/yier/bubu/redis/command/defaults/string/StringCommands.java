@@ -14,8 +14,11 @@ import yier.bubu.redis.command.defaults.CommandSupport;
 
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.SetMode;
+import yier.bubu.redis.storage.api.StringWriteOps;
+import yier.bubu.redis.storage.api.result.BulkStringValue;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.ReplyPlans;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 
 import java.util.Objects;
@@ -134,32 +137,51 @@ public final class StringCommands implements CommandModule {
 
     private void set(SetArgs args, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        try (var result = support.recordWriteValue(
-                ctx,
-                support.commandDb(ctx).writes().strings().set(
-                        args.key(),
-                        support.argSlice(args.request(), args.valueIndex()),
-                        args.mode(),
-                        args.expire(),
-                        args.getOld()
-                )
-        )) {
+        if (args.getOld()) {
+            preflightSetGet(args, ctx, out);
+        }
+        StringWriteOps.SetStringValue result = support.commandDb(ctx).writes().strings().set(
+                args.key(),
+                support.argSlice(args.request(), args.valueIndex()),
+                args.mode(),
+                args.expire(),
+                args.getOld()
+        ).value();
+        boolean ownershipTransferred = false;
+        try {
             if (!result.applied()) {
                 out.bulkString((byte[]) null);
                 return;
             }
             if (args.getOld()) {
-                result.oldValue().writeTo(new BulkStringReplyAdapter(out));
+                CommandSupport.writeOwnedBulkString(out, result.oldValue());
+                ownershipTransferred = true;
                 return;
             }
             out.simpleString("OK");
+        } finally {
+            if (!ownershipTransferred) {
+                result.close();
+            }
+        }
+    }
+
+    private void preflightSetGet(SetArgs args, CommandContext ctx, RedisReplyWriter out) {
+        if (args.mode() == SetMode.NX) {
+            out.requireReply(ReplyPlans.bulkString(-1, 0L));
+            return;
+        }
+        try (BulkStringValue oldValue = support.commandDb(ctx).reads().strings()
+                .previewStringValue(support.argView(args.request(), 1))) {
+            out.requireReply(ReplyPlans.bulkString(oldValue.payloadLength(), oldValue.retainedMemoryBytes()));
         }
     }
 
     private void get(ArgReader args, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
         ExecutionRequest request = args.request();
-        support.commandDb(ctx).reads().strings().getStringValue(support.argView(request, 1)).writeTo(new BulkStringReplyAdapter(out));
+        BulkStringValue value = support.commandDb(ctx).reads().strings().getStringValue(support.argView(request, 1));
+        CommandSupport.writeOwnedBulkString(out, value);
     }
 
     private void strlen(ArgReader args, CommandContext ctx) {
@@ -171,10 +193,9 @@ public final class StringCommands implements CommandModule {
     private void append(ArgReader args, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
         ExecutionRequest request = args.request();
-        long length = support.recordWriteValue(
-                ctx,
-                support.commandDb(ctx).writes().strings().append(request.readOnlyByteArray(1), support.argSlice(request, 2))
-        );
+        long length = support.commandDb(ctx).writes().strings()
+                .append(request.readOnlyByteArray(1), support.argSlice(request, 2))
+                .value();
         out.integer(length);
     }
 
@@ -193,10 +214,9 @@ public final class StringCommands implements CommandModule {
             out.error("ERR string exceeds maximum allowed size");
             return;
         }
-        int previousBit = support.recordWriteValue(
-                ctx,
-                support.commandDb(ctx).writes().strings().setBit(request.readOnlyByteArray(1), offset, (int) v)
-        );
+        int previousBit = support.commandDb(ctx).writes().strings()
+                .setBit(request.readOnlyByteArray(1), offset, (int) v)
+                .value();
         out.integer(previousBit);
     }
 
@@ -233,10 +253,9 @@ public final class StringCommands implements CommandModule {
     private void incrBy(ArgReader args, CommandContext ctx, long delta) {
         RedisReplyWriter out = ctx.out();
         ExecutionRequest request = args.request();
-        long value = support.recordWriteValue(
-                ctx,
-                support.commandDb(ctx).writes().strings().incrBy(request.readOnlyByteArray(1), delta)
-        );
+        long value = support.commandDb(ctx).writes().strings()
+                .incrBy(request.readOnlyByteArray(1), delta)
+                .value();
         out.integer(value);
     }
 }

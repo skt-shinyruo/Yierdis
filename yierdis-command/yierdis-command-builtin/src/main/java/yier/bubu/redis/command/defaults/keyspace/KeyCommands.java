@@ -9,23 +9,24 @@ import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
-import yier.bubu.redis.command.defaults.BulkStringReplyAdapter;
 import yier.bubu.redis.command.defaults.CommandSupport;
 
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.api.ScanCursorV2;
+import yier.bubu.redis.storage.api.result.KeyScanWindow;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.ReplyPlan;
+import yier.bubu.redis.execution.api.ReplyPlans;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 
 public final class KeyCommands implements CommandModule {
+    private static final int KEY_WINDOW_DISCOVERY_ATTEMPTS = 2;
     private static final byte[] MEMORY_STATS_MAXMEMORY_BYTES = "maxmemory_bytes".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] MEMORY_STATS_USED_BYTES_FOR_MAXMEMORY = "used_bytes_for_maxmemory".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] MEMORY_STATS_EFFECTIVE_USED_BYTES_FOR_MAXMEMORY = "effective_used_bytes_for_maxmemory".getBytes(StandardCharsets.US_ASCII);
@@ -214,11 +215,33 @@ public final class KeyCommands implements CommandModule {
             return;
         }
         SlowCommandGovernor governor = support.slowGovernor();
-        out.bulkStringArray(support.commandDb(ctx).reads().keyspace().keys(
-                request.readOnlyByteArray(1),
-                governor.keysMaxResults(ctx),
-                governor.keysTimeBudgetNanos(ctx)
-        ));
+        long timeBudgetNanos = governor.keysTimeBudgetNanos(ctx);
+        long deadlineNanos = deadlineNanos(timeBudgetNanos);
+        for (int attempt = 0; attempt < KEY_WINDOW_DISCOVERY_ATTEMPTS; attempt++) {
+            if (attempt > 0 && deadlineExpired(deadlineNanos)) {
+                break;
+            }
+            long remainingBudgetNanos = remainingBudgetNanos(timeBudgetNanos, deadlineNanos);
+            KeyScanWindow window = support.commandDb(ctx).reads().keyspace().keys(
+                    request.readOnlyByteArray(1),
+                    governor.keysMaxResults(ctx),
+                    remainingBudgetNanos
+            );
+            boolean ownershipTransferred = false;
+            try {
+                if (!window.current()) {
+                    continue;
+                }
+                CommandSupport.writeMeasuredBulkStringArray(out, window);
+                ownershipTransferred = true;
+                return;
+            } finally {
+                if (!ownershipTransferred) {
+                    window.close();
+                }
+            }
+        }
+        throw new IllegalStateException("key discovery window changed before reply preflight");
     }
 
     private record ScanArgs(long cursor, byte[] match, int count) {
@@ -268,18 +291,71 @@ public final class KeyCommands implements CommandModule {
 
     private void scan(ScanArgs args, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        List<byte[]> keys = new ArrayList<>();
-        ScanCursorV2 next = support.commandDb(ctx).reads().keyspace().scan(
-                ScanCursorV2.of(args.cursor()),
-                args.match(),
-                args.count(),
-                keys
-        );
+        for (int attempt = 0; attempt < KEY_WINDOW_DISCOVERY_ATTEMPTS; attempt++) {
+            KeyScanWindow window = support.commandDb(ctx).reads().keyspace().scan(
+                    ScanCursorV2.of(args.cursor()),
+                    args.match(),
+                    args.count()
+            );
+            boolean ownershipTransferred = false;
+            try {
+                if (!window.current()) {
+                    continue;
+                }
+                byte[] nextCursor = window.nextCursor().toBulkStringAscii();
+                out.requireReply(scanReplyPlan(window, nextCursor));
+                out.arrayHeader(2);
+                out.bulkString(nextCursor);
+                out.arrayHeader(window.count());
+                window.emitTo(new yier.bubu.redis.command.defaults.BulkStringReplyAdapter(out));
+                out.transferReplyOwnership(window);
+                ownershipTransferred = true;
+                return;
+            } finally {
+                if (!ownershipTransferred) {
+                    window.close();
+                }
+            }
+        }
+        throw new IllegalStateException("scan discovery window changed before reply preflight");
+    }
 
-        // Redis-compatible: reply is [cursor, keys].
-        out.arrayHeader(2);
-        out.bulkString(next.toBulkStringAscii());
-        out.bulkStringArray(keys);
+    private static ReplyPlan scanReplyPlan(KeyScanWindow window, byte[] nextCursor) {
+        ReplyPlan cursor = ReplyPlans.bulkString(nextCursor.length, 0L);
+        ReplyPlan keys = ReplyPlans.bulkStringArray(window.count(), window.encodedElementBytes(), 0L);
+        return ReplyPlans.bulkStringArray(
+                2,
+                saturatedAdd(cursor.encodedUpperBoundBytes(), keys.encodedUpperBoundBytes()),
+                window.retainedMemoryBytes()
+        );
+    }
+
+    private static long deadlineNanos(long budgetNanos) {
+        if (budgetNanos <= 0L) {
+            return Long.MAX_VALUE;
+        }
+        if (budgetNanos >= Long.MAX_VALUE - System.nanoTime()) {
+            return Long.MAX_VALUE;
+        }
+        return System.nanoTime() + budgetNanos;
+    }
+
+    private static boolean deadlineExpired(long deadlineNanos) {
+        return deadlineNanos != Long.MAX_VALUE && System.nanoTime() >= deadlineNanos;
+    }
+
+    private static long remainingBudgetNanos(long configuredBudgetNanos, long deadlineNanos) {
+        if (configuredBudgetNanos <= 0L) {
+            return 0L;
+        }
+        return Math.max(1L, deadlineNanos - System.nanoTime());
+    }
+
+    private static long saturatedAdd(long left, long right) {
+        if (left < 0L || right < 0L || Long.MAX_VALUE - left < right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 
     private void del(ExecutionRequest request, CommandContext ctx) {
@@ -291,10 +367,7 @@ public final class KeyCommands implements CommandModule {
         int len = request.argc() - 1;
         support.sliceResetFromRequest(request, 1, len);
         try {
-            long deleted = support.recordWriteValue(
-                    ctx,
-                    support.commandDb(ctx).writes().keyspace().del(support.slice())
-            );
+            long deleted = support.commandDb(ctx).writes().keyspace().del(support.slice()).value();
             out.integer(deleted);
         } finally {
             support.clearScratch(len);
@@ -324,10 +397,9 @@ public final class KeyCommands implements CommandModule {
             return;
         }
         long seconds = CommandSupport.parseLong(request, 2, "seconds");
-        boolean applied = support.recordWriteValue(
-                ctx,
-                support.commandDb(ctx).writes().ttl().expire(support.argView(request, 1), seconds)
-        );
+        boolean applied = support.commandDb(ctx).writes().ttl()
+                .expire(support.argView(request, 1), seconds)
+                .value();
         out.integer(applied ? 1 : 0);
     }
 
@@ -338,10 +410,9 @@ public final class KeyCommands implements CommandModule {
             return;
         }
         long millis = CommandSupport.parseLong(request, 2, "milliseconds");
-        boolean applied = support.recordWriteValue(
-                ctx,
-                support.commandDb(ctx).writes().ttl().pexpire(support.argView(request, 1), millis)
-        );
+        boolean applied = support.commandDb(ctx).writes().ttl()
+                .pexpire(support.argView(request, 1), millis)
+                .value();
         out.integer(applied ? 1 : 0);
     }
 
@@ -352,10 +423,9 @@ public final class KeyCommands implements CommandModule {
             return;
         }
         long seconds = CommandSupport.parseLong(request, 2, "seconds");
-        boolean applied = support.recordWriteValue(
-                ctx,
-                support.commandDb(ctx).writes().ttl().expireAtSeconds(support.argView(request, 1), seconds)
-        );
+        boolean applied = support.commandDb(ctx).writes().ttl()
+                .expireAtSeconds(support.argView(request, 1), seconds)
+                .value();
         out.integer(applied ? 1 : 0);
     }
 
@@ -366,10 +436,9 @@ public final class KeyCommands implements CommandModule {
             return;
         }
         long millis = CommandSupport.parseLong(request, 2, "milliseconds");
-        boolean applied = support.recordWriteValue(
-                ctx,
-                support.commandDb(ctx).writes().ttl().expireAtMillis(support.argView(request, 1), millis)
-        );
+        boolean applied = support.commandDb(ctx).writes().ttl()
+                .expireAtMillis(support.argView(request, 1), millis)
+                .value();
         out.integer(applied ? 1 : 0);
     }
 
@@ -379,10 +448,9 @@ public final class KeyCommands implements CommandModule {
             CommandSupport.wrongArity(out, "persist");
             return;
         }
-        boolean applied = support.recordWriteValue(
-                ctx,
-                support.commandDb(ctx).writes().ttl().persist(support.argView(request, 1))
-        );
+        boolean applied = support.commandDb(ctx).writes().ttl()
+                .persist(support.argView(request, 1))
+                .value();
         out.integer(applied ? 1 : 0);
     }
 

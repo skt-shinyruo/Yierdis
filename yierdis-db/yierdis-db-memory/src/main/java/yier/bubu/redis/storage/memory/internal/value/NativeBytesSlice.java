@@ -18,8 +18,17 @@ public final class NativeBytesSlice implements BytesSlice {
     private final NativeHandle handle;
     private final int offset;
     private final int length;
+    private final boolean retainedPin;
 
     public NativeBytesSlice(NativeAllocator allocator, NativeHandle handle, int offset, int length) {
+        this(allocator, handle, offset, length, false);
+    }
+
+    public static NativeBytesSlice retained(NativeAllocator allocator, NativeHandle handle, int offset, int length) {
+        return new NativeBytesSlice(allocator, handle, offset, length, true);
+    }
+
+    private NativeBytesSlice(NativeAllocator allocator, NativeHandle handle, int offset, int length, boolean retainedPin) {
         this.allocator = Objects.requireNonNull(allocator, "allocator");
         this.handle = Objects.requireNonNull(handle, "handle");
         if (offset < 0) {
@@ -30,6 +39,7 @@ public final class NativeBytesSlice implements BytesSlice {
         }
         this.offset = offset;
         this.length = length;
+        this.retainedPin = retainedPin;
     }
 
     @Override
@@ -42,12 +52,9 @@ public final class NativeBytesSlice implements BytesSlice {
         if (index < 0 || index >= length) {
             throw new IndexOutOfBoundsException("index=" + index + ", len=" + length);
         }
-        allocator.pin(handle);
-        try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+        try (NativeObjectView view = readView()) {
             checkSliceBounds(view);
             return view.getByte(offset + index);
-        } finally {
-            allocator.unpin(handle);
         }
     }
 
@@ -64,20 +71,16 @@ public final class NativeBytesSlice implements BytesSlice {
         if (len == 0) {
             return;
         }
-        allocator.pin(handle);
-        try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+        try (NativeObjectView view = readView()) {
             checkSliceBounds(view);
             view.getBytes(offset + index, dst, dstOff, len);
-        } finally {
-            allocator.unpin(handle);
         }
     }
 
     @Override
     public void writeTo(BytesSink out) {
         Objects.requireNonNull(out, "out");
-        allocator.pin(handle);
-        try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+        try (NativeObjectView view = readView()) {
             checkSliceBounds(view);
             byte[] scratch = TL_COPY_BUF.get();
             int remaining = length;
@@ -89,9 +92,13 @@ public final class NativeBytesSlice implements BytesSlice {
                 sourceOffset += chunk;
                 remaining -= chunk;
             }
-        } finally {
-            allocator.unpin(handle);
         }
+    }
+
+    private NativeObjectView readView() {
+        return retainedPin
+                ? allocator.resolvePinned(handle, NativeAccessMode.READ_ONLY)
+                : allocator.resolve(handle, NativeAccessMode.READ_ONLY);
     }
 
     private void checkSliceBounds(NativeObjectView view) {

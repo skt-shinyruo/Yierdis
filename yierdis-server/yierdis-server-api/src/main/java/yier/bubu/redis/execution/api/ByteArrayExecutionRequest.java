@@ -8,14 +8,18 @@ import java.util.Objects;
  * Immutable heap-backed {@link ExecutionRequest}.
  */
 public final class ByteArrayExecutionRequest implements ExecutionRequest {
-    private final byte[][] argv;
-    private final int retainedBytes;
+    private final SharedArgv argv;
     private final boolean exposeReadOnlyBacking;
+    private final RequestMemoryLease lease;
 
     private ByteArrayExecutionRequest(byte[][] argv, int retainedBytes, boolean exposeReadOnlyBacking) {
+        this(new SharedArgv(argv, retainedBytes), exposeReadOnlyBacking, RequestMemoryLease.NOOP);
+    }
+
+    private ByteArrayExecutionRequest(SharedArgv argv, boolean exposeReadOnlyBacking, RequestMemoryLease lease) {
         this.argv = argv;
-        this.retainedBytes = retainedBytes;
         this.exposeReadOnlyBacking = exposeReadOnlyBacking;
+        this.lease = lease;
     }
 
     public static ByteArrayExecutionRequest copyOf(List<byte[]> args) {
@@ -93,23 +97,23 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
 
     @Override
     public int argc() {
-        return argv.length;
+        return argv.values.length;
     }
 
     @Override
     public boolean isNull(int index) {
-        return argv[index] == null;
+        return argv.values[index] == null;
     }
 
     @Override
     public int len(int index) {
-        byte[] arg = argv[index];
+        byte[] arg = argv.values[index];
         return arg == null ? -1 : arg.length;
     }
 
     @Override
     public byte byteAt(int index, int offset) {
-        byte[] arg = argv[index];
+        byte[] arg = argv.values[index];
         if (arg == null) {
             throw new IllegalStateException("arg is null");
         }
@@ -118,7 +122,7 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
 
     @Override
     public void copyToByteArray(int index, byte[] dst, int dstOff) {
-        byte[] arg = argv[index];
+        byte[] arg = argv.values[index];
         if (arg == null) {
             throw new IllegalStateException("arg is null");
         }
@@ -127,13 +131,13 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
 
     @Override
     public byte[] toByteArray(int index) {
-        byte[] arg = argv[index];
+        byte[] arg = argv.values[index];
         return arg == null ? null : arg.clone();
     }
 
     @Override
     public byte[] readOnlyByteArray(int index) {
-        byte[] arg = argv[index];
+        byte[] arg = argv.values[index];
         if (arg == null) {
             return null;
         }
@@ -142,11 +146,67 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
 
     @Override
     public int retainedBytes() {
-        return retainedBytes;
+        return argv.retainedBytes;
+    }
+
+    @Override
+    public long admittedMemoryBytes() {
+        return argv.admittedMemoryBytes;
+    }
+
+    @Override
+    public ByteArrayExecutionRequest retain() {
+        return new ByteArrayExecutionRequest(argv, exposeReadOnlyBacking, lease.retain());
     }
 
     @Override
     public void close() {
-        // heap-backed, nothing to release
+        lease.close();
+    }
+
+    private static final class SharedArgv {
+        private final byte[][] values;
+        private final int retainedBytes;
+        private final long admittedMemoryBytes;
+
+        private SharedArgv(byte[][] values, int retainedBytes) {
+            this.values = values;
+            this.retainedBytes = retainedBytes;
+            this.admittedMemoryBytes = admittedMemoryBytes(values);
+        }
+    }
+
+    private static long admittedMemoryBytes(byte[][] argv) {
+        long total = 48L;
+        total = saturatedAdd(total, saturatedMultiply(argv.length, 8L));
+        for (byte[] arg : argv) {
+            if (arg != null) {
+                total = saturatedAdd(total, 16L);
+                total = saturatedAdd(total, align8(arg.length));
+            }
+        }
+        return total;
+    }
+
+    private static long align8(int length) {
+        long value = Math.max(0, length);
+        return (value + 7L) & ~7L;
+    }
+
+    private static long saturatedMultiply(long left, long right) {
+        if (left <= 0L || right <= 0L) {
+            return 0L;
+        }
+        if (left > Long.MAX_VALUE / right) {
+            return Long.MAX_VALUE;
+        }
+        return left * right;
+    }
+
+    private static long saturatedAdd(long left, long right) {
+        if (left >= Long.MAX_VALUE - right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 }

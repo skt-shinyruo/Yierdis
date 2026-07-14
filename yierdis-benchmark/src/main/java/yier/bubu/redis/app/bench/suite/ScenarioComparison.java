@@ -59,6 +59,7 @@ public record ScenarioComparison(
             reasons.add(current.artifactLabel() + " is not clean" + dirtySuffix(current));
         }
         addZeroBaselineDenominator(reasons, scenario, baseline, "qps");
+        addZeroBaselineMedianQpsGateDenominator(reasons, scenario, baseline);
         if (scenario.latency()) {
             addZeroBaselineDenominator(reasons, scenario, baseline, "p95_ms");
             addZeroBaselineDenominator(reasons, scenario, baseline, "p99_ms");
@@ -89,6 +90,7 @@ public record ScenarioComparison(
         addFieldMismatch(reasons, side, "warmupIterations", expected.warmupIterations(), actual.warmupIterations());
         addFieldMismatch(reasons, side, "repeatIterations", expected.repeatIterations(), actual.repeatIterations());
         addFieldMismatch(reasons, side, "latency", expected.latency(), actual.latency());
+        addFieldMismatch(reasons, side, "comparisonRole", expected.comparisonRole(), actual.comparisonRole());
     }
 
     private static void addFieldMismatch(List<String> reasons, String side, String field, Object expected, Object actual) {
@@ -119,6 +121,22 @@ public record ScenarioComparison(
         }
     }
 
+    private static void addZeroBaselineMedianQpsGateDenominator(
+            List<String> reasons,
+            ScenarioDefinition scenario,
+            ScenarioPassResult baseline
+    ) {
+        if (scenario.comparisonRole() != ScenarioDefinition.ComparisonRole.PRODUCTION_HARDENING_MEDIAN_QPS_GATE
+                || !sameExecutionShape(scenario, baseline.scenario())
+                || !baseline.clean()) {
+            return;
+        }
+        MetricSummary summary = baseline.summaries().get("qps");
+        if (summary != null && summary.mean() > 0.0 && summary.median() == 0.0) {
+            reasons.add("baseline qps median is zero");
+        }
+    }
+
     private static boolean sameExecutionShape(ScenarioDefinition expected, ScenarioDefinition actual) {
         return expected.id().equals(actual.id())
                 && expected.workload() == actual.workload()
@@ -129,7 +147,8 @@ public record ScenarioComparison(
                 && expected.pipeline() == actual.pipeline()
                 && expected.warmupIterations() == actual.warmupIterations()
                 && expected.repeatIterations() == actual.repeatIterations()
-                && expected.latency() == actual.latency();
+                && expected.latency() == actual.latency()
+                && expected.comparisonRole() == actual.comparisonRole();
     }
 
     private static Map<String, Double> deltas(ScenarioPassResult baseline, ScenarioPassResult current) {

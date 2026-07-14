@@ -225,8 +225,10 @@ public final class SuiteRunner {
         List<ThresholdFinding> out = new ArrayList<>();
         for (ScenarioPassResult pass : passes) {
             if (!pass.clean()) {
-                out.add(new ThresholdFinding(ThresholdFinding.Level.CRITICAL, pass.scenario().id(),
-                        "pass", pass.artifactLabel() + " is not clean" + dirtySuffix(pass)));
+                boolean diagnostic = pass.scenario().comparisonRole() == ScenarioDefinition.ComparisonRole.DIAGNOSTIC;
+                out.add(new ThresholdFinding(diagnostic ? ThresholdFinding.Level.WARNING : ThresholdFinding.Level.CRITICAL,
+                        pass.scenario().id(), diagnostic ? "diagnostic_pass" : "pass",
+                        pass.artifactLabel() + " is not clean" + dirtySuffix(pass)));
             }
         }
         return List.copyOf(out);

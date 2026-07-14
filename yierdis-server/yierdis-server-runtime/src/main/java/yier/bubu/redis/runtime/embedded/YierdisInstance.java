@@ -4,14 +4,12 @@ package yier.bubu.redis.runtime.embedded;
 
 import yier.bubu.redis.storage.api.DbEngine;
 import yier.bubu.redis.storage.api.DbEngineFactory;
-import yier.bubu.redis.storage.api.DbChangeListener;
-import yier.bubu.redis.storage.api.MaxmemoryUsageSource;
+import yier.bubu.redis.storage.api.DbCommitPublisher;
 import yier.bubu.redis.storage.api.RuntimeDbEngine;
-import yier.bubu.redis.runtime.api.YierdisChangeEventBridge;
+import yier.bubu.redis.runtime.api.YierdisChangeSink;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 
 import java.util.ArrayList;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
@@ -25,7 +23,6 @@ import java.util.concurrent.TimeUnit;
 public final class YierdisInstance implements AutoCloseable {
     private final YierdisInstanceConfig config;
     private final YierdisInstanceResources resources;
-    private final DbChangeListener changeListener;
     private final YierdisInstanceRuntimeAccess runtimeAccess;
     private final YierdisInstanceObservability observability;
 
@@ -33,12 +30,10 @@ public final class YierdisInstance implements AutoCloseable {
 
     private YierdisInstance(
             YierdisInstanceConfig config,
-            YierdisInstanceResources resources,
-            DbChangeListener changeListener
+            YierdisInstanceResources resources
     ) {
         this.config = Objects.requireNonNull(config, "config");
         this.resources = Objects.requireNonNull(resources, "resources");
-        this.changeListener = changeListener == null ? DbChangeListener.NOOP : changeListener;
         this.runtimeAccess = new YierdisInstanceRuntimeAccess(this);
         this.observability = new YierdisInstanceObservability(this);
     }
@@ -61,7 +56,15 @@ public final class YierdisInstance implements AutoCloseable {
     ) {
         int databases = Math.max(1, config.databases());
         boolean perDbScope = config.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.PER_DB;
-        DbChangeListener changeListener = YierdisChangeEventBridge.forSink(config.changeSink());
+        CommitStream commitStream = config.changeSink() == YierdisChangeSink.NOOP
+                ? null
+                : CommitStream.prepare(
+                        config.changeSink(),
+                        config.commitStreamMaxEvents(),
+                        config.commitStreamMaxRetainedBytes(),
+                        config.commitStreamShutdownTimeoutMillis()
+                );
+        DbCommitPublisher commitPublisher = commitStream == null ? DbCommitPublisher.NOOP : commitStream;
 
         long perDbMaxmemory = 0;
         long remainder = 0;
@@ -101,13 +104,8 @@ public final class YierdisInstance implements AutoCloseable {
                     participants[i] = dbs[i];
                 }
 
-                MaxmemoryUsageSource[] sharedUsage = new MaxmemoryUsageSource[]{
-                        () -> sharedOffHeapUsedBytes(dbs)
-                };
-
                 governor = new YierdisGlobalMaxmemoryGovernor(
                         participants,
-                        sharedUsage,
                         config.maxmemoryBytes(),
                         config.maxmemoryPolicy(),
                         config.maxmemorySamples(),
@@ -122,12 +120,28 @@ public final class YierdisInstance implements AutoCloseable {
                 }
             }
 
+            for (int index = 0; index < dbs.length; index++) {
+                RuntimeDbEngine engine = dbs[index];
+                if (engine != null) {
+                    engine.attachCommitPublisher(commitPublisher, index);
+                }
+            }
+            if (commitStream != null) {
+                commitStream.start();
+            }
+
             return new YierdisInstance(
                     config,
-                    new YierdisInstanceResources(dbs, closeables(ownedEngineFactoryResource), governor),
-                    changeListener
+                    new YierdisInstanceResources(dbs, closeables(ownedEngineFactoryResource), governor, commitStream)
             );
         } catch (Throwable t) {
+            if (commitStream != null) {
+                try {
+                    commitStream.close();
+                } catch (Throwable closeFailure) {
+                    t.addSuppressed(closeFailure);
+                }
+            }
             throw YierdisInstanceResources.startupFailure(t, dbs, closeables(ownedEngineFactoryResource));
         }
     }
@@ -139,37 +153,6 @@ public final class YierdisInstance implements AutoCloseable {
         List<AutoCloseable> closeables = new ArrayList<>(1);
         closeables.add(resource);
         return closeables;
-    }
-
-    private static long sharedOffHeapUsedBytes(RuntimeDbEngine[] dbs) {
-        if (dbs == null || dbs.length == 0) {
-            return 0L;
-        }
-        long total = 0L;
-        IdentityHashMap<Object, Boolean> seen = new IdentityHashMap<>();
-        for (RuntimeDbEngine engine : dbs) {
-            if (engine == null) {
-                continue;
-            }
-            Object identity = engine.globalSharedOffHeapUsageIdentity();
-            if (identity == null || seen.put(identity, Boolean.TRUE) != null) {
-                continue;
-            }
-            long used;
-            try {
-                used = engine.globalSharedOffHeapUsedBytes();
-            } catch (Throwable ignored) {
-                used = 0L;
-            }
-            if (used <= 0L) {
-                continue;
-            }
-            if (Long.MAX_VALUE - total < used) {
-                return Long.MAX_VALUE;
-            }
-            total += used;
-        }
-        return total;
     }
 
     public YierdisInstanceConfig config() {
@@ -233,8 +216,8 @@ public final class YierdisInstance implements AutoCloseable {
         return resources.engine(dbIndex);
     }
 
-    DbChangeListener changeListener() {
-        return changeListener;
+    CommitStream commitStream() {
+        return resources.commitStream();
     }
 
     YierdisInstanceResources resources() {
