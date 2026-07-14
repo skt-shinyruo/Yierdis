@@ -106,26 +106,30 @@ public class SuiteProfileFactoryTest {
     }
 
     @Test
-    public void releaseSmokeStringAndSparseHllScenariosCarryExplicitNativeSlotOverride() {
+    public void releaseLargeCardinalityScenariosApplyTheSameNativeSlotOverrideToBothJarArtifacts() {
         List<ScenarioDefinition> scenarios = SuiteProfileFactory.expand(SuiteProfileName.RELEASE);
 
         assertNativeSlotOverrideScenario(scenarios, "release-set-get-128b-c32-p4");
         assertNativeSlotOverrideScenario(scenarios, "release-set-get-256b-c64-p8");
         assertNativeSlotOverrideScenario(scenarios, "release-set-get-1024b-c64-p8");
+        assertNativeSlotOverrideScenario(scenarios, "release-get-256b-c64-p8");
+        assertNativeSlotOverrideScenario(scenarios, "release-set-256b-c64-p8");
+        assertNativeSlotOverrideScenario(scenarios, "release-hset-256b-c64-p8");
+        assertNativeSlotOverrideScenario(scenarios, "release-zadd-256b-c64-p8");
         assertNativeSlotOverrideScenario(scenarios, "release-append-256b-c64-p8");
         assertNativeSlotOverrideScenario(scenarios, "release-hll-sparse-c64-p8");
     }
 
     @Test
-    public void currentOnlySuiteRunsDoNotApplyRedisComparisonNativeSlotOverrides() {
+    public void currentOnlySuiteRunsApplyLargeCardinalityNativeSlotOverrides() {
         List<ScenarioDefinition> scenarios = SuiteProfileFactory.expand(SuiteProfileName.RELEASE);
         YierdisBenchServerArgs args = new YierdisBenchServerArgs();
 
         scenario(scenarios, "release-set-get-256b-c64-p8").applyServerOverrides(args);
         args.normalizeAndValidate();
 
-        Assert.assertEquals(16, args.databases);
-        Assert.assertEquals(0, args.nativeSlotCapacity);
+        Assert.assertEquals(1, args.databases);
+        Assert.assertEquals(2_097_152, args.nativeSlotCapacity);
     }
 
     @Test
@@ -263,17 +267,19 @@ public class SuiteProfileFactoryTest {
 
     private static void assertNativeSlotOverrideScenario(List<ScenarioDefinition> scenarios, String id) {
         try {
+            Path baselineJar = Files.createTempFile("suite-baseline-", ".jar");
             Path currentJar = Files.createTempFile("suite-current-", ".jar");
+            Files.writeString(baselineJar, "stub", StandardCharsets.US_ASCII);
             Files.writeString(currentJar, "stub", StandardCharsets.US_ASCII);
             YierdisBenchServerArgs baseArgs = new YierdisBenchServerArgs();
             baseArgs.normalizeAndValidate();
+            SuiteArtifact baseline = SuiteArtifact.yierdisJar("baseline", baselineJar, "baseline");
             SuiteArtifact current = SuiteArtifact.yierdisJar("current", currentJar, "head");
-            SuiteArtifact redis = SuiteArtifact.externalRedis("redis", "127.0.0.1", 6379, "", "", 0);
             SuiteConfig config = new SuiteConfig(
                     SuiteProfileName.RELEASE,
                     current,
-                    java.util.Optional.empty(),
-                    List.of(redis, current),
+                    java.util.Optional.of(baseline),
+                    List.of(baseline, current),
                     Files.createTempDirectory("suite-profile-factory-"),
                     "127.0.0.1",
                     16378,
@@ -284,12 +290,15 @@ public class SuiteProfileFactoryTest {
                     baseArgs,
                     true
             );
-            YierdisBenchServerArgs args = new YierdisBenchServerArgs();
-            scenario(scenarios, id).applyServerOverrides(args, current, config);
-            args.normalizeAndValidate();
+            for (SuiteArtifact artifact : List.of(baseline, current)) {
+                YierdisBenchServerArgs args = new YierdisBenchServerArgs();
+                scenario(scenarios, id).applyServerOverrides(args, artifact, config);
+                args.normalizeAndValidate();
 
-            Assert.assertEquals("scenario " + id + " should pin current-side smoke to one DB", 1, args.databases);
-            Assert.assertEquals("scenario " + id + " should raise current-side native slots", 2_097_152, args.nativeSlotCapacity);
+                Assert.assertEquals("scenario " + id + " should pin " + artifact.label() + " to one DB", 1, args.databases);
+                Assert.assertEquals("scenario " + id + " should raise " + artifact.label() + " native slots",
+                        2_097_152, args.nativeSlotCapacity);
+            }
         } catch (Exception e) {
             throw new AssertionError(e);
         }

@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Objects;
 
 public final class SuiteProfileFactory {
-    static final int RELEASE_SMOKE_NATIVE_SLOT_CAPACITY = 2 * 1024 * 1024;
+    static final int RELEASE_LARGE_CARDINALITY_NATIVE_SLOT_CAPACITY = 2 * 1024 * 1024;
 
     private SuiteProfileFactory() {
     }
@@ -28,25 +28,25 @@ public final class SuiteProfileFactory {
         return List.of(
                 scenario("release-ping-latency", "PING latency baseline", BenchWorkloadKind.PING, 10_000, 0, 50_000, 16, 1, 1, 5, true),
                 scenario("release-set-get-128b-c32-p4", "SET/GET 128B c32 p4", BenchWorkloadKind.SET_GET, 200_000, 128, 200_000, 32, 4, 1, 5, true,
-                        ScenarioDefinition.ServerOverrides.redisComparisonCurrentSideDatabasesAndNativeSlots(1, RELEASE_SMOKE_NATIVE_SLOT_CAPACITY)),
+                        releaseLargeCardinalityOverrides()),
                 scenario("release-set-get-256b-c64-p8", "SET/GET 256B c64 p8", BenchWorkloadKind.SET_GET, 500_000, 256, 500_000, 64, 8, 1, 5, true,
-                        ScenarioDefinition.ServerOverrides.redisComparisonCurrentSideDatabasesAndNativeSlots(1, RELEASE_SMOKE_NATIVE_SLOT_CAPACITY)),
+                        releaseLargeCardinalityOverrides()),
                 scenario("release-set-get-1024b-c64-p8", "SET/GET 1024B c64 p8", BenchWorkloadKind.SET_GET, 200_000, 1024, 200_000, 64, 8, 1, 5, true,
-                        ScenarioDefinition.ServerOverrides.redisComparisonCurrentSideDatabasesAndNativeSlots(1, RELEASE_SMOKE_NATIVE_SLOT_CAPACITY)),
+                        releaseLargeCardinalityOverrides()),
                 scenario("release-get-256b-c64-p8", "GET 256B c64 p8", BenchWorkloadKind.GET, 500_000, 256, 500_000, 64, 8, 1, 5, false,
-                        ScenarioDefinition.ComparisonRole.PRODUCTION_HARDENING_MEDIAN_QPS_GATE),
+                        releaseLargeCardinalityOverrides(), ScenarioDefinition.ComparisonRole.PRODUCTION_HARDENING_MEDIAN_QPS_GATE),
                 scenario("release-set-256b-c64-p8", "SET 256B c64 p8", BenchWorkloadKind.SET, 500_000, 256, 500_000, 64, 8, 1, 5, false,
-                        ScenarioDefinition.ComparisonRole.PRODUCTION_HARDENING_MEDIAN_QPS_GATE),
+                        releaseLargeCardinalityOverrides(), ScenarioDefinition.ComparisonRole.PRODUCTION_HARDENING_MEDIAN_QPS_GATE),
                 scenario("release-hset-256b-c64-p8", "HSET 256B c64 p8", BenchWorkloadKind.HASH_HSET, 100_000, 256, 300_000, 64, 8, 1, 5, false,
-                        ScenarioDefinition.ComparisonRole.PRODUCTION_HARDENING_MEDIAN_QPS_GATE),
+                        releaseLargeCardinalityOverrides(), ScenarioDefinition.ComparisonRole.PRODUCTION_HARDENING_MEDIAN_QPS_GATE),
                 scenario("release-zadd-256b-c64-p8", "ZADD 256B c64 p8", BenchWorkloadKind.ZSET_ZADD, 100_000, 256, 300_000, 64, 8, 1, 5, false,
-                        ScenarioDefinition.ComparisonRole.PRODUCTION_HARDENING_MEDIAN_QPS_GATE),
+                        releaseLargeCardinalityOverrides(), ScenarioDefinition.ComparisonRole.PRODUCTION_HARDENING_MEDIAN_QPS_GATE),
                 scenario("release-large-pipelined-reply", "Large pipelined GET reply diagnostics", BenchWorkloadKind.LARGE_PIPELINED_REPLY,
                         128, 64 * 1024, 1_000, 8, 8, 1, 3, false, ScenarioDefinition.ComparisonRole.DIAGNOSTIC),
                 scenario("release-append-256b-c64-p8", "APPEND 256B c64 p8", BenchWorkloadKind.APPEND, 200_000, 256, 300_000, 64, 8, 1, 5, true,
-                        ScenarioDefinition.ServerOverrides.redisComparisonCurrentSideDatabasesAndNativeSlots(1, RELEASE_SMOKE_NATIVE_SLOT_CAPACITY)),
+                        releaseLargeCardinalityOverrides()),
                 scenario("release-hll-sparse-c64-p8", "HLL sparse PFADD c64 p8", BenchWorkloadKind.HLL_SPARSE, 200_000, 0, 300_000, 64, 8, 1, 5, true,
-                        ScenarioDefinition.ServerOverrides.redisComparisonCurrentSideDatabasesAndNativeSlots(1, RELEASE_SMOKE_NATIVE_SLOT_CAPACITY)),
+                        releaseLargeCardinalityOverrides()),
                 scenario("release-hll-dense-c64-p8", "HLL dense PFADD c64 p8", BenchWorkloadKind.HLL_DENSE, 4096, 0, 300_000, 64, 8, 1, 5, true),
                 scenario("release-hll-pfcount-c64-p8", "HLL PFCOUNT c64 p8", BenchWorkloadKind.HLL_PFCOUNT, 4096, 0, 300_000, 64, 8, 1, 5, false),
                 scenario("release-native-defrag-append", "Native defrag APPEND p99", BenchWorkloadKind.NATIVE_DEFRAG_APPEND, 4096, 256, 50_000, 8, 4, 1, 5, true,
@@ -58,6 +58,13 @@ public final class SuiteProfileFactory {
                         ScenarioDefinition.RedisComparable.EXTERNAL_CONFIG_REQUIRED,
                         "external Redis config required"),
                 scenario("release-ttl-expiration", "TTL expiration pressure", BenchWorkloadKind.TTL_EXPIRATION, 50_000, 128, 100_000, 32, 4, 1, 5, false)
+        );
+    }
+
+    private static ScenarioDefinition.ServerOverrides releaseLargeCardinalityOverrides() {
+        return ScenarioDefinition.ServerOverrides.databasesAndNativeSlots(
+                1,
+                RELEASE_LARGE_CARDINALITY_NATIVE_SLOT_CAPACITY
         );
     }
 
@@ -105,6 +112,26 @@ public final class SuiteProfileFactory {
     ) {
         return new ScenarioDefinition(id, displayName, workload, keyspace, dataSize, requests, clients, pipeline,
                 warmupIterations, repeatIterations, latency, comparisonRole);
+    }
+
+    private static ScenarioDefinition scenario(
+            String id,
+            String displayName,
+            BenchWorkloadKind workload,
+            int keyspace,
+            int dataSize,
+            int requests,
+            int clients,
+            int pipeline,
+            int warmupIterations,
+            int repeatIterations,
+            boolean latency,
+            ScenarioDefinition.ServerOverrides serverOverrides,
+            ScenarioDefinition.ComparisonRole comparisonRole
+    ) {
+        return new ScenarioDefinition(id, displayName, workload, keyspace, dataSize, requests, clients, pipeline,
+                warmupIterations, repeatIterations, latency, serverOverrides, ScenarioDefinition.RedisComparable.YES, "",
+                comparisonRole);
     }
 
     private static ScenarioDefinition scenario(

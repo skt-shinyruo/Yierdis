@@ -511,9 +511,7 @@ public final class BenchHarness implements SuiteHarness {
                 || request.workload() == BenchWorkloadKind.TTL_EXPIRATION
                 || request.workload() == BenchWorkloadKind.MIXED_READ_WRITE
                 || request.workload() == BenchWorkloadKind.LARGE_PIPELINED_REPLY) {
-            if (!prefillExtendedKeys(request, readTimeoutMillis, value)) {
-                return new ExtendedOutcome(0, 1, new long[0], System.nanoTime());
-            }
+            prefillExtendedKeys(request, readTimeoutMillis, value);
         }
 
         int perClient = request.requests() / request.clients();
@@ -690,7 +688,8 @@ public final class BenchHarness implements SuiteHarness {
         };
     }
 
-    private static boolean prefillExtendedKeys(BenchWorkloadRequest request, int readTimeoutMillis, byte[] value) {
+    private static void prefillExtendedKeys(BenchWorkloadRequest request, int readTimeoutMillis, byte[] value) {
+        int keyIndex = 0;
         try (Socket socket = new Socket()) {
             socket.setTcpNoDelay(true);
             socket.connect(new InetSocketAddress(request.host(), request.port()), WORKLOAD_CONNECT_TIMEOUT_MILLIS);
@@ -701,9 +700,9 @@ public final class BenchHarness implements SuiteHarness {
                     bootstrapRedisSession(out, in, request.redisUser(), request.redisAuth(), request.redisDb());
                 }
                 int remaining = request.keyspace();
-                int keyIndex = 0;
                 while (remaining > 0) {
                     int batch = Math.min(request.pipeline(), remaining);
+                    int batchStartKeyIndex = keyIndex;
                     for (int i = 0; i < batch; i++) {
                         RespClientCodec.writeCommand(out, List.of(
                                 CMD_SET,
@@ -715,15 +714,22 @@ public final class BenchHarness implements SuiteHarness {
                     for (int i = 0; i < batch; i++) {
                         RespClientCodec.RespReply reply = RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
                         if (!reply.isSimpleString("OK")) {
-                            return false;
+                            throw new IllegalStateException("extended " + request.workload()
+                                    + " prefill SET key " + (batchStartKeyIndex + i)
+                                    + " failed: " + describeReply(reply));
                         }
                     }
                     remaining -= batch;
                 }
-                return true;
             }
-        } catch (Exception e) {
-            return false;
+        } catch (IOException e) {
+            String detail = e.getMessage();
+            if (detail == null || detail.isBlank()) {
+                detail = e.getClass().getSimpleName();
+            }
+            throw new IllegalStateException("extended " + request.workload()
+                    + " prefill I/O failed after key " + keyIndex
+                    + " at " + request.host() + ':' + request.port() + ": " + detail, e);
         }
     }
 

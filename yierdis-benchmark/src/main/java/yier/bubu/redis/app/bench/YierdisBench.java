@@ -705,13 +705,14 @@ public final class YierdisBench {
                 out.flush();
                 RespClientCodec.RespReply sourceReply = RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
                 if (isErrorReply(sourceReply)) {
-                    throw new IllegalStateException("PFADD dense source prefill failed");
+                    throw new IllegalStateException("PFADD dense source prefill failed: " + describeReply(sourceReply));
                 }
 
                 int remaining = keyspace;
                 int index = 0;
                 while (remaining > 0) {
                     int batch = Math.min(pipeline, remaining);
+                    int batchStartIndex = index;
                     for (int i = 0; i < batch; i++) {
                         writeDenseHllKey(denseKey, index++);
                         writer.writePfmerge(denseKey, sourceKey);
@@ -720,7 +721,8 @@ public final class YierdisBench {
                     for (int i = 0; i < batch; i++) {
                         RespClientCodec.RespReply reply = RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
                         if (!reply.isSimpleString("OK")) {
-                            throw new IllegalStateException("PFMERGE dense prefill failed");
+                            throw new IllegalStateException("PFMERGE dense prefill key " + (batchStartIndex + i)
+                                    + " failed: " + describeReply(reply));
                         }
                     }
                     remaining -= batch;
