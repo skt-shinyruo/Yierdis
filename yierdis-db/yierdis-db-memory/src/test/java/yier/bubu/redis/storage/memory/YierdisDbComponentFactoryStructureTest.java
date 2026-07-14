@@ -39,14 +39,14 @@ public class YierdisDbComponentFactoryStructureTest {
     }
 
     @Test
-    public void ownerCallbacksOnlyExposeOwnerIdentityAndThreadGuard() {
+    public void ownerCallbacksOnlyExposeThreadGuard() {
         Set<String> callbackNames = java.util.Arrays.stream(YierdisDbComponentFactory.OwnerCallbacks.class.getDeclaredMethods())
                 .map(Method::getName)
                 .collect(Collectors.toSet());
 
         Assert.assertEquals(
-                "OwnerCallbacks should stay narrow; runtime maintenance belongs to helper state",
-                Set.of("dbIndex", "checkThread"),
+                "OwnerCallbacks should only expose the thread guard; runtime state owns DB identity and maintenance",
+                Set.of("checkThread"),
                 callbackNames
         );
     }
