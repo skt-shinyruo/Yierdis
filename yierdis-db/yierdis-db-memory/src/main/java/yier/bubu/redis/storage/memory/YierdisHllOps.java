@@ -297,6 +297,9 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
             byte[] keyBytes,
             int replacementLength
     ) {
+        long stagedKeyDirectoryGrowthBytes = includeKeyAndEntry
+                ? keyLifecycle.keyDirectory().estimatedInsertHeapGrowthBytes()
+                : 0L;
         int valueLength = Math.max(1, replacementLength);
         int[] sizes = includeKeyAndEntry
                 ? new int[]{
@@ -308,7 +311,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
         return withScopeBookkeeping(MutationMemoryEstimator.peakAdditionalBytes(
                 keyLifecycle.nativeAllocator(),
                 0L,
-                Math.max(0L, heapGrowthBytes),
+                addSaturating(Math.max(0L, heapGrowthBytes), stagedKeyDirectoryGrowthBytes),
                 sizes
         ));
     }

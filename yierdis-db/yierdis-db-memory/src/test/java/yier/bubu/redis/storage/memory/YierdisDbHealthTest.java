@@ -2,6 +2,8 @@ package yier.bubu.redis.storage.memory;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.bytes.BytesSink;
+import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.memory.api.NativeAllocationScope;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeMemoryException;
@@ -25,15 +27,115 @@ import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
+import yier.bubu.redis.storage.memory.internal.value.YierdisHyperLogLog;
 
+import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
 public class YierdisDbHealthTest {
     private static final long TEST_UPPER_BOUND_BYTES = 1_000_000L;
+    private static final int RELEASE_NATIVE_SLOT_CAPACITY = 2 * 1024 * 1024;
+    private static final byte[] SUSTAINED_VALUE = new byte[256];
+    private static final BytesSlice SUSTAINED_VALUE_SLICE = slice(SUSTAINED_VALUE);
     private static final String MISCONF_DEGRADED =
             "MISCONF DB is in a degraded state; writes are disabled";
+
+    @Test
+    public void sustainedStringAndSparseHllWritesLeaveDbWritableForDenseHllPrefill() {
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntimeAndNativeSlotCapacity(
+                0L,
+                yier.bubu.redis.storage.api.MaxmemoryPolicy.NOEVICTION,
+                5,
+                5,
+                5,
+                null,
+                RELEASE_NATIVE_SLOT_CAPACITY
+        );
+        db.bindToCurrentThread();
+        try {
+            for (int index = 0; index < 20_000; index++) {
+                db.writes().strings().setString(key("k", index), SUSTAINED_VALUE, SetMode.NORMAL, null);
+            }
+            for (int index = 0; index < 40_000; index++) {
+                db.writes().strings().setString(key("k", index % 20_000), SUSTAINED_VALUE, SetMode.NORMAL, null);
+            }
+            for (int index = 0; index < 40_000; index++) {
+                db.writes().strings().append(key("k", index % 20_000), SUSTAINED_VALUE_SLICE);
+            }
+            for (int index = 0; index < 40_000; index++) {
+                db.writes().hll().pfadd(
+                        key("hll:s", index % 20_000),
+                        List.of(key("member", index))
+                );
+            }
+
+            Assert.assertFalse(db.health().toString(), db.health().degraded());
+            byte[] sourceKey = b("hll:src");
+            Assert.assertEquals(Integer.valueOf(1), db.writes().hll().pfadd(
+                    sourceKey,
+                    List.of(b("seed"))
+            ).value());
+            byte[] denseDestinationKey = b("hll:dense:0");
+            db.writes().hll().pfmerge(denseDestinationKey, List.of(sourceKey));
+            EntryRecord denseDestination = db.keyLifecycle().entryRecord(denseDestinationKey);
+            Assert.assertNotNull(denseDestination);
+            Assert.assertTrue(YierdisHyperLogLog.isDense(
+                    db.keyLifecycle().stringRoot(),
+                    denseDestination.valueHandle()
+            ));
+            Assert.assertFalse(db.health().toString(), db.health().degraded());
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    @Test
+    public void pfmergeNewDestinationReservesPendingKeyDirectoryGrowth() {
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntimeAndNativeSlotCapacity(
+                0L,
+                yier.bubu.redis.storage.api.MaxmemoryPolicy.NOEVICTION,
+                5,
+                5,
+                5,
+                null,
+                RELEASE_NATIVE_SLOT_CAPACITY
+        );
+        db.bindToCurrentThread();
+        try {
+            byte[] sourceKey = b("hll:merge-source");
+            db.writes().hll().pfadd(sourceKey, List.of(b("seed")));
+
+            long stagedDirectoryGrowth = 0L;
+            for (int index = 0; index < 100_000; index++) {
+                stagedDirectoryGrowth = db.keyLifecycle().keyDirectory().estimatedInsertHeapGrowthBytes();
+                if (stagedDirectoryGrowth >= 1_000_000L) {
+                    break;
+                }
+                db.writes().strings().setString(key("directory", index), b("v"), SetMode.NORMAL, null);
+            }
+            Assert.assertTrue(
+                    "expected the next key insertion to stage a large directory table, but growth was "
+                            + stagedDirectoryGrowth,
+                    stagedDirectoryGrowth >= 1_000_000L
+            );
+
+            byte[] destinationKey = b("hll:merge-destination");
+            db.writes().hll().pfmerge(destinationKey, List.of(sourceKey));
+
+            EntryRecord destination = db.keyLifecycle().entryRecord(destinationKey);
+            Assert.assertNotNull(destination);
+            Assert.assertTrue(YierdisHyperLogLog.isDense(
+                    db.keyLifecycle().stringRoot(),
+                    destination.valueHandle()
+            ));
+            Assert.assertFalse(db.health().toString(), db.health().degraded());
+        } finally {
+            db.shutdown();
+        }
+    }
 
     @Test
     public void postCommitReleaseFailureDegradesDbPreservesCommittedValueAndRejectsLaterWrites() {
@@ -216,5 +318,28 @@ public class YierdisDbHealthTest {
                 DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE,
                 previous
         );
+    }
+
+    private static byte[] key(String prefix, int index) {
+        return (prefix + ':' + index).getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static BytesSlice slice(byte[] bytes) {
+        return new BytesSlice() {
+            @Override
+            public void writeTo(BytesSink out) {
+                out.writeBytes(bytes, 0, bytes.length);
+            }
+
+            @Override
+            public int length() {
+                return bytes.length;
+            }
+
+            @Override
+            public byte getByte(int index) {
+                return bytes[index];
+            }
+        };
     }
 }
