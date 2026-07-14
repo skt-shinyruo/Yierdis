@@ -162,6 +162,21 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
   --reportDir target/benchmark-reports/production-hardening
 ```
 
+## Stage Evidence
+
+The focused tests below were rerun under JDK 25 against the current non-performance candidate. They complement the full Maven suite and make the acceptance boundary for each implementation stage explicit.
+
+| Stage | Non-benchmark evidence |
+| --- | --- |
+| 1: allocator and usage | `NativeAllocationScopeTest`, `SynchronizedNativeAllocatorTest`, and `EmptyDatabaseFootprintTest` passed. |
+| 2: failure-atomic mutations | `NativeCapacityOomRecoveryTest`, `MutationFaultInjectionTest`, `YierdisDbHealthTest`, and `MutationExecutorReservationTest` passed. |
+| 3: bounded hash tables | `HashTableMillionOperationChurnTest` and `HashTableMaintenanceTest` passed. |
+| 4: maxmemory convergence | `MaxmemoryScopeTest` passed; the full suite also passed physical-accounting, page-trim, and global-governor coverage. |
+| 5: RESP ingress admission | `RespIngressPressureTest` and `RespIngressFuzzTest` passed with paranoid Netty leak detection enabled. |
+| 6: commit stream convergence | `CommitStreamTest`, `CommitStreamShutdownTest`, `CommitStreamIntegrationTest`, and `CommitStreamExpirationEvictionTest` passed. |
+| 7: bounded ordered egress | `OrderedReplyIntegrationTest`, `OutboundReplyPressureTest`, `ReplyResultUnknownTest`, and `ArchitectureBoundaryTest` passed; package, smoke, and the 600-second soak also passed. |
+| 7: throughput gate | NOT RUN: Task 12 requires the four-command benchmark comparison. It remains pending while benchmark execution is prohibited. |
+
 ## Acceptance Record
 
 This repository is not accepted merely because this guide exists. Before final acceptance, record one candidate in this section with its candidate commit, baseline commit and artifact checksum, current artifact checksum, JDK/OS/CPU, exact commands, focused/full suite totals, smoke result, soak seed and peak/final counters, and GET/SET/HSET/ZADD medians and ratios. All evidence must come from the same candidate artifact; a rerun after rebuilding is a new candidate.
