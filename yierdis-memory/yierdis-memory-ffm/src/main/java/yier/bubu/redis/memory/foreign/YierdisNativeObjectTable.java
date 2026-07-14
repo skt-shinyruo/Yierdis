@@ -58,6 +58,8 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
     private long retiredSlots;
     private long peakLiveSlots;
     private long retainedHeapBytes;
+    private AllocationScopeCheckpoint activeAllocationScope;
+    private boolean allocationScopeAbortInProgress;
     private boolean closed;
     private boolean heapIterationTrapForTesting;
 
@@ -309,12 +311,17 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
 
     AllocationScopeCheckpoint allocationScopeCheckpoint() {
         ensureOpen();
-        return new AllocationScopeCheckpoint(
+        if (activeAllocationScope != null) {
+            throw new IllegalStateException("native object-table allocation scope is already active");
+        }
+        AllocationScopeCheckpoint checkpoint = new AllocationScopeCheckpoint(
                 activeSegments,
-                segments.clone(),
-                availableSegments.clone(),
+                segments,
+                availableSegments,
                 retainedHeapBytes
         );
+        activeAllocationScope = checkpoint;
+        return checkpoint;
     }
 
     long allocationScopeCheckpointHeapEstimatedBytes() {
@@ -322,44 +329,69 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         return allocationScopeCheckpointHeapEstimatedBytes(segments.length, availableSegments.length);
     }
 
+    void promoteAllocationScope(AllocationScopeCheckpoint checkpoint) {
+        if (activeAllocationScope == checkpoint) {
+            activeAllocationScope = null;
+            allocationScopeAbortInProgress = false;
+            checkpoint.releaseReferences();
+        }
+    }
+
+    void beginAllocationScopeAbort(AllocationScopeCheckpoint checkpoint) {
+        ensureOpen();
+        if (activeAllocationScope != checkpoint) {
+            throw new IllegalStateException("native object-table allocation scope is not active");
+        }
+        allocationScopeAbortInProgress = true;
+    }
+
     void restoreAllocationScopeCheckpoint(AllocationScopeCheckpoint checkpoint) {
         ensureOpen();
         Objects.requireNonNull(checkpoint, "checkpoint");
-        if (checkpoint.activeSegments > activeSegments) {
-            throw new IllegalStateException("allocation scope checkpoint is ahead of the object table");
+        if (activeAllocationScope != checkpoint) {
+            throw new IllegalStateException("native object-table allocation scope is not active");
         }
-        for (int segmentIndex = activeSegments - 1; segmentIndex >= checkpoint.activeSegments; segmentIndex--) {
-            YierdisNativeObjectSegment segment = segments[segmentIndex];
-            int reusableSlots = 0;
-            int retired = 0;
-            for (int offset = 0; offset < segment.validSlots(); offset++) {
-                int state = segment.readInt(offset, STATE_OFFSET);
-                if (state != STATE_FREE) {
-                    throw new IllegalStateException("allocation scope left a live native object");
+        try {
+            if (checkpoint.activeSegments > activeSegments) {
+                throw new IllegalStateException("allocation scope checkpoint is ahead of the object table");
+            }
+            for (int segmentIndex = activeSegments - 1; segmentIndex >= checkpoint.activeSegments; segmentIndex--) {
+                YierdisNativeObjectSegment segment = segments[segmentIndex];
+                int reusableSlots = 0;
+                int retired = 0;
+                for (int offset = 0; offset < segment.validSlots(); offset++) {
+                    int state = segment.readInt(offset, STATE_OFFSET);
+                    if (state != STATE_FREE) {
+                        throw new IllegalStateException("allocation scope left a live native object");
+                    }
+                    if (segment.isRetired(offset)) {
+                        retired++;
+                    } else {
+                        reusableSlots++;
+                    }
                 }
-                if (segment.isRetired(offset)) {
-                    retired++;
-                } else {
-                    reusableSlots++;
+                freeSlots -= reusableSlots;
+                retiredSlots -= retired;
+                stateCounts[STATE_FREE] -= segment.validSlots();
+                segment.close();
+                segments[segmentIndex] = null;
+            }
+            activeSegments = checkpoint.activeSegments;
+            segments = checkpoint.segments;
+            availableSegments = checkpoint.availableSegments;
+            retainedHeapBytes = checkpoint.retainedHeapBytes;
+            availableSegmentCount = 0;
+            for (int segmentIndex = 0; segmentIndex < activeSegments; segmentIndex++) {
+                YierdisNativeObjectSegment segment = segments[segmentIndex];
+                segment.availableQueued(false);
+                if (segment.hasFreeSlot()) {
+                    enqueueAvailable(segmentIndex, segment);
                 }
             }
-            freeSlots -= reusableSlots;
-            retiredSlots -= retired;
-            stateCounts[STATE_FREE] -= segment.validSlots();
-            segment.close();
-            segments[segmentIndex] = null;
-        }
-        activeSegments = checkpoint.activeSegments;
-        segments = checkpoint.segments;
-        availableSegments = checkpoint.availableSegments;
-        retainedHeapBytes = checkpoint.retainedHeapBytes;
-        availableSegmentCount = 0;
-        for (int segmentIndex = 0; segmentIndex < activeSegments; segmentIndex++) {
-            YierdisNativeObjectSegment segment = segments[segmentIndex];
-            segment.availableQueued(false);
-            if (segment.hasFreeSlot()) {
-                enqueueAvailable(segmentIndex, segment);
-            }
+        } finally {
+            allocationScopeAbortInProgress = false;
+            activeAllocationScope = null;
+            checkpoint.releaseReferences();
         }
     }
 
@@ -414,6 +446,8 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         activeSegments = 0;
         availableSegmentCount = 0;
         retainedHeapBytes = baseHeapBytes();
+        activeAllocationScope = null;
+        allocationScopeAbortInProgress = false;
     }
 
     private SegmentSlot allocateSlot() {
@@ -444,6 +478,7 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
                 validSlots,
                 ownerShardId
         );
+        detachSegmentsForActiveAllocationScope();
         segments[segmentIndex] = segment;
         activeSegments++;
         retainedHeapBytes = MemoryUsageSnapshot.addSaturating(retainedHeapBytes, objectSegmentHeapBytes());
@@ -516,7 +551,7 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         boolean wasFull = !slot.segment.hasFreeSlot();
         slot.segment.releaseOffset(slot.offset);
         freeSlots++;
-        if (wasFull) {
+        if (wasFull && !allocationScopeAbortInProgress) {
             enqueueAvailable(slot.segmentIndex, slot.segment);
         }
     }
@@ -564,6 +599,8 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         if (required <= segments.length) {
             return;
         }
+        failIfAllocationScopeAbortWouldAllocate();
+        retainSegmentsForActiveAllocationScope();
         long previousHeapBytes = arrayHeapBytes(segments.length, REFERENCE_BYTES);
         int capacity = Math.min(maxSegments, growCapacity(segments.length, required));
         segments = Arrays.copyOf(segments, capacity);
@@ -574,10 +611,39 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         if (required <= availableSegments.length) {
             return;
         }
+        failIfAllocationScopeAbortWouldAllocate();
+        retainAvailableSegmentsForActiveAllocationScope();
         long previousHeapBytes = arrayHeapBytes(availableSegments.length, INT_BYTES);
         int capacity = Math.min(maxSegments, growCapacity(availableSegments.length, required));
         availableSegments = Arrays.copyOf(availableSegments, capacity);
         replaceRetainedHeapBytes(previousHeapBytes, arrayHeapBytes(availableSegments.length, INT_BYTES));
+    }
+
+    private void detachSegmentsForActiveAllocationScope() {
+        if (activeAllocationScope == null || segments != activeAllocationScope.segments) {
+            return;
+        }
+        failIfAllocationScopeAbortWouldAllocate();
+        segments = segments.clone();
+        activeAllocationScope.retainSegments();
+    }
+
+    private void retainSegmentsForActiveAllocationScope() {
+        if (activeAllocationScope != null && segments == activeAllocationScope.segments) {
+            activeAllocationScope.retainSegments();
+        }
+    }
+
+    private void retainAvailableSegmentsForActiveAllocationScope() {
+        if (activeAllocationScope != null && availableSegments == activeAllocationScope.availableSegments) {
+            activeAllocationScope.retainAvailableSegments();
+        }
+    }
+
+    private void failIfAllocationScopeAbortWouldAllocate() {
+        if (allocationScopeAbortInProgress) {
+            throw new IllegalStateException("native object-table allocation scope abort must not allocate");
+        }
     }
 
     private static int growCapacity(int current, int required) {
@@ -658,14 +724,50 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
     ) {
     }
 
-    record AllocationScopeCheckpoint(
-            int activeSegments,
-            YierdisNativeObjectSegment[] segments,
-            int[] availableSegments,
-            long retainedHeapBytes
-    ) {
+    static final class AllocationScopeCheckpoint {
+        private final int activeSegments;
+        private YierdisNativeObjectSegment[] segments;
+        private int[] availableSegments;
+        private final long retainedHeapBytes;
+        private boolean retainsSegments;
+        private boolean retainsAvailableSegments;
+
+        private AllocationScopeCheckpoint(
+                int activeSegments,
+                YierdisNativeObjectSegment[] segments,
+                int[] availableSegments,
+                long retainedHeapBytes
+        ) {
+            this.activeSegments = activeSegments;
+            this.segments = segments;
+            this.availableSegments = availableSegments;
+            this.retainedHeapBytes = retainedHeapBytes;
+        }
+
+        private void retainSegments() {
+            retainsSegments = true;
+        }
+
+        private void retainAvailableSegments() {
+            retainsAvailableSegments = true;
+        }
+
+        private void releaseReferences() {
+            segments = null;
+            availableSegments = null;
+            retainsSegments = false;
+            retainsAvailableSegments = false;
+        }
+
         long heapEstimatedBytes() {
-            return allocationScopeCheckpointHeapEstimatedBytes(segments.length, availableSegments.length);
+            long bytes = CHECKPOINT_OBJECT_BYTES;
+            if (retainsSegments) {
+                bytes = MemoryUsageSnapshot.addSaturating(bytes, arrayHeapBytes(segments.length, REFERENCE_BYTES));
+            }
+            if (retainsAvailableSegments) {
+                bytes = MemoryUsageSnapshot.addSaturating(bytes, arrayHeapBytes(availableSegments.length, INT_BYTES));
+            }
+            return bytes;
         }
     }
 }

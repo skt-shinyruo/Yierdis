@@ -232,7 +232,9 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
 
     void promoteAllocationScope(AllocationScopeCheckpoint checkpoint) {
         if (activeAllocationScope == checkpoint) {
+            pageDirectory.promoteAllocationScope(checkpoint.directoryCheckpoint);
             activeAllocationScope = null;
+            checkpoint.releaseReferences();
         }
     }
 
@@ -241,6 +243,7 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         if (activeAllocationScope != checkpoint) {
             throw new IllegalStateException("native page allocation scope is not active");
         }
+        pageDirectory.beginAllocationScopeAbort(checkpoint.directoryCheckpoint);
         allocationScopeAbortInProgress = true;
     }
 
@@ -263,7 +266,9 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
             nextPageSequence = checkpoint.nextPageSequence;
         } finally {
             allocationScopeAbortInProgress = false;
+            pageDirectory.discardAllocationScope(checkpoint.directoryCheckpoint);
             activeAllocationScope = null;
+            checkpoint.releaseReferences();
         }
     }
 
@@ -757,14 +762,33 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
     record PageGrowth(long heapEstimatedBytes, long nativeDataCommittedBytes) {
     }
 
-    record AllocationScopeCheckpoint(
-            SmallPage smallPageHead,
-            SpanAllocation spanHead,
-            long nextPageSequence,
-            YierdisNativePageDirectory.AllocationScopeCheckpoint directoryCheckpoint
-    ) {
+    static final class AllocationScopeCheckpoint {
+        private SmallPage smallPageHead;
+        private SpanAllocation spanHead;
+        private final long nextPageSequence;
+        private YierdisNativePageDirectory.AllocationScopeCheckpoint directoryCheckpoint;
+
+        private AllocationScopeCheckpoint(
+                SmallPage smallPageHead,
+                SpanAllocation spanHead,
+                long nextPageSequence,
+                YierdisNativePageDirectory.AllocationScopeCheckpoint directoryCheckpoint
+        ) {
+            this.smallPageHead = smallPageHead;
+            this.spanHead = spanHead;
+            this.nextPageSequence = nextPageSequence;
+            this.directoryCheckpoint = directoryCheckpoint;
+        }
+
         long heapEstimatedBytes() {
-            return ALLOCATION_SCOPE_CHECKPOINT_HEAP_BYTES + directoryCheckpoint.heapEstimatedBytes();
+            return ALLOCATION_SCOPE_CHECKPOINT_HEAP_BYTES
+                    + (directoryCheckpoint == null ? 0L : directoryCheckpoint.heapEstimatedBytes());
+        }
+
+        private void releaseReferences() {
+            smallPageHead = null;
+            spanHead = null;
+            directoryCheckpoint = null;
         }
     }
 
