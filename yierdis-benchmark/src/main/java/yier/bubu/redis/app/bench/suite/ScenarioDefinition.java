@@ -228,6 +228,11 @@ public record ScenarioDefinition(
                     OverrideScope.UNIVERSAL);
         }
 
+        public static ServerOverrides databasesAndNativeSlots(int databases, int nativeSlotCapacity) {
+            return new ServerOverrides(databases, nativeSlotCapacity, false, 0, 0, 0, 0, "", 0, 0,
+                    OverrideScope.UNIVERSAL);
+        }
+
         public static ServerOverrides redisComparisonCurrentSideDatabasesAndNativeSlots(int databases, int nativeSlotCapacity) {
             return new ServerOverrides(databases, nativeSlotCapacity, false, 0, 0, 0, 0, "", 0, 0,
                     OverrideScope.REDIS_COMPARISON_CURRENT_ONLY);

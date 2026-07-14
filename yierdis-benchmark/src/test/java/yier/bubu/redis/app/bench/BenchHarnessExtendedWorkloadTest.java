@@ -265,6 +265,51 @@ public class BenchHarnessExtendedWorkloadTest {
     }
 
     @Test
+    public void getPrefillIncludesTheRejectedRespReplyInTheFailure() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.start((command, index) ->
+                error("OOM simulated prefill capacity"))) {
+            Assert.assertTrue(server.awaitListening());
+            BenchHarness harness = new BenchHarness(new NoopDenseHllPreparer(), 1_000);
+            BenchWorkloadRequest request = new BenchWorkloadRequest(
+                    BenchWorkloadKind.GET,
+                    "127.0.0.1",
+                    server.port(),
+                    1,
+                    1,
+                    1,
+                    1,
+                    4,
+                    false,
+                    true
+            );
+
+            IllegalStateException failure = Assert.assertThrows(IllegalStateException.class,
+                    () -> harness.runWorkload(request));
+
+            Assert.assertTrue(failure.getMessage(), failure.getMessage().contains("GET prefill SET key 0"));
+            Assert.assertTrue(failure.getMessage(), failure.getMessage().contains("OOM simulated prefill capacity"));
+        }
+    }
+
+    @Test
+    public void denseHllPrefillIncludesTheRejectedSourceReplyInTheFailure() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
+            if ("SELECT".equals(command)) {
+                return ok();
+            }
+            return error("OOM simulated dense HLL source capacity");
+        })) {
+            Assert.assertTrue(server.awaitListening());
+
+            IllegalStateException failure = Assert.assertThrows(IllegalStateException.class,
+                    () -> YierdisBench.prefillDenseHll("127.0.0.1", server.port(), 1, 1, "", "", 0));
+
+            Assert.assertTrue(failure.getMessage(), failure.getMessage().contains("PFADD dense source prefill failed"));
+            Assert.assertTrue(failure.getMessage(), failure.getMessage().contains("OOM simulated dense HLL source capacity"));
+        }
+    }
+
+    @Test
     public void isolatedSetWorkloadDoesNotNeedAReadPrefill() throws Exception {
         try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> ok())) {
             Assert.assertTrue(server.awaitListening());
@@ -372,7 +417,7 @@ public class BenchHarnessExtendedWorkloadTest {
     }
 
     @Test
-    public void externalRedisWorkloadCountsBootstrapSelectFailureAsError() throws Exception {
+    public void externalRedisWorkloadReportsBootstrapSelectFailure() throws Exception {
         try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
             if ("AUTH".equals(command)) {
                 return ok();
@@ -400,10 +445,11 @@ public class BenchHarnessExtendedWorkloadTest {
                     4
             );
 
-            BenchWorkloadResult result = harness.runWorkload(request);
+            IllegalStateException failure = Assert.assertThrows(IllegalStateException.class,
+                    () -> harness.runWorkload(request));
 
-            Assert.assertEquals(0, result.ops());
-            Assert.assertTrue("errors=" + result.errors(), result.errors() > 0);
+            Assert.assertTrue(failure.getMessage(), failure.getMessage().contains("SELECT failed"));
+            Assert.assertTrue(failure.getMessage(), failure.getMessage().contains("ERR DB index is out of range"));
             Assert.assertEquals(List.of("AUTH", "SELECT"), server.awaitCommands(2));
         }
     }
