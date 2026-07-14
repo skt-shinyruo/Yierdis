@@ -197,6 +197,7 @@ final class YierdisDbRuntimeState {
                 currentStorage.setRoot,
                 currentStorage.zsetRoot
         );
+        keyLifecycle().resetExpiredEntriesAwaitingPhysicalDeletion();
     }
 
     int size() {

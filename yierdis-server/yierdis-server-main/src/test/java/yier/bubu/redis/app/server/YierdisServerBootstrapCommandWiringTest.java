@@ -236,6 +236,7 @@ public class YierdisServerBootstrapCommandWiringTest {
                 Assert.assertTrue(memorySection.contains("yierdis_native_defrag_last_scanned_objects:"));
                 Assert.assertTrue(memorySection.contains("yierdis_native_defrag_moved_bytes:"));
                 Assert.assertTrue(memorySection.contains("yierdis_native_stale_handle_detections:"));
+                Assert.assertTrue(memorySection.contains("yierdis_expired_entries_awaiting_physical_deletion:"));
             }
         }
     }

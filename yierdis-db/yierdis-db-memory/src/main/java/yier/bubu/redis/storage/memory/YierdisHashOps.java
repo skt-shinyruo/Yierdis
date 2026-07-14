@@ -253,7 +253,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
                                 throw new IllegalStateException("prepared HDEL removed " + actualRemoved
                                         + " fields instead of " + removed);
                             }
-                            keyLifecycle.entryTable().replace(currentEntry.entryHandle(), next);
+                            keyLifecycle.replaceEntry(currentEntry.entryHandle(), current, next);
                         },
                         null,
                         null

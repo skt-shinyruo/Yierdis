@@ -190,7 +190,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
                                 throw new IllegalStateException("prepared SREM removed " + actualRemoved
                                         + " members instead of " + removed);
                             }
-                            keyLifecycle.entryTable().replace(currentEntry.entryHandle(), next);
+                            keyLifecycle.replaceEntry(currentEntry.entryHandle(), current, next);
                         },
                         null,
                         null

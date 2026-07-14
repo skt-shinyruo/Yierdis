@@ -32,6 +32,8 @@ import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
 
 public final class YierdisDbKeyLifecycle {
+    private static final int EXPIRED_AWAITING_PHYSICAL_DELETION_FLAG = 1;
+
     public record EntryMutationResult<R>(EntryRecord record, R result, boolean releaseReplacedValue) {
         public EntryMutationResult(EntryRecord record, R result) {
             this(record, result, true);
@@ -58,6 +60,7 @@ public final class YierdisDbKeyLifecycle {
     private final ZSetRoot zsetRoot;
     private final LongSupplier lruClockSupplier;
     private final LongConsumer adjustUsedBytesCallback;
+    private long expiredEntriesAwaitingPhysicalDeletion;
 
     YierdisDbKeyLifecycle(
             YierdisExpireIndex expires,
@@ -222,7 +225,7 @@ public final class YierdisDbKeyLifecycle {
         EntryRecord record = entryTable.get(handle);
         if (record != null) {
             releaseValue(record);
-            entryTable.release(handle);
+            releaseEntry(handle, record);
         }
         return record;
     }
@@ -237,7 +240,7 @@ public final class YierdisDbKeyLifecycle {
         EntryRecord record = entryTable.get(handle);
         if (record != null) {
             releaseValue(record);
-            entryTable.release(handle);
+            releaseEntry(handle, record);
         }
         return record;
     }
@@ -325,11 +328,11 @@ public final class YierdisDbKeyLifecycle {
         EntryRecord newRecord = mutation.record();
         if (newRecord == null) {
             keyDirectory.remove(keyBytes, existingHandle);
-            entryTable.release(existingHandle);
+            releaseEntry(existingHandle, oldRecord);
             releaseValue(oldRecord);
             return mutation.result();
         }
-        entryTable.replace(existingHandle, newRecord);
+        replaceEntry(existingHandle, oldRecord, newRecord);
         if (mutation.releaseReplacedValue()) {
             releaseReplacedValue(oldRecord, newRecord);
         }
@@ -361,11 +364,11 @@ public final class YierdisDbKeyLifecycle {
         EntryRecord newRecord = mutation.record();
         if (newRecord == null) {
             keyDirectory.remove(keyBytes, existingHandle);
-            entryTable.release(existingHandle);
+            releaseEntry(existingHandle, oldRecord);
             releaseValue(oldRecord);
             return mutation.result();
         }
-        entryTable.replace(existingHandle, newRecord);
+        replaceEntry(existingHandle, oldRecord, newRecord);
         if (mutation.releaseReplacedValue()) {
             releaseReplacedValue(oldRecord, newRecord);
         }
@@ -413,9 +416,52 @@ public final class YierdisDbKeyLifecycle {
             return false;
         }
         keyDirectory.remove(keyBytes, handle);
-        entryTable.release(handle);
+        releaseEntry(handle, current);
         releaseValue(current);
         return true;
+    }
+
+    public void replaceEntry(EntryHandle handle, EntryRecord oldRecord, EntryRecord newRecord) {
+        Objects.requireNonNull(handle, "handle");
+        Objects.requireNonNull(newRecord, "newRecord");
+        entryTable.replace(handle, newRecord);
+        reconcileExpiredEntryAwaitingPhysicalDeletion(oldRecord, newRecord);
+    }
+
+    public void releaseEntry(EntryHandle handle, EntryRecord record) {
+        Objects.requireNonNull(handle, "handle");
+        entryTable.release(handle);
+        reconcileExpiredEntryAwaitingPhysicalDeletion(record, null);
+    }
+
+    public boolean markExpiredEntryAwaitingPhysicalDeletion(
+            KeyHandle keyHandle,
+            EntryHandle entryHandle,
+            EntryRecord expectedRecord,
+            long nowMillis
+    ) {
+        if (keyHandle == null || entryHandle == null || expectedRecord == null
+                || !isKeyExpired(keyHandle, nowMillis)) {
+            return false;
+        }
+        EntryRecord current = entryTable.get(entryHandle);
+        if (current == null || !current.equals(expectedRecord)
+                || isExpiredEntryAwaitingPhysicalDeletion(current)) {
+            return false;
+        }
+        replaceEntry(entryHandle, current, withFlags(
+                current,
+                current.flags() | EXPIRED_AWAITING_PHYSICAL_DELETION_FLAG
+        ));
+        return true;
+    }
+
+    public long expiredEntriesAwaitingPhysicalDeletion() {
+        return expiredEntriesAwaitingPhysicalDeletion;
+    }
+
+    public void resetExpiredEntriesAwaitingPhysicalDeletion() {
+        expiredEntriesAwaitingPhysicalDeletion = 0L;
     }
 
     public byte[] copyKeyBytes(KeyHandle keyHandle) {
@@ -527,7 +573,7 @@ public final class YierdisDbKeyLifecycle {
         if (handle != null) {
             EntryRecord current = entryTable.get(handle);
             if (record.equals(current)) {
-                entryTable.replace(handle, touched);
+                replaceEntry(handle, current, touched);
             }
         }
         return touched;
@@ -543,7 +589,7 @@ public final class YierdisDbKeyLifecycle {
                 record.keyHash(),
                 record.type(),
                 record.encoding(),
-                record.flags(),
+                clearExpiredEntryAwaitingPhysicalDeletionFlag(record.flags()),
                 expireAtMillis,
                 record.version(),
                 accessClock(record.lruOrLfu())
@@ -602,17 +648,18 @@ public final class YierdisDbKeyLifecycle {
             keyDirectory.remove(keyBytes, handle);
             return;
         }
-        entryTable.replace(handle, new EntryRecord(
+        EntryRecord replacement = new EntryRecord(
                 record.keyHandle(),
                 record.valueHandle(),
                 record.keyHash(),
                 record.type(),
                 record.encoding(),
-                record.flags(),
+                clearExpiredEntryAwaitingPhysicalDeletionFlag(record.flags()),
                 expireAtMillis,
                 record.version(),
                 record.lruOrLfu()
-        ));
+        );
+        replaceEntry(handle, record, replacement);
     }
 
     private long accessClock(long previous) {
@@ -686,5 +733,44 @@ public final class YierdisDbKeyLifecycle {
             out[i] = keyHandle.getByte(i);
         }
         return out;
+    }
+
+    private void reconcileExpiredEntryAwaitingPhysicalDeletion(EntryRecord oldRecord, EntryRecord newRecord) {
+        boolean oldAwaitingDeletion = isExpiredEntryAwaitingPhysicalDeletion(oldRecord);
+        boolean newAwaitingDeletion = isExpiredEntryAwaitingPhysicalDeletion(newRecord);
+        if (oldAwaitingDeletion == newAwaitingDeletion) {
+            return;
+        }
+        if (newAwaitingDeletion) {
+            if (expiredEntriesAwaitingPhysicalDeletion < Long.MAX_VALUE) {
+                expiredEntriesAwaitingPhysicalDeletion++;
+            }
+            return;
+        }
+        if (expiredEntriesAwaitingPhysicalDeletion > 0L) {
+            expiredEntriesAwaitingPhysicalDeletion--;
+        }
+    }
+
+    private static boolean isExpiredEntryAwaitingPhysicalDeletion(EntryRecord record) {
+        return record != null && (record.flags() & EXPIRED_AWAITING_PHYSICAL_DELETION_FLAG) != 0;
+    }
+
+    private static int clearExpiredEntryAwaitingPhysicalDeletionFlag(int flags) {
+        return flags & ~EXPIRED_AWAITING_PHYSICAL_DELETION_FLAG;
+    }
+
+    private static EntryRecord withFlags(EntryRecord record, int flags) {
+        return new EntryRecord(
+                record.keyHandle(),
+                record.valueHandle(),
+                record.keyHash(),
+                record.type(),
+                record.encoding(),
+                flags,
+                record.expireAtMillis(),
+                record.version(),
+                record.lruOrLfu()
+        );
     }
 }

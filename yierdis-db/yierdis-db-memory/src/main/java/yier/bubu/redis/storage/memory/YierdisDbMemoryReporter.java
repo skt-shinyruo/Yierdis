@@ -108,6 +108,7 @@ public final class YierdisDbMemoryReporter {
                 usage,
                 ledger.reservedBytes(),
                 keyLifecycle.keyCount(),
+                keyLifecycle.expiredEntriesAwaitingPhysicalDeletion(),
                 expires,
                 hashTableMaintenanceRegistry,
                 true,

@@ -26,7 +26,7 @@ public class MemoryStatsCommandTest {
                 Assert.assertTrue(resp instanceof ReplyMap);
                 List<ReplyMap.Entry> entries = ((ReplyMap) resp).entries();
                 Assert.assertNotNull(entries);
-                Assert.assertEquals(20, entries.size());
+                Assert.assertEquals(21, entries.size());
 
                 Map<String, ReplyObject> map = toObjectMap(entries);
                 Assert.assertTrue(map.containsKey("maxmemory_bytes"));
@@ -40,6 +40,7 @@ public class MemoryStatsCommandTest {
                 Assert.assertTrue(map.containsKey("keyspace_rehashing"));
                 Assert.assertTrue(map.containsKey("keyspace_table0_capacity"));
                 Assert.assertTrue(map.containsKey("expire_rehashing"));
+                Assert.assertTrue(map.containsKey("expired_entries_awaiting_physical_deletion"));
 
                 assertLongValue(map.get("maxmemory_bytes"));
                 assertLongValue(map.get("used_bytes_for_maxmemory"));
@@ -50,6 +51,7 @@ public class MemoryStatsCommandTest {
                 assertLongValue(map.get("total_estimated_bytes"));
                 assertLongValue(map.get("key_count"));
                 assertLongValue(map.get("expire_count"));
+                assertLongValue(map.get("expired_entries_awaiting_physical_deletion"));
             }
         });
     }

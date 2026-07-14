@@ -568,7 +568,7 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                                 throw new IllegalStateException("prepared zset removal removed " + actualRemoved
                                         + " members instead of " + removed);
                             }
-                            keyLifecycle.entryTable().replace(currentEntry.entryHandle(), next);
+                            keyLifecycle.replaceEntry(currentEntry.entryHandle(), current, next);
                         },
                         null,
                         null
