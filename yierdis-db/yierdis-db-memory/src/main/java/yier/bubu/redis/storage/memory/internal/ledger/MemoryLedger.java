@@ -1,5 +1,7 @@
 package yier.bubu.redis.storage.memory.internal.ledger;
 
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
+
 // MemoryLedger：maxmemory/预算判定的 SSOT，提供 reserve → commit/rollback 的两阶段写入语义。
 
 /**
@@ -21,7 +23,7 @@ public interface MemoryLedger {
     }
 
     public default long effectiveUsedBytes() {
-        return usedBytes() + reservedBytes();
+        return MemoryUsageSnapshot.addSaturating(usedBytes(), reservedBytes());
     }
 
     MemoryReservation reserve(long estimatedExtraBytes);

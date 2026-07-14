@@ -7,6 +7,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.execution.api.ReplyCapacityUnavailableException;
 import yier.bubu.redis.execution.api.ReplyPlan;
+import yier.bubu.redis.execution.api.ReplyTooLargeException;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -129,6 +130,46 @@ public class BoundedChunkedReplySinkTest {
             holder.close();
             channel.finishAndReleaseAll();
             sequencer.close();
+        }
+    }
+
+    @Test
+    public void maximumReservationRemainsAuthoritativeAcrossNestedReplyPlans() {
+        Fixture fixture = new Fixture(32 * 1024L);
+        try {
+            BoundedChunkedReplySink sink = fixture.sink(Unpooled::buffer);
+            sink.require(ReplyPlan.maximum());
+
+            sink.writeBytes(new byte[4], 0, 4);
+            sink.require(ReplyPlan.exact(7L, 0L));
+            sink.writeBytes(new byte[7], 0, 7);
+            sink.writeBytes(new byte[8], 0, 8);
+
+            Assert.assertEquals(19L, sink.writtenBytes());
+            Assert.assertEquals(32L * 1024L, fixture.slot.lease().reservedBytes());
+        } finally {
+            fixture.close();
+        }
+    }
+
+    @Test
+    public void maximumReservationDoesNotSpendControlCapacityOnReplyChunks() {
+        Fixture fixture = new Fixture(16 * 1024L);
+        try {
+            BoundedChunkedReplySink sink = fixture.sink(Unpooled::buffer);
+            sink.require(ReplyPlan.maximum());
+
+            int maximumPayload = 16 * 1024 - 4 * 1024 - (int) BoundedChunkedReplySink.CHUNK_COMPONENT_OVERHEAD_BYTES;
+            sink.writeBytes(new byte[maximumPayload], 0, maximumPayload);
+
+            Assert.assertThrows(
+                    ReplyTooLargeException.class,
+                    () -> sink.writeBytes(new byte[]{1}, 0, 1)
+            );
+            Assert.assertEquals((long) maximumPayload, sink.writtenBytes());
+            Assert.assertEquals(ReplySlotState.FAILED, fixture.slot.state());
+        } finally {
+            fixture.close();
         }
     }
 

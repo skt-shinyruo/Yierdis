@@ -10,6 +10,7 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.memory.internal.ledger.InMemoryLedger;
 import yier.bubu.redis.storage.memory.internal.ledger.MemoryLedgerOutOfMemoryException;
 import yier.bubu.redis.storage.memory.internal.ledger.MemoryReservation;
@@ -64,6 +65,54 @@ public class MemoryLedgerContractTest {
         Assert.assertThrows(IllegalStateException.class, () -> ledger.reconcile(reservation, 4));
 
         ledger.rollback(reservation);
+        Assert.assertEquals(0L, ledger.reservedBytes());
+    }
+
+    @Test
+    public void inMemoryReservationOverflowIsRejectedWithoutCounterDrift() {
+        InMemoryLedger ledger = new InMemoryLedger(Long.MAX_VALUE);
+        MemoryReservation reservation = ledger.reserve(Long.MAX_VALUE - 1L);
+
+        Assert.assertThrows(MemoryLedgerOutOfMemoryException.class, () -> ledger.reserve(2L));
+        Assert.assertEquals(Long.MAX_VALUE - 1L, ledger.reservedBytes());
+        Assert.assertEquals(Long.MAX_VALUE - 1L, ledger.effectiveUsedBytes());
+
+        ledger.rollback(reservation);
+        Assert.assertEquals(0L, ledger.reservedBytes());
+    }
+
+    @Test
+    public void productionLedgerReservationOverflowIsRejectedWithoutCounterDrift() {
+        YierdisDbMemoryLedger ledger = new YierdisDbMemoryLedger(
+                Long.MAX_VALUE,
+                MaxmemoryPolicy.NOEVICTION,
+                () -> { },
+                ignored -> { },
+                () -> 0L,
+                () -> null
+        );
+        MemoryReservation reservation = ledger.reserve(Long.MAX_VALUE - 1L);
+
+        Assert.assertThrows(MemoryLedgerOutOfMemoryException.class, () -> ledger.reserve(2L));
+        Assert.assertEquals(Long.MAX_VALUE - 1L, ledger.reservedBytes());
+        Assert.assertEquals(Long.MAX_VALUE - 1L, ledger.effectiveUsedBytes());
+
+        ledger.rollback(reservation);
+        Assert.assertEquals(0L, ledger.reservedBytes());
+    }
+
+    @Test
+    public void commitRejectsUsageOverflowBeforeFinishingItsReservation() {
+        InMemoryLedger ledger = new InMemoryLedger(0L);
+        MemoryReservation initial = ledger.reserve(Long.MAX_VALUE);
+        ledger.commit(initial, Long.MAX_VALUE);
+        MemoryReservation overflow = ledger.reserve(1L);
+
+        Assert.assertThrows(IllegalStateException.class, () -> ledger.commit(overflow, 1L));
+        Assert.assertEquals(Long.MAX_VALUE, ledger.usedBytes());
+        Assert.assertEquals(1L, ledger.reservedBytes());
+
+        ledger.rollback(overflow);
         Assert.assertEquals(0L, ledger.reservedBytes());
     }
 }
