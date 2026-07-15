@@ -2,7 +2,7 @@ package yier.bubu.redis.storage.memory.internal.entry;
 
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocator;
-import yier.bubu.redis.memory.api.NativeAllocatorStats;
+import yier.bubu.redis.memory.api.NativeAllocatorMetadataStats;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
@@ -314,7 +314,7 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
     }
 
     private int possibleAdapterSegmentCount(int expectedNativeAllocationCount) {
-        NativeAllocatorStats stats = allocator.stats();
+        NativeAllocatorMetadataStats stats = allocator.metadataStats();
         long activeSegments = Math.max(0L, stats.activeMetadataSegments());
         long freeSlots = Math.max(0L, stats.freeSlots());
         long additionalAllocations = Math.max(0L, (long) expectedNativeAllocationCount - freeSlots);

@@ -7,6 +7,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeAllocatorMetadataStats;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeDefragReport;
@@ -28,6 +29,23 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 public class CollectionRootTest {
+    @Test
+    public void estimatedAdapterGrowthUsesLightweightAllocatorMetadata() {
+        MetadataOnlyAllocator allocator = new MetadataOnlyAllocator(3L, 0L);
+        NativeCollectionRootTable<CountingListValue> table = new NativeCollectionRootTable<>(
+                allocator,
+                NativeObjectKind.LIST_ROOT,
+                "list",
+                false
+        );
+
+        long growth = table.estimatedNewAdapterHeapGrowthBytes(128L, 1);
+
+        Assert.assertTrue(growth > 128L);
+        Assert.assertEquals(1, allocator.metadataStatsCalls());
+        Assert.assertEquals(0, allocator.fullStatsCalls());
+    }
+
     @Test
     public void collectionRootTableDoesNotOwnBoxedHandleMapsOrSets() {
         Assert.assertFalse(Arrays.stream(NativeCollectionRootTable.class.getDeclaredFields())
@@ -445,6 +463,85 @@ public class CollectionRootTest {
         @Override
         public void close() {
             delegate.close();
+        }
+    }
+
+    private static final class MetadataOnlyAllocator implements NativeAllocator {
+        private final NativeAllocatorMetadataStats metadataStats;
+        private int metadataStatsCalls;
+        private int fullStatsCalls;
+
+        private MetadataOnlyAllocator(long activeMetadataSegments, long freeSlots) {
+            metadataStats = new NativeAllocatorMetadataStats(activeMetadataSegments, freeSlots);
+        }
+
+        private int metadataStatsCalls() {
+            return metadataStatsCalls;
+        }
+
+        private int fullStatsCalls() {
+            return fullStatsCalls;
+        }
+
+        @Override
+        public NativeHandle allocate(NativeObjectKind kind, int size) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public NativeHandle realloc(NativeHandle handle, int newSize, NativeReallocPolicy policy) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void free(NativeHandle handle) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void pin(NativeHandle handle) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void unpin(NativeHandle handle) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public NativeEpochScope beginEpoch(NativeEpochKind kind) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public NativeObjectView resolve(NativeHandle handle, NativeAccessMode mode) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public NativeDefragResult defragOne(NativeHandle handle, long maxMoveBytes) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public NativeDefragReport defragCycle(NativeDefragOptions options) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public NativeAllocatorStats stats() {
+            fullStatsCalls++;
+            throw new AssertionError("full allocator stats are not valid for admission estimation");
+        }
+
+        @Override
+        public NativeAllocatorMetadataStats metadataStats() {
+            metadataStatsCalls++;
+            return metadataStats;
+        }
+
+        @Override
+        public void close() {
         }
     }
 

@@ -8,6 +8,7 @@ import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocationGrowth;
 import yier.bubu.redis.memory.api.NativeAllocationScope;
 import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeAllocatorMetadataStats;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeDefragReport;
@@ -149,6 +150,13 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
     public NativeAllocatorStats stats() {
         synchronized (lock) {
             return delegate.stats();
+        }
+    }
+
+    @Override
+    public NativeAllocatorMetadataStats metadataStats() {
+        synchronized (lock) {
+            return delegate.metadataStats();
         }
     }
 

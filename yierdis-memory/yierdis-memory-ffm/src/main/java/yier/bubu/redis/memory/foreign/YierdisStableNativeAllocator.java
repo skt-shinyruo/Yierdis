@@ -10,6 +10,7 @@ import yier.bubu.redis.memory.api.NativeAllocationGrowth;
 import yier.bubu.redis.memory.api.NativeAllocationScope;
 import yier.bubu.redis.memory.api.NativeAllocationLatencyHistogram;
 import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeAllocatorMetadataStats;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeDefragReport;
@@ -429,6 +430,13 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
                 tableStats.retiredSlots(),
                 tableStats.peakLiveSlots()
         );
+    }
+
+    @Override
+    public NativeAllocatorMetadataStats metadataStats() {
+        ensureOpen();
+        YierdisNativeObjectTableStats tableStats = objectTable.stats();
+        return new NativeAllocatorMetadataStats(tableStats.activeSegments(), tableStats.freeSlots());
     }
 
     @Override
