@@ -3,7 +3,26 @@ package yier.bubu.redis.memory.api;
 import org.junit.Assert;
 import org.junit.Test;
 
+import java.lang.management.ManagementFactory;
+
 public class NativeHandleTest {
+    @Test
+    public void domainLookupDoesNotAllocateForEveryDecodedHandle() {
+        com.sun.management.ThreadMXBean bean = allocatedBytesBean();
+        int domainCount = NativeHandleDomain.values().length;
+        for (int index = 0; index < 10_000; index++) {
+            Assert.assertNotNull(NativeHandleDomain.fromCode(index % domainCount));
+        }
+
+        long before = bean.getThreadAllocatedBytes(Thread.currentThread().threadId());
+        for (int index = 0; index < 100_000; index++) {
+            Assert.assertNotNull(NativeHandleDomain.fromCode(index % domainCount));
+        }
+        long allocatedBytes = bean.getThreadAllocatedBytes(Thread.currentThread().threadId()) - before;
+
+        Assert.assertTrue("domain lookup allocated " + allocatedBytes + " bytes", allocatedBytes < 4_096L);
+    }
+
     @Test
     public void nullHandleIsOnlyZeroRawValue() {
         Assert.assertTrue(NativeHandle.NULL.isNull());
@@ -76,5 +95,16 @@ public class NativeHandleTest {
         } catch (IllegalArgumentException expected) {
             Assert.assertNotNull(expected.getMessage());
         }
+    }
+
+    private static com.sun.management.ThreadMXBean allocatedBytesBean() {
+        java.lang.management.ThreadMXBean bean = ManagementFactory.getThreadMXBean();
+        Assert.assertTrue("thread allocation accounting is unavailable", bean instanceof com.sun.management.ThreadMXBean);
+        com.sun.management.ThreadMXBean allocatedBytesBean = (com.sun.management.ThreadMXBean) bean;
+        Assert.assertTrue("thread allocation accounting is unsupported", allocatedBytesBean.isThreadAllocatedMemorySupported());
+        if (!allocatedBytesBean.isThreadAllocatedMemoryEnabled()) {
+            allocatedBytesBean.setThreadAllocatedMemoryEnabled(true);
+        }
+        return allocatedBytesBean;
     }
 }

@@ -1,5 +1,6 @@
 package yier.bubu.redis.memory.foreign;
 
+import java.lang.management.ManagementFactory;
 import java.lang.reflect.Field;
 import java.util.Arrays;
 import java.util.List;
@@ -15,6 +16,34 @@ import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.OffHeapOutOfMemoryException;
 
 public class YierdisNativePageAllocatorTest {
+    @Test
+    public void byteAccessDoesNotAllocateFfmSpans() {
+        com.sun.management.ThreadMXBean bean = allocatedBytesBean();
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("block-access-allocation");
+             YierdisNativePageAllocator allocator = new YierdisNativePageAllocator(runtime)) {
+            YierdisNativeBlock block = allocator.allocate(16);
+            try {
+                for (int index = 0; index < 10_000; index++) {
+                    block.setByte(0, (byte) index);
+                    block.getByte(0);
+                }
+
+                long before = bean.getThreadAllocatedBytes(Thread.currentThread().threadId());
+                int checksum = 0;
+                for (int index = 0; index < 100_000; index++) {
+                    block.setByte(0, (byte) index);
+                    checksum += block.getByte(0);
+                }
+                long allocatedBytes = bean.getThreadAllocatedBytes(Thread.currentThread().threadId()) - before;
+
+                Assert.assertTrue("block byte access allocated " + allocatedBytes + " bytes", allocatedBytes < 1L);
+                Assert.assertNotEquals(0, checksum);
+            } finally {
+                block.close();
+            }
+        }
+    }
+
     @Test
     public void pageDirectoryReportsCheckedIdExhaustion() throws Exception {
         YierdisNativePageDirectory directory = new YierdisNativePageDirectory();
@@ -254,5 +283,16 @@ public class YierdisNativePageAllocatorTest {
             Assert.assertEquals(YierdisNativePageAllocator.PAGE_BYTES, afterFree.smallFreeBytes());
             Assert.assertEquals(1L, afterFree.freePages());
         }
+    }
+
+    private static com.sun.management.ThreadMXBean allocatedBytesBean() {
+        java.lang.management.ThreadMXBean bean = ManagementFactory.getThreadMXBean();
+        Assert.assertTrue("thread allocation accounting is unavailable", bean instanceof com.sun.management.ThreadMXBean);
+        com.sun.management.ThreadMXBean allocatedBytesBean = (com.sun.management.ThreadMXBean) bean;
+        Assert.assertTrue("thread allocation accounting is unsupported", allocatedBytesBean.isThreadAllocatedMemorySupported());
+        if (!allocatedBytesBean.isThreadAllocatedMemoryEnabled()) {
+            allocatedBytesBean.setThreadAllocatedMemoryEnabled(true);
+        }
+        return allocatedBytesBean;
     }
 }
