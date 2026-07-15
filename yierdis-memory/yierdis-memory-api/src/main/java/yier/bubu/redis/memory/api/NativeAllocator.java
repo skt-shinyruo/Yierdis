@@ -50,6 +50,11 @@ public interface NativeAllocator extends AutoCloseable {
 
     NativeAllocatorStats stats();
 
+    default NativeAllocatorMetadataStats metadataStats() {
+        NativeAllocatorStats stats = stats();
+        return new NativeAllocatorMetadataStats(stats.activeMetadataSegments(), stats.freeSlots());
+    }
+
     default MemoryUsageSnapshot memoryUsage() {
         NativeAllocatorStats stats = stats();
         return new MemoryUsageSnapshot(0, 0, stats.committedBytes(), stats.reservedBytes(), stats.freeBytes());
