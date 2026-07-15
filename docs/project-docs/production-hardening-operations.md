@@ -175,7 +175,7 @@ The focused tests below were rerun under JDK 25 against the current non-performa
 | 5: RESP ingress admission | `RespIngressPressureTest` and `RespIngressFuzzTest` passed with paranoid Netty leak detection enabled. |
 | 6: commit stream convergence | `CommitStreamTest`, `CommitStreamShutdownTest`, `CommitStreamIntegrationTest`, and `CommitStreamExpirationEvictionTest` passed. |
 | 7: bounded ordered egress | `OrderedReplyIntegrationTest`, `OutboundReplyPressureTest`, `ReplyResultUnknownTest`, and `ArchitectureBoundaryTest` passed; package, smoke, and the 600-second soak also passed. |
-| 7: throughput gate | NOT RUN: Task 12 requires the four-command benchmark comparison. It remains pending while benchmark execution is prohibited. |
+| 7: throughput gate | USER-WAIVED: benchmark execution is intentionally disabled and excluded from this acceptance record. No throughput ratio is claimed. |
 
 ## Acceptance Record
 
@@ -219,4 +219,43 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
   SKIP_BUILD=1 ./scripts/smoke.sh
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
   ./scripts/production-hardening-soak.sh --duration-seconds 600 --seed 20260710 --skip-package
+```
+
+### Candidate `20bf9aca1efbdc4446003e438f40e74814cd5679` (non-benchmark acceptance)
+
+This candidate passed every functional, ownership, smoke, soak, architecture, and full-suite gate on the frozen artifact below. The user explicitly waived Task 12 and requested that benchmark execution be ignored. This is therefore a non-benchmark acceptance record, not a claim that the original four-command 0.90 throughput gate was measured or passed.
+
+| Field | Acceptance value |
+| --- | --- |
+| Candidate commit and current artifact SHA-256 | `20bf9aca1efbdc4446003e438f40e74814cd5679`; `285f8c783ab3dd8660f4519c7c9b267de6755ac1070ad1b2cd403f34201875fe` |
+| Baseline commit and preserved artifact SHA-256 | `fb857980^` = `d9d3d36fe9eea93246d4daacd649536508e15d14`; `eb16b734b072131224f82fc72d92a8e2d250a7a1f453af89bb9a7af3bedfecf5` |
+| JDK / OS / CPU | OpenJDK `25.0.3`; Linux `6.6.87.2-microsoft-standard-WSL2`; AMD Ryzen 9 9950X, 16 cores / 32 threads |
+| Focused and architecture suites | PASS: `95` tests across `OutboundMemoryBudgetTest`, `ConnectionReplySequencerTest`, `BoundedChunkedReplySinkTest`, `OrderedReplyPipelineTest`, `ReplyShutdownTest`, `OrderedReplyIntegrationTest`, `OutboundReplyPressureTest`, `ReplyResultUnknownTest`, `CommitStreamIntegrationTest`, `CommitStreamShutdownTest`, and `ArchitectureBoundaryTest` |
+| Full non-benchmark Maven suite | PASS: `mvn -q -pl '!yierdis-benchmark' test`; `981` tests, `0` failures, `0` errors |
+| Package and smoke | PASS: `mvn -q -pl '!yierdis-benchmark' -DskipTests package`; frozen-JAR `SKIP_BUILD=1 ./scripts/smoke.sh` completed `PING`, `SET`, and `GET` |
+| 600-second soak | PASS: seed `20260710`, `600018` ms, `5485` samples, report `target/production-hardening-soak/20260715T042536Z-seed-20260710/soak-20260710-1784089542186.jsonl` |
+| Soak peaks | heap `348196424`; native `1933520`; maxmemory-used `2044780`; inbound reserved `404920`; commit events/bytes `53` / `400632`; outbound reserved/allocated `6974` / `2878`; reply slots/sources/chunks `1` / `0` / `1`; child channels `1`; RSS `554696704` bytes |
+| Cycle baselines | Cycles 0-3 each returned to `0` native live objects, `4` native live regions, `294912` metadata-committed bytes, and `208` data-committed bytes |
+| Final ownership counters | All zero: inbound reserved/read-credit/retained/consolidation; commit-stream reservation; outbound reserved/allocated/slots; reply sources/chunks; child channels. Ordering sequence `90889`; delayed commit callbacks `66526`; soak failure empty |
+| Throughput gate | USER-WAIVED: no benchmark command, output, median, or ratio was used for this candidate |
+
+Commands used for this candidate, all under JDK 25:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
+  mvn -q -pl '!yierdis-benchmark' -DskipTests package
+sha256sum yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
+  SKIP_BUILD=1 ./scripts/smoke.sh
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
+  ./scripts/production-hardening-soak.sh --skip-package --duration-seconds 600 --seed 20260710
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
+  mvn -q -pl yierdis-db,yierdis-networking,yierdis-command,yierdis-server,yierdis-tests/yierdis-integration-tests -am \
+  -Dtest=OutboundMemoryBudgetTest,ConnectionReplySequencerTest,BoundedChunkedReplySinkTest,OrderedReplyPipelineTest,ReplyShutdownTest,OrderedReplyIntegrationTest,OutboundReplyPressureTest,ReplyResultUnknownTest,CommitStreamIntegrationTest,CommitStreamShutdownTest \
+  -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
+  mvn -q -pl yierdis-tests/yierdis-architecture-tests -am \
+  -Dtest=ArchitectureBoundaryTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
+  mvn -q -pl '!yierdis-benchmark' test
 ```
