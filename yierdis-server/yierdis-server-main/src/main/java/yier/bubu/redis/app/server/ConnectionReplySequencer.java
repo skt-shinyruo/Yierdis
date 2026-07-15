@@ -6,9 +6,11 @@ import io.netty.channel.ChannelFuture;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -24,6 +26,7 @@ final class ConnectionReplySequencer implements AutoCloseable {
     private final ReplySlot.ReplySinkFactory sinkFactory;
     private final ReplyEgressStats replyEgressStats;
     private final ArrayDeque<ReplySlot> slots = new ArrayDeque<>();
+    private final Set<ReplySlot> inFlightSlots = new LinkedHashSet<>();
 
     private long nextSequence;
     private boolean acceptingRegistrations = true;
@@ -137,6 +140,7 @@ final class ConnectionReplySequencer implements AutoCloseable {
             draining = true;
             drainRequested = false;
             try {
+                boolean flushRequired = false;
                 while (true) {
                     ReplySlot head = head();
                     if (head == null) {
@@ -150,8 +154,31 @@ final class ConnectionReplySequencer implements AutoCloseable {
                     if (state != ReplySlotState.READY) {
                         break;
                     }
-                    writeHead(head);
-                    break;
+                    removeHead(head);
+                    try {
+                        writeHead(head);
+                        flushRequired = true;
+                    } catch (RuntimeException | Error failure) {
+                        replyEgressStats.writeFailure();
+                        head.fail(ReplyCleanupOwner.SEQUENCER);
+                        removeInFlight(head);
+                        flushBeforeFailureClose();
+                        cancelAll(ReplyCleanupOwner.SEQUENCER);
+                        channel.close();
+                        break;
+                    }
+                    if (head.closeAfterReply()) {
+                        break;
+                    }
+                }
+                if (flushRequired && channel.isOpen()) {
+                    try {
+                        channel.flush();
+                    } catch (RuntimeException | Error failure) {
+                        replyEgressStats.writeFailure();
+                        cancelAll(ReplyCleanupOwner.SEQUENCER);
+                        channel.close();
+                    }
                 }
             } finally {
                 draining = false;
@@ -179,7 +206,7 @@ final class ConnectionReplySequencer implements AutoCloseable {
     private void completeShutdownIfDrained() {
         boolean closeChannel = false;
         synchronized (lock) {
-            if (shutdownRequested && !shutdownCloseRequested && slots.isEmpty()) {
+            if (shutdownRequested && !shutdownCloseRequested && slots.isEmpty() && inFlightSlots.isEmpty()) {
                 shutdownCloseRequested = true;
                 closeChannel = true;
             }
@@ -196,18 +223,13 @@ final class ConnectionReplySequencer implements AutoCloseable {
 
     private void writeHead(ReplySlot slot) {
         List<ReplySlot.ReplyChunk> chunks = slot.takeChunksForWrite();
+        addInFlight(slot);
         ChannelFuture lastWrite = null;
         if (chunks.isEmpty()) {
-            lastWrite = channel.writeAndFlush(Unpooled.EMPTY_BUFFER);
+            lastWrite = channel.write(Unpooled.EMPTY_BUFFER);
         } else {
-            for (int index = 0; index < chunks.size(); index++) {
-                ReplySlot.ReplyChunk chunk = chunks.get(index);
-                ChannelFuture chunkWrite;
-                if (index + 1 == chunks.size()) {
-                    chunkWrite = channel.writeAndFlush(chunk.buffer());
-                } else {
-                    chunkWrite = channel.write(chunk.buffer());
-                }
+            for (ReplySlot.ReplyChunk chunk : chunks) {
+                ChannelFuture chunkWrite = channel.write(chunk.buffer());
                 lastWrite = chunkWrite;
                 chunkWrite.addListener(ignored -> slot.chunkWriteCompleted(chunk));
             }
@@ -216,7 +238,7 @@ final class ConnectionReplySequencer implements AutoCloseable {
         finalWrite.addListener(future -> {
             if (future.isSuccess()) {
                 slot.finish(ReplyCleanupOwner.FINAL_WRITE_FUTURE);
-                removeHead(slot);
+                removeInFlight(slot);
                 if (slot.closeAfterReply()) {
                     channel.close();
                     return;
@@ -226,7 +248,8 @@ final class ConnectionReplySequencer implements AutoCloseable {
             }
             replyEgressStats.writeFailure();
             slot.fail(ReplyCleanupOwner.FINAL_WRITE_FUTURE);
-            removeHead(slot);
+            removeInFlight(slot);
+            flushBeforeFailureClose();
             cancelAll(ReplyCleanupOwner.SEQUENCER);
             channel.close();
         });
@@ -253,7 +276,9 @@ final class ConnectionReplySequencer implements AutoCloseable {
         List<ReplySlot> pending;
         synchronized (lock) {
             acceptingRegistrations = false;
-            pending = new ArrayList<>(slots);
+            Set<ReplySlot> allSlots = new LinkedHashSet<>(slots);
+            allSlots.addAll(inFlightSlots);
+            pending = new ArrayList<>(allSlots);
         }
         for (ReplySlot slot : pending) {
             slot.cancelNow(owner);
@@ -274,6 +299,29 @@ final class ConnectionReplySequencer implements AutoCloseable {
             } else {
                 slots.remove(expected);
             }
+        }
+    }
+
+    private void addInFlight(ReplySlot slot) {
+        synchronized (lock) {
+            inFlightSlots.add(slot);
+        }
+    }
+
+    private void removeInFlight(ReplySlot slot) {
+        synchronized (lock) {
+            inFlightSlots.remove(slot);
+        }
+    }
+
+    private void flushBeforeFailureClose() {
+        if (!channel.isOpen()) {
+            return;
+        }
+        try {
+            channel.flush();
+        } catch (RuntimeException | Error ignored) {
+            // 原始写失败仍是此连接的终止 egress 结果。
         }
     }
 

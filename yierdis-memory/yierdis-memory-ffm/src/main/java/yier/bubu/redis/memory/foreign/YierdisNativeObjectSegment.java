@@ -84,19 +84,19 @@ final class YierdisNativeObjectSegment implements AutoCloseable {
     }
 
     long readLong(int offset, int fieldOffset) {
-        return YierdisFfmAccess.getLong(metaSpan(offset), fieldOffset);
+        return metadataRegion.getLong(metadataOffset(offset, fieldOffset, Long.BYTES));
     }
 
     void writeLong(int offset, int fieldOffset, long value) {
-        YierdisFfmAccess.setLong(metaSpan(offset), fieldOffset, value);
+        metadataRegion.setLong(metadataOffset(offset, fieldOffset, Long.BYTES), value);
     }
 
     int readInt(int offset, int fieldOffset) {
-        return YierdisFfmAccess.getInt(metaSpan(offset), fieldOffset);
+        return metadataRegion.getInt(metadataOffset(offset, fieldOffset, Integer.BYTES));
     }
 
     void writeInt(int offset, int fieldOffset, int value) {
-        YierdisFfmAccess.setInt(metaSpan(offset), fieldOffset, value);
+        metadataRegion.setInt(metadataOffset(offset, fieldOffset, Integer.BYTES), value);
     }
 
     @Override
@@ -108,9 +108,12 @@ final class YierdisNativeObjectSegment implements AutoCloseable {
         metadataRegion.close();
     }
 
-    private YierdisFfmSpan metaSpan(int offset) {
+    private int metadataOffset(int offset, int fieldOffset, int fieldBytes) {
         ensureValidOffset(offset);
-        return metadataRegion.span(offset * YierdisNativeObjectTable.META_BYTES, YierdisNativeObjectTable.META_BYTES);
+        if (fieldOffset < 0 || fieldOffset > YierdisNativeObjectTable.META_BYTES - fieldBytes) {
+            throw new IndexOutOfBoundsException("invalid object metadata field offset: " + fieldOffset);
+        }
+        return offset * YierdisNativeObjectTable.META_BYTES + fieldOffset;
     }
 
     private void ensureValidOffset(int offset) {

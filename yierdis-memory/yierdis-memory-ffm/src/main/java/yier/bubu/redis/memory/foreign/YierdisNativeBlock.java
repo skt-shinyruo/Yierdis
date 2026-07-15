@@ -92,25 +92,25 @@ public final class YierdisNativeBlock implements AutoCloseable {
     public byte getByte(int index) {
         ensureOpen();
         checkRange(index, 1);
-        return YierdisFfmAccess.getByte(region.span(regionOffset, capacity), index);
+        return region.getByte(regionOffset + index);
     }
 
     public void setByte(int index, byte value) {
         ensureOpen();
         checkRange(index, 1);
-        YierdisFfmAccess.setByte(region.span(regionOffset, capacity), index, value);
+        region.setByte(regionOffset + index, value);
     }
 
     public void getBytes(int index, byte[] dst, int dstOff, int len) {
         ensureOpen();
         checkRange(index, len);
-        YierdisFfmAccess.getBytes(region.span(regionOffset, capacity), index, dst, dstOff, len);
+        region.getBytes(regionOffset + index, dst, dstOff, len);
     }
 
     public void setBytes(int index, byte[] src, int srcOff, int len) {
         ensureOpen();
         checkRange(index, len);
-        YierdisFfmAccess.setBytes(region.span(regionOffset, capacity), index, src, srcOff, len);
+        region.setBytes(regionOffset + index, src, srcOff, len);
     }
 
     YierdisFfmSpan span() {

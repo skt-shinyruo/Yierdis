@@ -2,15 +2,55 @@ package yier.bubu.redis.app.server;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelOutboundHandlerAdapter;
+import io.netty.channel.ChannelPromise;
 import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.util.ReferenceCountUtil;
 import org.junit.Assert;
 import org.junit.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class ConnectionReplySequencerTest {
+    @Test
+    public void submitsFollowingReadySlotsBeforeThePriorWriteFutureCompletes() {
+        OutboundMemoryBudget budget = new OutboundMemoryBudget(8_192L);
+        OutboundConnectionMemory connection = budget.openConnection(8_192L);
+        DelayedOutboundWrites delayedWrites = new DelayedOutboundWrites();
+        EmbeddedChannel channel = new EmbeddedChannel(delayedWrites);
+        ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, connection, () -> { });
+        ReplySlot first = sequencer.register(connection.reserve(4_096L, 4_096L).orElseThrow()).orElseThrow();
+        ReplySlot second = sequencer.register(connection.reserve(4_096L, 4_096L).orElseThrow()).orElseThrow();
+        try {
+            second.addChunk(Unpooled.copiedBuffer("second", StandardCharsets.US_ASCII));
+            second.markReady(false);
+            first.addChunk(Unpooled.copiedBuffer("first", StandardCharsets.US_ASCII));
+            first.markReady(false);
+            drain(channel);
+
+            Assert.assertEquals(2, delayedWrites.pendingWriteCount());
+            Assert.assertEquals(1, delayedWrites.flushCount());
+            Assert.assertEquals(ReplySlotState.WRITING, first.state());
+            Assert.assertEquals(ReplySlotState.WRITING, second.state());
+
+            delayedWrites.succeedAll();
+            drain(channel);
+
+            Assert.assertEquals(ReplySlotState.COMPLETED, first.state());
+            Assert.assertEquals(ReplySlotState.COMPLETED, second.state());
+            Assert.assertEquals(0L, budget.stats().reservedBytes());
+        } finally {
+            delayedWrites.failAll();
+            channel.finishAndReleaseAll();
+            sequencer.close();
+        }
+    }
+
     @Test
     public void writesReadySlotsInRegistrationOrder() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(12_288L);
@@ -220,6 +260,53 @@ public class ConnectionReplySequencerTest {
         for (int i = 0; i < 4; i++) {
             channel.runPendingTasks();
             channel.runScheduledPendingTasks();
+        }
+    }
+
+    private static final class DelayedOutboundWrites extends ChannelOutboundHandlerAdapter {
+        private final List<PendingWrite> pendingWrites = new ArrayList<>();
+        private int flushCount;
+
+        @Override
+        public void write(ChannelHandlerContext context, Object message, ChannelPromise promise) {
+            pendingWrites.add(new PendingWrite(message, promise));
+        }
+
+        @Override
+        public void flush(ChannelHandlerContext context) {
+            flushCount++;
+        }
+
+        private int pendingWriteCount() {
+            return pendingWrites.size();
+        }
+
+        private int flushCount() {
+            return flushCount;
+        }
+
+        private void succeedAll() {
+            completeAll(null);
+        }
+
+        private void failAll() {
+            completeAll(new IllegalStateException("test cleanup"));
+        }
+
+        private void completeAll(Throwable failure) {
+            List<PendingWrite> writes = List.copyOf(pendingWrites);
+            pendingWrites.clear();
+            for (PendingWrite write : writes) {
+                ReferenceCountUtil.release(write.message());
+                if (failure == null) {
+                    write.promise().setSuccess();
+                } else {
+                    write.promise().setFailure(failure);
+                }
+            }
+        }
+
+        private record PendingWrite(Object message, ChannelPromise promise) {
         }
     }
 }
