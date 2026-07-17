@@ -5,6 +5,14 @@
 Approved design for a full replacement of the existing `yierdis-benchmark`
 implementation.
 
+Implementation-plan source audit correction: direct inspection of
+`af293cf75bf88773f9c04e20276cff57cffa730a` confirmed that the latency
+histogram samples only the first configured request count, while throughput
+uses `requests_finished` at the event-loop stop boundary. It also confirmed
+that AUTH/SELECT are prefixed to a connection's first measured write rather
+than completed before timing. The measurement sections below record those
+official semantics.
+
 This design supersedes the benchmark direction in:
 
 - `docs/superpowers/specs/2026-06-14-release-grade-benchmark-suite-design.md`
@@ -155,14 +163,17 @@ inputs needed to reproduce the built-in workload:
   non-negative value enables it;
 - `--keep-alive`, default `true`;
 - `--tests`, a comma-separated list of official selection names;
-- `--precision`, default `3` decimal places;
+- `--precision`, default `3` HdrHistogram significant digits (official output
+  still renders latency fields with three decimal places);
 - `--seed`, optional deterministic random seed;
 - `--format`, one of `human`, `quiet`, or `csv`;
 - optional username, password, and database selection for connection setup.
 
 Authentication and database selection are connection prefix operations. They
-must complete before measured requests and never contribute to request counts,
-throughput, or latency.
+are prepended to the first pipeline on every new connection that receives work,
+matching official `redis-benchmark`. Their replies never increment benchmark
+request or histogram counts, but their first-write/read delay is part of the
+first batch latency and the case's elapsed time.
 
 Invalid values and unknown test names fail before any measured request is sent.
 
@@ -283,29 +294,37 @@ client more closely than one platform thread or virtual thread per connection.
 
 Each client is an explicit state machine:
 
-1. connect;
-2. complete optional AUTH and SELECT prefixes;
-3. wait at the measured start barrier;
-4. write the next request batch;
-5. read and validate the corresponding replies;
+1. create a non-blocking connection and optional AUTH/SELECT prefix buffer;
+2. enter the measured event loop after all client objects are registered;
+3. finish connecting and write the optional prefix plus first request batch;
+4. discard validated prefix replies from benchmark counters;
+5. read and validate the corresponding measured replies;
 6. either refill the same connection, reconnect when keepalive is disabled, or
    finish when the global request budget is exhausted.
 
-All clients are connected and all prefix commands are complete before the
-measurement clock starts. No measured request is sent before the start barrier.
+With keepalive disabled, a client that finishes before the global reply
+threshold creates its replacement before the old client is removed, as the
+official `createMissingClients` path does. A late replacement may connect but
+receive no work after the full-pipeline issuance budget is exhausted.
+
+The measurement clock starts after all non-blocking client objects have been
+created, immediately before the selector loop starts. Connection completion is
+therefore included in elapsed time, while per-batch latency starts immediately
+before that batch's first write attempt. Prefixes share the first batch write
+and latency timestamp, as they do in the official client.
 
 Request issuance follows the official pipeline boundary. A client that is
 allowed to issue work always sends a complete pipeline batch. Therefore the
 wire request count is `ceil(requests / pipeline) * pipeline` when the configured
 request count is not divisible by the pipeline depth.
 
-Only the first configured `requests` replies contribute to the reported count
-and latency histogram. When that threshold is crossed, the runner drains the
-remainder of the same client's pipeline batch and then stops the event loop. It
-does not wait for replies to other already-issued client batches. Remaining
-connections are closed during case cleanup. This reproduces the official
-single-event-loop stop boundary rather than extending elapsed time to drain all
-outstanding work.
+Only the first configured `requests` replies contribute to the latency
+histogram. When that threshold is crossed, the runner drains the remainder of
+the same client's pipeline batch and then stops the event loop. It does not wait
+for replies to other already-issued client batches. Remaining connections are
+closed during case cleanup. The completed count used by the official throughput
+report is the actual number of validated measured replies at that stop boundary,
+which can exceed the configured count for a non-divisible final pipeline.
 
 ### RESP Reply Decoder
 
@@ -333,10 +352,11 @@ Any RESP error reply aborts the current case as `FAILED`.
 
 ## Measurement Semantics
 
-Throughput measurement starts immediately before measured clients are released
-to write and ends when the configured final reply is received. It excludes
-connection establishment, AUTH, SELECT, rendering, catalog resolution, and
-template compilation.
+Throughput measurement starts after all non-blocking clients are created and
+immediately before the selector loop, then ends when the threshold-crossing
+client drains its batch. It excludes rendering, catalog resolution, and
+template compilation. Like official `redis-benchmark`, elapsed time includes
+non-blocking connection completion and first-use AUTH/SELECT prefixes.
 
 Each client records a batch start timestamp immediately before writing a new
 batch. Like official `redis-benchmark`, latency is captured on the first read
@@ -355,16 +375,17 @@ uses milliseconds and includes:
 - p99;
 - maximum.
 
-Requests per second is the configured request count divided by measured elapsed
-milliseconds, matching the official report. Only the first configured number
-of validated measured replies enter the completed count and latency histogram.
-Surplus replies in the threshold-crossing client's batch are consumed and
-validated before the timer stops; other outstanding client batches are not
-awaited.
+Requests per second is the actual validated measured-reply count at the stop
+boundary divided by measured elapsed milliseconds, matching the official
+report's `requests_finished` numerator. Only the first configured number of
+validated measured replies enter the latency histogram. Surplus replies in the
+threshold-crossing client's batch are counted and validated before the timer
+stops; other outstanding client batches are not awaited.
 
 There is no implicit warmup. The benchmark may initialize classes, allocate
-buffers, compile templates, and connect sockets before the timer, but it must
-not send unreported workload commands to warm the client or server.
+buffers, compile templates, and create non-blocking socket objects before the
+timer, but it must not send unreported workload commands to warm the client or
+server.
 
 ## Results And Exit Semantics
 
@@ -413,12 +434,12 @@ The following fail before measurement begins:
 
 - invalid options;
 - unknown test selectors;
-- invalid template definitions;
-- inability to connect all clients;
-- AUTH or SELECT failure.
+- invalid template definitions.
 
 The following fail only the active supported case:
 
+- connection establishment failure;
+- AUTH or SELECT failure;
 - socket disconnect or write failure;
 - malformed RESP;
 - RESP error reply;
@@ -451,7 +472,8 @@ replies. Tests cover:
   pipeline counts;
 - one event loop serving many clients;
 - keepalive and reconnect behavior;
-- prefix command exclusion;
+- prefix reply exclusion from request and histogram counts, while retaining
+  official first-batch timing;
 - partial writes and fragmented replies;
 - multiple replies in one read;
 - RESP errors, malformed replies, and disconnects;
