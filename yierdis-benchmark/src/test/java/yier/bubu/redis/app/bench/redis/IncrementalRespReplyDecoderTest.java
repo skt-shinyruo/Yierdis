@@ -23,12 +23,12 @@ public class IncrementalRespReplyDecoderTest {
 
     @Test
     public void integersAcceptZeroSignedValuesAndLongBoundaries() throws Exception {
-        Assert.assertEquals(0L, defaults().tryDecode(ascii(":0\r\n")).integer().longValue());
-        Assert.assertEquals(-42L, defaults().tryDecode(ascii(":-42\r\n")).integer().longValue());
+        Assert.assertEquals(0L, defaults().tryDecode(ascii(":0\r\n")).integerValue());
+        Assert.assertEquals(-42L, defaults().tryDecode(ascii(":-42\r\n")).integerValue());
         Assert.assertEquals(Long.MAX_VALUE,
-                defaults().tryDecode(ascii(":" + Long.MAX_VALUE + "\r\n")).integer().longValue());
+                defaults().tryDecode(ascii(":" + Long.MAX_VALUE + "\r\n")).integerValue());
         Assert.assertEquals(Long.MIN_VALUE,
-                defaults().tryDecode(ascii(":" + Long.MIN_VALUE + "\r\n")).integer().longValue());
+                defaults().tryDecode(ascii(":" + Long.MIN_VALUE + "\r\n")).integerValue());
     }
 
     @Test
@@ -82,6 +82,181 @@ public class IncrementalRespReplyDecoderTest {
     }
 
     @Test
+    public void fragmentedLargeArrayRetainsMonotonicChildProgress() throws Exception {
+        int childCount = 2048;
+        byte[] header = ("*" + childCount + "\r\n").getBytes(StandardCharsets.US_ASCII);
+        byte[] child = ":1\r\n".getBytes(StandardCharsets.US_ASCII);
+        IncrementalRespReplyDecoder decoder = new IncrementalRespReplyDecoder(16, 32, childCount, 4);
+        ByteBuffer input = ByteBuffer.allocate(header.length + child.length * childCount);
+        input.put(header).flip();
+
+        Assert.assertNull(decoder.tryDecode(input));
+        Assert.assertEquals(0, input.position());
+        int previousProgress = decoder.retainedProgress();
+        Assert.assertEquals(header.length, previousProgress);
+
+        for (int index = 0; index < childCount - 1; index++) {
+            input.compact().put(child).flip();
+            Assert.assertNull(decoder.tryDecode(input));
+            Assert.assertEquals(0, input.position());
+            int progress = decoder.retainedProgress();
+            Assert.assertEquals(input.limit(), progress);
+            Assert.assertTrue(progress > previousProgress);
+            previousProgress = progress;
+        }
+
+        for (int repeat = 0; repeat < 32; repeat++) {
+            Assert.assertNull(decoder.tryDecode(input));
+            Assert.assertEquals(0, input.position());
+            Assert.assertEquals(previousProgress, decoder.retainedProgress());
+        }
+
+        input.compact().put(child).flip();
+        BenchmarkRespReply reply = decoder.tryDecode(input);
+        Assert.assertEquals(childCount, reply.arrayLength());
+        Assert.assertEquals(input.limit(), input.position());
+        Assert.assertEquals(0, decoder.retainedProgress());
+    }
+
+    @Test
+    public void fragmentedLinesAndBulkBodiesResumeTheirPriorStage() throws Exception {
+        IncrementalRespReplyDecoder lineDecoder = defaults();
+        ByteBuffer line = ByteBuffer.allocate(32);
+        line.put("+abc".getBytes(StandardCharsets.US_ASCII)).flip();
+        Assert.assertNull(lineDecoder.tryDecode(line));
+        Assert.assertEquals(4, lineDecoder.retainedProgress());
+        Assert.assertNull(lineDecoder.tryDecode(line));
+        Assert.assertEquals(4, lineDecoder.retainedProgress());
+        line.compact().put((byte) '\r').flip();
+        Assert.assertNull(lineDecoder.tryDecode(line));
+        Assert.assertEquals(4, lineDecoder.retainedProgress());
+        line.compact().put((byte) '\n').flip();
+        Assert.assertEquals("abc", lineDecoder.tryDecode(line).text());
+
+        IncrementalRespReplyDecoder bulkDecoder = defaults();
+        ByteBuffer bulk = ByteBuffer.allocate(32);
+        bulk.put("$5\r\nhe".getBytes(StandardCharsets.US_ASCII)).flip();
+        Assert.assertNull(bulkDecoder.tryDecode(bulk));
+        Assert.assertEquals(4, bulkDecoder.retainedProgress());
+        bulk.compact().put("llo\r".getBytes(StandardCharsets.US_ASCII)).flip();
+        Assert.assertNull(bulkDecoder.tryDecode(bulk));
+        Assert.assertEquals(4, bulkDecoder.retainedProgress());
+        Assert.assertNull(bulkDecoder.tryDecode(bulk));
+        Assert.assertEquals(4, bulkDecoder.retainedProgress());
+        bulk.compact().put((byte) '\n').flip();
+        Assert.assertEquals(5, bulkDecoder.tryDecode(bulk).bulkLength());
+    }
+
+    @Test
+    public void fragmentedNestedArraysRetainPrimitiveStackProgress() throws Exception {
+        IncrementalRespReplyDecoder decoder = defaults();
+        ByteBuffer input = ByteBuffer.allocate(64);
+        input.put("*1\r\n*2\r\n+one\r\n".getBytes(StandardCharsets.US_ASCII)).flip();
+
+        Assert.assertNull(decoder.tryDecode(input));
+        Assert.assertEquals(0, input.position());
+        Assert.assertEquals(input.limit(), decoder.retainedProgress());
+        Assert.assertEquals(2, decoder.retainedArrayDepth());
+
+        input.compact().put("+tw".getBytes(StandardCharsets.US_ASCII)).flip();
+        Assert.assertNull(decoder.tryDecode(input));
+        Assert.assertEquals(0, input.position());
+        Assert.assertEquals(input.limit(), decoder.retainedProgress());
+        Assert.assertEquals(2, decoder.retainedArrayDepth());
+
+        input.compact().put("o\r\n".getBytes(StandardCharsets.US_ASCII)).flip();
+        BenchmarkRespReply reply = decoder.tryDecode(input);
+        Assert.assertEquals(1, reply.arrayLength());
+        Assert.assertFalse(input.hasRemaining());
+    }
+
+    @Test
+    public void compactingNonzeroTopLevelStartPreservesRetainedOffsets() throws Exception {
+        IncrementalRespReplyDecoder decoder = defaults();
+        ByteBuffer input = ByteBuffer.allocate(64);
+        input.put("+OK\r\n*2\r\n:1\r\n".getBytes(StandardCharsets.US_ASCII)).flip();
+
+        Assert.assertEquals("OK", decoder.tryDecode(input).text());
+        Assert.assertEquals(5, input.position());
+        Assert.assertNull(decoder.tryDecode(input));
+        Assert.assertEquals(5, input.position());
+        Assert.assertEquals(8, decoder.retainedProgress());
+
+        input.compact().put(":2\r\n".getBytes(StandardCharsets.US_ASCII)).flip();
+        BenchmarkRespReply reply = decoder.tryDecode(input);
+        Assert.assertEquals(2, reply.arrayLength());
+        Assert.assertFalse(input.hasRemaining());
+    }
+
+    @Test
+    public void growingIntoReplacementDirectBufferPreservesRetainedOffsets() throws Exception {
+        IncrementalRespReplyDecoder decoder = defaults();
+        ByteBuffer small = ByteBuffer.allocate(16);
+        small.put("*2\r\n$3\r\nab".getBytes(StandardCharsets.US_ASCII)).flip();
+
+        Assert.assertNull(decoder.tryDecode(small));
+        Assert.assertEquals(0, small.position());
+        Assert.assertEquals(8, decoder.retainedProgress());
+
+        ByteBuffer grown = ByteBuffer.allocateDirect(64);
+        grown.put(small.duplicate());
+        grown.put("c\r\n:2\r\n".getBytes(StandardCharsets.US_ASCII)).flip();
+        BenchmarkRespReply reply = decoder.tryDecode(grown);
+        Assert.assertEquals(2, reply.arrayLength());
+        Assert.assertFalse(grown.hasRemaining());
+    }
+
+    @Test
+    public void replacementFragmentsValidateOnlyFixedWidthPrefixAnchors() throws Exception {
+        int childCount = 2048;
+        String header = "*" + childCount + "\r\n";
+        String child = ":1\r\n";
+        byte[] frame = (header + child.repeat(childCount)).getBytes(StandardCharsets.US_ASCII);
+        IncrementalRespReplyDecoder decoder = new IncrementalRespReplyDecoder(
+                16, 32, childCount, 1
+        );
+
+        ByteBuffer fragment = ByteBuffer.wrap(frame);
+        int fragmentLength = header.length();
+        fragment.limit(fragmentLength);
+        Assert.assertNull(decoder.tryDecode(fragment));
+
+        int retainedLength = fragmentLength;
+        long previousValidationBytes = decoder.prefixValidationByteReads();
+        BenchmarkRespReply reply = null;
+        for (int index = 0; index < childCount; index++) {
+            fragment = ByteBuffer.wrap(frame);
+            fragment.limit(fragmentLength += child.length());
+            reply = decoder.tryDecode(fragment);
+            long validationBytes = decoder.prefixValidationByteReads();
+            Assert.assertEquals(
+                    2L * Math.min(retainedLength, Long.BYTES),
+                    validationBytes - previousValidationBytes
+            );
+            if (index + 1 < childCount) {
+                Assert.assertNull(reply);
+            }
+            retainedLength = fragmentLength;
+            previousValidationBytes = validationBytes;
+        }
+
+        Assert.assertNotNull(reply);
+        Assert.assertEquals(childCount, reply.arrayLength());
+    }
+
+    @Test
+    public void droppingRetainedPrefixFailsAndClearsDecoderState() throws Exception {
+        IncrementalRespReplyDecoder decoder = defaults();
+        ByteBuffer partial = ascii("*2\r\n:1\r\n");
+        Assert.assertNull(decoder.tryDecode(partial));
+
+        IOException failure = Assert.assertThrows(IOException.class,
+                () -> decoder.tryDecode(ascii(":2\r\n")));
+        Assert.assertTrue(failure.getMessage().contains("retained prefix"));
+        Assert.assertEquals("OK", decoder.tryDecode(ascii("+OK\r\n")).text());
+    }
+
+    @Test
     public void everyReplyShapeRestoresPositionAtEveryFragmentBoundary() throws Exception {
         String[] frames = {
                 "+PONG\r\n",
@@ -109,7 +284,7 @@ public class IncrementalRespReplyDecoderTest {
         IncrementalRespReplyDecoder decoder = defaults();
         Assert.assertEquals("PONG", decoder.tryDecode(input).text());
         Assert.assertEquals(7, input.position());
-        Assert.assertEquals(1L, decoder.tryDecode(input).integer().longValue());
+        Assert.assertEquals(1L, decoder.tryDecode(input).integerValue());
         Assert.assertEquals(11, input.position());
         Assert.assertEquals(2, decoder.tryDecode(input).arrayLength());
         Assert.assertFalse(input.hasRemaining());
@@ -236,6 +411,25 @@ public class IncrementalRespReplyDecoderTest {
     }
 
     @Test
+    public void supportedMaximumDepthDecodesWithoutJvmStackGrowth() throws Exception {
+        int supportedMaximumDepth = IncrementalRespReplyDecoder.MAX_SUPPORTED_DEPTH;
+        IncrementalRespReplyDecoder decoder = new IncrementalRespReplyDecoder(
+                16, 32, 1, supportedMaximumDepth
+        );
+
+        BenchmarkRespReply reply = decoder.tryDecode(singletonArrays(supportedMaximumDepth));
+        Assert.assertEquals(1, reply.arrayLength());
+    }
+
+    @Test
+    public void constructorRejectsDepthAboveFiniteSupportedMaximum() {
+        Assert.assertThrows(IllegalArgumentException.class,
+                () -> new IncrementalRespReplyDecoder(
+                        16, 32, 1, IncrementalRespReplyDecoder.MAX_SUPPORTED_DEPTH + 1
+                ));
+    }
+
+    @Test
     public void zeroDepthAllowsRootAndRejectsEveryArrayChild() throws Exception {
         IncrementalRespReplyDecoder decoder = new IncrementalRespReplyDecoder(10, 32, 10, 0);
 
@@ -279,7 +473,7 @@ public class IncrementalRespReplyDecoderTest {
 
         Assert.assertEquals("OK", defaults().tryDecode(readOnly).text());
         Assert.assertEquals(7, readOnly.position());
-        Assert.assertEquals(2L, defaults().tryDecode(readOnly).integer().longValue());
+        Assert.assertEquals(2L, defaults().tryDecode(readOnly).integerValue());
         Assert.assertEquals(11, readOnly.position());
         Assert.assertEquals(readOnlyLimit, readOnly.limit());
 
@@ -311,12 +505,46 @@ public class IncrementalRespReplyDecoderTest {
         }
     }
 
+    @Test
+    public void topLevelSimpleAndErrorTextUseUtf8() throws Exception {
+        String text = "ready-\u4f60\u597d";
+
+        BenchmarkRespReply simple = defaults().tryDecode(utf8("+" + text + "\r\n"));
+        BenchmarkRespReply error = defaults().tryDecode(utf8("-" + text + "\r\n"));
+
+        Assert.assertEquals(text, simple.text());
+        Assert.assertEquals(text, error.text());
+    }
+
+    @Test
+    public void integerReplyStoresPrimitiveValueAndBoxesOnlyOnExplicitAccess() throws Exception {
+        Field integerField = BenchmarkRespReply.class.getDeclaredField("integer");
+        Assert.assertEquals(long.class, integerField.getType());
+
+        BenchmarkRespReply reply = defaults().tryDecode(ascii(":257\r\n"));
+        Assert.assertEquals(257L, reply.integerValue());
+        Assert.assertEquals(Long.valueOf(257L), reply.integer());
+    }
+
     private static IncrementalRespReplyDecoder defaults() {
         return new IncrementalRespReplyDecoder(1024, 1024, 1024, 32);
     }
 
     private static ByteBuffer ascii(String value) {
         return ByteBuffer.wrap(value.getBytes(StandardCharsets.US_ASCII));
+    }
+
+    private static ByteBuffer utf8(String value) {
+        return ByteBuffer.wrap(value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static ByteBuffer singletonArrays(int depth) {
+        StringBuilder frame = new StringBuilder(depth * 4 + 5);
+        for (int index = 0; index < depth; index++) {
+            frame.append("*1\r\n");
+        }
+        frame.append("+OK\r\n");
+        return ascii(frame.toString());
     }
 
     private static void assertIncompletePrefix(byte[] frame, int prefixLength) throws Exception {

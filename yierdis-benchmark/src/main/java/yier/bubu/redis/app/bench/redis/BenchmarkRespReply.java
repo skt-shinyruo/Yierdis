@@ -14,17 +14,17 @@ public final class BenchmarkRespReply {
     }
 
     private static final BenchmarkRespReply NULL_BULK =
-            new BenchmarkRespReply(Kind.NULL_BULK, null, null, -1, -1);
+            new BenchmarkRespReply(Kind.NULL_BULK, null, 0, -1, -1);
     private static final BenchmarkRespReply NULL_ARRAY =
-            new BenchmarkRespReply(Kind.NULL_ARRAY, null, null, -1, -1);
+            new BenchmarkRespReply(Kind.NULL_ARRAY, null, 0, -1, -1);
 
     private final Kind kind;
     private final String text;
-    private final Long integer;
+    private final long integer;
     private final int bulkLength;
     private final int arrayLength;
 
-    private BenchmarkRespReply(Kind kind, String text, Long integer, int bulkLength, int arrayLength) {
+    private BenchmarkRespReply(Kind kind, String text, long integer, int bulkLength, int arrayLength) {
         this.kind = Objects.requireNonNull(kind, "kind");
         this.text = text;
         this.integer = integer;
@@ -34,13 +34,13 @@ public final class BenchmarkRespReply {
 
     static BenchmarkRespReply simpleString(String text) {
         return new BenchmarkRespReply(
-                Kind.SIMPLE_STRING, Objects.requireNonNull(text, "text"), null, -1, -1
+                Kind.SIMPLE_STRING, Objects.requireNonNull(text, "text"), 0, -1, -1
         );
     }
 
     static BenchmarkRespReply error(String text) {
         return new BenchmarkRespReply(
-                Kind.ERROR, Objects.requireNonNull(text, "text"), null, -1, -1
+                Kind.ERROR, Objects.requireNonNull(text, "text"), 0, -1, -1
         );
     }
 
@@ -52,7 +52,7 @@ public final class BenchmarkRespReply {
         if (length < 0) {
             throw new IllegalArgumentException("length must be non-negative");
         }
-        return new BenchmarkRespReply(Kind.BULK_STRING, null, null, length, -1);
+        return new BenchmarkRespReply(Kind.BULK_STRING, null, 0, length, -1);
     }
 
     static BenchmarkRespReply nullBulk() {
@@ -63,7 +63,7 @@ public final class BenchmarkRespReply {
         if (length < 0) {
             throw new IllegalArgumentException("length must be non-negative");
         }
-        return new BenchmarkRespReply(Kind.ARRAY, null, null, -1, length);
+        return new BenchmarkRespReply(Kind.ARRAY, null, 0, -1, length);
     }
 
     static BenchmarkRespReply nullArray() {
@@ -79,6 +79,13 @@ public final class BenchmarkRespReply {
     }
 
     public Long integer() {
+        return kind == Kind.INTEGER ? Long.valueOf(integer) : null;
+    }
+
+    public long integerValue() {
+        if (kind != Kind.INTEGER) {
+            throw new IllegalStateException("reply is not an integer");
+        }
         return integer;
     }
 
