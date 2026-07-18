@@ -23,6 +23,7 @@
         <jacoco.version>0.8.14</jacoco.version>
         <shade.version>3.6.0</shade.version>
         <picocli.version>4.7.6</picocli.version>
+        <hdrhistogram.version>2.2.2</hdrhistogram.version>
     </properties>
 
     <modules>
@@ -69,6 +70,11 @@
                 <groupId>info.picocli</groupId>
                 <artifactId>picocli</artifactId>
                 <version>${picocli.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.hdrhistogram</groupId>
+                <artifactId>HdrHistogram</artifactId>
+                <version>${hdrhistogram.version}</version>
             </dependency>
 
             <dependency>
