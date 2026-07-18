@@ -180,4 +180,4 @@ executor/server 改动：executor 单元测试 + server main 集成测试 + 相�
 
 ## Production Hardening Gates
 
-有界 ingress、commit-stream、maxmemory、ordered reply 和 shutdown 改动都要运行与影响面相符的 focused tests，并用 JDK 25 运行架构守卫。完整的 reply matrix、smoke、deterministic soak、四命令 `0.90` benchmark gate、最终 ownership counter 和候选证据要求见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
+有界 ingress、commit-stream、maxmemory、ordered reply 和 shutdown 改动都要运行与影响面相符的 focused tests，并用 JDK 25 运行架构守卫。性能证据由操作者分别管理的 Yierdis benchmark 与官方 Redis benchmark 原始结果组成，两边必须使用等价 workload 设置；项目 benchmark 不计算阈值或 artifact ratio，任何通过/失败判定都属于外部 policy。完整的 reply matrix、smoke、deterministic soak、最终 ownership counter 和候选证据要求见 [`production-hardening-operations.md`](./production-hardening-operations.md)。

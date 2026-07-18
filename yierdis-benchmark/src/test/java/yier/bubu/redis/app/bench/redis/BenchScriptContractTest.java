@@ -25,6 +25,15 @@ public class BenchScriptContractTest {
         Assert.assertFalse(script.contains("--suite"));
     }
 
+    @Test
+    public void currentBenchmarkDocumentationDoesNotClaimRetiredPerformanceGate() throws IOException {
+        String documentation = Files.readString(
+                repoRoot().resolve("docs/project-docs/testing-and-debugging.md")
+        );
+
+        Assert.assertFalse(documentation.contains("四命令 `0.90` benchmark gate"));
+    }
+
     private static Path repoRoot() {
         if (System.getProperty("maven.multiModuleProjectDirectory") == null) {
             Path moduleRoot = Path.of(System.getProperty("basedir"));
