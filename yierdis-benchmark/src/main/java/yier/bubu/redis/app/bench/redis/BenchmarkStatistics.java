@@ -20,6 +20,18 @@ public record BenchmarkStatistics(
                 elapsedMillis,
                 latency
         );
+        if (!Double.isFinite(requestsPerSecond) || requestsPerSecond < 0.0) {
+            throw new IllegalArgumentException("requestsPerSecond must be finite and >= 0");
+        }
+        double expectedRequestsPerSecond = calculateRequestsPerSecond(
+                completedRequests,
+                elapsedMillis
+        );
+        if (Double.compare(requestsPerSecond, expectedRequestsPerSecond) != 0) {
+            throw new IllegalArgumentException(
+                    "requestsPerSecond must match completedRequests and elapsedMillis"
+            );
+        }
     }
 
     public static BenchmarkStatistics from(
@@ -31,18 +43,19 @@ public record BenchmarkStatistics(
             BenchmarkLatencyRecorder.Summary latency
     ) {
         validateCounters(requested, completed, wire, samples, elapsedMillis, latency);
-        double requestsPerSecond = elapsedMillis == 0
-                ? 0.0
-                : completed / (elapsedMillis / 1000.0);
         return new BenchmarkStatistics(
                 requested,
                 completed,
                 wire,
                 samples,
                 elapsedMillis,
-                requestsPerSecond,
+                calculateRequestsPerSecond(completed, elapsedMillis),
                 latency
         );
+    }
+
+    private static double calculateRequestsPerSecond(long completed, long elapsedMillis) {
+        return elapsedMillis == 0 ? 0.0 : completed / (elapsedMillis / 1000.0);
     }
 
     private static void validateCounters(

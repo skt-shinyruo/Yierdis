@@ -107,6 +107,55 @@ public class BenchmarkLatencyRecorderTest {
     }
 
     @Test
+    public void summaryRejectsNegativeCountAndLatencyFields() {
+        assertSummaryRejected(-1, 0.0, 0, 0, 0, 0, 0);
+        assertSummaryRejected(1, 0.0, -1, 0, 0, 0, 0);
+        assertSummaryRejected(1, 0.0, 0, -1, 0, 0, 0);
+        assertSummaryRejected(1, 0.0, 0, 0, -1, 0, 0);
+        assertSummaryRejected(1, 0.0, 0, 0, 0, -1, 0);
+        assertSummaryRejected(1, 0.0, 0, 0, 0, 0, -1);
+    }
+
+    @Test
+    public void summaryRejectsNonFiniteOrNegativeMean() {
+        assertSummaryRejected(1, Double.NaN, 0, 0, 0, 0, 0);
+        assertSummaryRejected(1, Double.POSITIVE_INFINITY, 0, 0, 0, 0, 0);
+        assertSummaryRejected(1, Double.NEGATIVE_INFINITY, 0, 0, 0, 0, 0);
+        assertSummaryRejected(1, -1.0, 0, 0, 0, 0, 0);
+    }
+
+    @Test
+    public void summaryRejectsUnorderedLatencyValues() {
+        assertSummaryRejected(1, 12.0, 11, 10, 12, 13, 14);
+        assertSummaryRejected(1, 11.0, 9, 11, 10, 12, 13);
+        assertSummaryRejected(1, 11.0, 9, 10, 12, 11, 13);
+        assertSummaryRejected(1, 11.0, 9, 10, 11, 13, 12);
+    }
+
+    @Test
+    public void summaryRejectsMeanOutsideRecordedRange() {
+        assertSummaryRejected(1, 9.0, 10, 10, 15, 20, 20);
+        assertSummaryRejected(1, 21.0, 10, 10, 15, 20, 20);
+    }
+
+    @Test
+    public void emptySummaryRejectsAnyNonzeroMetric() {
+        assertSummaryRejected(0, 1.0, 0, 0, 0, 0, 0);
+        assertSummaryRejected(0, 0.0, 1, 0, 0, 0, 0);
+        assertSummaryRejected(0, 0.0, 0, 1, 0, 0, 0);
+        assertSummaryRejected(0, 0.0, 0, 0, 1, 0, 0);
+        assertSummaryRejected(0, 0.0, 0, 0, 0, 1, 0);
+        assertSummaryRejected(0, 0.0, 0, 0, 0, 0, 1);
+    }
+
+    @Test
+    public void positiveSummaryAcceptsZeroLatenciesAndInclusiveMeanBounds() {
+        new BenchmarkLatencyRecorder.Summary(1, 0.0, 0, 0, 0, 0, 0);
+        new BenchmarkLatencyRecorder.Summary(1, 10.0, 10, 10, 15, 20, 20);
+        new BenchmarkLatencyRecorder.Summary(1, 20.0, 10, 10, 15, 20, 20);
+    }
+
+    @Test
     public void benchmarkClockHasOneInjectableMethodAndASystemImplementation() {
         long abstractMethodCount = Arrays.stream(BenchmarkClock.class.getDeclaredMethods())
                 .filter(method -> Modifier.isAbstract(method.getModifiers()))
@@ -181,7 +230,96 @@ public class BenchmarkLatencyRecorderTest {
                 () -> BenchmarkStatistics.from(1, 1, 1, 1, 1, summaryWithCount(0)));
     }
 
+    @Test
+    public void statisticsConstructorRejectsNonFiniteOrNegativeRate() {
+        BenchmarkLatencyRecorder.Summary latency = summaryWithCount(1);
+
+        assertStatisticsRateRejected(1, 1, 1_000, Double.NaN, latency);
+        assertStatisticsRateRejected(1, 1, 1_000, Double.POSITIVE_INFINITY, latency);
+        assertStatisticsRateRejected(1, 1, 1_000, Double.NEGATIVE_INFINITY, latency);
+        assertStatisticsRateRejected(1, 1, 1_000, -1.0, latency);
+    }
+
+    @Test
+    public void statisticsConstructorRejectsFiniteRateInconsistentWithCounters() {
+        BenchmarkLatencyRecorder.Summary latency = summaryWithCount(100);
+
+        Assert.assertThrows(IllegalArgumentException.class, () -> new BenchmarkStatistics(
+                100, 102, 104, 100, 40, 2551.0, latency
+        ));
+        new BenchmarkStatistics(100, 102, 104, 100, 40, 2550.0, latency);
+    }
+
+    @Test
+    public void statisticsConstructorRequiresPositiveZeroRateForZeroElapsedTime() {
+        BenchmarkLatencyRecorder.Summary latency = summaryWithCount(1);
+
+        assertStatisticsRateRejected(1, 2, 0, 1.0, latency);
+        assertStatisticsRateRejected(1, 2, 0, -0.0, latency);
+        new BenchmarkStatistics(1, 2, 2, 1, 0, 0.0, latency);
+    }
+
+    @Test
+    public void statisticsConstructorDerivesRateExactlyForExtremeCounters() {
+        BenchmarkLatencyRecorder.Summary latency = summaryWithCount(1);
+        double expected = Long.MAX_VALUE / (1 / 1000.0);
+
+        BenchmarkStatistics statistics = BenchmarkStatistics.from(
+                1, Long.MAX_VALUE, Long.MAX_VALUE, 1, 1, latency
+        );
+
+        Assert.assertEquals(expected, statistics.requestsPerSecond(), 0.0);
+        new BenchmarkStatistics(
+                1, Long.MAX_VALUE, Long.MAX_VALUE, 1, 1, expected, latency
+        );
+        assertStatisticsRateRejected(
+                1, Long.MAX_VALUE, 1, Math.nextDown(expected), latency
+        );
+    }
+
     private static BenchmarkLatencyRecorder.Summary summaryWithCount(long count) {
+        if (count == 0) {
+            return new BenchmarkLatencyRecorder.Summary(0, 0.0, 0, 0, 0, 0, 0);
+        }
         return new BenchmarkLatencyRecorder.Summary(count, 100.0, 96, 103, 103, 103, 103);
+    }
+
+    private static void assertSummaryRejected(
+            long count,
+            double meanMicros,
+            long minMicros,
+            long p50Micros,
+            long p95Micros,
+            long p99Micros,
+            long maxMicros
+    ) {
+        Assert.assertThrows(IllegalArgumentException.class, () ->
+                new BenchmarkLatencyRecorder.Summary(
+                        count,
+                        meanMicros,
+                        minMicros,
+                        p50Micros,
+                        p95Micros,
+                        p99Micros,
+                        maxMicros
+                ));
+    }
+
+    private static void assertStatisticsRateRejected(
+            int requested,
+            long completed,
+            long elapsedMillis,
+            double requestsPerSecond,
+            BenchmarkLatencyRecorder.Summary latency
+    ) {
+        Assert.assertThrows(IllegalArgumentException.class, () -> new BenchmarkStatistics(
+                requested,
+                completed,
+                completed,
+                requested,
+                elapsedMillis,
+                requestsPerSecond,
+                latency
+        ));
     }
 }
