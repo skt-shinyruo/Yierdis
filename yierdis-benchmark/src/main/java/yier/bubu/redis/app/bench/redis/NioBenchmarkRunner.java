@@ -23,6 +23,8 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
     private static final byte[] SELECT = ascii("SELECT");
     private static final byte[] EMPTY_PREFIX = new byte[0];
     private static final Duration DEFAULT_NO_PROGRESS_TIMEOUT = Duration.ofSeconds(30);
+    private static final ClientWriteFactory DEFAULT_CLIENT_WRITE_FACTORY =
+            channel -> channel::write;
 
     private final BenchmarkClock clock;
     private final NioBenchmarkClient.ReplyLimits replyLimits;
@@ -30,6 +32,7 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
     private final Duration noProgressTimeout;
     private final long noProgressTimeoutNanos;
     private final ClientCleanup clientCleanup;
+    private final ClientWriteFactory clientWriteFactory;
 
     public NioBenchmarkRunner() {
         this(
@@ -37,7 +40,8 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
                 NioBenchmarkClient.ReplyLimits.defaults(),
                 BenchmarkClock.system(),
                 DEFAULT_NO_PROGRESS_TIMEOUT,
-                NioBenchmarkClient::close
+                NioBenchmarkClient::close,
+                DEFAULT_CLIENT_WRITE_FACTORY
         );
     }
 
@@ -47,7 +51,8 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
                 NioBenchmarkClient.ReplyLimits.defaults(),
                 BenchmarkClock.system(),
                 DEFAULT_NO_PROGRESS_TIMEOUT,
-                NioBenchmarkClient::close
+                NioBenchmarkClient::close,
+                DEFAULT_CLIENT_WRITE_FACTORY
         );
     }
 
@@ -60,7 +65,8 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
                 replyLimits,
                 BenchmarkClock.system(),
                 DEFAULT_NO_PROGRESS_TIMEOUT,
-                NioBenchmarkClient::close
+                NioBenchmarkClient::close,
+                DEFAULT_CLIENT_WRITE_FACTORY
         );
     }
 
@@ -75,7 +81,8 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
                 replyLimits,
                 progressClock,
                 noProgressTimeout,
-                NioBenchmarkClient::close
+                NioBenchmarkClient::close,
+                DEFAULT_CLIENT_WRITE_FACTORY
         );
     }
 
@@ -85,6 +92,24 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
             BenchmarkClock progressClock,
             Duration noProgressTimeout,
             ClientCleanup clientCleanup
+    ) {
+        this(
+                clock,
+                replyLimits,
+                progressClock,
+                noProgressTimeout,
+                clientCleanup,
+                DEFAULT_CLIENT_WRITE_FACTORY
+        );
+    }
+
+    NioBenchmarkRunner(
+            BenchmarkClock clock,
+            NioBenchmarkClient.ReplyLimits replyLimits,
+            BenchmarkClock progressClock,
+            Duration noProgressTimeout,
+            ClientCleanup clientCleanup,
+            ClientWriteFactory clientWriteFactory
     ) {
         this.clock = Objects.requireNonNull(clock, "clock");
         this.replyLimits = Objects.requireNonNull(replyLimits, "replyLimits");
@@ -98,6 +123,10 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
         }
         this.noProgressTimeoutNanos = noProgressTimeout.toNanos();
         this.clientCleanup = Objects.requireNonNull(clientCleanup, "clientCleanup");
+        this.clientWriteFactory = Objects.requireNonNull(
+                clientWriteFactory,
+                "clientWriteFactory"
+        );
     }
 
     @Override
@@ -151,10 +180,10 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
         }
         try {
             closeClients(clients);
-        } catch (IOException closeFailure) {
+        } catch (Throwable closeFailure) {
             if (failure == null) {
                 failure = closeFailure;
-            } else {
+            } else if (failure != closeFailure) {
                 failure.addSuppressed(closeFailure);
             }
         }
@@ -207,6 +236,7 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
             channel.socket().setTcpNoDelay(true);
             NioBenchmarkClient client = new NioBenchmarkClient(
                     channel,
+                    clientWriteFactory.create(channel),
                     compiledPipeline,
                     prefix.bytes(),
                     prefix.replyCount(),
@@ -392,6 +422,11 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
                 }
                 client.pendingReplies--;
                 if (client.pendingReplies == 0) {
+                    if (client.readBuffer.hasRemaining()) {
+                        throw new IOException(
+                                "benchmark server sent an unexpected extra reply"
+                        );
+                    }
                     if (state.thresholdClient == client) {
                         state.stopNanos = clock.nanoTime();
                         state.stopping = true;
@@ -565,15 +600,15 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
         return new PreparedPrefix(bytes, frames.size());
     }
 
-    private void closeClients(List<NioBenchmarkClient> clients) throws IOException {
-        IOException failure = null;
+    private void closeClients(List<NioBenchmarkClient> clients) throws Throwable {
+        Throwable failure = null;
         for (NioBenchmarkClient client : clients) {
             try {
                 clientCleanup.close(client);
-            } catch (IOException e) {
+            } catch (Throwable e) {
                 if (failure == null) {
                     failure = e;
-                } else {
+                } else if (failure != e) {
                     failure.addSuppressed(e);
                 }
             }
@@ -597,6 +632,11 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
     @FunctionalInterface
     interface ClientCleanup {
         void close(NioBenchmarkClient client) throws IOException;
+    }
+
+    @FunctionalInterface
+    interface ClientWriteFactory {
+        NioBenchmarkClient.GatheringWrite create(SocketChannel channel);
     }
 
     private static final class RunState {
