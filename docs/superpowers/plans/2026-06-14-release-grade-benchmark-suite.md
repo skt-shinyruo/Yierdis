@@ -1,3 +1,5 @@
+> **Superseded:** Replaced by `docs/superpowers/specs/2026-07-17-redis-benchmark-comparable-rewrite-design.md`. Retained only as historical context.
+
 # Release-Grade Benchmark Suite Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

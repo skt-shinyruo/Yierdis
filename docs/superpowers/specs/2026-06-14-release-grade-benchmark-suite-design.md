@@ -1,3 +1,5 @@
+> **Superseded:** Replaced by `docs/superpowers/specs/2026-07-17-redis-benchmark-comparable-rewrite-design.md`. Retained only as historical context.
+
 # Release-Grade Benchmark Suite Design
 
 ## Status
