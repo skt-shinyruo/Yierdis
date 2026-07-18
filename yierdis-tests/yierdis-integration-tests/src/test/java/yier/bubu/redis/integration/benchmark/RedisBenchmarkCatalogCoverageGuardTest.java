@@ -11,6 +11,16 @@ import java.util.Set;
 
 public class RedisBenchmarkCatalogCoverageGuardTest {
     @Test
+    public void realServerGuardHasSixtySecondDeadline() throws NoSuchMethodException {
+        Test annotation = RedisBenchmarkRealServerTest.class
+                .getMethod("allOfficialCasesRunOrReportUnsupportedAgainstRealYierdis")
+                .getAnnotation(Test.class);
+
+        Assert.assertNotNull(annotation);
+        Assert.assertEquals(60_000L, annotation.timeout());
+    }
+
+    @Test
     public void supportDeclarationsMatchDefaultCommandRegistration() {
         Set<String> commands = DefaultCommandRegistrationTest.defaultCommandNames();
         List<RedisBenchmarkCase> cases = new RedisBenchmarkCatalog().allCases();

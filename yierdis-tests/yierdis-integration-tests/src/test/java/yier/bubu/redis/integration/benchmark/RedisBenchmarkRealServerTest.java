@@ -16,8 +16,8 @@ import java.util.OptionalLong;
 import java.util.Set;
 
 public class RedisBenchmarkRealServerTest {
-    @Test
-    public void allCatalogCasesRunAgainstRealYierdisServer() throws Exception {
+    @Test(timeout = 60_000L)
+    public void allOfficialCasesRunOrReportUnsupportedAgainstRealYierdis() throws Exception {
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
                 "--port", "0", "--noCleanup"
         )) {
