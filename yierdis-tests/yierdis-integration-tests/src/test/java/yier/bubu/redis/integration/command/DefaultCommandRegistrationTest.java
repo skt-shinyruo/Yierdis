@@ -30,6 +30,10 @@ public class DefaultCommandRegistrationTest {
     private static final Map<String, CommandMetadata> DEFAULT_COMMAND_METADATA = defaultCommandMetadata();
     private static final Set<String> DEFAULT_COMMANDS = DEFAULT_COMMAND_METADATA.keySet();
 
+    public static Set<String> defaultCommandNames() {
+        return DEFAULT_COMMANDS;
+    }
+
     @Test
     public void commandRegistryListsEveryDefaultCommand() {
         withClient(client -> {
