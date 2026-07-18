@@ -24,16 +24,6 @@
         </dependency>
 
         <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-db-api</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-memory-ffm</artifactId>
-        </dependency>
-
-        <dependency>
             <groupId>info.picocli</groupId>
             <artifactId>picocli</artifactId>
         </dependency>
