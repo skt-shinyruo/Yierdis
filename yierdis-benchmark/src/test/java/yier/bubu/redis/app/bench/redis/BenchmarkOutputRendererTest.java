@@ -156,23 +156,18 @@ public class BenchmarkOutputRendererTest {
 
     @Test
     public void csvEscapesEveryFieldAccordingToRfc4180() {
-        RedisBenchmarkCase custom = new RedisBenchmarkCase(
-                "custom",
-                "CUSTOM,\"TITLE\"\r\nNEXT",
-                Set.of("custom"),
-                RedisBenchmarkCommandTemplate.inline("PING\r\n"),
-                Set.of("PING"),
-                BenchmarkReplyExpectation.PONG,
-                RedisBenchmarkCase.Support.available(),
-                ""
-        );
+        RedisBenchmarkCase custom = customCase("CUSTOM\\PATH,\"TITLE\"\r\nNEXT");
         BenchmarkRunResult run = new BenchmarkRunResult(List.of(
-                BenchmarkCaseResult.failed(custom, 7, "because, \"quoted\"\r\nand more")
+                BenchmarkCaseResult.failed(
+                        custom,
+                        7,
+                        "because\\n, \"quoted\"\r\nand more"
+                )
         ));
 
         Assert.assertEquals(CSV_HEADER + "\n"
-                + "\"CUSTOM,\"\"TITLE\"\"\r\nNEXT\",\"\",\"\",\"\",\"\",\"\","
-                + "\"\",\"\",\"FAILED\",\"because, \"\"quoted\"\"\r\nand more\"\n",
+                + "\"CUSTOM\\PATH,\"\"TITLE\"\"\r\nNEXT\",\"\",\"\",\"\",\"\",\"\","
+                + "\"\",\"\",\"FAILED\",\"because\\n, \"\"quoted\"\"\r\nand more\"\n",
                 renderer.render(config(BenchmarkFormat.CSV, true, 3), run));
     }
 
@@ -200,7 +195,45 @@ public class BenchmarkOutputRendererTest {
     }
 
     @Test
-    public void humanReportEndsWithOneNewlineWhenReasonEndsWithLineBreaks() {
+    public void quietEscapesDynamicTextSoEachCaseOccupiesOnePhysicalLine() {
+        String rendered = renderer.render(
+                config(BenchmarkFormat.QUIET, true, 3),
+                displayEscapingRun()
+        );
+
+        Assert.assertEquals("CUSTOM\\\\TITLE\\r\\nNEXT: FAILED after 7 replies "
+                + "(disconnect\\\\nraw\\r\\nretry\\r\\n)\n"
+                + "SPOP: UNSUPPORTED (missing\\r\\ncommand\\r\\n)\n"
+                + "GET: SKIPPED (setup\\r\\nfailed\\r\\n)\n", rendered);
+        Assert.assertEquals(3L, rendered.chars().filter(value -> value == '\n').count());
+        Assert.assertFalse(rendered.contains("\r"));
+    }
+
+    @Test
+    public void humanEscapesDynamicTextWithoutTrimmingNonSuccessReasons() {
+        String rendered = renderer.render(
+                config(BenchmarkFormat.HUMAN, true, 3),
+                displayEscapingRun()
+        );
+
+        Assert.assertEquals("====== CUSTOM\\\\TITLE\\r\\nNEXT ======\n"
+                + "status: FAILED\n"
+                + "completed replies: 7\n"
+                + "reason: disconnect\\\\nraw\\r\\nretry\\r\\n\n"
+                + "\n"
+                + "====== SPOP ======\n"
+                + "status: UNSUPPORTED\n"
+                + "reason: missing\\r\\ncommand\\r\\n\n"
+                + "\n"
+                + "====== GET ======\n"
+                + "status: SKIPPED\n"
+                + "reason: setup\\r\\nfailed\\r\\n\n", rendered);
+        Assert.assertEquals(12L, rendered.chars().filter(value -> value == '\n').count());
+        Assert.assertFalse(rendered.contains("\r"));
+    }
+
+    @Test
+    public void humanReportEscapesTrailingReasonLineBreaksWithoutLosingData() {
         BenchmarkRunResult run = new BenchmarkRunResult(List.of(
                 BenchmarkCaseResult.failed(
                         catalog.caseById("set"),
@@ -212,7 +245,7 @@ public class BenchmarkOutputRendererTest {
         Assert.assertEquals("====== SET ======\n"
                 + "status: FAILED\n"
                 + "completed replies: 7\n"
-                + "reason: disconnect\n",
+                + "reason: disconnect\\r\\n\\n\n",
                 renderer.render(config(BenchmarkFormat.HUMAN, true, 3), run));
     }
 
@@ -244,6 +277,37 @@ public class BenchmarkOutputRendererTest {
                 BenchmarkCaseResult.skipped(catalog.caseById("get"), "setup failed"),
                 BenchmarkCaseResult.failed(catalog.caseById("set"), 7, "disconnect")
         ));
+    }
+
+    private BenchmarkRunResult displayEscapingRun() {
+        return new BenchmarkRunResult(List.of(
+                BenchmarkCaseResult.failed(
+                        customCase("CUSTOM\\TITLE\r\nNEXT"),
+                        7,
+                        "disconnect\\nraw\r\nretry\r\n"
+                ),
+                BenchmarkCaseResult.unsupported(
+                        catalog.caseById("spop"),
+                        "missing\r\ncommand\r\n"
+                ),
+                BenchmarkCaseResult.skipped(
+                        catalog.caseById("get"),
+                        "setup\r\nfailed\r\n"
+                )
+        ));
+    }
+
+    private static RedisBenchmarkCase customCase(String title) {
+        return new RedisBenchmarkCase(
+                "custom",
+                title,
+                Set.of("custom"),
+                RedisBenchmarkCommandTemplate.inline("PING\r\n"),
+                Set.of("PING"),
+                BenchmarkReplyExpectation.PONG,
+                RedisBenchmarkCase.Support.available(),
+                ""
+        );
     }
 
     private static BenchmarkStatistics statistics() {
