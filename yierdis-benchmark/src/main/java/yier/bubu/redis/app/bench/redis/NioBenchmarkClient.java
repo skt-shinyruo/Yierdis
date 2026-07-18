@@ -37,6 +37,11 @@ final class NioBenchmarkClient implements AutoCloseable {
         }
     }
 
+    @FunctionalInterface
+    interface GatheringWrite {
+        long write(ByteBuffer[] sources) throws IOException;
+    }
+
     enum Phase {
         CONNECTING,
         READY,
@@ -62,6 +67,7 @@ final class NioBenchmarkClient implements AutoCloseable {
 
     private boolean firstBatch = true;
     private boolean batchLatencyCaptured;
+    private long lastWriteBytes;
 
     NioBenchmarkClient(
             SocketChannel channel,
@@ -122,8 +128,32 @@ final class NioBenchmarkClient implements AutoCloseable {
     }
 
     boolean writeBatch() throws IOException {
-        channel.write(gatheringWriteBuffers);
-        return !pipelineWriteBuffer.hasRemaining();
+        long positionsBeforeWrite = (long) firstWritePrefix.position()
+                + pipelineWriteBuffer.position();
+        boolean complete = writeBatch(
+                channel::write,
+                gatheringWriteBuffers,
+                pipelineWriteBuffer
+        );
+        lastWriteBytes = (long) firstWritePrefix.position()
+                + pipelineWriteBuffer.position()
+                - positionsBeforeWrite;
+        return complete;
+    }
+
+    static boolean writeBatch(
+            GatheringWrite write,
+            ByteBuffer[] buffers,
+            ByteBuffer terminalBuffer
+    ) throws IOException {
+        Objects.requireNonNull(write, "write").write(
+                Objects.requireNonNull(buffers, "buffers")
+        );
+        return !Objects.requireNonNull(terminalBuffer, "terminalBuffer").hasRemaining();
+    }
+
+    long lastWriteBytes() {
+        return lastWriteBytes;
     }
 
     boolean needsBatchLatency() {

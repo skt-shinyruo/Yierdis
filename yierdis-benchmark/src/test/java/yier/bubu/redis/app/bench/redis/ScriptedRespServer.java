@@ -2,6 +2,7 @@ package yier.bubu.redis.app.bench.redis;
 
 import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 
+import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -16,18 +17,19 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.atomic.AtomicReferenceArray;
 
 final class ScriptedRespServer implements AutoCloseable {
     private static final byte[] PONG = ascii("+PONG\r\n");
+    private static final byte[] OK = ascii("+OK\r\n");
+    private static final int MAX_CAPTURED_ARGUMENT_BYTES = 1024;
     private static final AtomicInteger SERVER_IDS = new AtomicInteger();
 
     private final ServerSocket serverSocket;
@@ -37,9 +39,9 @@ final class ScriptedRespServer implements AutoCloseable {
     private final AtomicInteger acceptedConnections = new AtomicInteger();
     private final AtomicInteger commands = new AtomicInteger();
     private final AtomicInteger sentReplies = new AtomicInteger();
+    private final AtomicInteger measuredCommandReplies = new AtomicInteger();
     private final AtomicInteger clockCalls = new AtomicInteger();
-    private final AtomicIntegerArray commandsPerConnection;
-    private final AtomicReferenceArray<Connection> connections;
+    private final List<Connection> connections = new ArrayList<>();
     private final AtomicReference<Throwable> failure = new AtomicReference<>();
     private final Object stateChanged = new Object();
 
@@ -51,8 +53,6 @@ final class ScriptedRespServer implements AutoCloseable {
         }
         this.expectedClients = expectedClients;
         this.responseScript = Objects.requireNonNull(responseScript, "responseScript");
-        this.commandsPerConnection = new AtomicIntegerArray(expectedClients);
-        this.connections = new AtomicReferenceArray<>(expectedClients);
         int serverId = SERVER_IDS.incrementAndGet();
         this.executor = Executors.newCachedThreadPool(task -> {
             Thread thread = new Thread(task, "scripted-resp-server-" + serverId);
@@ -86,6 +86,43 @@ final class ScriptedRespServer implements AutoCloseable {
         return new ScriptedRespServer(expectedClients, new ImmediateScript(reply));
     }
 
+    static ScriptedRespServer respondingWith(String reply) throws IOException {
+        return immediate(
+                1,
+                Objects.requireNonNull(reply, "reply")
+                        .getBytes(StandardCharsets.US_ASCII)
+        );
+    }
+
+    static ScriptedRespServer authAndSelectAware() throws IOException {
+        return new ScriptedRespServer(1, new AuthAndSelectScript(null));
+    }
+
+    static ScriptedRespServer authAndSelectAware(Runnable beforePrefixReply)
+            throws IOException {
+        return new ScriptedRespServer(
+                1,
+                new AuthAndSelectScript(
+                        Objects.requireNonNull(beforePrefixReply, "beforePrefixReply")
+                )
+        );
+    }
+
+    static ScriptedRespServer rejectingAuth(String reply) throws IOException {
+        return new ScriptedRespServer(
+                1,
+                new RejectingAuthScript(
+                        Objects.requireNonNull(reply, "reply")
+                                .getBytes(StandardCharsets.US_ASCII)
+                )
+        );
+    }
+
+    static ScriptedRespServer neverResponding() throws IOException {
+        return new ScriptedRespServer(1, (connection, command, connectionCount, totalCount) -> {
+        });
+    }
+
     static ScriptedRespServer batched(
             int expectedClients,
             byte[] reply,
@@ -110,6 +147,16 @@ final class ScriptedRespServer implements AutoCloseable {
         );
     }
 
+    static ScriptedRespServer fragmentingEveryByte(String reply) throws IOException {
+        return new ScriptedRespServer(
+                1,
+                new EveryByteFragmentedScript(
+                        Objects.requireNonNull(reply, "reply")
+                                .getBytes(StandardCharsets.US_ASCII)
+                )
+        );
+    }
+
     static ScriptedRespServer error(int expectedClients, String message) throws IOException {
         Objects.requireNonNull(message, "message");
         return immediate(expectedClients, ascii("-" + message + "\r\n"));
@@ -123,6 +170,11 @@ final class ScriptedRespServer implements AutoCloseable {
                 expectedClients,
                 new CloseScript(connectionCommandNumber)
         );
+    }
+
+    static ScriptedRespServer closingAfterCommands(int connectionCommandNumber)
+            throws IOException {
+        return closeAfterCommand(1, connectionCommandNumber);
     }
 
     static ScriptedRespServer thresholdBoundaryScenario() throws IOException {
@@ -149,6 +201,10 @@ final class ScriptedRespServer implements AutoCloseable {
         return sentReplies.get();
     }
 
+    int measuredCommandReplies() {
+        return measuredCommandReplies.get();
+    }
+
     boolean stallWasReleased() {
         return responseScript.stallWasReleased();
     }
@@ -163,6 +219,36 @@ final class ScriptedRespServer implements AutoCloseable {
         };
     }
 
+    int awaitAcceptedConnections(int expected, Duration timeout) throws InterruptedException {
+        awaitState(
+                () -> acceptedConnections.get() >= expected,
+                timeout,
+                "accepted connections"
+        );
+        return acceptedConnections.get();
+    }
+
+    List<String> firstConnectionCommandPrefix(int length) {
+        return connection(0).commandNamesPrefix(length);
+    }
+
+    List<String> firstConnectionCommandArguments(int commandIndex) {
+        return connection(0).commandArguments(commandIndex);
+    }
+
+    boolean everyConnectionStartsWith(List<String> expectedPrefix) {
+        Objects.requireNonNull(expectedPrefix, "expectedPrefix");
+        for (Connection connection : connectionSnapshot()) {
+            if (connection.commandCount() == 0) {
+                continue;
+            }
+            if (!connection.commandNamesPrefix(expectedPrefix.size()).equals(expectedPrefix)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     List<Integer> awaitCommandCountsPerConnection(
             int expectedTotal,
             int expectedConnectionCount,
@@ -175,8 +261,10 @@ final class ScriptedRespServer implements AutoCloseable {
                 "command counts"
         );
         List<Integer> counts = new ArrayList<>(expectedConnectionCount);
-        for (int index = 0; index < expectedConnectionCount; index++) {
-            counts.add(commandsPerConnection.get(index));
+        synchronized (stateChanged) {
+            for (int index = 0; index < expectedConnectionCount; index++) {
+                counts.add(connections.get(index).commandCount());
+            }
         }
         Collections.sort(counts);
         return List.copyOf(counts);
@@ -200,11 +288,7 @@ final class ScriptedRespServer implements AutoCloseable {
         } catch (IOException e) {
             closeFailure = e;
         }
-        for (int index = 0; index < connections.length(); index++) {
-            Connection connection = connections.get(index);
-            if (connection == null) {
-                continue;
-            }
+        for (Connection connection : connectionSnapshot()) {
             try {
                 connection.close();
             } catch (IOException e) {
@@ -228,13 +312,15 @@ final class ScriptedRespServer implements AutoCloseable {
 
     private void acceptClients() {
         try {
-            for (int connectionId = 0; connectionId < expectedClients && !closed; connectionId++) {
+            while (!closed) {
                 Socket socket = serverSocket.accept();
                 socket.setTcpNoDelay(true);
-                Connection connection = new Connection(connectionId, socket);
-                connections.set(connectionId, connection);
-                acceptedConnections.incrementAndGet();
-                signalStateChanged();
+                Connection connection = new Connection(socket);
+                synchronized (stateChanged) {
+                    connections.add(connection);
+                    acceptedConnections.incrementAndGet();
+                    stateChanged.notifyAll();
+                }
                 execute(() -> readCommands(connection));
             }
         } catch (SocketException e) {
@@ -254,20 +340,25 @@ final class ScriptedRespServer implements AutoCloseable {
                 if (first < 0) {
                     return;
                 }
+                Command command;
                 if (first == '*') {
-                    readRespArray(input);
+                    command = readRespArray(input);
                 } else {
-                    readInline(input, first);
+                    command = readInline(input, first);
                 }
-                int connectionCommands = commandsPerConnection.incrementAndGet(connection.id());
+                connection.recordCommand(command);
+                int connectionCommands = connection.incrementCommandCount();
                 int totalCommands = commands.incrementAndGet();
                 signalStateChanged();
-                responseScript.onCommand(connection, connectionCommands, totalCommands);
+                responseScript.onCommand(
+                        connection,
+                        command,
+                        connectionCommands,
+                        totalCommands
+                );
             }
-        } catch (SocketException e) {
-            if (!closed && !connection.isClosed()) {
-                recordFailure(e);
-            }
+        } catch (SocketException ignored) {
+            // 达到回复阈值后不会排空其他已发批次，客户端清理导致的对端断开属于正常路径。
         } catch (Throwable e) {
             if (!closed) {
                 recordFailure(e);
@@ -275,11 +366,12 @@ final class ScriptedRespServer implements AutoCloseable {
         }
     }
 
-    private void readRespArray(InputStream input) throws IOException {
+    private Command readRespArray(InputStream input) throws IOException {
         long argumentCount = readLongLine(input, "array length");
         if (argumentCount <= 0 || argumentCount > RespProtocolLimits.DEFAULT_MAX_ARGS) {
             throw new IOException("invalid RESP command argument count: " + argumentCount);
         }
+        List<String> arguments = new ArrayList<>((int) argumentCount);
         for (long argument = 0; argument < argumentCount; argument++) {
             if (input.read() != '$') {
                 throw new IOException("RESP command argument must be a bulk string");
@@ -288,31 +380,48 @@ final class ScriptedRespServer implements AutoCloseable {
             if (length < 0 || length > RespProtocolLimits.DEFAULT_MAX_BULK_BYTES) {
                 throw new IOException("invalid RESP command bulk length: " + length);
             }
-            input.skipNBytes(length);
+            if (length <= MAX_CAPTURED_ARGUMENT_BYTES) {
+                byte[] bytes = input.readNBytes((int) length);
+                if (bytes.length != length) {
+                    throw new EOFException("unexpected EOF in RESP command bulk string");
+                }
+                arguments.add(new String(bytes, StandardCharsets.UTF_8));
+            } else {
+                input.skipNBytes(length);
+                arguments.add("");
+            }
             requireCrlf(input);
         }
+        return new Command(arguments);
     }
 
-    private void readInline(InputStream input, int first) throws IOException {
-        int previous = first;
-        int length = 1;
+    private Command readInline(InputStream input, int first) throws IOException {
+        ByteArrayOutputStream line = new ByteArrayOutputStream();
+        line.write(first);
         while (true) {
             int current = input.read();
             if (current < 0) {
                 throw new EOFException("unexpected EOF in inline command");
             }
-            length++;
-            if (length > RespProtocolLimits.DEFAULT_MAX_INLINE_BYTES) {
-                throw new IOException("inline command exceeds protocol limit");
-            }
-            if (previous == '\r' && current == '\n') {
-                return;
+            if (current == '\r') {
+                if (input.read() != '\n') {
+                    throw new IOException("inline CR is not followed by LF");
+                }
+                break;
             }
             if (current == '\n') {
                 throw new IOException("inline LF is not preceded by CR");
             }
-            previous = current;
+            line.write(current);
+            if (line.size() > RespProtocolLimits.DEFAULT_MAX_INLINE_BYTES) {
+                throw new IOException("inline command exceeds protocol limit");
+            }
         }
+        String text = line.toString(StandardCharsets.UTF_8).trim();
+        if (text.isEmpty()) {
+            throw new IOException("inline command must not be empty");
+        }
+        return new Command(List.of(text.split("\\s+")));
     }
 
     private long readLongLine(InputStream input, String field) throws IOException {
@@ -361,11 +470,18 @@ final class ScriptedRespServer implements AutoCloseable {
     }
 
     private Connection connection(int id) {
-        Connection connection = connections.get(id);
-        if (connection == null) {
-            throw new IllegalStateException("connection " + id + " has not been accepted");
+        synchronized (stateChanged) {
+            if (id < 0 || id >= connections.size()) {
+                throw new IllegalStateException("connection " + id + " has not been accepted");
+            }
+            return connections.get(id);
         }
-        return connection;
+    }
+
+    private List<Connection> connectionSnapshot() {
+        synchronized (stateChanged) {
+            return List.copyOf(connections);
+        }
     }
 
     private boolean everyConnectionHasAtLeast(int expectedCommands) {
@@ -373,7 +489,7 @@ final class ScriptedRespServer implements AutoCloseable {
             return false;
         }
         for (int index = 0; index < expectedClients; index++) {
-            if (commandsPerConnection.get(index) < expectedCommands) {
+            if (connection(index).commandCount() < expectedCommands) {
                 return false;
             }
         }
@@ -440,12 +556,29 @@ final class ScriptedRespServer implements AutoCloseable {
         boolean isSatisfied();
     }
 
+    private record Command(List<String> arguments) {
+        private Command {
+            arguments = List.copyOf(arguments);
+            if (arguments.isEmpty() || arguments.getFirst().isEmpty()) {
+                throw new IllegalArgumentException("command name must not be empty");
+            }
+        }
+
+        String name() {
+            return arguments.getFirst().toUpperCase(Locale.ROOT);
+        }
+    }
+
     private interface ResponseScript {
         default void attach(ScriptedRespServer server) {
         }
 
-        void onCommand(Connection connection, int connectionCommandCount, int totalCommandCount)
-                throws Exception;
+        void onCommand(
+                Connection connection,
+                Command command,
+                int connectionCommandCount,
+                int totalCommandCount
+        ) throws Exception;
 
         default boolean stallWasReleased() {
             return false;
@@ -457,29 +590,53 @@ final class ScriptedRespServer implements AutoCloseable {
     }
 
     private final class Connection implements AutoCloseable {
-        private final int id;
         private final Socket socket;
         private final InputStream input;
         private final OutputStream output;
         private final Object writeLock = new Object();
+        private final AtomicInteger commandCount = new AtomicInteger();
+        private final List<Command> receivedCommands = new ArrayList<>();
 
-        private Connection(int id, Socket socket) throws IOException {
-            this.id = id;
+        private Connection(Socket socket) throws IOException {
             this.socket = socket;
             this.input = socket.getInputStream();
             this.output = socket.getOutputStream();
-        }
-
-        int id() {
-            return id;
         }
 
         InputStream input() {
             return input;
         }
 
-        boolean isClosed() {
-            return socket.isClosed();
+        void recordCommand(Command command) {
+            synchronized (stateChanged) {
+                receivedCommands.add(command);
+                stateChanged.notifyAll();
+            }
+        }
+
+        int incrementCommandCount() {
+            return commandCount.incrementAndGet();
+        }
+
+        int commandCount() {
+            return commandCount.get();
+        }
+
+        List<String> commandNamesPrefix(int length) {
+            synchronized (stateChanged) {
+                if (length < 0 || receivedCommands.size() < length) {
+                    throw new IllegalArgumentException("command prefix is not available");
+                }
+                return receivedCommands.subList(0, length).stream()
+                        .map(Command::name)
+                        .toList();
+            }
+        }
+
+        List<String> commandArguments(int index) {
+            synchronized (stateChanged) {
+                return receivedCommands.get(index).arguments();
+            }
         }
 
         void sendReplies(byte[] reply, int count) throws IOException {
@@ -505,6 +662,17 @@ final class ScriptedRespServer implements AutoCloseable {
             signalStateChanged();
         }
 
+        void sendEveryByte(byte[] reply) throws IOException {
+            synchronized (writeLock) {
+                for (byte value : reply) {
+                    output.write(value);
+                    output.flush();
+                }
+            }
+            sentReplies.incrementAndGet();
+            signalStateChanged();
+        }
+
         @Override
         public void close() throws IOException {
             socket.close();
@@ -519,9 +687,79 @@ final class ScriptedRespServer implements AutoCloseable {
         }
 
         @Override
-        public void onCommand(Connection connection, int connectionCommandCount, int totalCommandCount)
-                throws IOException {
+        public void onCommand(
+                Connection connection,
+                Command command,
+                int connectionCommandCount,
+                int totalCommandCount
+        ) throws IOException {
             connection.sendReplies(reply, 1);
+        }
+    }
+
+    private static final class AuthAndSelectScript implements ResponseScript {
+        private static final Duration COORDINATION_TIMEOUT = Duration.ofSeconds(5);
+
+        private final Runnable beforePrefixReply;
+        private ScriptedRespServer server;
+
+        private AuthAndSelectScript(Runnable beforePrefixReply) {
+            this.beforePrefixReply = beforePrefixReply;
+        }
+
+        @Override
+        public void attach(ScriptedRespServer server) {
+            this.server = server;
+        }
+
+        @Override
+        public void onCommand(
+                Connection connection,
+                Command command,
+                int connectionCommandCount,
+                int totalCommandCount
+        ) throws IOException, InterruptedException {
+            switch (command.name()) {
+                case "AUTH" -> sendPrefixReply(connection);
+                case "SELECT" -> connection.sendReplies(OK, 1);
+                case "PING" -> {
+                    connection.sendReplies(PONG, 1);
+                    server.measuredCommandReplies.incrementAndGet();
+                }
+                default -> throw new IOException("unexpected command: " + command.name());
+            }
+        }
+
+        private void sendPrefixReply(Connection connection)
+                throws IOException, InterruptedException {
+            if (beforePrefixReply == null) {
+                connection.sendReplies(OK, 1);
+                return;
+            }
+            int observedClockCalls = server.clockCalls.get();
+            beforePrefixReply.run();
+            connection.sendReplies(OK, 1);
+            server.awaitClockCallAfter(observedClockCalls, COORDINATION_TIMEOUT);
+        }
+    }
+
+    private static final class RejectingAuthScript implements ResponseScript {
+        private final byte[] reply;
+
+        private RejectingAuthScript(byte[] reply) {
+            this.reply = Objects.requireNonNull(reply, "reply").clone();
+        }
+
+        @Override
+        public void onCommand(
+                Connection connection,
+                Command command,
+                int connectionCommandCount,
+                int totalCommandCount
+        ) throws IOException {
+            if (command.name().equals("AUTH")) {
+                connection.sendReplies(reply, 1);
+            }
         }
     }
 
@@ -543,8 +781,12 @@ final class ScriptedRespServer implements AutoCloseable {
         }
 
         @Override
-        public void onCommand(Connection connection, int connectionCommandCount, int totalCommandCount)
-                throws IOException {
+        public void onCommand(
+                Connection connection,
+                Command command,
+                int connectionCommandCount,
+                int totalCommandCount
+        ) throws IOException {
             if (connectionCommandCount % batchSize == 0) {
                 immediatelyBeforeResponse.run();
                 connection.sendReplies(reply, batchSize);
@@ -570,9 +812,31 @@ final class ScriptedRespServer implements AutoCloseable {
         }
 
         @Override
-        public void onCommand(Connection connection, int connectionCommandCount, int totalCommandCount)
-                throws IOException {
+        public void onCommand(
+                Connection connection,
+                Command command,
+                int connectionCommandCount,
+                int totalCommandCount
+        ) throws IOException {
             connection.sendFragments(first, second, betweenFragments);
+        }
+    }
+
+    private static final class EveryByteFragmentedScript implements ResponseScript {
+        private final byte[] reply;
+
+        private EveryByteFragmentedScript(byte[] reply) {
+            this.reply = Objects.requireNonNull(reply, "reply").clone();
+        }
+
+        @Override
+        public void onCommand(
+                Connection connection,
+                Command command,
+                int connectionCommandCount,
+                int totalCommandCount
+        ) throws IOException {
+            connection.sendEveryByte(reply);
         }
     }
 
@@ -587,8 +851,12 @@ final class ScriptedRespServer implements AutoCloseable {
         }
 
         @Override
-        public void onCommand(Connection connection, int connectionCommandCount, int totalCommandCount)
-                throws IOException {
+        public void onCommand(
+                Connection connection,
+                Command command,
+                int connectionCommandCount,
+                int totalCommandCount
+        ) throws IOException {
             if (connectionCommandCount == connectionCommandNumber) {
                 connection.close();
             }
@@ -608,7 +876,12 @@ final class ScriptedRespServer implements AutoCloseable {
         }
 
         @Override
-        public void onCommand(Connection connection, int connectionCommandCount, int totalCommandCount) {
+        public void onCommand(
+                Connection connection,
+                Command command,
+                int connectionCommandCount,
+                int totalCommandCount
+        ) {
             if (totalCommandCount >= 9
                     && server.everyConnectionHasAtLeast(3)
                     && coordinationStarted.compareAndSet(false, true)) {

@@ -3,6 +3,8 @@ package yier.bubu.redis.app.bench.redis;
 import org.junit.Assert;
 import org.junit.Test;
 
+import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
@@ -25,6 +27,297 @@ public class NioBenchmarkRunnerTest {
     private static final RedisBenchmarkCase LRANGE = CATALOG.caseById("lrange_100");
     private static final NioBenchmarkClient.ReplyLimits SMALL_REPLY_LIMITS =
             new NioBenchmarkClient.ReplyLimits(16, 16, 16, 3, 4);
+
+    @Test(timeout = 5_000)
+    public void keepAliveFalseReconnectsAfterEveryPipeline() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.immediatePong(2)) {
+            BenchmarkStatistics statistics = execute(
+                    server,
+                    PING,
+                    6,
+                    2,
+                    2,
+                    false,
+                    BenchmarkClock.system(),
+                    NioBenchmarkClient.ReplyLimits.defaults()
+            );
+
+            Assert.assertEquals(4, server.awaitAcceptedConnections(4, SERVER_WAIT));
+            Assert.assertEquals(
+                    List.of(0, 2, 2, 2),
+                    server.awaitCommandCountsPerConnection(6, 4, SERVER_WAIT)
+            );
+            assertCounters(statistics, 6, 6, 6, 6);
+        }
+    }
+
+    @Test(timeout = 5_000)
+    public void authAndSelectPrefixMeasuredCommandsWithoutEnteringCounts() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.authAndSelectAware()) {
+            BenchmarkStatistics statistics = execute(
+                    server,
+                    PING,
+                    6,
+                    2,
+                    2,
+                    false,
+                    BenchmarkClock.system(),
+                    NioBenchmarkClient.ReplyLimits.defaults(),
+                    "benchmark-user",
+                    "secret",
+                    2
+            );
+
+            Assert.assertEquals(4, server.awaitAcceptedConnections(4, SERVER_WAIT));
+            Assert.assertEquals(
+                    List.of(0, 4, 4, 4),
+                    server.awaitCommandCountsPerConnection(12, 4, SERVER_WAIT)
+            );
+            Assert.assertEquals(
+                    List.of("AUTH", "SELECT", "PING"),
+                    server.firstConnectionCommandPrefix(3)
+            );
+            Assert.assertTrue(server.everyConnectionStartsWith(List.of("AUTH", "SELECT")));
+            Assert.assertEquals(
+                    List.of("AUTH", "benchmark-user", "secret"),
+                    server.firstConnectionCommandArguments(0)
+            );
+            Assert.assertEquals(6, server.measuredCommandReplies());
+            assertCounters(statistics, 6, 6, 6, 6);
+        }
+
+        ManualClock clock = new ManualClock();
+        try (ScriptedRespServer server = ScriptedRespServer.authAndSelectAware(
+                () -> clock.advanceMicros(250)
+        )) {
+            BenchmarkStatistics statistics = execute(
+                    server,
+                    PING,
+                    1,
+                    1,
+                    1,
+                    true,
+                    server.coordinatedClock(clock),
+                    NioBenchmarkClient.ReplyLimits.defaults(),
+                    "benchmark-user",
+                    "secret",
+                    2
+            );
+
+            BenchmarkLatencyRecorder expectedLatency = new BenchmarkLatencyRecorder(3);
+            expectedLatency.recordMicros(250);
+            Assert.assertEquals(expectedLatency.summary(), statistics.latency());
+            Assert.assertEquals(4, clock.callCount());
+        }
+
+        try (ScriptedRespServer server = ScriptedRespServer.authAndSelectAware()) {
+            BenchmarkStatistics statistics = execute(
+                    server,
+                    PING,
+                    1,
+                    1,
+                    1,
+                    true,
+                    BenchmarkClock.system(),
+                    NioBenchmarkClient.ReplyLimits.defaults(),
+                    "",
+                    "password-only",
+                    0
+            );
+
+            Assert.assertEquals(
+                    List.of(2),
+                    server.awaitCommandCountsPerConnection(2, 1, SERVER_WAIT)
+            );
+            Assert.assertEquals(
+                    List.of("AUTH", "password-only"),
+                    server.firstConnectionCommandArguments(0)
+            );
+            assertCounters(statistics, 1, 1, 1, 1);
+        }
+    }
+
+    @Test(timeout = 5_000)
+    public void fragmentedRepliesAndPartialWritesStillComplete() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.fragmentingEveryByte(
+                "+PONG\r\n"
+        )) {
+            BenchmarkStatistics statistics = execute(
+                    server,
+                    20,
+                    4,
+                    3,
+                    BenchmarkClock.system()
+            );
+            List<Integer> perConnection =
+                    server.awaitCommandCountsPerConnection(21, 4, SERVER_WAIT);
+
+            Assert.assertEquals(20, statistics.requestedRequests());
+            Assert.assertTrue(statistics.completedRequests() >= 20);
+            Assert.assertTrue(statistics.completedRequests() <= 21);
+            Assert.assertEquals(21, statistics.wireRequests());
+            Assert.assertEquals(20, statistics.histogramSamples());
+            Assert.assertEquals(20, statistics.latency().count());
+            Assert.assertEquals(21, perConnection.stream().mapToInt(Integer::intValue).sum());
+        }
+
+        ByteBuffer prefix = ByteBuffer.wrap(ascii("AUTH"));
+        ByteBuffer pipeline = ByteBuffer.wrap(ascii("PING"));
+        ByteBuffer[] buffers = {prefix, pipeline};
+        NioBenchmarkClient.GatheringWrite shortWrite = sources -> {
+            int budget = 3;
+            long written = 0;
+            for (ByteBuffer source : sources) {
+                int transferred = Math.min(budget, source.remaining());
+                source.position(source.position() + transferred);
+                budget -= transferred;
+                written += transferred;
+                if (budget == 0) {
+                    break;
+                }
+            }
+            return written;
+        };
+
+        Assert.assertFalse(NioBenchmarkClient.writeBatch(shortWrite, buffers, pipeline));
+        Assert.assertEquals(3, prefix.position());
+        Assert.assertEquals(0, pipeline.position());
+        Assert.assertFalse(NioBenchmarkClient.writeBatch(shortWrite, buffers, pipeline));
+        Assert.assertEquals(4, prefix.position());
+        Assert.assertEquals(2, pipeline.position());
+        Assert.assertTrue(NioBenchmarkClient.writeBatch(shortWrite, buffers, pipeline));
+        Assert.assertEquals(4, prefix.position());
+        Assert.assertEquals(4, pipeline.position());
+    }
+
+    @Test(timeout = 5_000)
+    public void errorReplyDisconnectAndWrongShapeFailTheCase() throws Exception {
+        assertExecutionFails(
+                ScriptedRespServer.respondingWith("-ERR boom\r\n"),
+                "ERR boom",
+                0
+        );
+        assertExecutionFails(
+                ScriptedRespServer.closingAfterCommands(1),
+                "disconnect",
+                0
+        );
+        assertExecutionFails(
+                ScriptedRespServer.respondingWith(":1\r\n"),
+                "expected PONG",
+                0
+        );
+        assertExecutionFails(
+                ScriptedRespServer.respondingWith("!invalid\r\n"),
+                "unsupported reply marker",
+                0
+        );
+    }
+
+    @Test(timeout = 5_000)
+    public void rejectedPrefixFailsWithoutCountingItAsBenchmarkTraffic() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.rejectingAuth(
+                "-WRONGPASS invalid password\r\n"
+        )) {
+            BenchmarkExecutionException failure = Assert.assertThrows(
+                    BenchmarkExecutionException.class,
+                    () -> execute(
+                            server,
+                            PING,
+                            5,
+                            1,
+                            2,
+                            true,
+                            BenchmarkClock.system(),
+                            NioBenchmarkClient.ReplyLimits.defaults(),
+                            "default",
+                            "bad",
+                            0
+                    )
+            );
+
+            Assert.assertEquals(0, failure.completedReplies());
+            Assert.assertTrue(failure.detail().contains("WRONGPASS"));
+            Assert.assertTrue(failure.getMessage().contains("WRONGPASS"));
+            Assert.assertEquals(0, server.measuredCommandReplies());
+        }
+    }
+
+    @Test(timeout = 5_000)
+    public void noProgressTimesOutWithStructuredFailure() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.neverResponding()) {
+            BenchmarkExecutionException failure = Assert.assertThrows(
+                    BenchmarkExecutionException.class,
+                    () -> execute(
+                            server,
+                            PING,
+                            3,
+                            1,
+                            1,
+                            true,
+                            BenchmarkClock.system(),
+                            NioBenchmarkClient.ReplyLimits.defaults(),
+                            "",
+                            "",
+                            0,
+                            Duration.ofMillis(100)
+                    )
+            );
+
+            Assert.assertEquals(0, failure.completedReplies());
+            Assert.assertTrue(failure.detail().contains("no progress timeout"));
+            Assert.assertTrue(failure.getMessage().contains("no progress timeout"));
+            Assert.assertNotNull(failure.getCause());
+            Assert.assertEquals(
+                    List.of(1),
+                    server.awaitCommandCountsPerConnection(1, 1, SERVER_WAIT)
+            );
+        }
+    }
+
+    @Test(timeout = 5_000)
+    public void cleanupFailureIsSuppressedWithoutMaskingPrimaryFailure() throws Exception {
+        IOException cleanupFailure = new IOException("cleanup boom");
+        NioBenchmarkRunner runner = new NioBenchmarkRunner(
+                BenchmarkClock.system(),
+                NioBenchmarkClient.ReplyLimits.defaults(),
+                BenchmarkClock.system(),
+                Duration.ofSeconds(30),
+                client -> {
+                    client.close();
+                    throw cleanupFailure;
+                }
+        );
+        try (ScriptedRespServer server = ScriptedRespServer.respondingWith(
+                "-ERR primary boom\r\n"
+        )) {
+            BenchmarkExecutionException failure = Assert.assertThrows(
+                    BenchmarkExecutionException.class,
+                    () -> execute(
+                            server,
+                            PING,
+                            3,
+                            1,
+                            1,
+                            true,
+                            BenchmarkClock.system(),
+                            NioBenchmarkClient.ReplyLimits.defaults(),
+                            "",
+                            "",
+                            0,
+                            runner
+                    )
+            );
+
+            Assert.assertEquals(0, failure.completedReplies());
+            Assert.assertTrue(failure.detail().contains("ERR primary boom"));
+            Assert.assertTrue(failure.getMessage().contains("ERR primary boom"));
+            Assert.assertArrayEquals(
+                    new Throwable[]{cleanupFailure},
+                    failure.getCause().getSuppressed()
+            );
+        }
+    }
 
     @Test(timeout = 5_000)
     public void pipelineOneCompletesConfiguredRequestsAcrossClients() throws Exception {
@@ -155,6 +448,7 @@ public class NioBenchmarkRunnerTest {
                 requests,
                 clients,
                 pipeline,
+                true,
                 clock,
                 NioBenchmarkClient.ReplyLimits.defaults()
         );
@@ -169,6 +463,121 @@ public class NioBenchmarkRunnerTest {
             BenchmarkClock clock,
             NioBenchmarkClient.ReplyLimits replyLimits
     ) throws Exception {
+        return execute(
+                server,
+                testCase,
+                requests,
+                clients,
+                pipeline,
+                true,
+                clock,
+                replyLimits
+        );
+    }
+
+    private static BenchmarkStatistics execute(
+            ScriptedRespServer server,
+            RedisBenchmarkCase testCase,
+            int requests,
+            int clients,
+            int pipeline,
+            boolean keepAlive,
+            BenchmarkClock clock,
+            NioBenchmarkClient.ReplyLimits replyLimits
+    ) throws Exception {
+        return execute(
+                server,
+                testCase,
+                requests,
+                clients,
+                pipeline,
+                keepAlive,
+                clock,
+                replyLimits,
+                "",
+                "",
+                0
+        );
+    }
+
+    private static BenchmarkStatistics execute(
+            ScriptedRespServer server,
+            RedisBenchmarkCase testCase,
+            int requests,
+            int clients,
+            int pipeline,
+            boolean keepAlive,
+            BenchmarkClock clock,
+            NioBenchmarkClient.ReplyLimits replyLimits,
+            String username,
+            String password,
+            int database
+    ) throws Exception {
+        return execute(
+                server,
+                testCase,
+                requests,
+                clients,
+                pipeline,
+                keepAlive,
+                clock,
+                replyLimits,
+                username,
+                password,
+                database,
+                new NioBenchmarkRunner(clock, replyLimits)
+        );
+    }
+
+    private static BenchmarkStatistics execute(
+            ScriptedRespServer server,
+            RedisBenchmarkCase testCase,
+            int requests,
+            int clients,
+            int pipeline,
+            boolean keepAlive,
+            BenchmarkClock clock,
+            NioBenchmarkClient.ReplyLimits replyLimits,
+            String username,
+            String password,
+            int database,
+            Duration noProgressTimeout
+    ) throws Exception {
+        return execute(
+                server,
+                testCase,
+                requests,
+                clients,
+                pipeline,
+                keepAlive,
+                clock,
+                replyLimits,
+                username,
+                password,
+                database,
+                new NioBenchmarkRunner(
+                        clock,
+                        replyLimits,
+                        BenchmarkClock.system(),
+                        noProgressTimeout
+                )
+        );
+    }
+
+    private static BenchmarkStatistics execute(
+            ScriptedRespServer server,
+            RedisBenchmarkCase testCase,
+            int requests,
+            int clients,
+            int pipeline,
+            boolean keepAlive,
+            BenchmarkClock clock,
+            NioBenchmarkClient.ReplyLimits replyLimits,
+            String username,
+            String password,
+            int database,
+            NioBenchmarkRunner runner
+    ) throws Exception {
         BenchmarkConfig config = new BenchmarkConfig(
                 server.host(),
                 server.port(),
@@ -177,16 +586,15 @@ public class NioBenchmarkRunnerTest {
                 3,
                 pipeline,
                 OptionalLong.empty(),
-                true,
+                keepAlive,
                 Set.of(testCase.id()),
                 3,
                 19L,
                 BenchmarkFormat.HUMAN,
-                "",
-                "",
-                0
+                username,
+                password,
+                database
         );
-        NioBenchmarkRunner runner = new NioBenchmarkRunner(clock, replyLimits);
         ExecutorService executor = Executors.newSingleThreadExecutor();
         Future<BenchmarkStatistics> execution = executor.submit(() -> runner.execute(
                 testCase,
@@ -213,6 +621,24 @@ public class NioBenchmarkRunnerTest {
 
     private static byte[] ascii(String value) {
         return value.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static void assertExecutionFails(
+            ScriptedRespServer server,
+            String expectedDetail,
+            long expectedCompletedReplies
+    ) throws Exception {
+        try (server) {
+            BenchmarkExecutionException failure = Assert.assertThrows(
+                    BenchmarkExecutionException.class,
+                    () -> execute(server, 3, 1, 1, BenchmarkClock.system())
+            );
+
+            Assert.assertEquals(expectedCompletedReplies, failure.completedReplies());
+            Assert.assertTrue(failure.detail(), failure.detail().contains(expectedDetail));
+            Assert.assertTrue(failure.getMessage().contains(expectedDetail));
+            Assert.assertNotNull(failure.getCause());
+        }
     }
 
     private static void assertCounters(
