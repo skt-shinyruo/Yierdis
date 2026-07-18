@@ -24,9 +24,9 @@ public final class BenchmarkOutputRenderer {
             if (!output.isEmpty()) {
                 output.append('\n');
             }
-            output.append("====== ")
-                    .append(result.testCase().title())
-                    .append(" ======\n");
+            output.append("====== ");
+            appendDisplayText(output, result.testCase().title());
+            output.append(" ======\n");
             if (result.status() == BenchmarkStatus.SUCCESS) {
                 appendHumanSuccess(output, config, result.statistics());
             } else {
@@ -85,14 +85,15 @@ public final class BenchmarkOutputRenderer {
                     .append('\n');
         }
         output.append("reason: ");
-        appendWithoutTrailingLineBreaks(output, result.reason());
+        appendDisplayText(output, result.reason());
         output.append('\n');
     }
 
     private static String renderQuiet(BenchmarkRunResult run) {
         StringBuilder output = new StringBuilder();
         for (BenchmarkCaseResult result : run.cases()) {
-            output.append(result.testCase().title()).append(": ");
+            appendDisplayText(output, result.testCase().title());
+            output.append(": ");
             switch (result.status()) {
                 case SUCCESS -> appendRootFormat(
                         output,
@@ -100,15 +101,18 @@ public final class BenchmarkOutputRenderer {
                         result.statistics().requestsPerSecond(),
                         milliseconds(result.statistics().latency().p50Micros())
                 );
-                case FAILED -> output.append("FAILED after ")
-                        .append(result.completedReplies())
-                        .append(" replies (")
-                        .append(result.reason())
-                        .append(")\n");
-                case UNSUPPORTED, SKIPPED -> output.append(result.status())
-                        .append(" (")
-                        .append(result.reason())
-                        .append(")\n");
+                case FAILED -> {
+                    output.append("FAILED after ")
+                            .append(result.completedReplies())
+                            .append(" replies (");
+                    appendDisplayText(output, result.reason());
+                    output.append(")\n");
+                }
+                case UNSUPPORTED, SKIPPED -> {
+                    output.append(result.status()).append(" (");
+                    appendDisplayText(output, result.reason());
+                    output.append(")\n");
+                }
             }
         }
         return output.toString();
@@ -176,12 +180,15 @@ public final class BenchmarkOutputRenderer {
         return String.format(Locale.ROOT, format, arguments);
     }
 
-    private static void appendWithoutTrailingLineBreaks(StringBuilder output, String value) {
-        int end = value.length();
-        while (end > 0 && (value.charAt(end - 1) == '\r' || value.charAt(end - 1) == '\n')) {
-            end--;
+    private static void appendDisplayText(StringBuilder output, String value) {
+        for (int index = 0; index < value.length(); index++) {
+            switch (value.charAt(index)) {
+                case '\\' -> output.append("\\\\");
+                case '\r' -> output.append("\\r");
+                case '\n' -> output.append("\\n");
+                default -> output.append(value.charAt(index));
+            }
         }
-        output.append(value, 0, end);
     }
 
     private static double milliseconds(double micros) {
