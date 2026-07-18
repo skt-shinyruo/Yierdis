@@ -23,13 +23,22 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
     private static final byte[] EMPTY_PREFIX = new byte[0];
 
     private final BenchmarkClock clock;
+    private final NioBenchmarkClient.ReplyLimits replyLimits;
 
     public NioBenchmarkRunner() {
-        this(BenchmarkClock.system());
+        this(BenchmarkClock.system(), NioBenchmarkClient.ReplyLimits.defaults());
     }
 
     public NioBenchmarkRunner(BenchmarkClock clock) {
+        this(clock, NioBenchmarkClient.ReplyLimits.defaults());
+    }
+
+    NioBenchmarkRunner(
+            BenchmarkClock clock,
+            NioBenchmarkClient.ReplyLimits replyLimits
+    ) {
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.replyLimits = Objects.requireNonNull(replyLimits, "replyLimits");
     }
 
     @Override
@@ -111,7 +120,8 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
                         compiledPipeline,
                         prefix.bytes(),
                         prefix.replyCount(),
-                        random
+                        random,
+                        replyLimits
                 );
                 boolean connected = channel.connect(address);
                 int interestOps = connected ? SelectionKey.OP_WRITE : SelectionKey.OP_CONNECT;

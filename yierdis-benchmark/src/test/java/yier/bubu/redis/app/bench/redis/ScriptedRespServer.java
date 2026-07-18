@@ -133,6 +133,10 @@ final class ScriptedRespServer implements AutoCloseable {
         return serverSocket.getLocalPort();
     }
 
+    String host() {
+        return serverSocket.getInetAddress().getHostAddress();
+    }
+
     int acceptedConnectionCount() {
         return acceptedConnections.get();
     }

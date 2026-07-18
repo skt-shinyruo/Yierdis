@@ -3,6 +3,7 @@ package yier.bubu.redis.app.bench.redis;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Objects;
 
 public final class IncrementalRespReplyDecoder {
@@ -10,7 +11,7 @@ public final class IncrementalRespReplyDecoder {
 
     private static final byte CR = '\r';
     private static final byte LF = '\n';
-    private static final int PREFIX_ANCHOR_BYTES = Long.BYTES;
+    private static final int INITIAL_LINE_BUFFER_BYTES = 64;
 
     private final int maxBulkBytes;
     private final int maxLineBytes;
@@ -18,26 +19,18 @@ public final class IncrementalRespReplyDecoder {
     private final int maxDepth;
     private final int[] arrayRemaining;
 
+    private byte[] lineBuffer;
     private boolean active;
     private Stage stage = Stage.MARKER;
-    private int cursor;
     private int stackSize;
     private int rootArrayLength = -1;
 
     private byte currentMarker;
     private boolean currentTopLevel;
-    private int lineStart;
-    private int lineScanOffset;
+    private int lineLength;
 
     private int bulkLength;
-    private int bulkPayloadStart;
-
-    private int retainedInputLength;
-    private long retainedHeadAnchor;
-    private long retainedTailAnchor;
-    private ByteBuffer retainedBuffer;
-    private int retainedBufferStart;
-    private long prefixValidationByteReads;
+    private int bulkRemaining;
 
     public IncrementalRespReplyDecoder(
             int maxBulkBytes,
@@ -50,29 +43,19 @@ public final class IncrementalRespReplyDecoder {
         this.maxArrayLength = requireNonNegative(maxArrayLength, "maxArrayLength");
         this.maxDepth = requireDepth(maxDepth);
         this.arrayRemaining = new int[maxDepth + 1];
+        this.lineBuffer = new byte[Math.min(maxLineBytes, INITIAL_LINE_BUFFER_BYTES)];
     }
 
+    /**
+     * 从 input 当前位置继续解码；即使返回 null，也会推进到已消费位置，调用方只需 compact 未消费的尾部。
+     */
     public BenchmarkRespReply tryDecode(ByteBuffer input) throws IOException {
         Objects.requireNonNull(input, "input");
-        int start = input.position();
-        int available = input.limit() - start;
         try {
-            if (!active) {
-                startReply();
-            } else {
-                validateRetainedPrefix(input, start, available);
+            BenchmarkRespReply reply = advance(input);
+            if (reply != null) {
+                clearState();
             }
-
-            BenchmarkRespReply reply = advance(input, start, available);
-            if (reply == null) {
-                retainInput(input, start, available);
-                input.position(start);
-                return null;
-            }
-
-            int consumed = cursor;
-            clearState();
-            input.position(start + consumed);
             return reply;
         } catch (IOException failure) {
             clearState();
@@ -80,123 +63,87 @@ public final class IncrementalRespReplyDecoder {
         }
     }
 
-    int retainedProgress() {
-        if (!active) {
-            return 0;
-        }
-        return switch (stage) {
-            case MARKER -> cursor;
-            case LINE -> lineScanOffset;
-            case BULK -> bulkPayloadStart;
-        };
-    }
-
-    int retainedArrayDepth() {
+    int arrayDepth() {
         return active ? stackSize : 0;
     }
 
-    long prefixValidationByteReads() {
-        return prefixValidationByteReads;
-    }
-
-    private BenchmarkRespReply advance(ByteBuffer input, int start, int available) throws IOException {
-        while (true) {
-            if (stage == Stage.MARKER) {
-                if (stackSize > maxDepth) {
-                    throw malformed("reply nesting depth exceeds " + maxDepth);
-                }
-                if (cursor == available) {
-                    return null;
-                }
-
-                currentMarker = input.get(start + cursor++);
-                if (currentMarker != '+' && currentMarker != '-' && currentMarker != ':'
-                        && currentMarker != '$' && currentMarker != '*') {
-                    throw malformed("unsupported reply marker " + printable(currentMarker));
-                }
-                currentTopLevel = stackSize == 0;
-                lineStart = cursor;
-                lineScanOffset = cursor;
-                stage = Stage.LINE;
-            }
-
-            if (stage == Stage.LINE) {
-                int lineEnd = scanLine(input, start, available);
-                if (lineEnd < 0) {
-                    return null;
-                }
-                BenchmarkRespReply reply = processLine(input, start, lineEnd);
-                if (reply != null) {
-                    return reply;
-                }
-                continue;
-            }
-
-            BenchmarkRespReply reply = processBulk(input, start, available);
+    private BenchmarkRespReply advance(ByteBuffer input) throws IOException {
+        while (input.hasRemaining()) {
+            BenchmarkRespReply reply = switch (stage) {
+                case MARKER -> readMarker(input);
+                case LINE -> readLineByte(input);
+                case LINE_LF -> finishLine(input);
+                case BULK_PAYLOAD -> consumeBulkPayload(input);
+                case BULK_CR -> consumeBulkCr(input);
+                case BULK_LF -> consumeBulkLf(input);
+            };
             if (reply != null) {
                 return reply;
             }
-            if (stage == Stage.BULK) {
-                return null;
-            }
         }
+        return null;
     }
 
-    private int scanLine(ByteBuffer input, int start, int available) throws IOException {
-        while (lineScanOffset < available) {
-            byte current = input.get(start + lineScanOffset);
-            if (current == CR) {
-                if (lineScanOffset + 1 == available) {
-                    return -1;
-                }
-                if (input.get(start + lineScanOffset + 1) != LF) {
-                    throw malformed("CR is not followed by LF");
-                }
-                int lineEnd = lineScanOffset;
-                cursor = lineScanOffset + 2;
-                stage = Stage.MARKER;
-                return lineEnd;
-            }
-            if (current == LF) {
-                throw malformed("LF is not preceded by CR");
-            }
-            if (lineScanOffset - lineStart >= maxLineBytes) {
-                throw malformed("line exceeds " + maxLineBytes + " bytes");
-            }
-            lineScanOffset++;
+    private BenchmarkRespReply readMarker(ByteBuffer input) throws IOException {
+        currentMarker = input.get();
+        if (currentMarker != '+' && currentMarker != '-' && currentMarker != ':'
+                && currentMarker != '$' && currentMarker != '*') {
+            throw malformed("unsupported reply marker " + printable(currentMarker));
         }
-        return -1;
+
+        active = true;
+        currentTopLevel = stackSize == 0;
+        lineLength = 0;
+        stage = Stage.LINE;
+        return null;
     }
 
-    private BenchmarkRespReply processLine(ByteBuffer input, int start, int lineEnd) throws IOException {
+    private BenchmarkRespReply readLineByte(ByteBuffer input) throws IOException {
+        byte current = input.get();
+        if (current == CR) {
+            stage = Stage.LINE_LF;
+            return null;
+        }
+        if (current == LF) {
+            throw malformed("LF is not preceded by CR");
+        }
+        appendLineByte(current);
+        return null;
+    }
+
+    private BenchmarkRespReply finishLine(ByteBuffer input) throws IOException {
+        if (input.get() != LF) {
+            throw malformed("CR is not followed by LF");
+        }
+        stage = Stage.MARKER;
         return switch (currentMarker) {
-            case '+' -> processText(input, start, lineEnd, false);
-            case '-' -> processText(input, start, lineEnd, true);
-            case ':' -> processInteger(input, start, lineEnd);
-            case '$' -> processBulkLength(input, start, lineEnd);
-            case '*' -> processArrayLength(input, start, lineEnd);
+            case '+' -> processText(false);
+            case '-' -> processText(true);
+            case ':' -> processInteger();
+            case '$' -> processBulkLength();
+            case '*' -> processArrayLength();
             default -> throw new IllegalStateException("validated marker became invalid");
         };
     }
 
-    private BenchmarkRespReply processText(ByteBuffer input, int start, int lineEnd, boolean error) {
+    private BenchmarkRespReply processText(boolean error) {
         if (currentTopLevel) {
-            String text = decodeText(input, start + lineStart, lineEnd - lineStart);
+            String text = new String(lineBuffer, 0, lineLength, StandardCharsets.UTF_8);
             return error ? BenchmarkRespReply.error(text) : BenchmarkRespReply.simpleString(text);
         }
         return completeDiscardedReply();
     }
 
-    private BenchmarkRespReply processInteger(ByteBuffer input, int start, int lineEnd) throws IOException {
-        long value = parseLong(input, start, lineStart, lineEnd);
+    private BenchmarkRespReply processInteger() throws IOException {
+        long value = parseLong();
         if (currentTopLevel) {
             return BenchmarkRespReply.integer(value);
         }
         return completeDiscardedReply();
     }
 
-    private BenchmarkRespReply processBulkLength(ByteBuffer input, int start, int lineEnd) throws IOException {
-        long declaredLength = parseLong(input, start, lineStart, lineEnd);
+    private BenchmarkRespReply processBulkLength() throws IOException {
+        long declaredLength = parseLong();
         if (declaredLength == -1) {
             if (currentTopLevel) {
                 return BenchmarkRespReply.nullBulk();
@@ -211,13 +158,13 @@ public final class IncrementalRespReplyDecoder {
         }
 
         bulkLength = (int) declaredLength;
-        bulkPayloadStart = cursor;
-        stage = Stage.BULK;
+        bulkRemaining = bulkLength;
+        stage = bulkRemaining == 0 ? Stage.BULK_CR : Stage.BULK_PAYLOAD;
         return null;
     }
 
-    private BenchmarkRespReply processArrayLength(ByteBuffer input, int start, int lineEnd) throws IOException {
-        long declaredLength = parseLong(input, start, lineStart, lineEnd);
+    private BenchmarkRespReply processArrayLength() throws IOException {
+        long declaredLength = parseLong();
         if (declaredLength == -1) {
             if (currentTopLevel) {
                 return BenchmarkRespReply.nullArray();
@@ -242,30 +189,34 @@ public final class IncrementalRespReplyDecoder {
             rootArrayLength = length;
         }
         arrayRemaining[stackSize++] = length;
+        if (stackSize > maxDepth) {
+            throw malformed("reply nesting depth exceeds " + maxDepth);
+        }
         return null;
     }
 
-    private BenchmarkRespReply processBulk(ByteBuffer input, int start, int available) throws IOException {
-        long payloadEndValue = (long) bulkPayloadStart + bulkLength;
-        if (payloadEndValue > available) {
-            return null;
+    private BenchmarkRespReply consumeBulkPayload(ByteBuffer input) {
+        int consumed = Math.min(input.remaining(), bulkRemaining);
+        input.position(input.position() + consumed);
+        bulkRemaining -= consumed;
+        if (bulkRemaining == 0) {
+            stage = Stage.BULK_CR;
         }
+        return null;
+    }
 
-        int payloadEnd = (int) payloadEndValue;
-        if (payloadEnd == available) {
-            return null;
-        }
-        if (input.get(start + payloadEnd) != CR) {
+    private BenchmarkRespReply consumeBulkCr(ByteBuffer input) throws IOException {
+        if (input.get() != CR) {
             throw malformed("bulk payload is not followed by CRLF");
         }
-        if (payloadEnd + 1 == available) {
-            return null;
-        }
-        if (input.get(start + payloadEnd + 1) != LF) {
+        stage = Stage.BULK_LF;
+        return null;
+    }
+
+    private BenchmarkRespReply consumeBulkLf(ByteBuffer input) throws IOException {
+        if (input.get() != LF) {
             throw malformed("bulk payload is not followed by CRLF");
         }
-
-        cursor = payloadEnd + 2;
         stage = Stage.MARKER;
         if (currentTopLevel) {
             return BenchmarkRespReply.bulkString(bulkLength);
@@ -289,22 +240,34 @@ public final class IncrementalRespReplyDecoder {
         return BenchmarkRespReply.array(rootArrayLength);
     }
 
-    private long parseLong(ByteBuffer input, int start, int valueStart, int valueEnd) throws IOException {
-        if (valueStart == valueEnd) {
+    private void appendLineByte(byte value) throws IOException {
+        if (lineLength >= maxLineBytes) {
+            throw malformed("line exceeds " + maxLineBytes + " bytes");
+        }
+        if (lineLength == lineBuffer.length) {
+            long doubled = lineBuffer.length == 0 ? 1L : (long) lineBuffer.length * 2L;
+            int nextLength = (int) Math.min(maxLineBytes, doubled);
+            lineBuffer = Arrays.copyOf(lineBuffer, nextLength);
+        }
+        lineBuffer[lineLength++] = value;
+    }
+
+    private long parseLong() throws IOException {
+        if (lineLength == 0) {
             throw malformed("numeric field is empty");
         }
 
-        int index = valueStart;
-        boolean negative = input.get(start + index) == '-';
-        if (negative && ++index == valueEnd) {
+        int index = 0;
+        boolean negative = lineBuffer[index] == '-';
+        if (negative && ++index == lineLength) {
             throw malformed("numeric field has no digits");
         }
 
         long limit = negative ? Long.MIN_VALUE : -Long.MAX_VALUE;
         long multiplyLimit = limit / 10;
         long result = 0;
-        while (index < valueEnd) {
-            byte current = input.get(start + index++);
+        while (index < lineLength) {
+            byte current = lineBuffer[index++];
             if (current < '0' || current > '9') {
                 throw malformed("numeric field contains a non-digit");
             }
@@ -321,78 +284,16 @@ public final class IncrementalRespReplyDecoder {
         return negative ? result : -result;
     }
 
-    private void validateRetainedPrefix(ByteBuffer input, int start, int available) throws IOException {
-        if (available < retainedInputLength) {
-            throw malformed("input no longer contains retained prefix");
-        }
-        if (input == retainedBuffer && start == retainedBufferStart) {
-            return;
-        }
-
-        int headEnd = Math.min(retainedInputLength, PREFIX_ANCHOR_BYTES);
-        int tailStart = Math.max(0, retainedInputLength - PREFIX_ANCHOR_BYTES);
-        long suppliedHeadAnchor = readAnchor(input, start, 0, headEnd);
-        prefixValidationByteReads += headEnd;
-        if (suppliedHeadAnchor != retainedHeadAnchor) {
-            throw malformed("input no longer contains retained prefix");
-        }
-        long suppliedTailAnchor = readAnchor(input, start, tailStart, retainedInputLength);
-        prefixValidationByteReads += retainedInputLength - tailStart;
-        if (suppliedTailAnchor != retainedTailAnchor) {
-            throw malformed("input no longer contains retained prefix");
-        }
-    }
-
-    private void retainInput(ByteBuffer input, int start, int available) {
-        retainedInputLength = available;
-        int headEnd = Math.min(available, PREFIX_ANCHOR_BYTES);
-        int tailStart = Math.max(0, available - PREFIX_ANCHOR_BYTES);
-        retainedHeadAnchor = readAnchor(input, start, 0, headEnd);
-        retainedTailAnchor = readAnchor(input, start, tailStart, available);
-        retainedBuffer = input;
-        retainedBufferStart = start;
-    }
-
-    private static long readAnchor(ByteBuffer input, int start, int from, int to) {
-        long anchor = 0;
-        for (int offset = from; offset < to; offset++) {
-            anchor = (anchor << Byte.SIZE) | (input.get(start + offset) & 0xffL);
-        }
-        return anchor;
-    }
-
-    private static String decodeText(ByteBuffer input, int start, int length) {
-        byte[] bytes = new byte[length];
-        ByteBuffer view = input.duplicate();
-        view.position(start);
-        view.get(bytes);
-        return new String(bytes, StandardCharsets.UTF_8);
-    }
-
-    private void startReply() {
-        active = true;
-        stage = Stage.MARKER;
-        cursor = 0;
-        stackSize = 0;
-        rootArrayLength = -1;
-        retainedInputLength = 0;
-        retainedHeadAnchor = 0;
-        retainedTailAnchor = 0;
-        retainedBuffer = null;
-        retainedBufferStart = 0;
-    }
-
     private void clearState() {
         active = false;
         stage = Stage.MARKER;
-        cursor = 0;
         stackSize = 0;
         rootArrayLength = -1;
-        retainedInputLength = 0;
-        retainedHeadAnchor = 0;
-        retainedTailAnchor = 0;
-        retainedBuffer = null;
-        retainedBufferStart = 0;
+        currentMarker = 0;
+        currentTopLevel = false;
+        lineLength = 0;
+        bulkLength = 0;
+        bulkRemaining = 0;
     }
 
     private static int requireNonNegative(int value, String name) {
@@ -427,6 +328,9 @@ public final class IncrementalRespReplyDecoder {
     private enum Stage {
         MARKER,
         LINE,
-        BULK
+        LINE_LF,
+        BULK_PAYLOAD,
+        BULK_CR,
+        BULK_LF
     }
 }
