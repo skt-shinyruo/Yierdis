@@ -2,7 +2,6 @@ package yier.bubu.redis.app.bench.redis;
 
 import yier.bubu.redis.protocol.resp.RespClientCodec;
 
-import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -10,6 +9,7 @@ import java.util.Objects;
 import java.util.OptionalLong;
 
 public final class RedisBenchmarkCommandTemplate {
+    private static final int MAX_PIPELINE_CAPACITY = Integer.MAX_VALUE - 8;
     private static final byte[] RANDOM_MARKER = asciiBytes("__rand_int__", "random marker");
     private static final byte[] FIXED_SCORE = new byte[]{'0'};
 
@@ -117,19 +117,18 @@ public final class RedisBenchmarkCommandTemplate {
             }
         }
 
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        if (wireMode == WireMode.INLINE) {
-            for (int copy = 0; copy < pipeline; copy++) {
-                output.writeBytes(inlineFrame);
-            }
-        } else {
-            List<byte[]> resolvedArguments = resolveArguments(payload, requiredKeyspace);
-            for (int copy = 0; copy < pipeline; copy++) {
-                output.writeBytes(RespClientCodec.encodeCommand(resolvedArguments));
-            }
+        byte[] frame = wireMode == WireMode.INLINE
+                ? inlineFrame
+                : RespClientCodec.encodeCommand(resolveArguments(payload, requiredKeyspace));
+        long capacity = (long) frame.length * pipeline;
+        if (capacity > MAX_PIPELINE_CAPACITY) {
+            throw new IllegalArgumentException("pipeline capacity exceeds maximum byte array size");
         }
 
-        byte[] bytes = output.toByteArray();
+        byte[] bytes = new byte[(int) capacity];
+        for (int copy = 0; copy < pipeline; copy++) {
+            System.arraycopy(frame, 0, bytes, copy * frame.length, frame.length);
+        }
         int[] randomOffsets = requiredKeyspace.isPresent()
                 ? replaceMarkersWithZeroes(bytes)
                 : new int[0];
@@ -150,22 +149,29 @@ public final class RedisBenchmarkCommandTemplate {
 
     private static int[] replaceMarkersWithZeroes(byte[] bytes) {
         int markerCount = 0;
-        for (int offset = 0; offset <= bytes.length - RANDOM_MARKER.length; offset++) {
+        int offset = 0;
+        while (offset <= bytes.length - RANDOM_MARKER.length) {
             if (markerAt(bytes, offset)) {
                 markerCount++;
+                offset += RANDOM_MARKER.length;
+            } else {
+                offset++;
             }
         }
 
         int[] offsets = new int[markerCount];
         int markerIndex = 0;
-        for (int offset = 0; offset <= bytes.length - RANDOM_MARKER.length; offset++) {
+        offset = 0;
+        while (offset <= bytes.length - RANDOM_MARKER.length) {
             if (!markerAt(bytes, offset)) {
+                offset++;
                 continue;
             }
             offsets[markerIndex++] = offset;
             for (int digit = 0; digit < RANDOM_MARKER.length; digit++) {
                 bytes[offset + digit] = '0';
             }
+            offset += RANDOM_MARKER.length;
         }
         return offsets;
     }
