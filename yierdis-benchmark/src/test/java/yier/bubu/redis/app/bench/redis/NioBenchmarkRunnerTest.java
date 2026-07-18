@@ -3,6 +3,7 @@ package yier.bubu.redis.app.bench.redis;
 import org.junit.Assert;
 import org.junit.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.OptionalLong;
@@ -17,9 +18,13 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public class NioBenchmarkRunnerTest {
     private static final Duration SERVER_WAIT = Duration.ofSeconds(5);
-    private static final String LOOPBACK_HOST = "127.0.0.1";
+    private static final RedisBenchmarkCatalog CATALOG = new RedisBenchmarkCatalog();
     private static final RedisBenchmarkCase PING =
-            new RedisBenchmarkCatalog().caseById("ping_inline");
+            CATALOG.caseById("ping_inline");
+    private static final RedisBenchmarkCase GET = CATALOG.caseById("get");
+    private static final RedisBenchmarkCase LRANGE = CATALOG.caseById("lrange_100");
+    private static final NioBenchmarkClient.ReplyLimits SMALL_REPLY_LIMITS =
+            new NioBenchmarkClient.ReplyLimits(16, 16, 16, 3, 4);
 
     @Test(timeout = 5_000)
     public void pipelineOneCompletesConfiguredRequestsAcrossClients() throws Exception {
@@ -91,6 +96,52 @@ public class NioBenchmarkRunnerTest {
         }
     }
 
+    @Test(timeout = 5_000)
+    public void bulkPayloadAtLimitCanExceedFixedReadBufferWithFraming() throws Exception {
+        byte[] reply = ascii("$16\r\n0123456789abcdef\r\n");
+        try (ScriptedRespServer server = ScriptedRespServer.immediate(1, reply)) {
+            BenchmarkStatistics statistics = execute(
+                    server,
+                    GET,
+                    1,
+                    1,
+                    1,
+                    BenchmarkClock.system(),
+                    SMALL_REPLY_LIMITS
+            );
+
+            Assert.assertEquals(
+                    List.of(1),
+                    server.awaitCommandCountsPerConnection(1, 1, SERVER_WAIT)
+            );
+            assertCounters(statistics, 1, 1, 1, 1);
+        }
+    }
+
+    @Test(timeout = 5_000)
+    public void arrayAggregateCanExceedFixedReadBufferAndPerBulkLimit() throws Exception {
+        byte[] reply = ascii(
+                "*3\r\n$4\r\nabcd\r\n$4\r\nefgh\r\n$4\r\nijkl\r\n"
+        );
+        try (ScriptedRespServer server = ScriptedRespServer.immediate(1, reply)) {
+            BenchmarkStatistics statistics = execute(
+                    server,
+                    LRANGE,
+                    1,
+                    1,
+                    1,
+                    BenchmarkClock.system(),
+                    SMALL_REPLY_LIMITS
+            );
+
+            Assert.assertEquals(
+                    List.of(1),
+                    server.awaitCommandCountsPerConnection(1, 1, SERVER_WAIT)
+            );
+            assertCounters(statistics, 1, 1, 1, 1);
+        }
+    }
+
     private static BenchmarkStatistics execute(
             ScriptedRespServer server,
             int requests,
@@ -98,8 +149,28 @@ public class NioBenchmarkRunnerTest {
             int pipeline,
             BenchmarkClock clock
     ) throws Exception {
+        return execute(
+                server,
+                PING,
+                requests,
+                clients,
+                pipeline,
+                clock,
+                NioBenchmarkClient.ReplyLimits.defaults()
+        );
+    }
+
+    private static BenchmarkStatistics execute(
+            ScriptedRespServer server,
+            RedisBenchmarkCase testCase,
+            int requests,
+            int clients,
+            int pipeline,
+            BenchmarkClock clock,
+            NioBenchmarkClient.ReplyLimits replyLimits
+    ) throws Exception {
         BenchmarkConfig config = new BenchmarkConfig(
-                LOOPBACK_HOST,
+                server.host(),
                 server.port(),
                 requests,
                 clients,
@@ -107,7 +178,7 @@ public class NioBenchmarkRunnerTest {
                 pipeline,
                 OptionalLong.empty(),
                 true,
-                Set.of("ping_inline"),
+                Set.of(testCase.id()),
                 3,
                 19L,
                 BenchmarkFormat.HUMAN,
@@ -115,10 +186,10 @@ public class NioBenchmarkRunnerTest {
                 "",
                 0
         );
-        NioBenchmarkRunner runner = new NioBenchmarkRunner(clock);
+        NioBenchmarkRunner runner = new NioBenchmarkRunner(clock, replyLimits);
         ExecutorService executor = Executors.newSingleThreadExecutor();
         Future<BenchmarkStatistics> execution = executor.submit(() -> runner.execute(
-                PING,
+                testCase,
                 config,
                 BenchmarkPayload.generate(config.dataSize()),
                 new BenchmarkRandom(config.seed())
@@ -138,6 +209,10 @@ public class NioBenchmarkRunnerTest {
             execution.cancel(true);
             executor.shutdownNow();
         }
+    }
+
+    private static byte[] ascii(String value) {
+        return value.getBytes(StandardCharsets.US_ASCII);
     }
 
     private static void assertCounters(

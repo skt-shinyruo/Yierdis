@@ -9,7 +9,33 @@ import java.nio.channels.SocketChannel;
 import java.util.Objects;
 
 final class NioBenchmarkClient implements AutoCloseable {
-    private static final int INITIAL_READ_BUFFER_BYTES = 64 * 1024;
+    private static final int DEFAULT_READ_BUFFER_BYTES = 64 * 1024;
+
+    record ReplyLimits(
+            int readBufferBytes,
+            int maxBulkBytes,
+            int maxLineBytes,
+            int maxArrayLength,
+            int maxDepth
+    ) {
+        private static final ReplyLimits DEFAULTS = new ReplyLimits(
+                DEFAULT_READ_BUFFER_BYTES,
+                RespProtocolLimits.DEFAULT_MAX_BULK_BYTES,
+                RespProtocolLimits.DEFAULT_MAX_INLINE_BYTES,
+                RespProtocolLimits.DEFAULT_MAX_ARGS,
+                IncrementalRespReplyDecoder.MAX_SUPPORTED_DEPTH
+        );
+
+        ReplyLimits {
+            if (readBufferBytes <= 0) {
+                throw new IllegalArgumentException("readBufferBytes must be > 0");
+            }
+        }
+
+        static ReplyLimits defaults() {
+            return DEFAULTS;
+        }
+    }
 
     enum Phase {
         CONNECTING,
@@ -25,7 +51,7 @@ final class NioBenchmarkClient implements AutoCloseable {
     final ByteBuffer firstWritePrefix;
     final ByteBuffer[] gatheringWriteBuffers;
     final ByteBuffer pipelineWriteBuffer;
-    ByteBuffer readBuffer;
+    final ByteBuffer readBuffer;
     final IncrementalRespReplyDecoder replyDecoder;
 
     int prefixPending;
@@ -42,7 +68,8 @@ final class NioBenchmarkClient implements AutoCloseable {
             PreparedPipeline compiledPipeline,
             byte[] prefix,
             int prefixReplies,
-            BenchmarkRandom random
+            BenchmarkRandom random,
+            ReplyLimits replyLimits
     ) {
         this.channel = Objects.requireNonNull(channel, "channel");
         this.preparedPipeline = Objects.requireNonNull(
@@ -58,12 +85,13 @@ final class NioBenchmarkClient implements AutoCloseable {
         this.pipelineWriteBuffer = ByteBuffer.wrap(pipelineBytes);
         this.pipelineWriteBuffer.position(this.pipelineWriteBuffer.limit());
         this.gatheringWriteBuffers = new ByteBuffer[]{firstWritePrefix, pipelineWriteBuffer};
-        this.readBuffer = ByteBuffer.allocate(INITIAL_READ_BUFFER_BYTES);
+        ReplyLimits requiredReplyLimits = Objects.requireNonNull(replyLimits, "replyLimits");
+        this.readBuffer = ByteBuffer.allocate(requiredReplyLimits.readBufferBytes());
         this.replyDecoder = new IncrementalRespReplyDecoder(
-                RespProtocolLimits.DEFAULT_MAX_BULK_BYTES,
-                RespProtocolLimits.DEFAULT_MAX_INLINE_BYTES,
-                RespProtocolLimits.DEFAULT_MAX_ARGS,
-                IncrementalRespReplyDecoder.MAX_SUPPORTED_DEPTH
+                requiredReplyLimits.maxBulkBytes(),
+                requiredReplyLimits.maxLineBytes(),
+                requiredReplyLimits.maxArrayLength(),
+                requiredReplyLimits.maxDepth()
         );
         this.prefixPending = prefixReplies;
         this.phase = Phase.CONNECTING;
@@ -111,19 +139,7 @@ final class NioBenchmarkClient implements AutoCloseable {
         if (readBuffer.hasRemaining()) {
             return;
         }
-        int currentCapacity = readBuffer.capacity();
-        int maximumCapacity = RespProtocolLimits.DEFAULT_MAX_BULK_BYTES;
-        if (currentCapacity >= maximumCapacity) {
-            throw new IOException("benchmark reply exceeds the read buffer limit");
-        }
-        int nextCapacity = (int) Math.min(
-                (long) maximumCapacity,
-                (long) currentCapacity * 2L
-        );
-        ByteBuffer larger = ByteBuffer.allocate(nextCapacity);
-        readBuffer.flip();
-        larger.put(readBuffer);
-        readBuffer = larger;
+        throw new IOException("benchmark reply decoder left the read buffer full");
     }
 
     void awaitRead() {
