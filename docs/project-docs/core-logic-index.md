@@ -145,8 +145,11 @@
 | --- | --- | --- | --- |
 | [`InlineCommandParser`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/InlineCommandParser.java) | 共享 inline 命令解析 | parse methods | [`client-and-bench-internals.md`](./client-and-bench-internals.md) |
 | `YierdisClient` | RESP client、请求发送、回包读取 | connect / execute methods | [`client-and-bench-internals.md`](./client-and-bench-internals.md) |
-| [`YierdisBench`](../../yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/YierdisBench.java) | benchmark 入口、server 启动/复用、workload 执行 | `main(...)` | [`client-and-bench-internals.md`](./client-and-bench-internals.md) |
-| [`YierdisBenchArgs`](../../yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/YierdisBenchArgs.java) | benchmark 参数解析 | parse methods | [`client-and-bench-internals.md`](./client-and-bench-internals.md) |
+| [`YierdisBench`](../../yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/YierdisBench.java) | connect-only benchmark 薄入口 | `main(...)` | [`client-and-bench-internals.md`](./client-and-bench-internals.md) |
+| [`RedisBenchmarkOptions`](../../yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/redis/RedisBenchmarkOptions.java) | endpoint、workload 和输出 CLI options | option fields / `toConfig(...)` | [`client-and-bench-internals.md`](./client-and-bench-internals.md) |
+| [`RedisBenchmarkCatalog`](../../yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/redis/RedisBenchmarkCatalog.java) | canonical 21-row catalog、selection 和 support declarations | `allCases()`, `select(...)` | [`client-and-bench-internals.md`](./client-and-bench-internals.md) |
+| [`NioBenchmarkRunner`](../../yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/redis/NioBenchmarkRunner.java) | 单 `Selector` 的 non-blocking load runner | `execute(...)` | [`client-and-bench-internals.md`](./client-and-bench-internals.md) |
+| [`BenchmarkOutputRenderer`](../../yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/redis/BenchmarkOutputRenderer.java) | human、quiet、Redis-style CSV rendering | `render(...)` | [`client-and-bench-internals.md`](./client-and-bench-internals.md) |
 
 边界：CLI/bench 是外部使用者，不应该绕过 RESP 或直接调用 DB。
 

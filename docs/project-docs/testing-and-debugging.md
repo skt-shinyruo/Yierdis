@@ -19,7 +19,7 @@ Yierdis 的测试大致分成七层：
 | DB direct ops | 绕开 command 层验证 DB API | `StringDirectOpsTest`, `CollectionDirectOpsTest`, `TtlLifecycleDirectOpsTest` |
 | native/internal | handle、allocator、keyspace、root/value、ledger | `NativeHandleTest`, `YierdisStableNativeAllocatorTest`, `StringRootTest`, `MemoryLedgerContractTest` |
 | executor / server | owner thread、队列、背压、Netty 适配 | `CommandExecutorTest`, `CommandExecutorBackpressureTest`, `RespProtocolIntegrationTest` |
-| CLI / bench | 客户端、脚本和 benchmark 输出契约 | `YierdisClientTest`, `BenchScriptContractTest`, `YierdisBenchSummaryFormatTest` |
+| CLI / bench | 客户端、catalog、NIO runner、脚本和输出契约 | `YierdisClientTest`, `RedisBenchmarkCatalogTest`, `NioBenchmarkRunnerTest`, `BenchmarkOutputRendererTest`, `BenchScriptContractTest` |
 | architecture guard | 模块边界和协议边界 | `ArchitectureDependencyRuleTest`, `RespBoundaryGuardTest` |
 
 查找入口：开发路径看 [`development-navigation.md`](./development-navigation.md)，源码职责看 [`core-logic-index.md`](./core-logic-index.md)。
@@ -139,10 +139,10 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 bench 先跑：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=BenchScriptContractTest,SmokeScriptContractTest,YierdisBenchSummaryFormatTest,YierdisBenchComparisonRenderTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=RedisBenchmarkCatalogTest,RedisBenchmarkCommandTemplateTest,NioBenchmarkRunnerTest,BenchmarkOutputRendererTest,RedisBenchmarkCommandTest,BenchScriptContractTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-排障顺序：`InlineCommandParser` -> client codec -> script contract -> benchmark args -> summary/comparison renderer。详细入口看 [`client-and-bench-internals.md`](./client-and-bench-internals.md)。
+这些 focused tests 分别保护 canonical catalog/selection、wire template/random placeholder、单 `Selector` scheduling、human/quiet/CSV、CLI validation/exit code 和 connect-only shell contract。排障顺序：`RedisBenchmarkOptions` -> `BenchmarkConfig` -> `RedisBenchmarkCatalog` -> `RedisBenchmarkCommandTemplate` -> `NioBenchmarkRunner` / incremental reply decoder -> `BenchmarkLatencyRecorder` -> `BenchmarkOutputRenderer` -> `BenchScriptContractTest`。详细入口看 [`client-and-bench-internals.md`](./client-and-bench-internals.md)。
 
 ## 改架构护栏时
 

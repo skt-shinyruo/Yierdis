@@ -98,59 +98,48 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 
 ## Benchmark 和 Smoke
 
-可重复 benchmark：
+`yierdis-benchmark` 只连接已经运行的 Yierdis。项目不会由 benchmark 启动 Yierdis，不会运行 Redis 或 `redis-benchmark`，也不定义或执行把两边组合在一起的 harness。Redis 进程、官方工具和 Redis 结果文件都由操作者单独管理。
+
+1. 先单独启动 Yierdis，benchmark 默认目标端口是 `16378`：
+
+```bash
+java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar --port 16378
+```
+
+2. 在另一个终端运行 Yierdis benchmark：
 
 ```bash
 ./scripts/bench.sh
 ```
 
-常用对比参数：
+默认 workload 值是 `HOST=127.0.0.1`、`PORT=16378`、`REQUESTS=100000`、`CLIENTS=50`、`DATA_SIZE=3`、`PIPELINE=1`、`FORMAT=human`。例如，生成 CSV 或选择部分官方 case：
 
 ```bash
-REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
+FORMAT=csv ./scripts/bench.sh
+TESTS=ping,set,get REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
 ```
 
-正式性能报告：
+`KEYSPACE` 未设置时保留固定 key 模式；`KEYSPACE=0` 是显式随机 keyspace 配置，不能与省略混为一谈。还可设置 `KEEP_ALIVE`、`PRECISION`、`SEED`、`USERNAME`、`PASSWORD`、`DATABASE` 和 `BENCH_JVM_OPTS`。`SKIP_BUILD=1` 只跳过 benchmark module 的构建，不改变 connect-only 行为。
+
+3. 由操作者在独立的 Redis 环境中单独运行官方 `redis-benchmark`，使用等价 workload 值。例如 Redis 监听 `6379` 时：
 
 ```bash
-java -jar yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar \
-  --suite \
-  --suiteProfile release \
-  --currentServerJar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar \
-  --reportDir target/benchmark-reports/manual-release
+redis-benchmark -h 127.0.0.1 -p 6379 -n 100000 -c 50 -d 3 -P 1 --csv
 ```
 
-baseline/current 对比报告：
+4. 按对应 canonical title 比较两份结果。完整 built-in catalog 固定为 21 行，顺序是：
 
-```bash
-java -jar yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar \
-  --suite \
-  --suiteProfile release \
-  --baselineServerJar artifacts/baseline/yierdis-server-main-0.1.0-SNAPSHOT.jar \
-  --currentServerJar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar \
-  --reportDir target/benchmark-reports/release-comparison
-```
+`PING_INLINE`, `PING_MBULK`, `SET`, `GET`, `INCR`, `LPUSH`, `RPUSH`, `LPOP`, `RPOP`, `SADD`, `HSET`, `SPOP`, `ZADD`, `ZPOPMIN`, `LPUSH (needed to benchmark LRANGE)`, `LRANGE_100 (first 100 elements)`, `LRANGE_300 (first 300 elements)`, `LRANGE_500 (first 500 elements)`, `LRANGE_600 (first 600 elements)`, `MSET (10 keys)`, `XADD`。
 
-Redis/current 对比报告：
-
-```bash
-java -jar yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar \
-  --suite \
-  --suiteProfile release \
-  --includeRedis \
-  --redisHost 127.0.0.1 \
-  --redisPort 6379 \
-  --currentServerJar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar \
-  --reportDir target/benchmark-reports/redis-comparison
-```
-
-建议用专门的 Redis 实例运行对比，并固定配置，避免后台持久化或淘汰策略影响结果：
+CSV 只把前八个官方 Redis-style columns 作为共享比较面；字段名依次是：
 
 ```text
-save ""
-appendonly no
-maxmemory-policy noeviction
+"test","rps","avg_latency_ms","min_latency_ms","p50_latency_ms","p95_latency_ms","p99_latency_ms","max_latency_ms"
 ```
+
+Yierdis CSV 在这八列之后增加 `status` 和 `reason`，它们不是共享 Redis fields。操作者负责保存、配对和解释两边结果；项目不计算跨 server ratio 或 release threshold。
+
+5. Yierdis 当前完整运行的支持状态是 `17 SUCCESS / 4 UNSUPPORTED`。`SPOP`、`ZPOPMIN`、`MSET (10 keys)` 和 `XADD` 仍保留各自 canonical row，但七个数值 metrics 为空，不能按零吞吐或零延迟解释。
 
 快速 smoke：
 

@@ -3,123 +3,69 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Build control
-MVN_ARGS="${MVN_ARGS:--q -DskipTests package}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
+BENCH_JVM_OPTS="${BENCH_JVM_OPTS:-}"
 
-# RESP bench config overrides (keep empty to use yierdis-benchmark built-in defaults)
-HOST="${HOST:-}"
-PORT_BASE="${PORT_BASE:-}"
+HOST="${HOST:-127.0.0.1}"
+PORT="${PORT:-16378}"
+REQUESTS="${REQUESTS:-100000}"
+CLIENTS="${CLIENTS:-50}"
+DATA_SIZE="${DATA_SIZE:-3}"
+PIPELINE="${PIPELINE:-1}"
+FORMAT="${FORMAT:-human}"
 
 KEYSPACE="${KEYSPACE:-}"
-DATA_SIZE="${DATA_SIZE:-}"
+TESTS="${TESTS:-}"
+KEEP_ALIVE="${KEEP_ALIVE:-}"
+PRECISION="${PRECISION:-}"
+SEED="${SEED:-}"
+USERNAME="${USERNAME:-}"
+PASSWORD="${PASSWORD:-}"
+DATABASE="${DATABASE:-}"
 
-REQUESTS="${REQUESTS:-}"
-CLIENTS="${CLIENTS:-}"
-PIPELINE="${PIPELINE:-}"
-
-LATENCY_REQUESTS="${LATENCY_REQUESTS:-}"
-LATENCY_CLIENTS="${LATENCY_CLIENTS:-}"
-
-# Server (child process) JVM overrides
-XMS="${XMS:-}"
-XMX="${XMX:-}"
-MAX_DIRECT_MEMORY="${MAX_DIRECT_MEMORY:-}"
-
-# Server args overrides (keep empty to use yierdis-server-main defaults in yierdis-args)
-MAXMEMORY_BYTES="${MAXMEMORY_BYTES:-}"
-MAXMEMORY_POLICY="${MAXMEMORY_POLICY:-}"
-MAXMEMORY_SAMPLES="${MAXMEMORY_SAMPLES:-}"
-
-# Optional flags
-SKIP_PREFILL="${SKIP_PREFILL:-0}"
-SKIP_LATENCY="${SKIP_LATENCY:-0}"
-
-# Extra args
-JAVA_CMD="${JAVA_CMD:-java}"                       # used to start server child process
-SERVER_ARGS_EXTRA="${SERVER_ARGS_EXTRA:-}"         # appended to server args (split by shell)
-BENCH_ARGS_EXTRA="${BENCH_ARGS_EXTRA:-}"           # appended to bench args (as-is)
-BENCH_JVM_OPTS="${BENCH_JVM_OPTS:-}"               # JVM opts for the bench tool itself
-
-die() { printf "[bench][ERROR] %s\n" "$*" >&2; exit 1; }
+die() {
+  printf '[bench][ERROR] %s\n' "$*" >&2
+  exit 1
+}
 
 build_if_needed() {
   if [[ "$SKIP_BUILD" == "1" ]]; then
     return 0
   fi
-  (cd "$ROOT_DIR" && mvn $MVN_ARGS)
+  (cd "$ROOT_DIR" && mvn -pl yierdis-benchmark -am -q -DskipTests package)
 }
 
-pick_jar() {
-  local pattern="$1"
-  local exclude="${2:-}"
-  local jar
-
-  jar="$(ls -1t $pattern 2>/dev/null | head -n 1 || true)"
-  if [[ -n "$exclude" ]]; then
-    jar="$(ls -1t $pattern 2>/dev/null | grep -v "$exclude" | head -n 1 || true)"
-  fi
-
-  [[ -n "$jar" ]] || die "未找到 jar：pattern=$pattern"
-  printf "%s" "$jar"
+pick_bench_jar() {
+  local bench_jar
+  bench_jar="$(ls -1t "$ROOT_DIR"/yierdis-benchmark/target/yierdis-benchmark-*.jar 2>/dev/null \
+    | grep -v '/original-' \
+    | head -n 1 || true)"
+  [[ -n "$bench_jar" ]] || die 'shaded yierdis-benchmark jar not found'
+  printf '%s' "$bench_jar"
 }
 
 main() {
   build_if_needed
 
-  local server_jar bench_jar
-  server_jar="$(pick_jar "$ROOT_DIR/yierdis-server/yierdis-server-main/target/yierdis-server-main-*.jar" "original-")"
-  bench_jar="$(pick_jar "$ROOT_DIR/yierdis-benchmark/target/yierdis-benchmark-*.jar" "original-")"
+  local bench_jar
+  bench_jar="$(pick_bench_jar)"
 
-  local args=()
-  args+=(--serverJar "$server_jar")
-  [[ -n "$HOST" ]] && args+=(--host "$HOST")
-  [[ -n "$PORT_BASE" ]] && args+=(--portBase "$PORT_BASE")
+  local optional_args=()
+  [[ -n "$KEYSPACE" ]] && optional_args+=(--keyspace "$KEYSPACE")
+  [[ -n "$TESTS" ]] && optional_args+=(--tests "$TESTS")
+  [[ -n "$KEEP_ALIVE" ]] && optional_args+=("--keep-alive=$KEEP_ALIVE")
+  [[ -n "$PRECISION" ]] && optional_args+=(--precision "$PRECISION")
+  [[ -n "$SEED" ]] && optional_args+=(--seed "$SEED")
+  [[ -n "$USERNAME" ]] && optional_args+=(--username "$USERNAME")
+  [[ -n "$PASSWORD" ]] && optional_args+=(--password "$PASSWORD")
+  [[ -n "$DATABASE" ]] && optional_args+=(--database "$DATABASE")
 
-  [[ -n "$KEYSPACE" ]] && args+=(--keyspace "$KEYSPACE")
-  [[ -n "$DATA_SIZE" ]] && args+=(--dataSize "$DATA_SIZE")
-
-  [[ -n "$REQUESTS" ]] && args+=(--requests "$REQUESTS")
-  [[ -n "$CLIENTS" ]] && args+=(--clients "$CLIENTS")
-  [[ -n "$PIPELINE" ]] && args+=(--pipeline "$PIPELINE")
-
-  [[ -n "$LATENCY_REQUESTS" ]] && args+=(--latencyRequests "$LATENCY_REQUESTS")
-  [[ -n "$LATENCY_CLIENTS" ]] && args+=(--latencyClients "$LATENCY_CLIENTS")
-
-  [[ -n "$JAVA_CMD" ]] && args+=(--javaCmd "$JAVA_CMD")
-  [[ -n "$XMS" ]] && args+=(--xms "$XMS")
-  [[ -n "$XMX" ]] && args+=(--xmx "$XMX")
-  [[ -n "$MAX_DIRECT_MEMORY" ]] && args+=(--maxDirectMemory "$MAX_DIRECT_MEMORY")
-
-  if [[ "$SKIP_PREFILL" == "1" ]]; then
-    args+=(--skipPrefill)
-  fi
-  if [[ "$SKIP_LATENCY" == "1" ]]; then
-    args+=(--skipLatency)
-  fi
-
-  # Server args: pass through (parsed by yierdis-args on bench side, then forwarded to server).
-  local server_args=()
-  local extra_server_args=()
-  [[ -n "$MAXMEMORY_BYTES" ]] && server_args+=(--maxmemoryBytes "$MAXMEMORY_BYTES")
-  [[ -n "$MAXMEMORY_POLICY" ]] && server_args+=(--maxmemoryPolicy "$MAXMEMORY_POLICY")
-  [[ -n "$MAXMEMORY_SAMPLES" ]] && server_args+=(--maxmemorySamples "$MAXMEMORY_SAMPLES")
-
-  # SERVER_ARGS_EXTRA is appended as-is (split by shell)
-  # shellcheck disable=SC2206
-  extra_server_args=($SERVER_ARGS_EXTRA)
-  if [[ ${#extra_server_args[@]} -gt 0 ]]; then
-    server_args+=("${extra_server_args[@]}")
-  fi
-
-  if [[ ${#server_args[@]} -gt 0 ]]; then
-    args+=(--)
-    args+=("${server_args[@]}")
-  fi
-
-  # BENCH_ARGS_EXTRA is appended as-is (split by shell)
   # shellcheck disable=SC2086
-  exec java $BENCH_JVM_OPTS -jar "$bench_jar" "${args[@]}" $BENCH_ARGS_EXTRA
+  exec java $BENCH_JVM_OPTS -jar "$bench_jar" \
+    --host "$HOST" --port "$PORT" \
+    --requests "$REQUESTS" --clients "$CLIENTS" \
+    --data-size "$DATA_SIZE" --pipeline "$PIPELINE" \
+    --format "$FORMAT" "${optional_args[@]}"
 }
 
 main "$@"

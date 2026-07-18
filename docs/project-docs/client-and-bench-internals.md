@@ -4,7 +4,7 @@
 
 `yierdis-cli` 和 `yierdis-benchmark` 不是进程内 DB 调试入口。它们都通过真实 TCP、真实 RESP frame 和 `yierdis-networking-resp` 的 client codec 工作，因此更接近外部使用者视角。
 
-CLI 负责人工交互和轻量验证；benchmark 负责固定 workload shape 下的吞吐、延迟和 correctness smoke。比较 benchmark 结果时必须保证 workload shape 一致，例如相同的 `requests`、`clients`、`pipeline`、`keyspace`、`dataSize`，并保持可比的运行环境、JVM 参数和 server 启动参数。comparison mode 会刻意使用 baseline/current 两个 jar；它们应是操作者想比较且可识别来源的 artifacts。baseline/current 任一侧启动失败、协议错误、返回错误或缺少必要测量时，输出应视为 `non-comparable`，不能当成可信性能结论。
+CLI 负责人工交互和轻量验证；benchmark 负责固定 built-in workload 下的吞吐、延迟和最小 reply-shape 校验。比较结果时必须保证 `requests`、`clients`、`pipeline`、`data-size`、`keyspace`、keepalive、认证和 DB selection 等输入等价，并记录运行环境。项目 benchmark 只连接已经运行的 Yierdis；官方 Redis 结果由操作者在独立 Redis 环境中单独运行 `redis-benchmark` 获得。项目不会启动或运行 Redis，也没有组合两边执行的 harness。
 
 ## 它们更适合验证什么
 
@@ -111,154 +111,109 @@ SET raw "\x00\x01"
 
 ## yierdis-benchmark
 
-### Suite mode
-
-`--suite` runs the release-grade benchmark suite. It is separate from the single-run benchmark path: single-run mode remains the fast local benchmark, while suite mode expands a stable profile into scenarios, starts a fresh server for each scenario and artifact, records warmup and repeat iterations, captures before/after `STATS`, `MEMORY STATS`, and `INFO`, and writes `suite-result.json`, `metrics.csv`, `comparisons.csv`, and `report.md`.
-
-`--currentServerJar` is required. `--baselineServerJar` is optional. When both jars are present, suite mode compares only clean baseline/current scenario pairs. A scenario with startup failure, protocol/reply errors, benchmark errors, or missing measurements is marked `non-comparable`.
-
-`--includeRedis` adds an externally managed Redis artifact to the suite run. Redis is not launched by the benchmark process; operators provide `--redisHost`, `--redisPort`, optional auth, and DB selection. Suite mode records Redis endpoint metadata in the environment block (`redis.host`, `redis.port`, `redis.db`) and captures Redis `INFO` text under `redis.info.server` so reports preserve the external baseline context.
-
-When Redis auth or a non-zero Redis DB is configured, suite mode does not treat those values as report-only metadata. The suite harness authenticates and selects the configured DB before readiness checks, before the per-pass `FLUSHDB`, before observation capture, and before benchmark workload traffic. That same auth/select bootstrap is applied to both the extended socket-based workloads in `BenchHarness` and the core worker-based workloads that reuse `YierdisBench` workers, so external Redis runs measure the configured logical DB instead of always falling back to DB 0.
-
-For interpretable Redis comparison runs, operators should keep the Redis side as close to an isolated benchmark target as possible:
-
-- start Redis with persistence disabled, e.g. `redis-server --save '' --appendonly no`
-- use a dedicated Redis instance or a dedicated logical DB that the suite is allowed to `FLUSHDB`
-- keep the configured `--redisUser` / `--redisAuth` / `--redisDb` aligned with the actual benchmark target, because the suite now treats `AUTH`, `SELECT`, and lifecycle `FLUSHDB` failures as hard pass failures
-- avoid sharing the target DB with unrelated traffic during the run, or the before/after observations and per-pass cleanup lose meaning
-- keep Redis-side operator policies explicit when comparing scenarios that depend on runtime policy, such as maxmemory/eviction; if the external Redis policy is not intentionally matched, the scenario should be treated as environment-limited rather than a clean performance comparison
-
-Redis-specific CLI options are also validated as suite-only inputs. An explicit `--redisHost`, `--redisPort`, `--redisLabel`, `--redisUser`, `--redisAuth`, `--redisDb`, or `--includeRedis` outside `--suite` is rejected instead of being silently ignored. `redisDb` must be non-negative, and `redisLabel` must not collide with `current`, `baseline`, or another suite artifact label.
-
-Redis comparisons are rendered explicitly: `comparisons.csv` includes `baseline_artifact`, `current_artifact`, `comparable`, `reason`, and ratio fields so a `redis -> current` row is distinguishable from Yierdis jar comparisons. `report.md` adds a Redis comparison summary when an external Redis artifact participates. Redis-incompatible scenarios, such as operator-dependent maxmemory or native-defrag cases, remain `non-comparable` with the scenario reason rather than being treated as performance conclusions.
-
-The first version uses soft thresholds: QPS drops, p95/p99 latency increases, errors, and non-comparable scenarios are reported as warnings or critical observations but do not fail the process by default.
-
 `yierdis-benchmark` 是真实协议路径 benchmark，不是 JMH microbenchmark，也不是直接调用 DB API。
 
-入口是 `YierdisBench.main(...)`。流程是：
+入口 `YierdisBench.main(...)` 是一个薄 launcher，把 argv 交给 picocli 的 `RedisBenchmarkCommand`。当前核心架构固定为：
 
 ```text
-YierdisBenchArgs
-  -> parse unmatched server args into YierdisBenchServerArgs
-  -> normalizeAndValidate()
-  -> BenchConfig.from(...)
-  -> optional ServerProcess
-  -> ThroughputWorker / LatencyWorker
-  -> RespCommandWriter + RespClientCodec
-  -> summary / comparison output
+RedisBenchmarkOptions
+  -> BenchmarkConfig
+  -> RedisBenchmarkCatalog.select()
+  -> RedisBenchmark
+  -> NioBenchmarkRunner (one Selector)
+  -> BenchmarkLatencyRecorder
+  -> BenchmarkCaseResult / BenchmarkRunResult
+  -> BenchmarkOutputRenderer
 ```
 
-`YierdisBenchArgs` 定义 bench 自己的参数，例如 `--host`、`--portBase`、`--noStartServer`、`--serverJar`、comparison mode、server JVM 参数、`--keyspace`、`--dataSize`、`--requests`、`--clients`、`--pipeline`、latency 参数、`--skipPrefill`、`--skipLatency`、`--strictReplies` 和 native eval 参数。`@Unmatched serverArgs` 接住 `--` 后的 server 启动参数。
+`RedisBenchmarkOptions` 只描述 connect-only workload：
 
-`YierdisBenchServerArgs` 是 bench-local server launch argv 模型。它覆盖 port、DB 数量、cleanup、executor/backpressure、transaction queue、protocol limits、maxmemory、eviction、expire cleanup、native defrag 和 `KEYS` budget。它会归一化 `executorSchedulingPolicy`、`maxmemoryScope` 和 `maxmemoryPolicy`，再由 `toArgv()` 生成子进程 server 参数。
+- `--host 127.0.0.1`、`--port 16378`。
+- `--requests 100000`、`--clients 50`、`--data-size 3`、`--pipeline 1`。
+- 可选 `--keyspace`。省略时请求保留 literal `__rand_int__`，显式 `0` 则把每个 placeholder 展开成 `000000000000`。
+- `--keep-alive true`、可选逗号分隔的 `--tests`、`--precision 3`、可选 `--seed`。
+- `--format human|quiet|csv`，以及可选 `--username`、`--password`、`--database`。
 
-Redis suite comparison also relies on this bench-local argv model for
-current-side server overrides. The release profile keeps the production
-default shared native slot capacity unchanged at `256 * 1024`; it does not
-silently raise the server default just because Redis suite mode is enabled.
-When the release smoke needs a larger shared native slot budget for the
-current-side Yierdis artifact, the benchmark passes an explicit
-`--nativeSlotCapacity` override through `YierdisBenchServerArgs` together
-with `--databases 1`. That override is scenario-scoped, not a global server
-default change.
+`BenchmarkConfig` 归一化 host 和 selector，并在发送测量请求前验证端口、request/client/payload/pipeline 范围、keyspace、histogram precision、format 和 DB。`RedisBenchmarkCatalog.select()` 按 selector 做去重后的 canonical-order selection；空 selection 返回完整 catalog，`ping` 同时选择两个 PING case，任一 LRANGE selector 都会先选择 measured LPUSH setup row。
 
-重要 caveat：bench launch argv model 不是完整 server args model。`SERVER_ARGS_EXTRA` 会先通过 `YierdisBenchServerArgs` 的 picocli parser，再由 `toArgv()` 传给 server child process；当前不包含 server-only 的 `--client-idle-timeout-millis`、`--client-output-buffer-limit-bytes`、`--client-output-buffer-over-limit-millis`。要验证慢客户端保护，应直接启动 server，或先扩展 bench model。
+完整 catalog 是以下 21 个输出 row：
 
-## ServerProcess
+| Selector | Canonical title | Yierdis 当前状态 |
+| --- | --- | --- |
+| `ping_inline` / `ping` | `PING_INLINE` | `SUCCESS` |
+| `ping_mbulk` / `ping` | `PING_MBULK` | `SUCCESS` |
+| `set` | `SET` | `SUCCESS` |
+| `get` | `GET` | `SUCCESS` |
+| `incr` | `INCR` | `SUCCESS` |
+| `lpush` | `LPUSH` | `SUCCESS` |
+| `rpush` | `RPUSH` | `SUCCESS` |
+| `lpop` | `LPOP` | `SUCCESS` |
+| `rpop` | `RPOP` | `SUCCESS` |
+| `sadd` | `SADD` | `SUCCESS` |
+| `hset` | `HSET` | `SUCCESS` |
+| `spop` | `SPOP` | `UNSUPPORTED` |
+| `zadd` | `ZADD` | `SUCCESS` |
+| `zpopmin` | `ZPOPMIN` | `UNSUPPORTED` |
+| any LRANGE selector | `LPUSH (needed to benchmark LRANGE)` | `SUCCESS` |
+| `lrange_100` | `LRANGE_100 (first 100 elements)` | `SUCCESS` |
+| `lrange_300` | `LRANGE_300 (first 300 elements)` | `SUCCESS` |
+| `lrange_500` | `LRANGE_500 (first 500 elements)` | `SUCCESS` |
+| `lrange_600` | `LRANGE_600 (first 600 elements)` | `SUCCESS` |
+| `mset` | `MSET (10 keys)` | `UNSUPPORTED` |
+| `xadd` | `XADD` | `UNSUPPORTED` |
 
-非 `--noStartServer` 模式下，benchmark 会启动真实 server 子进程。`ServerProcess` 负责：
+因此当前默认 Yierdis 结果是 17 个 `SUCCESS` 和 4 个 `UNSUPPORTED` row；真实连接或协议故障会把受影响的 supported row 改为 `FAILED`，LRANGE setup 失败还会使依赖 row 成为 `SKIPPED`。`RedisBenchmark` 不会给这些非成功状态构造性能数字。
 
-- 拼 `java` 命令。
-- 加上 `-Xms`、`-Xmx`、`-XX:MaxDirectMemorySize`。
-- 加上 `-jar <serverJar>`。
-- 加上 `YierdisBenchServerArgs.toArgv()` 生成的 server argv。
-- 将 stdout/stderr 重定向到 log file。
-- 停止时先 `destroy()`，超时后 `destroyForcibly()`。
+`NioBenchmarkRunner` 为一个 case 打开一个 `Selector`，把配置数量的 non-blocking `SocketChannel` 注册到同一个 event loop。它预编译 pipeline frame，只在需要时改写随机 placeholder，处理 partial connect/write/read，并用 incremental RESP decoder 验证每个 reply 的最小 shape。keepalive 关闭时每个 pipeline 后重连；认证和 DB selection 会作为每个新连接第一次 measured write 的 prefix，其 replies 不进入 request 或 histogram count。
 
-这意味着 benchmark 的默认模式会覆盖真实进程启动、真实 Netty server、真实 RESP decode/execute/reply 路径。`--noStartServer` 则连接已有 server，适合手工启动特殊参数后跑同一 workload。
+measurement 以 selector run 的起止边界计算 elapsed time 和 completed-reply throughput。每个 pipeline 以第一次可读时间作为该 batch replies 的 latency；histogram 只保留配置的前 `requests` 个 samples，而 throughput 使用 stop boundary 已完成的 replies。`BenchmarkLatencyRecorder` 用 HdrHistogram 生成 mean、min、p50、p95、p99 和 max，最大记录延迟 clamp 到 3 秒。
 
-comparison mode 会分别启动 baseline/current jar。只有双方完成同一组必要测量且没有 workload/protocol/reply errors 时，结果才标记 comparable；否则 summary 里会标记 `non-comparable`。
+`BenchmarkCaseResult` 的状态只有 `SUCCESS`、`UNSUPPORTED`、`SKIPPED`、`FAILED`；`BenchmarkRunResult` 保留 catalog 顺序并由任意 `FAILED` 决定非零退出码。`BenchmarkOutputRenderer` 提供 human、quiet 和 CSV。吞吐与延迟仍是观测值，不是 correctness oracle，也不替代协议、命令或 DB direct-op tests。
 
-Redis suite mode follows the same comparability rule. A `redis -> current`
-comparison is only `comparable` when both passes complete cleanly with the
-same workload shape and `errors == 0`. Redis-only or Yierdis-only operational
-differences are carried as explicit non-comparable reasons instead of being
-flattened into performance numbers. In the current design, native-defrag
-scenarios remain Yierdis-only, and operator-dependent Redis maxmemory
-scenarios remain `EXTERNAL_CONFIG_REQUIRED` until an explicit acknowledgement
-flow exists.
+## Command templates 和 reply validation
 
-benchmark 的结果聚合也有边界：吞吐和延迟样本只是观测值，不是 correctness oracle。`summary`、`comparison` 和 `strictReplies` 的组合用来判断“跑得快不快”以及“这次结果能不能拿来比较”，但不替代协议测试、命令测试或 DB direct ops。
+`RedisBenchmarkCommandTemplate` 声明每个 built-in case 的 wire shape。`PING_INLINE` 使用 raw `PING\r\n`；其余 case 通过 `RespClientCodec.encodeCommand(...)` 生成 RESP array。payload 由 `BenchmarkPayload` 按官方确定性 data generator 每个 catalog pass 生成一次，并由需要 data 的 case 复用。
 
-## workload workers
+省略 keyspace 时，`__rand_int__` 保持 literal，因此每次使用固定 key/member；启用 keyspace 时，每个 placeholder 在每条 concrete command 中独立展开为 12 位十进制数。ZADD score 也按同一开关决定固定 `0` 或独立随机值。pipeline frame 预先展开，运行时只原地更新这些固定宽度 digits。
 
-当前 workload 包括：
+catalog 为每个 case 声明 expected reply shape：`PONG`、`OK`、integer、bulk-or-null 或 array。RESP error、错误 shape、多余 reply、连接断开、无进展 timeout 和 cleanup failure 都会形成带 reason 的 `FAILED` row，而不是伪造吞吐或延迟。四个当前未支持的 case 不发送网络请求，直接形成 `UNSUPPORTED` row。
 
-- `PING`
-- `SET_RANDOM`
-- `SET_SEQUENTIAL`
-- `APPEND`
-- `GET_RANDOM`
-- `PFADD_SPARSE`
-- `PFADD_DENSE`
-- `PFCOUNT`
+## 输出和独立比较
 
-`ThroughputWorker` 面向吞吐：
+CSV header 是：
 
-- 每个 worker 建立自己的 socket。
-- 使用 `BufferedOutputStream` / `BufferedInputStream`。
-- 支持 pipeline：一批写出多个 request，flush 后按同样数量读 reply。
-- 用 `SplittableRandom` 在 keyspace 内选 key。
-- 返回 `WorkerCounter(ops, errors)`。
+```text
+"test","rps","avg_latency_ms","min_latency_ms","p50_latency_ms","p95_latency_ms","p99_latency_ms","max_latency_ms","status","reason"
+```
 
-`LatencyWorker` 面向单请求往返延迟：
+前八列与官方 Redis-style CSV 对齐，是两份独立结果的共享比较面；`status` 和 `reason` 是 Yierdis 扩展。非 `SUCCESS` row 的七个 numeric fields 保持为空，不能解释为零。human 和 quiet format 同样只给成功 row 渲染 metrics。
 
-- pipeline 固定等价于 `1`。
-- 每次写一条、flush、读一条。
-- 用 `System.nanoTime()` 记录每个 request round trip。
-- 返回 samples 和 errors，主线程再算分位数。
-
-`RespCommandWriter` 是 workload 写出热点。它预置常用命令字节和 `PING` frame，复用 `MutableRequestArgs` 这个 `AbstractList<byte[]>`，再调用 `RespClientCodec.writeCommand(...)`。这样既保留真实 RESP request 编码路径，又减少每条命令额外创建 list 的成本。
-
-## strict reply validation
-
-`--strictReplies` 开启最小语义校验。未开启时，worker 主要区分正常 reply 和 RESP error reply；开启后会进一步验证 workload 对应的基本语义：
-
-- `PING` 必须是 `PONG`。
-- `SET_RANDOM` / `SET_SEQUENTIAL` 必须是 `OK`。
-- `APPEND` 必须是非负 integer，且通常不小于写入 value size。
-- `PFADD_*` 必须是 `0` 或 `1`。
-- `PFCOUNT` 必须是非负 integer。
-- `GET_RANDOM` 可以是 null bulk；如果是 bulk string，长度要匹配 `dataSize`。
-
-strict reply validation 让 benchmark 兼有 correctness smoke 的作用。若 strict 校验失败，worker 会计入 errors；comparison mode 下这类 errors 会让结果不可比较。
+Redis 侧由操作者在独立环境中运行官方工具，使用等价的 request、client、payload、pipeline、keyspace、keepalive、认证和 DB 设置，再按 canonical title 配对结果。项目 benchmark 不启动 Redis、不调用官方工具、不收集 Redis result，也不定义 combined run。artifact identity、环境记录、结果保存、ratio 和 release threshold 都是 benchmark 之外的 operator policy。
 
 ## smoke.sh 和 bench.sh
 
 `scripts/smoke.sh` 是最小端到端健康检查：
 
-- 默认先 `mvn -q -DskipTests package`，可用 `SKIP_BUILD=1` 跳过。
+- 默认只构建 server main 和 CLI 及其依赖，可用 `SKIP_BUILD=1` 跳过。
 - 启动 server jar 到 `HOST:PORT`，默认 `127.0.0.1:16379`。
 - 用 `READY_TIMEOUT_SEC` 控制 readiness 等待。
-- 如果本机有 `redis-cli`，用它跑 `PING/SET/GET`；否则回退到项目 Java CLI。
+- 如果本机有 `redis-cli`，把它作为 RESP client 对 Yierdis 跑 `PING/SET/GET`；否则回退到项目 Java CLI。
 - 可用 `ALLOCATOR_SMOKE=1` 额外跑 allocator-sensitive 命令路径。
-- 最后用 benchmark 的 `--noStartServer --strictReplies --skipLatency` 跑很小的 correctness smoke。
 
-`scripts/bench.sh` 是压测外壳：
+`scripts/bench.sh` 是纯 connect-only 压测外壳：
 
-- 默认构建 server/bench jar。
-- 通过环境变量组装 bench 参数：`HOST`、`PORT_BASE`、`KEYSPACE`、`DATA_SIZE`、`REQUESTS`、`CLIENTS`、`PIPELINE`、`LATENCY_REQUESTS`、`LATENCY_CLIENTS`。
-- 通过 `XMS`、`XMX`、`MAX_DIRECT_MEMORY` 控制 server child process JVM。
-- 通过 `MAXMEMORY_BYTES`、`MAXMEMORY_POLICY`、`MAXMEMORY_SAMPLES` 和 `SERVER_ARGS_EXTRA` 追加 bench model 支持的 server args。
-- 通过 `BENCH_ARGS_EXTRA` 和 `BENCH_JVM_OPTS` 控制 benchmark 进程本身。
+- 除非 `SKIP_BUILD=1`，只构建 `yierdis-benchmark` 及其 Maven 依赖，然后定位 shaded benchmark jar。
+- 必传默认值来自 `HOST`、`PORT`、`REQUESTS`、`CLIENTS`、`DATA_SIZE`、`PIPELINE` 和 `FORMAT`。
+- 非空 `KEYSPACE` 才会成为 CLI argument，因此省略和显式零保持不同。
+- 非空 `TESTS`、`KEEP_ALIVE`、`PRECISION`、`SEED`、`USERNAME`、`PASSWORD`、`DATABASE` 才会追加；`KEEP_ALIVE=false` 会编码为单个 `--keep-alive=false` argument。
+- `BENCH_JVM_OPTS` 只控制 benchmark JVM。
+- 脚本不查找、启动、轮询或停止任何 server artifact；目标 Yierdis 的生命周期始终由操作者管理。
 
 典型命令：
 
 ```bash
 ./scripts/smoke.sh
+./scripts/bench.sh
+FORMAT=csv KEYSPACE=0 KEEP_ALIVE=false ./scripts/bench.sh
 REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
 ```
-
-再次强调：`SERVER_ARGS_EXTRA` 不是无限制透传。它会被 shell split 后交给 `YierdisBenchServerArgs` 解析；bench model 未声明的 server-only 参数会解析失败。
