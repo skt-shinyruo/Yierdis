@@ -3,8 +3,8 @@ package yier.bubu.redis.app.bench.redis;
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.function.ThrowingRunnable;
-import yier.bubu.redis.protocol.resp.RespClientCodec;
 
+import java.io.ByteArrayOutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -66,6 +66,33 @@ public class RedisBenchmarkCommandTemplateTest {
     }
 
     @Test
+    public void markerScanUsesSameNonOverlappingOffsetsForOverlappingAndAdjacentMarkers() {
+        RedisBenchmarkCommandTemplate overlapping = RedisBenchmarkCommandTemplate.resp(
+                RedisBenchmarkCommandTemplate.Argument.literal("SET"),
+                RedisBenchmarkCommandTemplate.Argument.literal("__rand_int__rand_int__")
+        );
+        PreparedPipeline overlappingPipeline = overlapping
+                .prepare(1, new byte[0], OptionalLong.of(0));
+
+        Assert.assertEquals(
+                "*2\r\n$3\r\nSET\r\n$22\r\n000000000000rand_int__\r\n",
+                wire(overlappingPipeline.bytesForWrite(new BenchmarkRandom(1L)))
+        );
+
+        RedisBenchmarkCommandTemplate adjacent = RedisBenchmarkCommandTemplate.resp(
+                RedisBenchmarkCommandTemplate.Argument.literal("SET"),
+                RedisBenchmarkCommandTemplate.Argument.literal("__rand_int____rand_int__")
+        );
+        PreparedPipeline adjacentPipeline = adjacent
+                .prepare(1, new byte[0], OptionalLong.of(0));
+
+        Assert.assertEquals(
+                "*2\r\n$3\r\nSET\r\n$24\r\n000000000000000000000000\r\n",
+                wire(adjacentPipeline.bytesForWrite(new BenchmarkRandom(1L)))
+        );
+    }
+
+    @Test
     public void randomizedZaddUsesIndependentTwelveDigitScoreAndMember() {
         PreparedPipeline zadd = catalog.caseById("zadd").template()
                 .prepare(1, new byte[]{'x'}, OptionalLong.of(1_000_000));
@@ -123,15 +150,23 @@ public class RedisBenchmarkCommandTemplateTest {
                 inline.bytesForWrite(new BenchmarkRandom(1L))
         );
 
-        byte[] respFrame = RespClientCodec.encodeCommand(List.of(
-                ascii("GET"), ascii("key:__rand_int__")
-        ));
+        byte[] respFrame = resp("GET", "key:__rand_int__");
         PreparedPipeline resp = catalog.caseById("get").template()
                 .prepare(3, ascii("abc"), OptionalLong.empty());
         Assert.assertArrayEquals(
                 repeated(respFrame, 3),
                 resp.bytesForWrite(new BenchmarkRandom(1L))
         );
+    }
+
+    @Test(timeout = 1_000)
+    public void oversizedPipelineIsRejectedBeforeCombinedAllocation() {
+        assertMessage(IllegalArgumentException.class, "capacity",
+                () -> catalog.caseById("ping_inline").template()
+                        .prepare(Integer.MAX_VALUE, new byte[0], OptionalLong.empty()));
+        assertMessage(IllegalArgumentException.class, "capacity",
+                () -> catalog.caseById("ping_mbulk").template()
+                        .prepare(Integer.MAX_VALUE, new byte[0], OptionalLong.empty()));
     }
 
     @Test
@@ -159,9 +194,10 @@ public class RedisBenchmarkCommandTemplateTest {
         byte[] first = zadd.bytesForWrite(actual).clone();
         byte[] second = zadd.bytesForWrite(actual).clone();
 
-        Assert.assertArrayEquals(RespClientCodec.encodeCommand(List.of(
-                ascii("ZADD"), ascii("myzset"), ascii("0"), ascii("element:__rand_int__")
-        )), first);
+        Assert.assertArrayEquals(
+                resp("ZADD", "myzset", "0", "element:__rand_int__"),
+                first
+        );
         Assert.assertArrayEquals(first, second);
         BenchmarkRandom expected = new BenchmarkRandom(37L);
         Assert.assertEquals(expected.nextLong(1_000_000), actual.nextLong(1_000_000));
@@ -254,6 +290,18 @@ public class RedisBenchmarkCommandTemplateTest {
     }
 
     @Test
+    public void maximumRepresentableKeyspaceIsAcceptedAndRendersTwelveDigits() {
+        PreparedPipeline pipeline = catalog.caseById("set").template()
+                .prepare(1, ascii("abc"), OptionalLong.of(TWELVE_DIGIT_LIMIT));
+
+        List<String> keys = renderedKeys(wire(
+                pipeline.bytesForWrite(new BenchmarkRandom(1L))
+        ));
+        Assert.assertEquals(1, keys.size());
+        Assert.assertEquals(12, keys.get(0).length());
+    }
+
+    @Test
     public void writeTwelveDigitsZeroPadsWithoutTouchingNeighborsOrTruncating() {
         byte[] representative = ascii("xxxxxxxxxxxxxxxx");
         BenchmarkRandom.writeTwelveDigits(representative, 2, 42);
@@ -271,16 +319,27 @@ public class RedisBenchmarkCommandTemplateTest {
                 () -> BenchmarkRandom.writeTwelveDigits(new byte[12], 1, 0));
         assertMessage(IllegalArgumentException.class, "value",
                 () -> BenchmarkRandom.writeTwelveDigits(new byte[12], 0, -1));
+        byte[] outOfRange = ascii("xxxxxxxxxxxx");
         assertMessage(IllegalArgumentException.class, "12 digits",
-                () -> BenchmarkRandom.writeTwelveDigits(
-                        new byte[12], 0, TWELVE_DIGIT_LIMIT
-                ));
+                () -> BenchmarkRandom.writeTwelveDigits(outOfRange, 0, TWELVE_DIGIT_LIMIT));
+        Assert.assertArrayEquals(ascii("xxxxxxxxxxxx"), outOfRange);
+    }
+
+    @Test
+    public void msetEncodesTwentyOneArgumentsAndTenKeyValuePairs() {
+        String wire = wire(catalog.caseById("mset").template()
+                .prepare(1, ascii("abc"), OptionalLong.empty())
+                .bytesForWrite(new BenchmarkRandom(1L)));
+
+        Assert.assertTrue(wire.startsWith("*21\r\n"));
+        Assert.assertEquals(
+                10,
+                occurrences(wire, "$16\r\nkey:__rand_int__\r\n$3\r\nabc\r\n")
+        );
     }
 
     private void assertFixedResp(String id, String... arguments) {
-        byte[] expected = RespClientCodec.encodeCommand(Arrays.stream(arguments)
-                .map(RedisBenchmarkCommandTemplateTest::ascii)
-                .toList());
+        byte[] expected = resp(arguments);
         PreparedPipeline prepared = catalog.caseById(id).template()
                 .prepare(1, ascii("abc"), OptionalLong.empty());
         Assert.assertArrayEquals(
@@ -323,6 +382,22 @@ public class RedisBenchmarkCommandTemplateTest {
             System.arraycopy(frame, 0, repeated, frame.length * index, frame.length);
         }
         return repeated;
+    }
+
+    private static byte[] resp(String... arguments) {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        writeAscii(bytes, "*" + arguments.length + "\r\n");
+        for (String argument : arguments) {
+            byte[] value = ascii(argument);
+            writeAscii(bytes, "$" + value.length + "\r\n");
+            bytes.writeBytes(value);
+            writeAscii(bytes, "\r\n");
+        }
+        return bytes.toByteArray();
+    }
+
+    private static void writeAscii(ByteArrayOutputStream target, String value) {
+        target.writeBytes(ascii(value));
     }
 
     private static int occurrences(String value, String target) {
