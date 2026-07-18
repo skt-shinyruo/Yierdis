@@ -4,8 +4,10 @@ import org.junit.Assert;
 import org.junit.Test;
 import picocli.CommandLine;
 
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.io.Writer;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -55,6 +57,30 @@ public class RedisBenchmarkCommandTest {
     }
 
     @Test
+    public void outputFailureIsExecutionFailure() {
+        AtomicInteger calls = new AtomicInteger();
+        Function<BenchmarkConfig, BenchmarkRunResult> fake = config -> {
+            calls.incrementAndGet();
+            return new BenchmarkRunResult(List.of(
+                    BenchmarkCaseResult.success(catalog.caseById("set"), statistics())
+            ));
+        };
+        CommandLine commandLine = new CommandLine(new RedisBenchmarkCommand(fake, renderer));
+        PrintWriter failingOut = failingPrintWriter();
+        StringWriter err = new StringWriter();
+        commandLine.setOut(failingOut);
+        commandLine.setErr(new PrintWriter(err));
+
+        int exitCode = commandLine.execute("--tests", "set", "--format", "quiet");
+
+        Assert.assertEquals(1, exitCode);
+        Assert.assertEquals(1, calls.get());
+        Assert.assertTrue(failingOut.checkError());
+        Assert.assertTrue(err.toString(), err.toString().contains("failed to write benchmark output"));
+        Assert.assertFalse(err.toString(), err.toString().contains("Usage:"));
+    }
+
+    @Test
     public void unknownSelectorIsUsageErrorWithoutNetworkTraffic() {
         RedisBenchmarkCommand command = new RedisBenchmarkCommand(
                 new RedisBenchmark()::run,
@@ -87,6 +113,36 @@ public class RedisBenchmarkCommandTest {
         assertUsageErrorBeforeRunner(fake, "format must be one of", "--format", "json");
 
         Assert.assertEquals(0, calls.get());
+    }
+
+    @Test
+    public void runnerIllegalArgumentExceptionIsExecutionFailureNotUsageError() {
+        RedisBenchmarkCommand command = new RedisBenchmarkCommand(config -> {
+            throw new IllegalArgumentException("internal facade defect");
+        }, renderer);
+        CommandCapture capture = commandLine(command);
+
+        int exitCode = capture.commandLine.execute("--tests", "set");
+
+        Assert.assertEquals(1, exitCode);
+        Assert.assertEquals("", capture.out.toString());
+        Assert.assertTrue(capture.err.toString(),
+                capture.err.toString().contains("internal facade defect"));
+        Assert.assertFalse(capture.err.toString(), capture.err.toString().contains("Usage:"));
+    }
+
+    @Test
+    public void facadeExecutorIllegalArgumentExceptionRendersFailedRunAndExitsOne() {
+        RedisBenchmark benchmark = new RedisBenchmark(catalog, (testCase, config, payload, random) -> {
+            throw new IllegalArgumentException("executor defect");
+        });
+        CommandCapture capture = commandLine(new RedisBenchmarkCommand(benchmark::run, renderer));
+
+        int exitCode = capture.commandLine.execute("--tests", "set", "--format", "quiet");
+
+        Assert.assertEquals(1, exitCode);
+        Assert.assertEquals("SET: FAILED after 0 replies (executor defect)\n", capture.out.toString());
+        Assert.assertEquals("", capture.err.toString());
     }
 
     @Test
@@ -193,6 +249,37 @@ public class RedisBenchmarkCommandTest {
         commandLine.setOut(new PrintWriter(out));
         commandLine.setErr(new PrintWriter(err));
         return new CommandCapture(commandLine, out, err);
+    }
+
+    private static PrintWriter failingPrintWriter() {
+        return new PrintWriter(new Writer() {
+            @Override
+            public void write(char[] buffer, int offset, int length) throws IOException {
+                throw new IOException("write failed");
+            }
+
+            @Override
+            public void flush() throws IOException {
+                throw new IOException("flush failed");
+            }
+
+            @Override
+            public void close() {
+            }
+        });
+    }
+
+    private static BenchmarkStatistics statistics() {
+        BenchmarkLatencyRecorder.Summary latency = new BenchmarkLatencyRecorder.Summary(
+                2,
+                1_234.0,
+                100,
+                1_000,
+                2_000,
+                3_000,
+                4_567
+        );
+        return BenchmarkStatistics.from(2, 5, 6, 2, 2, latency);
     }
 
     private record CommandCapture(CommandLine commandLine, StringWriter out, StringWriter err) {

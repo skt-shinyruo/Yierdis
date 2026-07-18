@@ -173,7 +173,7 @@ public final class RedisBenchmarkCatalog {
         Set<String> unknownSelectors = new TreeSet<>(normalizedSelectors);
         unknownSelectors.removeAll(SELECTION_TRIGGERS);
         if (!unknownSelectors.isEmpty()) {
-            throw new IllegalArgumentException("unknown benchmark selector(s): "
+            throw new SelectionException("unknown benchmark selector(s): "
                     + String.join(", ", unknownSelectors));
         }
 
@@ -241,5 +241,11 @@ public final class RedisBenchmarkCatalog {
             throw new IllegalArgumentException(name + " must not be blank");
         }
         return normalized;
+    }
+
+    static final class SelectionException extends IllegalArgumentException {
+        SelectionException(String message) {
+            super(message);
+        }
     }
 }

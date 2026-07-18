@@ -43,17 +43,25 @@ public final class RedisBenchmarkCommand implements Callable<Integer> {
     @Override
     public Integer call() {
         BenchmarkConfig config;
-        BenchmarkRunResult result;
         try {
             config = options.toConfig(System::nanoTime);
-            result = runner.apply(config);
         } catch (IllegalArgumentException failure) {
+            throw new ParameterException(spec.commandLine(), failure.getMessage(), failure);
+        }
+
+        BenchmarkRunResult result;
+        try {
+            result = runner.apply(config);
+        } catch (RedisBenchmarkCatalog.SelectionException failure) {
             throw new ParameterException(spec.commandLine(), failure.getMessage(), failure);
         }
 
         PrintWriter out = spec.commandLine().getOut();
         out.print(renderer.render(config, result));
         out.flush();
+        if (out.checkError()) {
+            throw new IllegalStateException("failed to write benchmark output");
+        }
         return result.exitCode();
     }
 }
