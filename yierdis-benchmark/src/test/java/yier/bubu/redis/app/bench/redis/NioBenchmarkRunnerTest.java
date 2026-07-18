@@ -4,9 +4,14 @@ import org.junit.Assert;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.net.SocketException;
 import java.nio.ByteBuffer;
+import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalLong;
 import java.util.Set;
@@ -191,6 +196,79 @@ public class NioBenchmarkRunnerTest {
     }
 
     @Test(timeout = 5_000)
+    public void runnerCompletesAuthAndPipelineAcrossDeterministicPartialWrites()
+            throws Exception {
+        List<Long> aggregateWritePositions = new ArrayList<>();
+        NioBenchmarkRunner runner = runnerWithWriteFactory(channel -> cappedSocketWrite(
+                channel,
+                3,
+                aggregateWritePositions
+        ));
+        try (ScriptedRespServer server = ScriptedRespServer.authAndSelectAware()) {
+            BenchmarkStatistics statistics = execute(
+                    server,
+                    PING,
+                    2,
+                    1,
+                    2,
+                    true,
+                    BenchmarkClock.system(),
+                    NioBenchmarkClient.ReplyLimits.defaults(),
+                    "benchmark-user",
+                    "secret",
+                    2,
+                    runner
+            );
+
+            Assert.assertEquals(
+                    List.of(4),
+                    server.awaitCommandCountsPerConnection(4, 1, SERVER_WAIT)
+            );
+            Assert.assertEquals(
+                    List.of("AUTH", "SELECT", "PING", "PING"),
+                    server.firstConnectionCommandPrefix(4)
+            );
+            assertCounters(statistics, 2, 2, 2, 2);
+        }
+
+        Assert.assertTrue(aggregateWritePositions.size() > 1);
+        long previousPosition = 0;
+        for (long position : aggregateWritePositions) {
+            Assert.assertTrue(position >= previousPosition);
+            Assert.assertTrue(position - previousPosition <= 3);
+            previousPosition = position;
+        }
+        Assert.assertTrue(previousPosition > 3);
+    }
+
+    @Test(timeout = 5_000)
+    public void resetInsidePartialCommandIsReportedByScriptedServer() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.neverResponding()) {
+            try (Socket socket = new Socket()) {
+                socket.setSoLinger(true, 0);
+                socket.connect(new InetSocketAddress(server.host(), server.port()));
+                server.awaitAcceptedConnections(1, SERVER_WAIT);
+                socket.getOutputStream().write(ascii(
+                        "*2\r\n$4\r\nPING\r\n$5\r\nabc"
+                ));
+                socket.getOutputStream().flush();
+            }
+
+            AssertionError failure = Assert.assertThrows(
+                    AssertionError.class,
+                    () -> server.awaitCommandCountsPerConnection(
+                            1,
+                            1,
+                            Duration.ofMillis(500)
+                    )
+            );
+
+            Assert.assertEquals("scripted RESP server failed", failure.getMessage());
+            Assert.assertTrue(failure.getCause() instanceof SocketException);
+        }
+    }
+
+    @Test(timeout = 5_000)
     public void errorReplyDisconnectAndWrongShapeFailTheCase() throws Exception {
         assertExecutionFails(
                 ScriptedRespServer.respondingWith("-ERR boom\r\n"),
@@ -212,6 +290,25 @@ public class NioBenchmarkRunnerTest {
                 "unsupported reply marker",
                 0
         );
+    }
+
+    @Test(timeout = 5_000)
+    public void coalescedExtraReplyFailsImmediately() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.coalescedPongAndExtraReply()) {
+            BenchmarkExecutionException failure = Assert.assertThrows(
+                    BenchmarkExecutionException.class,
+                    () -> execute(server, 1, 1, 1, BenchmarkClock.system())
+            );
+
+            Assert.assertEquals(1, failure.completedReplies());
+            Assert.assertTrue(failure.detail().contains("unexpected extra reply"));
+            Assert.assertTrue(failure.getMessage().contains("unexpected extra reply"));
+            Assert.assertNotNull(failure.getCause());
+            Assert.assertEquals(
+                    List.of(1),
+                    server.awaitCommandCountsPerConnection(1, 1, SERVER_WAIT)
+            );
+        }
     }
 
     @Test(timeout = 5_000)
@@ -316,6 +413,70 @@ public class NioBenchmarkRunnerTest {
                     new Throwable[]{cleanupFailure},
                     failure.getCause().getSuppressed()
             );
+        }
+    }
+
+    @Test(timeout = 5_000)
+    public void uncheckedCleanupFailureIsSuppressedWithoutMaskingPrimaryFailure()
+            throws Exception {
+        RuntimeException cleanupFailure = new RuntimeException("unchecked cleanup boom");
+        NioBenchmarkRunner runner = runnerWithCleanup(client -> {
+            client.close();
+            throw cleanupFailure;
+        });
+        try (ScriptedRespServer server = ScriptedRespServer.respondingWith(
+                "-ERR primary boom\r\n"
+        )) {
+            BenchmarkExecutionException failure = Assert.assertThrows(
+                    BenchmarkExecutionException.class,
+                    () -> execute(server, 3, 1, 1, runner)
+            );
+
+            Assert.assertEquals(0, failure.completedReplies());
+            Assert.assertTrue(failure.detail().contains("ERR primary boom"));
+            Assert.assertTrue(failure.getMessage().startsWith(
+                    PING.title() + " failed after 0/3 replies"
+            ));
+            Assert.assertArrayEquals(
+                    new Throwable[]{cleanupFailure},
+                    failure.getCause().getSuppressed()
+            );
+        }
+    }
+
+    @Test(timeout = 5_000)
+    public void uncheckedCleanupWithoutPrimaryUsesTypedFailure() throws Exception {
+        RuntimeException cleanupFailure = new RuntimeException("unchecked cleanup only");
+        NioBenchmarkRunner runner = runnerWithCleanup(client -> {
+            client.close();
+            throw cleanupFailure;
+        });
+        try (ScriptedRespServer server = ScriptedRespServer.immediatePong(1)) {
+            BenchmarkExecutionException failure = Assert.assertThrows(
+                    BenchmarkExecutionException.class,
+                    () -> execute(server, 1, 1, 1, runner)
+            );
+
+            Assert.assertEquals(1, failure.completedReplies());
+            Assert.assertEquals("unchecked cleanup only", failure.detail());
+            Assert.assertSame(cleanupFailure, failure.getCause());
+        }
+    }
+
+    @Test(timeout = 5_000)
+    public void cleanupErrorWithoutPrimaryPropagatesUnchanged() throws Exception {
+        AssertionError cleanupFailure = new AssertionError("fatal cleanup");
+        NioBenchmarkRunner runner = runnerWithCleanup(client -> {
+            client.close();
+            throw cleanupFailure;
+        });
+        try (ScriptedRespServer server = ScriptedRespServer.immediatePong(1)) {
+            AssertionError thrown = Assert.assertThrows(
+                    AssertionError.class,
+                    () -> execute(server, 1, 1, 1, runner)
+            );
+
+            Assert.assertSame(cleanupFailure, thrown);
         }
     }
 
@@ -451,6 +612,29 @@ public class NioBenchmarkRunnerTest {
                 true,
                 clock,
                 NioBenchmarkClient.ReplyLimits.defaults()
+        );
+    }
+
+    private static BenchmarkStatistics execute(
+            ScriptedRespServer server,
+            int requests,
+            int clients,
+            int pipeline,
+            NioBenchmarkRunner runner
+    ) throws Exception {
+        return execute(
+                server,
+                PING,
+                requests,
+                clients,
+                pipeline,
+                true,
+                BenchmarkClock.system(),
+                NioBenchmarkClient.ReplyLimits.defaults(),
+                "",
+                "",
+                0,
+                runner
         );
     }
 
@@ -621,6 +805,60 @@ public class NioBenchmarkRunnerTest {
 
     private static byte[] ascii(String value) {
         return value.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static NioBenchmarkRunner runnerWithCleanup(
+            NioBenchmarkRunner.ClientCleanup clientCleanup
+    ) {
+        return new NioBenchmarkRunner(
+                BenchmarkClock.system(),
+                NioBenchmarkClient.ReplyLimits.defaults(),
+                BenchmarkClock.system(),
+                Duration.ofSeconds(30),
+                clientCleanup
+        );
+    }
+
+    private static NioBenchmarkRunner runnerWithWriteFactory(
+            NioBenchmarkRunner.ClientWriteFactory clientWriteFactory
+    ) {
+        return new NioBenchmarkRunner(
+                BenchmarkClock.system(),
+                NioBenchmarkClient.ReplyLimits.defaults(),
+                BenchmarkClock.system(),
+                Duration.ofSeconds(30),
+                NioBenchmarkClient::close,
+                clientWriteFactory
+        );
+    }
+
+    private static NioBenchmarkClient.GatheringWrite cappedSocketWrite(
+            SocketChannel channel,
+            int maxBytes,
+            List<Long> aggregateWritePositions
+    ) {
+        AtomicLong aggregatePosition = new AtomicLong();
+        return sources -> {
+            ByteBuffer[] cappedSources = new ByteBuffer[sources.length];
+            int remainingBudget = maxBytes;
+            for (int index = 0; index < sources.length; index++) {
+                ByteBuffer cappedSource = sources[index].duplicate();
+                int allowedBytes = Math.min(remainingBudget, cappedSource.remaining());
+                cappedSource.limit(cappedSource.position() + allowedBytes);
+                cappedSources[index] = cappedSource;
+                remainingBudget -= allowedBytes;
+            }
+            long written;
+            try {
+                written = channel.write(cappedSources);
+            } finally {
+                for (int index = 0; index < sources.length; index++) {
+                    sources[index].position(cappedSources[index].position());
+                }
+            }
+            aggregateWritePositions.add(aggregatePosition.addAndGet(written));
+            return written;
+        };
     }
 
     private static void assertExecutionFails(

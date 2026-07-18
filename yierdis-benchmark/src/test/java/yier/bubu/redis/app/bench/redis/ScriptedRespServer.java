@@ -94,6 +94,10 @@ final class ScriptedRespServer implements AutoCloseable {
         );
     }
 
+    static ScriptedRespServer coalescedPongAndExtraReply() throws IOException {
+        return immediate(1, ascii("+PONG\r\n+PONG\r\n"));
+    }
+
     static ScriptedRespServer authAndSelectAware() throws IOException {
         return new ScriptedRespServer(1, new AuthAndSelectScript(null));
     }
@@ -333,6 +337,7 @@ final class ScriptedRespServer implements AutoCloseable {
     }
 
     private void readCommands(Connection connection) {
+        boolean commandFrameStarted = false;
         try {
             InputStream input = connection.input();
             while (!closed) {
@@ -340,12 +345,14 @@ final class ScriptedRespServer implements AutoCloseable {
                 if (first < 0) {
                     return;
                 }
+                commandFrameStarted = true;
                 Command command;
                 if (first == '*') {
                     command = readRespArray(input);
                 } else {
                     command = readInline(input, first);
                 }
+                commandFrameStarted = false;
                 connection.recordCommand(command);
                 int connectionCommands = connection.incrementCommandCount();
                 int totalCommands = commands.incrementAndGet();
@@ -357,8 +364,11 @@ final class ScriptedRespServer implements AutoCloseable {
                         totalCommands
                 );
             }
-        } catch (SocketException ignored) {
-            // 达到回复阈值后不会排空其他已发批次，客户端清理导致的对端断开属于正常路径。
+        } catch (SocketException e) {
+            // 命令边界或回写阶段的 reset 可能来自 runner 达到回复阈值后的清理；帧内 reset 则表示命令被截断。
+            if (!closed && commandFrameStarted) {
+                recordFailure(e);
+            }
         } catch (Throwable e) {
             if (!closed) {
                 recordFailure(e);

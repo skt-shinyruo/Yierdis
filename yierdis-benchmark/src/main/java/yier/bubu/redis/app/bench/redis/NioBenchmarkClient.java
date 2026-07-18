@@ -51,6 +51,7 @@ final class NioBenchmarkClient implements AutoCloseable {
     }
 
     final SocketChannel channel;
+    private final GatheringWrite gatheringWrite;
     SelectionKey selectionKey;
     final PreparedPipeline preparedPipeline;
     final ByteBuffer firstWritePrefix;
@@ -71,6 +72,7 @@ final class NioBenchmarkClient implements AutoCloseable {
 
     NioBenchmarkClient(
             SocketChannel channel,
+            GatheringWrite gatheringWrite,
             PreparedPipeline compiledPipeline,
             byte[] prefix,
             int prefixReplies,
@@ -78,6 +80,7 @@ final class NioBenchmarkClient implements AutoCloseable {
             ReplyLimits replyLimits
     ) {
         this.channel = Objects.requireNonNull(channel, "channel");
+        this.gatheringWrite = Objects.requireNonNull(gatheringWrite, "gatheringWrite");
         this.preparedPipeline = Objects.requireNonNull(
                 compiledPipeline,
                 "compiledPipeline"
@@ -131,7 +134,7 @@ final class NioBenchmarkClient implements AutoCloseable {
         long positionsBeforeWrite = (long) firstWritePrefix.position()
                 + pipelineWriteBuffer.position();
         boolean complete = writeBatch(
-                channel::write,
+                gatheringWrite,
                 gatheringWriteBuffers,
                 pipelineWriteBuffer
         );
