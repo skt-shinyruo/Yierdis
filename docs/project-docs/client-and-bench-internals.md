@@ -107,7 +107,7 @@ SET raw "\x00\x01"
 - array 递归读取子 reply。
 - 返回 `RespReply` record，包含 `kind`、`text`、`bytes`、`integer` 和 `values`，并对 bytes/list 做防御性复制。
 
-这个 codec 是 client-side 工具路径的事实标准：CLI 用它做单请求通信，benchmark 用它写 workload frame 和读 reply。
+这个 codec 是 client-side 工具路径的事实标准：CLI 用它做单请求通信；benchmark 只用它编码 workload、AUTH 和 SELECT frame，`NioBenchmarkClient` 通过 `IncrementalRespReplyDecoder` 增量读取和校验 reply。
 
 ## yierdis-benchmark
 
@@ -205,7 +205,7 @@ Redis 侧由操作者在独立环境中运行官方工具，使用等价的 requ
 - 除非 `SKIP_BUILD=1`，只构建 `yierdis-benchmark` 及其 Maven 依赖，然后定位 shaded benchmark jar。
 - 必传默认值来自 `HOST`、`PORT`、`REQUESTS`、`CLIENTS`、`DATA_SIZE`、`PIPELINE` 和 `FORMAT`。
 - 非空 `KEYSPACE` 才会成为 CLI argument，因此省略和显式零保持不同。
-- 非空 `TESTS`、`KEEP_ALIVE`、`PRECISION`、`SEED`、`USERNAME`、`PASSWORD`、`DATABASE` 才会追加；`KEEP_ALIVE=false` 会编码为单个 `--keep-alive=false` argument。
+- 非空 `TESTS`、`KEEP_ALIVE`、`PRECISION`、`SEED`、`BENCH_USERNAME`、`PASSWORD`、`DATABASE` 才会追加；`KEEP_ALIVE=false` 会编码为单个 `--keep-alive=false` argument。`BENCH_USERNAME` 是 portable ACL username knob，并优先于仅为非保留环境保留的 `USERNAME` compatibility fallback；zsh 中不要使用 `USERNAME=value` 调用脚本。
 - `BENCH_JVM_OPTS` 只控制 benchmark JVM。
 - 脚本不查找、启动、轮询或停止任何 server artifact；目标 Yierdis 的生命周期始终由操作者管理。
 

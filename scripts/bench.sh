@@ -19,7 +19,7 @@ TESTS="${TESTS:-}"
 KEEP_ALIVE="${KEEP_ALIVE:-}"
 PRECISION="${PRECISION:-}"
 SEED="${SEED:-}"
-USERNAME="${USERNAME:-}"
+BENCH_USERNAME="${BENCH_USERNAME:-${USERNAME:-}}"
 PASSWORD="${PASSWORD:-}"
 DATABASE="${DATABASE:-}"
 
@@ -36,12 +36,17 @@ build_if_needed() {
 }
 
 pick_bench_jar() {
-  local bench_jar
-  bench_jar="$(ls -1t "$ROOT_DIR"/yierdis-benchmark/target/yierdis-benchmark-*.jar 2>/dev/null \
-    | grep -v '/original-' \
-    | head -n 1 || true)"
-  [[ -n "$bench_jar" ]] || die 'shaded yierdis-benchmark jar not found'
-  printf '%s' "$bench_jar"
+  local target_dir="$ROOT_DIR/yierdis-benchmark/target"
+  local original_jar original_name bench_jar
+  while IFS= read -r original_jar; do
+    original_name="${original_jar##*/}"
+    bench_jar="$target_dir/${original_name#original-}"
+    if [[ -f "$bench_jar" ]]; then
+      printf '%s' "$bench_jar"
+      return 0
+    fi
+  done < <(ls -1t "$target_dir"/original-yierdis-benchmark-*.jar 2>/dev/null || true)
+  die 'shaded yierdis-benchmark jar not found'
 }
 
 main() {
@@ -56,7 +61,7 @@ main() {
   [[ -n "$KEEP_ALIVE" ]] && optional_args+=("--keep-alive=$KEEP_ALIVE")
   [[ -n "$PRECISION" ]] && optional_args+=(--precision "$PRECISION")
   [[ -n "$SEED" ]] && optional_args+=(--seed "$SEED")
-  [[ -n "$USERNAME" ]] && optional_args+=(--username "$USERNAME")
+  [[ -n "$BENCH_USERNAME" ]] && optional_args+=(--username "$BENCH_USERNAME")
   [[ -n "$PASSWORD" ]] && optional_args+=(--password "$PASSWORD")
   [[ -n "$DATABASE" ]] && optional_args+=(--database "$DATABASE")
 

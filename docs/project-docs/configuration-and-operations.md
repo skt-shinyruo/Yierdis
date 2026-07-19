@@ -36,7 +36,7 @@ argv
 
 `YierdisInstance` 在这个过程中不是“随手可用的 DB 容器”。`YierdisInstance.create(config)` 要求 `engineFactory` 已经注入；`bindToCurrentThread()` 要先把当前线程标成 owner thread，后续 DB access 才会被允许；`close()` 负责按拥有关系关闭 runtime、allocator 和 DB resources。bootstrap 失败时会 best-effort 清掉已经创建的对象，避免留下半初始化实例。
 
-注意：benchmark 有自己的 `YierdisBenchServerArgs`，只负责生成子进程 server argv。它不是完整 server 参数模型，尤其没有 server-only 的 client idle/output-buffer 慢客户端参数。
+注意：benchmark 不持有 server 参数或生命周期模型，只连接由操作者单独管理的 Yierdis。client idle/output-buffer 等 server-only 参数必须在启动目标 Yierdis 时直接配置。
 
 源码入口：
 
@@ -228,7 +228,7 @@ java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SN
 
 关闭是 best-effort，顺序大致是：server channel、cleanup future、executor graceful shutdown、engine、instance runtime access、command group、boss group、worker group。runtime access 的关闭会通过 `executor.executeOwnerTask(runtimeAccess::close)` 回到 owner thread，避免在错误线程释放已绑定 DB runtime。
 
-脚本层关闭逻辑也要按真实进程处理：`scripts/smoke.sh` 用 trap 杀掉临时 server；benchmark 的 `ServerProcess.stop()` 先 `destroy()`，超时后 `destroyForcibly()`。
+脚本层关闭逻辑也要按真实进程处理：只有 `scripts/smoke.sh` 拥有它启动的临时 server，并用 trap 清理；connect-only benchmark 不拥有也不停止目标 Yierdis。
 
 ## Production Hardening Operations
 
