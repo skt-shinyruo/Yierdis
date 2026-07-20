@@ -151,7 +151,7 @@ RESP frame 级别的 protocol error 发生在 `RespRequestDecoder` / `RespProtoc
 
 ## 命令记录与 DB 提交边界
 
-命令层只负责解析、执行和写回 Redis 语义，不根据 handler 返回值推断或发布变更事件。`DefaultYierdisEngine.execute(...)` 在进入 processor 前打开 owner-thread `CommandRecordScope`，为当前请求提供不可变的命令记录；scope 在本次 engine 调用结束时关闭。
+命令层只负责解析、执行和写回 Redis 语义，不根据 handler 返回值推断或发布变更事件。`DefaultYierdisEngine.execute(...)` 为当前请求创建显式 `MutationContext`，并由 processor 在命令边界的 `finally` 中关闭借用；DB view 不再从隐式 `ThreadLocal` 读取命令记录。
 
 真正的变更发布由 DB 持有。`YierdisDbMutationExecutor` 只会在 prepared mutation 确认实际发生变化后，先向 `DbCommitPublisher` 预留记录容量，再开始可见性提交；storage 和 ledger 都提交后才把预留转换为已发布事件。这样读命令、parse error、unknown command、条件写入的 no-op 以及 `MULTI` 的 `QUEUED` 阶段都不会产生 commit-stream 事件。
 

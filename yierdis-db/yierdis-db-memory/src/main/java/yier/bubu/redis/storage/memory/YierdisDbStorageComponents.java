@@ -17,11 +17,6 @@ import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 
 public final class YierdisDbStorageComponents {
-    private static final int ENTRY_TABLE_NATIVE_SLOT_CAPACITY = 64 * 1024;
-    private static final int STRING_NATIVE_SLOT_CAPACITY = 64 * 1024;
-    private static final int KEY_NATIVE_SLOT_CAPACITY = 64 * 1024;
-    private static final int COLLECTION_ROOT_NATIVE_SLOT_CAPACITY = 64 * 1024;
-
     final YierdisFfmMemoryRuntime memoryRuntime;
     final NativeAllocator nativeAllocator;
     final YierdisDbOwnedResources resources;
@@ -88,15 +83,11 @@ public final class YierdisDbStorageComponents {
         YierdisFfmMemoryRuntime resolvedRuntime =
                 memoryRuntime == null ? new YierdisFfmMemoryRuntime("db") : memoryRuntime;
         boolean resolvedOwnsRuntime = memoryRuntime == null || ownsMemoryRuntime;
-        int resolvedNativeSlotCapacity = nativeSlotCapacity > 0
-                ? nativeSlotCapacity
-                : sharedNativeSlotCapacity();
-
         // Entry、key bytes、string bytes 和 collection roots 共享一个 stable allocator，
         // 使 defrag/释放时可以按统一的 native handle 域验证对象类型与存活状态。
         NativeAllocator nativeAllocator = new YierdisStableNativeAllocator(
                 resolvedRuntime,
-                resolvedNativeSlotCapacity
+                nativeSlotCapacity
         );
         YierdisDbOwnedResources resources = new YierdisDbOwnedResources(
                 resolvedRuntime,
@@ -137,10 +128,4 @@ public final class YierdisDbStorageComponents {
         );
     }
 
-    static int sharedNativeSlotCapacity() {
-        return ENTRY_TABLE_NATIVE_SLOT_CAPACITY
-                + STRING_NATIVE_SLOT_CAPACITY
-                + KEY_NATIVE_SLOT_CAPACITY
-                + COLLECTION_ROOT_NATIVE_SLOT_CAPACITY;
-    }
 }

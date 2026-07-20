@@ -4,6 +4,7 @@ package yier.bubu.redis.storage.api;
 
 import yier.bubu.redis.storage.api.result.BulkStringMapMetrics;
 import yier.bubu.redis.storage.api.result.BulkStringValue;
+import yier.bubu.redis.storage.api.result.CollectionScanWindow;
 
 public interface HashReadOps {
     BulkStringValue hget(byte[] keyBytes, byte[] fieldBytes);
@@ -11,4 +12,12 @@ public interface HashReadOps {
     BulkStringMapMetrics hgetall(byte[] keyBytes);
 
     long hlen(byte[] keyBytes);
+
+    CollectionScanWindow hscan(
+            byte[] keyBytes,
+            ScanCursorV2 cursor,
+            byte[] globPattern,
+            int count,
+            boolean noValues
+    );
 }

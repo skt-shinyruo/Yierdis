@@ -13,12 +13,18 @@ import java.util.Objects;
  */
 public final class CommandDb {
     private DbEngine engine;
+    private DbWrites writes;
+    private DbLifecycleOps lifecycle;
 
     CommandDb() {
     }
 
-    CommandDb reset(DbEngine engine) {
+    CommandDb reset(DbEngine engine, yier.bubu.redis.common.command.MutationContext mutationContext) {
         this.engine = Objects.requireNonNull(engine, "engine");
+        this.writes = engine.writes().withMutationContext(
+                Objects.requireNonNull(mutationContext, "mutationContext")
+        );
+        this.lifecycle = engine.lifecycle().withMutationContext(mutationContext);
         return this;
     }
 
@@ -27,7 +33,7 @@ public final class CommandDb {
     }
 
     public DbWrites writes() {
-        return engine.writes();
+        return writes;
     }
 
     public MemoryOps memory() {
@@ -35,6 +41,6 @@ public final class CommandDb {
     }
 
     public DbLifecycleOps lifecycle() {
-        return engine.lifecycle();
+        return lifecycle;
     }
 }

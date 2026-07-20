@@ -125,7 +125,7 @@ change event 是 DB 提交事实的有界、顺序化视图。它适合作为 AO
 
 ```text
 DefaultYierdisEngine
-  -> CommandRecordScope.open(request)
+  -> MutationContext.of(request)
   -> YierdisFastCommandProcessor
   -> command handler / DbWrites
   -> YierdisDbMutationExecutor
@@ -136,7 +136,7 @@ DefaultYierdisEngine
   -> YierdisChangeSink.onChange(callback-scoped event)
 ```
 
-`CommandRecordScope` 是 owner-thread scope，向 DB 提供当前请求的 immutable command record。`YierdisDbMutationExecutor` 仅在 prepared mutation 的 outcome 表示真实变化时预留 stream slot；预留失败发生在 storage commit 之前，因此不会把不可发布的写入变成可见状态。发布转换本身不分配、不回调，也不进行新的容量判断。
+`MutationContext` 是命令边界内借用的 immutable command record 视图；processor 结束命令后会关闭它，跨越当前调用栈的 commit record 必须显式 retain。`YierdisDbMutationExecutor` 仅在 prepared mutation 的 outcome 表示真实变化时预留 stream slot；预留失败发生在 storage commit 之前，因此不会把不可发布的写入变成可见状态。发布转换本身不分配、不回调，也不进行新的容量判断。
 
 expire 和 eviction 的路径也经同一个 DB commit boundary。DB lifecycle 为实际删除构造规范化的 `DEL key` record，并分别使用 `EXPIRED` 或 `EVICTED` kind；客户端并没有真的发送这条 `DEL` 命令。
 

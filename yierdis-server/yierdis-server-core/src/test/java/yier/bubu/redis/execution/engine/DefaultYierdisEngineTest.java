@@ -8,7 +8,7 @@ import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.kernel.CommandRegistries;
 import yier.bubu.redis.command.kernel.CommandRegistry;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
-import yier.bubu.redis.common.command.CommandRecordScope;
+import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ClientMetadataSession;
 import yier.bubu.redis.execution.api.ConnectionStatsSession;
@@ -27,6 +27,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 public class DefaultYierdisEngineTest {
@@ -74,7 +75,9 @@ public class DefaultYierdisEngineTest {
     }
 
     @Test
-    public void executeOpensTheRequestRecordScopeAndRestoresItAfterFailures() {
+    public void executePassesTheRequestThroughTheExplicitMutationContext() {
+        AtomicReference<MutationContext> successfulContext = new AtomicReference<>();
+        AtomicReference<MutationContext> failedContext = new AtomicReference<>();
         CommandRegistry registry = CommandRegistries.from(
                 registration -> {
                     registration.register(
@@ -82,7 +85,8 @@ public class DefaultYierdisEngineTest {
                             CommandDescriptor.of(1, 0, 0, 0),
                             CommandParsers.exactRequest(1, "scoped"),
                             (request, ctx) -> {
-                                Assert.assertSame(request, CommandRecordScope.current());
+                                Assert.assertSame(request, ctx.mutationContext().commandRecord());
+                                successfulContext.set(ctx.mutationContext());
                                 ctx.out().simpleString("OK");
                             }
                     );
@@ -91,7 +95,8 @@ public class DefaultYierdisEngineTest {
                             CommandDescriptor.of(1, 0, 0, 0),
                             CommandParsers.exactRequest(1, "fail"),
                             (request, ctx) -> {
-                                Assert.assertSame(request, CommandRecordScope.current());
+                                Assert.assertSame(request, ctx.mutationContext().commandRecord());
+                                failedContext.set(ctx.mutationContext());
                                 throw new IllegalStateException("injected");
                             }
                     );
@@ -102,17 +107,18 @@ public class DefaultYierdisEngineTest {
         EngineSession session = new EngineSession(16, 1024);
 
         engine.execute(session, ByteArrayExecutionRequest.fromUtf8("SCOPED", List.of()), new CapturingReplyWriter());
-        Assert.assertNull(CommandRecordScope.current());
+        Assert.assertFalse(successfulContext.get().hasCommandRecord());
 
         Assert.assertThrows(
                 IllegalStateException.class,
                 () -> engine.execute(session, ByteArrayExecutionRequest.fromUtf8("FAIL", List.of()), new CapturingReplyWriter())
         );
-        Assert.assertNull(CommandRecordScope.current());
+        Assert.assertFalse(failedContext.get().hasCommandRecord());
     }
 
     @Test
     public void transactionReplayUsesTheQueuedRequestAsItsCurrentRecord() {
+        AtomicReference<MutationContext> replayContext = new AtomicReference<>();
         CommandRegistry registry = new CommandRegistry();
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
         CommandRegistries.registerTransactionSupport(registry, processor::execute);
@@ -121,7 +127,8 @@ public class DefaultYierdisEngineTest {
                 CommandDescriptor.of(1, 0, 0, 0),
                 CommandParsers.exactRequest(1, "scoped"),
                 (request, ctx) -> {
-                    Assert.assertSame(request, CommandRecordScope.current());
+                    Assert.assertSame(request, ctx.mutationContext().commandRecord());
+                    replayContext.set(ctx.mutationContext());
                     ctx.out().simpleString("OK");
                 }
         );
@@ -134,7 +141,7 @@ public class DefaultYierdisEngineTest {
         engine.execute(session, ByteArrayExecutionRequest.fromUtf8("SCOPED", List.of()), out);
         engine.execute(session, ByteArrayExecutionRequest.fromUtf8("EXEC", List.of()), out);
 
-        Assert.assertNull(CommandRecordScope.current());
+        Assert.assertFalse(replayContext.get().hasCommandRecord());
     }
 
     @Test

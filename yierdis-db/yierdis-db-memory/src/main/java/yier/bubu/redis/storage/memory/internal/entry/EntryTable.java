@@ -3,7 +3,6 @@ package yier.bubu.redis.storage.memory.internal.entry;
 import java.util.Objects;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocator;
-import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
@@ -53,31 +52,31 @@ public final class EntryTable implements AutoCloseable {
     public EntryHandle allocate(EntryRecord record) {
         Objects.requireNonNull(record, "record");
         ensureOpen();
-        NativeHandle nativeHandle = allocator.allocate(NativeObjectKind.ENTRY_RECORD, RECORD_BYTES);
+        long rawHandle = allocator.allocateRaw(NativeObjectKind.ENTRY_RECORD, RECORD_BYTES);
         boolean ok = false;
         try {
-            EntryHandle handle = EntryHandle.fromNativeHandle(nativeHandle);
-            write(nativeHandle, record);
+            EntryHandle handle = EntryHandle.fromRaw(rawHandle);
+            write(rawHandle, record);
             ok = true;
             return handle;
         } finally {
             if (!ok) {
-                allocator.free(nativeHandle);
+                allocator.freeRaw(rawHandle);
             }
         }
     }
 
     public EntryHandle reserve() {
         ensureOpen();
-        NativeHandle nativeHandle = allocator.allocate(NativeObjectKind.ENTRY_RECORD, RECORD_BYTES);
+        long rawHandle = allocator.allocateRaw(NativeObjectKind.ENTRY_RECORD, RECORD_BYTES);
         boolean ok = false;
         try {
-            EntryHandle handle = EntryHandle.fromNativeHandle(nativeHandle);
+            EntryHandle handle = EntryHandle.fromRaw(rawHandle);
             ok = true;
             return handle;
         } finally {
             if (!ok) {
-                allocator.free(nativeHandle);
+                allocator.freeRaw(rawHandle);
             }
         }
     }
@@ -86,7 +85,7 @@ public final class EntryTable implements AutoCloseable {
         Objects.requireNonNull(handle, "handle");
         Objects.requireNonNull(record, "record");
         ensureOpen();
-        write(handle.nativeHandle(), record);
+        write(handle.raw(), record);
     }
 
     public EntryRecord get(EntryHandle handle) {
@@ -95,7 +94,7 @@ public final class EntryTable implements AutoCloseable {
         }
         ensureOpen();
         try {
-            return read(handle.nativeHandle());
+            return read(handle.raw());
         } catch (NativeMemoryException e) {
             throw e;
         } catch (RuntimeException e) {
@@ -110,15 +109,15 @@ public final class EntryTable implements AutoCloseable {
         Objects.requireNonNull(handle, "handle");
         Objects.requireNonNull(record, "record");
         ensureOpen();
-        EntryRecord previous = read(handle.nativeHandle());
-        write(handle.nativeHandle(), record);
+        EntryRecord previous = read(handle.raw());
+        write(handle.raw(), record);
         return previous;
     }
 
     public void release(EntryHandle handle) {
         Objects.requireNonNull(handle, "handle");
         ensureOpen();
-        allocator.free(handle.nativeHandle());
+        allocator.freeRaw(handle.raw());
     }
 
     public int size() {
@@ -168,32 +167,32 @@ public final class EntryTable implements AutoCloseable {
         return allocator;
     }
 
-    private void write(NativeHandle handle, EntryRecord record) {
-        try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
-            setLong(view, KEY_HANDLE_OFFSET, record.keyHandle());
-            setLong(view, VALUE_HANDLE_OFFSET, record.valueHandle().raw());
-            setInt(view, KEY_HASH_OFFSET, record.keyHash());
-            setInt(view, TYPE_OFFSET, record.type().ordinal());
-            setInt(view, ENCODING_OFFSET, record.encoding().ordinal());
-            setInt(view, FLAGS_OFFSET, record.flags());
-            setLong(view, EXPIRE_AT_MILLIS_OFFSET, record.expireAtMillis());
-            setLong(view, VERSION_OFFSET, record.version());
-            setLong(view, LRU_OR_LFU_OFFSET, record.lruOrLfu());
+    private void write(long rawHandle, EntryRecord record) {
+        try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_WRITE)) {
+            view.setLongLittleEndian(KEY_HANDLE_OFFSET, record.keyHandle());
+            view.setLongLittleEndian(VALUE_HANDLE_OFFSET, record.valueHandle().raw());
+            view.setIntLittleEndian(KEY_HASH_OFFSET, record.keyHash());
+            view.setIntLittleEndian(TYPE_OFFSET, record.type().ordinal());
+            view.setIntLittleEndian(ENCODING_OFFSET, record.encoding().ordinal());
+            view.setIntLittleEndian(FLAGS_OFFSET, record.flags());
+            view.setLongLittleEndian(EXPIRE_AT_MILLIS_OFFSET, record.expireAtMillis());
+            view.setLongLittleEndian(VERSION_OFFSET, record.version());
+            view.setLongLittleEndian(LRU_OR_LFU_OFFSET, record.lruOrLfu());
         }
     }
 
-    private EntryRecord read(NativeHandle handle) {
-        try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+    private EntryRecord read(long rawHandle) {
+        try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_ONLY)) {
             return new EntryRecord(
-                    getLong(view, KEY_HANDLE_OFFSET),
-                    ValueHandle.fromRaw(getLong(view, VALUE_HANDLE_OFFSET)),
-                    getInt(view, KEY_HASH_OFFSET),
-                    valueType(getInt(view, TYPE_OFFSET)),
-                    valueEncoding(getInt(view, ENCODING_OFFSET)),
-                    getInt(view, FLAGS_OFFSET),
-                    getLong(view, EXPIRE_AT_MILLIS_OFFSET),
-                    getLong(view, VERSION_OFFSET),
-                    getLong(view, LRU_OR_LFU_OFFSET)
+                    view.getLongLittleEndian(KEY_HANDLE_OFFSET),
+                    ValueHandle.fromRaw(view.getLongLittleEndian(VALUE_HANDLE_OFFSET)),
+                    view.getIntLittleEndian(KEY_HASH_OFFSET),
+                    valueType(view.getIntLittleEndian(TYPE_OFFSET)),
+                    valueEncoding(view.getIntLittleEndian(ENCODING_OFFSET)),
+                    view.getIntLittleEndian(FLAGS_OFFSET),
+                    view.getLongLittleEndian(EXPIRE_AT_MILLIS_OFFSET),
+                    view.getLongLittleEndian(VERSION_OFFSET),
+                    view.getLongLittleEndian(LRU_OR_LFU_OFFSET)
             );
         }
     }
@@ -216,36 +215,6 @@ public final class EntryTable implements AutoCloseable {
             throw new IllegalStateException("invalid value encoding ordinal: " + ordinal);
         }
         return VALUE_ENCODINGS[ordinal];
-    }
-
-    private static long getLong(NativeObjectView view, int offset) {
-        return ((long) view.getByte(offset) & 0xff)
-                | (((long) view.getByte(offset + 1) & 0xff) << 8)
-                | (((long) view.getByte(offset + 2) & 0xff) << 16)
-                | (((long) view.getByte(offset + 3) & 0xff) << 24)
-                | (((long) view.getByte(offset + 4) & 0xff) << 32)
-                | (((long) view.getByte(offset + 5) & 0xff) << 40)
-                | (((long) view.getByte(offset + 6) & 0xff) << 48)
-                | (((long) view.getByte(offset + 7) & 0xff) << 56);
-    }
-
-    private static void setLong(NativeObjectView view, int offset, long value) {
-        for (int i = 0; i < Long.BYTES; i++) {
-            view.setByte(offset + i, (byte) (value >>> (i * 8)));
-        }
-    }
-
-    private static int getInt(NativeObjectView view, int offset) {
-        return (view.getByte(offset) & 0xff)
-                | ((view.getByte(offset + 1) & 0xff) << 8)
-                | ((view.getByte(offset + 2) & 0xff) << 16)
-                | ((view.getByte(offset + 3) & 0xff) << 24);
-    }
-
-    private static void setInt(NativeObjectView view, int offset, int value) {
-        for (int i = 0; i < Integer.BYTES; i++) {
-            view.setByte(offset + i, (byte) (value >>> (i * 8)));
-        }
     }
 
     private static Throwable addFailure(Throwable failure, Throwable next) {

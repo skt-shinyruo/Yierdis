@@ -18,6 +18,7 @@ public class OutboundReplyPressureTest {
     public void singleReplyPreflightFailureLeavesMutationInvisibleAndReleasesItsLease() throws Exception {
         YierdisServerBootstrap server = YierdisServerBootstrap.start(
                 "--port", "0",
+                "--maxmemoryBytes", "0",
                 "--noCleanup",
                 "--replyGlobalCapacityBytes", "8192",
                 "--replyPerConnectionCapacityBytes", "8192",
@@ -103,6 +104,7 @@ public class OutboundReplyPressureTest {
     private static String[] serverArgs(String policy) {
         return new String[]{
                 "--port", "0",
+                "--maxmemoryBytes", "0",
                 "--noCleanup",
                 "--executorSchedulingPolicy", policy,
                 "--protocolMaxCommandBytes", "256",

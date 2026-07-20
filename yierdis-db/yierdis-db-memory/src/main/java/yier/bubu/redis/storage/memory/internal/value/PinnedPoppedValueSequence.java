@@ -8,12 +8,13 @@ import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.api.result.PoppedValueSequence;
 
 /**
- * A read-only pop preview that pins the current list entries until preflight completes.
+ * 只读 pop 预览；preflight 结束前按 native block 固定底层 payload。
  */
 public final class PinnedPoppedValueSequence implements PoppedValueSequence {
     private static final PinnedPoppedValueSequence NULL_VALUE = new PinnedPoppedValueSequence(
             null,
             new NativeListEntryRef[0],
+            new NativeRawHandleSet(0),
             true,
             0L,
             0L
@@ -21,6 +22,7 @@ public final class PinnedPoppedValueSequence implements PoppedValueSequence {
     private static final PinnedPoppedValueSequence EMPTY_VALUE = new PinnedPoppedValueSequence(
             null,
             new NativeListEntryRef[0],
+            new NativeRawHandleSet(0),
             false,
             0L,
             0L
@@ -28,6 +30,7 @@ public final class PinnedPoppedValueSequence implements PoppedValueSequence {
 
     private final NativeAllocator allocator;
     private final NativeListEntryRef[] entries;
+    private final NativeRawHandleSet pinnedRawHandles;
     private final boolean nullValue;
     private final long encodedElementBytes;
     private final long retainedMemoryBytes;
@@ -36,12 +39,14 @@ public final class PinnedPoppedValueSequence implements PoppedValueSequence {
     private PinnedPoppedValueSequence(
             NativeAllocator allocator,
             NativeListEntryRef[] entries,
+            NativeRawHandleSet pinnedRawHandles,
             boolean nullValue,
             long encodedElementBytes,
             long retainedMemoryBytes
     ) {
         this.allocator = allocator;
         this.entries = Objects.requireNonNull(entries, "entries").clone();
+        this.pinnedRawHandles = Objects.requireNonNull(pinnedRawHandles, "pinnedRawHandles");
         this.nullValue = nullValue;
         this.encodedElementBytes = encodedElementBytes;
         this.retainedMemoryBytes = retainedMemoryBytes;
@@ -60,34 +65,17 @@ public final class PinnedPoppedValueSequence implements PoppedValueSequence {
         Objects.requireNonNull(entries, "entries");
         long encoded = 0L;
         long retained = 0L;
-        boolean[] pinned = new boolean[entries.length];
-        try {
-            for (int index = 0; index < entries.length; index++) {
-                NativeListEntryRef entry = entries[index];
-                Objects.requireNonNull(entry, "entry");
-                NativeHandle handle = entry.handle();
-                if (handle != null) {
-                    allocator.pin(handle);
-                    pinned[index] = true;
-                }
-                encoded = addSaturating(encoded, entry.encodedElementBytes());
+        NativeRawHandleSet pinnedRawHandles = new NativeRawHandleSet(entries.length);
+        for (NativeListEntryRef entry : entries) {
+            Objects.requireNonNull(entry, "entry");
+            NativeHandle handle = entry.handle();
+            if (handle != null && pinnedRawHandles.add(handle.raw())) {
                 retained = addSaturating(retained, entry.retainedBytes());
             }
-            return new PinnedPoppedValueSequence(allocator, entries, false, encoded, retained);
-        } catch (RuntimeException | Error failure) {
-            for (int index = 0; index < entries.length; index++) {
-                if (!pinned[index]) {
-                    continue;
-                }
-                NativeHandle handle = entries[index].handle();
-                try {
-                    allocator.unpin(handle);
-                } catch (RuntimeException | Error unpinFailure) {
-                    failure.addSuppressed(unpinFailure);
-                }
-            }
-            throw failure;
+            encoded = addSaturating(encoded, entry.encodedElementBytes());
         }
+        pinnedRawHandles.pinAll(allocator);
+        return new PinnedPoppedValueSequence(allocator, entries, pinnedRawHandles, false, encoded, retained);
     }
 
     @Override
@@ -119,7 +107,12 @@ public final class PinnedPoppedValueSequence implements PoppedValueSequence {
                 out.bulkStringNull();
                 continue;
             }
-            out.bulkString(NativeBytesSlice.retained(allocator, handle, 0, entry.payloadLength()));
+            out.bulkString(NativeBytesSlice.retained(
+                    allocator,
+                    handle,
+                    entry.payloadOffset(),
+                    entry.payloadLength()
+            ));
         }
     }
 
@@ -128,31 +121,7 @@ public final class PinnedPoppedValueSequence implements PoppedValueSequence {
         if (allocator == null || !closed.compareAndSet(false, true)) {
             return;
         }
-        Throwable failure = null;
-        for (NativeListEntryRef entry : entries) {
-            NativeHandle handle = entry.handle();
-            if (handle == null) {
-                continue;
-            }
-            try {
-                allocator.unpin(handle);
-            } catch (RuntimeException | Error next) {
-                if (failure == null) {
-                    failure = next;
-                } else {
-                    failure.addSuppressed(next);
-                }
-            }
-        }
-        if (failure != null) {
-            if (failure instanceof RuntimeException runtimeException) {
-                throw runtimeException;
-            }
-            if (failure instanceof Error error) {
-                throw error;
-            }
-            throw new AssertionError("unexpected unpin failure type", failure);
-        }
+        pinnedRawHandles.unpinAll(allocator);
     }
 
     private static long addSaturating(long left, long right) {

@@ -72,11 +72,23 @@ DB hot path 保存的是 stable handle raw value，不是 physical address，也
 
 ## Object table
 
-`YierdisNativeObjectTable` 是 handle 到对象 metadata 的权威表。每个 slot 记录：
+`YierdisNativeObjectTable` 是 handle 到对象 metadata 的权威表。当前每个 slot 固定为 `36 bytes`：page offset、size、page id、两个 epoch 和 pin count 使用独立字段；generation、domain、kind、flags、page class、state 打包在一个 32-bit word 中。capacity 不在 slot 内重复保存，而是按 page id、offset 和 page class 从 small-page size class 或 span descriptor 派生；allocate、realloc location update 和 defrag publish 都会校验调用方声明的 capacity 与 descriptor 一致。owner shard id 属于整张 object table，也不在每个 slot 重复保存。
 
-- physical packed address
+```text
+offset  0: page offset       (int32)
+offset  4: logical size      (int32)
+offset  8: page id           (int32)
+offset 12: packed metadata   (int32)
+offset 16: alloc epoch       (int64)
+offset 24: free epoch        (int64)
+offset 32: pin count         (int32)
+```
+
+每个 slot 的逻辑信息包括：
+
+- page-local physical offset
 - logical size
-- capacity
+- 由 page/span descriptor 派生的 capacity
 - segment id
 - page class
 - generation
@@ -84,7 +96,7 @@ DB hot path 保存的是 stable handle raw value，不是 physical address，也
 - kind code
 - flags
 - pin count
-- owner shard id
+- object table 继承的 owner shard id
 - alloc epoch
 - free epoch
 - state
@@ -282,6 +294,8 @@ Type roots
 48  LRU/LFU                  8 bytes
 ```
 
+layout 中的 `version` 是为兼容既有格式保留的字段名，当前值是 entry accounting estimate。它不是 mutation version 或乐观锁序号；prepared mutation 的 stale-plan 校验依赖 source adapter/table、generation、size、raw handle 和旧 value 等显式条件。该 estimate 也不保存 collection 的完整 heap topology，后者由各 adapter 的 `heapBytes()` / staged growth 单独计量。
+
 `StringRoot` 使用 `STRING_BYTES`。`set` 分配新 object，`append` / growth 通过 `realloc(..., PRESERVE_PREFIX)` 保持 handle 稳定，读写时短暂 resolve `NativeObjectView`。
 
 collection root records 使用：
@@ -291,9 +305,26 @@ collection root records 使用：
 - set：`SET_ROOT`
 - zset：`ZSET_ROOT`
 
-`NativeCollectionRootTable` 为 root record 分配 8 bytes，写入自己的 handle raw value，并用 `Map<Long, adapter>` 把 stable native root identity 映射到当前 Java adapter。root record 进入 allocator stats、native handle graph 和 defrag traversal。
+`NativeCollectionRootTable` 为 root record 分配 8 bytes 并写入自己的 handle raw value。Java adapter registry 是按 allocator slot id 直接寻址的 segmented `Object[][]`，不是 `Map<Long, adapter>`：每段 4096 个槽位，`segmentIndex = (slotId - 1) / 4096`，槽内 `AdapterSlot` 再比较完整 raw handle，防止 slot 复用后的旧 generation 命中新 adapter。目录使用 `Object[][]` 和 `int[]` live counts，按需扩展；空段会释放，其 directory、slot 和 adapter heap bytes 都进入 root table 计量。
 
-collection internals also use allocator-backed native handles. List quicklist metadata uses `LIST_NODE`; list payload bytes use `LISTPACK_BYTES`; hash, set, and zset member bytes use their type-specific storage object kinds. These handles are exposed through collection traversal hooks so graph validation and defrag maintenance see the same live native object graph that reads use.
+root identity stable 不代表 payload physical block 或 Java topology 不变。现有 List staged mutation、existing ZSet `ZADD` 和 `HASH_HT` HSET delta 保持 `EntryRecord.valueHandle()` 不变，在原 adapter 内发布新 block/topology；packed Hash 和当前 Set 的 replacement 路径仍可能发布新 root。无论哪条路径，DB graph 都不能缓存 adapter 地址或 resolved native address。
+
+collection 使用“native payload + heap topology”的混合布局：
+
+- `NativeListpack` 把全部变长条目编码到单个连续 `LISTPACK_BYTES` block，heap 只保留 `int[] entryOffsets`。普通扩容通过 `realloc` 保持 block handle；detached build 一次申请最终大小，避免 prepare 后再次 native allocation。
+- `NativeByteMap` 的 table topology 是 `byte[] states`、`int[] hashes`、`long[] keyRawHandles`，value slots 按用途选择 `long[]`、`Object[]` 或 constant。rehash replacement 复用已有 key raw handles，只替换 heap arrays。
+- Set intset 使用 `short[]` / `int[]` / `long[]`；ZSet skiplist 的排序 topology 使用 Java nodes、`Node[] forward` 和 `int[] span`。因此“primitive heap topology”表示索引和紧凑 metadata 优先放在 primitive/raw-handle arrays 中，不表示所有算法节点都已消除 Java object reference。
+- List quicklist metadata 使用 `LIST_NODE`，packed payload 使用 `LISTPACK_BYTES`；hash、set、zset 的独立 bytes 使用各自 object kind。只有 allocator-owned handles 进入 native handle graph 和 active defrag traversal，heap topology 由 adapter 自己计量和验证。
+
+ZSet skiplist 的 member payload 是 canonical ownership 的典型边界。每个 member 只分配一个 `ZSET_MEMBER_BYTES`，skiplist node 持有它，`byMember` 使用 borrowed-key `NativeByteMap` 索引同一 raw handle。borrowed map 的 remove/clear/close 只移除索引槽位，不 free member；`memberStore` 是唯一 owner。Hash/Set 的 owning-key map 则在新增 key 时分配 payload，并在 remove/clear/close 或 prepared abort 时释放。
+
+## Prepared mutation 与计费边界
+
+增长型 collection 写入先 reserve upper bound，再打开 `NativeAllocationScope` 并进入 prepare。prepare 负责 native payload、root、replacement table、listpack offset、skiplist node/path 等所有可能失败的分配，并保存 source adapter/table、generation、size、raw handle 和旧 value 条件。commit 前重新校验这些条件；需要 commit stream 时也在此时预留 publication capacity。已 staged 的 commit 只发布数组引用、槽位或节点链接，不再申请 native payload。
+
+prepare 后的峰值 reservation 按 `NativeAllocationGrowth.effectiveBytes() + stagedNonNativeGrowthBytes()` reconcile。前者来自 allocation scope 实测的 allocator heap metadata、native metadata 和 data committed growth，后者覆盖 adapter segment、primitive arrays、Java node/path 和其他非 native topology。成功路径固定为 commit、allocation promote、logical ledger settle、commit-stream publish、release superseded，最后在启用 maxmemory 且 mutation 给出提示时尝试 trim empty pages。先发布新 graph 再释放旧 payload，保证 stable root、entry 和 borrowed index 在任一可见状态都只指向 live object。
+
+`actualDeltaBytes` 是发布并清理旧资源后的稳态逻辑增量，不是物理 snapshot。commit 开始前失败时，prepared resource、scope、stream reservation 和 ledger reservation 可以各自 abort/rollback；commit 开始后则必须走 post-commit settle/result-unknown，不能回收已经可能被可见 graph 引用的新 allocation。`shouldTrimNativePagesAfterCommit()` 只表示 superseded release 可能产生空页；是否真的减少 committed bytes 要结合 `MemoryReclaimResult` 并重新采样 owned `MemoryUsageSnapshot`。
 
 ## metrics
 

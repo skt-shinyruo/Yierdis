@@ -11,7 +11,7 @@ import java.nio.charset.StandardCharsets;
 public class RespHandshakeIntegrationTest {
     @Test
     public void hello3SwitchesConnectionToResp3() throws Exception {
-        ServerConfig config = ServerConfig.fromArgs(new String[]{"--port", "0"});
+        ServerConfig config = serverConfig();
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(config);
              Socket socket = new Socket("127.0.0.1", server.port())) {
             socket.setSoTimeout(3000);
@@ -32,7 +32,7 @@ public class RespHandshakeIntegrationTest {
 
     @Test
     public void hello2SetnameUnsupportedProtoAndAuthAreHandled() throws Exception {
-        ServerConfig config = ServerConfig.fromArgs(new String[]{"--port", "0"});
+        ServerConfig config = serverConfig();
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(config);
              Socket socket = new Socket("127.0.0.1", server.port())) {
             socket.setSoTimeout(3000);
@@ -63,7 +63,7 @@ public class RespHandshakeIntegrationTest {
 
     @Test
     public void clientSetinfoSetnameAndGetnameAreAccepted() throws Exception {
-        ServerConfig config = ServerConfig.fromArgs(new String[]{"--port", "0"});
+        ServerConfig config = serverConfig();
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(config);
              Socket socket = new Socket("127.0.0.1", server.port())) {
             socket.setSoTimeout(3000);
@@ -92,5 +92,12 @@ public class RespHandshakeIntegrationTest {
         byte[] buf = new byte[256];
         int n = in.read(buf);
         return new String(buf, 0, n, StandardCharsets.US_ASCII);
+    }
+
+    private static ServerConfig serverConfig() {
+        return ServerConfig.fromArgs(new String[]{
+                "--port", "0",
+                "--maxmemoryBytes", "0"
+        });
     }
 }

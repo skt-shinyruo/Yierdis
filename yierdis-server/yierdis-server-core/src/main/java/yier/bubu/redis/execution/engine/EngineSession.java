@@ -6,12 +6,16 @@ import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.DbIndexSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.ProtocolNegotiationSession;
+import yier.bubu.redis.execution.api.ReplyPlan;
+import yier.bubu.redis.execution.api.ReplyPlans;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.execution.api.TransactionSession;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -204,6 +208,24 @@ public final class EngineSession implements
         }
 
         @Override
+        public synchronized ReplyPlan planExecReply(
+                Function<? super ExecutionRequest, ReplyPlan> planner
+        ) {
+            Objects.requireNonNull(planner, "planner");
+            long encodedElementBytes = 0L;
+            long retainedSourceBytes = 0L;
+            for (ExecutionRequest request : queue) {
+                ReplyPlan child = planner.apply(request);
+                if (child == null || child.reserveMaximum()) {
+                    return ReplyPlan.maximum();
+                }
+                encodedElementBytes = saturatedAdd(encodedElementBytes, child.encodedUpperBoundBytes());
+                retainedSourceBytes = saturatedAdd(retainedSourceBytes, child.retainedSourceBytes());
+            }
+            return ReplyPlans.array(queue.size(), encodedElementBytes, retainedSourceBytes);
+        }
+
+        @Override
         public synchronized List<ExecutionRequest> drain() {
             ArrayList<ExecutionRequest> out = new ArrayList<>(queue);
             queue.clear();
@@ -225,6 +247,13 @@ public final class EngineSession implements
                 }
             }
             queue.clear();
+        }
+
+        private static long saturatedAdd(long left, long right) {
+            if (left < 0L || right < 0L || left > Long.MAX_VALUE - right) {
+                return Long.MAX_VALUE;
+            }
+            return left + right;
         }
     }
 }

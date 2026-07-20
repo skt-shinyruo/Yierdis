@@ -16,8 +16,7 @@ final class YierdisNativeObjectSegment implements AutoCloseable {
     YierdisNativeObjectSegment(
             YierdisFfmMemoryRuntime runtime,
             int segmentIndex,
-            int validSlots,
-            int ownerShardId
+            int validSlots
     ) {
         if (segmentIndex < 0) {
             throw new IllegalArgumentException("segmentIndex must be >= 0");
@@ -31,9 +30,11 @@ final class YierdisNativeObjectSegment implements AutoCloseable {
         );
         this.validSlots = validSlots;
         for (int offset = validSlots - 1; offset >= 0; offset--) {
-            writeInt(offset, YierdisNativeObjectTable.GENERATION_OFFSET, YierdisNativeObjectTable.INITIAL_GENERATION);
-            writeInt(offset, YierdisNativeObjectTable.OWNER_SHARD_ID_OFFSET, ownerShardId);
-            writeInt(offset, YierdisNativeObjectTable.STATE_OFFSET, YierdisNativeObjectTable.STATE_FREE);
+            writeInt(
+                    offset,
+                    YierdisNativeObjectTable.PACKED_METADATA_OFFSET,
+                    YierdisNativeObjectTable.initialPackedMetadata()
+            );
             freeStack[freeCount++] = offset;
         }
     }

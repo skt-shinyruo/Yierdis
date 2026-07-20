@@ -59,7 +59,7 @@ public final class CommandSupport {
 
     public CommandDb commandDb(CommandContext ctx) {
         java.util.Objects.requireNonNull(ctx, "ctx");
-        return commandDb.reset(dbRouter.dbFor(ctx.dbIndexSession()));
+        return commandDb.reset(dbRouter.dbFor(ctx.dbIndexSession()), ctx.mutationContext());
     }
 
     public int databases() {

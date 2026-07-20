@@ -3,6 +3,7 @@ package yier.bubu.redis.app.server;
 import picocli.CommandLine;
 import yier.bubu.redis.app.server.args.YierdisCliException;
 import yier.bubu.redis.app.server.args.YierdisServerArgs;
+import yier.bubu.redis.app.server.args.YierdisServerArgNames;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 
 import java.util.Objects;
@@ -22,7 +23,14 @@ final class ServerConfig {
         YierdisServerArgs parsed = new YierdisServerArgs();
         CommandLine cmd = new CommandLine(parsed);
         try {
-            cmd.parseArgs(args);
+            CommandLine.ParseResult parseResult = cmd.parseArgs(args);
+            if (!parsed.help && !parseResult.hasMatchedOption(YierdisServerArgNames.MAXMEMORY_BYTES)) {
+                throw new CommandLine.ParameterException(
+                        cmd,
+                        YierdisServerArgNames.MAXMEMORY_BYTES
+                                + " must be specified explicitly (use 0 to acknowledge unlimited memory)"
+                );
+            }
         } catch (CommandLine.ParameterException e) {
             System.err.println(e.getMessage());
             cmd.usage(System.err);

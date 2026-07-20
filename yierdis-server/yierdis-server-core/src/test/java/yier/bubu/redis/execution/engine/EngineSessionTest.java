@@ -5,6 +5,7 @@ import org.junit.Test;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.TransactionState;
 
 import java.lang.reflect.Field;
@@ -140,6 +141,29 @@ public class EngineSessionTest {
 
         session.transaction().discard();
         Assert.assertEquals(1, state.finalReleases.get());
+    }
+
+    @Test
+    public void transactionPlansExecEnvelopeWithoutDrainingOwnedRequests() {
+        EngineSession session = new EngineSession(4, 64);
+        TransactionState tx = session.transaction();
+        tx.begin();
+        Assert.assertNull(tx.tryEnqueue(ByteArrayExecutionRequest.fromUtf8("FIRST", List.of())));
+        Assert.assertNull(tx.tryEnqueue(ByteArrayExecutionRequest.fromUtf8("SECOND", List.of())));
+
+        AtomicInteger index = new AtomicInteger();
+        ReplyPlan envelope = tx.planExecReply(request -> index.getAndIncrement() == 0
+                ? ReplyPlan.exact(5L, 2L)
+                : ReplyPlan.exact(7L, 3L));
+
+        Assert.assertEquals(ReplyPlan.exact(16L, 5L), envelope);
+        Assert.assertTrue(tx.active());
+        Assert.assertEquals(2, tx.size());
+        Assert.assertEquals(
+                ReplyPlan.maximum(),
+                tx.planExecReply(request -> ReplyPlan.maximum())
+        );
+        tx.discard();
     }
 
     @Test

@@ -92,12 +92,41 @@ read DB result
 | string/bitmap | `StringCommands` | `SET`、`GET`、`STRLEN`、`APPEND`、`SETBIT`、`GETBIT`、`BITCOUNT`、`INCR`、`DECR` |
 | HLL | `HllCommands` | `PFADD`、`PFCOUNT`、`PFMERGE` |
 | list | `ListCommands` | `LPUSH`、`RPUSH`、`LRANGE`、`LPOP`、`RPOP` |
-| hash | `HashCommands` | `HSET`、`HGET`、`HGETALL`、`HLEN`、`HDEL` |
-| set | `SetCommands` | `SADD`、`SREM`、`SMEMBERS`、`SISMEMBER`、`SCARD` |
-| zset | `ZSetCommands` | `ZADD`、`ZRANGE`、`ZREVRANGE`、`ZRANGEBYSCORE`、`ZREVRANGEBYSCORE`、`ZREMRANGEBYSCORE`、`ZREMRANGEBYRANK`、`ZREM` |
+| hash | `HashCommands` | `HSET`、`HGET`、`HGETALL`、`HLEN`、`HDEL`、`HSCAN` |
+| set | `SetCommands` | `SADD`、`SREM`、`SMEMBERS`、`SISMEMBER`、`SCARD`、`SSCAN` |
+| zset | `ZSetCommands` | `ZADD`、`ZRANGE`、`ZREVRANGE`、`ZRANGEBYSCORE`、`ZREVRANGEBYSCORE`、`ZREMRANGEBYSCORE`、`ZREMRANGEBYRANK`、`ZREM`、`ZSCAN` |
 | transaction | `TransactionCommands` | `MULTI`、`EXEC`、`DISCARD` |
 
 connection/server 命令更多操作连接态、握手兼容、server runtime 信息和执行框架；数据结构命令则通过 DB capability 修改或读取逻辑类型。
+
+## HSCAN、SSCAN 和 ZSCAN
+
+集合扫描命令复用 `CollectionScanCommandSupport` 的参数解析和回复写入：
+
+```text
+HSCAN key cursor [MATCH pattern] [COUNT count] [NOVALUES]
+SSCAN key cursor [MATCH pattern] [COUNT count]
+ZSCAN key cursor [MATCH pattern] [COUNT count]
+```
+
+`cursor` 应传入上一页返回的非负十进制游标；`0` 表示开始一次迭代，返回 `0` 表示本轮迭代结束。`MATCH` 使用 glob pattern，只匹配 hash field、set member 或 zset member，不匹配 hash value 或 zset score。`COUNT` 默认为 10，参数必须在 `1..Integer.MAX_VALUE` 内。选项可以按任意顺序出现；`NOVALUES` 只对 `HSCAN` 有效，启用后只返回 field。
+
+三条命令都返回两元素数组：第一个元素是 bulk string 形式的下一游标，第二个元素是 bulk string 数组。元素数组的形状分别是：
+
+- `HSCAN`：默认按 `field, value, ...` 交替排列；`NOVALUES` 模式只包含 field。
+- `SSCAN`：`member, ...`。
+- `ZSCAN`：按 `member, score, ...` 交替排列，score 使用 Redis 风格十进制文本。
+
+不存在的 key 返回游标 `0` 和空元素数组；存在但类型不匹配的 key 返回 `WRONGTYPE`。
+
+`COUNT` 是工作量和期望返回量的 hint，不是精确页大小。具体行为取决于内部编码：
+
+- `HASH_PACKED`、`SET_INTSET`、`ZSET_PACKED` 属于 compact 分支。游标为 `0` 时会过滤并物化全部匹配元素，一次返回且下一游标为 `0`，即使 `COUNT 1` 也可能返回整个集合；传入非零游标时返回空的终止页。这样可以避免 packed 数组删除、hash field 移位或 zset 改分重排破坏位置游标。
+- `HASH_HT`、`SET_HT` 以及 `ZSET_SKIPLIST` 的 member table 属于字典分支。实现按物理 slot 做有界扫描，单次匹配的逻辑 field/member 数为 `min(COUNT, 1024)`；slot budget、空槽和 `MATCH` 过滤都可能让实际返回量更少，甚至返回空数组但下一游标仍非零。`HSCAN` 和 `ZSCAN` 的 field/member 与附属 value/score 仍作为一组计入这个逻辑条目上限。
+
+字典分支不会复制整个集合。一次扫描只 pin 已选中的 native field/member/value handle，并把这些 pin 可能延迟回收的 native payload 纳入 reply retained-memory 预检；元素同步写入 `RedisReplyWriter` 后窗口立即关闭并 unpin。compact 分支则用稳定的 heap byte arrays 构造本页窗口，同样把窗口保留量计入 reply admission。
+
+这些游标提供的是 Redis 风格弱一致迭代，不是快照，也没有稳定顺序。迭代期间新增的元素可能出现也可能不出现，已经返回的元素可能因 rehash 或结构代变化再次出现，调用方应自行去重；删除或改分会影响后续可见结果。generation-aware 游标以可推进、可终止为目标，并在 generation token 未回绕时避免遗漏整个迭代期间始终存在的元素，但不能作为跨 DB、跨 key 删除重建或跨集合生命周期长期保存的书签。
 
 ## `StringCommands` 的主路线
 

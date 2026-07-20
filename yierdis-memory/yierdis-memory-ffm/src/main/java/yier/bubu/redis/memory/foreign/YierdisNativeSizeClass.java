@@ -25,6 +25,7 @@ public enum YierdisNativeSizeClass {
     B24576(24576),
     B32768(32768);
 
+    private static final YierdisNativeSizeClass[] CACHED_VALUES = values();
     public static final int MAX_SMALL_BYTES = B32768.bytes;
 
     private final int bytes;
@@ -45,11 +46,16 @@ public enum YierdisNativeSizeClass {
         if (requestedBytes <= 0 || requestedBytes > MAX_SMALL_BYTES) {
             throw new IllegalArgumentException("not a small size: " + requestedBytes);
         }
-        for (YierdisNativeSizeClass sizeClass : values()) {
+        // enum.values() 每次都会克隆数组；native allocation 热路径必须复用只读表。
+        for (YierdisNativeSizeClass sizeClass : CACHED_VALUES) {
             if (sizeClass.supports(requestedBytes)) {
                 return sizeClass;
             }
         }
         throw new IllegalArgumentException("not a small size: " + requestedBytes);
+    }
+
+    static int count() {
+        return CACHED_VALUES.length;
     }
 }

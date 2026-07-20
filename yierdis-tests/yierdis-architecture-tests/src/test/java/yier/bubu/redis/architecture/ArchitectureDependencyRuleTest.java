@@ -47,6 +47,15 @@ public class ArchitectureDependencyRuleTest {
     }
 
     @Test
+    public void maxmemoryAndMutationLedgerDependOnlyOnMemoryApi() {
+        assertOnlyMemoryApiDependencies(
+                "maxmemory native allocator boundary",
+                name -> name.equals("yier.bubu.redis.storage.memory.YierdisDbMaxmemorySupport")
+                        || name.startsWith("yier.bubu.redis.storage.memory.internal.ledger.")
+        );
+    }
+
+    @Test
     public void executorCoreDoesNotDependOnCommandStorageRuntimeProtocolOrNetty() {
         assertNoDependencies(
                 "executor-core boundary",
@@ -83,11 +92,13 @@ public class ArchitectureDependencyRuleTest {
             List<String> forbiddenPrefixes
     ) {
         List<String> offenders = new ArrayList<>();
+        int matchedOrigins = 0;
         for (JavaClass origin : PRODUCTION_CLASSES) {
             String originName = origin.getName();
             if (!originMatcher.test(originName)) {
                 continue;
             }
+            matchedOrigins++;
             for (Dependency dependency : origin.getDirectDependenciesFromSelf()) {
                 String targetName = dependency.getTargetClass().getName();
                 for (String forbiddenPrefix : forbiddenPrefixes) {
@@ -97,6 +108,31 @@ public class ArchitectureDependencyRuleTest {
                 }
             }
         }
+        Assert.assertTrue(ruleName + " did not match any production classes", matchedOrigins > 0);
+        Assert.assertTrue(String.join("\n", offenders), offenders.isEmpty());
+    }
+
+    private static void assertOnlyMemoryApiDependencies(
+            String ruleName,
+            Predicate<String> originMatcher
+    ) {
+        List<String> offenders = new ArrayList<>();
+        int matchedOrigins = 0;
+        for (JavaClass origin : PRODUCTION_CLASSES) {
+            String originName = origin.getName();
+            if (!originMatcher.test(originName)) {
+                continue;
+            }
+            matchedOrigins++;
+            for (Dependency dependency : origin.getDirectDependenciesFromSelf()) {
+                String targetName = dependency.getTargetClass().getName();
+                if (targetName.startsWith("yier.bubu.redis.memory.")
+                        && !targetName.startsWith("yier.bubu.redis.memory.api.")) {
+                    offenders.add(ruleName + ": " + originName + " -> " + targetName);
+                }
+            }
+        }
+        Assert.assertTrue(ruleName + " did not match any production classes", matchedOrigins > 0);
         Assert.assertTrue(String.join("\n", offenders), offenders.isEmpty());
     }
 }

@@ -10,9 +10,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
-import yier.bubu.redis.common.command.CommandRecordScope;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
-import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.integration.command.TestCommandProcessors;
 import yier.bubu.redis.runtime.api.YierdisChangeKind;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
@@ -229,10 +227,7 @@ public class CommitStreamExpirationEvictionTest {
     }
 
     private static ReplyObject executeScoped(FastTestClient client, List<byte[]> command) {
-        ExecutionRequest request = ByteArrayExecutionRequest.copyOf(command);
-        try (CommandRecordScope.Scope ignored = CommandRecordScope.open(request)) {
-            return client.execute(request);
-        }
+        return client.execute(ByteArrayExecutionRequest.copyOf(command));
     }
 
     private static void awaitReservedEvents(YierdisInstance instance, long expected) throws InterruptedException {

@@ -19,7 +19,9 @@ public class RedisBenchmarkRealServerTest {
     @Test(timeout = 60_000L)
     public void allOfficialCasesRunOrReportUnsupportedAgainstRealYierdis() throws Exception {
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
-                "--port", "0", "--noCleanup"
+                "--port", "0",
+                "--maxmemoryBytes", "0",
+                "--noCleanup"
         )) {
             BenchmarkConfig config = new BenchmarkConfig(
                     "127.0.0.1",

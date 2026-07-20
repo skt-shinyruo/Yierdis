@@ -6,7 +6,7 @@
 
 `YierdisDbMemoryLedger` 维护两份数字：
 
-- `usedBytes`：已经提交的真实占用。
+- `usedBytes`：按已提交 mutation 的 `actualDeltaBytes` 增减的逻辑账本，不是 allocator/JVM 的实时物理占用。
 - `reservedBytes`：预算已通过、但 mutation 还没 commit/rollback 的窗口。
 
 `YierdisDbMemoryReporter.memoryStats()` 会把它们暴露成：
@@ -15,15 +15,18 @@
 - `ledger_reserved_bytes`
 - `effective_used_bytes_for_maxmemory`
 
-其中 `effective_used_bytes_for_maxmemory` 不是单纯的 `usedBytes + reservedBytes` 视角，而是“参与 maxmemory 判断的 used 口径”再加 reservation。`usedBytesForMaxmemory()` 本身也不只是 ledger：
+enforcement 不把 ledger `usedBytes`、native counter 和 TTL estimate 再拼成一套数字。每个 DB 直接报告 owned `MemoryUsageSnapshot`，物理口径固定为：
 
-- 以 ledger `usedBytes` 为基线；
-- 按部署模式决定是否把 native/off-heap usage 算进去；
-- 再按 TTL 条目数追加 expire index 的稳定估算。
+```text
+usedBytesForMaxmemory
+  = heapEstimatedBytes
+  + nativeMetadataCommittedBytes
+  + nativeDataCommittedBytes
+```
 
-所以 `MEMORY STATS` 里的 `used_bytes_for_maxmemory` 解释的是 enforcement 口径，而不是“所有内部计数器里挑一个字段直接打印”。
+expire index 和 collection topology 已由各自组件进入这个 owned snapshot，不能再按 TTL 条目数重复加一遍。`nativeDataLiveBytes` 和 `nativeReclaimableBytes` 是诊断维度，不从 committed footprint 中扣除。`MEMORY STATS` 的 `used_bytes_for_maxmemory` 就是这份物理快照；`effective_used_bytes_for_maxmemory` 再加 ledger `reservedBytes`，用于展示已批准但尚未 settle 的预算窗口。
 
-## `YierdisDbMutationExecutor` 为什么先 reserve 再 apply
+## `YierdisDbMutationExecutor` 为什么先 reserve 再 prepare
 
 标准写路径是：
 
@@ -31,8 +34,16 @@
 estimate upper bound
   -> YierdisDbMutationExecutor.execute(plan)
      -> ledger.reserve(upperBound)
-     -> plan.apply()
+     -> NativeAllocationScope.begin()
+     -> plan.prepare()
+     -> ledger.reconcile(preparedPeak)
+     -> commitStream.reserve() when required
+     -> prepared.commit()
+     -> allocationScope.promote()
      -> ledger.commit(actualDelta)
+     -> commitStream.publish()
+     -> prepared.releaseSuperseded()
+     -> optional native page trim
 ```
 
 这样做的原因是 DB mutation 经常需要“先分配、后知道实际变化量”：
@@ -42,15 +53,14 @@ estimate upper bound
 - collection 或 string 可能触发编码升级；
 - 覆盖写可能最终是 shrink、no-op 或负 delta。
 
-`upperBoundBytes()` 解决“能不能先让这次写动起来”，`actualDeltaBytes()` 解决“最后到底长了多少/缩了多少”。`MutationExecutorReservationTest` 覆盖了两个关键点：
+`upperBoundBytes()` 解决“能不能先让这次写动起来”，prepare 后实测的 native growth 加 staged heap topology 用来收窄 reservation，`actualDeltaBytes()` 解决“最后到底长了多少/缩了多少”。需要 commit stream 时必须在 commit 前 reserve publication capacity；提交后的固定顺序是 allocation promote、ledger settle、stream publish、release superseded，最后才根据提示尝试 trim。
 
-- 预算不过关时，`apply()` 根本不会执行；
-- `apply()` 自己抛异常时，reservation 会 rollback，不会污染下一次写入。
+`MutationExecutorReservationTest` 覆盖了两个关键点：
 
-执行器还负责统一错误映射：
+- 预算不过关时，`prepare()` 根本不会执行；
+- commit 前 prepare/校验失败时，prepared resources、allocation scope、stream reservation 和 ledger reservation 都会 abort/rollback，不会污染下一次写入。
 
-- ledger / coordinator 的 OOM 映射成 Redis 风格 `OOM command not allowed when used memory > 'maxmemory'.`
-- `OffHeapOutOfMemoryException` 映射成 `OOM off-heap memory limit exceeded`
+`prepared.commit()` 开始之后不再存在“确认未生效”的安全回滚前提。此后的异常会触发 post-commit settle：executor best-effort promote allocation、settle ledger、release superseded resources，并把未完成的 stream reservation 标为 commit 后失败；DB 进入 degraded，调用方收到 result-unknown，而不是把异常简单映射成一次确定未执行的 OOM。只有 commit 开始前的 capacity rejection 才能安全返回 Redis 风格 OOM。
 
 ## per-DB scope 的判断顺序
 
@@ -59,18 +69,16 @@ estimate upper bound
 1. 先做 `cleanupExpired.run()`，让刚释放的空间参与同一次预算判定。
 2. 如果 `estimatedExtraBytes > maxmemoryBytes`，直接 OOM。
 3. 计算本次写入前必须压到的目标：`limit = maxmemoryBytes - estimatedExtraBytes`。
-4. 如果 `usedBytesForMaxmemory() > limit`：
-   - `noeviction`：增长型写入直接拒绝；
-   - `estimatedExtraBytes == 0`：返回 noop reservation，让 shrink/no-growth 路径还能执行；
-   - 其他策略：调用 `YierdisDbMaxmemorySupport.evictUntilUnder(limit)`。
-5. 淘汰后再次检查；仍超限且本次写入会增长时，OOM。
-6. 只有通过这些检查后，才增加 `reservedBytes`。
+4. 如果 owned physical snapshot 超过 `limit`，调用 `YierdisDbMaxmemorySupport.evictUntilUnder(limit)`。该入口先 trim empty native pages，再重新采样 snapshot。
+5. 重新采样后仍超限时，`noeviction` 不选 victim；增长型写入 OOM，`estimatedExtraBytes == 0` 返回 noop reservation。其他策略继续淘汰，并在每次释放后 trim/resnapshot。
+6. 淘汰结束后再次采样；仍超限且本次写入会增长时，OOM。
+7. 只有通过这些检查后，才增加 `reservedBytes`。
 
 这解释了几个容易混淆的现象：
 
 - 覆盖写如果最终缩小 value，可以在“已经顶到 maxmemory”时成功。
 - 纯 maintenance enforcement 会复用 `reserve(0)`，而不是另起一套判断口径。
-- `usedBytesForMaxmemory()` 比 ledger `usedBytes` 更贴近真正的拒写条件，因为它把 TTL/native 口径也带进来了。
+- `usedBytesForMaxmemory()` 是 owned physical snapshot 的投影；ledger `usedBytes` 只负责 mutation delta 对账，不能替代拒写采样。
 
 ## global scope 与 governor 协调
 
@@ -78,16 +86,16 @@ global scope 下，本地 ledger 不自己算跨 DB 预算，而是先委托 `Yi
 
 governor 的主线是：
 
-1. 对所有 participant 执行 `cleanupExpired(nowMillis)`。
+1. 对所有 participant 执行 `cleanupExpired(nowMillis)`，再按 budget 轮转调用 `trimMemory(...)`。
 2. 计算本次写入前的目标线 `limit = maxmemoryBytes - estimatedExtraBytes`。
-3. `globalUsedBytesForMaxmemory() <= limit` 时直接通过。
-4. `noeviction` 只允许不增长的维护路径继续。
-5. 需要淘汰时，跨 participant 挑 victim，直到全局 usage 压回目标线，或在时间/尝试预算内停止。
+3. 汇总所有 participant 最新的 owned physical snapshots；总量不超过 `limit` 时直接通过。
+4. `noeviction` 在 trim/resnapshot 后仍超限时，只允许不增长的维护路径继续。
+5. 需要淘汰时，跨 participant 挑 victim；每次释放后继续 trim 并汇总新 snapshots，直到全局 usage 压回目标线，或在时间/尝试预算内停止。
 
 这里有两个跨 DB 约束：
 
 - participant 是每个 DB 暴露出来的 `YierdisDbMaxmemorySupport`，governor 只能通过 SPI 观察和驱动，不直接越过 DB API。
-- shared usage source 表示实例级共享 native/off-heap usage，只加一次，避免 shared runtime 在每个 DB 上重复计数。
+- governor 只相加每个 DB 独占的 `MemoryUsageSnapshot`。shared runtime 的 `usedBytes` counter 不进入全局 enforcement，它只用于 region lifecycle 和 native leak 诊断。
 
 maintenance 时的顺序由 `YierdisInstanceRuntimeAccess.maintenanceTick()` 固定：
 
@@ -101,16 +109,18 @@ maintenance 时的顺序由 `YierdisInstanceRuntimeAccess.maintenanceTick()` 固
 
 三种策略的差异不只在“挑谁删”：
 
-- `noeviction`：不挑 victim；增长型写入直接报 OOM。
+- `noeviction`：不挑 victim；压力路径仍会先 trim empty pages 并重新采样，确认 committed footprint 仍超限后才拒绝增长型写入。
 - `allkeys-random`：单 DB 视角下用 `randomKeyHandle()` 选 key；global governor 先随机 participant，再向它要 candidate。
 - `allkeys-lru`：按 `EntryRecord.lruOrLfu()` 选择最小值。样本数覆盖全部 key 时，单 DB 和 global 两层都会退化成完整扫描，减少测试和小 keyspace 下的随机抖动。
 
 还有两条收敛规则：
 
 - cleanup 先于 eviction。候选 key 如果已经过期，会先走 `removeIfExpired(...)`，它算 `EXPIRED`，不是 `EVICTED`。
-- 真正 eviction 时，`YierdisDbMaxmemorySupport.removeRecord(...)` 会先复制稳定 key bytes，再移除 TTL index、删除 entry、扣减 used bytes，最后发 synthetic `DEL key`，`kind=EVICTED`。
+- 真正 eviction 时，`YierdisDbMaxmemorySupport` 调用 `YierdisDbInternals.evict(...)`；reclamation plan 在 prepare 阶段复制稳定 key bytes，commit 时移除 TTL index 和 entry，随后结算 ledger，并通过已预留的 commit stream 发布 synthetic `DEL key`，`kind=EVICTED`。
 
 所以“淘汰”和“过期”都会删除 key，但 change-event kind、触发原因和测试入口不同。
+
+`PreparedDbMutation.shouldTrimNativePagesAfterCommit()` 和 snapshot 的 `nativeReclaimableBytes` 都只是回收候选提示，不表示相应字节已经离开 committed footprint。`trimMemory(...)` 返回的 `MemoryReclaimResult` 记录本次检查、实际回收和停止原因；admission 仍要在 trim 后重新采样 owned snapshot，不能直接用 reclaimable estimate 或一次 trim hint 推导“已经低于 maxmemory”。
 
 ## 仍然无法写入时的错误路径
 
@@ -118,14 +128,14 @@ maintenance 时的顺序由 `YierdisInstanceRuntimeAccess.maintenanceTick()` 固
 
 - cleanup 没释放出足够空间；
 - eviction policy 在预算内找不到可删的 victim；
-- shared/global usage 仍高于目标线；
-- `apply()` 过程中命中了 native allocator OOM。
+- participant owned snapshots 的全局总量仍高于目标线；
+- prepare 阶段命中了 native allocator capacity limit。
 
 这些失败路径的约束是：
 
-- 增长型写入最终必须返回稳定 OOM 文案；
-- 失败前不能把半成品 mutation 留在 DB 内部；
-- reservation 必须 rollback，避免后续写入被“幽灵 reserved bytes”污染。
+- commit 开始前被 admission/capacity 拒绝的增长型写入必须返回稳定 OOM 文案；
+- commit 开始前不能把半成品 mutation 留在 DB 内部，reservation 必须 rollback；
+- commit 开始后的失败必须走 post-commit settle/result-unknown，不能宣称 mutation 一定未发生。
 
 TTL index、random/LRU eviction candidates 和 synthetic delete 都使用 native-backed key handles。删除前复制稳定 key bytes 是为了 change event 和 output ownership，不表示 DB 内部仍有 heap keyspace。
 

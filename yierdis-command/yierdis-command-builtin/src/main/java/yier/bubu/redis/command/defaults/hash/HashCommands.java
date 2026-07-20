@@ -9,6 +9,7 @@ import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
+import yier.bubu.redis.command.defaults.CollectionScanCommandSupport;
 import yier.bubu.redis.command.defaults.CommandSupport;
 
 import yier.bubu.redis.storage.api.result.BulkStringMapMetrics;
@@ -39,6 +40,12 @@ public final class HashCommands implements CommandModule {
         registration.register("HGETALL", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exactRequest(2, "hgetall"), this::hgetall);
         registration.register("HLEN", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exactRequest(2, "hlen"), this::hlen);
         registration.register("HDEL", CommandDescriptor.of(-3, 1, 1, 1), CommandParsers.minRequest(3, "hdel"), this::hdel);
+        registration.register(
+                "HSCAN",
+                CommandDescriptor.of(-3, 1, 1, 1),
+                args -> CollectionScanCommandSupport.parse(args, "hscan", true),
+                this::hscan
+        );
     }
 
     private void hset(ArgReader args, CommandContext ctx) {
@@ -104,5 +111,18 @@ public final class HashCommands implements CommandModule {
         } finally {
             support.clearScratch(fieldsLen);
         }
+    }
+
+    private void hscan(CollectionScanCommandSupport.Arguments args, CommandContext ctx) {
+        CollectionScanCommandSupport.writeReply(
+                ctx.out(),
+                support.commandDb(ctx).reads().hashes().hscan(
+                        args.key(),
+                        args.cursor(),
+                        args.match(),
+                        args.count(),
+                        args.noValues()
+                )
+        );
     }
 }

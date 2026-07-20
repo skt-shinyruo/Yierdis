@@ -46,6 +46,6 @@ public final class CommandRegistries {
         if (registry == null) {
             throw new NullPointerException("registry");
         }
-        new TransactionCommands(replayer).register(registry);
+        new TransactionCommands(replayer, registry::replyPlan).register(registry);
     }
 }

@@ -175,10 +175,20 @@ public final class YierdisDbComponentFactory {
                 memoryReporter,
                 introspection,
                 new YierdisDbReads(stringOps, hashOps, listOps, setOps, zsetOps, hllOps, keyspaceOps, ttlOps),
-                new YierdisDbWrites(stringOps, hashOps, listOps, setOps, zsetOps, hllOps, keyspaceOps, ttlOps),
+                new YierdisDbWrites(
+                        internals,
+                        stringOps,
+                        hashOps,
+                        listOps,
+                        setOps,
+                        zsetOps,
+                        hllOps,
+                        keyspaceOps,
+                        ttlOps
+                ),
                 new YierdisDbExpirationManager(expirationSupport, health),
                 new YierdisDbMemoryOps(memoryReporter, introspection),
-                new YierdisDbLifecycleOps(maintenance::flushDb),
+                new YierdisDbLifecycleOps(owner::checkThread, maintenance::flushDb),
                 maintenance
         );
     }

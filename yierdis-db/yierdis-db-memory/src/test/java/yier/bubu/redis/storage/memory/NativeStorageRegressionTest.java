@@ -488,25 +488,21 @@ public class NativeStorageRegressionTest {
     }
 
     @Test
-    public void defaultSharedNativeSlotCapacityStillOverflowsAroundNinetyThousandStringKeys() {
+    public void defaultSharedNativeSlotCapacityAutomaticallyGrowsForNinetyThousandStringKeys() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-string-slot-capacity-default")) {
             YierdisDb db = createNativeRegressionDb(runtime, 0, MaxmemoryPolicy.NOEVICTION);
             db.bindToCurrentThread();
             int keyCount = 90_000;
             try {
-                try {
-                    for (int i = 0; i < keyCount; i++) {
-                        Assert.assertTrue(db.writes().strings().setString(
-                                b("slot:string:" + i),
-                                b("v"),
-                                SetMode.NORMAL,
-                                null
-                        ).value());
-                    }
-                    Assert.fail("expected default shared native slot capacity to overflow before 90k string keys");
-                } catch (YierdisCommandException e) {
-                    Assert.assertEquals(MaxmemoryErrors.OOM_ERR, e.getMessage());
+                for (int i = 0; i < keyCount; i++) {
+                    Assert.assertTrue(db.writes().strings().setString(
+                            b("slot:string:" + i),
+                            b("v"),
+                            SetMode.NORMAL,
+                            null
+                    ).value());
                 }
+                Assert.assertEquals(keyCount, db.size());
             } finally {
                 db.shutdown();
             }

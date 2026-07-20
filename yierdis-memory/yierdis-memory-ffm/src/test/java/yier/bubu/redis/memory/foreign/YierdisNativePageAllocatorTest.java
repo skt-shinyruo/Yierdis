@@ -167,6 +167,62 @@ public class YierdisNativePageAllocatorTest {
     }
 
     @Test
+    public void sizeClassLookupDoesNotCloneEnumValuesOnTheAllocationPath() {
+        com.sun.management.ThreadMXBean bean = allocatedBytesBean();
+        long checksum = 0L;
+        for (int index = 0; index < 10_000; index++) {
+            checksum += YierdisNativeSizeClass.forSize(1 + index % 32_768).bytes();
+        }
+
+        long before = bean.getThreadAllocatedBytes(Thread.currentThread().threadId());
+        for (int index = 0; index < 100_000; index++) {
+            checksum += YierdisNativeSizeClass.forSize(1 + index % 32_768).bytes();
+        }
+        long allocatedBytes = bean.getThreadAllocatedBytes(Thread.currentThread().threadId()) - before;
+
+        Assert.assertNotEquals(0L, checksum);
+        Assert.assertTrue("size-class lookup allocated " + allocatedBytes + " bytes", allocatedBytes < 4_096L);
+    }
+
+    @Test
+    public void resolvesCapacityFromPageAndSpanDescriptors() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-capacity-resolver");
+             YierdisNativePageAllocator allocator = new YierdisNativePageAllocator(runtime)) {
+            YierdisNativeBlock small = allocator.allocate(17);
+            YierdisNativeBlock span = allocator.allocate(70_000);
+            try {
+                Assert.assertEquals(
+                        small.capacity(),
+                        allocator.resolveCapacity(
+                                small.pageId(),
+                                small.pageOffset(),
+                                small.pageClass().ordinal()
+                        )
+                );
+                Assert.assertEquals(
+                        span.capacity(),
+                        allocator.resolveCapacity(
+                                span.pageId(),
+                                span.pageOffset(),
+                                span.pageClass().ordinal()
+                        )
+                );
+                Assert.assertThrows(
+                        IllegalStateException.class,
+                        () -> allocator.resolveCapacity(
+                                span.pageId(),
+                                1,
+                                span.pageClass().ordinal()
+                        )
+                );
+            } finally {
+                small.close();
+                span.close();
+            }
+        }
+    }
+
+    @Test
     public void smallAllocationsNeverCrossPageBoundary() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-page-boundary");
              YierdisNativePageAllocator allocator = new YierdisNativePageAllocator(runtime)) {

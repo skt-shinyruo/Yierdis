@@ -142,6 +142,9 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                             ttlMutation,
                             oldValue
                     );
+                    if (replacementCanReleaseNativePages(current, stored)) {
+                        prepared.requestNativePageTrimAfterCommit();
+                    }
                     oldValueOwnedByPreparedMutation = true;
                     staged = null;
                     stored = null;
@@ -211,6 +214,9 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                         requireString(current);
                         byte[] before = copyStringBytes(current);
                         int beforeLen = before.length;
+                        if (suffix.length == 0) {
+                            return preparedNoEntry(WriteResult.unchanged((long) beforeLen), MutationOutcome.NONE);
+                        }
                         ensureMaxStringLength(Math.addExact(beforeLen, suffix.length));
                         int newLen = beforeLen + suffix.length;
                         ValueHandle handle = requireStringHandle(current);
@@ -249,6 +255,9 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                             true,
                             PreparedTtlMutation.NONE
                     );
+                    if (replacementCanReleaseNativePages(current, stored)) {
+                        prepared.requestNativePageTrimAfterCommit();
+                    }
                     staged = null;
                     stored = null;
                     return prepared;
@@ -306,6 +315,9 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     }
 
                     int oldBit = getBit(before, offset);
+                    if (existed && oldBit == value && before.length >= requiredLen) {
+                        return preparedNoEntry(WriteResult.unchanged(oldBit), MutationOutcome.NONE);
+                    }
                     byte[] replacement = before.length >= requiredLen
                             ? Arrays.copyOf(before, before.length)
                             : Arrays.copyOf(before, requiredLen);
@@ -340,6 +352,9 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                             true,
                             PreparedTtlMutation.NONE
                     );
+                    if (replacementCanReleaseNativePages(current, stored)) {
+                        prepared.requestNativePageTrimAfterCommit();
+                    }
                     staged = null;
                     stored = null;
                     return prepared;
@@ -409,6 +424,9 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                             true,
                             PreparedTtlMutation.NONE
                     );
+                    if (replacementCanReleaseNativePages(current, stored)) {
+                        prepared.requestNativePageTrimAfterCommit();
+                    }
                     staged = null;
                     stored = null;
                     return prepared;
@@ -598,6 +616,18 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
     private long estimateRecordBytes(KeyHandle keyHandle, EntryRecord record) {
         return keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
+    }
+
+    private boolean replacementCanReleaseNativePages(EntryRecord current, StoredString replacement) {
+        if (current == null || replacement == null) {
+            return false;
+        }
+        if (current.type() != ValueType.STRING) {
+            return true;
+        }
+        ValueHandle currentHandle = requireStringHandle(current);
+        return !currentHandle.equals(replacement.handle())
+                && stringRoot.estimatedBytes(currentHandle) > stringRoot.estimatedBytes(replacement.handle());
     }
 
     private CurrentEntry currentEntry(byte[] keyBytes) {

@@ -4,6 +4,7 @@ import yier.bubu.redis.command.api.CommandDescriptor;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.ReplyPlan;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -101,6 +102,11 @@ public final class CommandRegistry implements CommandModule.Registration {
     CommandSpec spec(ExecutionRequest request) {
         Entry entry = findEntry(request);
         return entry == null ? null : entry.spec;
+    }
+
+    ReplyPlan replyPlan(ExecutionRequest request) {
+        CommandSpec spec = spec(request);
+        return spec == null ? ReplyPlan.maximum() : spec.planReply(request);
     }
 
     CommandSpec specByUpperName(String nameUpper) {

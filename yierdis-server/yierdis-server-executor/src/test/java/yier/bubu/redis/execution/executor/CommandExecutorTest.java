@@ -11,6 +11,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -194,6 +195,142 @@ public class CommandExecutorTest {
 
         executor.close();
         rejected.close();
+    }
+
+    @Test
+    public void schedulingRejectionAfterOfferRollsBackOwnershipAndAccounting() {
+        for (SchedulingPolicy policy : SchedulingPolicy.values()) {
+            AtomicBoolean rejectOwnerTask = new AtomicBoolean();
+            RecordingIoAdapter io = new RecordingIoAdapter();
+            java.util.concurrent.Executor ownerExecutor = task -> {
+                if (rejectOwnerTask.get()) {
+                    throw new RejectedExecutionException("injected owner rejection");
+                }
+                task.run();
+            };
+            CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+                    () -> { },
+                    ExecutorCoreTestSupport.simpleCommandEngine(),
+                    ownerExecutor,
+                    ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                    io,
+                    new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, policy)
+            );
+            executor.start();
+
+            TestConnection connection = ExecutorCoreTestSupport.newConnection("schedule-reject-" + policy);
+            TrackingExecutionRequest rejectedRequest = TrackingExecutionRequest.ofUtf8("PING");
+            TrackingReply rejectedReply = new TrackingReply();
+            rejectOwnerTask.set(true);
+
+            Assert.assertEquals(
+                    CommandExecutor.SubmitRejectReason.OFFER_FAILED,
+                    executor.trySubmit(connection, rejectedRequest, rejectedReply)
+            );
+            Assert.assertEquals(0, rejectedRequest.closeCalls());
+            Assert.assertEquals(0, rejectedReply.cancelCalls());
+            Assert.assertEquals(0, connection.context().pending());
+            Assert.assertEquals(0L, connection.context().pendingBytes());
+            Assert.assertEquals(0L, connection.context().statsSnapshot().commandsEnqueued());
+            Assert.assertEquals(0, executor.statsSnapshot().queuedTasks());
+            Assert.assertEquals(0L, executor.statsSnapshot().queuedBytes());
+            Assert.assertEquals(0L, executor.statsSnapshot().submitAccepted());
+            Assert.assertEquals(1L, executor.statsSnapshot().submitRejectedOfferFailed());
+
+            rejectOwnerTask.set(false);
+            TrackingExecutionRequest accepted = TrackingExecutionRequest.ofUtf8("PING");
+            Assert.assertNull(executor.trySubmit(connection, accepted));
+            Assert.assertEquals("PONG\n", io.bufferedReply(connection));
+            Assert.assertEquals(1, accepted.closeCalls());
+            Assert.assertEquals(1L, executor.statsSnapshot().commandsExecuted());
+            Assert.assertEquals(1L, executor.statsSnapshot().submitAccepted());
+
+            executor.close();
+            rejectedRequest.close();
+            rejectedReply.close();
+            Assert.assertEquals(1, rejectedRequest.closeCalls());
+            Assert.assertEquals(1, rejectedReply.cancelCalls());
+        }
+    }
+
+    @Test
+    public void drainRescheduleRejectionDoesNotStrandAcceptedTasks() {
+        String retainedArgument = "012345678901234567890123456789012345";
+        for (SchedulingPolicy policy : SchedulingPolicy.values()) {
+            AtomicBoolean rejectOwnerTask = new AtomicBoolean();
+            ManualOwnerExecutor delegate = ExecutorCoreTestSupport.manualOwnerExecutor();
+            java.util.concurrent.Executor ownerExecutor = task -> {
+                if (rejectOwnerTask.get()) {
+                    throw new RejectedExecutionException("injected owner reschedule rejection");
+                }
+                delegate.execute(task);
+            };
+            RecordingIoAdapter io = new RecordingIoAdapter();
+            CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+                    () -> { },
+                    ExecutorCoreTestSupport.simpleCommandEngine(),
+                    ownerExecutor,
+                    ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                    io,
+                    new CommandExecutorConfig(4, 100, 8, 4, 0, 0, 1, 1_000, policy)
+            );
+            ExecutorCoreTestSupport.startExecutor(executor, delegate);
+
+            TestConnection connection = ExecutorCoreTestSupport.newConnection("reschedule-reject-" + policy);
+            TrackingExecutionRequest firstRequest = TrackingExecutionRequest.ofUtf8("PING", retainedArgument);
+            TrackingExecutionRequest secondRequest = TrackingExecutionRequest.ofUtf8("PING", retainedArgument);
+            TrackingReply firstReply = new TrackingReply();
+            TrackingReply secondReply = new TrackingReply();
+            try {
+                Assert.assertNull(executor.trySubmit(connection, firstRequest, firstReply));
+                Assert.assertNull(executor.trySubmit(connection, secondRequest, secondReply));
+                Assert.assertEquals(1, delegate.pendingTasks());
+
+                rejectOwnerTask.set(true);
+                try {
+                    // 第一轮 drain 已取走一项；重排被拒绝时，队列仍必须保留后一项的所有权。
+                    delegate.runAll();
+                    Assert.fail("expected owner reschedule rejection");
+                } catch (RejectedExecutionException expected) {
+                    Assert.assertEquals("injected owner reschedule rejection", expected.getMessage());
+                }
+                rejectOwnerTask.set(false);
+
+                Assert.assertEquals(1, firstRequest.closeCalls());
+                Assert.assertEquals(1, firstReply.readyCalls());
+                Assert.assertEquals(0, firstReply.cancelCalls());
+                Assert.assertEquals(0, secondRequest.closeCalls());
+                Assert.assertEquals(0, secondReply.readyCalls());
+                Assert.assertEquals(0, secondReply.cancelCalls());
+                Assert.assertEquals(1, connection.context().pending());
+                Assert.assertEquals(40L, connection.context().pendingBytes());
+                Assert.assertEquals(1, executor.statsSnapshot().queuedTasks());
+                Assert.assertEquals(40L, executor.statsSnapshot().queuedBytes());
+                Assert.assertEquals(2L, executor.statsSnapshot().submitAccepted());
+                Assert.assertEquals(0L, executor.statsSnapshot().submitRejectedOfferFailed());
+
+                TrackingExecutionRequest thirdRequest = TrackingExecutionRequest.ofUtf8("PING", retainedArgument);
+                TrackingReply thirdReply = new TrackingReply();
+                Assert.assertNull(executor.trySubmit(connection, thirdRequest, thirdReply));
+                Assert.assertEquals(1, delegate.pendingTasks());
+                delegate.runAll();
+
+                Assert.assertEquals(1, secondRequest.closeCalls());
+                Assert.assertEquals(1, secondReply.readyCalls());
+                Assert.assertEquals(0, secondReply.cancelCalls());
+                Assert.assertEquals(1, thirdRequest.closeCalls());
+                Assert.assertEquals(1, thirdReply.readyCalls());
+                Assert.assertEquals(0, thirdReply.cancelCalls());
+                Assert.assertEquals(0, connection.context().pending());
+                Assert.assertEquals(0L, connection.context().pendingBytes());
+                Assert.assertEquals(0, executor.statsSnapshot().queuedTasks());
+                Assert.assertEquals(0L, executor.statsSnapshot().queuedBytes());
+                Assert.assertEquals(3L, executor.statsSnapshot().commandsExecuted());
+                Assert.assertEquals(3L, executor.statsSnapshot().submitAccepted());
+            } finally {
+                executor.close();
+            }
+        }
     }
 
     @Test

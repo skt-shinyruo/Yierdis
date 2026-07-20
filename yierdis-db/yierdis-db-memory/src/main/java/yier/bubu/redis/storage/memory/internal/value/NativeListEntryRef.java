@@ -6,10 +6,14 @@ import java.util.Objects;
 
 public final class NativeListEntryRef {
     private final NativeHandle handle;
+    private final int payloadOffset;
     private final int payloadLength;
     private final int retainedBytes;
 
-    private NativeListEntryRef(NativeHandle handle, int payloadLength, int retainedBytes) {
+    private NativeListEntryRef(NativeHandle handle, int payloadOffset, int payloadLength, int retainedBytes) {
+        if (payloadOffset < 0) {
+            throw new IllegalArgumentException("payloadOffset must be >= 0");
+        }
         if (payloadLength < -1) {
             throw new IllegalArgumentException("payloadLength must be >= -1");
         }
@@ -17,20 +21,39 @@ public final class NativeListEntryRef {
             throw new IllegalArgumentException("retainedBytes must be >= 0");
         }
         this.handle = handle;
+        this.payloadOffset = payloadOffset;
         this.payloadLength = payloadLength;
         this.retainedBytes = retainedBytes;
     }
 
     public static NativeListEntryRef nullValue() {
-        return new NativeListEntryRef(null, -1, 0);
+        return new NativeListEntryRef(null, 0, -1, 0);
     }
 
     public static NativeListEntryRef handle(NativeHandle handle, int payloadLength, int retainedBytes) {
-        return new NativeListEntryRef(Objects.requireNonNull(handle, "handle"), payloadLength, retainedBytes);
+        return handle(handle, 0, payloadLength, retainedBytes);
+    }
+
+    public static NativeListEntryRef handle(
+            NativeHandle handle,
+            int payloadOffset,
+            int payloadLength,
+            int retainedBytes
+    ) {
+        return new NativeListEntryRef(
+                Objects.requireNonNull(handle, "handle"),
+                payloadOffset,
+                payloadLength,
+                retainedBytes
+        );
     }
 
     public NativeHandle handle() {
         return handle;
+    }
+
+    public int payloadOffset() {
+        return payloadOffset;
     }
 
     public int payloadLength() {

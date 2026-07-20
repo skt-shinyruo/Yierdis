@@ -1,5 +1,7 @@
 package yier.bubu.redis.app.server;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutor;
@@ -12,11 +14,15 @@ import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
+import yier.bubu.redis.protocol.resp.netty.InboundByteAccountingHandler;
 import yier.bubu.redis.protocol.resp.netty.InboundConnectionMemory;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
+import yier.bubu.redis.protocol.resp.netty.InboundReadCreditHandler;
+import yier.bubu.redis.protocol.resp.netty.RespRequestDecoder;
 
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -51,9 +57,9 @@ public class RespIngressLifecycleIntegrationTest {
     }
 
     @Test
-    public void rejectedAndClosingQueuedRequestsReleaseInboundLeases() throws Exception {
+    public void deferredAndClosingQueuedRequestsReleaseInboundLeases() throws Exception {
         InboundMemoryBudget budget = new InboundMemoryBudget(1_024);
-        InboundConnectionMemory memory = connectionMemory("rejected", 1_024);
+        InboundConnectionMemory memory = connectionMemory("deferred", 1_024);
         AtomicInteger executions = new AtomicInteger();
         ExecutorFixture fixture = new ExecutorFixture(1, executions);
         CountDownLatch blockerStarted = new CountDownLatch(1);
@@ -62,21 +68,133 @@ public class RespIngressLifecycleIntegrationTest {
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
         LeaseBackedRequest queued = admittedRequest(budget, memory, 128);
-        LeaseBackedRequest rejected = admittedRequest(budget, memory, 128);
+        LeaseBackedRequest deferred = admittedRequest(budget, memory, 128);
         try {
             fixture.write(queued);
-            fixture.write(rejected);
+            fixture.write(deferred);
 
-            Assert.assertTrue(rejected.awaitFinalRelease());
-            Assert.assertEquals(128L, budget.stats().reservedBytes());
+            Assert.assertEquals(256L, budget.stats().reservedBytes());
+            Assert.assertEquals(0L, fixture.connection.context().statsSnapshot().commandsRejected());
 
             fixture.connection.markClosing();
             unblock.countDown();
 
             Assert.assertTrue(queued.awaitFinalRelease());
+            Assert.assertTrue(fixture.awaitFinalRelease(deferred));
             Assert.assertEquals(0L, budget.stats().reservedBytes());
             Assert.assertEquals(0, executions.get());
             Assert.assertEquals(1L, fixture.connection.context().statsSnapshot().commandsSkippedClosing());
+        } finally {
+            unblock.countDown();
+            fixture.close();
+        }
+    }
+
+    @Test
+    public void shutdownRejectsDeferredRequestWithoutDroppingAnEarlierReadyReply() throws Exception {
+        InboundMemoryBudget budget = new InboundMemoryBudget(1_024);
+        InboundConnectionMemory memory = connectionMemory("shutdown-deferred", 1_024);
+        ExecutorFixture fixture = new ExecutorFixture(1, new AtomicInteger());
+        CountDownLatch blockerStarted = new CountDownLatch(1);
+        CountDownLatch unblock = new CountDownLatch(1);
+        fixture.blockOwner(blockerStarted, unblock);
+        Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
+
+        LeaseBackedRequest queued = admittedRequest(budget, memory, 128);
+        LeaseBackedRequest deferred = admittedRequest(budget, memory, 128);
+        try {
+            fixture.write(queued);
+            ReplySlot ready = fixture.replies.registerReadyAscii("ready-before-shutdown");
+            fixture.write(deferred);
+            Assert.assertEquals(ReplySlotState.READY, ready.state());
+
+            fixture.connection.markClosing();
+            CompletableFuture<Void> executorDrained = fixture.executor.shutdownGracefully();
+            fixture.replies.drain();
+
+            Assert.assertTrue("shutdown must leave transport ownership to the sequencer", fixture.channel.isOpen());
+            Assert.assertTrue(fixture.awaitFinalRelease(deferred));
+
+            unblock.countDown();
+            executorDrained.join();
+            CompletableFuture<Void> repliesDrained = fixture.connection.shutdownReplyGracefully();
+            fixture.replies.drain();
+
+            Assert.assertEquals("ready-before-shutdown", readOutboundAscii(fixture.channel));
+            Assert.assertEquals(ReplySlotState.COMPLETED, ready.state());
+            Assert.assertTrue(repliesDrained.isDone());
+            Assert.assertFalse(fixture.channel.isOpen());
+            Assert.assertTrue(queued.awaitFinalRelease());
+            Assert.assertEquals(0L, budget.stats().reservedBytes());
+        } finally {
+            unblock.countDown();
+            fixture.close();
+        }
+    }
+
+    @Test
+    public void samePacketProtocolErrorCompletesDeferredRequestBeforeTerminalReply() throws Exception {
+        AtomicInteger executions = new AtomicInteger();
+        ProtocolExecutorFixture fixture = new ProtocolExecutorFixture(1, executions);
+        CountDownLatch blockerStarted = new CountDownLatch(1);
+        CountDownLatch unblock = new CountDownLatch(1);
+        fixture.blockOwner(blockerStarted, unblock);
+        Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
+
+        try {
+            fixture.writePacket(
+                    "*1\r\n$4\r\nPING\r\n"
+                            + "*1\r\n$4\r\nPING\r\n"
+                            + "*1\r\nPING\r\n"
+            );
+
+            Assert.assertEquals(1L, fixture.executor.statsSnapshot().submitRejectedQueueFull());
+            Assert.assertNull(fixture.channel.readOutbound());
+
+            unblock.countDown();
+
+            Assert.assertEquals("-ERR busy queue_full\r\n", awaitOutboundAscii(fixture.channel));
+            String protocolError = awaitOutboundAscii(fixture.channel);
+            Assert.assertTrue(protocolError, protocolError.startsWith("-ERR Protocol error"));
+            Assert.assertTrue(awaitChannelClosed(fixture.channel));
+            Assert.assertEquals(0, executions.get());
+            Assert.assertEquals(1L, fixture.connection.context().statsSnapshot().commandsSkippedClosing());
+            Assert.assertEquals(0L, fixture.inboundBudget.stats().reservedBytes());
+            Assert.assertEquals(0L, fixture.outboundBudget.stats().reservedBytes());
+        } finally {
+            unblock.countDown();
+            fixture.close();
+        }
+    }
+
+    @Test
+    public void internalErrorCompletesDeferredRequestBeforeTerminalReply() throws Exception {
+        AtomicInteger executions = new AtomicInteger();
+        ProtocolExecutorFixture fixture = new ProtocolExecutorFixture(1, executions);
+        CountDownLatch blockerStarted = new CountDownLatch(1);
+        CountDownLatch unblock = new CountDownLatch(1);
+        fixture.blockOwner(blockerStarted, unblock);
+        Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
+
+        try {
+            fixture.writePacket(
+                    "*1\r\n$4\r\nPING\r\n"
+                            + "*1\r\n$4\r\nPING\r\n"
+            );
+            Assert.assertEquals(1L, fixture.executor.statsSnapshot().submitRejectedQueueFull());
+
+            fixture.channel.pipeline().fireExceptionCaught(new IllegalStateException("injected internal failure"));
+            Assert.assertNull(fixture.channel.readOutbound());
+
+            unblock.countDown();
+
+            Assert.assertEquals("-ERR busy queue_full\r\n", awaitOutboundAscii(fixture.channel));
+            Assert.assertEquals("-ERR internal error\r\n", awaitOutboundAscii(fixture.channel));
+            Assert.assertTrue(awaitChannelClosed(fixture.channel));
+            Assert.assertEquals(0, executions.get());
+            Assert.assertEquals(1L, fixture.connection.context().statsSnapshot().commandsSkippedClosing());
+            Assert.assertEquals(0L, fixture.inboundBudget.stats().reservedBytes());
+            Assert.assertEquals(0L, fixture.outboundBudget.stats().reservedBytes());
         } finally {
             unblock.countDown();
             fixture.close();
@@ -142,6 +260,44 @@ public class RespIngressLifecycleIntegrationTest {
         return value.getBytes(StandardCharsets.US_ASCII);
     }
 
+    private static String readOutboundAscii(EmbeddedChannel channel) {
+        ByteBuf buffer = channel.readOutbound();
+        Assert.assertNotNull("expected a drained ready reply", buffer);
+        try {
+            return buffer.toString(StandardCharsets.US_ASCII);
+        } finally {
+            buffer.release();
+        }
+    }
+
+    private static String awaitOutboundAscii(EmbeddedChannel channel) throws InterruptedException {
+        long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+        while (System.nanoTime() < deadlineNanos) {
+            channel.runPendingTasks();
+            channel.runScheduledPendingTasks();
+            ByteBuf buffer = channel.readOutbound();
+            if (buffer != null) {
+                try {
+                    return buffer.toString(StandardCharsets.US_ASCII);
+                } finally {
+                    buffer.release();
+                }
+            }
+            Thread.sleep(1L);
+        }
+        throw new AssertionError("timed out waiting for outbound reply");
+    }
+
+    private static boolean awaitChannelClosed(EmbeddedChannel channel) throws InterruptedException {
+        long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+        while (channel.isOpen() && System.nanoTime() < deadlineNanos) {
+            channel.runPendingTasks();
+            channel.runScheduledPendingTasks();
+            Thread.sleep(1L);
+        }
+        return !channel.isOpen();
+    }
+
     private static final class ExecutorFixture implements AutoCloseable {
         private final DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         private final EventExecutor owner = group.next();
@@ -180,11 +336,123 @@ public class RespIngressLifecycleIntegrationTest {
             replies.write(request);
         }
 
+        private boolean awaitFinalRelease(LeaseBackedRequest request) throws InterruptedException {
+            long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+            while (!request.isFinalReleased() && System.nanoTime() < deadlineNanos) {
+                replies.drain();
+                Thread.sleep(1L);
+            }
+            return request.isFinalReleased();
+        }
+
         @Override
         public void close() {
             executor.shutdownGracefully().join();
             group.shutdownGracefully().syncUninterruptibly();
             replies.close();
+        }
+    }
+
+    private static final class ProtocolExecutorFixture implements AutoCloseable {
+        private static final long INBOUND_CAPACITY_BYTES = 64L * 1024L;
+        private static final long OUTBOUND_CONNECTION_BYTES = 256L * 1024L;
+        private static final long OUTBOUND_GLOBAL_BYTES = 512L * 1024L;
+
+        private final DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
+        private final EventExecutor owner = group.next();
+        private final CommandExecutor<NettyExecutionConnection> executor;
+        private final InboundMemoryBudget inboundBudget = new InboundMemoryBudget(INBOUND_CAPACITY_BYTES);
+        private final InboundConnectionMemory inboundMemory = connectionMemory(
+                "protocol-deferred",
+                INBOUND_CAPACITY_BYTES
+        );
+        private final OutboundMemoryBudget outboundBudget = new OutboundMemoryBudget(OUTBOUND_GLOBAL_BYTES);
+        private final EmbeddedChannel channel = new EmbeddedChannel();
+        private final NettyExecutionConnection connection;
+        private final ConnectionReplySequencer sequencer;
+
+        private ProtocolExecutorFixture(int queueCapacity, AtomicInteger executions) {
+            RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
+            executor = new CommandExecutor<>(
+                    () -> { },
+                    (session, request, out) -> {
+                        executions.incrementAndGet();
+                        out.simpleString("OK");
+                    },
+                    owner,
+                    replyWriterFactory,
+                    new NettyExecutionIoAdapter(),
+                    new CommandExecutorConfig(queueCapacity, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+            );
+            executor.start();
+
+            connection = NettyExecutionConnection.getOrCreate(channel, 16, 1_024L);
+            connection.bindOwnerTaskExecutor(task -> executor.executeOwnerTask(task));
+            OutboundConnectionMemory outboundMemory = outboundBudget.openConnection(OUTBOUND_CONNECTION_BYTES);
+            sequencer = new ConnectionReplySequencer(
+                    channel,
+                    outboundMemory,
+                    () -> { },
+                    slot -> BoundedChunkedReplySink.forChannel(
+                            slot,
+                            channel,
+                            64 * 1024,
+                            OrderedReplyTestFixture.CONTROL_BYTES,
+                            OrderedReplyTestFixture.MAX_REPLY_BYTES
+                    )
+            );
+            NettyReplyDecodedMessageGate gate = new NettyReplyDecodedMessageGate(
+                    OrderedReplyTestFixture.CONTROL_BYTES,
+                    OrderedReplyTestFixture.MAX_REPLY_BYTES,
+                    outboundMemory,
+                    sequencer
+            );
+            connection.bindReplyGate(gate);
+
+            InboundReadCreditHandler readCredits = new InboundReadCreditHandler(
+                    inboundBudget,
+                    inboundMemory,
+                    8 * 1024
+            );
+            RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                    1_024,
+                    16,
+                    1_024,
+                    1_024,
+                    inboundBudget,
+                    inboundMemory,
+                    gate
+            );
+            decoder.setReadControl(readCredits);
+            channel.pipeline()
+                    .addLast("inboundReadCredit", readCredits)
+                    .addLast("inboundByteAccounting", new InboundByteAccountingHandler(readCredits))
+                    .addLast("respRequestDecoder", decoder)
+                    .addLast("commandHandler", new YierdisFastCommandHandler(executor, replyWriterFactory));
+        }
+
+        private void blockOwner(CountDownLatch started, CountDownLatch unblock) {
+            owner.submit(() -> {
+                started.countDown();
+                unblock.await();
+                return null;
+            });
+        }
+
+        private void writePacket(String packet) {
+            channel.writeInbound(Unpooled.copiedBuffer(packet, StandardCharsets.US_ASCII));
+            channel.runPendingTasks();
+        }
+
+        @Override
+        public void close() {
+            executor.shutdownGracefully().join();
+            group.shutdownGracefully().syncUninterruptibly();
+            channel.finishAndReleaseAll();
+            sequencer.close();
+            inboundMemory.close();
+            inboundBudget.close();
+            outboundBudget.close();
         }
     }
 
@@ -207,6 +475,10 @@ public class RespIngressLifecycleIntegrationTest {
 
         private boolean awaitFinalRelease() throws InterruptedException {
             return state.released.await(1, TimeUnit.SECONDS);
+        }
+
+        private boolean isFinalReleased() {
+            return state.finalReleases.get() > 0;
         }
 
         private int retainCalls() {

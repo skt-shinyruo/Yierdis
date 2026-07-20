@@ -19,6 +19,7 @@ public class NativeCapacityOomRecoveryTest {
     public void nativeSlotExhaustionLeavesConnectionUsableAfterExactOomReply() throws Exception {
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
                 "--port", "0",
+                "--maxmemoryBytes", "0",
                 "--databases", "1",
                 "--noCleanup",
                 "--nativeSlotCapacity", "5"

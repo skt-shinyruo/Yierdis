@@ -6,6 +6,7 @@ import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
@@ -16,6 +17,9 @@ import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.result.BulkStringSequence;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.api.result.PoppedValueSequence;
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
+import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -27,6 +31,102 @@ import java.util.Set;
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
 public class CollectionDirectOpsTest {
+    @Test
+    public void packedZsetPromotionPublishesTargetEncodingAndStableHeapAccounting() {
+        withDb(db -> {
+            long ledgerBeforeCreate = db.memoryLedger().usedBytes();
+            Assert.assertEquals(
+                    3L,
+                    db.writes().zsets().zadd(
+                            b("zset"),
+                            List.of(b("1"), b("alpha"), b("2"), b("beta"), b("3"), b("gamma"))
+                    ).value().longValue()
+            );
+            EntryRecord before = db.keyLifecycle().liveEntryRecord(b("zset"));
+            ValueHandle rootHandle = before.valueHandle();
+            long usedBeforePromotion = db.memoryLedger().usedBytes();
+            long heapBeforePromotion = db.keyLifecycle().zsetRoot().heapBytes();
+            Assert.assertEquals(ValueEncoding.ZSET_PACKED, before.encoding());
+
+            Assert.assertEquals(
+                    1L,
+                    db.writes().zsets().zadd(b("zset"), List.of(b("4"), new byte[256])).value().longValue()
+            );
+
+            EntryRecord after = db.keyLifecycle().liveEntryRecord(b("zset"));
+            Assert.assertEquals(rootHandle, after.valueHandle());
+            Assert.assertEquals(ValueEncoding.ZSET_SKIPLIST, after.encoding());
+            Assert.assertEquals(DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE, after.version());
+            Assert.assertEquals(before.version(), after.version());
+            Assert.assertEquals(usedBeforePromotion, db.memoryLedger().usedBytes());
+            Assert.assertTrue(db.keyLifecycle().zsetRoot().heapBytes() > heapBeforePromotion);
+
+            Assert.assertEquals(1L, db.writes().keyspace().del(List.of(b("zset"))).value().longValue());
+            Assert.assertEquals(ledgerBeforeCreate, db.memoryLedger().usedBytes());
+        });
+    }
+
+    @Test
+    public void existingPackedListKeepsRootAndReplacesOnlyItsBoundedBlock() {
+        withDb(db -> {
+            Assert.assertEquals(2L, db.writes().lists().rpush(b("list"), List.of(b("a"), b("b"))).value().longValue());
+            EntryRecord before = db.keyLifecycle().liveEntryRecord(b("list"));
+            ValueHandle rootHandle = before.valueHandle();
+            Set<Long> beforeBlocks = listHandles(db, rootHandle, NativeObjectKind.LISTPACK_BYTES);
+            Assert.assertEquals(1, beforeBlocks.size());
+
+            Assert.assertEquals(3L, db.writes().lists().lpush(b("list"), List.of(b("c"))).value().longValue());
+
+            EntryRecord after = db.keyLifecycle().liveEntryRecord(b("list"));
+            Assert.assertEquals(rootHandle, after.valueHandle());
+            Set<Long> afterBlocks = listHandles(db, rootHandle, NativeObjectKind.LISTPACK_BYTES);
+            Assert.assertEquals(1, afterBlocks.size());
+            Assert.assertNotEquals(beforeBlocks, afterBlocks);
+            Assert.assertEquals(List.of("c", "a", "b"), sequence(db.reads().lists().lrange(b("list"), 0, -1)));
+        });
+    }
+
+    @Test
+    public void quicklistEdgeCowKeepsInteriorTopologyAndPopReleasesOnlyRemovedNode() {
+        withDb(db -> {
+            byte[] first = repeatedBytes('a', 4096);
+            byte[] second = repeatedBytes('b', 4096);
+            byte[] third = repeatedBytes('c', 4096);
+            Assert.assertEquals(3L, db.writes().lists().rpush(b("list"), List.of(first, second, third)).value().longValue());
+
+            EntryRecord before = db.keyLifecycle().liveEntryRecord(b("list"));
+            ValueHandle rootHandle = before.valueHandle();
+            Set<Long> nodeHandles = listHandles(db, rootHandle, NativeObjectKind.LIST_NODE);
+            Set<Long> blockHandles = listHandles(db, rootHandle, NativeObjectKind.LISTPACK_BYTES);
+            Assert.assertEquals(3, nodeHandles.size());
+            Assert.assertEquals(3, blockHandles.size());
+
+            Assert.assertEquals(4L, db.writes().lists().rpush(b("list"), List.of(b("tail"))).value().longValue());
+            Assert.assertEquals(rootHandle, db.keyLifecycle().liveEntryRecord(b("list")).valueHandle());
+            Assert.assertEquals(nodeHandles, listHandles(db, rootHandle, NativeObjectKind.LIST_NODE));
+            Set<Long> afterPushBlocks = listHandles(db, rootHandle, NativeObjectKind.LISTPACK_BYTES);
+            Assert.assertEquals(3, afterPushBlocks.size());
+            Set<Long> unchangedBlocks = new HashSet<>(blockHandles);
+            unchangedBlocks.retainAll(afterPushBlocks);
+            Assert.assertEquals(2, unchangedBlocks.size());
+
+            try (PoppedValueSequence popped = db.writes().lists().lpop(b("list"), 1).value()) {
+                Assert.assertEquals(rootHandle, db.keyLifecycle().liveEntryRecord(b("list")).valueHandle());
+                Assert.assertEquals(2L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.LIST_NODE));
+                Assert.assertEquals(List.of(new String(first, StandardCharsets.UTF_8)), sequence(popped));
+            }
+            Assert.assertEquals(2L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.LISTPACK_BYTES));
+            Assert.assertEquals(
+                    List.of(
+                            new String(second, StandardCharsets.UTF_8),
+                            new String(third, StandardCharsets.UTF_8),
+                            "tail"
+                    ),
+                    sequence(db.reads().lists().lrange(b("list"), 0, -1))
+            );
+        });
+    }
+
     @Test
     public void collectionWriteAdmissionCoversRootAdaptersInLaterAllocatorMetadataSegments() {
         assertCollectionWriteAdmissionCoversPhysicalGrowth(
@@ -171,7 +271,7 @@ public class CollectionDirectOpsTest {
     }
 
     @Test
-    public void partialListPopRetainsOnlyPoppedNativePayloads() {
+    public void partialPackedListPopRetainsTheSharedNativeBlockOnce() {
         withDb(db -> {
             byte[] left = repeatedBytes('a', 128);
             byte[] middle = repeatedBytes('b', 128);
@@ -181,7 +281,7 @@ public class CollectionDirectOpsTest {
             try (PoppedValueSequence popped = db.writes().lists().lpop(b("list"), 1).value()) {
                 Assert.assertEquals(1, popped.count());
                 Assert.assertEquals(136L, popped.encodedElementBytes());
-                Assert.assertEquals(128L, popped.retainedMemoryBytes());
+                Assert.assertEquals(512L, popped.retainedMemoryBytes());
                 Assert.assertEquals(
                         List.of(new String(middle, StandardCharsets.UTF_8), new String(right, StandardCharsets.UTF_8)),
                         sequence(db.reads().lists().lrange(b("list"), 0, -1))
@@ -404,6 +504,16 @@ public class CollectionDirectOpsTest {
         byte[] bytes = new byte[count];
         Arrays.fill(bytes, (byte) value);
         return bytes;
+    }
+
+    private static Set<Long> listHandles(YierdisDb db, ValueHandle rootHandle, NativeObjectKind kind) {
+        Set<Long> handles = new HashSet<>();
+        db.keyLifecycle().listRoot().forEachNativeHandle(rootHandle, handle -> {
+            if (handle.domain() == kind.domain() && handle.kindCode() == kind.code()) {
+                handles.add(handle.raw());
+            }
+        });
+        return handles;
     }
 
     private static void sleepPastTtl() {

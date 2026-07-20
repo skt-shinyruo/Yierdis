@@ -24,6 +24,7 @@ public class ReplyResultUnknownTest {
                     }
                 },
                 "--port", "0",
+                "--maxmemoryBytes", "0",
                 "--noCleanup"
         );
         try {
@@ -49,7 +50,11 @@ public class ReplyResultUnknownTest {
 
     @Test
     public void disconnectDuringLargeOutputReleasesEveryReplyLease() throws Exception {
-        YierdisServerBootstrap server = YierdisServerBootstrap.start("--port", "0", "--noCleanup");
+        YierdisServerBootstrap server = YierdisServerBootstrap.start(
+                "--port", "0",
+                "--maxmemoryBytes", "0",
+                "--noCleanup"
+        );
         try {
             String value = RespTcpTestSupport.asciiRepeat('d', 1_024 * 1_024);
             try (Socket client = RespTcpTestSupport.connect(server)) {

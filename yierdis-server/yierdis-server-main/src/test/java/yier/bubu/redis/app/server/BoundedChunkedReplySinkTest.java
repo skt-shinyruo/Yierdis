@@ -153,6 +153,30 @@ public class BoundedChunkedReplySinkTest {
     }
 
     @Test
+    public void maximumNestedPlanPacksRepeatedSmallWritesIntoItsPreflightedChunks() {
+        Fixture fixture = new Fixture(16 * 1024L);
+        try {
+            BoundedChunkedReplySink sink = fixture.sink(Unpooled::buffer);
+            sink.require(ReplyPlan.maximum());
+            sink.writeBytes(new byte[4], 0, 4);
+            sink.require(ReplyPlan.exact(6_000L, 0L));
+
+            byte[] oneByte = {1};
+            for (int index = 0; index < 6_000; index++) {
+                sink.writeBytes(oneByte, 0, oneByte.length);
+            }
+            sink.finish();
+            fixture.slot.markReady(false);
+            fixture.drain();
+
+            Assert.assertEquals(List.of(4, 6_000), fixture.outboundCapacities());
+            Assert.assertEquals(0L, fixture.budget.stats().reservedBytes());
+        } finally {
+            fixture.close();
+        }
+    }
+
+    @Test
     public void maximumReservationDoesNotSpendControlCapacityOnReplyChunks() {
         Fixture fixture = new Fixture(16 * 1024L);
         try {
@@ -170,6 +194,59 @@ public class BoundedChunkedReplySinkTest {
             Assert.assertEquals(ReplySlotState.FAILED, fixture.slot.state());
         } finally {
             fixture.close();
+        }
+    }
+
+    @Test
+    public void exactEnvelopeRemainsAuthoritativeAcrossNestedReplyPlans() {
+        Fixture fixture = new Fixture(32 * 1024L);
+        try {
+            BoundedChunkedReplySink sink = fixture.sink(Unpooled::buffer);
+            sink.requireEnvelope(ReplyPlan.exact(20L, 5L));
+            sink.writeBytes(new byte[4], 0, 4); // 模拟外层 RESP array header。
+
+            sink.require(ReplyPlan.exact(8L, 2L));
+            sink.writeBytes(new byte[8], 0, 8);
+            sink.require(ReplyPlan.exact(8L, 3L));
+            sink.writeBytes(new byte[8], 0, 8);
+
+            Assert.assertEquals(20L, sink.writtenBytes());
+            Assert.assertEquals(4_096L + 20L + 5L + BoundedChunkedReplySink.CHUNK_COMPONENT_OVERHEAD_BYTES,
+                    fixture.slot.lease().reservedBytes());
+        } finally {
+            fixture.close();
+        }
+    }
+
+    @Test
+    public void exactEnvelopeRejectsNestedEncodedAndRetainedBounds() {
+        Fixture encodedFixture = new Fixture(32 * 1024L);
+        try {
+            BoundedChunkedReplySink sink = encodedFixture.sink(Unpooled::buffer);
+            sink.requireEnvelope(ReplyPlan.exact(20L, 10L));
+            sink.writeBytes(new byte[4], 0, 4);
+            sink.require(ReplyPlan.exact(10L, 0L));
+            sink.writeBytes(new byte[10], 0, 10);
+
+            Assert.assertThrows(
+                    ReplyTooLargeException.class,
+                    () -> sink.require(ReplyPlan.exact(7L, 0L))
+            );
+        } finally {
+            encodedFixture.close();
+        }
+
+        Fixture retainedFixture = new Fixture(32 * 1024L);
+        try {
+            BoundedChunkedReplySink sink = retainedFixture.sink(Unpooled::buffer);
+            sink.requireEnvelope(ReplyPlan.exact(20L, 2L));
+
+            Assert.assertThrows(
+                    ReplyTooLargeException.class,
+                    () -> sink.require(ReplyPlan.exact(4L, 3L))
+            );
+        } finally {
+            retainedFixture.close();
         }
     }
 

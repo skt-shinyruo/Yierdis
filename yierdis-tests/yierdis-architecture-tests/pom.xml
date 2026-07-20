@@ -31,6 +31,12 @@
         </dependency>
 
         <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-common-bytes</artifactId>
             <scope>test</scope>
@@ -56,6 +62,18 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-server-api</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-server-executor</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-command-api</artifactId>
             <scope>test</scope>
         </dependency>
@@ -75,6 +93,12 @@
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-networking-resp</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-networking-netty</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

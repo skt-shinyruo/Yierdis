@@ -5,9 +5,11 @@ import java.util.Set;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
+import yier.bubu.redis.storage.api.result.BulkStringValue;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 public class StringRootTest {
@@ -15,6 +17,34 @@ public class StringRootTest {
     public void stringRootDoesNotMirrorEveryLiveHandle() {
         Assert.assertFalse(Arrays.stream(StringRoot.class.getDeclaredFields())
                 .anyMatch(field -> Set.class.isAssignableFrom(field.getType())));
+        Assert.assertFalse(Arrays.stream(StringRoot.class.getDeclaredFields())
+                .anyMatch(field -> NativeHandle.class.isAssignableFrom(field.getType())));
+    }
+
+    @Test
+    public void stringRootUsesRawAllocatorPathForValueLifecycle() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("string-root-raw-path");
+             RawPathRecordingAllocator allocator = new RawPathRecordingAllocator(
+                     new YierdisStableNativeAllocator(runtime, 32)
+             );
+             StringRoot root = new StringRoot(allocator)) {
+            ValueHandle handle = root.store(new byte[] { 'a' });
+            root.overwrite(handle, new byte[] { 'b', 'c' });
+            Assert.assertEquals(3, root.append(handle, new byte[] { 'd' }));
+            Assert.assertArrayEquals(new byte[] { 'b', 'c', 'd' }, root.copy(handle));
+
+            try (BulkStringValue ignored = root.retainedValue(handle)) {
+                Assert.assertEquals(3, ignored.payloadLength());
+            }
+            root.release(handle);
+
+            Assert.assertEquals(1, allocator.allocateRawCalls());
+            Assert.assertEquals(2, allocator.reallocRawCalls());
+            Assert.assertEquals(1, allocator.freeRawCalls());
+            Assert.assertEquals(1, allocator.pinRawCalls());
+            Assert.assertEquals(1, allocator.unpinRawCalls());
+            Assert.assertTrue(allocator.resolveRawCalls() >= 6);
+        }
     }
 
     @Test

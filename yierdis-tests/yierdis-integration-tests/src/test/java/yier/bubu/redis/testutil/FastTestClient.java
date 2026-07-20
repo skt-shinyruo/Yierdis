@@ -2,6 +2,7 @@ package yier.bubu.redis.testutil;
 
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.CommandSessionCapabilities;
@@ -43,7 +44,14 @@ public final class FastTestClient implements AutoCloseable {
         Objects.requireNonNull(request, "request");
         CapturingReplyWriter writer = new CapturingReplyWriter();
         try {
-            processor.execute(request, new CommandContext(CommandSessionCapabilities.from(session), writer));
+            processor.execute(
+                    request,
+                    new CommandContext(
+                            CommandSessionCapabilities.from(session),
+                            writer,
+                            MutationContext.of(request)
+                    )
+            );
             return writer.root();
         } finally {
             request.close();

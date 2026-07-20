@@ -15,16 +15,58 @@ public record NativeHandle(long raw) {
     private static final long GENERATION_MASK = (1L << 12) - 1L;
 
     public NativeHandle {
-        if (raw != 0L && ((raw >>> DOMAIN_SHIFT) & FOUR_BIT_MASK) == NativeHandleDomain.RESERVED.code()) {
-            throw new IllegalArgumentException("non-zero handle cannot use reserved domain");
-        }
+        requireValidRaw(raw);
     }
 
     public static NativeHandle fromRaw(long raw) {
         return new NativeHandle(raw);
     }
 
+    public static void requireValidRaw(long raw) {
+        if (raw != 0L && domainCode(raw) == NativeHandleDomain.RESERVED.code()) {
+            throw new IllegalArgumentException("non-zero handle cannot use reserved domain");
+        }
+    }
+
+    public static boolean isNull(long raw) {
+        return raw == 0L;
+    }
+
+    public static int domainCode(long raw) {
+        return (int) ((raw >>> DOMAIN_SHIFT) & FOUR_BIT_MASK);
+    }
+
+    public static NativeHandleDomain domain(long raw) {
+        return NativeHandleDomain.fromCode(domainCode(raw));
+    }
+
+    public static int kindCode(long raw) {
+        return (int) ((raw >>> KIND_SHIFT) & FOUR_BIT_MASK);
+    }
+
+    public static long slotId(long raw) {
+        return (raw >>> SLOT_SHIFT) & SLOT_MASK;
+    }
+
+    public static int generation(long raw) {
+        return (int) ((raw >>> GENERATION_SHIFT) & GENERATION_MASK);
+    }
+
+    public static int flags(long raw) {
+        return (int) (raw & FOUR_BIT_MASK);
+    }
+
     public static NativeHandle of(
+            NativeHandleDomain domain,
+            NativeObjectKind kind,
+            long slotId,
+            int generation,
+            int flags
+    ) {
+        return new NativeHandle(rawOf(domain, kind, slotId, generation, flags));
+    }
+
+    public static long rawOf(
             NativeHandleDomain domain,
             NativeObjectKind kind,
             long slotId,
@@ -56,31 +98,31 @@ public record NativeHandle(long raw) {
                 | (slotId << SLOT_SHIFT)
                 | ((long) generation << GENERATION_SHIFT)
                 | flags;
-        return new NativeHandle(raw);
+        return raw;
     }
 
     public boolean isNull() {
-        return raw == 0L;
+        return isNull(raw);
     }
 
     public NativeHandleDomain domain() {
-        return NativeHandleDomain.fromCode((int) ((raw >>> DOMAIN_SHIFT) & FOUR_BIT_MASK));
+        return domain(raw);
     }
 
     public int kindCode() {
-        return (int) ((raw >>> KIND_SHIFT) & FOUR_BIT_MASK);
+        return kindCode(raw);
     }
 
     public long slotId() {
-        return (raw >>> SLOT_SHIFT) & SLOT_MASK;
+        return slotId(raw);
     }
 
     public int generation() {
-        return (int) ((raw >>> GENERATION_SHIFT) & GENERATION_MASK);
+        return generation(raw);
     }
 
     public int flags() {
-        return (int) (raw & FOUR_BIT_MASK);
+        return flags(raw);
     }
 
     public void requireNonNull() {

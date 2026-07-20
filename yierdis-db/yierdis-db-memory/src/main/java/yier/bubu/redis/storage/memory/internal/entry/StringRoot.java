@@ -57,7 +57,8 @@ public final class StringRoot implements TypeRoot {
     }
 
     public ValueEncoding encoding(ValueHandle handle) {
-        try (NativeObjectView ignored = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_ONLY)) {
+        long rawHandle = requireStringRaw(handle);
+        try (NativeObjectView ignored = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_ONLY)) {
             return ValueEncoding.STRING_RAW;
         }
     }
@@ -67,13 +68,13 @@ public final class StringRoot implements TypeRoot {
         if (handle == null || handle.isNull()) {
             return false;
         }
-        NativeHandle nativeHandle;
+        long rawHandle;
         try {
-            nativeHandle = requireStringHandle(handle);
+            rawHandle = requireStringRaw(handle);
         } catch (IllegalArgumentException e) {
             return false;
         }
-        try (NativeObjectView ignored = allocator.resolve(nativeHandle, NativeAccessMode.READ_ONLY)) {
+        try (NativeObjectView ignored = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_ONLY)) {
             return true;
         } catch (StaleNativeHandleException e) {
             return false;
@@ -83,19 +84,19 @@ public final class StringRoot implements TypeRoot {
     public ValueHandle store(byte[] value) {
         ensureOpen();
         int len = value == null ? 0 : value.length;
-        NativeHandle nativeHandle = allocator.allocate(NativeObjectKind.STRING_BYTES, len);
+        long rawHandle = allocator.allocateRaw(NativeObjectKind.STRING_BYTES, len);
         boolean ok = false;
         try {
             if (len > 0) {
-                try (NativeObjectView view = allocator.resolve(nativeHandle, NativeAccessMode.READ_WRITE)) {
+                try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_WRITE)) {
                     view.setBytes(0, value, 0, len);
                 }
             }
             ok = true;
-            return ValueHandle.fromNativeHandle(nativeHandle);
+            return ValueHandle.fromRaw(rawHandle);
         } finally {
             if (!ok) {
-                allocator.free(nativeHandle);
+                allocator.freeRaw(rawHandle);
             }
         }
     }
@@ -103,19 +104,19 @@ public final class StringRoot implements TypeRoot {
     public ValueHandle store(BytesSlice value) {
         ensureOpen();
         int len = value == null ? 0 : value.length();
-        NativeHandle nativeHandle = allocator.allocate(NativeObjectKind.STRING_BYTES, len);
+        long rawHandle = allocator.allocateRaw(NativeObjectKind.STRING_BYTES, len);
         boolean ok = false;
         try {
             if (len > 0) {
-                try (NativeObjectView view = allocator.resolve(nativeHandle, NativeAccessMode.READ_WRITE)) {
+                try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_WRITE)) {
                     setBytes(view, 0, value, len);
                 }
             }
             ok = true;
-            return ValueHandle.fromNativeHandle(nativeHandle);
+            return ValueHandle.fromRaw(rawHandle);
         } finally {
             if (!ok) {
-                allocator.free(nativeHandle);
+                allocator.freeRaw(rawHandle);
             }
         }
     }
@@ -123,9 +124,10 @@ public final class StringRoot implements TypeRoot {
     public void overwrite(ValueHandle handle, byte[] value) {
         ensureOpen();
         int len = value == null ? 0 : value.length;
-        resizePreservingHandle(handle, len);
+        long rawHandle = requireStringRaw(handle);
+        resizePreservingHandle(rawHandle, len);
         if (len > 0) {
-            try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_WRITE)) {
+            try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_WRITE)) {
                 view.setBytes(0, value, 0, len);
             }
         }
@@ -134,9 +136,10 @@ public final class StringRoot implements TypeRoot {
     public void overwrite(ValueHandle handle, BytesSlice value) {
         ensureOpen();
         int len = value == null ? 0 : value.length();
-        resizePreservingHandle(handle, len);
+        long rawHandle = requireStringRaw(handle);
+        resizePreservingHandle(rawHandle, len);
         if (len > 0) {
-            try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_WRITE)) {
+            try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_WRITE)) {
                 setBytes(view, 0, value, len);
             }
         }
@@ -144,13 +147,14 @@ public final class StringRoot implements TypeRoot {
 
     public int append(ValueHandle handle, byte[] suffix) {
         ensureOpen();
+        long rawHandle = requireStringRaw(handle);
         if (suffix == null || suffix.length == 0) {
-            return length(handle);
+            return lengthRaw(rawHandle);
         }
-        int oldLen = length(handle);
+        int oldLen = lengthRaw(rawHandle);
         int nextLen = Math.addExact(oldLen, suffix.length);
-        resizePreservingHandle(handle, nextLen);
-        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_WRITE)) {
+        resizePreservingHandle(rawHandle, nextLen);
+        try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_WRITE)) {
             view.setBytes(oldLen, suffix, 0, suffix.length);
         }
         return nextLen;
@@ -158,14 +162,15 @@ public final class StringRoot implements TypeRoot {
 
     public int append(ValueHandle handle, BytesSlice suffix) {
         ensureOpen();
+        long rawHandle = requireStringRaw(handle);
         if (suffix == null || suffix.length() == 0) {
-            return length(handle);
+            return lengthRaw(rawHandle);
         }
-        int oldLen = length(handle);
+        int oldLen = lengthRaw(rawHandle);
         int suffixLen = suffix.length();
         int nextLen = Math.addExact(oldLen, suffixLen);
-        resizePreservingHandle(handle, nextLen);
-        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_WRITE)) {
+        resizePreservingHandle(rawHandle, nextLen);
+        try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_WRITE)) {
             setBytes(view, oldLen, suffix, suffixLen);
         }
         return nextLen;
@@ -176,19 +181,21 @@ public final class StringRoot implements TypeRoot {
         if (requiredLen < 0) {
             throw new IllegalArgumentException("requiredLen must be >= 0");
         }
-        int oldLen = length(handle);
+        long rawHandle = requireStringRaw(handle);
+        int oldLen = lengthRaw(rawHandle);
         if (requiredLen <= oldLen) {
             return;
         }
-        resizePreservingHandle(handle, requiredLen);
-        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_WRITE)) {
+        resizePreservingHandle(rawHandle, requiredLen);
+        try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_WRITE)) {
             zeroFill(view, oldLen, requiredLen);
         }
     }
 
     public byte byteAt(ValueHandle handle, int index) {
         ensureOpen();
-        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_ONLY)) {
+        long rawHandle = requireStringRaw(handle);
+        try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_ONLY)) {
             if (index < 0 || index >= view.size()) {
                 throw new IndexOutOfBoundsException();
             }
@@ -198,7 +205,8 @@ public final class StringRoot implements TypeRoot {
 
     public void setByteAt(ValueHandle handle, int index, byte value) {
         ensureOpen();
-        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_WRITE)) {
+        long rawHandle = requireStringRaw(handle);
+        try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_WRITE)) {
             if (index < 0 || index >= view.size()) {
                 throw new IndexOutOfBoundsException();
             }
@@ -208,7 +216,7 @@ public final class StringRoot implements TypeRoot {
 
     public BytesSlice slice(ValueHandle handle) {
         ensureOpen();
-        byte[] copy = copy(handle);
+        byte[] copy = copyRaw(requireStringRaw(handle));
         if (copy.length == 0) {
             return EMPTY_SLICE;
         }
@@ -217,56 +225,47 @@ public final class StringRoot implements TypeRoot {
 
     public BulkStringValue retainedValue(ValueHandle handle) {
         ensureOpen();
-        NativeHandle nativeHandle = requireStringHandle(handle);
+        long rawHandle = requireStringRaw(handle);
         int payloadLength;
         long retainedBytes;
-        try (NativeObjectView view = allocator.resolve(nativeHandle, NativeAccessMode.READ_ONLY)) {
+        try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_ONLY)) {
             payloadLength = view.size();
             retainedBytes = view.capacity();
         }
 
-        allocator.pin(nativeHandle);
+        allocator.pinRaw(rawHandle);
         boolean ownershipTransferred = false;
         try {
             BulkStringValue value = BulkStringValue.owned(
-                    NativeBytesSlice.retained(allocator, nativeHandle, 0, payloadLength),
+                    NativeBytesSlice.retained(allocator, NativeHandle.fromRaw(rawHandle), 0, payloadLength),
                     payloadLength,
                     retainedBytes,
-                    () -> allocator.unpin(nativeHandle)
+                    () -> allocator.unpinRaw(rawHandle)
             );
             ownershipTransferred = true;
             return value;
         } finally {
             if (!ownershipTransferred) {
-                allocator.unpin(nativeHandle);
+                allocator.unpinRaw(rawHandle);
             }
         }
     }
 
     public byte[] copy(ValueHandle handle) {
         ensureOpen();
-        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_ONLY)) {
-            int len = view.size();
-            if (len == 0) {
-                return new byte[0];
-            }
-            byte[] out = new byte[len];
-            view.getBytes(0, out, 0, len);
-            return out;
-        }
+        return copyRaw(requireStringRaw(handle));
     }
 
     public int length(ValueHandle handle) {
         ensureOpen();
-        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_ONLY)) {
-            return view.size();
-        }
+        return lengthRaw(requireStringRaw(handle));
     }
 
     @Override
     public long estimatedBytes(ValueHandle handle) {
         ensureOpen();
-        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_ONLY)) {
+        long rawHandle = requireStringRaw(handle);
+        try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_ONLY)) {
             return view.capacity();
         }
     }
@@ -276,7 +275,7 @@ public final class StringRoot implements TypeRoot {
         if (handle == null) {
             return;
         }
-        allocator.free(requireStringHandle(handle));
+        allocator.freeRaw(requireStringRaw(handle));
     }
 
     @Override
@@ -313,25 +312,46 @@ public final class StringRoot implements TypeRoot {
         }
     }
 
-    private NativeHandle requireStringHandle(ValueHandle handle) {
+    private long requireStringRaw(ValueHandle handle) {
         Objects.requireNonNull(handle, "handle");
-        NativeHandle nativeHandle = handle.nativeHandle();
-        nativeHandle.requireNonNull();
-        NativeObjectKind kind = NativeObjectKind.STRING_BYTES;
-        if (nativeHandle.domain() != kind.domain() || nativeHandle.kindCode() != kind.code()) {
-            throw new IllegalArgumentException("value handle is not string bytes: " + handle.raw());
+        long rawHandle = handle.raw();
+        NativeHandle.requireValidRaw(rawHandle);
+        if (NativeHandle.isNull(rawHandle)) {
+            throw new IllegalArgumentException("native handle must not be null");
         }
-        return nativeHandle;
+        NativeObjectKind kind = NativeObjectKind.STRING_BYTES;
+        if (NativeHandle.domainCode(rawHandle) != kind.domain().code()
+                || NativeHandle.kindCode(rawHandle) != kind.code()) {
+            throw new IllegalArgumentException("value handle is not string bytes: " + rawHandle);
+        }
+        return rawHandle;
     }
 
-    private void resizePreservingHandle(ValueHandle handle, int len) {
+    private void resizePreservingHandle(long rawHandle, int len) {
         if (len < 0) {
             throw new IllegalArgumentException("len must be >= 0");
         }
-        NativeHandle nativeHandle = requireStringHandle(handle);
-        NativeHandle resized = allocator.realloc(nativeHandle, len, NativeReallocPolicy.PRESERVE_PREFIX);
-        if (resized.raw() != nativeHandle.raw()) {
+        long resizedRawHandle = allocator.reallocRaw(rawHandle, len, NativeReallocPolicy.PRESERVE_PREFIX);
+        if (resizedRawHandle != rawHandle) {
             throw new IllegalStateException("string realloc changed stable handle");
+        }
+    }
+
+    private byte[] copyRaw(long rawHandle) {
+        try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_ONLY)) {
+            int len = view.size();
+            if (len == 0) {
+                return new byte[0];
+            }
+            byte[] out = new byte[len];
+            view.getBytes(0, out, 0, len);
+            return out;
+        }
+    }
+
+    private int lengthRaw(long rawHandle) {
+        try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_ONLY)) {
+            return view.size();
         }
     }
 

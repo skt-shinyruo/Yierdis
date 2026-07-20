@@ -76,6 +76,27 @@ public class YierdisBenchEntrypointTest {
         for (String option : LEGACY_OPTIONS) {
             Assert.assertFalse("legacy option remains in help " + option, usage.contains(option));
         }
+        Assert.assertTrue(usage.contains("storage"));
+        Assert.assertEquals("", err.toString());
+    }
+
+    @Test
+    public void storageHelpListsFootprintOptionsWithoutRunningTheWorkload() {
+        CommandLine commandLine = YierdisBench.commandLine();
+        StringWriter out = new StringWriter();
+        StringWriter err = new StringWriter();
+        commandLine.setOut(new PrintWriter(out));
+        commandLine.setErr(new PrintWriter(err));
+
+        Assert.assertEquals(0, commandLine.execute("storage", "--help"));
+
+        String usage = out.toString();
+        Assert.assertTrue(usage.contains("--keys"));
+        Assert.assertTrue(usage.contains("--key-size"));
+        Assert.assertTrue(usage.contains("--value-size"));
+        Assert.assertTrue(usage.contains("--warmup-operations"));
+        Assert.assertTrue(usage.contains("--precision"));
+        Assert.assertTrue(usage.contains("--format"));
         Assert.assertEquals("", err.toString());
     }
 

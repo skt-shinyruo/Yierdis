@@ -1,6 +1,7 @@
 package yier.bubu.redis.memory.foreign;
 
 import java.lang.reflect.Modifier;
+import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -25,6 +26,90 @@ import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
 
 public class YierdisStableNativeAllocatorTest {
+    @Test
+    public void typedLittleEndianAccessSupportsUnalignedValues() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-typed-access");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 16)) {
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
+
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
+                view.setIntLittleEndian(1, 0x89abcdef);
+                view.setLongLittleEndian(7, 0x8070605040302010L);
+                Assert.assertEquals(0x89abcdef, view.getIntLittleEndian(1));
+                Assert.assertEquals(0x8070605040302010L, view.getLongLittleEndian(7));
+                Assert.assertEquals((byte) 0xef, view.getByte(1));
+                Assert.assertEquals((byte) 0x89, view.getByte(4));
+                Assert.assertEquals((byte) 0x10, view.getByte(7));
+                Assert.assertEquals((byte) 0x80, view.getByte(14));
+            }
+
+            try (NativeObjectView readOnly = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(0x89abcdef, readOnly.getIntLittleEndian(1));
+                Assert.assertEquals(0x8070605040302010L, readOnly.getLongLittleEndian(7));
+                Assert.assertThrows(
+                        NativeMemoryException.class,
+                        () -> readOnly.setIntLittleEndian(0, 1)
+                );
+                Assert.assertThrows(
+                        IndexOutOfBoundsException.class,
+                        () -> readOnly.getLongLittleEndian(17)
+                );
+            }
+
+            allocator.free(handle);
+        }
+    }
+
+    @Test
+    public void nativeCopyBytesPreservesOverlappingMemmoveSemantics() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-overlap-copy");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 16)) {
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 10);
+            byte[] initial = new byte[]{0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
+                view.setBytes(0, initial, 0, initial.length);
+                Assert.assertTrue(view.contentEquals(0, initial, 0, initial.length));
+                Assert.assertFalse(view.contentEquals(1, initial, 0, initial.length - 1));
+                view.copyBytes(0, 2, 8);
+                byte[] movedRight = new byte[10];
+                view.getBytes(0, movedRight, 0, movedRight.length);
+                Assert.assertArrayEquals(new byte[]{0, 1, 0, 1, 2, 3, 4, 5, 6, 7}, movedRight);
+
+                view.copyBytes(2, 0, 8);
+                byte[] movedLeft = new byte[10];
+                view.getBytes(0, movedLeft, 0, movedLeft.length);
+                Assert.assertArrayEquals(new byte[]{0, 1, 2, 3, 4, 5, 6, 7, 6, 7}, movedLeft);
+            }
+
+            allocator.free(handle);
+        }
+    }
+
+    @Test
+    public void automaticSlotCapacityStartsLazyAndAllocatesNormally() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-auto-capacity");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 0)) {
+            Assert.assertEquals(0L, allocator.metadataStats().activeMetadataSegments());
+
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 1);
+
+            Assert.assertEquals(1L, allocator.metadataStats().activeMetadataSegments());
+            allocator.free(handle);
+        }
+    }
+
+    @Test
+    public void negativeSlotCapacityIsRejectedBeforeAllocatorConstruction() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-negative-capacity")) {
+            Assert.assertThrows(
+                    IllegalArgumentException.class,
+                    () -> new YierdisStableNativeAllocator(runtime, -1)
+            );
+            Assert.assertEquals(0L, runtime.usedBytes());
+        }
+    }
+
     @Test
     public void productionAllocatorMethodsAreNotSynchronized() {
         for (String name : List.of("allocate", "realloc", "free", "pin", "unpin", "resolve", "stats")) {
@@ -495,6 +580,71 @@ public class YierdisStableNativeAllocatorTest {
             NativeHandle reused = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
             Assert.assertNotEquals(handle.generation(), reused.generation());
             allocator.free(reused);
+        }
+    }
+
+    @Test
+    public void rawHandleLifecycleMatchesObjectHandleLifecycle() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-raw-handle-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
+
+            long rawHandle = allocator.allocateRaw(NativeObjectKind.STRING_BYTES, 8);
+            NativeHandle handle = NativeHandle.fromRaw(rawHandle);
+            try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_WRITE)) {
+                Assert.assertEquals(handle, view.handle());
+                view.setByte(0, (byte) 41);
+            }
+
+            long resizedRawHandle = allocator.reallocRaw(
+                    rawHandle,
+                    24,
+                    NativeReallocPolicy.PRESERVE_PREFIX
+            );
+            Assert.assertEquals(rawHandle, resizedRawHandle);
+            try (NativeObjectView resized = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(24, resized.size());
+                Assert.assertEquals(41, resized.getByte(0));
+            }
+
+            allocator.pinRaw(rawHandle);
+            NativeObjectView retained = allocator.resolvePinnedRaw(rawHandle, NativeAccessMode.READ_ONLY);
+            allocator.freeRaw(rawHandle);
+            Assert.assertEquals(41, retained.getByte(0));
+            retained.close();
+            allocator.unpinRaw(rawHandle);
+
+            Assert.assertEquals(0L, allocator.stats().liveObjects());
+            NativeHandle reused = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
+            Assert.assertNotEquals(handle.generation(), reused.generation());
+            allocator.free(reused);
+        }
+    }
+
+    @Test
+    public void openViewByteReadsDoNotRebuildMetadataObjects() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-view-allocation-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
+            long rawHandle = allocator.allocateRaw(NativeObjectKind.STRING_BYTES, 1);
+            try (NativeObjectView writable = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_WRITE)) {
+                writable.setByte(0, (byte) 7);
+            }
+
+            com.sun.management.ThreadMXBean bean = allocatedBytesBean();
+            try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_ONLY)) {
+                int checksum = 0;
+                for (int index = 0; index < 10_000; index++) {
+                    checksum += view.getByte(0);
+                }
+                long before = bean.getThreadAllocatedBytes(Thread.currentThread().threadId());
+                for (int index = 0; index < 100_000; index++) {
+                    checksum += view.getByte(0);
+                }
+                long allocatedBytes = bean.getThreadAllocatedBytes(Thread.currentThread().threadId()) - before;
+
+                Assert.assertEquals(770_000, checksum);
+                Assert.assertTrue("open view reads allocated " + allocatedBytes + " bytes", allocatedBytes < 4_096L);
+            }
+            allocator.freeRaw(rawHandle);
         }
     }
 
@@ -1282,6 +1432,17 @@ public class YierdisStableNativeAllocatorTest {
 
     private static NativeLocation locationOf(YierdisNativeObjectMeta meta) {
         return new NativeLocation(meta.segmentId(), meta.address());
+    }
+
+    private static com.sun.management.ThreadMXBean allocatedBytesBean() {
+        java.lang.management.ThreadMXBean bean = ManagementFactory.getThreadMXBean();
+        Assert.assertTrue("thread allocation accounting is unavailable", bean instanceof com.sun.management.ThreadMXBean);
+        com.sun.management.ThreadMXBean allocatedBytesBean = (com.sun.management.ThreadMXBean) bean;
+        Assert.assertTrue("thread allocation accounting is unsupported", allocatedBytesBean.isThreadAllocatedMemorySupported());
+        if (!allocatedBytesBean.isThreadAllocatedMemoryEnabled()) {
+            allocatedBytesBean.setThreadAllocatedMemoryEnabled(true);
+        }
+        return allocatedBytesBean;
     }
 
     private record NativeLocation(int pageId, long pageOffset) {

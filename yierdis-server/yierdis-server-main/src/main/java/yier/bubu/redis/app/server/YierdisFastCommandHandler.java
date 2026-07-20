@@ -13,13 +13,17 @@ import yier.bubu.redis.protocol.resp.netty.InboundReadCreditHandler;
 import yier.bubu.redis.protocol.resp.netty.RespProtocolError;
 
 import java.io.IOException;
+import java.util.ArrayDeque;
 import java.util.Objects;
 
 public final class YierdisFastCommandHandler extends ChannelInboundHandlerAdapter {
     private static final Logger log = LoggerFactory.getLogger(YierdisFastCommandHandler.class);
+    private static final String DEFERRED_BUSY_ERROR = "ERR busy queue_full";
 
     private final CommandExecutor<NettyExecutionConnection> executor;
     private final RedisReplyWriterFactory replyWriterFactory;
+    private final ArrayDeque<PendingSubmission> pendingSubmissions = new ArrayDeque<>();
+    private CommandExecutor.CapacityRegistration capacityRegistration = CommandExecutor.CapacityRegistration.NONE;
 
     public YierdisFastCommandHandler(
             CommandExecutor<NettyExecutionConnection> executor,
@@ -54,28 +58,19 @@ public final class YierdisFastCommandHandler extends ChannelInboundHandlerAdapte
         }
 
         if (message instanceof ExecutionRequest request) {
-            CommandExecutor.SubmitRejectReason reject = executor.trySubmit(connection, request, registered.slot());
-            if (reject == null) {
+            PendingSubmission submission = new PendingSubmission(request, registered.slot());
+            if (!pendingSubmissions.isEmpty()) {
+                pendingSubmissions.addLast(submission);
+                pauseExecutorInput(ctx);
                 return;
             }
-            if (reject == CommandExecutor.SubmitRejectReason.CONNECTION_CLOSING) {
-                closeRequest(request);
-                registered.slot().cancel(ReplyCleanupOwner.SEQUENCER);
-                return;
-            }
-            try {
-                RedisReplyWriter writer = replyWriterFactory.newWriter(connection.session(), registered.slot().sink());
-                writer.error("ERR busy " + reject.code());
-                registered.slot().markReady(false);
-            } catch (Throwable ignored) {
-                registered.slot().cancel(ReplyCleanupOwner.SEQUENCER);
-            } finally {
-                closeRequest(request);
-            }
+            submitOrDefer(ctx, connection, submission);
             return;
         }
 
         if (message instanceof RespProtocolError error) {
+            cancelCapacityWait();
+            completePendingSubmissionsWithError(connection);
             try {
                 if (connection.markClosing()) {
                     safeDisableAutoRead(ctx);
@@ -93,6 +88,20 @@ public final class YierdisFastCommandHandler extends ChannelInboundHandlerAdapte
     }
 
     @Override
+    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        cancelCapacityWait();
+        clearPendingSubmissions();
+        super.channelInactive(ctx);
+    }
+
+    @Override
+    public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
+        cancelCapacityWait();
+        clearPendingSubmissions();
+        super.handlerRemoved(ctx);
+    }
+
+    @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         if (ctx == null) {
             return;
@@ -105,6 +114,8 @@ public final class YierdisFastCommandHandler extends ChannelInboundHandlerAdapte
         NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
         if (root instanceof IOException) {
             log.debug("Transport closed from {}: {}", remote, logMessage);
+            cancelCapacityWait();
+            clearPendingSubmissions();
             if (connection != null && connection.markClosing()) {
                 safeDisableAutoRead(ctx);
             }
@@ -114,9 +125,13 @@ public final class YierdisFastCommandHandler extends ChannelInboundHandlerAdapte
 
         log.error("Internal error from {}: {}", remote, logMessage, root);
         if (connection == null || connection.replyGate() == null) {
+            cancelCapacityWait();
+            clearPendingSubmissions();
             ctx.close();
             return;
         }
+        cancelCapacityWait();
+        completePendingSubmissionsWithError(connection);
         if (connection.markClosing()) {
             safeDisableAutoRead(ctx);
         }
@@ -143,6 +158,171 @@ public final class YierdisFastCommandHandler extends ChannelInboundHandlerAdapte
             throw new IllegalStateException("missing NettyExecutionConnection");
         }
         return connection;
+    }
+
+    private void submitOrDefer(
+            ChannelHandlerContext ctx,
+            NettyExecutionConnection connection,
+            PendingSubmission submission
+    ) {
+        CommandExecutor.SubmitRejectReason reject = executor.trySubmit(
+                connection,
+                submission.request,
+                submission.slot
+        );
+        if (reject == null) {
+            resumeExecutorInputIfDrained(ctx);
+            return;
+        }
+        if (isCapacityRejection(reject)) {
+            pendingSubmissions.addFirst(submission);
+            pauseExecutorInput(ctx);
+            armCapacityWait(ctx);
+            return;
+        }
+        terminateRejectedSubmission(ctx, connection, submission, reject);
+    }
+
+    private void retryPendingSubmissions(ChannelHandlerContext ctx) {
+        capacityRegistration = CommandExecutor.CapacityRegistration.NONE;
+        if (!ctx.channel().isActive()) {
+            clearPendingSubmissions();
+            return;
+        }
+        NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
+        if (connection == null) {
+            clearPendingSubmissions();
+            ctx.close();
+            return;
+        }
+        while (!pendingSubmissions.isEmpty()) {
+            PendingSubmission submission = pendingSubmissions.removeFirst();
+            CommandExecutor.SubmitRejectReason reject = executor.trySubmit(
+                    connection,
+                    submission.request,
+                    submission.slot
+            );
+            if (reject == null) {
+                continue;
+            }
+            if (isCapacityRejection(reject)) {
+                pendingSubmissions.addFirst(submission);
+                armCapacityWait(ctx);
+                return;
+            }
+            terminateRejectedSubmission(ctx, connection, submission, reject);
+            if (!ctx.channel().isActive() || connection.context().isClosing()) {
+                clearPendingSubmissions();
+                return;
+            }
+        }
+        resumeExecutorInputIfDrained(ctx);
+    }
+
+    private void armCapacityWait(ChannelHandlerContext ctx) {
+        cancelCapacityWait();
+        PendingSubmission head = pendingSubmissions.peekFirst();
+        if (head == null) {
+            resumeExecutorInputIfDrained(ctx);
+            return;
+        }
+        capacityRegistration = executor.onCapacityAvailable(
+                head.request,
+                () -> ctx.executor().execute(() -> retryPendingSubmissions(ctx))
+        );
+    }
+
+    private void terminateRejectedSubmission(
+            ChannelHandlerContext ctx,
+            NettyExecutionConnection connection,
+            PendingSubmission submission,
+            CommandExecutor.SubmitRejectReason reject
+    ) {
+        if (reject == CommandExecutor.SubmitRejectReason.REQUEST_TOO_LARGE) {
+            try {
+                RedisReplyWriter writer = replyWriterFactory.newWriter(connection.session(), submission.slot.sink());
+                writer.error("ERR request exceeds executor queue byte limit");
+                submission.slot.markReady(false);
+            } catch (Throwable ignored) {
+                submission.slot.cancel(ReplyCleanupOwner.SEQUENCER);
+            } finally {
+                closeRequest(submission.request);
+            }
+            return;
+        }
+        closeRequest(submission.request);
+        submission.slot.cancel(ReplyCleanupOwner.SEQUENCER);
+        if (reject == CommandExecutor.SubmitRejectReason.NOT_RUNNING
+                && !connection.context().isClosing()) {
+            // 正常 shutdown 由 reply sequencer 在 READY/WRITING 回复排空后关闭 transport。
+            ctx.close();
+        }
+    }
+
+    private void cancelCapacityWait() {
+        CommandExecutor.CapacityRegistration registration = capacityRegistration;
+        capacityRegistration = CommandExecutor.CapacityRegistration.NONE;
+        registration.cancel();
+    }
+
+    private void clearPendingSubmissions() {
+        PendingSubmission submission;
+        while ((submission = pendingSubmissions.pollFirst()) != null) {
+            closeRequest(submission.request);
+            submission.slot.cancel(ReplyCleanupOwner.SEQUENCER);
+        }
+    }
+
+    private void completePendingSubmissionsWithError(NettyExecutionConnection connection) {
+        PendingSubmission submission;
+        while ((submission = pendingSubmissions.pollFirst()) != null) {
+            try {
+                RedisReplyWriter writer = replyWriterFactory.newWriter(
+                        connection.session(),
+                        submission.slot.sink()
+                );
+                writer.error(DEFERRED_BUSY_ERROR);
+                submission.slot.markReady(false);
+            } catch (Throwable ignored) {
+                submission.slot.cancel(ReplyCleanupOwner.SEQUENCER);
+            } finally {
+                closeRequest(submission.request);
+            }
+        }
+    }
+
+    private void resumeExecutorInputIfDrained(ChannelHandlerContext ctx) {
+        if (!pendingSubmissions.isEmpty()) {
+            return;
+        }
+        InboundReadCreditHandler readCredits = ctx.pipeline().get(InboundReadCreditHandler.class);
+        if (readCredits != null) {
+            readCredits.resumeExecutorInput();
+            return;
+        }
+        try {
+            ctx.channel().config().setAutoRead(true);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static boolean isCapacityRejection(CommandExecutor.SubmitRejectReason reject) {
+        return reject == CommandExecutor.SubmitRejectReason.QUEUE_FULL
+                || reject == CommandExecutor.SubmitRejectReason.BYTES_BUDGET
+                || reject == CommandExecutor.SubmitRejectReason.OFFER_FAILED;
+    }
+
+    private static void pauseExecutorInput(ChannelHandlerContext ctx) {
+        InboundReadCreditHandler readCredits = ctx.pipeline().get(InboundReadCreditHandler.class);
+        if (readCredits != null) {
+            readCredits.pauseExecutorInput();
+            return;
+        }
+        try {
+            ctx.channel().config().setAutoRead(false);
+        } catch (Throwable ignored) {
+            // ignore
+        }
     }
 
     private static void closeRequest(ExecutionRequest request) {
@@ -193,5 +373,12 @@ public final class YierdisFastCommandHandler extends ChannelInboundHandlerAdapte
             msg = msg.substring(0, 256);
         }
         return msg;
+    }
+
+    private record PendingSubmission(ExecutionRequest request, ReplySlot slot) {
+        private PendingSubmission {
+            Objects.requireNonNull(request, "request");
+            Objects.requireNonNull(slot, "slot");
+        }
     }
 }

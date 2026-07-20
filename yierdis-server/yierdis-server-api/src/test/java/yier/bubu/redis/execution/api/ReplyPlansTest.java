@@ -24,6 +24,14 @@ public class ReplyPlansTest {
     }
 
     @Test
+    public void genericArrayAcceptsAlreadyEncodedNestedReplies() {
+        ReplyPlan plan = ReplyPlans.array(2, 12L, 7L);
+
+        Assert.assertEquals(16L, plan.encodedUpperBoundBytes());
+        Assert.assertEquals(7L, plan.retainedSourceBytes());
+    }
+
+    @Test
     public void arithmeticSaturatesAndMaximumUsesNoExactPayloadClaim() {
         ReplyPlan saturated = ReplyPlans.raw(Long.MAX_VALUE, 1L);
         Assert.assertEquals(Long.MAX_VALUE, saturated.totalUpperBoundBytes());

@@ -3,18 +3,18 @@ package yier.bubu.redis.storage.api;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Redis SCAN 游标 v2（rehash-aware）。
+ * Redis SCAN 系列命令的游标 v2（rehash-aware）。
  * <p>
  * 兼容 Redis 生态约定：游标仍以“数字字符串”的 bulk string 形式传输；当返回值为 {@code 0} 时表示扫描结束。
  * <p>
  * v2 语义：
  * <ul>
- *   <li>在 keyspace rehash 的“双表期”，游标会携带 table generation、phase 与 slot position。</li>
+ *   <li>在字典 rehash 的“双表期”，游标会携带 table generation、phase 与 slot position。</li>
  *   <li>该游标用于 best-effort 增量遍历，不提供强一致保证；目标是“可推进、可终止”。</li>
  * </ul>
  *
  * <p>29 位 generation 有限：只有完整迭代跨越的结构代数少于 {@code 2^29} 时，才保证不会遗漏
- * 全程存在的 key。该 token 不是可跨数据库生命周期保存的书签。</p>
+ * 全程存在的 key 或集合元素。该 token 不是可跨数据库或集合生命周期保存的书签。</p>
  */
 public final class ScanCursorV2 {
     private static final byte[] ZERO_ASCII = "0".getBytes(StandardCharsets.US_ASCII);

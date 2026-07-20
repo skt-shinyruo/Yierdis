@@ -7,7 +7,10 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
+import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.memory.api.NativeObjectView;
+import yier.bubu.redis.memory.api.StaleNativeHandleException;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
@@ -148,6 +151,63 @@ public class OffHeapStringStorageTest {
             }
         } finally {
             db.shutdown();
+        }
+    }
+
+    @Test
+    public void shrinkingSetReleasesSupersededNativeCapacity() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("string-shrink-release")) {
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
+                    runtime,
+                    10_000_000L,
+                    MaxmemoryPolicy.NOEVICTION,
+                    5,
+                    5,
+                    5
+            );
+            try {
+                db.bindToCurrentThread();
+                byte[] key = b("k");
+                byte[] largeValue = new byte[24 * 1024];
+
+                Assert.assertTrue(db.writes().strings().setString(
+                        key,
+                        largeValue,
+                        SetMode.NORMAL,
+                        null
+                ).value());
+                long supersededRaw = db.keyLifecycle().liveEntryRecord(key).valueHandle().raw();
+                long supersededCapacity;
+                try (NativeObjectView view = db.keyLifecycle().nativeAllocator()
+                        .resolveRaw(supersededRaw, NativeAccessMode.READ_ONLY)) {
+                    supersededCapacity = view.capacity();
+                }
+                long committedBefore = db.keyLifecycle().nativeAllocator().stats().committedBytes();
+
+                Assert.assertTrue(db.writes().strings().setString(key, b("x"), SetMode.NORMAL, null).value());
+
+                long replacementRaw = db.keyLifecycle().liveEntryRecord(key).valueHandle().raw();
+                Assert.assertNotEquals(supersededRaw, replacementRaw);
+                Assert.assertThrows(StaleNativeHandleException.class, () -> {
+                    try (NativeObjectView ignored = db.keyLifecycle().nativeAllocator()
+                            .resolveRaw(supersededRaw, NativeAccessMode.READ_ONLY)) {
+                    }
+                });
+                try (NativeObjectView replacement = db.keyLifecycle().nativeAllocator()
+                        .resolveRaw(replacementRaw, NativeAccessMode.READ_ONLY)) {
+                    Assert.assertTrue(replacement.capacity() < supersededCapacity);
+                }
+                Assert.assertEquals(1L, db.keyLifecycle().nativeAllocator().stats()
+                        .objectCount(NativeObjectKind.STRING_BYTES));
+                Assert.assertTrue(
+                        "release plus trim must return the superseded string page",
+                        db.keyLifecycle().nativeAllocator().stats().committedBytes() < committedBefore
+                );
+                Assert.assertArrayEquals(b("x"), db.reads().strings().getStringBytes(key));
+            } finally {
+                db.shutdown();
+            }
+            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 

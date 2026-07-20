@@ -8,7 +8,8 @@ import yier.bubu.redis.execution.api.ReplyReservationSink;
 import yier.bubu.redis.execution.api.ReplyTooLargeException;
 
 import java.util.Objects;
-import java.util.function.Consumer;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
 
 /**
  * 将一个回复写入固定上限的 ByteBuf 块，并在每次 allocator 调用前转换对应 lease。
@@ -26,10 +27,16 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
     private final int chunkPayloadBytes;
     private final long controlReservationBytes;
     private final long maxTotalBytes;
-    private final Consumer<AutoCloseable> ownerResourceCloser;
+    private final Function<AutoCloseable, CompletableFuture<Void>> ownerResourceCloser;
 
     private ReplyPlan plan;
+    /** 顶层聚合回复的计划；建立后，子命令计划只能校验，不能替换这份 reservation。 */
+    private ReplyPlan envelopePlan;
+    private long envelopePendingEncodedBytes;
+    private long envelopeLastRequireWrittenBytes;
+    private long envelopeRetainedSourceBytes;
     private long maximumRetainedSourceBytes;
+    private long maximumNestedPendingEncodedBytes;
     private long writtenBytes;
     private ByteBuf current;
     private int currentWritable;
@@ -58,7 +65,7 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
             int chunkPayloadBytes,
             long controlReservationBytes,
             long maxTotalBytes,
-            Consumer<AutoCloseable> ownerResourceCloser
+            Function<AutoCloseable, CompletableFuture<Void>> ownerResourceCloser
     ) {
         this.slot = Objects.requireNonNull(slot, "slot");
         this.allocator = Objects.requireNonNull(allocator, "allocator");
@@ -97,7 +104,7 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
             int chunkPayloadBytes,
             long controlReservationBytes,
             long maxTotalBytes,
-            Consumer<AutoCloseable> ownerResourceCloser
+            Function<AutoCloseable, CompletableFuture<Void>> ownerResourceCloser
     ) {
         Objects.requireNonNull(channel, "channel");
         return new BoundedChunkedReplySink(
@@ -112,8 +119,17 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
 
     @Override
     public void require(ReplyPlan requestedPlan) {
+        slot.runProducerAction(() -> requireLocked(requestedPlan));
+    }
+
+    private void requireLocked(ReplyPlan requestedPlan) {
         Objects.requireNonNull(requestedPlan, "requestedPlan");
         ensureOpen();
+
+        if (envelopePlan != null) {
+            reserveNestedEnvelope(requestedPlan);
+            return;
+        }
 
         if (plan != null && plan.reserveMaximum()) {
             reserveNestedMaximumPlan(requestedPlan);
@@ -142,7 +158,36 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
     }
 
     @Override
+    public void requireEnvelope(ReplyPlan requestedPlan) {
+        slot.runProducerAction(() -> requireEnvelopeLocked(requestedPlan));
+    }
+
+    private void requireEnvelopeLocked(ReplyPlan requestedPlan) {
+        Objects.requireNonNull(requestedPlan, "requestedPlan");
+        ensureOpen();
+        if (envelopePlan != null) {
+            if (!envelopePlan.equals(requestedPlan)) {
+                throw new IllegalStateException("reply envelope cannot be replaced");
+            }
+            return;
+        }
+        if (writtenBytes != 0L || (plan != null && !plan.equals(requestedPlan))) {
+            throw new IllegalStateException("reply envelope must be reserved before nested output");
+        }
+
+        require(requestedPlan);
+        envelopePlan = requestedPlan;
+        envelopePendingEncodedBytes = 0L;
+        envelopeLastRequireWrittenBytes = writtenBytes;
+        envelopeRetainedSourceBytes = 0L;
+    }
+
+    @Override
     public void writeBytes(byte[] source, int sourceIndex, int length) {
+        slot.runProducerAction(() -> writeBytesLocked(source, sourceIndex, length));
+    }
+
+    private void writeBytesLocked(byte[] source, int sourceIndex, int length) {
         Objects.requireNonNull(source, "source");
         Objects.checkFromIndexSize(sourceIndex, length, source.length);
         ensureOpen();
@@ -170,6 +215,9 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
             currentWritable -= writable;
             writtenBytes += writable;
         }
+        if (plan != null && plan.reserveMaximum() && maximumNestedPendingEncodedBytes > 0L) {
+            maximumNestedPendingEncodedBytes = Math.max(0L, maximumNestedPendingEncodedBytes - length);
+        }
     }
 
     @Override
@@ -179,8 +227,10 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
 
     @Override
     public boolean transferOwnership(AutoCloseable resource) {
-        AutoCloseable source = Objects.requireNonNull(resource, "resource");
-        slot.addOwnedResource(() -> ownerResourceCloser.accept(source));
+        slot.runProducerAction(() -> {
+            AutoCloseable source = Objects.requireNonNull(resource, "resource");
+            slot.addOwnedResource(source, ownerResourceCloser);
+        });
         return true;
     }
 
@@ -220,10 +270,12 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
             if (surplus > 0L) {
                 slot.lease().releaseAllocated(surplus);
             }
-            slot.addChunk(buffer, actualCharge);
-            current = buffer;
-            currentWritable = buffer.writableBytes();
+            // addChunk 在拒绝时也消费并释放 buffer；先清空局部所有权，catch 才不会二次 release。
+            ByteBuf registered = buffer;
             buffer = null;
+            slot.addChunk(registered, actualCharge);
+            current = registered;
+            currentWritable = registered.writableBytes();
         } catch (RuntimeException | Error failure) {
             if (buffer != null) {
                 buffer.release();
@@ -244,7 +296,8 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
             }
             return (int) Math.min(chunkPayloadBytes, remainingPlanBytes);
         }
-        return Math.min(chunkPayloadBytes, Math.max(1, remainingWriteBytes));
+        long plannedBytes = Math.max(remainingWriteBytes, maximumNestedPendingEncodedBytes);
+        return (int) Math.min(chunkPayloadBytes, Math.max(1L, plannedBytes));
     }
 
     private void ensureControlWriteFits(int additionalBytes) {
@@ -293,6 +346,7 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
 
     private void reserveNestedMaximumPlan(ReplyPlan requestedPlan) {
         if (requestedPlan.reserveMaximum()) {
+            maximumNestedPendingEncodedBytes = 0L;
             return;
         }
         long encodedCharge = saturatedAdd(
@@ -307,6 +361,41 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
             throw tooLarge("nested reply exceeds its maximum reservation");
         }
         maximumRetainedSourceBytes = saturatedAdd(maximumRetainedSourceBytes, requestedPlan.retainedSourceBytes());
+        // 后续多次小 write 共享按整个 nested plan 分配的 chunk，实际 overhead 才不会超过这里的预检模型。
+        maximumNestedPendingEncodedBytes = requestedPlan.encodedUpperBoundBytes();
+    }
+
+    private void reserveNestedEnvelope(ReplyPlan requestedPlan) {
+        if (envelopePlan.reserveMaximum()) {
+            reserveNestedMaximumPlan(requestedPlan);
+            return;
+        }
+        if (requestedPlan.reserveMaximum()) {
+            slot.fail(ReplyCleanupOwner.SEQUENCER);
+            throw tooLarge("nested reply has no finite envelope plan");
+        }
+
+        // 保留来源不会因编码而减少，因此每个子计划都必须计入 envelope 的 retained-source 上界。
+        long retained = saturatedAdd(envelopeRetainedSourceBytes, requestedPlan.retainedSourceBytes());
+        if (retained > envelopePlan.retainedSourceBytes()) {
+            slot.fail(ReplyCleanupOwner.SEQUENCER);
+            throw tooLarge("nested reply retained sources exceed its envelope");
+        }
+
+        // 子计划的上界在对应字节写出前保持挂账；先结算上一个子计划已经写出的字节，
+        // 再加入当前上界，避免把已写出的部分重复计算。
+        long writtenSinceLastRequire = Math.max(0L, writtenBytes - envelopeLastRequireWrittenBytes);
+        envelopePendingEncodedBytes = Math.max(0L, envelopePendingEncodedBytes - writtenSinceLastRequire);
+        long pending = saturatedAdd(envelopePendingEncodedBytes, requestedPlan.encodedUpperBoundBytes());
+        long projected = saturatedAdd(writtenBytes, pending);
+        if (projected > envelopePlan.encodedUpperBoundBytes()) {
+            slot.fail(ReplyCleanupOwner.SEQUENCER);
+            throw tooLarge("nested reply encoded bytes exceed its envelope");
+        }
+
+        envelopePendingEncodedBytes = pending;
+        envelopeLastRequireWrittenBytes = writtenBytes;
+        envelopeRetainedSourceBytes = retained;
     }
 
     private boolean fitsMaximumWrite(int additionalBytes) {
@@ -347,13 +436,14 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
         return left > Long.MAX_VALUE / right ? Long.MAX_VALUE : left * right;
     }
 
-    private static void closeResource(AutoCloseable resource) {
+    private static CompletableFuture<Void> closeResource(AutoCloseable resource) {
         try {
             resource.close();
+            return CompletableFuture.completedFuture(null);
         } catch (RuntimeException | Error failure) {
-            throw failure;
+            return CompletableFuture.failedFuture(failure);
         } catch (Exception failure) {
-            throw new IllegalStateException("reply resource close failed", failure);
+            return CompletableFuture.failedFuture(new IllegalStateException("reply resource close failed", failure));
         }
     }
 }

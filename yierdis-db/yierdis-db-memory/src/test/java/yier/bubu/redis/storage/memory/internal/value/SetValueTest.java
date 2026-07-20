@@ -14,6 +14,26 @@ import java.util.List;
 
 public class SetValueTest {
     @Test
+    public void hashtableEncodingDoesNotAllocateValueSlots() throws ReflectiveOperationException {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("set-without-value-slots");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+            SetValue set = new SetValue(allocator);
+            try {
+                List<byte[]> members = List.of(b("alpha"));
+                long heapUpperBound = SetValue.preparedNewHeapUpperBound(members);
+
+                Assert.assertEquals(1, set.addAll(members));
+                Assert.assertEquals(ValueEncoding.SET_HT, set.encoding());
+                Assert.assertNull(nativeMapValueSlots(set, "members"));
+                Assert.assertTrue(set.heapEstimatedBytes() <= heapUpperBound);
+                Assert.assertTrue(set.contains(b("alpha")));
+            } finally {
+                set.close();
+            }
+        }
+    }
+
+    @Test
     public void nativeSetKeepsIntsetMembersAndUpgradesToNativeHashtable() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("set-test");
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
@@ -61,6 +81,18 @@ public class SetValueTest {
 
     private static byte[] b(String value) {
         return value.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static Object nativeMapValueSlots(Object owner, String mapFieldName) throws ReflectiveOperationException {
+        var mapField = owner.getClass().getDeclaredField(mapFieldName);
+        mapField.setAccessible(true);
+        Object map = mapField.get(owner);
+        var activeField = NativeByteMap.class.getDeclaredField("active");
+        activeField.setAccessible(true);
+        Object table = activeField.get(map);
+        var valueSlotsField = table.getClass().getDeclaredField("valueSlots");
+        valueSlotsField.setAccessible(true);
+        return valueSlotsField.get(table);
     }
 
     private static final class RecordingSink implements BulkStringSink {

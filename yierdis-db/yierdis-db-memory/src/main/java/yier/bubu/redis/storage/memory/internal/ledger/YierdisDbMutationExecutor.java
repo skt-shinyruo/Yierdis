@@ -4,8 +4,8 @@ import java.util.Objects;
 import java.util.function.IntSupplier;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
-import yier.bubu.redis.common.command.CommandRecordScope;
 import yier.bubu.redis.common.command.ImmutableCommandRecord;
+import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeAllocationGrowth;
@@ -115,6 +115,11 @@ public final class YierdisDbMutationExecutor {
     }
 
     public <T> T execute(MutationPlan<T> plan) {
+        return execute(MutationContext.none(), plan);
+    }
+
+    public <T> T execute(MutationContext mutationContext, MutationPlan<T> plan) {
+        Objects.requireNonNull(mutationContext, "mutationContext");
         Objects.requireNonNull(plan, "plan");
         threadChecker.run();
         health.requireWritable();
@@ -129,10 +134,14 @@ public final class YierdisDbMutationExecutor {
         if (nativeAllocator == null) {
             throw new IllegalStateException("prepared mutations require a native allocator");
         }
-        return executePrepared(plan, publisher);
+        return executePrepared(mutationContext, plan, publisher);
     }
 
-    private <T> T executePrepared(MutationPlan<T> plan, DbCommitPublisher publisher) {
+    private <T> T executePrepared(
+            MutationContext mutationContext,
+            MutationPlan<T> plan,
+            DbCommitPublisher publisher
+    ) {
         MemoryReservation reservation = null;
         NativeAllocationScope allocations = null;
         PreparedDbMutation<T> prepared = null;
@@ -141,6 +150,7 @@ public final class YierdisDbMutationExecutor {
         boolean commitStarted = false;
         boolean allocationsPromoted = false;
         boolean ledgerSettled = false;
+        boolean nativePageTrimAttempted = false;
         boolean publishChanges = plan.requiresCommitStream() && publisher.enabled();
         try {
             boolean reclamation = plan.admissionMode() == MutationPlan.AdmissionMode.RECLAMATION;
@@ -165,7 +175,7 @@ public final class YierdisDbMutationExecutor {
             requireLedgerDeltaInvariant(ledger.usedBytes(), prepared.actualDeltaBytes());
 
             if (publishChanges && prepared.outcome().changedAny()) {
-                commitRecord = plan.retainCommitRecord();
+                commitRecord = plan.retainCommitRecord(mutationContext);
                 commitReservation = publisher.reserve(
                         commitDbIndexSupplier.getAsInt(),
                         plan.commitKind(),
@@ -188,7 +198,8 @@ public final class YierdisDbMutationExecutor {
                 commitReservation = null;
             }
             prepared.releaseSuperseded();
-            if (ledger.maxmemoryEnabled() && prepared.actualDeltaBytes() <= 0L) {
+            if (ledger.maxmemoryEnabled() && prepared.shouldTrimNativePagesAfterCommit()) {
+                nativePageTrimAttempted = true;
                 nativeAllocator.trimEmptyPages(MemoryPressureBudget.unlimited());
             }
             return result;
@@ -207,6 +218,7 @@ public final class YierdisDbMutationExecutor {
                     reservation,
                     allocationsPromoted,
                     ledgerSettled,
+                    nativePageTrimAttempted,
                     invariantFailure
             );
             failPublicationAfterCommit(publisher, commitReservation, invariantFailure);
@@ -224,6 +236,7 @@ public final class YierdisDbMutationExecutor {
                         reservation,
                         allocationsPromoted,
                         ledgerSettled,
+                        nativePageTrimAttempted,
                         failure
                 );
                 failPublicationAfterCommit(publisher, commitReservation, failure);
@@ -389,6 +402,7 @@ public final class YierdisDbMutationExecutor {
             MemoryReservation reservation,
             boolean allocationsPromoted,
             boolean ledgerSettled,
+            boolean nativePageTrimAttempted,
             Throwable failure
     ) {
         if (!allocationsPromoted && allocations != null) {
@@ -403,6 +417,22 @@ public final class YierdisDbMutationExecutor {
                 ledger.commit(reservation, prepared.actualDeltaBytes());
             } catch (RuntimeException | Error settlementFailure) {
                 failure.addSuppressed(settlementFailure);
+            }
+        }
+        if (prepared != null) {
+            try {
+                prepared.releaseSuperseded();
+            } catch (RuntimeException | Error cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+            if (!nativePageTrimAttempted
+                    && ledger.maxmemoryEnabled()
+                    && prepared.shouldTrimNativePagesAfterCommit()) {
+                try {
+                    nativeAllocator.trimEmptyPages(MemoryPressureBudget.unlimited());
+                } catch (RuntimeException | Error trimFailure) {
+                    failure.addSuppressed(trimFailure);
+                }
             }
         }
     }
@@ -497,12 +527,12 @@ public final class YierdisDbMutationExecutor {
             return true;
         }
 
-        default ImmutableCommandRecord retainCommitRecord() {
-            ImmutableCommandRecord current = CommandRecordScope.current();
-            if (current == null) {
+        default ImmutableCommandRecord retainCommitRecord(MutationContext context) {
+            ImmutableCommandRecord record = Objects.requireNonNull(context, "context").retainCommandRecord();
+            if (record == null) {
                 throw new DbCommitStreamUnavailableException();
             }
-            return current.retain();
+            return record;
         }
 
         PreparedDbMutation<T> prepare();

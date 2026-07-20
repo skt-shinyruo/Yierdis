@@ -12,6 +12,8 @@ public final class ZSkipList {
     private static final long FIXED_HEAP_BYTES = 72L;
     private static final long ARRAY_HEADER_BYTES = 16L;
     private static final long NODE_FIXED_HEAP_BYTES = 48L;
+    private static final long PREPARED_INSERT_FIXED_HEAP_BYTES = 64L;
+    private static final long PREPARED_DELETE_FIXED_HEAP_BYTES = 64L;
 
     private final NativeByteStore memberStore;
     private final Node header = new Node(MAX_LEVEL, null, 0);
@@ -59,12 +61,29 @@ public final class ZSkipList {
     }
 
     public Node insert(double score, NativeHandle member) {
+        return insertPrepared(prepareInsert(score, member));
+    }
+
+    PreparedInsert prepareInsert(double score, NativeHandle member) {
         if (member == null) {
             throw new IllegalArgumentException("member must not be null");
         }
+        return new PreparedInsert(
+                new Node(levelFor(score, member), member, canonicalScore(score)),
+                new Node[MAX_LEVEL],
+                new int[MAX_LEVEL]
+        );
+    }
 
-        Node[] update = new Node[MAX_LEVEL];
-        int[] rank = new int[MAX_LEVEL];
+    Node insertPrepared(PreparedInsert prepared) {
+        Objects.requireNonNull(prepared, "prepared");
+        prepared.ensurePending();
+        Node newNode = prepared.node;
+        double score = newNode.score;
+        NativeHandle member = newNode.member;
+
+        Node[] update = prepared.update;
+        int[] rank = prepared.rank;
 
         Node x = header;
         for (int i = level - 1; i >= 0; i--) {
@@ -76,7 +95,7 @@ public final class ZSkipList {
             update[i] = x;
         }
 
-        int newLevel = levelFor(score, member);
+        int newLevel = newNode.forward.length;
         if (newLevel > level) {
             for (int i = level; i < newLevel; i++) {
                 rank[i] = 0;
@@ -86,7 +105,6 @@ public final class ZSkipList {
             level = newLevel;
         }
 
-        Node newNode = new Node(newLevel, member, score);
         for (int i = 0; i < newLevel; i++) {
             newNode.forward[i] = update[i].forward[i];
             update[i].forward[i] = newNode;
@@ -108,6 +126,7 @@ public final class ZSkipList {
 
         length++;
         nodeLevelCount += newLevel;
+        prepared.published = true;
         return newNode;
     }
 
@@ -116,7 +135,35 @@ public final class ZSkipList {
             return false;
         }
 
-        Node[] update = new Node[MAX_LEVEL];
+        return deletePrepared(new PreparedDelete(null, canonicalScore(score), member, new Node[MAX_LEVEL]));
+    }
+
+    PreparedDelete prepareDelete(Node expected) {
+        Objects.requireNonNull(expected, "expected");
+        return new PreparedDelete(
+                expected,
+                expected.score,
+                expected.member,
+                new Node[MAX_LEVEL]
+        );
+    }
+
+    void validatePreparedDelete(PreparedDelete prepared) {
+        Objects.requireNonNull(prepared, "prepared");
+        prepared.ensurePending();
+        Node candidate = findPreparedDeleteCandidate(prepared);
+        if (!matchesPreparedDelete(candidate, prepared)) {
+            throw new IllegalStateException("prepared skiplist delete source node changed");
+        }
+    }
+
+    boolean deletePrepared(PreparedDelete prepared) {
+        Objects.requireNonNull(prepared, "prepared");
+        prepared.ensurePending();
+        double score = prepared.score;
+        NativeHandle member = prepared.member;
+
+        Node[] update = prepared.update;
         Node x = header;
         for (int i = level - 1; i >= 0; i--) {
             while (x.forward[i] != null && lessThan(x.forward[i], score, member)) {
@@ -126,7 +173,7 @@ public final class ZSkipList {
         }
 
         x = x.forward[0];
-        if (x == null || Double.compare(x.score, score) != 0 || memberStore.compareLex(x.member, member) != 0) {
+        if (!matchesPreparedDelete(x, prepared)) {
             return false;
         }
 
@@ -151,7 +198,26 @@ public final class ZSkipList {
 
         length--;
         nodeLevelCount -= x.forward.length;
+        prepared.published = true;
         return true;
+    }
+
+    private Node findPreparedDeleteCandidate(PreparedDelete prepared) {
+        Node current = header;
+        for (int index = level - 1; index >= 0; index--) {
+            while (current.forward[index] != null
+                    && lessThan(current.forward[index], prepared.score, prepared.member)) {
+                current = current.forward[index];
+            }
+        }
+        return current.forward[0];
+    }
+
+    private boolean matchesPreparedDelete(Node candidate, PreparedDelete prepared) {
+        return candidate != null
+                && scoresEqual(candidate.score, prepared.score)
+                && memberStore.compareLex(candidate.member, prepared.member) == 0
+                && (prepared.expected == null || candidate == prepared.expected);
     }
 
     public Node getElementByRank(int rank) {
@@ -181,6 +247,23 @@ public final class ZSkipList {
         return FIXED_HEAP_BYTES + headerBytes + nodes + nodeLevelCount * (Long.BYTES + Integer.BYTES);
     }
 
+    long heapEstimatedBytesAfterPreparedChanges(int addedNodes, long levelDelta) {
+        if (addedNodes < 0) {
+            throw new IllegalArgumentException("addedNodes must be >= 0");
+        }
+        long targetLength = (long) length + addedNodes;
+        long targetLevelCount = nodeLevelCount + levelDelta;
+        if (targetLevelCount < 0L) {
+            throw new IllegalArgumentException("targetLevelCount must be >= 0");
+        }
+        long headerBytes = NODE_FIXED_HEAP_BYTES
+                + ARRAY_HEADER_BYTES + (long) MAX_LEVEL * Long.BYTES
+                + ARRAY_HEADER_BYTES + (long) MAX_LEVEL * Integer.BYTES;
+        long nodes = targetLength * (NODE_FIXED_HEAP_BYTES + ARRAY_HEADER_BYTES * 2L);
+        return FIXED_HEAP_BYTES + headerBytes + nodes
+                + targetLevelCount * (Long.BYTES + Integer.BYTES);
+    }
+
     static long heapUpperBoundForNodes(long nodeCount) {
         if (nodeCount < 0L) {
             return Long.MAX_VALUE;
@@ -194,6 +277,31 @@ public final class ZSkipList {
         return addSaturating(FIXED_HEAP_BYTES + headerBytes, nodes);
     }
 
+    static long preparedInsertWorkspaceHeapUpperBound(long insertCount) {
+        if (insertCount < 0L) {
+            return Long.MAX_VALUE;
+        }
+        long perInsert = PREPARED_INSERT_FIXED_HEAP_BYTES
+                + ARRAY_HEADER_BYTES + (long) MAX_LEVEL * Long.BYTES
+                + ARRAY_HEADER_BYTES + (long) MAX_LEVEL * Integer.BYTES;
+        return multiplySaturating(insertCount, perInsert);
+    }
+
+    static long preparedMutationHeapUpperBound(long insertCount, long deleteCount) {
+        if (insertCount < 0L || deleteCount < 0L || deleteCount > insertCount) {
+            return Long.MAX_VALUE;
+        }
+        long nodeBytes = NODE_FIXED_HEAP_BYTES + ARRAY_HEADER_BYTES * 2L
+                + (long) MAX_LEVEL * (Long.BYTES + Integer.BYTES);
+        long insertBytes = addSaturating(
+                multiplySaturating(insertCount, nodeBytes),
+                preparedInsertWorkspaceHeapUpperBound(insertCount)
+        );
+        long perDelete = PREPARED_DELETE_FIXED_HEAP_BYTES
+                + ARRAY_HEADER_BYTES + (long) MAX_LEVEL * Long.BYTES;
+        return addSaturating(insertBytes, multiplySaturating(deleteCount, perDelete));
+    }
+
     private static long addSaturating(long left, long right) {
         return left > Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
     }
@@ -205,13 +313,21 @@ public final class ZSkipList {
     }
 
     private boolean lessThan(Node node, double score, NativeHandle member) {
-        if (Double.compare(node.score, score) < 0) {
+        if (node.score < score) {
             return true;
         }
-        if (Double.compare(node.score, score) > 0) {
+        if (node.score > score) {
             return false;
         }
         return memberStore.compareLex(node.member, member) < 0;
+    }
+
+    private static double canonicalScore(double score) {
+        return score == 0.0d ? 0.0d : score;
+    }
+
+    private static boolean scoresEqual(double left, double right) {
+        return left == right;
     }
 
     private int levelFor(double score, NativeHandle member) {
@@ -243,6 +359,50 @@ public final class ZSkipList {
             this.score = score;
             this.forward = new Node[level];
             this.span = new int[level];
+        }
+    }
+
+    static final class PreparedInsert {
+        private final Node node;
+        private final Node[] update;
+        private final int[] rank;
+        private boolean published;
+
+        private PreparedInsert(Node node, Node[] update, int[] rank) {
+            this.node = node;
+            this.update = update;
+            this.rank = rank;
+        }
+
+        Node node() {
+            return node;
+        }
+
+        private void ensurePending() {
+            if (published) {
+                throw new IllegalStateException("prepared skiplist insert is already published");
+            }
+        }
+    }
+
+    static final class PreparedDelete {
+        private final Node expected;
+        private final double score;
+        private final NativeHandle member;
+        private final Node[] update;
+        private boolean published;
+
+        private PreparedDelete(Node expected, double score, NativeHandle member, Node[] update) {
+            this.expected = expected;
+            this.score = score;
+            this.member = member;
+            this.update = update;
+        }
+
+        private void ensurePending() {
+            if (published) {
+                throw new IllegalStateException("prepared skiplist delete is already published");
+            }
         }
     }
 }

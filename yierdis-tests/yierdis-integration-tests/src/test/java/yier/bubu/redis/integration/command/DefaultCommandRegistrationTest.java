@@ -116,6 +116,7 @@ public class DefaultCommandRegistrationTest {
         metadata(metadata, "HGET", 3, 1, 1, 1);
         metadata(metadata, "HGETALL", 2, 1, 1, 1);
         metadata(metadata, "HLEN", 2, 1, 1, 1);
+        metadata(metadata, "HSCAN", -3, 1, 1, 1);
         metadata(metadata, "HSET", -4, 1, 1, 1);
         metadata(metadata, "INCR", 2, 1, 1, 1);
         metadata(metadata, "KEYS", 2, 0, 0, 0);
@@ -145,6 +146,7 @@ public class DefaultCommandRegistrationTest {
         metadata(metadata, "SISMEMBER", 3, 1, 1, 1);
         metadata(metadata, "SMEMBERS", 2, 1, 1, 1);
         metadata(metadata, "SREM", -3, 1, 1, 1);
+        metadata(metadata, "SSCAN", -3, 1, 1, 1);
         metadata(metadata, "STRLEN", 2, 1, 1, 1);
         metadata(metadata, "TTL", 2, 1, 1, 1);
         metadata(metadata, "TYPE", 2, 1, 1, 1);
@@ -156,6 +158,7 @@ public class DefaultCommandRegistrationTest {
         metadata(metadata, "ZREMRANGEBYSCORE", 4, 1, 1, 1);
         metadata(metadata, "ZREVRANGE", -4, 1, 1, 1);
         metadata(metadata, "ZREVRANGEBYSCORE", -4, 1, 1, 1);
+        metadata(metadata, "ZSCAN", -3, 1, 1, 1);
         return Collections.unmodifiableMap(metadata);
     }
 

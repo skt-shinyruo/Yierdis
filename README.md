@@ -37,7 +37,7 @@ mvn -DskipTests package
 
 ```bash
 mvn -q -DskipTests package
-java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar --port 6378
+java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar --port 6378 --maxmemoryBytes 0
 ```
 
 用 `redis-cli` 验证：
@@ -98,7 +98,11 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 
 ## Benchmark 和 Smoke
 
-`yierdis-benchmark` 只连接已经运行的 Yierdis。项目不会由 benchmark 启动 Yierdis，不会运行 Redis 或 `redis-benchmark`，也不定义或执行把两边组合在一起的 harness。Redis 进程、官方工具和 Redis 结果文件都由操作者单独管理。
+`yierdis-benchmark` 提供两条刻意分离的测量路径：默认命令通过 TCP/RESP 压测已经运行的 Yierdis；显式 `storage` 子命令在进程内直接测量 DB SET 和存储 footprint，不需要启动 server。两类吞吐覆盖的边界不同，不能直接横向比较。
+
+### RESP benchmark
+
+默认 RESP benchmark 是 connect-only。项目不会由它启动 Yierdis，不会运行 Redis 或 `redis-benchmark`，也不定义或执行把两边组合在一起的 harness。Redis 进程、官方工具和 Redis 结果文件都由操作者单独管理。
 
 1. 先单独启动 Yierdis，benchmark 默认目标端口是 `16378`：
 
@@ -140,6 +144,21 @@ CSV 只把前八个官方 Redis-style columns 作为共享比较面；字段名�
 Yierdis CSV 在这八列之后增加 `status` 和 `reason`，它们不是共享 Redis fields。操作者负责保存、配对和解释两边结果；项目不计算跨 server ratio 或 release threshold。
 
 5. Yierdis 当前完整运行的支持状态是 `17 SUCCESS / 4 UNSUPPORTED`。`SPOP`、`ZPOPMIN`、`MSET (10 keys)` 和 `XADD` 仍保留各自 canonical row，但七个数值 metrics 为空，不能按零吞吐或零延迟解释。
+
+### Storage footprint benchmark
+
+存储基准在单 owner thread 上直接调用 `RuntimeDbEngine` 的 `StringWriteOps.setString(...)`，排除 TCP、RESP、server 和 executor 开销。默认写入 1,000,000 个唯一 key，key/value 都是固定 16 bytes，并先在一个随后关闭的临时 DB 中预热 50,000 次：
+
+```bash
+./scripts/storage-bench.sh
+STORAGE_KEYS=10000000 FORMAT=csv ./scripts/storage-bench.sh
+```
+
+`STORAGE_KEYS` 最大为 10,000,000；还可设置 `STORAGE_KEY_SIZE`、`STORAGE_VALUE_SIZE`、`STORAGE_WARMUP_OPERATIONS`、`STORAGE_PRECISION`、`FORMAT`、`BENCH_JVM_OPTS` 和 `SKIP_BUILD`。
+
+主 footprint 口径是 `heap estimate + native metadata committed + native data committed`。SET 计时结束后会先完成未决的增量 rehash，再抓取稳定 snapshot；`bytes/key` 使用该 accounted footprint 减去空 DB baseline 后再除以 key 数，不使用 RSS。Linux RSS 来自 `/proc/self/status`，仅是 best-effort 辅助观测；不可用时 human 输出显示 `unavailable`，CSV 对应列留空。
+
+### Smoke
 
 快速 smoke：
 

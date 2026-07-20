@@ -28,6 +28,15 @@ public final class YierdisFastCommandProcessor {
     public void execute(ExecutionRequest request, CommandContext ctx) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(ctx, "ctx");
+        try {
+            executeCommand(request, ctx);
+        } finally {
+            // CommandSupport 复用的 DB view 可能持有同一 context；统一释放借用，避免其继续强引用已完成命令的 argv。
+            ctx.releaseMutationContext();
+        }
+    }
+
+    private void executeCommand(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
         int argc = request.argc();
         if (argc <= 0) {
@@ -74,6 +83,7 @@ public final class YierdisFastCommandProcessor {
     private void executeSpec(CommandSpec<?> spec, ExecutionRequest request, CommandContext ctx) {
         CommandParseResult<?> parsed = spec.parse(request);
         if (!parsed.ok()) {
+            transactionQueuePolicy.markActiveTransactionAborted(ctx);
             ctx.out().error(parsed.error().toReplyMessage());
             return;
         }

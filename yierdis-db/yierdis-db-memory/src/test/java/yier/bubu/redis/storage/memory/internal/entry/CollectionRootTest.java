@@ -89,12 +89,21 @@ public class CollectionRootTest {
             );
             try {
                 Assert.assertTrue(prepared.stagedNonNativeGrowthBytes() > 0L);
+                Assert.assertEquals(source, prepared.handle());
+                Assert.assertEquals(ValueEncoding.ZSET_SKIPLIST, prepared.targetEncoding());
+                Assert.assertEquals(before, zset.heapBytes());
+
+                prepared.commit();
                 Assert.assertEquals(
-                        zset.heapBytes() - before,
-                        prepared.stagedNonNativeGrowthBytes()
+                        prepared.targetHeapEstimatedBytes(),
+                        zset.heapEstimatedBytes(source)
                 );
+                Assert.assertEquals(before, zset.heapBytes());
+                prepared.releaseSuperseded();
+                Assert.assertTrue(zset.heapBytes() > before);
+                Assert.assertTrue(zset.heapBytes() - before <= prepared.stagedNonNativeGrowthBytes());
             } finally {
-                zset.release(prepared.handle());
+                prepared.close();
                 zset.release(source);
             }
         }

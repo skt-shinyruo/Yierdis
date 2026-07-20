@@ -3,6 +3,8 @@ package yier.bubu.redis.app.server;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelPromise;
+import io.netty.util.concurrent.PromiseCombiner;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -27,6 +29,7 @@ final class ConnectionReplySequencer implements AutoCloseable {
     private final ReplyEgressStats replyEgressStats;
     private final ArrayDeque<ReplySlot> slots = new ArrayDeque<>();
     private final Set<ReplySlot> inFlightSlots = new LinkedHashSet<>();
+    private final Set<ReplySlot> liveSlots = new LinkedHashSet<>();
 
     private long nextSequence;
     private boolean acceptingRegistrations = true;
@@ -34,6 +37,8 @@ final class ConnectionReplySequencer implements AutoCloseable {
     private boolean drainRequested;
     private boolean shutdownRequested;
     private boolean shutdownCloseRequested;
+    private boolean channelClosed;
+    private Throwable terminationFailure;
     private final CompletableFuture<Void> shutdownDrained = new CompletableFuture<>();
 
     ConnectionReplySequencer(Channel channel, OutboundConnectionMemory connectionMemory, Runnable disableInput) {
@@ -63,23 +68,26 @@ final class ConnectionReplySequencer implements AutoCloseable {
         this.disableInput = disableInput == null ? () -> { } : disableInput;
         this.sinkFactory = Objects.requireNonNull(sinkFactory, "sinkFactory");
         this.replyEgressStats = Objects.requireNonNull(replyEgressStats, "replyEgressStats");
-        channel.closeFuture().addListener(ignored -> {
+        channel.closeFuture().addListener(future -> {
             cancelAll(ReplyCleanupOwner.CONNECTION_CLOSE);
-            shutdownDrained.complete(null);
+            markChannelClosed(future.isSuccess() ? null : future.cause());
         });
     }
 
     Optional<ReplySlot> register(OutboundMemoryLease lease) {
         Objects.requireNonNull(lease, "lease");
+        ReplySlot slot;
         synchronized (lock) {
             if (!acceptingRegistrations || !channel.isOpen() || nextSequence == Long.MAX_VALUE) {
                 lease.close();
                 return Optional.empty();
             }
-            ReplySlot slot = new ReplySlot(nextSequence++, lease, this, sinkFactory, replyEgressStats);
+            slot = new ReplySlot(nextSequence++, lease, this, sinkFactory, replyEgressStats);
             slots.addLast(slot);
-            return Optional.of(slot);
+            liveSlots.add(slot);
         }
+        slot.cleanupCompletion().whenComplete((ignored, failure) -> slotCleanupCompleted(slot, failure));
+        return Optional.of(slot);
     }
 
     boolean acceptingRegistrations() {
@@ -115,7 +123,16 @@ final class ConnectionReplySequencer implements AutoCloseable {
             shutdownRequested = true;
         }
         disableInput.run();
+        if (!channel.isOpen() || channel.closeFuture().isDone()) {
+            cancelAll(ReplyCleanupOwner.SHUTDOWN);
+            markChannelClosed(null);
+            return shutdownDrained;
+        }
         executeOnEventLoop(this::beginShutdownOnEventLoop);
+        return shutdownDrained;
+    }
+
+    CompletableFuture<Void> terminationFuture() {
         return shutdownDrained;
     }
 
@@ -154,7 +171,7 @@ final class ConnectionReplySequencer implements AutoCloseable {
                     if (state != ReplySlotState.READY) {
                         break;
                     }
-                    removeHead(head);
+                    moveHeadToInFlight(head);
                     try {
                         writeHead(head);
                         flushRequired = true;
@@ -217,25 +234,38 @@ final class ConnectionReplySequencer implements AutoCloseable {
         if (channel.isOpen()) {
             channel.close();
         } else {
-            shutdownDrained.complete(null);
+            markChannelClosed(null);
         }
     }
 
     private void writeHead(ReplySlot slot) {
         List<ReplySlot.ReplyChunk> chunks = slot.takeChunksForWrite();
-        addInFlight(slot);
-        ChannelFuture lastWrite = null;
+        if (chunks == null) {
+            removeInFlight(slot);
+            return;
+        }
+        PromiseCombiner writes = new PromiseCombiner(channel.eventLoop());
         if (chunks.isEmpty()) {
-            lastWrite = channel.write(Unpooled.EMPTY_BUFFER);
+            writes.add(channel.write(Unpooled.EMPTY_BUFFER));
         } else {
-            for (ReplySlot.ReplyChunk chunk : chunks) {
-                ChannelFuture chunkWrite = channel.write(chunk.buffer());
-                lastWrite = chunkWrite;
-                chunkWrite.addListener(ignored -> slot.chunkWriteCompleted(chunk));
+            int submitted = 0;
+            try {
+                for (ReplySlot.ReplyChunk chunk : chunks) {
+                    ChannelFuture chunkWrite = channel.write(chunk.buffer());
+                    submitted++;
+                    chunkWrite.addListener(ignored -> slot.chunkWriteCompleted(chunk));
+                    writes.add(chunkWrite);
+                }
+            } catch (RuntimeException | Error failure) {
+                for (int index = submitted; index < chunks.size(); index++) {
+                    slot.chunkWriteAborted(chunks.get(index));
+                }
+                throw failure;
             }
         }
-        ChannelFuture finalWrite = lastWrite;
-        finalWrite.addListener(future -> {
+        ChannelPromise aggregate = channel.newPromise();
+        writes.finish(aggregate);
+        aggregate.addListener(future -> {
             if (future.isSuccess()) {
                 slot.finish(ReplyCleanupOwner.FINAL_WRITE_FUTURE);
                 removeInFlight(slot);
@@ -302,8 +332,13 @@ final class ConnectionReplySequencer implements AutoCloseable {
         }
     }
 
-    private void addInFlight(ReplySlot slot) {
+    private void moveHeadToInFlight(ReplySlot slot) {
         synchronized (lock) {
+            if (slots.peekFirst() == slot) {
+                slots.removeFirst();
+            } else {
+                slots.remove(slot);
+            }
             inFlightSlots.add(slot);
         }
     }
@@ -311,6 +346,37 @@ final class ConnectionReplySequencer implements AutoCloseable {
     private void removeInFlight(ReplySlot slot) {
         synchronized (lock) {
             inFlightSlots.remove(slot);
+        }
+    }
+
+    private void slotCleanupCompleted(ReplySlot slot, Throwable failure) {
+        synchronized (lock) {
+            liveSlots.remove(slot);
+            terminationFailure = recordFailure(terminationFailure, unwrapCompletionFailure(failure));
+        }
+        completeTerminationIfPossible();
+    }
+
+    private void markChannelClosed(Throwable failure) {
+        synchronized (lock) {
+            channelClosed = true;
+            terminationFailure = recordFailure(terminationFailure, failure);
+        }
+        completeTerminationIfPossible();
+    }
+
+    private void completeTerminationIfPossible() {
+        Throwable failure;
+        synchronized (lock) {
+            if (!channelClosed || !liveSlots.isEmpty() || shutdownDrained.isDone()) {
+                return;
+            }
+            failure = terminationFailure;
+        }
+        if (failure == null) {
+            shutdownDrained.complete(null);
+        } else {
+            shutdownDrained.completeExceptionally(failure);
         }
     }
 
@@ -326,10 +392,63 @@ final class ConnectionReplySequencer implements AutoCloseable {
     }
 
     private void executeOnEventLoop(Runnable action) {
-        if (channel.eventLoop().inEventLoop()) {
-            action.run();
-            return;
+        try {
+            if (channel.eventLoop().inEventLoop()) {
+                action.run();
+                return;
+            }
+            channel.eventLoop().execute(action);
+        } catch (RuntimeException | Error schedulingFailure) {
+            failAfterEventLoopRejection(schedulingFailure);
         }
-        channel.eventLoop().execute(action);
+    }
+
+    private void failAfterEventLoopRejection(Throwable failure) {
+        replyEgressStats.writeFailure();
+        synchronized (lock) {
+            terminationFailure = recordFailure(terminationFailure, failure);
+        }
+        cancelAll(ReplyCleanupOwner.SEQUENCER);
+        try {
+            if (channel.isRegistered()) {
+                channel.close();
+            } else {
+                channel.unsafe().closeForcibly();
+            }
+        } catch (Throwable closeFailure) {
+            synchronized (lock) {
+                terminationFailure = recordFailure(terminationFailure, closeFailure);
+            }
+            try {
+                channel.unsafe().closeForcibly();
+            } catch (Throwable forceCloseFailure) {
+                synchronized (lock) {
+                    terminationFailure = recordFailure(terminationFailure, forceCloseFailure);
+                }
+            }
+        }
+        if (!channel.isOpen()) {
+            markChannelClosed(null);
+        }
+    }
+
+    private static Throwable unwrapCompletionFailure(Throwable failure) {
+        if (failure instanceof java.util.concurrent.CompletionException completion && completion.getCause() != null) {
+            return completion.getCause();
+        }
+        return failure;
+    }
+
+    private static Throwable recordFailure(Throwable current, Throwable next) {
+        if (next == null) {
+            return current;
+        }
+        if (current == null) {
+            return next;
+        }
+        if (current != next) {
+            current.addSuppressed(next);
+        }
+        return current;
     }
 }

@@ -13,6 +13,7 @@ import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
 import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyError;
+import yier.bubu.redis.testutil.ReplyNull;
 import yier.bubu.redis.testutil.ReplyObject;
 import yier.bubu.redis.testutil.ReplySimpleString;
 
@@ -244,6 +245,39 @@ public class TransactionCommandTest {
                 ReplyObject exec = client.execute(Arrays.asList(b("EXEC")));
                 Assert.assertTrue(exec instanceof ReplyError);
                 Assert.assertEquals("EXECABORT Transaction discarded because of previous errors.", ((ReplyError) exec).message());
+            }
+        });
+    }
+
+    @Test
+    public void transactionControlParseErrorsAbortAndDiscardQueuedWrites() {
+        forEachDb(db -> {
+            for (String control : List.of("MULTI", "EXEC", "DISCARD")) {
+                YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(db);
+                TestSession session = new TestSession();
+                byte[] key = b("dirty:" + control.toLowerCase(java.util.Locale.ROOT));
+                try (FastTestClient client = new FastTestClient(processor, session)) {
+                    Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+                    Assert.assertEquals(
+                            "QUEUED",
+                            ((ReplySimpleString) client.execute(List.of(b("SET"), key, b("value")))).value()
+                    );
+
+                    ReplyObject invalidControl = client.execute(List.of(b(control), b("extra")));
+                    Assert.assertTrue(control, invalidControl instanceof ReplyError);
+                    Assert.assertEquals(
+                            "ERR wrong number of arguments for '" + control.toLowerCase(java.util.Locale.ROOT) + "' command",
+                            ((ReplyError) invalidControl).message()
+                    );
+
+                    ReplyObject exec = client.execute(List.of(b("EXEC")));
+                    Assert.assertTrue(control, exec instanceof ReplyError);
+                    Assert.assertEquals(
+                            "EXECABORT Transaction discarded because of previous errors.",
+                            ((ReplyError) exec).message()
+                    );
+                    Assert.assertSame(ReplyNull.INSTANCE, client.execute(List.of(b("GET"), key)));
+                }
             }
         });
     }

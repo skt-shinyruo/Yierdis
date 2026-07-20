@@ -10,6 +10,7 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.common.memory.MemoryReclaimResult;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
@@ -53,6 +54,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 public class YierdisDbConstructionTest {
     @Test
@@ -185,8 +187,22 @@ public class YierdisDbConstructionTest {
     }
 
     @Test
-    public void storageComponentsReserveNativeSlotsForEntriesStringsKeysAndCollectionRoots() {
-        Assert.assertEquals(256 * 1024, YierdisDbStorageComponents.sharedNativeSlotCapacity());
+    public void defaultStorageComponentsStartWithLazyAutomaticNativeSlots() {
+        YierdisDbStorageComponents storage = YierdisDbStorageComponents.create(null, true, 0);
+        try {
+            Assert.assertEquals(0L, storage.nativeAllocator.metadataStats().activeMetadataSegments());
+        } finally {
+            storage.resources.releaseAll(
+                    storage.expires,
+                    storage.entries,
+                    storage.keyDirectory,
+                    storage.stringRoot,
+                    storage.listRoot,
+                    storage.hashRoot,
+                    storage.setRoot,
+                    storage.zsetRoot
+            );
+        }
     }
 
     @Test
@@ -369,6 +385,11 @@ public class YierdisDbConstructionTest {
                 @Override
                 public <T> T executeMutation(YierdisDbMutationExecutor.MutationPlan<T> plan) {
                     return executor.execute(plan);
+                }
+
+                @Override
+                public <T> T withMutationContext(MutationContext context, Supplier<T> action) {
+                    return action.get();
                 }
 
                 @Override

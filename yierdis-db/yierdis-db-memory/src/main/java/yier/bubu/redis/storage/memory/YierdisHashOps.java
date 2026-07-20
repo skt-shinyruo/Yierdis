@@ -5,10 +5,12 @@ import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.HashReadOps;
 import yier.bubu.redis.storage.api.HashWriteOps;
 import yier.bubu.redis.storage.api.MutationOutcome;
+import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.WriteResult;
 import yier.bubu.redis.storage.api.result.BulkStringValue;
+import yier.bubu.redis.storage.api.result.CollectionScanWindow;
 import yier.bubu.redis.storage.api.result.BulkStringMapMetrics;
 import yier.bubu.redis.storage.api.result.BulkStringMapMetricsSources;
 import yier.bubu.redis.storage.api.result.BulkStringMetrics;
@@ -54,9 +56,24 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
         long now = System.currentTimeMillis();
         reclaimExpiredBeforeMutation(keyBytes, now);
         return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+            private HashRoot.SetPlan cachedSetPlan;
+            private boolean setPlanInitialized;
+
             @Override
             public long upperBoundBytes() {
-                return estimateHashSetUpperBound(keyBytes, fieldValuePairs, now);
+                EntryRecord existing = keyLifecycle.entryRecord(keyBytes);
+                if (existing == null) {
+                    return newHashUpperBound(keyBytes, setPlan(null));
+                }
+                KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+                if (keyLifecycle.isKeyExpired(keyHandle, now)) {
+                    return newHashUpperBound(keyBytes, setPlan(null));
+                }
+                if (existing.type() != ValueType.HASH) {
+                    return withScopeBookkeeping(0L);
+                }
+                ValueHandle handle = requireHashHandle(existing);
+                return existingHashUpperBound(keyBytes, fieldValuePairs, handle, setPlan(handle));
             }
 
             @Override
@@ -69,71 +86,38 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
 
                 StagedEntry staged = null;
                 ValueHandle replacement = null;
+                HashRoot.PreparedSetResult preparedSet = null;
                 long rootHeapBefore = hashRoot.retainedHeapBytes();
                 try {
                     KeyHandle targetKey = currentEntry.keyHandle();
                     if (current == null) {
                         staged = stageNewEntry(keyBytes);
                         targetKey = staged.keyHandle();
-                    } else if (fieldValuePairs.size() == 2) {
-                        ValueHandle source = requireHashHandle(current);
-                        HashRoot.PreparedPackedHset packed = hashRoot.preparePackedHset(
-                                source,
-                                fieldValuePairs.get(0),
-                                fieldValuePairs.get(1)
-                        );
-                        if (packed != null) {
-                            ValueHandle packedReplacement = packed.replacementHandle();
-                            try {
-                                EntryRecord next = hashRecord(
-                                        targetKey,
-                                        packedReplacement,
-                                        current.expireAtMillis(),
-                                        current
-                                );
-                                WriteResult<Long> result = WriteResult.of((long) packed.added(), MutationOutcome.VALUE_CHANGED);
-                                long deltaBytes = estimateRecordBytes(targetKey, next)
-                                        - estimateRecordBytes(targetKey, current);
-                                return new PreparedEntryMutation<>(
-                                        keyLifecycle,
-                                        result,
-                                        deltaBytes,
-                                        hashRoot.positiveRetainedHeapGrowthBytes(rootHeapBefore),
-                                        MutationOutcome.VALUE_CHANGED,
-                                        currentEntry.entryHandle(),
-                                        null,
-                                        null,
-                                        current,
-                                        next,
-                                        true,
-                                        () -> hashRoot.releaseExcept(source, packedReplacement),
-                                        PreparedTtlMutation.NONE,
-                                        null,
-                                        () -> hashRoot.discardPackedHset(packedReplacement, source)
-                                );
-                            } catch (RuntimeException | Error failure) {
-                                try {
-                                    hashRoot.discardPackedHset(packedReplacement, source);
-                                } catch (RuntimeException | Error releaseFailure) {
-                                    failure.addSuppressed(releaseFailure);
-                                }
-                                throw failure;
-                            }
-                        }
                     }
 
-                    replacement = hashRoot.create();
-                    if (current != null) {
-                        hashRoot.hsetMany(replacement, hashRoot.hgetallPairs(requireHashHandle(current)));
+                    ValueHandle sourceHandle = current == null ? null : requireHashHandle(current);
+                    preparedSet = hashRoot.prepareSet(setPlan(sourceHandle));
+                    if (!preparedSet.changedAny()) {
+                        preparedSet.close();
+                        preparedSet = null;
+                        return preparedNoEntry(
+                                WriteResult.of((long) setPlan(sourceHandle).added(), MutationOutcome.NONE),
+                                MutationOutcome.NONE
+                        );
                     }
-                    int added = hashRoot.hsetMany(replacement, fieldValuePairs);
+                    boolean stableHandle = preparedSet.stableHandle();
+                    ValueHandle nextHandle = preparedSet.replacementHandle();
+                    replacement = stableHandle ? null : nextHandle;
                     EntryRecord next = hashRecord(
                             targetKey,
-                            replacement,
+                            nextHandle,
                             current == null ? -1L : current.expireAtMillis(),
                             current
                     );
-                    WriteResult<Long> result = WriteResult.of((long) added, MutationOutcome.VALUE_CHANGED);
+                    WriteResult<Long> result = WriteResult.of(
+                            (long) preparedSet.added(),
+                            MutationOutcome.VALUE_CHANGED
+                    );
                     long deltaBytes = estimateRecordBytes(targetKey, next)
                             - estimateRecordBytes(targetKey, current);
                     PreparedEntryMutation<WriteResult<Long>> prepared = new PreparedEntryMutation<>(
@@ -142,7 +126,10 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
                             deltaBytes,
                             MemoryUsageSnapshot.addSaturating(
                                     staged == null ? 0L : staged.stagedHeapBytes(),
-                                    hashRoot.positiveRetainedHeapGrowthBytes(rootHeapBefore)
+                                    MemoryUsageSnapshot.addSaturating(
+                                            hashRoot.positiveRetainedHeapGrowthBytes(rootHeapBefore),
+                                            preparedSet.stagedHeapBytes()
+                                    )
                             ),
                             MutationOutcome.VALUE_CHANGED,
                             currentEntry.entryHandle(),
@@ -150,16 +137,41 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
                             staged == null ? null : staged.stagedKey(),
                             current,
                             next,
-                            true,
-                            PreparedTtlMutation.NONE
+                            !stableHandle,
+                            stableHandle ? preparedSet::releaseSuperseded : null,
+                            PreparedTtlMutation.NONE,
+                            stableHandle ? preparedSet : null
                     );
+                    if (stableHandle) {
+                        prepared.beforeEntryPublish(preparedSet::commit);
+                    }
                     staged = null;
                     replacement = null;
+                    preparedSet = null;
                     return prepared;
                 } catch (RuntimeException | Error failure) {
+                    if (preparedSet != null && preparedSet.stableHandle()) {
+                        try {
+                            preparedSet.close();
+                        } catch (RuntimeException | Error closeFailure) {
+                            failure.addSuppressed(closeFailure);
+                        }
+                    }
                     abortStaged(staged, replacement, PreparedTtlMutation.NONE, failure);
                     throw failure;
                 }
+            }
+
+            private HashRoot.SetPlan setPlan(ValueHandle source) {
+                if (!setPlanInitialized) {
+                    cachedSetPlan = hashRoot.planSet(source, fieldValuePairs);
+                    setPlanInitialized = true;
+                    return cachedSetPlan;
+                }
+                if (!Objects.equals(cachedSetPlan.source(), source)) {
+                    throw new IllegalStateException("prepared HSET source changed after admission");
+                }
+                return cachedSetPlan;
             }
         });
     }
@@ -193,6 +205,31 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
             return 0;
         }
         return hashRoot.size(requireHashHandle(record));
+    }
+
+    @Override
+    public CollectionScanWindow hscan(
+            byte[] keyBytes,
+            ScanCursorV2 cursor,
+            byte[] globPattern,
+            int count,
+            boolean noValues
+    ) {
+        internals.checkThread();
+        if (count <= 0) {
+            throw new IllegalArgumentException("count must be > 0");
+        }
+        EntryRecord record = liveHashRecord(keyBytes);
+        if (record == null) {
+            return new MaterializedCollectionScanWindow(ScanCursorV2.start(), List.of());
+        }
+        return hashRoot.hscan(
+                requireHashHandle(record),
+                cursor == null ? ScanCursorV2.start() : cursor,
+                globPattern,
+                count,
+                noValues
+        );
     }
 
     @Override
@@ -262,30 +299,20 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
         });
     }
 
-    private long estimateHashSetUpperBound(byte[] keyBytes, List<byte[]> fieldValuePairs, long nowMillis) {
-        EntryRecord existing = keyLifecycle.entryRecord(keyBytes);
-        if (existing == null) {
-            return newHashUpperBound(keyBytes, fieldValuePairs);
-        }
-
-        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
-        if (keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
-            return newHashUpperBound(keyBytes, fieldValuePairs);
-        }
-        if (existing.type() != ValueType.HASH) {
-            return withScopeBookkeeping(0L);
-        }
-
-        ValueHandle handle = requireHashHandle(existing);
+    private long existingHashUpperBound(
+            byte[] keyBytes,
+            List<byte[]> fieldValuePairs,
+            ValueHandle handle,
+            HashRoot.SetPlan setPlan
+    ) {
         int[] allocationSizes = hashAllocationSizes(
                 false,
+                !setPlan.stableHandle(),
                 keyBytes,
-                hashRoot.nativePayloadSizes(handle),
-                fieldValuePairs
+                hashRoot.preparedSetNativeAllocationSizes(setPlan)
         );
         long stagedHeapBytes = hashRoot.estimatedPreparedSetHeapGrowthBytes(
-                handle,
-                fieldValuePairs,
+                setPlan,
                 allocationSizes.length
         );
         long nativeUpperBound = nativePeak(stagedHeapBytes, allocationSizes);
@@ -296,48 +323,46 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
         return withScopeBookkeeping(Math.max(logicalUpperBound, nativeUpperBound));
     }
 
-    private long newHashUpperBound(byte[] keyBytes, List<byte[]> fieldValuePairs) {
+    private long newHashUpperBound(byte[] keyBytes, HashRoot.SetPlan setPlan) {
         int[] allocationSizes = hashAllocationSizes(
                 true,
+                true,
                 keyBytes,
-                new int[0],
-                fieldValuePairs
+                hashRoot.preparedSetNativeAllocationSizes(setPlan)
         );
         long stagedHeapBytes = MemoryUsageSnapshot.addSaturating(
                 keyLifecycle.keyDirectory().estimatedInsertHeapGrowthBytes(),
                 hashRoot.estimatedPreparedSetHeapGrowthBytes(
-                        null,
-                        fieldValuePairs,
+                        setPlan,
                         allocationSizes.length
                 )
         );
         long nativeUpperBound = nativePeak(stagedHeapBytes, allocationSizes);
-        long logicalUpperBound = estimateHashWriteUpperBound(keyBytes.length, fieldValuePairs);
+        long logicalUpperBound = estimateHashWriteUpperBound(keyBytes.length, setPlan.replacementPairs());
         return withScopeBookkeeping(Math.max(logicalUpperBound, nativeUpperBound));
     }
 
     private int[] hashAllocationSizes(
             boolean includeKeyAndEntry,
+            boolean includeRoot,
             byte[] keyBytes,
-            int[] existingPayloadSizes,
-            List<byte[]> fieldValuePairs
+            int[] replacementAllocationSizes
     ) {
-        int existingPayloadCount = existingPayloadSizes == null ? 0 : existingPayloadSizes.length;
-        int newPayloadCount = nonNullValueCount(fieldValuePairs);
         int metadataCount = includeKeyAndEntry ? 2 : 0;
-        int[] sizes = new int[metadataCount + 1 + existingPayloadCount * 2 + newPayloadCount * 2];
+        int payloadCount = replacementAllocationSizes == null ? 0 : replacementAllocationSizes.length;
+        int[] sizes = new int[metadataCount + (includeRoot ? 1 : 0) + payloadCount];
         int next = 0;
         if (includeKeyAndEntry) {
             sizes[next++] = Math.max(1, keyBytes.length);
             sizes[next++] = ENTRY_RECORD_NATIVE_BYTES;
         }
-        sizes[next++] = HASH_ROOT_NATIVE_BYTES;
-        next = appendPayloadSizes(sizes, next, existingPayloadSizes);
-        next = appendPayloadSizes(sizes, next, existingPayloadSizes);
-        next = appendHashPairPayloadSizes(sizes, next, fieldValuePairs);
-        next = appendHashPairPayloadSizes(sizes, next, fieldValuePairs);
-        if (next != sizes.length) {
-            throw new IllegalStateException("hash allocation size estimate count mismatch");
+        if (includeRoot) {
+            sizes[next++] = HASH_ROOT_NATIVE_BYTES;
+        }
+        if (replacementAllocationSizes != null) {
+            for (int size : replacementAllocationSizes) {
+                sizes[next++] = Math.max(1, size);
+            }
         }
         return sizes;
     }
@@ -527,43 +552,6 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
                 Math.max(0L, upperBound),
                 MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(keyLifecycle.nativeAllocator(), 0)
         );
-    }
-
-    private static int nonNullValueCount(List<byte[]> values) {
-        if (values == null || values.isEmpty()) {
-            return 0;
-        }
-        int count = 0;
-        for (byte[] value : values) {
-            if (value != null) {
-                count++;
-            }
-        }
-        return count;
-    }
-
-    private static int appendPayloadSizes(int[] sizes, int offset, int[] payloadSizes) {
-        if (payloadSizes == null || payloadSizes.length == 0) {
-            return offset;
-        }
-        int next = offset;
-        for (int size : payloadSizes) {
-            sizes[next++] = Math.max(1, size);
-        }
-        return next;
-    }
-
-    private static int appendHashPairPayloadSizes(int[] sizes, int offset, List<byte[]> fieldValuePairs) {
-        if (fieldValuePairs == null || fieldValuePairs.isEmpty()) {
-            return offset;
-        }
-        int next = offset;
-        for (byte[] value : fieldValuePairs) {
-            if (value != null) {
-                sizes[next++] = Math.max(1, value.length);
-            }
-        }
-        return next;
     }
 
     private static BulkStringMapMetrics pairsOf(BulkEmitter emitter) {

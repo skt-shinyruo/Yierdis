@@ -92,7 +92,7 @@
 
 | 类/模块 | 职责 | 关键入口 | 继续阅读 |
 | --- | --- | --- | --- |
-| [`CommandRecordScope`](../../yierdis-common/yierdis-common-command/src/main/java/yier/bubu/redis/common/command/CommandRecordScope.java) | owner-thread 当前命令 immutable record 的嵌套 scope | `open(...)`, `current()` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
+| [`MutationContext`](../../yierdis-common/yierdis-common-command/src/main/java/yier/bubu/redis/common/command/MutationContext.java) | 命令边界内借用的 mutation record，关闭后释放 argv 引用 | `of(...)`, `retainCommandRecord()`, `close()` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
 | [`DbCommitPublisher`](../../yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/DbCommitPublisher.java) | DB API 的有界提交发布端口；可见性前预留、提交后发布 | `reserve(...)`, `publish(...)`, `failAfterCommit(...)` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
 | [`DbCommitEvent`](../../yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/DbCommitEvent.java) | 已提交记录的 callback-scoped DB 视图 | event accessors | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
 | [`YierdisChangeEvent`](../../yierdis-server/yierdis-server-runtime-api/src/main/java/yier/bubu/redis/runtime/api/YierdisChangeEvent.java) | runtime sink 接收的 borrowed event，包含 sequence、kind、record 和提交元数据 | `borrowed(...)`, `close()` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
@@ -145,13 +145,14 @@
 | --- | --- | --- | --- |
 | [`InlineCommandParser`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/InlineCommandParser.java) | 共享 inline 命令解析 | parse methods | [`client-and-bench-internals.md`](./client-and-bench-internals.md) |
 | `YierdisClient` | RESP client、请求发送、回包读取 | connect / execute methods | [`client-and-bench-internals.md`](./client-and-bench-internals.md) |
-| [`YierdisBench`](../../yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/YierdisBench.java) | connect-only benchmark 薄入口 | `main(...)` | [`client-and-bench-internals.md`](./client-and-bench-internals.md) |
+| [`YierdisBench`](../../yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/YierdisBench.java) | RESP 根命令与 storage 子命令的薄 launcher | `main(...)`, `commandLine()` | [`client-and-bench-internals.md`](./client-and-bench-internals.md) |
 | [`RedisBenchmarkOptions`](../../yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/redis/RedisBenchmarkOptions.java) | endpoint、workload 和输出 CLI options | option fields / `toConfig(...)` | [`client-and-bench-internals.md`](./client-and-bench-internals.md) |
+| [`StorageBenchmarkRunner`](../../yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/storage/StorageBenchmarkRunner.java) | 单 owner DB SET 吞吐与 heap/native footprint 测量 | `run(...)` | [`client-and-bench-internals.md`](./client-and-bench-internals.md) |
 | [`RedisBenchmarkCatalog`](../../yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/redis/RedisBenchmarkCatalog.java) | canonical 21-row catalog、selection 和 support declarations | `allCases()`, `select(...)` | [`client-and-bench-internals.md`](./client-and-bench-internals.md) |
 | [`NioBenchmarkRunner`](../../yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/redis/NioBenchmarkRunner.java) | 单 `Selector` 的 non-blocking load runner | `execute(...)` | [`client-and-bench-internals.md`](./client-and-bench-internals.md) |
 | [`BenchmarkOutputRenderer`](../../yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/redis/BenchmarkOutputRenderer.java) | human、quiet、Redis-style CSV rendering | `render(...)` | [`client-and-bench-internals.md`](./client-and-bench-internals.md) |
 
-边界：CLI/bench 是外部使用者，不应该绕过 RESP 或直接调用 DB。
+边界：CLI 和 RESP benchmark 是外部使用者，不应该绕过 RESP；显式 storage benchmark 是隔离的进程内 DB 诊断入口，其结果不代表端到端 request path。
 
 ## 测试和架构护栏
 

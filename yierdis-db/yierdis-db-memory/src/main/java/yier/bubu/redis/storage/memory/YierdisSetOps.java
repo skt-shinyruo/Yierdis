@@ -3,6 +3,7 @@ package yier.bubu.redis.storage.memory;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.MutationOutcome;
+import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.SetReadOps;
 import yier.bubu.redis.storage.api.SetWriteOps;
 import yier.bubu.redis.storage.api.ValueType;
@@ -12,6 +13,7 @@ import yier.bubu.redis.storage.api.result.BulkStringMetrics;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequence;
 import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequences;
+import yier.bubu.redis.storage.api.result.CollectionScanWindow;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
@@ -228,6 +230,24 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
             return 0;
         }
         return setRoot.size(requireSetHandle(record));
+    }
+
+    @Override
+    public CollectionScanWindow sscan(byte[] keyBytes, ScanCursorV2 cursor, byte[] globPattern, int count) {
+        internals.checkThread();
+        if (count <= 0) {
+            throw new IllegalArgumentException("count must be > 0");
+        }
+        EntryRecord record = liveSetRecord(keyBytes);
+        if (record == null) {
+            return new MaterializedCollectionScanWindow(ScanCursorV2.start(), List.of());
+        }
+        return setRoot.sscan(
+                requireSetHandle(record),
+                cursor == null ? ScanCursorV2.start() : cursor,
+                globPattern,
+                count
+        );
     }
 
     private long estimateSetAddUpperBound(byte[] keyBytes, List<byte[]> members, long nowMillis) {

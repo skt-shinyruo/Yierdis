@@ -51,7 +51,7 @@
  *     <li>ExpireOption - API. Audience: command handlers and storage implementations.</li>
  *     <li>SetMode - API. Audience: command handlers and storage implementations.</li>
  *     <li>ValueType - API. Audience: command handlers, observability, and storage implementations.</li>
- *     <li>ScanCursorV2 - compatibility API. Audience: keyspace/HLL scan command handlers and storage implementations; contains keyspace cursor details that must split later.</li>
+ *     <li>ScanCursorV2 - compatibility API. Audience: keyspace/collection/HLL scan command handlers and storage implementations; contains dictionary cursor details that must split later.</li>
  *     <li>KeyHandle - SPI. Audience: pressure-path key identity without heap materialization.</li>
  * </ul>
  */

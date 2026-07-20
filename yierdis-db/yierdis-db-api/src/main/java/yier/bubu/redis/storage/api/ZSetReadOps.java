@@ -2,6 +2,7 @@ package yier.bubu.redis.storage.api;
 
 // ZSetReadOps：zset 只读能力边界。
 
+import yier.bubu.redis.storage.api.result.CollectionScanWindow;
 import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequence;
 
 public interface ZSetReadOps {
@@ -30,4 +31,6 @@ public interface ZSetReadOps {
             long offset,
             long count
     );
+
+    CollectionScanWindow zscan(byte[] keyBytes, ScanCursorV2 cursor, byte[] globPattern, int count);
 }

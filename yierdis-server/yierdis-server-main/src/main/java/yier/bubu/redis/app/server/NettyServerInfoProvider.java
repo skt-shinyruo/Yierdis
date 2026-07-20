@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * Server-side INFO/STATS provider backed by {@link CommandExecutor}.
@@ -88,6 +89,16 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     private static final byte[] KEY_RESULT_UNKNOWN_CLOSES = ascii("result_unknown_closes");
     private static final byte[] KEY_REPLY_SHUTDOWN_TIMEOUTS = ascii("reply_shutdown_timeouts");
     private static final byte[] KEY_LIVE_CHILD_CHANNELS = ascii("live_child_channels");
+    private static final byte[] KEY_LIFECYCLE_STATE = ascii("lifecycle_state");
+    private static final byte[] KEY_READY = ascii("ready");
+    private static final byte[] KEY_WRITABLE = ascii("writable");
+    private static final byte[] KEY_DEGRADED_DATABASES = ascii("degraded_databases");
+    private static final byte[] KEY_DATABASES = ascii("databases");
+    private static final byte[] KEY_TOTAL_CONNECTIONS_RECEIVED = ascii("total_connections_received");
+    private static final byte[] KEY_REJECTED_CONNECTIONS = ascii("rejected_connections");
+    private static final byte[] KEY_MAX_CLIENTS = ascii("max_clients");
+    private static final byte[] KEY_FIRST_FAILURE_TYPE = ascii("first_failure_type");
+    private static final byte[] KEY_FIRST_FAILURE_MESSAGE = ascii("first_failure_message");
 
     private static final byte[] KEY_QUEUED_TASKS = ascii("queued_tasks");
     private static final byte[] KEY_QUEUED_BYTES = ascii("queued_bytes");
@@ -128,6 +139,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     private volatile OutboundMemoryBudget outboundMemoryBudget;
     private volatile ChildChannelRegistry childChannelRegistry;
     private volatile ReplyEgressStats replyEgressStats;
+    private volatile Supplier<String> lifecycleState = () -> "STARTING";
 
     NettyServerInfoProvider(YierdisServerRuntimeConfig config) {
         this.config = Objects.requireNonNull(config, "config");
@@ -162,6 +174,10 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         this.replyEgressStats = Objects.requireNonNull(replyEgressStats, "replyEgressStats");
     }
 
+    void bindLifecycleState(Supplier<String> lifecycleState) {
+        this.lifecycleState = Objects.requireNonNull(lifecycleState, "lifecycleState");
+    }
+
     @Override
     public void info(ExecutionRequest request, CommandContext ctx) {
         Objects.requireNonNull(ctx, "ctx");
@@ -173,6 +189,10 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
 
         String section = request != null && request.argc() == 2 ? asciiLower(request, 1) : null;
+        if ("health".equals(section)) {
+            writeHealth(out, healthView());
+            return;
+        }
         if ("yierdis".equals(section)) {
             CommandExecutor.StatsSnapshot stats = ex.statsSnapshot();
             long uptimeMillis = Math.max(0L, System.currentTimeMillis() - startedMillis);
@@ -181,6 +201,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             OutboundMemoryBudgetStats outboundStats = outboundStats();
             ReplyEgressStats.Snapshot egressStats = replyEgressStats();
             int liveChildChannels = liveChildChannels();
+            HealthView health = healthView();
             requireMeasuredReply(
                     out,
                     writer -> writeYierdisStructuredInfo(
@@ -191,7 +212,8 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
                             streamStats,
                             outboundStats,
                             egressStats,
-                            liveChildChannels
+                            liveChildChannels,
+                            health
                     )
             );
             writeYierdisStructuredInfo(
@@ -202,7 +224,8 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
                     streamStats,
                     outboundStats,
                     egressStats,
-                    liveChildChannels
+                    liveChildChannels,
+                    health
             );
             return;
         }
@@ -229,6 +252,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         OutboundMemoryBudgetStats outboundStats = outboundStats();
         ReplyEgressStats.Snapshot egressStats = replyEgressStats();
         int liveChildChannels = liveChildChannels();
+        HealthView health = healthView();
         requireMeasuredReply(
                 out,
                 writer -> writeStats(
@@ -239,7 +263,8 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
                         streamStats,
                         outboundStats,
                         egressStats,
-                        liveChildChannels
+                        liveChildChannels,
+                        health
                 )
         );
         writeStats(
@@ -250,7 +275,8 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
                 streamStats,
                 outboundStats,
                 egressStats,
-                liveChildChannels
+                liveChildChannels,
+                health
         );
     }
 
@@ -270,9 +296,10 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             CommitStreamStats streamStats,
             OutboundMemoryBudgetStats outboundStats,
             ReplyEgressStats.Snapshot egressStats,
-            int liveChildChannels
+            int liveChildChannels,
+            HealthView health
     ) {
-        int pairs = 59 + (stats == null ? 0 : 11);
+        int pairs = 69 + (stats == null ? 0 : 11);
         writeHeader(out, pairs);
 
         writePair(out, KEY_QUEUED_TASKS, s.queuedTasks());
@@ -296,6 +323,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         writeInboundStats(out, inboundStats);
         writeCommitStreamStats(out, streamStats);
         writeOutboundStats(out, outboundStats, egressStats, liveChildChannels);
+        writeHealthPairs(out, health, childStats(), config.maxClients(), false);
 
         if (stats == null) {
             return;
@@ -322,9 +350,10 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             CommitStreamStats streamStats,
             OutboundMemoryBudgetStats outboundStats,
             ReplyEgressStats.Snapshot egressStats,
-            int liveChildChannels
+            int liveChildChannels,
+            HealthView health
     ) {
-        int pairs = 58;
+        int pairs = 68;
         writeHeader(out, pairs);
 
         writePair(out, KEY_SERVER, VALUE_SERVER);
@@ -347,6 +376,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         writeInboundStats(out, inboundStats);
         writeCommitStreamStats(out, streamStats);
         writeOutboundStats(out, outboundStats, egressStats, liveChildChannels);
+        writeHealthPairs(out, health, childStats(), config.maxClients(), false);
     }
 
     private String buildRedisInfo(String section, CommandExecutor<NettyExecutionConnection> ex) {
@@ -358,11 +388,14 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         boolean all = section == null || section.isBlank() || "default".equals(section) || "all".equals(section);
         boolean server = all || "server".equals(section);
         boolean clients = all || "clients".equals(section);
+        boolean health = all || "health".equals(section);
         boolean memory = all || "memory".equals(section);
         boolean stats = all || "stats".equals(section);
         boolean keyspace = all || "keyspace".equals(section);
 
         StringBuilder sb = new StringBuilder(512);
+        ChildChannelRegistry.StatsSnapshot childStats = childStats();
+        HealthView healthView = healthView();
 
         if (server) {
             sb.append("# Server\r\n");
@@ -373,9 +406,15 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             sb.append("\r\n");
         }
 
+        if (health) {
+            sb.append("# Health\r\n");
+            appendHealthText(sb, healthView, childStats, config.maxClients());
+            sb.append("\r\n");
+        }
+
         if (clients) {
             sb.append("# Clients\r\n");
-            sb.append("connected_clients:").append(liveChildChannels()).append("\r\n");
+            sb.append("connected_clients:").append(childStats.activeConnections()).append("\r\n");
             sb.append("blocked_clients:0\r\n");
             sb.append("\r\n");
         }
@@ -439,9 +478,9 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             ReplyEgressStats.Snapshot egressStats = replyEgressStats();
             sb.append("# Stats\r\n");
             sb.append("total_commands_processed:").append(s.commandsExecuted()).append("\r\n");
-            sb.append("rejected_connections:0\r\n");
-            sb.append("total_connections_received:0\r\n");
-            sb.append("instantaneous_ops_per_sec:0\r\n");
+            sb.append("rejected_connections:").append(childStats.rejectedConnections()).append("\r\n");
+            sb.append("total_connections_received:").append(childStats.acceptedConnections()).append("\r\n");
+            sb.append("instantaneous_ops_per_sec:").append(instantaneousOpsPerSecond(s, uptimeSeconds)).append("\r\n");
             sb.append("yierdis_queued_tasks:").append(s.queuedTasks()).append("\r\n");
             sb.append("yierdis_queued_bytes:").append(s.queuedBytes()).append("\r\n");
             sb.append("yierdis_inbound_capacity_bytes:").append(inboundStats.capacityBytes()).append("\r\n");
@@ -617,8 +656,121 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     }
 
     private int liveChildChannels() {
+        return childStats().activeConnections();
+    }
+
+    private ChildChannelRegistry.StatsSnapshot childStats() {
         ChildChannelRegistry registry = childChannelRegistry;
-        return registry == null ? 0 : registry.activeChannelCount();
+        return registry == null
+                ? new ChildChannelRegistry.StatsSnapshot(0, 0L, 0L, 0L)
+                : registry.statsSnapshot();
+    }
+
+    private HealthView healthView() {
+        String state;
+        try {
+            state = lifecycleState.get();
+        } catch (Throwable ignored) {
+            state = "FAILED";
+        }
+        if (state == null || state.isBlank()) {
+            state = "UNKNOWN";
+        }
+
+        YierdisInstanceObservability.RuntimeHealthSnapshot dbHealth = observability == null
+                ? new YierdisInstanceObservability.RuntimeHealthSnapshot(0, 0, null, null, 0L)
+                : observability.healthSnapshot();
+        CommitStreamStats stream = commitStreamStats();
+        InboundMemoryBudgetStats inbound = inboundStats();
+        OutboundMemoryBudgetStats outbound = outboundStats();
+        boolean commitHealthy = stream.state() == yier.bubu.redis.runtime.embedded.CommitStreamState.DISABLED
+                || stream.state() == yier.bubu.redis.runtime.embedded.CommitStreamState.RUNNING;
+        boolean infrastructureHealthy = "RUNNING".equals(state) && !inbound.closed() && !outbound.closed();
+        boolean ready = infrastructureHealthy && dbHealth.healthy() && commitHealthy;
+        return new HealthView(
+                state,
+                ready,
+                ready,
+                dbHealth.databaseCount(),
+                dbHealth.degradedDatabaseCount(),
+                stream.state().name(),
+                dbHealth.firstFailureType(),
+                dbHealth.firstFailureMessage()
+        );
+    }
+
+    private void writeHealth(RedisReplyWriter out, HealthView health) {
+        writeHeader(out, 11);
+        writeHealthPairs(out, health, childStats(), config.maxClients(), true);
+    }
+
+    private static void writeHealthPairs(
+            RedisReplyWriter out,
+            HealthView health,
+            ChildChannelRegistry.StatsSnapshot child,
+            int maxClients,
+            boolean includeCommitStreamState
+    ) {
+        writePair(out, KEY_LIFECYCLE_STATE, ascii(health.lifecycleState()));
+        writePair(out, KEY_READY, health.ready ? 1L : 0L);
+        writePair(out, KEY_WRITABLE, health.writable ? 1L : 0L);
+        writePair(out, KEY_DEGRADED_DATABASES, health.degradedDatabases);
+        writePair(out, KEY_DATABASES, health.databases);
+        if (includeCommitStreamState) {
+            writePair(out, KEY_COMMIT_STREAM_STATE, ascii(health.commitStreamState));
+        }
+        writePair(out, KEY_FIRST_FAILURE_TYPE, ascii(health.firstFailureType));
+        writePair(out, KEY_FIRST_FAILURE_MESSAGE, ascii(health.firstFailureMessage));
+        writePair(out, KEY_TOTAL_CONNECTIONS_RECEIVED, child.acceptedConnections());
+        writePair(out, KEY_REJECTED_CONNECTIONS, child.rejectedConnections());
+        writePair(out, KEY_MAX_CLIENTS, maxClients);
+    }
+
+    private static void appendHealthText(
+            StringBuilder sb,
+            HealthView health,
+            ChildChannelRegistry.StatsSnapshot child,
+            int maxClients
+    ) {
+        sb.append("lifecycle_state:").append(health.lifecycleState).append("\r\n");
+        sb.append("ready:").append(health.ready ? 1 : 0).append("\r\n");
+        sb.append("writable:").append(health.writable ? 1 : 0).append("\r\n");
+        sb.append("databases:").append(health.databases).append("\r\n");
+        sb.append("degraded_databases:").append(health.degradedDatabases).append("\r\n");
+        sb.append("commit_stream_state:").append(health.commitStreamState).append("\r\n");
+        sb.append("connected_clients:").append(child.activeConnections()).append("\r\n");
+        sb.append("total_connections_received:").append(child.acceptedConnections()).append("\r\n");
+        sb.append("rejected_connections:").append(child.rejectedConnections()).append("\r\n");
+        sb.append("max_clients:").append(maxClients).append("\r\n");
+        if (health.firstFailureType != null && !health.firstFailureType.isBlank()) {
+            sb.append("first_failure_type:").append(sanitizeInfoValue(health.firstFailureType)).append("\r\n");
+            sb.append("first_failure_message:").append(sanitizeInfoValue(health.firstFailureMessage)).append("\r\n");
+        }
+    }
+
+    private static long instantaneousOpsPerSecond(CommandExecutor.StatsSnapshot stats, long uptimeSeconds) {
+        long elapsed = Math.max(1L, uptimeSeconds);
+        long commands = Math.max(0L, stats.commandsExecuted());
+        return commands / elapsed;
+    }
+
+    private static String sanitizeInfoValue(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replace('\r', ' ').replace('\n', ' ');
+    }
+
+    private record HealthView(
+            String lifecycleState,
+            boolean ready,
+            boolean writable,
+            int databases,
+            int degradedDatabases,
+            String commitStreamState,
+            String firstFailureType,
+            String firstFailureMessage
+    ) {
     }
 
     private void writeOutboundStats(

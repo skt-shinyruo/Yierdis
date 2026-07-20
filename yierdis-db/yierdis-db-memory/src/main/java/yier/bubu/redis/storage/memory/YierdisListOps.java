@@ -1,5 +1,6 @@
 package yier.bubu.redis.storage.memory;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
@@ -27,12 +28,13 @@ import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 import yier.bubu.redis.storage.memory.internal.value.PreparedPoppedValueSequence;
 import yier.bubu.redis.storage.memory.internal.value.PinnedPoppedValueSequence;
+import yier.bubu.redis.storage.memory.internal.value.ListValue;
+import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 public final class YierdisListOps implements ListReadOps, ListWriteOps {
     private static final long LIST_ELEMENT_OVERHEAD_BYTES_ESTIMATE = 32L;
     private static final int ENTRY_RECORD_NATIVE_BYTES = 56;
     private static final int LIST_ROOT_NATIVE_BYTES = Long.BYTES;
-    private static final int QUICKLIST_NODE_NATIVE_BYTES = 48;
 
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
@@ -48,6 +50,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
     public WriteResult<Long> lpush(byte[] keyBytes, List<byte[]> values) {
         internals.checkThread();
         Objects.requireNonNull(keyBytes, "keyBytes");
+        Objects.requireNonNull(values, "values");
         return pushInternal(keyBytes, values, true);
     }
 
@@ -55,6 +58,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
     public WriteResult<Long> rpush(byte[] keyBytes, List<byte[]> values) {
         internals.checkThread();
         Objects.requireNonNull(keyBytes, "keyBytes");
+        Objects.requireNonNull(values, "values");
         return pushInternal(keyBytes, values, false);
     }
 
@@ -111,7 +115,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
         return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
-                return estimatePushUpperBound(keyBytes, values, now);
+                return estimatePushUpperBound(keyBytes, values, left, now);
             }
 
             @Override
@@ -120,6 +124,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                 EntryRecord current = currentEntry.record();
                 if (current != null) {
                     requireList(current);
+                    return prepareExistingPush(currentEntry, current, values, left);
                 }
 
                 StagedEntry staged = null;
@@ -132,25 +137,18 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                         targetKey = staged.keyHandle();
                     }
 
-                    replacement = listRoot.create();
-                    if (current != null) {
-                        listRoot.rpush(replacement, listRoot.range(requireListHandle(current), 0, -1));
-                    }
-                    if (left) {
-                        listRoot.lpush(replacement, values);
-                    } else {
-                        listRoot.rpush(replacement, values);
-                    }
+                    List<byte[]> orderedValues = pushedValues(values, left);
+                    replacement = listRoot.build(orderedValues);
 
                     int len = listRoot.size(replacement);
                     EntryRecord next = listRecord(
                             targetKey,
                             replacement,
-                            current == null ? -1L : current.expireAtMillis(),
-                            current
+                            -1L,
+                            null
                     );
                     WriteResult<Long> result = WriteResult.of((long) len, MutationOutcome.VALUE_CHANGED);
-                    long deltaBytes = estimateRecordBytes(targetKey, next) - estimateRecordBytes(targetKey, current);
+                    long deltaBytes = estimateRecordBytes(targetKey, next);
                     PreparedEntryMutation<WriteResult<Long>> prepared = new PreparedEntryMutation<>(
                             keyLifecycle,
                             result,
@@ -160,10 +158,10 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                                     listRoot.positiveRetainedHeapGrowthBytes(rootHeapBefore)
                             ),
                             MutationOutcome.VALUE_CHANGED,
-                            currentEntry.entryHandle(),
+                            null,
                             staged == null ? null : staged.entryHandle(),
                             staged == null ? null : staged.stagedKey(),
-                            current,
+                            null,
                             next,
                             true,
                             PreparedTtlMutation.NONE
@@ -195,7 +193,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                 if (isPopReclamation(keyBytes, count, now)) {
                     return 0L;
                 }
-                return estimatePopUpperBound(keyBytes, count, now);
+                return estimatePopUpperBound(keyBytes, count, left, now);
             }
 
             @Override
@@ -258,92 +256,143 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                     }
                 }
 
-                long rootHeapBefore = listRoot.retainedHeapBytes();
-                ValueHandle replacement = null;
-                try {
-                    replacement = listRoot.create();
-                    copyRemainingAfterPop(oldHandle, replacement, oldSize, popCount, left);
-                    EntryRecord next = listRecord(
-                            currentEntry.keyHandle(),
-                            replacement,
-                            current.expireAtMillis(),
-                            current
-                    );
-                    long deltaBytes = estimateRecordBytes(currentEntry.keyHandle(), next)
-                            - estimateRecordBytes(currentEntry.keyHandle(), current);
-                    PreparedEntryMutation<WriteResult<PoppedValueSequence>> prepared = new PreparedEntryMutation<>(
-                            keyLifecycle,
-                            result,
-                            deltaBytes,
-                            listRoot.positiveRetainedHeapGrowthBytes(rootHeapBefore),
-                            MutationOutcome.VALUE_CHANGED,
-                            currentEntry.entryHandle(),
-                            null,
-                            null,
-                            current,
-                            next,
-                            false,
-                            releaseOldListToPopped,
-                            PreparedTtlMutation.NONE
-                    );
-                    replacement = null;
-                    return prepared;
-                } catch (RuntimeException | Error failure) {
-                    if (replacement != null) {
-                        try {
-                            listRoot.release(replacement);
-                        } catch (RuntimeException | Error releaseFailure) {
-                            failure.addSuppressed(releaseFailure);
-                        }
-                    }
-                    throw failure;
-                }
+                return prepareExistingPop(
+                        currentEntry,
+                        current,
+                        oldHandle,
+                        popCount,
+                        left,
+                        popped,
+                        result
+                );
             }
         });
     }
 
-    private void copyRemainingAfterPop(
-            ValueHandle oldHandle,
-            ValueHandle replacement,
-            int oldSize,
-            int popCount,
+    private PreparedEntryMutation<WriteResult<Long>> prepareExistingPush(
+            CurrentEntry currentEntry,
+            EntryRecord current,
+            List<byte[]> values,
             boolean left
     ) {
-        if (left) {
-            listRoot.rpush(replacement, listRoot.range(oldHandle, popCount, -1));
-            return;
+        ValueHandle handle = requireListHandle(current);
+        if (values.isEmpty()) {
+            return preparedNoEntry(
+                    WriteResult.unchanged((long) listRoot.size(handle)),
+                    MutationOutcome.NONE
+            );
         }
-        int stop = oldSize - popCount - 1;
-        listRoot.rpush(replacement, listRoot.range(oldHandle, 0, stop));
+        ListValue.PreparedMutation valueMutation = null;
+        try {
+            valueMutation = listRoot.preparePush(handle, values, left);
+            EntryRecord next = listRecord(
+                    currentEntry.keyHandle(),
+                    handle,
+                    valueMutation.encoding(),
+                    current.expireAtMillis(),
+                    current
+            );
+            long deltaBytes = estimateRecordBytes(currentEntry.keyHandle(), next)
+                    - estimateRecordBytes(currentEntry.keyHandle(), current);
+            ListValue.PreparedMutation transferred = valueMutation;
+            return new PreparedEntryMutation<>(
+                    keyLifecycle,
+                    WriteResult.of((long) valueMutation.size(), MutationOutcome.VALUE_CHANGED),
+                    deltaBytes,
+                    valueMutation.stagedHeapBytes(),
+                    MutationOutcome.VALUE_CHANGED,
+                    currentEntry.entryHandle(),
+                    null,
+                    null,
+                    current,
+                    next,
+                    false,
+                    transferred::releaseSuperseded,
+                    PreparedTtlMutation.NONE,
+                    transferred
+            ).beforeEntryPublish(transferred::commit);
+        } catch (RuntimeException | Error failure) {
+            closePreparedValueMutation(valueMutation, failure);
+            throw failure;
+        }
     }
 
-    private long estimatePushUpperBound(byte[] keyBytes, List<byte[]> values, long nowMillis) {
+    private PreparedEntryMutation<WriteResult<PoppedValueSequence>> prepareExistingPop(
+            CurrentEntry currentEntry,
+            EntryRecord current,
+            ValueHandle handle,
+            int popCount,
+            boolean left,
+            PreparedPoppedValueSequence popped,
+            WriteResult<PoppedValueSequence> result
+    ) {
+        ListValue.PreparedMutation valueMutation = null;
+        try {
+            valueMutation = listRoot.preparePop(handle, popCount, left);
+            EntryRecord next = listRecord(
+                    currentEntry.keyHandle(),
+                    handle,
+                    valueMutation.encoding(),
+                    current.expireAtMillis(),
+                    current
+            );
+            long deltaBytes = estimateRecordBytes(currentEntry.keyHandle(), next)
+                    - estimateRecordBytes(currentEntry.keyHandle(), current);
+            ListValue.PreparedMutation transferred = valueMutation;
+            return new PreparedEntryMutation<>(
+                    keyLifecycle,
+                    result,
+                    deltaBytes,
+                    valueMutation.stagedHeapBytes(),
+                    MutationOutcome.VALUE_CHANGED,
+                    currentEntry.entryHandle(),
+                    null,
+                    null,
+                    current,
+                    next,
+                    false,
+                    () -> releasePreparedPopToReply(transferred, popped),
+                    PreparedTtlMutation.NONE,
+                    transferred
+            ).beforeEntryPublish(transferred::commit);
+        } catch (RuntimeException | Error failure) {
+            closePreparedValueMutation(valueMutation, failure);
+            throw failure;
+        }
+    }
+
+    private static List<byte[]> pushedValues(List<byte[]> values, boolean left) {
+        ArrayList<byte[]> ordered = new ArrayList<>(values.size());
+        if (left) {
+            for (int index = values.size() - 1; index >= 0; index--) {
+                ordered.add(values.get(index));
+            }
+        } else {
+            ordered.addAll(values);
+        }
+        return ordered;
+    }
+
+    private long estimatePushUpperBound(byte[] keyBytes, List<byte[]> values, boolean left, long nowMillis) {
         EntryRecord existing = keyLifecycle.entryRecord(keyBytes);
         if (existing == null) {
-            return newListUpperBound(keyBytes, values);
+            return newListUpperBound(keyBytes, values, left);
         }
 
         KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
         if (keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
-            return newListUpperBound(keyBytes, values);
+            return newListUpperBound(keyBytes, values, left);
         }
         if (existing.type() != ValueType.LIST) {
             return withScopeBookkeeping(0L);
         }
 
         ValueHandle handle = requireListHandle(existing);
-        int oldSize = listRoot.size(handle);
-        int totalElements = oldSize + valueCount(values);
-        int[] allocationSizes = listAllocationSizes(
-                false,
-                keyBytes,
-                listRoot.nativePayloadSizes(handle),
-                values,
-                totalElements
-        );
+        int[] allocationSizes = listRoot.preparedPushNativeAllocationSizes(handle, values, left);
         long stagedHeapBytes = listRoot.estimatedPreparedPushHeapGrowthBytes(
                 handle,
                 values,
+                left,
                 allocationSizes.length
         );
         long nativeUpperBound = nativePeak(stagedHeapBytes, allocationSizes);
@@ -351,7 +400,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
         return withScopeBookkeeping(Math.max(logicalUpperBound, nativeUpperBound));
     }
 
-    private long estimatePopUpperBound(byte[] keyBytes, int count, long nowMillis) {
+    private long estimatePopUpperBound(byte[] keyBytes, int count, boolean left, long nowMillis) {
         EntryRecord existing = keyLifecycle.entryRecord(keyBytes);
         if (existing == null) {
             return withScopeBookkeeping(0L);
@@ -370,14 +419,8 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
             return 0L;
         }
 
-        int[] allocationSizes = listAllocationSizes(
-                false,
-                keyBytes,
-                listRoot.nativePayloadSizes(handle),
-                null,
-                remaining
-        );
-        long stagedHeapBytes = listRoot.estimatedPreparedPopHeapGrowthBytes(remaining, allocationSizes.length);
+        int[] allocationSizes = listRoot.preparedPopNativeAllocationSizes(handle, popCount, left);
+        long stagedHeapBytes = listRoot.estimatedPreparedPopHeapGrowthBytes(handle, popCount, left);
         return withScopeBookkeeping(nativePeak(stagedHeapBytes, allocationSizes));
     }
 
@@ -400,20 +443,18 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
         return oldSize == 0 || Math.min(count, oldSize) == oldSize;
     }
 
-    private long newListUpperBound(byte[] keyBytes, List<byte[]> values) {
+    private long newListUpperBound(byte[] keyBytes, List<byte[]> values, boolean left) {
         int[] allocationSizes = listAllocationSizes(
-                true,
                 keyBytes,
-                new int[0],
-                values,
-                valueCount(values)
+                listRoot.preparedPushNativeAllocationSizes(null, values, left)
         );
         long stagedHeapBytes = MemoryUsageSnapshot.addSaturating(
                 keyLifecycle.keyDirectory().estimatedInsertHeapGrowthBytes(),
                 listRoot.estimatedPreparedPushHeapGrowthBytes(
                         null,
                         values,
-                        allocationSizes.length
+                        left,
+                        3
                 )
         );
         long nativeUpperBound = nativePeak(stagedHeapBytes, allocationSizes);
@@ -422,31 +463,19 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
     }
 
     private int[] listAllocationSizes(
-            boolean includeKeyAndEntry,
             byte[] keyBytes,
-            int[] existingPayloadSizes,
-            List<byte[]> values,
-            int nodeEstimate
+            int[] replacementAllocationSizes
     ) {
-        int existingPayloadCount = existingPayloadSizes == null ? 0 : existingPayloadSizes.length;
-        int newPayloadCount = nonNullValueCount(values);
-        int metadataCount = includeKeyAndEntry ? 2 : 0;
-        int nodeCount = Math.max(0, nodeEstimate);
-        int[] sizes = new int[metadataCount + 1 + existingPayloadCount + newPayloadCount + nodeCount];
+        int payloadCount = replacementAllocationSizes == null ? 0 : replacementAllocationSizes.length;
+        int[] sizes = new int[3 + payloadCount];
         int next = 0;
-        if (includeKeyAndEntry) {
-            sizes[next++] = Math.max(1, keyBytes.length);
-            sizes[next++] = ENTRY_RECORD_NATIVE_BYTES;
-        }
+        sizes[next++] = Math.max(1, keyBytes.length);
+        sizes[next++] = ENTRY_RECORD_NATIVE_BYTES;
         sizes[next++] = LIST_ROOT_NATIVE_BYTES;
-        if (existingPayloadSizes != null) {
-            for (int size : existingPayloadSizes) {
+        if (replacementAllocationSizes != null) {
+            for (int size : replacementAllocationSizes) {
                 sizes[next++] = Math.max(1, size);
             }
-        }
-        next = appendValuePayloadSizes(sizes, next, values);
-        for (int i = 0; i < nodeCount; i++) {
-            sizes[next++] = QUICKLIST_NODE_NATIVE_BYTES;
         }
         return sizes;
     }
@@ -462,11 +491,21 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
     }
 
     private EntryRecord listRecord(KeyHandle keyHandle, ValueHandle handle, long expireAtMillis, EntryRecord previous) {
+        return listRecord(keyHandle, handle, listRoot.encoding(handle), expireAtMillis, previous);
+    }
+
+    private EntryRecord listRecord(
+            KeyHandle keyHandle,
+            ValueHandle handle,
+            ValueEncoding encoding,
+            long expireAtMillis,
+            EntryRecord previous
+    ) {
         return keyLifecycle.newRecord(
                 keyHandle,
                 handle,
                 ValueType.LIST,
-                listRoot.encoding(handle),
+                encoding,
                 expireAtMillis,
                 DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE,
                 previous
@@ -597,9 +636,50 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
 
     private Runnable releaseOldListToPopped(ValueHandle oldHandle, PreparedPoppedValueSequence popped) {
         return () -> {
-            listRoot.releaseExcept(oldHandle, popped.retainedHandles());
+            // 先声明 reply 对 retained block 的唯一 ownership；后续 root/node free 失败也不能让 block 失去 owner。
             popped.activateOwnership();
+            try {
+                listRoot.releaseExcept(oldHandle, popped);
+            } catch (RuntimeException | Error failure) {
+                try {
+                    popped.close();
+                } catch (RuntimeException | Error closeFailure) {
+                    failure.addSuppressed(closeFailure);
+                }
+                throw failure;
+            }
         };
+    }
+
+    private void releasePreparedPopToReply(
+            ListValue.PreparedMutation valueMutation,
+            PreparedPoppedValueSequence popped
+    ) {
+        popped.activateOwnership();
+        try {
+            valueMutation.releaseSuperseded(popped);
+        } catch (RuntimeException | Error failure) {
+            try {
+                popped.close();
+            } catch (RuntimeException | Error closeFailure) {
+                failure.addSuppressed(closeFailure);
+            }
+            throw failure;
+        }
+    }
+
+    private static void closePreparedValueMutation(
+            ListValue.PreparedMutation valueMutation,
+            Throwable failure
+    ) {
+        if (valueMutation == null) {
+            return;
+        }
+        try {
+            valueMutation.close();
+        } catch (RuntimeException | Error closeFailure) {
+            failure.addSuppressed(closeFailure);
+        }
     }
 
     private void abortStaged(
@@ -668,32 +748,6 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
 
     private static int valueCount(List<byte[]> values) {
         return values == null ? 0 : values.size();
-    }
-
-    private static int nonNullValueCount(List<byte[]> values) {
-        if (values == null || values.isEmpty()) {
-            return 0;
-        }
-        int count = 0;
-        for (byte[] value : values) {
-            if (value != null) {
-                count++;
-            }
-        }
-        return count;
-    }
-
-    private static int appendValuePayloadSizes(int[] sizes, int offset, List<byte[]> values) {
-        if (values == null || values.isEmpty()) {
-            return offset;
-        }
-        int next = offset;
-        for (byte[] value : values) {
-            if (value != null) {
-                sizes[next++] = Math.max(1, value.length);
-            }
-        }
-        return next;
     }
 
     private static MeasuredBulkStringSequence sequenceOf(BulkEmitter emitter) {

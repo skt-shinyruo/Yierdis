@@ -19,7 +19,7 @@ Yierdis 的测试大致分成七层：
 | DB direct ops | 绕开 command 层验证 DB API | `StringDirectOpsTest`, `CollectionDirectOpsTest`, `TtlLifecycleDirectOpsTest` |
 | native/internal | handle、allocator、keyspace、root/value、ledger | `NativeHandleTest`, `YierdisStableNativeAllocatorTest`, `StringRootTest`, `MemoryLedgerContractTest` |
 | executor / server | owner thread、队列、背压、Netty 适配 | `CommandExecutorTest`, `CommandExecutorBackpressureTest`, `RespProtocolIntegrationTest` |
-| CLI / bench | 客户端、catalog、NIO runner、脚本和输出契约 | `YierdisClientTest`, `RedisBenchmarkCatalogTest`, `NioBenchmarkRunnerTest`, `BenchmarkOutputRendererTest`, `BenchScriptContractTest` |
+| CLI / bench | 客户端、catalog、NIO runner、storage footprint、脚本和输出契约 | `YierdisClientTest`, `RedisBenchmarkCatalogTest`, `NioBenchmarkRunnerTest`, `BenchmarkOutputRendererTest`, `StorageBenchmarkRunnerTest`, `BenchScriptContractTest` |
 | architecture guard | 模块边界和协议边界 | `ArchitectureDependencyRuleTest`, `RespBoundaryGuardTest` |
 
 查找入口：开发路径看 [`development-navigation.md`](./development-navigation.md)，源码职责看 [`core-logic-index.md`](./core-logic-index.md)。
@@ -136,13 +136,21 @@ CLI 先跑：
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-cli -am -Dtest=YierdisClientTest,MaxmemoryScopeTest,TransactionQueueLimitTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-bench 先跑：
+RESP bench 先跑：
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=RedisBenchmarkCatalogTest,RedisBenchmarkCommandTemplateTest,NioBenchmarkRunnerTest,BenchmarkOutputRendererTest,RedisBenchmarkCommandTest,BenchScriptContractTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 这些 focused tests 分别保护 canonical catalog/selection、wire template/random placeholder、单 `Selector` scheduling、human/quiet/CSV、CLI validation/exit code 和 connect-only shell contract。排障顺序：`RedisBenchmarkOptions` -> `BenchmarkConfig` -> `RedisBenchmarkCatalog` -> `RedisBenchmarkCommandTemplate` -> `NioBenchmarkRunner` / incremental reply decoder -> `BenchmarkLatencyRecorder` -> `BenchmarkOutputRenderer` -> `BenchScriptContractTest`。详细入口看 [`client-and-bench-internals.md`](./client-and-bench-internals.md)。
+
+storage bench 先跑：
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=YierdisBenchEntrypointTest,StorageBenchmarkConfigTest,ProcessRssReaderTest,StorageBenchmarkRendererTest,StorageBenchmarkRunnerTest,StorageBenchScriptContractTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+这组测试保护 1M 默认/10M 上限、固定宽度 key、RSS unavailable、21 列 CSV、rehash 稳定 snapshot、empty baseline/loaded accounting、真实小规模 DB 生命周期和专用脚本契约。排障顺序：`StorageBenchmarkOptions` -> `StorageBenchmarkConfig` -> `StorageBenchmarkRunner` -> `StorageMemorySnapshot` -> `StorageBenchmarkResult` -> `StorageBenchmarkRenderer`。
 
 ## 改架构护栏时
 

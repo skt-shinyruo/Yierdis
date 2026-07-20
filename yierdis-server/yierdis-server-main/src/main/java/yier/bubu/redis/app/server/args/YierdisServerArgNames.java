@@ -1,7 +1,9 @@
 package yier.bubu.redis.app.server.args;
 
 public final class YierdisServerArgNames {
+    public static final String BIND = "--bind";
     public static final String PORT = "--port";
+    public static final String MAX_CLIENTS = "--maxClients";
     public static final String DATABASES = "--databases";
     public static final String CLEANUP_INTERVAL_MILLIS = "--cleanupIntervalMillis";
     public static final String NO_CLEANUP = "--noCleanup";

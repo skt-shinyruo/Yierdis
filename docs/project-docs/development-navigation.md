@@ -242,7 +242,7 @@
 - [`YierdisDbRouter.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/YierdisDbRouter.java)
 - [`CommandSupport.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java)
 - [`ServerInfoProvider.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/ServerInfoProvider.java)
-- [`CommandRecordScope.java`](../../yierdis-common/yierdis-common-command/src/main/java/yier/bubu/redis/common/command/CommandRecordScope.java)
+- [`MutationContext.java`](../../yierdis-common/yierdis-common-command/src/main/java/yier/bubu/redis/common/command/MutationContext.java)
 - [`DbCommitPublisher.java`](../../yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/DbCommitPublisher.java)
 - [`YierdisDbMutationExecutor.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java)
 - [`CommitStream.java`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/CommitStream.java)

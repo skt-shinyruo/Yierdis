@@ -7,17 +7,22 @@ import yier.bubu.redis.command.api.CommandDescriptor;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.CommandSessionCapabilities;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.ReplyPlan;
+import yier.bubu.redis.execution.api.ReplyPlans;
 import yier.bubu.redis.execution.api.TransactionState;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 public class YierdisFastCommandProcessorPolicyTest {
     @Test
@@ -84,6 +89,53 @@ public class YierdisFastCommandProcessorPolicyTest {
     }
 
     @Test
+    public void transactionControlParseErrorsAbortActiveTransaction() {
+        for (String control : List.of("MULTI", "EXEC", "DISCARD")) {
+            YierdisFastCommandProcessor processor = processorWithTransactions(registration -> { });
+            TestSession session = new TestSession();
+            CapturingReplyWriter out = new CapturingReplyWriter();
+            CommandContext ctx = context(session, out);
+
+            processor.execute(request("MULTI"), ctx);
+            out.clear();
+            processor.execute(request(control, "extra"), ctx);
+
+            Assert.assertEquals(
+                    "ERR wrong number of arguments for '" + control.toLowerCase(java.util.Locale.ROOT) + "' command",
+                    out.error()
+            );
+            Assert.assertTrue(control, session.transactionState().aborted());
+
+            out.clear();
+            processor.execute(request("EXEC"), ctx);
+            Assert.assertEquals(
+                    control,
+                    "EXECABORT Transaction discarded because of previous errors.",
+                    out.error()
+            );
+        }
+    }
+
+    @Test
+    public void nestedMultiHandlerErrorDoesNotAbortActiveTransaction() {
+        YierdisFastCommandProcessor processor = processorWithTransactions(registration -> { });
+        TestSession session = new TestSession();
+        CapturingReplyWriter out = new CapturingReplyWriter();
+        CommandContext ctx = context(session, out);
+
+        processor.execute(request("MULTI"), ctx);
+        out.clear();
+        processor.execute(request("MULTI"), ctx);
+
+        Assert.assertEquals("ERR MULTI calls can not be nested", out.error());
+        Assert.assertFalse(session.transactionState().aborted());
+
+        out.clear();
+        processor.execute(request("EXEC"), ctx);
+        Assert.assertEquals(Integer.valueOf(0), out.arrayHeader());
+    }
+
+    @Test
     public void transactionCommandsReplayQueuedRequestsThroughNarrowReplayer() {
         ArrayList<String> replayed = new ArrayList<>();
         CommandRegistry registry = CommandRegistries.from(
@@ -114,6 +166,86 @@ public class YierdisFastCommandProcessorPolicyTest {
         Assert.assertEquals(Integer.valueOf(1), out.arrayHeader());
         Assert.assertEquals(List.of("WRITE"), replayed);
         Assert.assertEquals("REPLAY_WRITE", out.simpleString());
+    }
+
+    @Test
+    public void execClosesCurrentAndQueuedTailExactlyOnceWhenReplayFails() {
+        AtomicReference<MutationContext> replayContext = new AtomicReference<>();
+        CommandRegistry registry = CommandRegistries.from(
+                new TransactionCommands((request, ctx) -> {
+                    replayContext.set(ctx.mutationContext());
+                    throw new IllegalStateException("injected replay failure");
+                })
+        );
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
+        TestSession session = new TestSession();
+        CapturingReplyWriter out = new CapturingReplyWriter();
+        TrackingExecutionRequest first = new TrackingExecutionRequest(request("FIRST"));
+        TrackingExecutionRequest second = new TrackingExecutionRequest(request("SECOND"));
+        session.transactionState().begin();
+        session.transactionState().enqueueOwned(first);
+        session.transactionState().enqueueOwned(second);
+
+        IllegalStateException failure = Assert.assertThrows(
+                IllegalStateException.class,
+                () -> processor.execute(request("EXEC"), context(session, out))
+        );
+
+        Assert.assertEquals("injected replay failure", failure.getMessage());
+        Assert.assertEquals(1, first.closeCalls());
+        Assert.assertEquals(1, second.closeCalls());
+        Assert.assertNotNull(replayContext.get());
+        Assert.assertFalse(replayContext.get().hasCommandRecord());
+    }
+
+    @Test
+    public void execAggregatesRequestOnlyReplyPlansBeforeReplayingCommands() {
+        CommandRegistry registry = new CommandRegistry();
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
+        CommandRegistries.registerTransactionSupport(registry, processor::execute);
+        registry.register(
+                "PLANNED",
+                CommandSpec.of(
+                        CommandDescriptor.of(1, 0, 0, 0),
+                        CommandParsers.exactRequest(1, "planned"),
+                        (request, ctx) -> ctx.out().simpleString("OK")
+                ).withReplyPlanner(request -> ReplyPlan.exact(5L, 3L))
+        );
+        TestSession session = new TestSession();
+        CapturingReplyWriter out = new CapturingReplyWriter();
+        CommandContext ctx = context(session, out);
+
+        processor.execute(request("MULTI"), ctx);
+        processor.execute(request("PLANNED"), ctx);
+        out.clear();
+        processor.execute(request("EXEC"), ctx);
+
+        Assert.assertEquals(ReplyPlan.exact(9L, 3L), out.envelopePlan());
+        Assert.assertEquals(Integer.valueOf(1), out.arrayHeader());
+        Assert.assertEquals("OK", out.simpleString());
+    }
+
+    @Test
+    public void execFallsBackToMaximumWhenAnyQueuedCommandHasNoPlanner() {
+        CommandRegistry registry = new CommandRegistry();
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
+        CommandRegistries.registerTransactionSupport(registry, processor::execute);
+        registry.register(
+                "UNPLANNED",
+                CommandDescriptor.of(1, 0, 0, 0),
+                CommandParsers.exactRequest(1, "unplanned"),
+                (request, ctx) -> ctx.out().simpleString("OK")
+        );
+        TestSession session = new TestSession();
+        CapturingReplyWriter out = new CapturingReplyWriter();
+        CommandContext ctx = context(session, out);
+
+        processor.execute(request("MULTI"), ctx);
+        processor.execute(request("UNPLANNED"), ctx);
+        out.clear();
+        processor.execute(request("EXEC"), ctx);
+
+        Assert.assertEquals(ReplyPlan.maximum(), out.envelopePlan());
     }
 
     private static YierdisFastCommandProcessor processorWithTransactions(CommandModule module) {
@@ -244,6 +376,21 @@ public class YierdisFastCommandProcessorPolicyTest {
         }
 
         @Override
+        public ReplyPlan planExecReply(Function<? super ExecutionRequest, ReplyPlan> planner) {
+            long encodedElementBytes = 0L;
+            long retainedSourceBytes = 0L;
+            for (ExecutionRequest request : queue) {
+                ReplyPlan child = planner.apply(request);
+                if (child == null || child.reserveMaximum()) {
+                    return ReplyPlan.maximum();
+                }
+                encodedElementBytes = addSaturating(encodedElementBytes, child.encodedUpperBoundBytes());
+                retainedSourceBytes = addSaturating(retainedSourceBytes, child.retainedSourceBytes());
+            }
+            return ReplyPlans.array(queue.size(), encodedElementBytes, retainedSourceBytes);
+        }
+
+        @Override
         public List<ExecutionRequest> drain() {
             ArrayList<ExecutionRequest> out = new ArrayList<>(queue);
             queue.clear();
@@ -251,17 +398,76 @@ public class YierdisFastCommandProcessorPolicyTest {
             aborted = false;
             return out;
         }
+
+        private void enqueueOwned(ExecutionRequest request) {
+            queue.add(request);
+        }
+
+        private static long addSaturating(long left, long right) {
+            return left > Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
+        }
+    }
+
+    private static final class TrackingExecutionRequest implements ExecutionRequest {
+        private final ExecutionRequest delegate;
+        private int closeCalls;
+
+        private TrackingExecutionRequest(ExecutionRequest delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public int argc() {
+            return delegate.argc();
+        }
+
+        @Override
+        public boolean isNull(int index) {
+            return delegate.isNull(index);
+        }
+
+        @Override
+        public int len(int index) {
+            return delegate.len(index);
+        }
+
+        @Override
+        public byte byteAt(int index, int offset) {
+            return delegate.byteAt(index, offset);
+        }
+
+        @Override
+        public void copyToByteArray(int index, byte[] dst, int dstOff) {
+            delegate.copyToByteArray(index, dst, dstOff);
+        }
+
+        @Override
+        public byte[] toByteArray(int index) {
+            return delegate.toByteArray(index);
+        }
+
+        @Override
+        public void close() {
+            closeCalls++;
+            delegate.close();
+        }
+
+        private int closeCalls() {
+            return closeCalls;
+        }
     }
 
     private static final class CapturingReplyWriter implements RedisReplyWriter {
         private String simpleString;
         private String error;
         private Integer arrayHeader;
+        private ReplyPlan envelopePlan;
 
         private void clear() {
             simpleString = null;
             error = null;
             arrayHeader = null;
+            envelopePlan = null;
         }
 
         private String simpleString() {
@@ -274,6 +480,15 @@ public class YierdisFastCommandProcessorPolicyTest {
 
         private Integer arrayHeader() {
             return arrayHeader;
+        }
+
+        private ReplyPlan envelopePlan() {
+            return envelopePlan;
+        }
+
+        @Override
+        public void requireReplyEnvelope(ReplyPlan plan) {
+            envelopePlan = plan;
         }
 
         @Override

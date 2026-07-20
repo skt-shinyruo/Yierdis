@@ -77,8 +77,32 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
         return totalSize;
     }
 
-    public long preparedCopyHeapUpperBound(List<byte[]> values) {
-        return heapUpperBoundForElementCount(addSaturating(totalSize, valueCount(values)));
+    public long preparedPushHeapUpperBound(List<byte[]> values, boolean left) {
+        long upperBound = preparedMutationHeapUpperBound(
+                addSaturating(valueCount(values), quicklist == null ? totalSize : edgeSize(left)),
+                preparedPushNativeAllocationSizes(values, left).length
+        );
+        if (quicklist == null) {
+            return upperBound;
+        }
+        QuicklistPushPlan plan = planQuicklistPush(values, left);
+        long finalNodeCount = addSaturating(quicklist.size(), plan.nodeCount());
+        if (finalNodeCount < quicklistDequeCapacity) {
+            return upperBound;
+        }
+        long topologyBytes = addSaturating(
+                ARRAY_DEQUE_HEAP_BYTES + ARRAY_HEADER_BYTES,
+                multiplySaturating(addSaturating(finalNodeCount, 1L), REFERENCE_BYTES)
+        );
+        return addSaturating(upperBound, topologyBytes);
+    }
+
+    public long preparedPopHeapUpperBound(int count, boolean left) {
+        int popCount = Math.min(Math.max(0, count), totalSize);
+        return preparedMutationHeapUpperBound(
+                addSaturating(popCount, quicklist == null ? totalSize : edgeSize(left)),
+                preparedPopNativeAllocationSizes(count, left).length
+        );
     }
 
     public static long preparedHeapUpperBoundForElementCount(long expectedElements) {
@@ -87,6 +111,484 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
 
     public static long preparedNewHeapUpperBound(List<byte[]> values) {
         return heapUpperBoundForElementCount(valueCount(values));
+    }
+
+    public int[] preparedPushNativeAllocationSizes(List<byte[]> values, boolean left) {
+        Objects.requireNonNull(values, "values");
+        if (quicklist != null) {
+            return planQuicklistPush(values, left).nativeAllocationSizes();
+        }
+        return planPackedPush(values, left).nativeAllocationSizes();
+    }
+
+    private BuildPlan planPackedPush(List<byte[]> values, boolean left) {
+        int[] current = encodedEntrySizes();
+        int incomingCount = values == null ? 0 : values.size();
+        int[] combined = new int[Math.addExact(current.length, incomingCount)];
+        if (left) {
+            for (int index = 0; index < incomingCount; index++) {
+                combined[index] = NativeListpack.entryEncodedBytes(values.get(incomingCount - index - 1));
+            }
+            System.arraycopy(current, 0, combined, incomingCount, current.length);
+        } else {
+            System.arraycopy(current, 0, combined, 0, current.length);
+            for (int index = 0; index < incomingCount; index++) {
+                combined[current.length + index] = NativeListpack.entryEncodedBytes(values.get(index));
+            }
+        }
+        return buildPlan(combined);
+    }
+
+    public static int[] preparedNewNativeAllocationSizes(List<byte[]> values, boolean left) {
+        int incomingCount = values == null ? 0 : values.size();
+        int[] encoded = new int[incomingCount];
+        for (int index = 0; index < incomingCount; index++) {
+            int sourceIndex = left ? incomingCount - index - 1 : index;
+            encoded[index] = NativeListpack.entryEncodedBytes(values.get(sourceIndex));
+        }
+        return buildPlan(encoded).nativeAllocationSizes();
+    }
+
+    public int[] preparedPopNativeAllocationSizes(int count, boolean left) {
+        int popCount = Math.min(Math.max(0, count), totalSize);
+        int remaining = totalSize - popCount;
+        if (remaining == 0) {
+            return new int[0];
+        }
+        if (quicklist == null) {
+            int sourceOffset = left ? popCount : 0;
+            return new int[]{listpack.encodedBytesInRange(sourceOffset, remaining)};
+        }
+
+        int pending = popCount;
+        java.util.Iterator<ListNode> iterator = left ? quicklist.iterator() : quicklist.descendingIterator();
+        while (iterator.hasNext()) {
+            ListNode node = iterator.next();
+            if (pending >= node.size()) {
+                pending -= node.size();
+                continue;
+            }
+            if (pending == 0) {
+                return new int[0];
+            }
+            int retainedCount = node.size() - pending;
+            int retainedFrom = left ? pending : 0;
+            return new int[]{node.encodedBytesInRange(retainedFrom, retainedCount)};
+        }
+        throw new IllegalStateException("quicklist pop planning exceeded list size");
+    }
+
+    private int edgeSize(boolean left) {
+        ListNode edge = left ? quicklist.peekFirst() : quicklist.peekLast();
+        return edge == null ? 0 : edge.size();
+    }
+
+    private QuicklistPushPlan planQuicklistPush(List<byte[]> values, boolean left) {
+        ListNode edge = left ? quicklist.peekFirst() : quicklist.peekLast();
+        int edgeEntryCount = 0;
+        int edgeEncodedBytes = edge == null ? 0 : edge.encodedBytes();
+        while (edge != null && edgeEntryCount < values.size()) {
+            int entryBytes = entryEncodedBytes(values.get(edgeEntryCount));
+            if ((long) edgeEncodedBytes + entryBytes > QUICKLIST_NODE_MAX_BYTES) {
+                break;
+            }
+            edgeEncodedBytes = Math.addExact(edgeEncodedBytes, entryBytes);
+            edgeEntryCount++;
+        }
+
+        int remaining = values.size() - edgeEntryCount;
+        int[] nodeEntryCounts = new int[remaining];
+        int[] nodeEncodedBytes = new int[remaining];
+        int nodeCount = 0;
+        int currentEntries = 0;
+        int currentBytes = 0;
+        for (int index = edgeEntryCount; index < values.size(); index++) {
+            int entryBytes = entryEncodedBytes(values.get(index));
+            if (currentEntries > 0 && (long) currentBytes + entryBytes > QUICKLIST_NODE_MAX_BYTES) {
+                nodeEntryCounts[nodeCount] = currentEntries;
+                nodeEncodedBytes[nodeCount] = currentBytes;
+                nodeCount++;
+                currentEntries = 0;
+                currentBytes = 0;
+            }
+            currentEntries++;
+            currentBytes = Math.addExact(currentBytes, entryBytes);
+        }
+        if (currentEntries > 0) {
+            nodeEntryCounts[nodeCount] = currentEntries;
+            nodeEncodedBytes[nodeCount] = currentBytes;
+            nodeCount++;
+        }
+        return new QuicklistPushPlan(
+                edgeEntryCount,
+                edgeEncodedBytes,
+                java.util.Arrays.copyOf(nodeEntryCounts, nodeCount),
+                java.util.Arrays.copyOf(nodeEncodedBytes, nodeCount)
+        );
+    }
+
+    public void loadForBuild(List<byte[]> orderedValues) {
+        Objects.requireNonNull(orderedValues, "orderedValues");
+        if (totalSize != 0 || quicklist != null || !listpack.isEmpty()) {
+            throw new IllegalStateException("staged list build requires an empty value");
+        }
+        int[] encodedEntries = encodedEntrySizes(orderedValues);
+        BuildPlan plan = buildPlan(encodedEntries);
+        if (!plan.quicklist()) {
+            int encodedBytes = plan.blockCount() == 0 ? 0 : plan.blockEncodedBytes()[0];
+            listpack.reserveForBuild(orderedValues.size(), encodedBytes);
+            for (byte[] value : orderedValues) {
+                listpack.addLast(value);
+            }
+            totalSize = orderedValues.size();
+            return;
+        }
+
+        ArrayDeque<ListNode> out = new ArrayDeque<>(INITIAL_QUICKLIST_DEQUE_CAPACITY);
+        int outDequeCapacity = INITIAL_QUICKLIST_DEQUE_CAPACITY + 1;
+        long outNodeHeapBytes = 0L;
+        int valueIndex = 0;
+        ListNode currentNode = null;
+        try {
+            for (int blockIndex = 0; blockIndex < plan.blockCount(); blockIndex++) {
+                currentNode = newListNode();
+                int entryCount = plan.blockEntryCounts()[blockIndex];
+                currentNode.reserveForBuild(entryCount, plan.blockEncodedBytes()[blockIndex]);
+                for (int entryIndex = 0; entryIndex < entryCount; entryIndex++) {
+                    currentNode.addLast(orderedValues.get(valueIndex++));
+                }
+                if (out.size() + 1 >= outDequeCapacity) {
+                    outDequeCapacity = nextArrayDequeCapacity(outDequeCapacity);
+                }
+                out.addLast(currentNode);
+                outNodeHeapBytes += currentNode.heapEstimatedBytes();
+                currentNode = null;
+            }
+            refreshNodeMetadataLinks(out);
+        } catch (RuntimeException | Error failure) {
+            closeNodes(out, failure);
+            if (currentNode != null) {
+                closeNode(currentNode, failure);
+            }
+            throw failure;
+        }
+
+        listpack.close();
+        listpack = null;
+        quicklist = out;
+        quicklistDequeCapacity = outDequeCapacity;
+        quicklistNodeHeapBytes = outNodeHeapBytes;
+        totalSize = orderedValues.size();
+    }
+
+    public PreparedMutation preparePush(List<byte[]> values, boolean left) {
+        Objects.requireNonNull(values, "values");
+        if (values.isEmpty()) {
+            return PreparedMutation.unchanged(this);
+        }
+        return quicklist == null ? preparePackedPush(values, left) : prepareQuicklistPush(values, left);
+    }
+
+    public PreparedMutation preparePop(int count, boolean left) {
+        int popCount = Math.min(Math.max(0, count), totalSize);
+        if (popCount == 0) {
+            return PreparedMutation.unchanged(this);
+        }
+        if (popCount == totalSize) {
+            throw new IllegalArgumentException("full list deletion is owned by the entry mutation");
+        }
+        return quicklist == null ? preparePackedPop(popCount, left) : prepareQuicklistPop(popCount, left);
+    }
+
+    private PreparedMutation preparePackedPush(List<byte[]> values, boolean left) {
+        BuildPlan plan = planPackedPush(values, left);
+        int nextSize = Math.addExact(totalSize, values.size());
+        if (!plan.quicklist()) {
+            NativeListpack replacement = new NativeListpack(byteStore, NativeObjectKind.LISTPACK_BYTES);
+            boolean success = false;
+            try {
+                replacement.reserveForBuild(nextSize, plan.blockEncodedBytes()[0]);
+                appendPackedPush(replacement, values, left);
+                PreparedMutation prepared = PreparedMutation.packedReplacement(this, replacement, nextSize);
+                success = true;
+                return prepared;
+            } finally {
+                if (!success) {
+                    replacement.close();
+                }
+            }
+        }
+
+        ArrayDeque<ListNode> nodes = new ArrayDeque<>(plan.blockCount());
+        boolean success = false;
+        int logicalOffset = 0;
+        ListNode current = null;
+        try {
+            for (int blockIndex = 0; blockIndex < plan.blockCount(); blockIndex++) {
+                current = newListNode();
+                int entryCount = plan.blockEntryCounts()[blockIndex];
+                current.reserveForBuild(entryCount, plan.blockEncodedBytes()[blockIndex]);
+                appendPackedPushRange(current, values, left, logicalOffset, entryCount);
+                nodes.addLast(current);
+                current = null;
+                logicalOffset += entryCount;
+            }
+            PreparedMutation prepared = PreparedMutation.packedToQuicklist(this, nodes, nextSize);
+            success = true;
+            return prepared;
+        } finally {
+            if (!success) {
+                RuntimeException failure = null;
+                if (current != null) {
+                    try {
+                        current.close();
+                    } catch (RuntimeException closeFailure) {
+                        failure = closeFailure;
+                    }
+                }
+                for (ListNode node : nodes) {
+                    try {
+                        node.close();
+                    } catch (RuntimeException closeFailure) {
+                        failure = addFailure(failure, closeFailure);
+                    }
+                }
+                if (failure != null) {
+                    throw failure;
+                }
+            }
+        }
+    }
+
+    private PreparedMutation preparePackedPop(int popCount, boolean left) {
+        int retainedCount = totalSize - popCount;
+        int retainedFrom = left ? popCount : 0;
+        int retainedBytes = listpack.encodedBytesInRange(retainedFrom, retainedCount);
+        NativeListpack replacement = new NativeListpack(byteStore, NativeObjectKind.LISTPACK_BYTES);
+        boolean success = false;
+        try {
+            replacement.reserveForBuild(retainedCount, retainedBytes);
+            replacement.appendRangeFrom(listpack, retainedFrom, retainedCount);
+            PreparedMutation prepared = PreparedMutation.packedReplacement(this, replacement, retainedCount);
+            success = true;
+            return prepared;
+        } finally {
+            if (!success) {
+                replacement.close();
+            }
+        }
+    }
+
+    private PreparedMutation prepareQuicklistPush(List<byte[]> values, boolean left) {
+        QuicklistPushPlan plan = planQuicklistPush(values, left);
+        ListNode edge = left ? quicklist.peekFirst() : quicklist.peekLast();
+        NativeListpack edgeReplacement = null;
+        ArrayDeque<ListNode> addedNodes = new ArrayDeque<>(plan.nodeCount());
+        ListNode current = null;
+        boolean success = false;
+        try {
+            if (plan.edgeEntryCount() > 0) {
+                edgeReplacement = new NativeListpack(byteStore, NativeObjectKind.LISTPACK_BYTES);
+                edgeReplacement.reserveForBuild(
+                        Math.addExact(edge.size(), plan.edgeEntryCount()),
+                        plan.edgeEncodedBytes()
+                );
+                if (left) {
+                    for (int index = plan.edgeEntryCount() - 1; index >= 0; index--) {
+                        edgeReplacement.addLast(values.get(index));
+                    }
+                    edgeReplacement.appendRangeFrom(edge.listpack, 0, edge.size());
+                } else {
+                    edgeReplacement.appendRangeFrom(edge.listpack, 0, edge.size());
+                    for (int index = 0; index < plan.edgeEntryCount(); index++) {
+                        edgeReplacement.addLast(values.get(index));
+                    }
+                }
+            }
+
+            int valueIndex = plan.edgeEntryCount();
+            for (int nodeIndex = 0; nodeIndex < plan.nodeCount(); nodeIndex++) {
+                current = newListNode();
+                int entryCount = plan.nodeEntryCounts()[nodeIndex];
+                current.reserveForBuild(entryCount, plan.nodeEncodedBytes()[nodeIndex]);
+                if (left) {
+                    for (int index = valueIndex + entryCount - 1; index >= valueIndex; index--) {
+                        current.addLast(values.get(index));
+                    }
+                    addedNodes.addFirst(current);
+                } else {
+                    for (int index = valueIndex; index < valueIndex + entryCount; index++) {
+                        current.addLast(values.get(index));
+                    }
+                    addedNodes.addLast(current);
+                }
+                current = null;
+                valueIndex += entryCount;
+            }
+
+            ArrayDeque<ListNode> replacementTopology = null;
+            int finalNodeCount = Math.addExact(quicklist.size(), addedNodes.size());
+            if (finalNodeCount >= quicklistDequeCapacity) {
+                replacementTopology = new ArrayDeque<>(finalNodeCount);
+                if (left) {
+                    replacementTopology.addAll(addedNodes);
+                    replacementTopology.addAll(quicklist);
+                } else {
+                    replacementTopology.addAll(quicklist);
+                    replacementTopology.addAll(addedNodes);
+                }
+            }
+            PreparedMutation prepared = PreparedMutation.quicklistPush(
+                    this,
+                    left,
+                    edge,
+                    edgeReplacement,
+                    addedNodes,
+                    replacementTopology,
+                    Math.addExact(totalSize, values.size())
+            );
+            success = true;
+            return prepared;
+        } finally {
+            if (!success) {
+                RuntimeException failure = null;
+                if (edgeReplacement != null) {
+                    try {
+                        edgeReplacement.close();
+                    } catch (RuntimeException closeFailure) {
+                        failure = closeFailure;
+                    }
+                }
+                if (current != null) {
+                    try {
+                        current.close();
+                    } catch (RuntimeException closeFailure) {
+                        failure = addFailure(failure, closeFailure);
+                    }
+                }
+                for (ListNode node : addedNodes) {
+                    try {
+                        node.close();
+                    } catch (RuntimeException closeFailure) {
+                        failure = addFailure(failure, closeFailure);
+                    }
+                }
+                if (failure != null) {
+                    throw failure;
+                }
+            }
+        }
+    }
+
+    private PreparedMutation prepareQuicklistPop(int popCount, boolean left) {
+        ArrayList<ListNode> removed = new ArrayList<>();
+        java.util.Iterator<ListNode> iterator = left ? quicklist.iterator() : quicklist.descendingIterator();
+        int pending = popCount;
+        ListNode edge = null;
+        NativeListpack edgeReplacement = null;
+        while (iterator.hasNext() && pending > 0) {
+            ListNode node = iterator.next();
+            if (pending >= node.size()) {
+                pending -= node.size();
+                removed.add(node);
+                continue;
+            }
+            edge = node;
+            int retainedCount = node.size() - pending;
+            int retainedFrom = left ? pending : 0;
+            int retainedBytes = node.encodedBytesInRange(retainedFrom, retainedCount);
+            edgeReplacement = new NativeListpack(byteStore, NativeObjectKind.LISTPACK_BYTES);
+            boolean copied = false;
+            try {
+                edgeReplacement.reserveForBuild(retainedCount, retainedBytes);
+                edgeReplacement.appendRangeFrom(node.listpack, retainedFrom, retainedCount);
+                copied = true;
+            } finally {
+                if (!copied) {
+                    edgeReplacement.close();
+                }
+            }
+            pending = 0;
+        }
+        if (pending != 0) {
+            throw new IllegalStateException("quicklist pop staging exceeded list size");
+        }
+        if (edge == null) {
+            java.util.Iterator<ListNode> retained = left
+                    ? quicklist.iterator()
+                    : quicklist.descendingIterator();
+            for (int index = 0; index < removed.size(); index++) {
+                retained.next();
+            }
+            edge = retained.next();
+        }
+        return PreparedMutation.quicklistPop(
+                this,
+                left,
+                edge,
+                edgeReplacement,
+                removed.toArray(ListNode[]::new),
+                totalSize - popCount
+        );
+    }
+
+    private void appendPackedPush(NativeListpack target, List<byte[]> values, boolean left) {
+        if (left) {
+            for (int index = values.size() - 1; index >= 0; index--) {
+                target.addLast(values.get(index));
+            }
+            target.appendRangeFrom(listpack, 0, listpack.size());
+            return;
+        }
+        target.appendRangeFrom(listpack, 0, listpack.size());
+        for (byte[] value : values) {
+            target.addLast(value);
+        }
+    }
+
+    private void appendPackedPushRange(
+            ListNode target,
+            List<byte[]> values,
+            boolean left,
+            int logicalOffset,
+            int entryCount
+    ) {
+        int incomingCount = values.size();
+        int next = logicalOffset;
+        int remaining = entryCount;
+        while (remaining > 0) {
+            if (left && next < incomingCount) {
+                int run = Math.min(remaining, incomingCount - next);
+                for (int index = 0; index < run; index++) {
+                    target.addLast(values.get(incomingCount - next - index - 1));
+                }
+                next += run;
+                remaining -= run;
+                continue;
+            }
+            if (!left && next < listpack.size()) {
+                int run = Math.min(remaining, listpack.size() - next);
+                target.appendRangeFrom(listpack, next, run);
+                next += run;
+                remaining -= run;
+                continue;
+            }
+            if (left) {
+                int sourceIndex = next - incomingCount;
+                int run = Math.min(remaining, listpack.size() - sourceIndex);
+                target.appendRangeFrom(listpack, sourceIndex, run);
+                next += run;
+                remaining -= run;
+                continue;
+            }
+            int valueIndex = next - listpack.size();
+            int run = Math.min(remaining, incomingCount - valueIndex);
+            for (int index = 0; index < run; index++) {
+                target.addLast(values.get(valueIndex + index));
+            }
+            next += run;
+            remaining -= run;
+        }
     }
 
     public long estimatedBytes() {
@@ -448,11 +950,12 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
         return total;
     }
 
-    public void releaseExcept(NativeHandle[] retained) {
+    public void releaseExcept(PreparedPoppedValueSequence retained) {
+        Objects.requireNonNull(retained, "retained");
         RuntimeException failure = null;
         if (listpack != null) {
             try {
-                listpack.closeExcept(retained);
+                listpack.closeExcept(retained::retainsRawHandle);
             } catch (RuntimeException e) {
                 failure = e;
             } finally {
@@ -517,7 +1020,7 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
         }
         int predicted = listpack.encodedBytes();
         for (byte[] v : incoming) {
-            predicted += entryEncodedBytes(v);
+            predicted = Math.addExact(predicted, NativeListpack.entryEncodedBytes(v));
             if (predicted > QUICKLIST_NODE_MAX_BYTES) {
                 return true;
             }
@@ -790,6 +1293,39 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
         }
     }
 
+    private void refreshEdgeMetadata(boolean left, int nodeCount) {
+        if (quicklist == null || quicklist.isEmpty() || nodeCount <= 0) {
+            return;
+        }
+        java.util.Iterator<ListNode> iterator = left ? quicklist.iterator() : quicklist.descendingIterator();
+        if (left) {
+            long previousRaw = 0L;
+            ListNode current = iterator.next();
+            for (int written = 0; written < nodeCount; written++) {
+                ListNode next = iterator.hasNext() ? iterator.next() : null;
+                current.writeMetadata(previousRaw, next == null ? 0L : next.rawHandle());
+                previousRaw = current.rawHandle();
+                if (next == null) {
+                    break;
+                }
+                current = next;
+            }
+            return;
+        }
+
+        long nextRaw = 0L;
+        ListNode current = iterator.next();
+        for (int written = 0; written < nodeCount; written++) {
+            ListNode previous = iterator.hasNext() ? iterator.next() : null;
+            current.writeMetadata(previous == null ? 0L : previous.rawHandle(), nextRaw);
+            nextRaw = current.rawHandle();
+            if (previous == null) {
+                break;
+            }
+            current = previous;
+        }
+    }
+
     private ListNode secondNodeFromFirst() {
         java.util.Iterator<ListNode> iterator = quicklist.iterator();
         iterator.next();
@@ -862,26 +1398,82 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
         return idx >= 0 ? idx : size + idx;
     }
 
-    private static void setLong(NativeObjectView view, int offset, long value) {
-        for (int i = 0; i < Long.BYTES; i++) {
-            view.setByte(offset + i, (byte) (value >>> (i * 8)));
-        }
-    }
-
-    private static void setInt(NativeObjectView view, int offset, int value) {
-        for (int i = 0; i < Integer.BYTES; i++) {
-            view.setByte(offset + i, (byte) (value >>> (i * 8)));
-        }
-    }
-
     private static int entryEncodedBytes(byte[] v) {
-        int len = v == null ? -1 : v.length;
-        return entryEncodedBytes(len);
+        return NativeListpack.entryEncodedBytes(v);
     }
 
     private static int entryEncodedBytes(int len) {
-        int headerValue = len < 0 ? 0 : len + 1;
-        return varIntSize(headerValue) + Math.max(0, len);
+        return NativeListpack.entryEncodedBytes(len);
+    }
+
+    private int[] encodedEntrySizes() {
+        int[] encoded = new int[totalSize];
+        int next = 0;
+        if (quicklist == null) {
+            for (int index = 0; index < listpack.size(); index++) {
+                encoded[next++] = listpack.encodedEntryBytesAt(index);
+            }
+        } else {
+            for (ListNode node : quicklist) {
+                for (int index = 0; index < node.size(); index++) {
+                    encoded[next++] = node.encodedEntryBytesAt(index);
+                }
+            }
+        }
+        if (next != encoded.length) {
+            throw new IllegalStateException("list entry count changed during allocation planning");
+        }
+        return encoded;
+    }
+
+    private static int[] encodedEntrySizes(List<byte[]> values) {
+        int[] encoded = new int[values.size()];
+        for (int index = 0; index < values.size(); index++) {
+            encoded[index] = NativeListpack.entryEncodedBytes(values.get(index));
+        }
+        return encoded;
+    }
+
+    private static BuildPlan buildPlan(int[] encodedEntries) {
+        long totalEncodedBytes = 0L;
+        for (int entryBytes : encodedEntries) {
+            totalEncodedBytes += entryBytes;
+            if (totalEncodedBytes > QUICKLIST_NODE_MAX_BYTES) {
+                break;
+            }
+        }
+        if (totalEncodedBytes <= QUICKLIST_NODE_MAX_BYTES) {
+            return encodedEntries.length == 0
+                    ? BuildPlan.emptyPacked()
+                    : new BuildPlan(false, new int[]{encodedEntries.length}, new int[]{(int) totalEncodedBytes});
+        }
+
+        int[] entryCounts = new int[encodedEntries.length];
+        int[] blockBytes = new int[encodedEntries.length];
+        int blockCount = 0;
+        int currentEntries = 0;
+        int currentBytes = 0;
+        for (int entryBytes : encodedEntries) {
+            if (currentEntries > 0 && (long) currentBytes + entryBytes > QUICKLIST_NODE_MAX_BYTES) {
+                entryCounts[blockCount] = currentEntries;
+                blockBytes[blockCount] = currentBytes;
+                blockCount++;
+                currentEntries = 0;
+                currentBytes = 0;
+            }
+            currentEntries++;
+            currentBytes = Math.addExact(currentBytes, entryBytes);
+        }
+        if (currentEntries > 0) {
+            entryCounts[blockCount] = currentEntries;
+            blockBytes[blockCount] = currentBytes;
+            blockCount++;
+        }
+        return new BuildPlan(
+                true,
+                java.util.Arrays.copyOf(entryCounts, blockCount),
+                java.util.Arrays.copyOf(blockBytes, blockCount)
+        );
     }
 
     private static long heapUpperBoundForElementCount(long expectedElements) {
@@ -905,6 +1497,12 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
         return Math.max(packedBytes, quicklistBytes);
     }
 
+    private static long preparedMutationHeapUpperBound(long affectedEntries, int nativeAllocationCount) {
+        long arrays = multiplySaturating(Math.max(0L, affectedEntries), 16L);
+        long nativeAdapters = multiplySaturating(Math.max(0L, nativeAllocationCount), 256L);
+        return addSaturating(512L, addSaturating(arrays, nativeAdapters));
+    }
+
     private static long arrayDequeCapacityForElements(long elements) {
         long capacity = INITIAL_QUICKLIST_DEQUE_CAPACITY + 1L;
         while (capacity <= elements) {
@@ -919,19 +1517,6 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
 
     private static long valueCount(List<byte[]> values) {
         return values == null ? 0L : values.size();
-    }
-
-    private static int varIntSize(int value) {
-        if (value < 0) {
-            throw new IllegalArgumentException("value must be >= 0");
-        }
-        int bytes = 1;
-        int v = value;
-        while ((v & ~0x7F) != 0) {
-            v >>>= 7;
-            bytes++;
-        }
-        return bytes;
     }
 
     private static long addSaturating(long left, long right) {
@@ -954,10 +1539,514 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
     private record RangeBounds(int start, int stop) {
     }
 
+    private record BuildPlan(boolean quicklist, int[] blockEntryCounts, int[] blockEncodedBytes) {
+        private static BuildPlan emptyPacked() {
+            return new BuildPlan(false, new int[0], new int[0]);
+        }
+
+        private int blockCount() {
+            return blockEncodedBytes.length;
+        }
+
+        private int[] nativeAllocationSizes() {
+            if (!quicklist) {
+                return blockEncodedBytes.clone();
+            }
+            int[] sizes = new int[Math.multiplyExact(blockCount(), 2)];
+            for (int blockIndex = 0; blockIndex < blockCount(); blockIndex++) {
+                sizes[blockIndex * 2] = QUICKLIST_NODE_RECORD_BYTES;
+                sizes[blockIndex * 2 + 1] = blockEncodedBytes[blockIndex];
+            }
+            return sizes;
+        }
+    }
+
+    private record QuicklistPushPlan(
+            int edgeEntryCount,
+            int edgeEncodedBytes,
+            int[] nodeEntryCounts,
+            int[] nodeEncodedBytes
+    ) {
+        private int nodeCount() {
+            return nodeEncodedBytes.length;
+        }
+
+        private int[] nativeAllocationSizes() {
+            int edgeAllocations = edgeEntryCount == 0 ? 0 : 1;
+            int[] sizes = new int[Math.addExact(edgeAllocations, Math.multiplyExact(nodeCount(), 2))];
+            int next = 0;
+            if (edgeEntryCount > 0) {
+                sizes[next++] = edgeEncodedBytes;
+            }
+            for (int index = 0; index < nodeCount(); index++) {
+                sizes[next++] = QUICKLIST_NODE_RECORD_BYTES;
+                sizes[next++] = nodeEncodedBytes[index];
+            }
+            return sizes;
+        }
+    }
+
+    public static final class PreparedMutation implements AutoCloseable {
+        private final ListValue owner;
+        private final boolean sourcePacked;
+        private final NativeListpack sourcePackedValue;
+        private final ArrayDeque<ListNode> sourceQuicklist;
+        private final boolean left;
+        private final int sourceSize;
+        private final int finalSize;
+        private final ValueEncoding finalEncoding;
+        private final ListNode edgeNode;
+        private final ListNode[] removedNodes;
+        private final int affectedMetadataNodes;
+        private final long stagedHeapBytes;
+
+        private NativeListpack packedReplacement;
+        private NativeListpack edgeReplacement;
+        private ArrayDeque<ListNode> addedNodes;
+        private ArrayDeque<ListNode> replacementTopology;
+        private int replacementTopologyCapacity;
+
+        private NativeListpack supersededPacked;
+        private NativeListpack supersededEdgePacked;
+        private boolean committed;
+        private boolean metadataRefreshed;
+        private boolean released;
+
+        private PreparedMutation(
+                ListValue owner,
+                boolean sourcePacked,
+                boolean left,
+                int finalSize,
+                NativeListpack packedReplacement,
+                ListNode edgeNode,
+                NativeListpack edgeReplacement,
+                ArrayDeque<ListNode> addedNodes,
+                ArrayDeque<ListNode> replacementTopology,
+                int replacementTopologyCapacity,
+                ListNode[] removedNodes,
+                int affectedMetadataNodes
+        ) {
+            this.owner = Objects.requireNonNull(owner, "owner");
+            this.sourcePacked = sourcePacked;
+            this.sourcePackedValue = owner.listpack;
+            this.sourceQuicklist = owner.quicklist;
+            this.left = left;
+            this.sourceSize = owner.totalSize;
+            this.finalSize = finalSize;
+            this.finalEncoding = !sourcePacked || replacementTopology != null
+                    ? ValueEncoding.LIST_QUICKLIST
+                    : ValueEncoding.LIST_PACKED;
+            this.packedReplacement = packedReplacement;
+            this.edgeNode = edgeNode;
+            this.edgeReplacement = edgeReplacement;
+            this.addedNodes = addedNodes;
+            this.replacementTopology = replacementTopology;
+            this.replacementTopologyCapacity = replacementTopologyCapacity;
+            this.removedNodes = removedNodes == null ? new ListNode[0] : removedNodes;
+            this.affectedMetadataNodes = affectedMetadataNodes;
+            this.stagedHeapBytes = estimateStagedHeapBytes();
+        }
+
+        private static PreparedMutation unchanged(ListValue owner) {
+            return new PreparedMutation(
+                    owner,
+                    owner.quicklist == null,
+                    false,
+                    owner.totalSize,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    0,
+                    null,
+                    0
+            );
+        }
+
+        private static PreparedMutation packedReplacement(
+                ListValue owner,
+                NativeListpack replacement,
+                int finalSize
+        ) {
+            return new PreparedMutation(
+                    owner,
+                    true,
+                    false,
+                    finalSize,
+                    replacement,
+                    null,
+                    null,
+                    null,
+                    null,
+                    0,
+                    null,
+                    0
+            );
+        }
+
+        private static PreparedMutation packedToQuicklist(
+                ListValue owner,
+                ArrayDeque<ListNode> nodes,
+                int finalSize
+        ) {
+            int capacity = Math.addExact(nodes.size(), 1);
+            return new PreparedMutation(
+                    owner,
+                    true,
+                    false,
+                    finalSize,
+                    null,
+                    null,
+                    null,
+                    nodes,
+                    nodes,
+                    capacity,
+                    null,
+                    nodes.size()
+            );
+        }
+
+        private static PreparedMutation quicklistPush(
+                ListValue owner,
+                boolean left,
+                ListNode edge,
+                NativeListpack edgeReplacement,
+                ArrayDeque<ListNode> addedNodes,
+                ArrayDeque<ListNode> replacementTopology,
+                int finalSize
+        ) {
+            int topologyCapacity = replacementTopology == null
+                    ? 0
+                    : Math.addExact(replacementTopology.size(), 1);
+            return new PreparedMutation(
+                    owner,
+                    false,
+                    left,
+                    finalSize,
+                    null,
+                    edge,
+                    edgeReplacement,
+                    addedNodes,
+                    replacementTopology,
+                    topologyCapacity,
+                    null,
+                    Math.addExact(addedNodes.size(), 1)
+            );
+        }
+
+        private static PreparedMutation quicklistPop(
+                ListValue owner,
+                boolean left,
+                ListNode edge,
+                NativeListpack edgeReplacement,
+                ListNode[] removedNodes,
+                int finalSize
+        ) {
+            return new PreparedMutation(
+                    owner,
+                    false,
+                    left,
+                    finalSize,
+                    null,
+                    edge,
+                    edgeReplacement,
+                    null,
+                    null,
+                    0,
+                    removedNodes,
+                    1
+            );
+        }
+
+        public int size() {
+            return finalSize;
+        }
+
+        public ValueEncoding encoding() {
+            return finalEncoding;
+        }
+
+        public long stagedHeapBytes() {
+            return stagedHeapBytes;
+        }
+
+        public void commit() {
+            if (committed) {
+                throw new IllegalStateException("prepared list mutation is already committed");
+            }
+            validateSourceTopology();
+            if (finalSize == sourceSize
+                    && packedReplacement == null
+                    && edgeReplacement == null
+                    && replacementTopology == null
+                    && (addedNodes == null || addedNodes.isEmpty())
+                    && removedNodes.length == 0) {
+                committed = true;
+                metadataRefreshed = true;
+                released = true;
+                return;
+            }
+
+            if (sourcePacked) {
+                supersededPacked = owner.listpack;
+                if (packedReplacement != null) {
+                    owner.listpack = packedReplacement;
+                    packedReplacement = null;
+                } else if (replacementTopology != null) {
+                    owner.listpack = null;
+                    owner.quicklist = replacementTopology;
+                    owner.quicklistDequeCapacity = replacementTopologyCapacity;
+                    owner.quicklistNodeHeapBytes = nodeHeapBytes(addedNodes);
+                    replacementTopology = null;
+                    addedNodes = null;
+                }
+                owner.totalSize = finalSize;
+                committed = true;
+                return;
+            }
+
+            long nextNodeHeapBytes = owner.quicklistNodeHeapBytes;
+            if (edgeReplacement != null) {
+                long previousHeapBytes = edgeNode.heapEstimatedBytes();
+                supersededEdgePacked = edgeNode.replaceListpack(edgeReplacement);
+                edgeReplacement = null;
+                nextNodeHeapBytes += edgeNode.heapEstimatedBytes() - previousHeapBytes;
+            }
+            for (ListNode removed : removedNodes) {
+                ListNode actual = left ? owner.quicklist.removeFirst() : owner.quicklist.removeLast();
+                if (actual != removed) {
+                    throw new IllegalStateException("quicklist edge changed after pop preparation");
+                }
+                nextNodeHeapBytes -= removed.heapEstimatedBytes();
+            }
+
+            long addedHeapBytes = nodeHeapBytes(addedNodes);
+            if (replacementTopology != null) {
+                owner.quicklist = replacementTopology;
+                owner.quicklistDequeCapacity = replacementTopologyCapacity;
+                replacementTopology = null;
+            } else if (addedNodes != null) {
+                if (left) {
+                    java.util.Iterator<ListNode> iterator = addedNodes.descendingIterator();
+                    while (iterator.hasNext()) {
+                        owner.quicklist.addFirst(iterator.next());
+                    }
+                } else {
+                    owner.quicklist.addAll(addedNodes);
+                }
+            }
+            nextNodeHeapBytes += addedHeapBytes;
+            addedNodes = null;
+            owner.quicklistNodeHeapBytes = nextNodeHeapBytes;
+            owner.totalSize = finalSize;
+            committed = true;
+        }
+
+        private void validateSourceTopology() {
+            if (owner.totalSize != sourceSize || (owner.quicklist == null) != sourcePacked) {
+                throw new IllegalStateException("list changed after mutation preparation");
+            }
+            if (sourcePacked) {
+                if (owner.listpack != sourcePackedValue) {
+                    throw new IllegalStateException("packed list changed after mutation preparation");
+                }
+                return;
+            }
+            if (owner.quicklist != sourceQuicklist) {
+                throw new IllegalStateException("quicklist topology changed after mutation preparation");
+            }
+
+            java.util.Iterator<ListNode> iterator = left
+                    ? owner.quicklist.iterator()
+                    : owner.quicklist.descendingIterator();
+            for (ListNode removed : removedNodes) {
+                if (!iterator.hasNext() || iterator.next() != removed) {
+                    throw new IllegalStateException("quicklist edge changed after mutation preparation");
+                }
+            }
+            if (edgeNode != null && (!iterator.hasNext() || iterator.next() != edgeNode)) {
+                throw new IllegalStateException("quicklist edge changed after mutation preparation");
+            }
+        }
+
+        public void releaseSuperseded() {
+            releaseSuperseded(null);
+        }
+
+        public void releaseSuperseded(PreparedPoppedValueSequence retained) {
+            if (!committed) {
+                throw new IllegalStateException("prepared list mutation is not committed");
+            }
+            if (released) {
+                return;
+            }
+            Throwable failure = null;
+            if (!metadataRefreshed) {
+                try {
+                    if (owner.quicklist != null) {
+                        if (sourcePacked) {
+                            owner.refreshNodeMetadataLinks();
+                        } else {
+                            owner.refreshEdgeMetadata(left, affectedMetadataNodes);
+                        }
+                    }
+                    owner.heapChangeListener.run();
+                    metadataRefreshed = true;
+                } catch (RuntimeException | Error refreshFailure) {
+                    failure = refreshFailure;
+                }
+            }
+            if (supersededPacked != null) {
+                try {
+                    closePacked(supersededPacked, retained);
+                    supersededPacked = null;
+                } catch (RuntimeException | Error closeFailure) {
+                    failure = addFailure(failure, closeFailure);
+                }
+            }
+            if (supersededEdgePacked != null) {
+                try {
+                    closePacked(supersededEdgePacked, retained);
+                    supersededEdgePacked = null;
+                } catch (RuntimeException | Error closeFailure) {
+                    failure = addFailure(failure, closeFailure);
+                }
+            }
+            for (int index = 0; index < removedNodes.length; index++) {
+                ListNode removed = removedNodes[index];
+                if (removed == null) {
+                    continue;
+                }
+                try {
+                    if (retained == null) {
+                        removed.close();
+                    } else {
+                        removed.closeExcept(retained);
+                    }
+                    removedNodes[index] = null;
+                } catch (RuntimeException | Error closeFailure) {
+                    failure = addFailure(failure, closeFailure);
+                }
+            }
+            if (failure != null) {
+                rethrow(failure);
+            }
+            released = true;
+        }
+
+        @Override
+        public void close() {
+            if (committed) {
+                return;
+            }
+            Throwable failure = null;
+            if (packedReplacement != null) {
+                try {
+                    packedReplacement.close();
+                    packedReplacement = null;
+                } catch (RuntimeException | Error closeFailure) {
+                    failure = closeFailure;
+                }
+            }
+            if (edgeReplacement != null) {
+                try {
+                    edgeReplacement.close();
+                    edgeReplacement = null;
+                } catch (RuntimeException | Error closeFailure) {
+                    failure = addFailure(failure, closeFailure);
+                }
+            }
+            if (addedNodes != null) {
+                for (ListNode added : addedNodes) {
+                    try {
+                        added.close();
+                    } catch (RuntimeException | Error closeFailure) {
+                        failure = addFailure(failure, closeFailure);
+                    }
+                }
+                addedNodes.clear();
+                addedNodes = null;
+            }
+            replacementTopology = null;
+            if (failure != null) {
+                rethrow(failure);
+            }
+        }
+
+        private long estimateStagedHeapBytes() {
+            long bytes = 256L + ARRAY_HEADER_BYTES + (long) removedNodes.length * REFERENCE_BYTES;
+            if (packedReplacement != null) {
+                bytes = addSaturating(bytes, packedReplacement.heapEstimatedBytes());
+            }
+            if (edgeReplacement != null) {
+                bytes = addSaturating(bytes, edgeReplacement.heapEstimatedBytes());
+            }
+            bytes = addSaturating(bytes, stagedNodesHeapBytes(addedNodes));
+            if (replacementTopology != null && replacementTopology != addedNodes) {
+                bytes = addSaturating(
+                        bytes,
+                        ARRAY_DEQUE_HEAP_BYTES + ARRAY_HEADER_BYTES
+                                + (long) replacementTopologyCapacity * REFERENCE_BYTES
+                );
+            }
+            return bytes;
+        }
+
+        private static long stagedNodesHeapBytes(ArrayDeque<ListNode> nodes) {
+            if (nodes == null) {
+                return 0L;
+            }
+            long bytes = ARRAY_DEQUE_HEAP_BYTES + ARRAY_HEADER_BYTES
+                    + (long) (nodes.size() + 1) * REFERENCE_BYTES;
+            return addSaturating(bytes, nodeHeapBytes(nodes));
+        }
+
+        private static long nodeHeapBytes(ArrayDeque<ListNode> nodes) {
+            if (nodes == null) {
+                return 0L;
+            }
+            long bytes = 0L;
+            for (ListNode node : nodes) {
+                bytes = addSaturating(bytes, node.heapEstimatedBytes());
+            }
+            return bytes;
+        }
+
+        private static void closePacked(
+                NativeListpack packed,
+                PreparedPoppedValueSequence retained
+        ) {
+            if (retained == null) {
+                packed.close();
+            } else {
+                packed.closeExcept(retained::retainsRawHandle);
+            }
+        }
+
+        private static Throwable addFailure(Throwable failure, Throwable next) {
+            if (failure == null) {
+                return next;
+            }
+            failure.addSuppressed(next);
+            return failure;
+        }
+
+        private static void rethrow(Throwable failure) {
+            if (failure instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            if (failure instanceof Error error) {
+                throw error;
+            }
+            throw new AssertionError("unexpected prepared list cleanup failure", failure);
+        }
+    }
+
     private static final class ListNode implements AutoCloseable {
         private final NativeAllocator allocator;
         private final NativeHandle rootHandle;
-        private final NativeListpack listpack;
+        private NativeListpack listpack;
         private NativeHandle nodeHandle;
         private long prevRawDuringRefresh;
         private boolean payloadClosed;
@@ -1035,6 +2124,10 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
             liveListpack().addLast(v);
         }
 
+        void reserveForBuild(int entryCount, int encodedBytes) {
+            liveListpack().reserveForBuild(entryCount, encodedBytes);
+        }
+
         int size() {
             return liveListpack().size();
         }
@@ -1045,6 +2138,31 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
 
         long encodedElementBytesAt(int index) {
             return liveListpack().encodedElementBytesAt(index);
+        }
+
+        int encodedEntryBytesAt(int index) {
+            return liveListpack().encodedEntryBytesAt(index);
+        }
+
+        int encodedBytes() {
+            return liveListpack().encodedBytes();
+        }
+
+        int encodedBytesInRange(int fromIndex, int entryCount) {
+            return liveListpack().encodedBytesInRange(fromIndex, entryCount);
+        }
+
+        void appendRangeFrom(NativeListpack source, int fromIndex, int entryCount) {
+            liveListpack().appendRangeFrom(source, fromIndex, entryCount);
+        }
+
+        NativeListpack replaceListpack(NativeListpack replacement) {
+            Objects.requireNonNull(replacement, "replacement");
+            validateLiveNode();
+            NativeListpack previous = listpack;
+            listpack = replacement;
+            payloadClosed = false;
+            return previous;
         }
 
         int nativePayloadCount() {
@@ -1100,14 +2218,14 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
             }
         }
 
-        void closeExcept(NativeHandle[] retained) {
+        void closeExcept(PreparedPoppedValueSequence retained) {
             if (payloadClosed && nodeFreed) {
                 return;
             }
             RuntimeException failure = null;
             if (!payloadClosed) {
                 try {
-                    listpack.closeExcept(retained);
+                    listpack.closeExcept(retained::retainsRawHandle);
                     payloadClosed = true;
                 } catch (RuntimeException e) {
                     failure = e;
@@ -1146,14 +2264,14 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
             validateOwnerRoot();
             NativeListpack current = liveListpack();
             try (NativeObjectView view = allocator.resolve(nodeHandle, NativeAccessMode.READ_WRITE)) {
-                setLong(view, QUICKLIST_NODE_OWNER_ROOT_OFFSET, rootHandle.raw());
-                setLong(view, QUICKLIST_NODE_PREV_OFFSET, prevRaw);
-                setLong(view, QUICKLIST_NODE_NEXT_OFFSET, nextRaw);
-                setLong(view, QUICKLIST_NODE_PAYLOAD_REF_OFFSET, 0L);
-                setInt(view, QUICKLIST_NODE_ENTRY_COUNT_OFFSET, current.size());
-                setInt(view, QUICKLIST_NODE_ENCODED_BYTES_OFFSET, current.encodedBytes());
-                setInt(view, QUICKLIST_NODE_FLAGS_OFFSET, 0);
-                setInt(view, QUICKLIST_NODE_RESERVED_OFFSET, 0);
+                view.setLongLittleEndian(QUICKLIST_NODE_OWNER_ROOT_OFFSET, rootHandle.raw());
+                view.setLongLittleEndian(QUICKLIST_NODE_PREV_OFFSET, prevRaw);
+                view.setLongLittleEndian(QUICKLIST_NODE_NEXT_OFFSET, nextRaw);
+                view.setLongLittleEndian(QUICKLIST_NODE_PAYLOAD_REF_OFFSET, 0L);
+                view.setIntLittleEndian(QUICKLIST_NODE_ENTRY_COUNT_OFFSET, current.size());
+                view.setIntLittleEndian(QUICKLIST_NODE_ENCODED_BYTES_OFFSET, current.encodedBytes());
+                view.setIntLittleEndian(QUICKLIST_NODE_FLAGS_OFFSET, 0);
+                view.setIntLittleEndian(QUICKLIST_NODE_RESERVED_OFFSET, 0);
             }
         }
 

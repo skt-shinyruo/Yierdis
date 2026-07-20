@@ -34,7 +34,9 @@ final class TestYierdisEngines {
             int protocolMaxCommandBytes
     ) {
         return new YierdisServerRuntimeConfig(
+                "127.0.0.1",
                 0,
+                1024,
                 1,
                 1000L,
                 1,

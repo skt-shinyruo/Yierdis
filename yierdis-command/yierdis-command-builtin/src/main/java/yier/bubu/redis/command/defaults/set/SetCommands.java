@@ -9,6 +9,7 @@ import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
+import yier.bubu.redis.command.defaults.CollectionScanCommandSupport;
 import yier.bubu.redis.command.defaults.CommandSupport;
 
 import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequence;
@@ -33,6 +34,12 @@ public final class SetCommands implements CommandModule {
         registration.register("SMEMBERS", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exactRequest(2, "smembers"), this::smembers);
         registration.register("SISMEMBER", CommandDescriptor.of(3, 1, 1, 1), CommandParsers.exactRequest(3, "sismember"), this::sismember);
         registration.register("SCARD", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exactRequest(2, "scard"), this::scard);
+        registration.register(
+                "SSCAN",
+                CommandDescriptor.of(-3, 1, 1, 1),
+                args -> CollectionScanCommandSupport.parse(args, "sscan", false),
+                this::sscan
+        );
     }
 
     private void sadd(ExecutionRequest request, CommandContext ctx) {
@@ -99,5 +106,17 @@ public final class SetCommands implements CommandModule {
             return;
         }
         out.integer(support.commandDb(ctx).reads().sets().scard(request.readOnlyByteArray(1)));
+    }
+
+    private void sscan(CollectionScanCommandSupport.Arguments args, CommandContext ctx) {
+        CollectionScanCommandSupport.writeReply(
+                ctx.out(),
+                support.commandDb(ctx).reads().sets().sscan(
+                        args.key(),
+                        args.cursor(),
+                        args.match(),
+                        args.count()
+                )
+        );
     }
 }

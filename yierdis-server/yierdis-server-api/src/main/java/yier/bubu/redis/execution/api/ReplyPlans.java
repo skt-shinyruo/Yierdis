@@ -27,6 +27,17 @@ public final class ReplyPlans {
             long encodedElementBytes,
             long retainedSourceBytes
     ) {
+        return array(count, encodedElementBytes, retainedSourceBytes);
+    }
+
+    /**
+     * 返回 RESP array header 与已编码子元素的总上界。
+     */
+    public static ReplyPlan array(
+            int count,
+            long encodedElementBytes,
+            long retainedSourceBytes
+    ) {
         if (count < -1) {
             throw new IllegalArgumentException("count must be >= -1");
         }

@@ -11,7 +11,11 @@ public class OrderedReplyIntegrationTest {
     @Test
     public void pipelinedSmallLargeCommandErrorAndQuitRepliesKeepReceiveOrder() throws Exception {
         String value = RespTcpTestSupport.asciiRepeat('v', 8_192);
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start("--port", "0", "--noCleanup");
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
+                "--port", "0",
+                "--maxmemoryBytes", "0",
+                "--noCleanup"
+        );
              Socket socket = RespTcpTestSupport.connect(server)) {
             RespTcpTestSupport.writeCommand(socket, "SET", "ordered:large", value);
             Assert.assertEquals("+OK\r\n", RespTcpTestSupport.readFrame(socket));
@@ -34,7 +38,11 @@ public class OrderedReplyIntegrationTest {
 
     @Test
     public void protocolErrorWaitsForEarlierAcceptedReplyBeforeItsTerminalReply() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start("--port", "0", "--noCleanup");
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
+                "--port", "0",
+                "--maxmemoryBytes", "0",
+                "--noCleanup"
+        );
              Socket socket = RespTcpTestSupport.connect(server)) {
             RespTcpTestSupport.writeRaw(
                     socket,
@@ -52,9 +60,10 @@ public class OrderedReplyIntegrationTest {
     }
 
     @Test
-    public void deterministicBusyReplyUsesTheSameOrderedReplyPath() throws Exception {
+    public void permanentlyOversizedRequestsUseTheOrderedErrorPath() throws Exception {
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
                 "--port", "0",
+                "--maxmemoryBytes", "0",
                 "--noCleanup",
                 "--executorQueueMaxBytes", "1"
         );
@@ -65,8 +74,8 @@ public class OrderedReplyIntegrationTest {
                     new String[]{"ECHO", "later"}
             );
 
-            Assert.assertEquals("-ERR busy bytes_budget\r\n", RespTcpTestSupport.readFrame(socket));
-            Assert.assertEquals("-ERR busy bytes_budget\r\n", RespTcpTestSupport.readFrame(socket));
+            Assert.assertEquals("-ERR request exceeds executor queue byte limit\r\n", RespTcpTestSupport.readFrame(socket));
+            Assert.assertEquals("-ERR request exceeds executor queue byte limit\r\n", RespTcpTestSupport.readFrame(socket));
         }
     }
 }

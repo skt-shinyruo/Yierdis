@@ -14,7 +14,10 @@ import java.nio.charset.StandardCharsets;
 public class RespProtocolErrorIntegrationTest {
     @Test
     public void malformedRespReturnsProtocolErrorAndClosesConnection() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start("--port", "0");
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
+                "--port", "0",
+                "--maxmemoryBytes", "0"
+        );
              Socket socket = new Socket()) {
             socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
             socket.setSoTimeout(2000);
@@ -36,6 +39,7 @@ public class RespProtocolErrorIntegrationTest {
         String key = "pepk";
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
                 "--port", "0",
+                "--maxmemoryBytes", "0",
                 "--protocolMaxBulkBytes", "4"
         );
              Socket bad = new Socket()) {
@@ -71,6 +75,7 @@ public class RespProtocolErrorIntegrationTest {
     public void oversizedTotalCommandBytesReturnsProtocolErrorAndClosesConnection() throws Exception {
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
                 "--port", "0",
+                "--maxmemoryBytes", "0",
                 "--protocolMaxCommandBytes", "4"
         );
              Socket socket = new Socket()) {
@@ -91,7 +96,10 @@ public class RespProtocolErrorIntegrationTest {
 
     @Test
     public void malformedRespAfterHello3ReturnsProtocolErrorThenCloses() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start("--port", "0");
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
+                "--port", "0",
+                "--maxmemoryBytes", "0"
+        );
              Socket socket = new Socket()) {
             socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
             socket.setSoTimeout(2000);

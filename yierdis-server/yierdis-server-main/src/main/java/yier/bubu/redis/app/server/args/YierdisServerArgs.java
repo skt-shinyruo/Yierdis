@@ -36,8 +36,14 @@ public final class YierdisServerArgs {
     @Option(names = {"-h", "--help"}, usageHelp = true, description = "Show this help message and exit.")
     public boolean help;
 
+    @Option(names = YierdisServerArgNames.BIND, defaultValue = "127.0.0.1", description = "TCP host or address to bind.")
+    public String bind = "127.0.0.1";
+
     @Option(names = YierdisServerArgNames.PORT, defaultValue = "6378", description = "TCP port to bind.")
     public int port = 6378;
+
+    @Option(names = YierdisServerArgNames.MAX_CLIENTS, defaultValue = "1024", description = "Maximum accepted client connections.")
+    public int maxClients = 1024;
 
     @Option(
             names = YierdisServerArgNames.DATABASES,
@@ -157,10 +163,10 @@ public final class YierdisServerArgs {
 
     @Option(
             names = YierdisServerArgNames.CLIENT_IDLE_TIMEOUT_MILLIS,
-            defaultValue = "300000",
+            defaultValue = "0",
             description = "Close clients idle for this many milliseconds (0 disables)."
     )
-    public long clientIdleTimeoutMillis = 300000;
+    public long clientIdleTimeoutMillis = 0;
 
     @Option(
             names = YierdisServerArgNames.CLIENT_OUTPUT_BUFFER_LIMIT_BYTES,
@@ -273,10 +279,10 @@ public final class YierdisServerArgs {
 
     @Option(
             names = YierdisServerArgNames.KEYS_TIME_BUDGET_MILLIS,
-            defaultValue = "20",
+            defaultValue = "0",
             description = "KEYS time budget in milliseconds (0 disables; use SCAN for large datasets)."
     )
-    public long keysTimeBudgetMillis = 20;
+    public long keysTimeBudgetMillis = 0;
 
     @Option(
             names = YierdisServerArgNames.KEYS_MAX_RESULTS,
@@ -290,8 +296,15 @@ public final class YierdisServerArgs {
             cleanupIntervalMillis = 0;
         }
 
+        if (bind == null || bind.isBlank()) {
+            throw new IllegalArgumentException("bind must not be blank");
+        }
+        bind = bind.trim();
         if (port < 0 || port > 65535) {
             throw new IllegalArgumentException("port must be in range 0..65535");
+        }
+        if (maxClients <= 0) {
+            throw new IllegalArgumentException("maxClients must be > 0");
         }
         if (databases <= 0) {
             throw new IllegalArgumentException("databases must be > 0");
@@ -457,7 +470,9 @@ public final class YierdisServerArgs {
     public YierdisServerArgs copy() {
         YierdisServerArgs out = new YierdisServerArgs();
         out.help = help;
+        out.bind = bind;
         out.port = port;
+        out.maxClients = maxClients;
         out.databases = databases;
         out.cleanupIntervalMillis = cleanupIntervalMillis;
         out.noCleanup = noCleanup;
@@ -510,7 +525,9 @@ public final class YierdisServerArgs {
      */
     public YierdisServerRuntimeConfig toRuntimeConfig() {
         return new YierdisServerRuntimeConfig(
+                bind,
                 port,
+                maxClients,
                 databases,
                 cleanupIntervalMillis,
                 ioThreads,
@@ -567,8 +584,12 @@ public final class YierdisServerArgs {
             return out;
         }
 
+        out.add(YierdisServerArgNames.BIND);
+        out.add(bind);
         out.add(YierdisServerArgNames.PORT);
         out.add(Integer.toString(port));
+        out.add(YierdisServerArgNames.MAX_CLIENTS);
+        out.add(Integer.toString(maxClients));
 
         out.add(YierdisServerArgNames.DATABASES);
         out.add(Integer.toString(databases));

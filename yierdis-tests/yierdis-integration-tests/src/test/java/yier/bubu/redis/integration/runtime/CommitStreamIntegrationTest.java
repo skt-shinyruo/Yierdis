@@ -7,7 +7,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.common.command.CommandRecordScope;
+import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.runtime.api.YierdisChangeKind;
@@ -39,9 +39,8 @@ public class CommitStreamIntegrationTest {
 
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
             instance.bindToCurrentThread();
-            try (ExecutionRequest record = ByteArrayExecutionRequest.fromUtf8("SET", List.of("key", "value"));
-                 CommandRecordScope.Scope ignored = CommandRecordScope.open(record)) {
-                Assert.assertTrue(instance.engine(0).writes().strings()
+            try (ExecutionRequest record = ByteArrayExecutionRequest.fromUtf8("SET", List.of("key", "value"))) {
+                Assert.assertTrue(instance.engine(0).writes().withMutationContext(MutationContext.of(record)).strings()
                         .setString(bytes("key"), bytes("value"), SetMode.NORMAL, null).value());
             }
 
@@ -56,9 +55,8 @@ public class CommitStreamIntegrationTest {
                 events.clear();
             }
 
-            try (ExecutionRequest record = ByteArrayExecutionRequest.fromUtf8("SET", List.of("key", "other", "NX"));
-                 CommandRecordScope.Scope ignored = CommandRecordScope.open(record)) {
-                Assert.assertFalse(instance.engine(0).writes().strings()
+            try (ExecutionRequest record = ByteArrayExecutionRequest.fromUtf8("SET", List.of("key", "other", "NX"))) {
+                Assert.assertFalse(instance.engine(0).writes().withMutationContext(MutationContext.of(record)).strings()
                         .setString(bytes("key"), bytes("other"), SetMode.NX, null).value());
             }
 
@@ -91,14 +89,12 @@ public class CommitStreamIntegrationTest {
 
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
             instance.bindToCurrentThread();
-            try (ExecutionRequest record = ByteArrayExecutionRequest.fromUtf8("SET", List.of("expiring", "value"));
-                 CommandRecordScope.Scope ignored = CommandRecordScope.open(record)) {
-                Assert.assertTrue(instance.engine(0).writes().strings()
+            try (ExecutionRequest record = ByteArrayExecutionRequest.fromUtf8("SET", List.of("expiring", "value"))) {
+                Assert.assertTrue(instance.engine(0).writes().withMutationContext(MutationContext.of(record)).strings()
                         .setString(bytes("expiring"), bytes("value"), SetMode.NORMAL, null).value());
             }
-            try (ExecutionRequest record = ByteArrayExecutionRequest.fromUtf8("PEXPIRE", List.of("expiring", "1"));
-                 CommandRecordScope.Scope ignored = CommandRecordScope.open(record)) {
-                Assert.assertTrue(instance.engine(0).writes().ttl()
+            try (ExecutionRequest record = ByteArrayExecutionRequest.fromUtf8("PEXPIRE", List.of("expiring", "1"))) {
+                Assert.assertTrue(instance.engine(0).writes().withMutationContext(MutationContext.of(record)).ttl()
                         .pexpire(view(bytes("expiring")), 1L).value());
             }
 

@@ -61,6 +61,7 @@ public class DefaultCommandDispatchErrorTest {
         errorCase(cases, wrongArity("hget"), "HGET", "hash");
         errorCase(cases, wrongArity("hgetall"), "HGETALL");
         errorCase(cases, wrongArity("hlen"), "HLEN");
+        errorCase(cases, wrongArity("hscan"), "HSCAN", "hash");
         errorCase(cases, wrongArity("hset"), "HSET", "hash", "field");
         errorCase(cases, wrongArity("incr"), "INCR");
         errorCase(cases, wrongArity("keys"), "KEYS");
@@ -90,6 +91,7 @@ public class DefaultCommandDispatchErrorTest {
         errorCase(cases, wrongArity("sismember"), "SISMEMBER", "set");
         errorCase(cases, wrongArity("smembers"), "SMEMBERS");
         errorCase(cases, wrongArity("srem"), "SREM", "set");
+        errorCase(cases, wrongArity("sscan"), "SSCAN", "set");
         errorCase(cases, wrongArity("strlen"), "STRLEN");
         errorCase(cases, wrongArity("ttl"), "TTL");
         errorCase(cases, wrongArity("type"), "TYPE");
@@ -101,6 +103,7 @@ public class DefaultCommandDispatchErrorTest {
         errorCase(cases, wrongArity("zremrangebyscore"), "ZREMRANGEBYSCORE", "zset", "0");
         errorCase(cases, wrongArity("zrevrange"), "ZREVRANGE", "zset", "0");
         errorCase(cases, wrongArity("zrevrangebyscore"), "ZREVRANGEBYSCORE", "zset", "0");
+        errorCase(cases, wrongArity("zscan"), "ZSCAN", "zset");
         return Collections.unmodifiableList(cases);
     }
 

@@ -103,7 +103,8 @@ public class TransactionQueueLimitTest {
             String[] base = new String[]{
                     "--port", "0",
                     "--ioThreads", "1",
-                    "--noCleanup"
+                    "--noCleanup",
+                    "--maxmemoryBytes", "0"
             };
             String[] argv = Arrays.copyOf(base, base.length + extraArgs.length);
             System.arraycopy(extraArgs, 0, argv, base.length, extraArgs.length);

@@ -3,11 +3,15 @@ package yier.bubu.redis.storage.memory.internal.value;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.CollectionScanWindow;
+import yier.bubu.redis.storage.memory.MaterializedCollectionScanWindow;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMetrics;
+import yier.bubu.redis.storage.memory.internal.keyspace.YierdisGlobMatcher;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -235,6 +239,48 @@ public final class SetValue implements YierdisValue, NativeHandleOwner, HeapTrac
         }
     }
 
+    public CollectionScanWindow sscan(ScanCursorV2 cursor, byte[] globPattern, int count) {
+        if (count <= 0) {
+            throw new IllegalArgumentException("count must be > 0");
+        }
+        ScanCursorV2 current = cursor == null ? ScanCursorV2.start() : cursor;
+        if (members != null) {
+            int boundedCount = NativeCollectionScanWindow.boundedMatchCount(count);
+            int[] matched = {0};
+            try (NativeCollectionScanWindow.Builder builder =
+                         NativeCollectionScanWindow.builder(memberStore.allocator(), boundedCount)) {
+                NativeByteMap.ScanResult result = members.scanWithWork(
+                        current,
+                        NativeCollectionScanWindow.slotBudget(boundedCount),
+                        (memberRef, ignored) -> {
+                            var memberSlice = memberStore.slice(memberRef);
+                            if (globPattern != null && !YierdisGlobMatcher.matches(globPattern, memberSlice)) {
+                                return true;
+                            }
+                            builder.addNative(memberRef, memberSlice.length());
+                            matched[0]++;
+                            return matched[0] < boundedCount;
+                        }
+                );
+                return builder.build(result.nextCursor());
+            }
+        }
+
+        // intset 数量受编码阈值限制，一次返回可避免删除导致后续元素左移并越过旧位置游标。
+        if (current.value() != 0L) {
+            return new MaterializedCollectionScanWindow(ScanCursorV2.start(), List.of());
+        }
+        List<byte[]> out = new ArrayList<>(intsetSize);
+        for (int index = 0; index < intsetSize; index++) {
+            byte[] member = Long.toString(intsetLongAt(index)).getBytes(StandardCharsets.US_ASCII);
+            if (globPattern != null && !YierdisGlobMatcher.matches(globPattern, member)) {
+                continue;
+            }
+            out.add(member);
+        }
+        return new MaterializedCollectionScanWindow(ScanCursorV2.start(), out);
+    }
+
     @Override
     public void forEachNativeHandle(Consumer<NativeHandle> consumer) {
         Objects.requireNonNull(consumer, "consumer");
@@ -287,12 +333,13 @@ public final class SetValue implements YierdisValue, NativeHandleOwner, HeapTrac
         if (members != null) {
             return;
         }
-        NativeByteMap<Object> out = new NativeByteMap<>(
+        NativeByteMap<Object> out = NativeByteMap.constantValues(
                 memberStore,
                 NativeObjectKind.SET_MEMBER_BYTES,
                 hashSeed,
                 maintenanceRegistry,
-                this::notifyHeapChanged
+                this::notifyHeapChanged,
+                PRESENT
         );
         boolean ok = false;
         try {
@@ -528,7 +575,7 @@ public final class SetValue implements YierdisValue, NativeHandleOwner, HeapTrac
         }
         long hashTableBytes = addSaturating(
                 FIXED_HEAP_BYTES,
-                NativeByteMap.heapUpperBoundForEntries(expectedEntries)
+                NativeByteMap.heapUpperBoundForConstantValues(expectedEntries)
         );
         long intsetBytes = addSaturating(
                 FIXED_HEAP_BYTES,

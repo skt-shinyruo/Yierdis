@@ -49,6 +49,42 @@ public class NativeHandleTest {
     }
 
     @Test
+    public void primitiveDecodersMatchHandleAccessorsWithoutPerCallAllocation() {
+        NativeHandle handle = NativeHandle.of(
+                NativeHandleDomain.STORAGE_OBJECT,
+                NativeObjectKind.STRING_BYTES,
+                123456789L,
+                77,
+                3
+        );
+        long raw = handle.raw();
+        Assert.assertEquals(raw, NativeHandle.rawOf(
+                NativeHandleDomain.STORAGE_OBJECT,
+                NativeObjectKind.STRING_BYTES,
+                123456789L,
+                77,
+                3
+        ));
+
+        com.sun.management.ThreadMXBean bean = allocatedBytesBean();
+        for (int index = 0; index < 10_000; index++) {
+            consumeRawFields(raw);
+        }
+        long before = bean.getThreadAllocatedBytes(Thread.currentThread().threadId());
+        for (int index = 0; index < 100_000; index++) {
+            consumeRawFields(raw);
+        }
+        long allocatedBytes = bean.getThreadAllocatedBytes(Thread.currentThread().threadId()) - before;
+
+        Assert.assertEquals(handle.domain(), NativeHandle.domain(raw));
+        Assert.assertEquals(handle.kindCode(), NativeHandle.kindCode(raw));
+        Assert.assertEquals(handle.slotId(), NativeHandle.slotId(raw));
+        Assert.assertEquals(handle.generation(), NativeHandle.generation(raw));
+        Assert.assertEquals(handle.flags(), NativeHandle.flags(raw));
+        Assert.assertTrue("primitive handle decoding allocated " + allocatedBytes + " bytes", allocatedBytes < 4_096L);
+    }
+
+    @Test
     public void rejectsOutOfRangeFields() {
         assertIllegal(() -> NativeHandle.of(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.STRING_BYTES, -1, 1, 0));
         assertIllegal(() -> NativeHandle.of(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.STRING_BYTES, 1L << 40, 1, 0));
@@ -95,6 +131,14 @@ public class NativeHandleTest {
         } catch (IllegalArgumentException expected) {
             Assert.assertNotNull(expected.getMessage());
         }
+    }
+
+    private static long consumeRawFields(long raw) {
+        return NativeHandle.domainCode(raw)
+                + NativeHandle.kindCode(raw)
+                + NativeHandle.slotId(raw)
+                + NativeHandle.generation(raw)
+                + NativeHandle.flags(raw);
     }
 
     private static com.sun.management.ThreadMXBean allocatedBytesBean() {

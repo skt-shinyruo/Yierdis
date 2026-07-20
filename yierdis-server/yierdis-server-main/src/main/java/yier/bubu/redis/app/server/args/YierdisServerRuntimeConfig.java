@@ -6,7 +6,9 @@ import java.util.Locale;
 import java.util.Objects;
 
 public record YierdisServerRuntimeConfig(
+        String bind,
         int port,
+        int maxClients,
         int databases,
         long cleanupIntervalMillis,
         int ioThreads,
@@ -55,9 +57,16 @@ public record YierdisServerRuntimeConfig(
             (long) REPLY_FIXED_OVERHEAD_BYTES + REPLY_MAX_CONTROL_ERROR_FRAME_BYTES;
 
     public YierdisServerRuntimeConfig {
+        Objects.requireNonNull(bind, "bind");
         Objects.requireNonNull(executorSchedulingPolicy, "executorSchedulingPolicy");
         Objects.requireNonNull(maxmemoryScope, "maxmemoryScope");
         Objects.requireNonNull(maxmemoryPolicy, "maxmemoryPolicy");
+        if (bind.isBlank()) {
+            throw new IllegalArgumentException("bind must not be blank");
+        }
+        if (maxClients <= 0) {
+            throw new IllegalArgumentException("maxClients must be > 0");
+        }
         if (nativeDefragMaxMoveBytes < 0) {
             throw new IllegalArgumentException("nativeDefragMaxMoveBytes must be >= 0");
         }

@@ -7,6 +7,7 @@ import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.memory.internal.value.ListValue;
 import yier.bubu.redis.storage.memory.internal.value.NativeListEntryRef;
+import yier.bubu.redis.storage.memory.internal.value.PreparedPoppedValueSequence;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.util.List;
@@ -52,6 +53,27 @@ public final class ListRoot implements TypeRoot {
     public synchronized ValueHandle create() {
         ensureOpen();
         return lists.create(rootHandle -> newListValue(rootHandle));
+    }
+
+    public synchronized ValueHandle build(List<byte[]> orderedValues) {
+        ensureOpen();
+        Objects.requireNonNull(orderedValues, "orderedValues");
+        ValueHandle handle = create();
+        boolean built = false;
+        try {
+            ListValue value = requireList(handle);
+            try {
+                value.loadForBuild(orderedValues);
+            } finally {
+                lists.refreshAdapter(handle);
+            }
+            built = true;
+            return handle;
+        } finally {
+            if (!built) {
+                release(handle);
+            }
+        }
     }
 
     public synchronized ValueHandle store(ListValue value) {
@@ -162,26 +184,59 @@ public final class ListRoot implements TypeRoot {
         return requireList(handle).size();
     }
 
+    public synchronized ListValue.PreparedMutation preparePush(
+            ValueHandle source,
+            List<byte[]> values,
+            boolean left
+    ) {
+        ensureOpen();
+        return requireList(source).preparePush(values, left);
+    }
+
+    public synchronized ListValue.PreparedMutation preparePop(
+            ValueHandle source,
+            int count,
+            boolean left
+    ) {
+        ensureOpen();
+        return requireList(source).preparePop(count, left);
+    }
+
     public synchronized long estimatedPreparedPushHeapGrowthBytes(
             ValueHandle source,
             List<byte[]> values,
+            boolean left,
             int expectedNativeAllocationCount
     ) {
         ensureOpen();
         Objects.requireNonNull(values, "values");
-        long replacementHeapBytes = source == null
-                ? ListValue.preparedNewHeapUpperBound(values)
-                : requireList(source).preparedCopyHeapUpperBound(values);
+        if (source != null) {
+            return requireList(source).preparedPushHeapUpperBound(values, left);
+        }
+        long replacementHeapBytes = ListValue.preparedNewHeapUpperBound(values);
         return lists.estimatedNewAdapterHeapGrowthBytes(replacementHeapBytes, expectedNativeAllocationCount);
     }
 
-    public synchronized long estimatedPreparedPopHeapGrowthBytes(
-            int remainingElements,
-            int expectedNativeAllocationCount
+    public synchronized int[] preparedPushNativeAllocationSizes(
+            ValueHandle source,
+            List<byte[]> values,
+            boolean left
     ) {
         ensureOpen();
-        long replacementHeapBytes = ListValue.preparedHeapUpperBoundForElementCount(remainingElements);
-        return lists.estimatedNewAdapterHeapGrowthBytes(replacementHeapBytes, expectedNativeAllocationCount);
+        Objects.requireNonNull(values, "values");
+        return source == null
+                ? ListValue.preparedNewNativeAllocationSizes(values, left)
+                : requireList(source).preparedPushNativeAllocationSizes(values, left);
+    }
+
+    public synchronized int[] preparedPopNativeAllocationSizes(ValueHandle source, int count, boolean left) {
+        ensureOpen();
+        return requireList(source).preparedPopNativeAllocationSizes(count, left);
+    }
+
+    public synchronized long estimatedPreparedPopHeapGrowthBytes(ValueHandle source, int count, boolean left) {
+        ensureOpen();
+        return requireList(source).preparedPopHeapUpperBound(count, left);
     }
 
     public synchronized long retainedHeapBytes() {
@@ -227,7 +282,7 @@ public final class ListRoot implements TypeRoot {
         lists.release(handle);
     }
 
-    public synchronized void releaseExcept(ValueHandle handle, NativeHandle[] retained) {
+    public synchronized void releaseExcept(ValueHandle handle, PreparedPoppedValueSequence retained) {
         ensureOpen();
         if (handle == null) {
             return;

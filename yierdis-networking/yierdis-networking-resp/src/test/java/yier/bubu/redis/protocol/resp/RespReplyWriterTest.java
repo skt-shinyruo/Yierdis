@@ -4,7 +4,10 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.execution.api.ReplyPlan;
+import yier.bubu.redis.execution.api.ReplyReservationSink;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -148,6 +151,18 @@ public class RespReplyWriterTest {
         Assert.assertEquals(1, mapCloses.get());
     }
 
+    @Test
+    public void envelopePreflightIsForwardedToReservationSink() {
+        RecordingReservationSink sink = new RecordingReservationSink();
+        RespReplyWriter writer = new RespReplyWriter(sink, RespProtocolVersion.RESP2);
+        ReplyPlan expected = ReplyPlan.exact(37L, 11L);
+
+        writer.requireReplyEnvelope(expected);
+
+        Assert.assertEquals(expected, sink.envelopePlan);
+        Assert.assertNull(sink.requiredPlan);
+    }
+
     private static String write2(WriterAction action) {
         return write(RespProtocolVersion.RESP2, action);
     }
@@ -181,6 +196,32 @@ public class RespReplyWriterTest {
 
         String utf8() {
             return out.toString(StandardCharsets.UTF_8);
+        }
+    }
+
+    private static final class RecordingReservationSink implements ReplyReservationSink {
+        private final ByteArrayOutputStream out = new ByteArrayOutputStream();
+        private ReplyPlan requiredPlan;
+        private ReplyPlan envelopePlan;
+
+        @Override
+        public void require(ReplyPlan plan) {
+            requiredPlan = plan;
+        }
+
+        @Override
+        public void requireEnvelope(ReplyPlan plan) {
+            envelopePlan = plan;
+        }
+
+        @Override
+        public void writeBytes(byte[] src, int off, int len) {
+            out.write(src, off, len);
+        }
+
+        @Override
+        public long writtenBytes() {
+            return out.size();
         }
     }
 }

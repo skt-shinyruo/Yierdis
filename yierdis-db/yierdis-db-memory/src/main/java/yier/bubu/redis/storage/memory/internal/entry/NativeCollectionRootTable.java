@@ -388,7 +388,7 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
 
     private void writeRootRecord(NativeHandle handle) {
         try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
-            setLong(view, 0, handle.raw());
+            view.setLongLittleEndian(0, handle.raw());
         }
     }
 
@@ -397,7 +397,7 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
             if (view.size() != ROOT_RECORD_BYTES) {
                 throw new IllegalStateException(label + " root record size mismatch: " + handle.raw());
             }
-            long storedHandle = getLong(view, 0);
+            long storedHandle = view.getLongLittleEndian(0);
             if (storedHandle != handle.raw()) {
                 throw new IllegalStateException(label + " root record handle mismatch: " + handle.raw());
             }
@@ -422,23 +422,6 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
             return null;
         }
         return nativeHandle;
-    }
-
-    private static long getLong(NativeObjectView view, int offset) {
-        return ((long) view.getByte(offset) & 0xff)
-                | (((long) view.getByte(offset + 1) & 0xff) << 8)
-                | (((long) view.getByte(offset + 2) & 0xff) << 16)
-                | (((long) view.getByte(offset + 3) & 0xff) << 24)
-                | (((long) view.getByte(offset + 4) & 0xff) << 32)
-                | (((long) view.getByte(offset + 5) & 0xff) << 40)
-                | (((long) view.getByte(offset + 6) & 0xff) << 48)
-                | (((long) view.getByte(offset + 7) & 0xff) << 56);
-    }
-
-    private static void setLong(NativeObjectView view, int offset, long value) {
-        for (int i = 0; i < Long.BYTES; i++) {
-            view.setByte(offset + i, (byte) (value >>> (i * 8)));
-        }
     }
 
     private static long addSaturating(long left, long right) {

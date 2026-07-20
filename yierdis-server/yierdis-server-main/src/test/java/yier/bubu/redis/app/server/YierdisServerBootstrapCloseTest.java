@@ -16,6 +16,7 @@ import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
+import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
 import yier.bubu.redis.storage.api.DbEngineFactory;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbReads;
@@ -36,13 +37,46 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class YierdisServerBootstrapCloseTest {
     @Test
+    public void undrainedChildStillAllowsBudgetsAndRemainingLifecycleResourcesToClose() throws Exception {
+        YierdisServerBootstrap bootstrap = newBootstrap(ServerConfig.fromArgs(new String[]{
+                "--maxmemoryBytes", "0",
+                "--replyDrainTimeoutMillis", "10"
+        }));
+        ChildChannelRegistry registry = new ChildChannelRegistry();
+        InboundMemoryBudget inboundBudget = new InboundMemoryBudget(8_192L);
+        OutboundMemoryBudget outboundBudget = new OutboundMemoryBudget(8_192L);
+        EmbeddedChannel child = new EmbeddedChannel();
+        CompletableFuture<Void> lifecycle = new CompletableFuture<>();
+        Assert.assertEquals(ChildChannelRegistry.AdmissionResult.ACCEPTED, registry.admit(child));
+        registry.bindLifecycle(child, lifecycle);
+        setField(bootstrap, "childChannelRegistry", registry);
+        setField(bootstrap, "inboundMemoryBudget", inboundBudget);
+        setField(bootstrap, "outboundMemoryBudget", outboundBudget);
+
+        try {
+            Assert.assertThrows(IllegalStateException.class, bootstrap::close);
+
+            Assert.assertEquals(YierdisServerBootstrap.LifecycleState.FAILED, bootstrap.lifecycleStateForTests());
+            Assert.assertTrue(inboundBudget.stats().closed());
+            Assert.assertTrue(outboundBudget.stats().closed());
+            Assert.assertEquals(1, registry.activeChannelCount());
+        } finally {
+            lifecycle.complete(null);
+            child.finishAndReleaseAll();
+        }
+        Assert.assertTrue(registry.drainedFuture().isDone());
+    }
+
+    @Test
     public void closeDrainsAcceptedChildrenBeforeClosingTheOutboundBudget() throws Exception {
         YierdisServerBootstrap bootstrap = YierdisServerBootstrap.start(
                 "--port", "0",
+                "--maxmemoryBytes", "0",
                 "--replyDrainTimeoutMillis", "2000"
         );
         try (Socket child = new Socket()) {
@@ -69,6 +103,7 @@ public class YierdisServerBootstrapCloseTest {
     @Test
     public void replyDrainTimeoutReportsLiveOwnershipThenForceCloseReleasesIt() throws Exception {
         YierdisServerBootstrap bootstrap = newBootstrap(ServerConfig.fromArgs(new String[]{
+                "--maxmemoryBytes", "0",
                 "--replyDrainTimeoutMillis", "25"
         }));
         ChildChannelRegistry registry = new ChildChannelRegistry();
@@ -139,7 +174,9 @@ public class YierdisServerBootstrapCloseTest {
     @Test
     public void closeAggregatesGroupShutdownFailures() throws Exception {
         List<String> closeOrder = Collections.synchronizedList(new ArrayList<>());
-        YierdisServerBootstrap bootstrap = newBootstrap(ServerConfig.fromArgs(new String[0]));
+        YierdisServerBootstrap bootstrap = newBootstrap(ServerConfig.fromArgs(new String[]{
+                "--maxmemoryBytes", "0"
+        }));
 
         setField(bootstrap, "commandGroup", failingEventExecutorGroup("command-group", closeOrder));
         setField(bootstrap, "bossGroup", failingEventLoopGroup("boss-group", closeOrder));
@@ -160,7 +197,9 @@ public class YierdisServerBootstrapCloseTest {
     @Test
     public void closeWithoutExecutorStillPropagatesInstanceFailures() throws Exception {
         List<String> closeOrder = Collections.synchronizedList(new ArrayList<>());
-        YierdisServerBootstrap bootstrap = newBootstrap(ServerConfig.fromArgs(new String[0]));
+        YierdisServerBootstrap bootstrap = newBootstrap(ServerConfig.fromArgs(new String[]{
+                "--maxmemoryBytes", "0"
+        }));
 
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder()
                 .databases(1)
@@ -188,7 +227,9 @@ public class YierdisServerBootstrapCloseTest {
     public void closePropagatesInstanceFailuresAfterBestEffortCleanup() throws Exception {
         List<String> closeOrder = Collections.synchronizedList(new ArrayList<>());
         DefaultEventExecutorGroup commandGroup = new DefaultEventExecutorGroup(1);
-        YierdisServerBootstrap bootstrap = newBootstrap(ServerConfig.fromArgs(new String[0]));
+        YierdisServerBootstrap bootstrap = newBootstrap(ServerConfig.fromArgs(new String[]{
+                "--maxmemoryBytes", "0"
+        }));
 
         YierdisInstance instance = null;
         try {

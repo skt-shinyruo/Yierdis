@@ -1,6 +1,7 @@
 package yier.bubu.redis.runtime.embedded;
 
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
+import yier.bubu.redis.storage.api.DbHealthSnapshot;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 
@@ -17,6 +18,19 @@ public final class YierdisInstanceObservability {
     public record YierdisDbSummary(int dbIndex, int keyCount, int expireCount) {
     }
 
+    /** 供 server readiness 视图使用的 DB 健康聚合结果。 */
+    public record RuntimeHealthSnapshot(
+            int databaseCount,
+            int degradedDatabaseCount,
+            String firstFailureType,
+            String firstFailureMessage,
+            long firstFailureAtMillis
+    ) {
+        public boolean healthy() {
+            return degradedDatabaseCount == 0;
+        }
+    }
+
     YierdisInstanceObservability(YierdisInstance instance) {
         this.instance = Objects.requireNonNull(instance, "instance");
     }
@@ -24,6 +38,33 @@ public final class YierdisInstanceObservability {
     public CommitStreamStats commitStreamStats() {
         CommitStream stream = instance.commitStream();
         return stream == null ? CommitStreamStats.disabled() : stream.stats();
+    }
+
+    /**
+     * 在 DB owner thread 上聚合当前健康状态。
+     * <p>
+     * observability 层不拥有调度器；server 或 embedded 调用方若位于其他线程，必须先调度到 instance 的 owner thread。
+     */
+    public RuntimeHealthSnapshot healthSnapshot() {
+        int databases = Math.max(0, instance.databases());
+        int degraded = 0;
+        String firstType = null;
+        String firstMessage = null;
+        long firstAt = 0L;
+        for (int dbIndex = 0; dbIndex < databases; dbIndex++) {
+            DbHealthSnapshot health = instance.runtimeEngine(dbIndex).health();
+            if (health == null || !health.degraded()) {
+                continue;
+            }
+            degraded++;
+            long failureAt = health.failureAtMillis();
+            if (firstAt == 0L || (failureAt > 0L && failureAt < firstAt)) {
+                firstType = health.failureTypeName();
+                firstMessage = health.failureMessage();
+                firstAt = failureAt;
+            }
+        }
+        return new RuntimeHealthSnapshot(databases, degraded, firstType, firstMessage, firstAt);
     }
 
     public YierdisMemoryStats memoryStats() {

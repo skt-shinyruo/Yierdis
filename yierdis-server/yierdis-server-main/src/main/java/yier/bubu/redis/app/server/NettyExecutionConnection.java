@@ -9,6 +9,7 @@ import yier.bubu.redis.execution.executor.ExecutionConnectionContext;
 
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 final class NettyExecutionConnection implements ExecutionConnection {
     private static final AttributeKey<NettyExecutionConnection> KEY =
@@ -44,6 +45,7 @@ final class NettyExecutionConnection implements ExecutionConnection {
     private final Channel channel;
     private final EngineSession session;
     private final ExecutionConnectionContext context;
+    private volatile Consumer<Runnable> ownerTaskExecutor = Runnable::run;
     private volatile NettyReplyDecodedMessageGate replyGate;
 
     private NettyExecutionConnection(Channel channel, EngineSession session, ExecutionConnectionContext context) {
@@ -62,6 +64,10 @@ final class NettyExecutionConnection implements ExecutionConnection {
 
     NettyReplyDecodedMessageGate replyGate() {
         return replyGate;
+    }
+
+    void bindOwnerTaskExecutor(Consumer<Runnable> ownerTaskExecutor) {
+        this.ownerTaskExecutor = Objects.requireNonNull(ownerTaskExecutor, "ownerTaskExecutor");
     }
 
     CompletableFuture<Void> shutdownReplyGracefully() {
@@ -102,7 +108,14 @@ final class NettyExecutionConnection implements ExecutionConnection {
         if (!context.markClosing()) {
             return false;
         }
-        session.discardTransaction();
+        Runnable discard = session::discardTransaction;
+        try {
+            // MULTI 队列由 command owner 回收，避免 transport event loop 与命令执行并发释放请求。
+            ownerTaskExecutor.accept(discard);
+        } catch (Throwable schedulingFailure) {
+            // owner 已退出时仍要归还请求引用；transaction 自身同步保证兜底清理不会重复释放。
+            discard.run();
+        }
         return true;
     }
 }

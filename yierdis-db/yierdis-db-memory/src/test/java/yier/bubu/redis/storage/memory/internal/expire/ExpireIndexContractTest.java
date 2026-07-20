@@ -17,10 +17,13 @@ import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkResult;
 import yier.bubu.redis.storage.memory.internal.hash.SipHash24;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 public class ExpireIndexContractTest {
@@ -257,6 +260,44 @@ public class ExpireIndexContractTest {
                 expires.removeExpire(key);
                 Assert.assertEquals(0, expires.size());
                 Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.KEY_BYTES));
+            } finally {
+                expires.clear();
+                expires.close();
+                allocator.free(entry.nativeHandle());
+            }
+        }
+    }
+
+    @Test
+    public void ffmExpireTableStoresSharedKeyIdentityInPrimitiveRawHandleArray() throws Exception {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("ffm-expire-primitive-key-handles");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+             NativeKeyDirectory directory = new NativeKeyDirectory(allocator)) {
+            YierdisFfmExpireIndex expires = new YierdisFfmExpireIndex(runtime, allocator);
+            byte[] key = bytes("primitive-key-handle");
+            EntryHandle entry = EntryHandle.fromNativeHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
+            try {
+                directory.compute(key, (ignored, old) -> entry);
+                KeyHandle keyHandle = directory.getKeyHandle(key);
+                long expectedRawHandle = KeyHandleAccess.allocatorNativeHandle(keyHandle).raw();
+
+                expires.setExpireAtMillis(keyHandle, 123456789L);
+
+                Field table0Field = YierdisFfmExpireIndex.class.getDeclaredField("table0");
+                table0Field.setAccessible(true);
+                Object table = table0Field.get(expires);
+                Field rawHandlesField = table.getClass().getDeclaredField("keyRawHandles");
+                rawHandlesField.setAccessible(true);
+                Assert.assertEquals(long[].class, rawHandlesField.getType());
+                long[] rawHandles = (long[]) rawHandlesField.get(table);
+
+                Assert.assertTrue(Arrays.stream(rawHandles).anyMatch(raw -> raw == expectedRawHandle));
+                Assert.assertFalse(Arrays.stream(table.getClass().getDeclaredFields())
+                        .map(Field::getType)
+                        .filter(Class::isArray)
+                        .anyMatch(type -> !type.getComponentType().isPrimitive()));
+                Assert.assertFalse(Arrays.stream(YierdisFfmExpireIndex.class.getDeclaredClasses())
+                        .anyMatch(type -> type.getSimpleName().equals("AllocatorKeyRef")));
             } finally {
                 expires.clear();
                 expires.close();

@@ -28,6 +28,58 @@ import java.util.List;
 
 public class ListValueTest {
     @Test
+    public void stagedQuicklistBuildPlanMatchesFinalNodeAndBlockTopology() {
+        int elementBytes = elementBytesSoTwoFitThreeDoNot(ListValue.quicklistNodeMaxBytesForTesting());
+        List<byte[]> values = List.of(new byte[elementBytes], new byte[elementBytes], new byte[elementBytes]);
+        int encodedEntryBytes = NativeListpack.entryEncodedBytes(values.get(0));
+
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-staged-build-plan");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+             ListRoot root = new ListRoot(allocator)) {
+            int[] allocationSizes = root.preparedPushNativeAllocationSizes(null, values, false);
+            Assert.assertEquals(4, allocationSizes.length);
+            Assert.assertEquals(encodedEntryBytes * 2, allocationSizes[1]);
+            Assert.assertEquals(encodedEntryBytes, allocationSizes[3]);
+
+            ValueHandle handle = root.build(values);
+            Assert.assertEquals(3, root.size(handle));
+            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
+            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LISTPACK_BYTES));
+        }
+    }
+
+    @Test
+    public void preparedPushHeapUpperBoundCoversLargeDequeTopologyReplacement() {
+        int nodeCount = 837;
+        byte[] oneEntryPerNode = new byte[ListValue.quicklistNodeMaxBytesForTesting()];
+        ArrayList<byte[]> values = new ArrayList<>(nodeCount);
+        for (int index = 0; index < nodeCount; index++) {
+            values.add(oneEntryPerNode);
+        }
+
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-topology-upper-bound");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+             ListRoot root = new ListRoot(allocator)) {
+            ValueHandle handle = root.build(values);
+            List<byte[]> addition = List.of(oneEntryPerNode);
+            int allocationCount = root.preparedPushNativeAllocationSizes(handle, addition, false).length;
+            long upperBound = root.estimatedPreparedPushHeapGrowthBytes(
+                    handle,
+                    addition,
+                    false,
+                    allocationCount
+            );
+
+            try (ListValue.PreparedMutation prepared = root.preparePush(handle, addition, false)) {
+                Assert.assertTrue(
+                        "prepared heap exceeds admitted upper bound",
+                        prepared.stagedHeapBytes() <= upperBound
+                );
+            }
+        }
+    }
+
+    @Test
     public void rootCreatedPackedFfmListDoesNotAllocateQuicklistNodeRecords() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-native-node-packed");
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
@@ -50,7 +102,7 @@ public class ListValueTest {
 
             root.rpush(handle, List.of(b("a"), b("b"), b("c")));
 
-            Assert.assertEquals(3L, allocator.stats().objectCount(NativeObjectKind.LISTPACK_BYTES));
+            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LISTPACK_BYTES));
             RecordingBulkStringSink out = new RecordingBulkStringSink();
             root.rangeInto(handle, 0, -1, out);
             Assert.assertTrue(out.sawNativeBytesSlice());

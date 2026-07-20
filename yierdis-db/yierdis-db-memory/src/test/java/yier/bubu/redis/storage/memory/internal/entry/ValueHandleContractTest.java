@@ -1,11 +1,20 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
+import java.lang.reflect.Modifier;
+import java.util.Arrays;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 
 public class ValueHandleContractTest {
+    @Test
+    public void valueHandleInstanceTopologyIsPrimitive() {
+        Assert.assertTrue(Arrays.stream(ValueHandle.class.getDeclaredFields())
+                .filter(field -> !Modifier.isStatic(field.getModifiers()))
+                .allMatch(field -> field.getType().isPrimitive()));
+    }
+
     @Test
     public void valueHandleWrapsProductionNativeHandle() {
         NativeHandle nativeHandle = NativeHandle.of(

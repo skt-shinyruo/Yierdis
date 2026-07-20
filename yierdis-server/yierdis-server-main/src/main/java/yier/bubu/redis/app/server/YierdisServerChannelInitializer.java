@@ -19,6 +19,7 @@ import yier.bubu.redis.protocol.resp.netty.InboundReadCreditHandler;
 import yier.bubu.redis.protocol.resp.netty.RespRequestDecoder;
 
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 final class YierdisServerChannelInitializer extends ChannelInitializer<SocketChannel> {
@@ -41,7 +42,7 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
                 replyWriterFactory,
                 new InboundMemoryBudget(config.protocolGlobalInFlightBytes()),
                 new OutboundMemoryBudget(config.replyGlobalCapacityBytes()),
-                new ChildChannelRegistry(),
+                new ChildChannelRegistry(config.maxClients()),
                 ReplyEgressStats.noop()
         );
     }
@@ -58,7 +59,7 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
                 replyWriterFactory,
                 inboundMemoryBudget,
                 new OutboundMemoryBudget(config.replyGlobalCapacityBytes()),
-                new ChildChannelRegistry(),
+                new ChildChannelRegistry(config.maxClients()),
                 ReplyEgressStats.noop()
         );
     }
@@ -76,7 +77,7 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
                 replyWriterFactory,
                 inboundMemoryBudget,
                 outboundMemoryBudget,
-                new ChildChannelRegistry(),
+                new ChildChannelRegistry(config.maxClients()),
                 ReplyEgressStats.noop()
         );
     }
@@ -120,83 +121,94 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
 
     @Override
     protected void initChannel(SocketChannel ch) {
-        if (!childChannelRegistry.register(ch)) {
+        if (childChannelRegistry.admit(ch) != ChildChannelRegistry.AdmissionResult.ACCEPTED) {
             return;
         }
-        if (config.clientOutputBufferLimitBytes() > 0) {
-            int high = (int) Math.min(Integer.MAX_VALUE, config.clientOutputBufferLimitBytes());
-            int low = Math.max(1, high / 2);
-            ch.config().setWriteBufferWaterMark(new WriteBufferWaterMark(low, high));
-        }
+        boolean lifecycleBound = false;
+        try {
+            if (config.clientOutputBufferLimitBytes() > 0) {
+                int high = (int) Math.min(Integer.MAX_VALUE, config.clientOutputBufferLimitBytes());
+                int low = Math.max(1, high / 2);
+                ch.config().setWriteBufferWaterMark(new WriteBufferWaterMark(low, high));
+            }
 
-        NettyExecutionConnection executionConnection = NettyExecutionConnection.getOrCreate(
-                ch,
-                config.transactionQueueMaxCommands(),
-                config.transactionQueueMaxBytes()
-        );
+            NettyExecutionConnection executionConnection = NettyExecutionConnection.getOrCreate(
+                    ch,
+                    config.transactionQueueMaxCommands(),
+                    config.transactionQueueMaxBytes()
+            );
+            executionConnection.bindOwnerTaskExecutor(task -> executor.executeOwnerTask(task));
+            ch.closeFuture().addListener(ignored -> executionConnection.markClosing());
 
-        InboundConnectionMemory inboundConnection = new InboundConnectionMemory(
-                ch.id().asLongText(),
-                perConnectionHardLimit(config),
-                ImmediateEventExecutor.INSTANCE,
-                () -> { }
-        );
-        InboundReadCreditHandler inboundReadCredit = new InboundReadCreditHandler(
-                inboundMemoryBudget,
-                inboundConnection,
-                receiveBufferCapacity(config)
-        );
-        OutboundConnectionMemory outboundConnection = outboundMemoryBudget.openConnection(
-                config.replyPerConnectionCapacityBytes()
-        );
-        ConnectionReplySequencer replySequencer = new ConnectionReplySequencer(
-                ch,
-                outboundConnection,
-                inboundReadCredit::pauseIngress,
-                slot -> BoundedChunkedReplySink.forChannel(
-                        slot,
-                        ch,
-                        config.replyChunkPayloadBytes(),
-                        config.replyControlReservationBytes(),
-                        config.replyMaxTotalBytes(),
-                        resource -> executor.executeOwnerTask(() -> closeReplyResource(resource))
-                ),
-                replyEgressStats
-        );
-        NettyReplyDecodedMessageGate replyGate = new NettyReplyDecodedMessageGate(
-                config.replyControlReservationBytes(),
-                config.replyMaxTotalBytes(),
-                outboundConnection,
-                replySequencer
-        );
-        executionConnection.bindReplyGate(replyGate);
-        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
-                config.protocolMaxBulkBytes(),
-                config.protocolMaxArgs(),
-                config.protocolMaxLineBytes(),
-                config.protocolMaxCommandBytes(),
-                inboundMemoryBudget,
-                inboundConnection,
-                replyGate
-        );
-        decoder.setReadControl(inboundReadCredit);
+            InboundConnectionMemory inboundConnection = new InboundConnectionMemory(
+                    ch.id().asLongText(),
+                    perConnectionHardLimit(config),
+                    ImmediateEventExecutor.INSTANCE,
+                    () -> { }
+            );
+            InboundReadCreditHandler inboundReadCredit = new InboundReadCreditHandler(
+                    inboundMemoryBudget,
+                    inboundConnection,
+                    receiveBufferCapacity(config)
+            );
+            OutboundConnectionMemory outboundConnection = outboundMemoryBudget.openConnection(
+                    config.replyPerConnectionCapacityBytes()
+            );
+            ConnectionReplySequencer replySequencer = new ConnectionReplySequencer(
+                    ch,
+                    outboundConnection,
+                    inboundReadCredit::pauseIngress,
+                    slot -> BoundedChunkedReplySink.forChannel(
+                            slot,
+                            ch,
+                            config.replyChunkPayloadBytes(),
+                            config.replyControlReservationBytes(),
+                            config.replyMaxTotalBytes(),
+                            resource -> closeReplyResourceOnOwner(executor, resource)
+                    ),
+                    replyEgressStats
+            );
+            NettyReplyDecodedMessageGate replyGate = new NettyReplyDecodedMessageGate(
+                    config.replyControlReservationBytes(),
+                    config.replyMaxTotalBytes(),
+                    outboundConnection,
+                    replySequencer
+            );
+            executionConnection.bindReplyGate(replyGate);
+            childChannelRegistry.bindLifecycle(ch, replySequencer.terminationFuture());
+            lifecycleBound = true;
+            RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                    config.protocolMaxBulkBytes(),
+                    config.protocolMaxArgs(),
+                    config.protocolMaxLineBytes(),
+                    config.protocolMaxCommandBytes(),
+                    inboundMemoryBudget,
+                    inboundConnection,
+                    replyGate
+            );
+            decoder.setReadControl(inboundReadCredit);
 
-        ch.pipeline().addLast("writeBufferBackpressure", new WriteBufferBackpressureHandler(
-                executor,
-                config.clientOutputBufferLimitBytes() > 0 ? config.clientOutputBufferOverLimitMillis() : 0
-        ));
-        if (config.clientIdleTimeoutMillis() > 0) {
+            ch.pipeline().addLast("writeBufferBackpressure", new WriteBufferBackpressureHandler(
+                    executor,
+                    config.clientOutputBufferLimitBytes() > 0 ? config.clientOutputBufferOverLimitMillis() : 0
+            ));
+            if (config.clientIdleTimeoutMillis() > 0) {
+                ch.pipeline()
+                        .addLast("idleTimeout", new IdleStateHandler(
+                                config.clientIdleTimeoutMillis(), 0, 0, TimeUnit.MILLISECONDS
+                        ))
+                        .addLast("idleTimeoutCloser", new CloseOnReadIdleHandler());
+            }
             ch.pipeline()
-                    .addLast("idleTimeout", new IdleStateHandler(
-                            config.clientIdleTimeoutMillis(), 0, 0, TimeUnit.MILLISECONDS
-                    ))
-                    .addLast("idleTimeoutCloser", new CloseOnReadIdleHandler());
+                    .addLast("inboundReadCredit", inboundReadCredit)
+                    .addLast("inboundByteAccounting", new InboundByteAccountingHandler(inboundReadCredit))
+                    .addLast("respRequestDecoder", decoder)
+                    .addLast("commandHandler", new YierdisFastCommandHandler(executor, replyWriterFactory));
+        } finally {
+            if (!lifecycleBound) {
+                childChannelRegistry.initializationFailed(ch);
+            }
         }
-        ch.pipeline()
-                .addLast("inboundReadCredit", inboundReadCredit)
-                .addLast("inboundByteAccounting", new InboundByteAccountingHandler(inboundReadCredit))
-                .addLast("respRequestDecoder", decoder)
-                .addLast("commandHandler", new YierdisFastCommandHandler(executor, replyWriterFactory));
     }
 
     private static void markProtocolErrorClosing(io.netty.channel.ChannelHandlerContext ctx) {
@@ -231,6 +243,24 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
             throw failure;
         } catch (Exception failure) {
             throw new IllegalStateException("reply resource close failed", failure);
+        }
+    }
+
+    private static CompletableFuture<Void> closeReplyResourceOnOwner(
+            CommandExecutor<?> executor,
+            AutoCloseable resource
+    ) {
+        try {
+            return executor.executeOwnerTask(() -> closeReplyResource(resource));
+        } catch (RuntimeException | Error schedulingFailure) {
+            try {
+                // owner executor 已拒绝时已不存在可靠的线程亲和调度出口；同步兜底优先保证 pin/epoch 不永久泄漏。
+                closeReplyResource(resource);
+                return CompletableFuture.completedFuture(null);
+            } catch (RuntimeException | Error closeFailure) {
+                schedulingFailure.addSuppressed(closeFailure);
+                return CompletableFuture.failedFuture(schedulingFailure);
+            }
         }
     }
 

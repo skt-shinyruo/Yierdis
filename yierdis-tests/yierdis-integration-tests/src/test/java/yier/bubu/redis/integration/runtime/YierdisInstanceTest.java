@@ -5,7 +5,7 @@ package yier.bubu.redis.integration.runtime;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
-import yier.bubu.redis.common.command.CommandRecordScope;
+import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.integration.command.TestCommandProcessors;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
@@ -251,15 +251,14 @@ public class YierdisInstanceTest {
 
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
             instance.bindToCurrentThread();
-            try (ExecutionRequest record = ByteArrayExecutionRequest.fromUtf8("SET", List.of("maintenance-expired", "v"));
-                 CommandRecordScope.Scope ignored = CommandRecordScope.open(record)) {
-                Assert.assertTrue(instance.engine(0).writes().strings()
+            try (ExecutionRequest record = ByteArrayExecutionRequest.fromUtf8("SET", List.of("maintenance-expired", "v"))) {
+                Assert.assertTrue(instance.engine(0).writes().withMutationContext(MutationContext.of(record)).strings()
                         .setString(b("maintenance-expired"), b("v"), SetMode.NORMAL, null)
                         .value());
             }
-            try (ExecutionRequest record = ByteArrayExecutionRequest.fromUtf8("PEXPIRE", List.of("maintenance-expired", "1"));
-                 CommandRecordScope.Scope ignored = CommandRecordScope.open(record)) {
-                Assert.assertTrue(instance.engine(0).writes().ttl().pexpire(view(b("maintenance-expired")), 1L).value());
+            try (ExecutionRequest record = ByteArrayExecutionRequest.fromUtf8("PEXPIRE", List.of("maintenance-expired", "1"))) {
+                Assert.assertTrue(instance.engine(0).writes().withMutationContext(MutationContext.of(record)).ttl()
+                        .pexpire(view(b("maintenance-expired")), 1L).value());
             }
 
             sleepPastTtl();
@@ -343,9 +342,9 @@ public class YierdisInstanceTest {
     }
 
     private static void scopedSet(YierdisInstance instance, String key) {
-        try (ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("SET", List.of(key, "v"));
-             CommandRecordScope.Scope ignored = CommandRecordScope.open(request)) {
-            Assert.assertTrue(instance.engine(0).writes().strings().setString(b(key), b("v"), SetMode.NORMAL, null).value());
+        try (ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("SET", List.of(key, "v"))) {
+            Assert.assertTrue(instance.engine(0).writes().withMutationContext(MutationContext.of(request)).strings()
+                    .setString(b(key), b("v"), SetMode.NORMAL, null).value());
         }
     }
 

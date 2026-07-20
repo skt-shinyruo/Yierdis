@@ -5,6 +5,7 @@ import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
@@ -16,6 +17,8 @@ import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.api.result.BulkStringValue;
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -201,6 +204,48 @@ public class StringDirectOpsTest {
             byte[] expected = java.util.Arrays.copyOf(initial, initial.length + 1);
             expected[expected.length - 1] = '!';
             Assert.assertArrayEquals(expected, db.reads().strings().getStringBytes(b("k")));
+        });
+    }
+
+    @Test
+    public void appendAndSetbitNoopsKeepTheExistingNativeString() {
+        withDb(db -> {
+            Assert.assertEquals(Long.valueOf(1L), db.writes().strings().incrBy(b("number"), 1L).value());
+            EntryRecord integerBefore = db.keyLifecycle().liveEntryRecord(b("number"));
+            long stringObjectsBefore = db.nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES);
+
+            WriteResult<Long> append = db.writes().strings().append(b("number"), slice(""));
+
+            Assert.assertEquals(Long.valueOf(1L), append.value());
+            Assert.assertSame(MutationOutcome.NONE, append.mutationOutcome());
+            EntryRecord integerAfter = db.keyLifecycle().liveEntryRecord(b("number"));
+            Assert.assertEquals(integerBefore.valueHandle(), integerAfter.valueHandle());
+            Assert.assertEquals(ValueEncoding.STRING_INT, integerAfter.encoding());
+            Assert.assertEquals(integerBefore.version(), integerAfter.version());
+            Assert.assertEquals(
+                    stringObjectsBefore,
+                    db.nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES)
+            );
+
+            Assert.assertTrue(db.writes().strings().setString(
+                    b("bits"),
+                    new byte[]{(byte) 0x80},
+                    SetMode.NORMAL,
+                    null
+            ).value());
+            EntryRecord bitsBefore = db.keyLifecycle().liveEntryRecord(b("bits"));
+            stringObjectsBefore = db.nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES);
+
+            WriteResult<Integer> setbit = db.writes().strings().setBit(b("bits"), 0L, 1);
+
+            Assert.assertEquals(Integer.valueOf(1), setbit.value());
+            Assert.assertSame(MutationOutcome.NONE, setbit.mutationOutcome());
+            EntryRecord bitsAfter = db.keyLifecycle().liveEntryRecord(b("bits"));
+            Assert.assertEquals(bitsBefore.valueHandle(), bitsAfter.valueHandle());
+            Assert.assertEquals(
+                    stringObjectsBefore,
+                    db.nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES)
+            );
         });
     }
 

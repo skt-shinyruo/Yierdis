@@ -1,19 +1,19 @@
 package yier.bubu.redis.memory.foreign;
 
-import java.util.EnumMap;
-import java.util.Map;
 import java.util.Objects;
 import yier.bubu.redis.memory.api.NativeEpochKind;
 import yier.bubu.redis.memory.api.NativeEpochScope;
 
 public final class YierdisNativeEpochManager {
-    private final Map<NativeEpochKind, ActiveEpochs> activeEpochs = new EnumMap<>(NativeEpochKind.class);
+    private static final NativeEpochKind[] EPOCH_KINDS = NativeEpochKind.values();
+
+    private final ActiveEpochs[] activeEpochs = new ActiveEpochs[EPOCH_KINDS.length];
 
     private long currentEpoch;
 
     public YierdisNativeEpochManager() {
-        for (NativeEpochKind kind : NativeEpochKind.values()) {
-            activeEpochs.put(kind, new ActiveEpochs());
+        for (NativeEpochKind kind : EPOCH_KINDS) {
+            activeEpochs[kind.ordinal()] = new ActiveEpochs();
         }
     }
 
@@ -24,7 +24,7 @@ public final class YierdisNativeEpochManager {
     public NativeEpochScope begin(NativeEpochKind kind) {
         Objects.requireNonNull(kind, "kind");
         long epoch = nextEpoch();
-        activeEpochs.get(kind).add(epoch);
+        activeEpochs[kind.ordinal()].add(epoch);
         return new Scope(kind, epoch);
     }
 
@@ -32,7 +32,7 @@ public final class YierdisNativeEpochManager {
         if (retiredEpoch <= 0) {
             return !hasActiveEpochs();
         }
-        for (ActiveEpochs epochs : activeEpochs.values()) {
+        for (ActiveEpochs epochs : activeEpochs) {
             if (epochs.hasEpochAtOrBefore(retiredEpoch)) {
                 return false;
             }
@@ -42,14 +42,14 @@ public final class YierdisNativeEpochManager {
 
     public long activeCount() {
         long count = 0;
-        for (ActiveEpochs epochs : activeEpochs.values()) {
+        for (ActiveEpochs epochs : activeEpochs) {
             count += epochs.count();
         }
         return count;
     }
 
     private boolean hasActiveEpochs() {
-        for (ActiveEpochs epochs : activeEpochs.values()) {
+        for (ActiveEpochs epochs : activeEpochs) {
             if (epochs.count() > 0) {
                 return true;
             }
@@ -58,7 +58,7 @@ public final class YierdisNativeEpochManager {
     }
 
     private void close(NativeEpochKind kind, long epoch) {
-        activeEpochs.get(kind).remove(epoch);
+        activeEpochs[kind.ordinal()].remove(epoch);
     }
 
     private final class Scope implements NativeEpochScope {

@@ -1,5 +1,6 @@
 package yier.bubu.redis.storage.memory;
 
+import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
@@ -169,33 +170,36 @@ final class YierdisDbDataMaintenance {
         runtimeState.shutdown();
     }
 
-    MutationOutcome flushDb() {
+    MutationOutcome flushDb(MutationContext context) {
         health.requireWritable();
-        return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<>() {
-            @Override
-            public long upperBoundBytes() {
-                return 0L;
-            }
+        return mutationExecutor.execute(
+                Objects.requireNonNull(context, "context"),
+                new YierdisDbMutationExecutor.MutationPlan<>() {
+                    @Override
+                    public long upperBoundBytes() {
+                        return 0L;
+                    }
 
-            @Override
-            public AdmissionMode admissionMode() {
-                return AdmissionMode.RECLAMATION;
-            }
+                    @Override
+                    public AdmissionMode admissionMode() {
+                        return AdmissionMode.RECLAMATION;
+                    }
 
-            @Override
-            public yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation<MutationOutcome> prepare() {
-                YierdisDbRuntimeState.FlushPreparation preparation = runtimeState.prepareFlushDb();
-                return new PreparedCallbackMutation<>(
-                        preparation.outcome(),
-                        preparation.committedMemoryDelta(),
-                        0L,
-                        preparation.outcome(),
-                        runtimeState::commitFlushDb,
-                        null,
-                        null
-                );
-            }
-        });
+                    @Override
+                    public yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation<MutationOutcome> prepare() {
+                        YierdisDbRuntimeState.FlushPreparation preparation = runtimeState.prepareFlushDb();
+                        return new PreparedCallbackMutation<>(
+                                preparation.outcome(),
+                                preparation.committedMemoryDelta(),
+                                0L,
+                                preparation.outcome(),
+                                runtimeState::commitFlushDb,
+                                null,
+                                null
+                        );
+                    }
+                }
+        );
     }
 
     int size() {

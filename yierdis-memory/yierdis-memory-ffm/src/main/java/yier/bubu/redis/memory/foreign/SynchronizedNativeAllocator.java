@@ -56,10 +56,26 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
     }
 
     @Override
+    public long allocateRaw(NativeObjectKind kind, int size) {
+        synchronized (lock) {
+            requireAllocationScopeOwner();
+            return delegate.allocateRaw(kind, size);
+        }
+    }
+
+    @Override
     public NativeHandle realloc(NativeHandle handle, int newSize, NativeReallocPolicy policy) {
         synchronized (lock) {
             requireAllocationScopeOwner();
             return delegate.realloc(handle, newSize, policy);
+        }
+    }
+
+    @Override
+    public long reallocRaw(long rawHandle, int newSize, NativeReallocPolicy policy) {
+        synchronized (lock) {
+            requireAllocationScopeOwner();
+            return delegate.reallocRaw(rawHandle, newSize, policy);
         }
     }
 
@@ -72,6 +88,14 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
     }
 
     @Override
+    public void freeRaw(long rawHandle) {
+        synchronized (lock) {
+            requireAllocationScopeOwner();
+            delegate.freeRaw(rawHandle);
+        }
+    }
+
+    @Override
     public void pin(NativeHandle handle) {
         synchronized (lock) {
             delegate.pin(handle);
@@ -79,9 +103,23 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
     }
 
     @Override
+    public void pinRaw(long rawHandle) {
+        synchronized (lock) {
+            delegate.pinRaw(rawHandle);
+        }
+    }
+
+    @Override
     public void unpin(NativeHandle handle) {
         synchronized (lock) {
             delegate.unpin(handle);
+        }
+    }
+
+    @Override
+    public void unpinRaw(long rawHandle) {
+        synchronized (lock) {
+            delegate.unpinRaw(rawHandle);
         }
     }
 
@@ -119,9 +157,23 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
     }
 
     @Override
+    public NativeObjectView resolveRaw(long rawHandle, NativeAccessMode mode) {
+        synchronized (lock) {
+            return new SynchronizedObjectView(delegate.resolveRaw(rawHandle, mode));
+        }
+    }
+
+    @Override
     public NativeObjectView resolvePinned(NativeHandle handle, NativeAccessMode mode) {
         synchronized (lock) {
             return new SynchronizedObjectView(delegate.resolvePinned(handle, mode));
+        }
+    }
+
+    @Override
+    public NativeObjectView resolvePinnedRaw(long rawHandle, NativeAccessMode mode) {
+        synchronized (lock) {
+            return new SynchronizedObjectView(delegate.resolvePinnedRaw(rawHandle, mode));
         }
     }
 
@@ -341,6 +393,48 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
         public void setBytes(int index, byte[] src, int srcOff, int len) {
             synchronized (lock) {
                 delegateView.setBytes(index, src, srcOff, len);
+            }
+        }
+
+        @Override
+        public void copyBytes(int sourceIndex, int targetIndex, int length) {
+            synchronized (lock) {
+                delegateView.copyBytes(sourceIndex, targetIndex, length);
+            }
+        }
+
+        @Override
+        public boolean contentEquals(int index, byte[] other, int otherOffset, int length) {
+            synchronized (lock) {
+                return delegateView.contentEquals(index, other, otherOffset, length);
+            }
+        }
+
+        @Override
+        public int getIntLittleEndian(int index) {
+            synchronized (lock) {
+                return delegateView.getIntLittleEndian(index);
+            }
+        }
+
+        @Override
+        public void setIntLittleEndian(int index, int value) {
+            synchronized (lock) {
+                delegateView.setIntLittleEndian(index, value);
+            }
+        }
+
+        @Override
+        public long getLongLittleEndian(int index) {
+            synchronized (lock) {
+                return delegateView.getLongLittleEndian(index);
+            }
+        }
+
+        @Override
+        public void setLongLittleEndian(int index, long value) {
+            synchronized (lock) {
+                delegateView.setLongLittleEndian(index, value);
             }
         }
 

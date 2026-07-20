@@ -34,6 +34,19 @@ public class NativeKeyDirectoryTest {
     private static final HashSeed FIXED_SEED = new HashSeed(0x0123456789abcdefL, 0xfedcba9876543210L);
 
     @Test
+    public void tableStoresKeysAndEntriesAsPrimitiveHandles() throws ClassNotFoundException {
+        Class<?> tableClass = Class.forName(NativeKeyDirectory.class.getName() + "$Table");
+
+        long primitiveHandleArrays = java.util.Arrays.stream(tableClass.getDeclaredFields())
+                .filter(field -> field.getType() == long[].class)
+                .count();
+        Assert.assertEquals(2L, primitiveHandleArrays);
+        Assert.assertFalse(java.util.Arrays.stream(tableClass.getDeclaredFields())
+                .anyMatch(field -> field.getType() == NativeHandle[].class
+                        || field.getType() == EntryHandle[].class));
+    }
+
+    @Test
     public void registryAdvancesOnlyTheDirectoryWithRehashDebtAndUnregistersItWhenComplete() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("directory-registry-test");
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 64)) {

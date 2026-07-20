@@ -3,6 +3,7 @@ package yier.bubu.redis.app.server;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import yier.bubu.redis.app.server.args.YierdisCliException;
+
 public final class YierdisServer {
     private static final Logger log = LoggerFactory.getLogger(YierdisServer.class);
 
@@ -21,8 +22,24 @@ public final class YierdisServer {
         try {
             ForeignMemoryAutoModules.ensureFfmAvailable();
             try (YierdisServerBootstrap server = YierdisServerBootstrap.start(config)) {
-                log.info("yierdis started on 0.0.0.0:{} (RESP)", server.port());
-                server.awaitClose();
+                Thread shutdownHook = new Thread(() -> {
+                    try {
+                        server.close();
+                    } catch (Throwable failure) {
+                        log.error("shutdown hook failed", failure);
+                    }
+                }, "yierdis-shutdown-hook");
+                Runtime.getRuntime().addShutdownHook(shutdownHook);
+                try {
+                    log.info("yierdis started on {}:{} (RESP)", config.runtimeConfig().bind(), server.port());
+                    server.awaitClose();
+                } finally {
+                    try {
+                        Runtime.getRuntime().removeShutdownHook(shutdownHook);
+                    } catch (IllegalStateException shuttingDown) {
+                        // JVM shutdown is already in progress; the hook is executing independently.
+                    }
+                }
             }
         } catch (YierdisCliException e) {
             // 可预期配置错误：避免输出长堆栈，给出明确提示并使用稳定退出码。

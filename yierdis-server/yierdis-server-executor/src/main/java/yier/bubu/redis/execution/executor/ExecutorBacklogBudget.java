@@ -2,6 +2,8 @@ package yier.bubu.redis.execution.executor;
 
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Executor backlog global budget:\n
@@ -16,6 +18,7 @@ public final class ExecutorBacklogBudget {
 
     private final AtomicInteger queuedTasks = new AtomicInteger(0);
     private final AtomicLong queuedBytes = new AtomicLong(0);
+    private final ConcurrentLinkedQueue<CapacityWaiter> capacityWaiters = new ConcurrentLinkedQueue<>();
 
     private final int globalBackpressureHighWatermark;
     private final int globalBackpressureLowWatermark;
@@ -105,6 +108,7 @@ public final class ExecutorBacklogBudget {
             // Best-effort: avoid underflow breaking future reservations.
             queuedTasks.set(0);
         }
+        signalCapacityWaiters();
     }
 
     public boolean tryReserveQueuedBytes(int bytes) {
@@ -135,6 +139,84 @@ public final class ExecutorBacklogBudget {
         if (now < 0) {
             // Best-effort: avoid underflow breaking future reservations.
             queuedBytes.set(0);
+        }
+        signalCapacityWaiters();
+    }
+
+    public boolean canEverReserveQueuedBytes(int bytes) {
+        return queueMaxBytes <= 0 || Math.max(0, bytes) <= queueMaxBytes;
+    }
+
+    CommandExecutor.CapacityRegistration onCapacityAvailable(int retainedBytes, Runnable callback) {
+        if (retainedBytes < 0) {
+            throw new IllegalArgumentException("retainedBytes must be >= 0");
+        }
+        CapacityWaiter waiter = new CapacityWaiter(retainedBytes, callback);
+        capacityWaiters.offer(waiter);
+        signalCapacityWaiters();
+        return waiter;
+    }
+
+    void wakeAllCapacityWaiters() {
+        CapacityWaiter waiter;
+        while ((waiter = capacityWaiters.poll()) != null) {
+            try {
+                waiter.signal();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    private void signalCapacityWaiters() {
+        if (queuedTasks.get() >= queueCapacity) {
+            return;
+        }
+        for (CapacityWaiter waiter : capacityWaiters) {
+            if (!hasByteCapacity(waiter.retainedBytes)) {
+                continue;
+            }
+            if (waiter.signal()) {
+                capacityWaiters.remove(waiter);
+            } else {
+                capacityWaiters.remove(waiter);
+            }
+        }
+    }
+
+    private boolean hasByteCapacity(int retainedBytes) {
+        if (queueMaxBytes <= 0 || retainedBytes <= 0) {
+            return true;
+        }
+        long current = queuedBytes.get();
+        return current <= queueMaxBytes - retainedBytes;
+    }
+
+    private final class CapacityWaiter implements CommandExecutor.CapacityRegistration {
+        private final int retainedBytes;
+        private final Runnable callback;
+        private final AtomicBoolean active = new AtomicBoolean(true);
+
+        private CapacityWaiter(int retainedBytes, Runnable callback) {
+            this.retainedBytes = retainedBytes;
+            this.callback = java.util.Objects.requireNonNull(callback, "callback");
+        }
+
+        private boolean signal() {
+            if (!active.compareAndSet(true, false)) {
+                return false;
+            }
+            try {
+                callback.run();
+            } catch (Throwable ignored) {
+            }
+            return true;
+        }
+
+        @Override
+        public void cancel() {
+            if (active.compareAndSet(true, false)) {
+                capacityWaiters.remove(this);
+            }
         }
     }
 
@@ -188,4 +270,3 @@ public final class ExecutorBacklogBudget {
         return Math.max(0, low);
     }
 }
-

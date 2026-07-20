@@ -11,7 +11,11 @@ import org.junit.Test;
 public class ReplySourceThreadAffinityIntegrationTest {
     @Test
     public void getReplyCleanupReturnsTheNativePinToTheCommandOwnerBeforeShutdown() throws Exception {
-        YierdisServerBootstrap server = YierdisServerBootstrap.start("--port", "0", "--noCleanup");
+        YierdisServerBootstrap server = YierdisServerBootstrap.start(
+                "--port", "0",
+                "--maxmemoryBytes", "0",
+                "--noCleanup"
+        );
         try {
             try (Socket socket = new Socket("127.0.0.1", server.port())) {
                 socket.setSoTimeout(3_000);

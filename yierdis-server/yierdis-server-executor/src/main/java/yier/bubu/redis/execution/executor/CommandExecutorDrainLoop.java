@@ -46,7 +46,7 @@ final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
         if (!drainScheduled.compareAndSet(false, true)) {
             return;
         }
-        ownerExecutor.execute(this::drainLoop);
+        submitDrainTask();
     }
 
     void drainLeftoverCommands() {
@@ -98,13 +98,23 @@ final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
             }
         }
         if (runnableAfterDrain) {
-            ownerExecutor.execute(this::drainLoop);
+            submitDrainTask();
             return;
         }
 
         drainScheduled.set(false);
         if (taskQueue.hasRunnableTasks() && drainScheduled.compareAndSet(false, true)) {
+            submitDrainTask();
+        }
+    }
+
+    private void submitDrainTask() {
+        try {
             ownerExecutor.execute(this::drainLoop);
+        } catch (RuntimeException | Error failure) {
+            // execute 拒绝时没有新的 drain 接管队列；归还标记后，调用方或后续唤醒才能重新调度已接受任务。
+            drainScheduled.set(false);
+            throw failure;
         }
     }
 

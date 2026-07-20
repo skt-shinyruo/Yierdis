@@ -3,8 +3,10 @@ package yier.bubu.redis.storage.memory.internal.entry;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.CollectionScanWindow;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.value.SetValue;
@@ -163,6 +165,16 @@ public final class SetRoot implements TypeRoot {
     public synchronized void membersInto(ValueHandle handle, BulkStringSink out) {
         ensureOpen();
         requireSet(handle).membersInto(out);
+    }
+
+    public synchronized CollectionScanWindow sscan(
+            ValueHandle handle,
+            ScanCursorV2 cursor,
+            byte[] globPattern,
+            int count
+    ) {
+        ensureOpen();
+        return requireSet(handle).sscan(cursor, globPattern, count);
     }
 
     @Override

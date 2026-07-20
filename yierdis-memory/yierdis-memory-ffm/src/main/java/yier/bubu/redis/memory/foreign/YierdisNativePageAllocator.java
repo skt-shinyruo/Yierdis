@@ -5,19 +5,21 @@ import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.common.memory.MemoryReclaimResult;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 
-public final class YierdisNativePageAllocator implements AutoCloseable {
+public final class YierdisNativePageAllocator
+        implements AutoCloseable, YierdisNativeObjectTable.CapacityResolver {
     public static final int PAGE_BYTES = 64 * 1024;
     private static final int MEDIUM_MAX_BYTES = 1024 * 1024;
     private static final long SMALL_PAGE_HEAP_BYTES = 160L;
     private static final long SPAN_HEAP_BYTES = 112L;
     private static final long REGION_WRAPPER_HEAP_BYTES = 128L;
     private static final long ALLOCATION_SCOPE_CHECKPOINT_HEAP_BYTES = 40L;
+    private static final YierdisNativePageClass[] PAGE_CLASSES = YierdisNativePageClass.values();
 
     private final YierdisFfmMemoryRuntime runtime;
     private final YierdisNativePageDirectory pageDirectory = new YierdisNativePageDirectory();
-    private final SmallPage[] nonFullHeads = new SmallPage[YierdisNativeSizeClass.values().length];
-    private final SmallPage[] emptyByClass = new SmallPage[YierdisNativeSizeClass.values().length];
-    private final long[] freeBlocksByClass = new long[YierdisNativeSizeClass.values().length];
+    private final SmallPage[] nonFullHeads = new SmallPage[YierdisNativeSizeClass.count()];
+    private final SmallPage[] emptyByClass = new SmallPage[YierdisNativeSizeClass.count()];
+    private final long[] freeBlocksByClass = new long[YierdisNativeSizeClass.count()];
 
     private SmallPage liveSmallHead;
     private SmallPage emptyHead;
@@ -133,7 +135,7 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         Objects.requireNonNull(requestedBytes, "requestedBytes");
         long[] availableBlocks = useAvailableSmallBlocks
                 ? freeBlocksByClass.clone()
-                : new long[YierdisNativeSizeClass.values().length];
+                : new long[YierdisNativeSizeClass.count()];
         int additionalEntries = 0;
         long heapBytes = 0L;
         long dataBytes = 0L;
@@ -314,6 +316,36 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
             return;
         }
         throw new IllegalStateException("unknown native block allocation");
+    }
+
+    @Override
+    public int resolveCapacity(int pageId, int pageOffset, int pageClassOrdinal) {
+        ensureOpen();
+        if (pageId <= 0 || pageOffset < 0) {
+            throw new IllegalStateException("invalid native block location");
+        }
+        if (pageClassOrdinal < 0 || pageClassOrdinal >= PAGE_CLASSES.length) {
+            throw new IllegalStateException("invalid native page class: " + pageClassOrdinal);
+        }
+        YierdisNativePageClass pageClass = PAGE_CLASSES[pageClassOrdinal];
+        Object entry = pageDirectory.get(pageId);
+        if (entry instanceof SmallPage page) {
+            int capacity = page.sizeClass.bytes();
+            if (page.closed
+                    || pageClass != YierdisNativePageClass.SMALL
+                    || pageOffset % capacity != 0
+                    || pageOffset > PAGE_BYTES - capacity) {
+                throw new IllegalStateException("native small block location mismatch");
+            }
+            return capacity;
+        }
+        if (entry instanceof SpanAllocation span) {
+            if (span.closed || pageClass != span.pageClass || pageOffset != 0) {
+                throw new IllegalStateException("native span location mismatch");
+            }
+            return span.capacity;
+        }
+        throw new IllegalStateException("unknown or closed native page id: " + pageId);
     }
 
     YierdisNativeBlock view(YierdisNativeObjectMeta meta) {
@@ -499,11 +531,10 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         if (pageOffset < 0 || capacity <= 0) {
             throw new IllegalStateException("invalid native block location");
         }
-        YierdisNativePageClass[] pageClasses = YierdisNativePageClass.values();
-        if (pageClassOrdinal < 0 || pageClassOrdinal >= pageClasses.length) {
+        if (pageClassOrdinal < 0 || pageClassOrdinal >= PAGE_CLASSES.length) {
             throw new IllegalStateException("invalid native page class: " + pageClassOrdinal);
         }
-        YierdisNativePageClass pageClass = pageClasses[pageClassOrdinal];
+        YierdisNativePageClass pageClass = PAGE_CLASSES[pageClassOrdinal];
         Object entry = pageDirectory.get(pageId);
         if (entry instanceof SmallPage page) {
             if (page.closed || pageClass != YierdisNativePageClass.SMALL) {

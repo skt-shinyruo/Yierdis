@@ -17,6 +17,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
         CONNECTION_CLOSING("connection_closing"),
         QUEUE_FULL("queue_full"),
         BYTES_BUDGET("bytes_budget"),
+        REQUEST_TOO_LARGE("request_too_large"),
         OFFER_FAILED("offer_failed");
 
         private final String code;
@@ -186,6 +187,16 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
         return submitter.trySubmit(connection, request, reply, drainLoop::scheduleDrain);
     }
 
+    public CapacityRegistration onCapacityAvailable(ExecutionRequest request, Runnable callback) {
+        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(callback, "callback");
+        if (!running) {
+            callback.run();
+            return CapacityRegistration.NONE;
+        }
+        return backlogBudget.onCapacityAvailable(safeRetainedBytes(request), callback);
+    }
+
     public StatsSnapshot statsSnapshot() {
         return new StatsSnapshot(
                 executionSupport.commandsExecuted(),
@@ -199,6 +210,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
                 submitter.submitRejectedClosing(),
                 submitter.submitRejectedQueueFull(),
                 submitter.submitRejectedBytesBudget(),
+                submitter.submitRejectedRequestTooLarge(),
                 submitter.submitRejectedOfferFailed(),
                 executionSupport.closeAfterReply(),
                 backpressureEnter.sum(),
@@ -249,6 +261,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
 
     public CompletableFuture<Void> shutdownGracefully() {
         running = false;
+        backlogBudget.wakeAllCapacityWaiters();
         CompletableFuture<Void> future = new CompletableFuture<>();
         ownerExecutor.execute(() -> {
             drainLoop.drainLeftoverCommands();
@@ -260,6 +273,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
     @Override
     public void close() {
         running = false;
+        backlogBudget.wakeAllCapacityWaiters();
         drainLoop.drainLeftoverCommands();
     }
 
@@ -275,6 +289,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
             long submitRejectedClosing,
             long submitRejectedQueueFull,
             long submitRejectedBytesBudget,
+            long submitRejectedRequestTooLarge,
             long submitRejectedOfferFailed,
             long closeAfterReply,
             long backpressureEnter,
@@ -284,6 +299,20 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
             long deferredFairReplyHeads,
             long deferredGlobalReplyHeads
     ) {
+    }
+
+    public interface CapacityRegistration {
+        CapacityRegistration NONE = () -> { };
+
+        void cancel();
+    }
+
+    private static int safeRetainedBytes(ExecutionRequest request) {
+        try {
+            return Math.max(0, request.retainedBytes());
+        } catch (Throwable ignored) {
+            return 0;
+        }
     }
 
     @SuppressWarnings("unchecked")

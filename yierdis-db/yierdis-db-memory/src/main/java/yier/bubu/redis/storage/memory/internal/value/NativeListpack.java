@@ -1,38 +1,44 @@
 package yier.bubu.redis.storage.memory.internal.value;
 
+import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.memory.api.NativeObjectView;
+import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 
-import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.function.LongPredicate;
 
 public final class NativeListpack implements AutoCloseable {
     private static final long ARRAY_HEADER_BYTES = 16L;
-    private static final long REFERENCE_BYTES = 8L;
+    private static final long INT_BYTES = Integer.BYTES;
     private static final long FIXED_HEAP_BYTES = 72L;
+    private static final int COPY_BUFFER_BYTES = 8 * 1024;
 
     private final NativeByteStore byteStore;
-    private final NativeObjectKind valueKind;
-    private final ArrayList<NativeHandle> entries = new ArrayList<>();
-    private int entryCapacity;
-
+    private int[] entryOffsets = new int[0];
+    private long blockRawHandle;
+    private int size;
     private int encodedBytes;
+    private int storageBytes;
     private int allocatedBytes;
     private int rawBytes;
 
     public NativeListpack(NativeByteStore byteStore, NativeObjectKind valueKind) {
         this.byteStore = Objects.requireNonNull(byteStore, "byteStore");
-        this.valueKind = Objects.requireNonNull(valueKind, "valueKind");
+        Objects.requireNonNull(valueKind, "valueKind");
     }
 
     public int size() {
-        return entries.size();
+        return size;
     }
 
     public boolean isEmpty() {
-        return entries.isEmpty();
+        return size == 0;
     }
 
     public int encodedBytes() {
@@ -48,7 +54,7 @@ public final class NativeListpack implements AutoCloseable {
     }
 
     public long heapEstimatedBytes() {
-        return FIXED_HEAP_BYTES + ARRAY_HEADER_BYTES + (long) entryCapacity * REFERENCE_BYTES;
+        return FIXED_HEAP_BYTES + ARRAY_HEADER_BYTES + (long) entryOffsets.length * INT_BYTES;
     }
 
     static long heapUpperBoundForEntries(long expectedEntries) {
@@ -64,7 +70,7 @@ public final class NativeListpack implements AutoCloseable {
         }
         return addSaturating(
                 FIXED_HEAP_BYTES + ARRAY_HEADER_BYTES,
-                multiplySaturating(capacity, REFERENCE_BYTES)
+                multiplySaturating(capacity, INT_BYTES)
         );
     }
 
@@ -72,35 +78,49 @@ public final class NativeListpack implements AutoCloseable {
         return rawBytes;
     }
 
-    public void clear() {
-        for (NativeHandle handle : entries) {
-            release(handle);
+    // detached replacement 在发布前一次性申请最终 block，失败时 source 的容量和内容都不会被改动。
+    void reserveForBuild(int finalEntryCount, int finalEncodedBytes) {
+        if (finalEntryCount < 0) {
+            throw new IllegalArgumentException("finalEntryCount must be >= 0");
         }
-        entries.clear();
-        encodedBytes = 0;
-        allocatedBytes = 0;
-        rawBytes = 0;
+        if (finalEncodedBytes < 0) {
+            throw new IllegalArgumentException("finalEncodedBytes must be >= 0");
+        }
+        if (size != 0 || encodedBytes != 0) {
+            throw new IllegalStateException("build reservation requires an empty listpack");
+        }
+        if ((finalEntryCount == 0) != (finalEncodedBytes == 0)) {
+            throw new IllegalArgumentException("empty entry and encoded byte counts must agree");
+        }
+        ensureEntryCapacity(finalEntryCount);
+        if (finalEncodedBytes > 0) {
+            ensureNativeStorage(finalEncodedBytes);
+        }
+    }
+
+    public void clear() {
+        if (blockRawHandle != 0L) {
+            byteStore.releaseRaw(blockRawHandle);
+        }
+        resetState();
     }
 
     public void addLast(byte[] value) {
-        insertAt(entries.size(), value);
+        insertAt(size, value);
     }
 
     public void addLast(byte[] value, NativeObjectKind kind) {
-        insertAt(entries.size(), value, kind);
+        insertAt(size, value, kind);
     }
 
     void addBorrowed(NativeListEntryRef entry) {
         Objects.requireNonNull(entry, "entry");
-        ensureEntryCapacityForAdd();
         NativeHandle handle = entry.handle();
-        entries.add(handle);
-        encodedBytes += entryEncodedBytes(entry.payloadLength());
-        if (handle != null) {
-            byteStore.adopt(handle, entry.retainedBytes());
-            allocatedBytes += entry.retainedBytes();
-            rawBytes += entry.payloadLength();
+        if (handle == null) {
+            addLast(null);
+            return;
         }
+        addLast(byteStore.toByteArrayRaw(handle.raw(), entry.payloadOffset(), entry.payloadLength()));
     }
 
     public void addFirst(byte[] value) {
@@ -112,20 +132,40 @@ public final class NativeListpack implements AutoCloseable {
     }
 
     public void insertAt(int index, byte[] value) {
-        insertAt(index, value, valueKind);
+        insertAt(index, value, NativeObjectKind.LISTPACK_BYTES);
     }
 
     public void insertAt(int index, byte[] value, NativeObjectKind kind) {
-        if (index < 0 || index > entries.size()) {
+        if (index < 0 || index > size) {
             throw new IndexOutOfBoundsException();
         }
-        NativeHandle handle = store(value, kind);
+        Objects.requireNonNull(kind, "kind");
+        int payloadLength = value == null ? -1 : value.length;
+        int entryBytes = entryEncodedBytes(payloadLength);
+        int nextEncodedBytes = addExact(encodedBytes, entryBytes);
         ensureEntryCapacityForAdd();
-        entries.add(index, handle);
-        encodedBytes += entryEncodedBytes(value == null ? -1 : value.length);
-        if (handle != null) {
-            allocatedBytes += byteStore.allocatedBytes(handle);
-            rawBytes += value.length;
+        ensureNativeStorage(nextEncodedBytes);
+
+        int insertOffset = index == size ? encodedBytes : entryOffsets[index];
+        try (NativeObjectView view = byteStore.allocator().resolveRaw(blockRawHandle, NativeAccessMode.READ_WRITE)) {
+            int tailBytes = encodedBytes - insertOffset;
+            if (tailBytes > 0) {
+                view.copyBytes(insertOffset, insertOffset + entryBytes, tailBytes);
+            }
+            writeEntry(view, insertOffset, value);
+        }
+
+        if (index < size) {
+            System.arraycopy(entryOffsets, index, entryOffsets, index + 1, size - index);
+            for (int i = index + 1; i <= size; i++) {
+                entryOffsets[i] += entryBytes;
+            }
+        }
+        entryOffsets[index] = insertOffset;
+        size++;
+        encodedBytes = nextEncodedBytes;
+        if (payloadLength >= 0) {
+            rawBytes = addExact(rawBytes, payloadLength);
         }
     }
 
@@ -134,144 +174,178 @@ public final class NativeListpack implements AutoCloseable {
     }
 
     public byte[] removeLast() {
-        return removeAt(entries.size() - 1);
+        return removeAt(size - 1);
     }
 
     public byte[] removeAt(int index) {
-        NativeHandle handle = entries.remove(index);
-        encodedBytes -= entryEncodedBytes(handle == null ? -1 : byteStore.length(handle));
-        if (handle == null) {
-            return null;
-        }
-        int allocatedLen = byteStore.allocatedBytes(handle);
-        byte[] out = byteStore.toByteArray(handle);
-        allocatedBytes -= allocatedLen;
-        rawBytes -= out.length;
-        byteStore.release(handle);
-        return out;
+        return remove(index, true);
     }
 
     public void removeAtDiscard(int index) {
-        NativeHandle handle = entries.remove(index);
-        encodedBytes -= entryEncodedBytes(handle == null ? -1 : byteStore.length(handle));
-        if (handle == null) {
-            return;
-        }
-        int len = byteStore.length(handle);
-        allocatedBytes -= byteStore.allocatedBytes(handle);
-        rawBytes -= len;
-        byteStore.release(handle);
+        remove(index, false);
     }
 
     public NativeListEntryRef entryRefAt(int index) {
-        NativeHandle handle = entries.get(index);
-        if (handle == null) {
+        long slice = entrySliceAt(index);
+        int payloadLength = sliceLength(slice);
+        if (payloadLength < 0) {
             return NativeListEntryRef.nullValue();
         }
-        int payloadLength = byteStore.length(handle);
-        return NativeListEntryRef.handle(handle, payloadLength, byteStore.allocatedBytes(handle));
+        return NativeListEntryRef.handle(
+                NativeHandle.fromRaw(blockRawHandle),
+                sliceOffset(slice),
+                payloadLength,
+                allocatedBytes
+        );
     }
 
     public byte[] get(int index) {
-        NativeHandle handle = entries.get(index);
-        return handle == null ? null : byteStore.toByteArray(handle);
+        return toByteArray(entrySliceAt(index));
     }
 
     public void writeAt(int index, BulkStringSink out) {
         Objects.requireNonNull(out, "out");
-        NativeHandle handle = entries.get(index);
-        if (handle == null) {
-            out.bulkStringNull();
-            return;
-        }
-        out.bulkString(byteStore.slice(handle));
+        writeSlice(entrySliceAt(index), out);
     }
 
     public long encodedElementBytesAt(int index) {
-        NativeHandle handle = entries.get(index);
-        return handle == null ? 5L : bulkStringEncodedBytes(byteStore.length(handle));
+        int payloadLength = sliceLength(entrySliceAt(index));
+        return payloadLength < 0 ? 5L : bulkStringEncodedBytes(payloadLength);
+    }
+
+    int encodedEntryBytesAt(int index) {
+        checkIndex(index);
+        int entryEnd = index + 1 < size ? entryOffsets[index + 1] : encodedBytes;
+        return entryEnd - entryOffsets[index];
+    }
+
+    int encodedBytesInRange(int fromIndex, int entryCount) {
+        checkRange(fromIndex, entryCount);
+        if (entryCount == 0) {
+            return 0;
+        }
+        int startOffset = entryOffsets[fromIndex];
+        int endIndex = fromIndex + entryCount;
+        int endOffset = endIndex < size ? entryOffsets[endIndex] : encodedBytes;
+        return endOffset - startOffset;
+    }
+
+    void appendRangeFrom(NativeListpack source, int fromIndex, int entryCount) {
+        Objects.requireNonNull(source, "source");
+        if (source == this) {
+            throw new IllegalArgumentException("source must be a different listpack");
+        }
+        source.checkRange(fromIndex, entryCount);
+        if (entryCount == 0) {
+            return;
+        }
+
+        int copiedBytes = source.encodedBytesInRange(fromIndex, entryCount);
+        int nextSize = Math.addExact(size, entryCount);
+        int nextEncodedBytes = addExact(encodedBytes, copiedBytes);
+        ensureEntryCapacity(nextSize);
+        ensureNativeStorage(nextEncodedBytes);
+
+        int sourceOffset = source.entryOffsets[fromIndex];
+        byte[] transfer = new byte[Math.min(copiedBytes, COPY_BUFFER_BYTES)];
+        int copiedRawBytes = 0;
+        try (NativeObjectView sourceView = byteStore.allocator().resolveRaw(
+                source.blockRawHandle,
+                NativeAccessMode.READ_ONLY
+        ); NativeObjectView targetView = byteStore.allocator().resolveRaw(
+                blockRawHandle,
+                NativeAccessMode.READ_WRITE
+        )) {
+            int transferredBytes = 0;
+            while (transferredBytes < copiedBytes) {
+                int chunkBytes = Math.min(transfer.length, copiedBytes - transferredBytes);
+                sourceView.getBytes(sourceOffset + transferredBytes, transfer, 0, chunkBytes);
+                targetView.setBytes(encodedBytes + transferredBytes, transfer, 0, chunkBytes);
+                transferredBytes += chunkBytes;
+            }
+
+            for (int index = 0; index < entryCount; index++) {
+                int sourceIndex = fromIndex + index;
+                int entryOffset = source.entryOffsets[sourceIndex];
+                int entryEnd = sourceIndex + 1 < source.size
+                        ? source.entryOffsets[sourceIndex + 1]
+                        : source.encodedBytes;
+                long decoded = decodeHeader(sourceView, entryOffset);
+                int payloadLength = decodedPayloadLength(decoded);
+                validateEntryEnd(entryOffset + decodedHeaderBytes(decoded), payloadLength, entryEnd);
+                entryOffsets[size + index] = encodedBytes + entryOffset - sourceOffset;
+                if (payloadLength > 0) {
+                    copiedRawBytes = addExact(copiedRawBytes, payloadLength);
+                }
+            }
+        }
+        size = nextSize;
+        encodedBytes = nextEncodedBytes;
+        rawBytes = addExact(rawBytes, copiedRawBytes);
     }
 
     public int nativePayloadCount() {
-        int count = 0;
-        for (NativeHandle handle : entries) {
-            if (handle != null) {
-                count++;
-            }
-        }
-        return count;
+        return blockRawHandle == 0L ? 0 : 1;
     }
 
     public int copyNativePayloadSizes(int[] target, int offset) {
         Objects.requireNonNull(target, "target");
-        int next = offset;
-        for (NativeHandle handle : entries) {
-            if (handle != null) {
-                target[next++] = Math.max(1, byteStore.length(handle));
-            }
+        if (blockRawHandle == 0L) {
+            return offset;
         }
-        return next;
+        target[offset] = Math.max(1, allocatedBytes);
+        return offset + 1;
     }
 
     public boolean equalsAt(int index, byte[] other) {
-        NativeHandle handle = entries.get(index);
-        if (handle == null) {
-            return other == null;
-        }
-        return other != null && byteStore.equalsBytes(handle, other);
+        return equalsSlice(entrySliceAt(index), other);
     }
 
     public void set(int index, byte[] value) {
-        set(index, value, valueKind);
+        set(index, value, NativeObjectKind.LISTPACK_BYTES);
     }
 
     public void set(int index, byte[] value, NativeObjectKind kind) {
-        NativeHandle old = entries.get(index);
-        NativeHandle next = store(value, kind);
-        entries.set(index, next);
-        encodedBytes += entryEncodedBytes(value == null ? -1 : value.length)
-                - entryEncodedBytes(old == null ? -1 : byteStore.length(old));
-        if (old != null) {
-            int oldLen = byteStore.length(old);
-            allocatedBytes -= byteStore.allocatedBytes(old);
-            rawBytes -= oldLen;
-            byteStore.release(old);
+        checkIndex(index);
+        Objects.requireNonNull(kind, "kind");
+        int nextPayloadLength = value == null ? -1 : value.length;
+        int nextEntryBytes = entryEncodedBytes(nextPayloadLength);
+
+        int entryOffset = entryOffsets[index];
+        long oldSlice = entrySliceAt(index);
+        int oldPayloadLength = sliceLength(oldSlice);
+        int oldEntryEnd = index + 1 < size ? entryOffsets[index + 1] : encodedBytes;
+        int oldEntryBytes = oldEntryEnd - entryOffset;
+        int delta = nextEntryBytes - oldEntryBytes;
+        int nextEncodedBytes = addExact(encodedBytes, delta);
+        ensureNativeStorage(nextEncodedBytes);
+
+        try (NativeObjectView view = byteStore.allocator().resolveRaw(blockRawHandle, NativeAccessMode.READ_WRITE)) {
+            int tailBytes = encodedBytes - oldEntryEnd;
+            if (tailBytes > 0 && delta != 0) {
+                view.copyBytes(oldEntryEnd, oldEntryEnd + delta, tailBytes);
+            }
+            writeEntry(view, entryOffset, value);
         }
-        if (next != null) {
-            allocatedBytes += byteStore.allocatedBytes(next);
-            rawBytes += value.length;
+
+        if (delta != 0) {
+            for (int i = index + 1; i < size; i++) {
+                entryOffsets[i] += delta;
+            }
         }
+        encodedBytes = nextEncodedBytes;
+        rawBytes = addExact(
+                rawBytes,
+                Math.max(0, nextPayloadLength) - Math.max(0, oldPayloadLength)
+        );
     }
 
     void replaceBorrowedAt(int index, byte[] value, NativeObjectKind kind) {
-        NativeHandle old = entries.get(index);
-        NativeHandle next = store(value, kind);
-        boolean replaced = false;
-        try {
-            int oldLength = old == null ? -1 : byteStore.length(old);
-            int oldRetainedBytes = old == null ? 0 : byteStore.allocatedBytes(old);
-            entries.set(index, next);
-            encodedBytes += entryEncodedBytes(value == null ? -1 : value.length)
-                    - entryEncodedBytes(oldLength);
-            if (old != null) {
-                allocatedBytes -= oldRetainedBytes;
-                rawBytes -= oldLength;
-                byteStore.forget(old);
-            }
-            if (next != null) {
-                allocatedBytes += byteStore.allocatedBytes(next);
-                rawBytes += value.length;
-            }
-            replaced = true;
-        } finally {
-            if (!replaced && next != null) {
-                byteStore.release(next);
-            }
-        }
+        set(index, value, kind);
     }
 
     public int indexOf(byte[] needle) {
-        for (int i = 0; i < entries.size(); i++) {
+        for (int i = 0; i < size; i++) {
             if (equalsAt(i, needle)) {
                 return i;
             }
@@ -285,62 +359,44 @@ public final class NativeListpack implements AutoCloseable {
 
     public void forEachNativeHandle(Consumer<NativeHandle> consumer) {
         Objects.requireNonNull(consumer, "consumer");
-        for (NativeHandle handle : entries) {
-            if (handle != null) {
-                consumer.accept(handle);
-            }
+        if (blockRawHandle != 0L) {
+            consumer.accept(NativeHandle.fromRaw(blockRawHandle));
         }
     }
 
     public void closeExcept(NativeHandle[] retained) {
-        RuntimeException failure = null;
-        for (NativeHandle handle : entries) {
-            if (handle == null) {
-                continue;
-            }
-            if (isRetained(handle, retained)) {
-                byteStore.forget(handle);
-                continue;
-            }
-            try {
-                byteStore.release(handle);
-            } catch (RuntimeException e) {
-                failure = addFailure(failure, e);
-            }
+        closeExcept(rawHandle -> isRetained(rawHandle, retained));
+    }
+
+    void closeExcept(LongPredicate retained) {
+        Objects.requireNonNull(retained, "retained");
+        if (blockRawHandle == 0L) {
+            resetState();
+            return;
         }
-        entries.clear();
-        encodedBytes = 0;
-        allocatedBytes = 0;
-        rawBytes = 0;
-        if (failure != null) {
-            throw failure;
+        long rawHandle = blockRawHandle;
+        if (retained.test(rawHandle)) {
+            // pop 响应接管整块 ownership 后，原 listpack 只移除自己的计量，不能提前 free。
+            byteStore.forgetRaw(rawHandle);
+        } else {
+            byteStore.releaseRaw(rawHandle);
         }
+        resetState();
     }
 
     void closeExcept(NativeListpack retained) {
         Objects.requireNonNull(retained, "retained");
-        RuntimeException failure = null;
-        for (NativeHandle handle : entries) {
-            if (handle == null) {
-                continue;
-            }
-            if (retained.containsHandle(handle)) {
-                byteStore.forget(handle);
-                continue;
-            }
-            try {
-                byteStore.release(handle);
-            } catch (RuntimeException e) {
-                failure = addFailure(failure, e);
-            }
+        if (blockRawHandle == 0L) {
+            resetState();
+            return;
         }
-        entries.clear();
-        encodedBytes = 0;
-        allocatedBytes = 0;
-        rawBytes = 0;
-        if (failure != null) {
-            throw failure;
+        long rawHandle = blockRawHandle;
+        if (rawHandle == retained.blockRawHandle) {
+            byteStore.forgetRaw(rawHandle);
+        } else {
+            byteStore.releaseRaw(rawHandle);
         }
+        resetState();
     }
 
     @Override
@@ -348,86 +404,244 @@ public final class NativeListpack implements AutoCloseable {
         clear();
     }
 
-    private NativeHandle store(byte[] value) {
-        return store(value, valueKind);
-    }
+    private byte[] remove(int index, boolean copyPayload) {
+        checkIndex(index);
+        int entryOffset = entryOffsets[index];
+        int entryEnd = index + 1 < size ? entryOffsets[index + 1] : encodedBytes;
+        int entryBytes = entryEnd - entryOffset;
+        byte[] removed;
+        int payloadLength;
 
-    private NativeHandle store(byte[] value, NativeObjectKind kind) {
-        if (value == null) {
-            return null;
+        try (NativeObjectView view = byteStore.allocator().resolveRaw(blockRawHandle, NativeAccessMode.READ_WRITE)) {
+            long decoded = decodeHeader(view, entryOffset);
+            payloadLength = decodedPayloadLength(decoded);
+            int payloadOffset = entryOffset + decodedHeaderBytes(decoded);
+            validateEntryEnd(payloadOffset, payloadLength, entryEnd);
+            if (!copyPayload || payloadLength < 0) {
+                removed = null;
+            } else if (payloadLength == 0) {
+                removed = new byte[0];
+            } else {
+                removed = new byte[payloadLength];
+                view.getBytes(payloadOffset, removed, 0, payloadLength);
+            }
+
+            int tailBytes = encodedBytes - entryEnd;
+            if (tailBytes > 0) {
+                view.copyBytes(entryEnd, entryOffset, tailBytes);
+            }
         }
-        return byteStore.store(value, kind);
+
+        for (int i = index + 1; i < size; i++) {
+            entryOffsets[i - 1] = entryOffsets[i] - entryBytes;
+        }
+        entryOffsets[size - 1] = 0;
+        size--;
+        encodedBytes -= entryBytes;
+        if (payloadLength >= 0) {
+            rawBytes -= payloadLength;
+        }
+        return removed;
     }
 
     private void ensureEntryCapacityForAdd() {
-        if (entries.size() < entryCapacity) {
+        ensureEntryCapacity(addExact(size, 1));
+    }
+
+    private void ensureEntryCapacity(int expectedEntries) {
+        if (expectedEntries <= entryOffsets.length) {
             return;
         }
-        int next = entryCapacity == 0 ? 10 : entryCapacity + (entryCapacity >>> 1);
-        entries.ensureCapacity(next);
-        entryCapacity = next;
-    }
-
-    private static long multiplySaturating(long left, long right) {
-        if (left == 0L || right == 0L) {
-            return 0L;
+        int next = entryOffsets.length == 0 ? 10 : entryOffsets.length;
+        while (next < expectedEntries) {
+            int grown = next + (next >>> 1);
+            if (grown <= next) {
+                next = Integer.MAX_VALUE;
+                break;
+            }
+            next = grown;
         }
-        return left > Long.MAX_VALUE / right ? Long.MAX_VALUE : left * right;
+        entryOffsets = Arrays.copyOf(entryOffsets, next);
     }
 
-    private static long addSaturating(long left, long right) {
-        return left > Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
+    private void ensureNativeStorage(int requiredBytes) {
+        if (requiredBytes <= 0) {
+            throw new IllegalArgumentException("requiredBytes must be > 0");
+        }
+        if (blockRawHandle == 0L) {
+            blockRawHandle = byteStore.allocateRawBlock(NativeObjectKind.LISTPACK_BYTES, requiredBytes);
+            storageBytes = requiredBytes;
+            allocatedBytes = byteStore.allocatedBytesRaw(blockRawHandle);
+            return;
+        }
+        if (requiredBytes <= storageBytes) {
+            return;
+        }
+        byteStore.reallocRawBlock(blockRawHandle, requiredBytes, NativeReallocPolicy.PRESERVE_PREFIX);
+        storageBytes = requiredBytes;
+        allocatedBytes = byteStore.allocatedBytesRaw(blockRawHandle);
     }
 
-    private void release(NativeHandle handle) {
-        if (handle != null) {
-            byteStore.release(handle);
+    private long entrySliceAt(int index) {
+        checkIndex(index);
+        int entryOffset = entryOffsets[index];
+        int entryEnd = index + 1 < size ? entryOffsets[index + 1] : encodedBytes;
+        try (NativeObjectView view = byteStore.allocator().resolveRaw(blockRawHandle, NativeAccessMode.READ_ONLY)) {
+            long decoded = decodeHeader(view, entryOffset);
+            int payloadLength = decodedPayloadLength(decoded);
+            int payloadOffset = entryOffset + decodedHeaderBytes(decoded);
+            validateEntryEnd(payloadOffset, payloadLength, entryEnd);
+            return encodeSlice(payloadOffset, payloadLength);
         }
     }
 
-    private static boolean isRetained(NativeHandle handle, NativeHandle[] retained) {
-        if (handle == null || retained == null || retained.length == 0) {
+    private byte[] toByteArray(long slice) {
+        int payloadLength = sliceLength(slice);
+        if (payloadLength < 0) {
+            return null;
+        }
+        return byteStore.toByteArrayRaw(blockRawHandle, sliceOffset(slice), payloadLength);
+    }
+
+    private boolean equalsSlice(long slice, byte[] other) {
+        int payloadLength = sliceLength(slice);
+        if (payloadLength < 0) {
+            return other == null;
+        }
+        if (other == null || other.length != payloadLength) {
             return false;
         }
-        long raw = handle.raw();
+        try (NativeObjectView view = byteStore.allocator().resolveRaw(blockRawHandle, NativeAccessMode.READ_ONLY)) {
+            return view.contentEquals(sliceOffset(slice), other, 0, payloadLength);
+        }
+    }
+
+    private void writeSlice(long slice, BulkStringSink out) {
+        int payloadLength = sliceLength(slice);
+        if (payloadLength < 0) {
+            out.bulkStringNull();
+            return;
+        }
+        out.bulkString(byteStore.sliceRaw(blockRawHandle, sliceOffset(slice), payloadLength));
+    }
+
+    private void resetState() {
+        blockRawHandle = 0L;
+        size = 0;
+        encodedBytes = 0;
+        storageBytes = 0;
+        allocatedBytes = 0;
+        rawBytes = 0;
+    }
+
+    private void checkIndex(int index) {
+        if (index < 0 || index >= size) {
+            throw new IndexOutOfBoundsException();
+        }
+    }
+
+    private void checkRange(int fromIndex, int entryCount) {
+        if (fromIndex < 0 || entryCount < 0 || fromIndex > size - entryCount) {
+            throw new IndexOutOfBoundsException();
+        }
+    }
+
+    private static void writeEntry(NativeObjectView view, int offset, byte[] value) {
+        int headerValue = value == null ? 0 : addExact(value.length, 1);
+        int next = writeVarInt(view, offset, headerValue);
+        if (value != null && value.length > 0) {
+            view.setBytes(next, value, 0, value.length);
+        }
+    }
+
+    private static int writeVarInt(NativeObjectView view, int offset, int value) {
+        int next = offset;
+        int remaining = value;
+        while ((remaining & ~0x7F) != 0) {
+            view.setByte(next++, (byte) ((remaining & 0x7F) | 0x80));
+            remaining >>>= 7;
+        }
+        view.setByte(next++, (byte) remaining);
+        return next;
+    }
+
+    private static long decodeHeader(NativeObjectView view, int offset) {
+        long value = 0L;
+        int shift = 0;
+        for (int bytes = 1; bytes <= 5; bytes++) {
+            int current = view.getByte(offset + bytes - 1) & 0xFF;
+            value |= (long) (current & 0x7F) << shift;
+            if ((current & 0x80) == 0) {
+                if (value > Integer.MAX_VALUE) {
+                    throw new IllegalStateException("listpack entry length exceeds int range");
+                }
+                return ((long) bytes << 32) | value;
+            }
+            shift += 7;
+        }
+        throw new IllegalStateException("invalid listpack varint");
+    }
+
+    private static int decodedHeaderBytes(long decoded) {
+        return (int) (decoded >>> 32);
+    }
+
+    private static int decodedPayloadLength(long decoded) {
+        return (int) decoded - 1;
+    }
+
+    private static void validateEntryEnd(int payloadOffset, int payloadLength, int entryEnd) {
+        int expectedEnd = payloadLength < 0 ? payloadOffset : addExact(payloadOffset, payloadLength);
+        if (expectedEnd != entryEnd) {
+            throw new IllegalStateException("listpack entry offsets do not match encoded payload");
+        }
+    }
+
+    private static long encodeSlice(int payloadOffset, int payloadLength) {
+        return ((long) payloadOffset << 32) | ((payloadLength + 1L) & 0xFFFF_FFFFL);
+    }
+
+    private static int sliceOffset(long slice) {
+        return (int) (slice >>> 32);
+    }
+
+    private static int sliceLength(long slice) {
+        return (int) slice - 1;
+    }
+
+    private static boolean isRetained(long rawHandle, NativeHandle[] retained) {
+        if (retained == null || retained.length == 0) {
+            return false;
+        }
         for (NativeHandle candidate : retained) {
-            if (candidate != null && candidate.raw() == raw) {
+            if (candidate != null && candidate.raw() == rawHandle) {
                 return true;
             }
         }
         return false;
     }
 
-    private boolean containsHandle(NativeHandle candidate) {
-        if (candidate == null) {
-            return false;
-        }
-        long raw = candidate.raw();
-        for (NativeHandle handle : entries) {
-            if (handle != null && handle.raw() == raw) {
-                return true;
-            }
-        }
-        return false;
+    static int entryEncodedBytes(byte[] value) {
+        return entryEncodedBytes(value == null ? -1 : value.length);
     }
 
-    private static RuntimeException addFailure(RuntimeException failure, RuntimeException next) {
-        if (failure == null) {
-            return next;
-        }
-        failure.addSuppressed(next);
-        return failure;
+    static int entryEncodedBytes(int payloadLength) {
+        int headerValue = payloadLength < 0 ? 0 : addExact(payloadLength, 1);
+        return addExact(varIntSize(headerValue), Math.max(0, payloadLength));
     }
 
-    private static int entryEncodedBytes(int len) {
-        int headerValue = len < 0 ? 0 : len + 1;
-        return varIntSize(headerValue) + Math.max(0, len);
+    static int encodedBytesOf(List<byte[]> values) {
+        if (values == null || values.isEmpty()) {
+            return 0;
+        }
+        int total = 0;
+        for (byte[] value : values) {
+            total = addExact(total, entryEncodedBytes(value));
+        }
+        return total;
     }
 
     private static long bulkStringEncodedBytes(int len) {
-        if (len < 0) {
-            return 5L;
-        }
         return 1L + decimalDigits(len) + 2L + len + 2L;
     }
 
@@ -454,72 +668,83 @@ public final class NativeListpack implements AutoCloseable {
         return bytes;
     }
 
+    private static int addExact(int left, int right) {
+        long sum = (long) left + right;
+        if (sum < 0L || sum > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("listpack size exceeds int range");
+        }
+        return (int) sum;
+    }
+
+    private static long multiplySaturating(long left, long right) {
+        if (left == 0L || right == 0L) {
+            return 0L;
+        }
+        return left > Long.MAX_VALUE / right ? Long.MAX_VALUE : left * right;
+    }
+
+    private static long addSaturating(long left, long right) {
+        return left > Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
+    }
+
     public static final class Cursor {
         private final NativeListpack owner;
         private int index = -1;
+        private long slice;
 
         private Cursor(NativeListpack owner) {
             this.owner = owner;
         }
 
         public boolean next() {
-            if (index + 1 >= owner.entries.size()) {
+            if (index + 1 >= owner.size) {
                 return false;
             }
             index++;
+            slice = owner.entrySliceAt(index);
             return true;
         }
 
         public boolean isNull() {
-            currentHandle();
-            return owner.entries.get(index) == null;
+            ensurePositioned();
+            return sliceLength(slice) < 0;
         }
 
         public int length() {
-            NativeHandle handle = currentHandle();
-            return handle == null ? 0 : owner.byteStore.length(handle);
+            ensurePositioned();
+            return Math.max(0, sliceLength(slice));
         }
 
         public boolean equalsBytes(byte[] other) {
-            currentHandle();
-            NativeHandle handle = owner.entries.get(index);
-            if (handle == null) {
-                return other == null;
-            }
-            return other != null && owner.byteStore.equalsBytes(handle, other);
+            ensurePositioned();
+            return owner.equalsSlice(slice, other);
         }
 
         public byte[] toByteArray() {
-            currentHandle();
-            NativeHandle handle = owner.entries.get(index);
-            return handle == null ? null : owner.byteStore.toByteArray(handle);
+            ensurePositioned();
+            return owner.toByteArray(slice);
         }
 
         public void writeTo(BulkStringSink out) {
             if (out == null) {
                 throw new IllegalArgumentException("out must not be null");
             }
-            currentHandle();
-            NativeHandle handle = owner.entries.get(index);
-            if (handle == null) {
-                out.bulkStringNull();
-                return;
-            }
-            out.bulkString(owner.byteStore.slice(handle));
+            ensurePositioned();
+            owner.writeSlice(slice, out);
         }
 
         public void appendTo(NativeListpack other) {
             if (other == null) {
                 throw new IllegalArgumentException("other must not be null");
             }
-            other.addLast(toByteArray());
+            ensurePositioned();
+            other.addLast(owner.toByteArray(slice));
         }
 
-        private NativeHandle currentHandle() {
-            if (index < 0 || index >= owner.entries.size()) {
+        private void ensurePositioned() {
+            if (index < 0 || index >= owner.size) {
                 throw new IllegalStateException("cursor is not positioned");
             }
-            return owner.entries.get(index);
         }
     }
 }

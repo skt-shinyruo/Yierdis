@@ -1,16 +1,17 @@
 # 客户端与基准测试内部
 
-本文解释项目内置 CLI、Netty client、benchmark 和 smoke/bench 脚本如何沿真实 RESP 路径工作。
+本文解释项目内置 CLI、Netty client、RESP benchmark、进程内 storage benchmark 和 smoke/bench 脚本如何工作。
 
-`yierdis-cli` 和 `yierdis-benchmark` 不是进程内 DB 调试入口。它们都通过真实 TCP、真实 RESP frame 和 `yierdis-networking-resp` 的 client codec 工作，因此更接近外部使用者视角。
+`yierdis-cli` 和默认的 benchmark 根命令都通过真实 TCP、真实 RESP frame 和 `yierdis-networking-resp` 的 client codec 工作，因此更接近外部使用者视角。显式 `storage` 子命令是例外：它直接创建 `RuntimeDbEngine`，只测 DB SET hot path 和存储 footprint。
 
-CLI 负责人工交互和轻量验证；benchmark 负责固定 built-in workload 下的吞吐、延迟和最小 reply-shape 校验。比较结果时必须保证 `requests`、`clients`、`pipeline`、`data-size`、`keyspace`、keepalive、认证和 DB selection 等输入等价，并记录运行环境。项目 benchmark 只连接已经运行的 Yierdis；官方 Redis 结果由操作者在独立 Redis 环境中单独运行 `redis-benchmark` 获得。项目不会启动或运行 Redis，也没有组合两边执行的 harness。
+CLI 负责人工交互和轻量验证；RESP benchmark 负责固定 built-in workload 下的吞吐、延迟和最小 reply-shape 校验。比较网络结果时必须保证 `requests`、`clients`、`pipeline`、`data-size`、`keyspace`、keepalive、认证和 DB selection 等输入等价，并记录运行环境。默认 benchmark 只连接已经运行的 Yierdis；官方 Redis 结果由操作者在独立 Redis 环境中单独运行 `redis-benchmark` 获得。项目不会启动或运行 Redis，也没有组合两边执行的 harness。
 
 ## 它们更适合验证什么
 
 - CLI：快速确认协议、回包和单命令行为。
 - smoke：快速确认 server 启动、基础命令和 CLI/RESP 主链。
-- benchmark：观察高并发请求、pipeline 和 backpressure 行为，但不是 correctness oracle。
+- RESP benchmark：观察高并发请求、pipeline 和 backpressure 行为，但不是 correctness oracle。
+- storage benchmark：隔离观察单 owner DB SET 吞吐、延迟和 heap/native footprint，不代表端到端吞吐。
 
 ## yierdis-cli
 
@@ -107,13 +108,15 @@ SET raw "\x00\x01"
 - array 递归读取子 reply。
 - 返回 `RespReply` record，包含 `kind`、`text`、`bytes`、`integer` 和 `values`，并对 bytes/list 做防御性复制。
 
-这个 codec 是 client-side 工具路径的事实标准：CLI 用它做单请求通信；benchmark 只用它编码 workload、AUTH 和 SELECT frame，`NioBenchmarkClient` 通过 `IncrementalRespReplyDecoder` 增量读取和校验 reply。
+这个 codec 是 client-side 工具路径的事实标准：CLI 用它做单请求通信；RESP benchmark 只用它编码 workload、AUTH 和 SELECT frame，`NioBenchmarkClient` 通过 `IncrementalRespReplyDecoder` 增量读取和校验 reply。storage benchmark 不经过 codec。
 
 ## yierdis-benchmark
 
-`yierdis-benchmark` 是真实协议路径 benchmark，不是 JMH microbenchmark，也不是直接调用 DB API。
+`yierdis-benchmark` 在同一个 launcher 中提供两个边界不同的入口：根命令是真实 RESP 协议路径 benchmark，`storage` 子命令是直接调用 DB API 的进程内 benchmark。两者都不是 JMH microbenchmark。
 
-入口 `YierdisBench.main(...)` 是一个薄 launcher，把 argv 交给 picocli 的 `RedisBenchmarkCommand`。当前核心架构固定为：
+### RESP benchmark
+
+入口 `YierdisBench.main(...)` 是一个薄 launcher。picocli 保留 `RedisBenchmarkCommand` 作为根命令，并额外注册 `StorageBenchmarkCommand` 子命令。RESP 路径的核心架构固定为：
 
 ```text
 RedisBenchmarkOptions
@@ -190,7 +193,38 @@ CSV header 是：
 
 Redis 侧由操作者在独立环境中运行官方工具，使用等价的 request、client、payload、pipeline、keyspace、keepalive、认证和 DB 设置，再按 canonical title 配对结果。项目 benchmark 不启动 Redis、不调用官方工具、不收集 Redis result，也不定义 combined run。artifact identity、环境记录、结果保存、ratio 和 release threshold 都是 benchmark 之外的 operator policy。
 
-## smoke.sh 和 bench.sh
+### Storage benchmark
+
+`storage` 子命令的测量边界固定为单线程、单 owner、进程内 `RuntimeDbEngine` SET，不包括 TCP、RESP、server dispatch 或 executor。它用于回答 native payload + heap topology 的存储成本和 DB hot-path 上限，不能把 ops/s 与 RESP benchmark 直接比较。
+
+```text
+StorageBenchmarkOptions
+  -> StorageBenchmarkConfig
+  -> StorageBenchmarkRunner
+  -> disposable warmup RuntimeDbEngine
+  -> measured single-owner RuntimeDbEngine
+  -> StorageLatencyRecorder / StorageMemorySnapshot
+  -> StorageBenchmarkResult
+  -> StorageBenchmarkRenderer
+```
+
+warmup 使用独立 DB，完成后 shutdown；正式测量再创建并绑定一个干净 DB。runner 在 driver buffer 和 histogram 就绪后记录 empty baseline，完成全部 unique SET 后停止计时，再用 DB maintenance 完成未决的增量 rehash，确认 `pending hash tables = 0` 后记录稳定 loaded snapshot，最后 shutdown。固定宽度 mutable key buffer 在循环内复用，因此 benchmark driver 不为每个 key 创建新数组。
+
+每次 SET latency 用纳秒 HdrHistogram 记录，超过 10 秒的样本 clamp 到 10 秒；总吞吐用整个写入循环的起止时间计算。这个 throughput 包含固定宽度 key 编码、两次计时读取、结果校验和 histogram record，是 instrumented direct workload throughput，不是裸 `setString(...)` 方法调用的理论上限。rehash 稳定化发生在计时窗口之后，不计入 SET throughput。
+
+参数边界如下：
+
+- `--keys` 为 `1..10000000`，默认 `1000000`。
+- `--key-size` 上限 1024，且至少容纳 `k` 加最大 key index；默认 16 bytes。
+- `--value-size` 为 `0..1048576`，默认 16 bytes。
+- `--warmup-operations` 为 `0..1000000`，默认 `50000`。
+- `--precision` 为 `0..4`；`--format` 为 `human|quiet|csv`。
+
+footprint 使用 DB 自己的物理内存核算：`accounted = heap estimated + native metadata committed + native data committed`。`accounted delta` 是 loaded 减 empty baseline，`accounted delta bytes/key` 再除以实际 key 数。`native data live` 是逻辑存活 payload；`native reclaimable` 是 allocator 识别出的回收候选/提示量，不代表页面已经 trim，也不能从 `accounted` footprint 中扣除。`live object count` 用于观察 native object topology，而不是字节量。
+
+进程 RSS 从 Linux `/proc/self/status` best-effort 读取，会受 warmup 残留、GC、JVM heap committed、JIT、native arena 和 OS residency 影响。`rss_delta` 不是 DB footprint delta，也不参与 accounted delta 或 bytes/key；不可用时 human/quiet 输出 `unavailable`，CSV 的 `rss_bytes` 和 `rss_delta_bytes` 留空。CSV 总计 21 列，其中 `pending_hash_table_count` 在成功的稳定 snapshot 中必须为 0；字段顺序以 `StorageBenchmarkRenderer` 为准。
+
+## smoke.sh、bench.sh 和 storage-bench.sh
 
 `scripts/smoke.sh` 是最小端到端健康检查：
 
@@ -209,6 +243,12 @@ Redis 侧由操作者在独立环境中运行官方工具，使用等价的 requ
 - `BENCH_JVM_OPTS` 只控制 benchmark JVM。
 - 脚本不查找、启动、轮询或停止任何 server artifact；目标 Yierdis 的生命周期始终由操作者管理。
 
+`scripts/storage-bench.sh` 是进程内存储测量外壳：
+
+- 除非 `SKIP_BUILD=1`，只构建 `yierdis-benchmark` 及其 Maven 依赖，然后定位 shaded benchmark jar。
+- 固定调用 `storage` 子命令，不接收 host/port，也不启动 server。
+- 默认值来自 `STORAGE_KEYS`、`STORAGE_KEY_SIZE`、`STORAGE_VALUE_SIZE`、`STORAGE_WARMUP_OPERATIONS`、`STORAGE_PRECISION` 和 `FORMAT`；`BENCH_JVM_OPTS` 只控制 benchmark JVM。
+
 典型命令：
 
 ```bash
@@ -216,4 +256,6 @@ Redis 侧由操作者在独立环境中运行官方工具，使用等价的 requ
 ./scripts/bench.sh
 FORMAT=csv KEYSPACE=0 KEEP_ALIVE=false ./scripts/bench.sh
 REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
+./scripts/storage-bench.sh
+STORAGE_KEYS=10000000 FORMAT=csv ./scripts/storage-bench.sh
 ```

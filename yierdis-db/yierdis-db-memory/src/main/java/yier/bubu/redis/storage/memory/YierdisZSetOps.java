@@ -2,6 +2,7 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.MutationOutcome;
+import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.WriteResult;
@@ -9,6 +10,7 @@ import yier.bubu.redis.storage.api.ZSetReadOps;
 import yier.bubu.redis.storage.api.ZSetWriteOps;
 import yier.bubu.redis.storage.api.result.BulkStringMetrics;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.CollectionScanWindow;
 import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequence;
 import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequences;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
@@ -53,9 +55,24 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
         long now = System.currentTimeMillis();
         reclaimExpiredBeforeMutation(keyBytes, now);
         return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+            private ZSetRoot.AddPlan cachedAddPlan;
+            private boolean addPlanInitialized;
+
             @Override
             public long upperBoundBytes() {
-                return estimateZSetWriteUpperBoundForMutation(keyBytes, scoreMemberPairs, now);
+                EntryRecord existing = keyLifecycle.entryRecord(keyBytes);
+                if (existing == null) {
+                    return newZSetUpperBound(keyBytes, addPlan(null));
+                }
+                KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+                if (keyLifecycle.isKeyExpired(keyHandle, now)) {
+                    return newZSetUpperBound(keyBytes, addPlan(null));
+                }
+                if (existing.type() != ValueType.ZSET) {
+                    return withScopeBookkeeping(0L);
+                }
+                ValueHandle handle = requireZSetHandle(existing);
+                return existingZSetUpperBound(keyBytes, handle, scoreMemberPairs, addPlan(handle));
             }
 
             @Override
@@ -68,30 +85,34 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
 
                 StagedEntry staged = null;
                 ValueHandle replacement = null;
+                ZSetRoot.PreparedAddResult preparedAdd = null;
                 try {
                     KeyHandle targetKey = currentEntry.keyHandle();
                     if (current == null) {
                         staged = stageNewEntry(keyBytes);
                         targetKey = staged.keyHandle();
                     }
-                    ZSetRoot.PreparedAddResult preparedAdd = zsetRoot.prepareAdd(
-                            current == null ? null : requireZSetHandle(current),
-                            scoreMemberPairs
-                    );
-                    replacement = preparedAdd.handle();
+                    ValueHandle sourceHandle = current == null ? null : requireZSetHandle(current);
+                    preparedAdd = zsetRoot.prepareAdd(addPlan(sourceHandle));
                     ZAddResult added = preparedAdd.result();
                     MutationOutcome outcome = added.changedAny()
                             ? MutationOutcome.VALUE_CHANGED
                             : MutationOutcome.NONE;
-                    if (replacement == null) {
+                    if (preparedAdd.stableHandle() && !preparedAdd.changedAny()) {
+                        preparedAdd.close();
+                        preparedAdd = null;
                         return preparedNoEntry(WriteResult.of(0L, outcome), outcome);
                     }
 
+                    boolean stableHandle = preparedAdd.stableHandle();
+                    ValueHandle nextHandle = preparedAdd.handle();
+                    replacement = stableHandle ? null : nextHandle;
                     EntryRecord next = zsetRecord(
                             targetKey,
-                            replacement,
+                            nextHandle,
                             current == null ? -1L : current.expireAtMillis(),
-                            current
+                            current,
+                            preparedAdd.targetEncoding()
                     );
                     WriteResult<Long> result = WriteResult.of((long) added.added(), outcome);
                     long deltaBytes = estimateRecordBytes(targetKey, next)
@@ -110,16 +131,41 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                             staged == null ? null : staged.stagedKey(),
                             current,
                             next,
-                            true,
-                            PreparedTtlMutation.NONE
+                            !stableHandle,
+                            stableHandle ? preparedAdd::releaseSuperseded : null,
+                            PreparedTtlMutation.NONE,
+                            stableHandle ? preparedAdd : null
                     );
+                    if (stableHandle) {
+                        prepared.beforeEntryPublish(preparedAdd::commit);
+                    }
                     staged = null;
                     replacement = null;
+                    preparedAdd = null;
                     return prepared;
                 } catch (RuntimeException | Error failure) {
+                    if (preparedAdd != null && preparedAdd.stableHandle()) {
+                        try {
+                            preparedAdd.close();
+                        } catch (RuntimeException | Error closeFailure) {
+                            failure.addSuppressed(closeFailure);
+                        }
+                    }
                     abortStaged(staged, replacement, failure);
                     throw failure;
                 }
+            }
+
+            private ZSetRoot.AddPlan addPlan(ValueHandle source) {
+                if (!addPlanInitialized) {
+                    cachedAddPlan = zsetRoot.planAdd(source, scoreMemberPairs);
+                    addPlanInitialized = true;
+                    return cachedAddPlan;
+                }
+                if (!Objects.equals(cachedAddPlan.source(), source)) {
+                    throw new IllegalStateException("prepared ZADD source changed after admission");
+                }
+                return cachedAddPlan;
             }
         });
     }
@@ -209,110 +255,67 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
         );
     }
 
-    private static int appendPayloadSizes(int[] sizes, int offset, int[] payloadSizes) {
-        if (payloadSizes == null || payloadSizes.length == 0) {
-            return offset;
-        }
-        int next = offset;
-        for (int size : payloadSizes) {
-            sizes[next++] = Math.max(1, size);
-        }
-        return next;
-    }
-
-    private static int appendMemberPayloadSizes(int[] sizes, int offset, List<byte[]> scoreMemberPairs) {
-        if (scoreMemberPairs == null || scoreMemberPairs.isEmpty()) {
-            return offset;
-        }
-        int next = offset;
-        for (int i = 1; i < scoreMemberPairs.size(); i += 2) {
-            byte[] member = scoreMemberPairs.get(i);
-            if (member != null) {
-                sizes[next++] = Math.max(1, member.length);
-            }
-        }
-        return next;
-    }
-
-    private static int nonNullMemberCount(List<byte[]> scoreMemberPairs) {
-        if (scoreMemberPairs == null || scoreMemberPairs.isEmpty()) {
-            return 0;
-        }
-        int count = 0;
-        for (int i = 1; i < scoreMemberPairs.size(); i += 2) {
-            if (scoreMemberPairs.get(i) != null) {
-                count++;
-            }
-        }
-        return count;
-    }
-
     private int[] zsetAllocationSizes(
             boolean includeKeyAndEntry,
+            boolean includeRoot,
             byte[] keyBytes,
-            int[] existingPayloadSizes,
-            List<byte[]> scoreMemberPairs
+            int[] replacementAllocationSizes
     ) {
-        int existingCount = existingPayloadSizes == null ? 0 : existingPayloadSizes.length;
-        int newCount = nonNullMemberCount(scoreMemberPairs);
         int metadataCount = includeKeyAndEntry ? 2 : 0;
-        int[] sizes = new int[metadataCount + 1 + existingCount * 3 + newCount * 3];
+        int payloadCount = replacementAllocationSizes == null ? 0 : replacementAllocationSizes.length;
+        int[] sizes = new int[metadataCount + (includeRoot ? 1 : 0) + payloadCount];
         int next = 0;
         if (includeKeyAndEntry) {
             sizes[next++] = Math.max(1, keyBytes.length);
             sizes[next++] = ENTRY_RECORD_NATIVE_BYTES;
         }
-        sizes[next++] = ZSET_ROOT_NATIVE_BYTES;
-        next = appendPayloadSizes(sizes, next, existingPayloadSizes);
-        next = appendPayloadSizes(sizes, next, existingPayloadSizes);
-        next = appendPayloadSizes(sizes, next, existingPayloadSizes);
-        next = appendMemberPayloadSizes(sizes, next, scoreMemberPairs);
-        next = appendMemberPayloadSizes(sizes, next, scoreMemberPairs);
-        next = appendMemberPayloadSizes(sizes, next, scoreMemberPairs);
-        if (next != sizes.length) {
-            throw new IllegalStateException("zset allocation size estimate count mismatch");
+        if (includeRoot) {
+            sizes[next++] = ZSET_ROOT_NATIVE_BYTES;
+        }
+        if (replacementAllocationSizes != null) {
+            for (int size : replacementAllocationSizes) {
+                sizes[next++] = Math.max(1, size);
+            }
         }
         return sizes;
     }
 
-    private long newZSetUpperBound(byte[] keyBytes, List<byte[]> scoreMemberPairs) {
+    private long newZSetUpperBound(byte[] keyBytes, ZSetRoot.AddPlan addPlan) {
         int[] allocationSizes = zsetAllocationSizes(
                 true,
+                true,
                 keyBytes,
-                new int[0],
-                scoreMemberPairs
+                zsetRoot.preparedAddNativeAllocationSizes(addPlan)
         );
         long stagedHeapBytes = addSaturating(
                 keyLifecycle.keyDirectory().estimatedInsertHeapGrowthBytes(),
                 zsetRoot.estimatedPreparedAddHeapGrowthBytes(
-                        null,
-                        scoreMemberPairs,
+                        addPlan,
                         allocationSizes.length
                 )
         );
         long nativeUpperBound = nativePeak(stagedHeapBytes, allocationSizes);
         long logicalUpperBound = YierdisDbMemoryEstimator.estimateZSetWriteUpperBound(
                 keyBytes.length,
-                scoreMemberPairs
+                addPlan.scoreMemberPairs()
         );
         return withScopeBookkeeping(Math.max(logicalUpperBound, nativeUpperBound));
     }
 
     private long existingZSetUpperBound(
             byte[] keyBytes,
-            EntryRecord existing,
-            List<byte[]> scoreMemberPairs
+            ValueHandle handle,
+            List<byte[]> scoreMemberPairs,
+            ZSetRoot.AddPlan addPlan
     ) {
-        ValueHandle handle = requireZSetHandle(existing);
         int[] allocationSizes = zsetAllocationSizes(
                 false,
+                !addPlan.stableHandle(),
                 keyBytes,
-                zsetRoot.nativePayloadSizes(handle),
-                scoreMemberPairs
+                zsetRoot.preparedAddNativeAllocationSizes(addPlan)
         );
         long stagedHeapBytes = zsetRoot.estimatedPreparedAddHeapGrowthBytes(
-                handle,
-                scoreMemberPairs,
+                addPlan,
                 allocationSizes.length
         );
         long nativeUpperBound = nativePeak(stagedHeapBytes, allocationSizes);
@@ -321,25 +324,6 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                 zsetRoot.estimatedBytes(handle)
         );
         return withScopeBookkeeping(Math.max(logicalUpperBound, nativeUpperBound));
-    }
-
-    private long estimateZSetWriteUpperBoundForMutation(
-            byte[] keyBytes,
-            List<byte[]> scoreMemberPairs,
-            long nowMillis
-    ) {
-        EntryRecord existing = keyLifecycle.entryRecord(keyBytes);
-        if (existing == null) {
-            return newZSetUpperBound(keyBytes, scoreMemberPairs);
-        }
-        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
-        if (keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
-            return newZSetUpperBound(keyBytes, scoreMemberPairs);
-        }
-        if (existing.type() != ValueType.ZSET) {
-            return withScopeBookkeeping(0L);
-        }
-        return existingZSetUpperBound(keyBytes, existing, scoreMemberPairs);
     }
 
     private record CurrentEntry(
@@ -447,6 +431,24 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                 count,
                 out
         ));
+    }
+
+    @Override
+    public CollectionScanWindow zscan(byte[] keyBytes, ScanCursorV2 cursor, byte[] globPattern, int count) {
+        internals.checkThread();
+        if (count <= 0) {
+            throw new IllegalArgumentException("count must be > 0");
+        }
+        EntryRecord record = liveZSetRecord(keyBytes);
+        if (record == null) {
+            return new MaterializedCollectionScanWindow(ScanCursorV2.start(), List.of());
+        }
+        return zsetRoot.zscan(
+                requireZSetHandle(record),
+                cursor == null ? ScanCursorV2.start() : cursor,
+                globPattern,
+                count
+        );
     }
 
     @Override
@@ -645,11 +647,27 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
     }
 
     private EntryRecord zsetRecord(KeyHandle keyHandle, ValueHandle handle, long expireAtMillis, EntryRecord previous) {
+        return zsetRecord(
+                keyHandle,
+                handle,
+                expireAtMillis,
+                previous,
+                zsetRoot.encoding(handle)
+        );
+    }
+
+    private EntryRecord zsetRecord(
+            KeyHandle keyHandle,
+            ValueHandle handle,
+            long expireAtMillis,
+            EntryRecord previous,
+            ValueEncoding encoding
+    ) {
         return keyLifecycle.newRecord(
                 keyHandle,
                 handle,
                 ValueType.ZSET,
-                zsetRoot.encoding(handle),
+                encoding,
                 expireAtMillis,
                 DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE,
                 previous

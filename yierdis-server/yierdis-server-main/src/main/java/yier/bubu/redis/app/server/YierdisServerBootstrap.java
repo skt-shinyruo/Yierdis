@@ -55,10 +55,21 @@ import java.util.function.UnaryOperator;
 public final class YierdisServerBootstrap implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(YierdisServerBootstrap.class);
 
+    enum LifecycleState {
+        STARTING,
+        RUNNING,
+        CLOSING,
+        CLOSED,
+        FAILED
+    }
+
     private final ServerConfig config;
     private final YierdisServerRuntimeConfig runtimeConfig;
     private final UnaryOperator<CommandExecutionEngine> commandEngineDecorator;
     private final Consumer<YierdisInstanceConfig.Builder> instanceConfigCustomizer;
+    private final Object lifecycleLock = new Object();
+    private volatile LifecycleState lifecycleState = LifecycleState.STARTING;
+    private CompletableFuture<Void> closeAttempt;
 
     private Channel serverChannel;
     private ScheduledFuture<?> cleanupFuture;
@@ -209,11 +220,12 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         YierdisInstanceObservability observability = instance.observability();
 
         infoProvider = new NettyServerInfoProvider(runtimeConfig);
+        infoProvider.bindLifecycleState(() -> lifecycleState.name());
         infoProvider.bindObservability(observability);
         inboundMemoryBudget = new InboundMemoryBudget(runtimeConfig.protocolGlobalInFlightBytes());
         infoProvider.bindInboundMemoryBudget(inboundMemoryBudget);
         outboundMemoryBudget = new OutboundMemoryBudget(runtimeConfig.replyGlobalCapacityBytes());
-        childChannelRegistry = new ChildChannelRegistry();
+        childChannelRegistry = new ChildChannelRegistry(runtimeConfig.maxClients());
         replyEgressStats = new ReplyEgressStats();
         infoProvider.bindOutboundMemoryBudget(outboundMemoryBudget);
         infoProvider.bindChildChannelRegistry(childChannelRegistry);
@@ -305,7 +317,10 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                         replyEgressStats
                 ));
 
-        serverChannel = bootstrap.bind(runtimeConfig.port()).sync().channel();
+        serverChannel = bootstrap.bind(runtimeConfig.bind(), runtimeConfig.port()).sync().channel();
+        synchronized (lifecycleLock) {
+            lifecycleState = LifecycleState.RUNNING;
+        }
     }
 
     private static void configureDefaultDbEngineFactory(
@@ -340,6 +355,38 @@ public final class YierdisServerBootstrap implements AutoCloseable {
 
     @Override
     public void close() {
+        CompletableFuture<Void> attempt;
+        boolean performClose = false;
+        synchronized (lifecycleLock) {
+            if (closeAttempt == null) {
+                closeAttempt = new CompletableFuture<>();
+                lifecycleState = LifecycleState.CLOSING;
+                performClose = true;
+            }
+            attempt = closeAttempt;
+        }
+        if (performClose) {
+            try {
+                closeInternal();
+                synchronized (lifecycleLock) {
+                    lifecycleState = LifecycleState.CLOSED;
+                }
+                attempt.complete(null);
+            } catch (Throwable failure) {
+                synchronized (lifecycleLock) {
+                    lifecycleState = LifecycleState.FAILED;
+                }
+                attempt.completeExceptionally(failure);
+            }
+        }
+        awaitCloseAttempt(attempt);
+    }
+
+    LifecycleState lifecycleStateForTests() {
+        return lifecycleState;
+    }
+
+    private void closeInternal() {
         // Closing is best-effort: this class is used in tests/tools where leaks are worse than double-close.
         Throwable failure = null;
 
@@ -381,10 +428,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
 
         ChildDrainResult childDrain = drainChildReplies(children, acceptedChildren, ex);
         failure = recordCloseFailure(failure, childDrain.failure());
-        if (!childDrain.drained()) {
-            rethrowIfNeeded(failure);
-            return;
-        }
+        // 即使 transport/回复 drain 已无法确认完成，也必须继续关闭预算、DB 和线程组，避免一次失败把整个实例永久留在半关闭态。
         childChannelRegistry = null;
 
         InboundMemoryBudget inboundBudget = inboundMemoryBudget;
@@ -463,6 +507,21 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         rethrowIfNeeded(failure);
     }
 
+    private static void awaitCloseAttempt(CompletableFuture<Void> attempt) {
+        try {
+            attempt.join();
+        } catch (java.util.concurrent.CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw new IllegalStateException("close failed", cause == null ? failure : cause);
+        }
+    }
+
     NettyServerInfoProvider infoProviderForTests() {
         return infoProvider;
     }
@@ -486,7 +545,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
     private ChildDrainResult drainChildReplies(
             ChildChannelRegistry children,
             List<Channel> acceptedChildren,
-        CommandExecutor<NettyExecutionConnection> commandExecutor
+            CommandExecutor<NettyExecutionConnection> commandExecutor
     ) {
         if (children == null) {
             return ChildDrainResult.success();
@@ -494,8 +553,15 @@ public final class YierdisServerBootstrap implements AutoCloseable {
 
         List<CompletableFuture<Void>> replyDrains = new ArrayList<>(acceptedChildren.size());
         for (Channel child : acceptedChildren) {
-            NettyExecutionConnection connection = NettyExecutionConnection.get(child);
-            replyDrains.add(connection == null ? closeUninitializedChild(child) : connection.shutdownReplyGracefully());
+            try {
+                NettyExecutionConnection connection = NettyExecutionConnection.get(child);
+                replyDrains.add(connection == null
+                        ? closeUninitializedChild(child)
+                        : connection.shutdownReplyGracefully());
+            } catch (Throwable schedulingFailure) {
+                // event loop 已退出时 shutdownReplyGracefully 可能同步拒绝；把失败纳入聚合，后续仍会 force-close 并回收其余资源。
+                replyDrains.add(CompletableFuture.failedFuture(schedulingFailure));
+            }
         }
         CompletableFuture<Void> replies = CompletableFuture.allOf(replyDrains.toArray(CompletableFuture[]::new));
         CompletableFuture<Void> allChildren = CompletableFuture.allOf(replies, children.drainedFuture());
@@ -507,7 +573,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             IllegalStateException timeoutFailure = replyDrainTimeout(children, timeout);
             children.forceClose();
             try {
-                awaitDrain(allChildren);
+                awaitDrain(children.drainedFuture());
                 flushReplyCleanupTasks(commandExecutor);
                 return ChildDrainResult.drainedWithFailure(timeoutFailure);
             } catch (Throwable forcedCloseFailure) {
@@ -517,7 +583,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         } catch (Throwable drainFailure) {
             children.forceClose();
             try {
-                awaitDrain(allChildren);
+                awaitDrain(children.drainedFuture());
                 flushReplyCleanupTasks(commandExecutor);
             } catch (Throwable forcedCloseFailure) {
                 drainFailure.addSuppressed(forcedCloseFailure);

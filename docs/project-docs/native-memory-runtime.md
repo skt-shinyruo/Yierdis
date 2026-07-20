@@ -77,7 +77,7 @@ per-db maxmemory scope 下，每个 DB 使用自己的 runtime / allocator resou
 FFM-backed storage paths 当前集中在这些结构：
 
 - `NativeKeyDirectory`：key -> `EntryHandle` 目录。key bytes 存为 allocator-backed `KEY_BYTES` object；directory 的 open-addressing arrays 仍是 heap arrays。
-- `EntryTable`：`EntryHandle` -> `ENTRY_RECORD`。entry metadata 是 allocator-backed native object，按固定 offset 存 key identity、value handle、type、encoding、TTL、version 和 LRU/LFU 字段。
+- `EntryTable`：`EntryHandle` -> `ENTRY_RECORD`。entry metadata 是 allocator-backed native object，按固定 offset 存 key identity、value handle、type、encoding、TTL、legacy `version` 和 LRU/LFU 字段。`version` 当前保存 entry accounting estimate，不是 mutation version；stale prepared mutation 由 source generation、raw handle/value 等条件识别。
 - `YierdisFfmExpireIndex`：TTL index 只接收 native-backed `KeyHandle`，并以 native key identity 参与 DB lifecycle；TTL authoritative 字段仍要和 `EntryRecord.expireAtMillis` 保持一致。
 - `StringRoot`：string payload 使用 allocator-backed `STRING_BYTES`。
 - `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot`：collection root records 使用 allocator-backed `LIST_ROOT`、`HASH_ROOT`、`SET_ROOT`、`ZSET_ROOT`。
@@ -90,12 +90,13 @@ FFM-backed storage paths 当前集中在这些结构：
 
 ## maxmemory 和 memory stats
 
-Yierdis 把 native-memory usage 纳入 maxmemory 预算入口。写路径通过 `YierdisDbMutationExecutor` 先 reserve upper bound，再执行 mutation，最后按 actual delta commit 或 rollback。global scope 下，`YierdisGlobalMaxmemoryGovernor` 汇总 DB participant 的 physical snapshots；per-db scope 下，DB ledger 按自己的 limit 做 cleanup、evict 或 reject。
+Yierdis 把 native-memory usage 纳入 maxmemory 预算入口。写路径通过 `YierdisDbMutationExecutor` reserve upper bound 并 prepare；commit 后依次 promote allocation、settle logical ledger、publish commit stream、release superseded resources，再按提示尝试 trim。global scope 下，`YierdisGlobalMaxmemoryGovernor` 汇总 DB participant 的 owned physical snapshots；per-db scope 下，DB 使用自己的 snapshot 做 cleanup、trim、evict 或 reject。
 
 需要注意两点：
 
 - 这是 Yierdis 当前 runtime/accounting 口径，不要过度声称和 Redis 内部 maxmemory 精确等价。
-- `MEMORY STATS` 是 explainable estimate，不是 JVM instrumentation object graph。它会区分 ledger used/reserved、allocator stats、off-heap usage、是否纳入 maxmemory、heap estimate 和 native structure estimate。
+- enforcement snapshot 的公式是 `heap estimate + native metadata committed + native data committed`。ledger `usedBytes` 是 mutation delta 的逻辑账本；shared runtime counter 只用于 region lifecycle/leak 诊断，不能再叠加到 participant snapshots。
+- `MEMORY STATS` 是 explainable estimate，不是 JVM instrumentation object graph。`native reclaimable` 只表示 allocator 的候选回收量，不能从 committed enforcement footprint 中预先扣除。
 
 ## 仍然会 materialize 到 heap 的地方
 

@@ -11,6 +11,7 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 import yier.bubu.redis.storage.memory.internal.ledger.MemoryLedger;
 import yier.bubu.redis.common.command.ByteArrayCommandRecord;
 import yier.bubu.redis.common.command.ImmutableCommandRecord;
+import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.storage.api.DbCommitKind;
 import yier.bubu.redis.storage.api.DbCommitStreamUnavailableException;
 import yier.bubu.redis.storage.api.MutationOutcome;
@@ -21,6 +22,7 @@ import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 
 import java.util.Objects;
+import java.util.function.Supplier;
 
 public final class YierdisDbRuntimeInternals implements YierdisDbInternals {
     private static final byte[] DELETE_COMMAND = new byte[]{'D', 'E', 'L'};
@@ -28,6 +30,7 @@ public final class YierdisDbRuntimeInternals implements YierdisDbInternals {
     private final YierdisDbMutationExecutor mutationExecutor;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final MemoryLedger ledger;
+    private MutationContext mutationContext = MutationContext.none();
 
     YierdisDbRuntimeInternals(
             Runnable threadChecker,
@@ -48,7 +51,21 @@ public final class YierdisDbRuntimeInternals implements YierdisDbInternals {
 
     @Override
     public <T> T executeMutation(YierdisDbMutationExecutor.MutationPlan<T> plan) {
-        return mutationExecutor.execute(plan);
+        return mutationExecutor.execute(mutationContext, plan);
+    }
+
+    @Override
+    public <T> T withMutationContext(MutationContext context, Supplier<T> action) {
+        checkThread();
+        Objects.requireNonNull(context, "context");
+        Objects.requireNonNull(action, "action");
+        MutationContext previous = mutationContext;
+        mutationContext = context;
+        try {
+            return action.get();
+        } finally {
+            mutationContext = previous;
+        }
     }
 
     @Override
@@ -137,7 +154,7 @@ public final class YierdisDbRuntimeInternals implements YierdisDbInternals {
             }
 
             @Override
-            public ImmutableCommandRecord retainCommitRecord() {
+            public ImmutableCommandRecord retainCommitRecord(MutationContext context) {
                 if (deletedKey == null) {
                     throw new IllegalStateException("synthetic deletion record is unavailable");
                 }

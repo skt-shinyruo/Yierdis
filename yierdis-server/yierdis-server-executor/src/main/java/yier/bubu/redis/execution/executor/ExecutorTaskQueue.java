@@ -57,6 +57,15 @@ public final class ExecutorTaskQueue<K, T> {
         return true;
     }
 
+    public boolean remove(K key, T task) {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(task, "task");
+        if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
+            return globalQueue.remove(task);
+        }
+        return stateProvider.getOrCreate(key).queue().remove(task);
+    }
+
     public T poll() {
         if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
             return pollGlobalTask();

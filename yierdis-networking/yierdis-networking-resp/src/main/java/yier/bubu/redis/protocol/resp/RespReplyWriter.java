@@ -46,6 +46,14 @@ public final class RespReplyWriter implements RedisReplyWriter {
     }
 
     @Override
+    public void requireReplyEnvelope(ReplyPlan plan) {
+        Objects.requireNonNull(plan, "plan");
+        if (out instanceof ReplyReservationSink reservationSink) {
+            reservationSink.requireEnvelope(plan);
+        }
+    }
+
+    @Override
     public void transferReplyOwnership(AutoCloseable resource) {
         Objects.requireNonNull(resource, "resource");
         if (out instanceof ReplyReservationSink reservationSink && reservationSink.transferOwnership(resource)) {

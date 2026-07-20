@@ -19,6 +19,8 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
     private final PreparedTtlMutation ttlMutation;
     private AutoCloseable abortResource;
     private Runnable abortNewValueHook;
+    private Runnable beforeEntryPublishHook;
+    private boolean nativePageTrimRequested;
 
     private EntryHandle existingEntryHandle;
     private EntryHandle stagedEntryHandle;
@@ -166,6 +168,24 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
         this.abortNewValueHook = abortNewValueHook;
     }
 
+    public PreparedEntryMutation<T> beforeEntryPublish(Runnable hook) {
+        if (beforeEntryPublishHook != null) {
+            throw new IllegalStateException("before-entry-publish hook is already configured");
+        }
+        beforeEntryPublishHook = Objects.requireNonNull(hook, "hook");
+        return this;
+    }
+
+    public PreparedEntryMutation<T> requestNativePageTrimAfterCommit() {
+        nativePageTrimRequested = true;
+        return this;
+    }
+
+    @Override
+    public boolean shouldTrimNativePagesAfterCommit() {
+        return nativePageTrimRequested || actualDeltaBytes() < 0L;
+    }
+
     @Override
     protected T commitPrepared() {
         boolean deletingEntry = newRecord == null && existingEntryHandle != null;
@@ -173,6 +193,11 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
             ttlMutation.commit();
         }
         if (newRecord != null) {
+            if (beforeEntryPublishHook != null) {
+                Runnable hook = beforeEntryPublishHook;
+                beforeEntryPublishHook = null;
+                hook.run();
+            }
             if (existingEntryHandle != null) {
                 keyLifecycle.replaceEntry(existingEntryHandle, oldRecord, newRecord);
                 entryPublished = true;
@@ -223,6 +248,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
         }
         existingEntryHandle = null;
         abortNewValueHook = null;
+        abortResource = null;
         if (failure != null) {
             rethrow(failure);
         }
@@ -282,6 +308,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
                 abortResource = null;
             }
         }
+        beforeEntryPublishHook = null;
         if (failure != null) {
             rethrow(failure);
         }

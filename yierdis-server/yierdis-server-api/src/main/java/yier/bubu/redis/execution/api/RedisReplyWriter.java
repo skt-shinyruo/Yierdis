@@ -23,6 +23,17 @@ public interface RedisReplyWriter extends ReplySink {
     }
 
     /**
+     * 为包含嵌套回复预检的顶层回复请求一个不可被子计划替换的 envelope。
+     *
+     * <p>普通 {@link #requireReply(ReplyPlan)} 没有该保持语义。尚未实现 envelope 的 writer 必须保守地
+     * 回退 maximum，避免 {@code EXEC} 已产生副作用后才发现回复容量不足。</p>
+     */
+    default void requireReplyEnvelope(ReplyPlan plan) {
+        Objects.requireNonNull(plan, "plan");
+        requireReply(ReplyPlan.maximum());
+    }
+
+    /**
      * 将异步回复完成前仍需保留的来源转交给 writer；同步 writer 会在此处关闭它。
      */
     default void transferReplyOwnership(AutoCloseable resource) {

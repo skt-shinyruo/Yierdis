@@ -1,6 +1,8 @@
 package yier.bubu.redis.app.server;
 
+import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
+import java.nio.charset.StandardCharsets;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.executor.CommandExecutor;
@@ -73,6 +75,14 @@ final class OrderedReplyTestFixture implements AutoCloseable {
         OutboundMemoryLease lease = connectionMemory.reserve(CONTROL_BYTES, MAX_REPLY_BYTES).orElseThrow();
         ReplySlot slot = sequencer.register(lease).orElseThrow();
         return new RegisteredRespMessage(message, slot);
+    }
+
+    ReplySlot registerReadyAscii(String value) {
+        OutboundMemoryLease lease = connectionMemory.reserve(CONTROL_BYTES, MAX_REPLY_BYTES).orElseThrow();
+        ReplySlot slot = sequencer.register(lease).orElseThrow();
+        slot.addChunk(Unpooled.copiedBuffer(value, StandardCharsets.US_ASCII));
+        slot.markReady(false);
+        return slot;
     }
 
     void drain() {

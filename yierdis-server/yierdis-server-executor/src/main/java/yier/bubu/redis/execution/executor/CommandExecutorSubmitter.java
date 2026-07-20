@@ -18,6 +18,7 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
     private final LongAdder submitRejectedClosing = new LongAdder();
     private final LongAdder submitRejectedQueueFull = new LongAdder();
     private final LongAdder submitRejectedBytesBudget = new LongAdder();
+    private final LongAdder submitRejectedRequestTooLarge = new LongAdder();
     private final LongAdder submitRejectedOfferFailed = new LongAdder();
 
     CommandExecutorSubmitter(
@@ -62,6 +63,13 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
             return CommandExecutor.SubmitRejectReason.CONNECTION_CLOSING;
         }
 
+        int retainedBytes = safeRetainedBytes(request);
+        if (!backlogBudget.canEverReserveQueuedBytes(retainedBytes)) {
+            context.recordCommandRejected();
+            submitRejectedRequestTooLarge.increment();
+            return CommandExecutor.SubmitRejectReason.REQUEST_TOO_LARGE;
+        }
+
         if (backlogBudget.isGlobalBackpressureHigh()) {
             backpressureController.disableAutoRead(connection);
         }
@@ -74,35 +82,36 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
 
         if (!backlogBudget.tryReserveSlot()) {
             backpressureController.disableAutoRead(connection);
-            context.recordCommandRejected();
             submitRejectedQueueFull.increment();
             return CommandExecutor.SubmitRejectReason.QUEUE_FULL;
         }
 
-        int retainedBytes = safeRetainedBytes(request);
         boolean reservedBytes = false;
+        CommandExecutorTask<C> task = null;
+        boolean offered = false;
+        boolean recordedEnqueue = false;
         try {
             if (!backlogBudget.tryReserveQueuedBytes(retainedBytes)) {
                 backlogBudget.releaseSlot();
                 backpressureController.disableAutoRead(connection);
-                context.recordCommandRejected();
                 submitRejectedBytesBudget.increment();
                 return CommandExecutor.SubmitRejectReason.BYTES_BUDGET;
             }
             reservedBytes = true;
 
-            boolean accepted = taskQueue.offer(connection, new CommandExecutorTask<>(connection, request, retainedBytes, reply));
+            task = new CommandExecutorTask<>(connection, request, retainedBytes, reply);
+            boolean accepted = taskQueue.offer(connection, task);
             if (!accepted) {
                 backlogBudget.releaseQueuedBytes(retainedBytes);
                 backlogBudget.releaseSlot();
                 backpressureController.disableAutoRead(connection);
-                context.recordCommandRejected();
                 submitRejectedOfferFailed.increment();
                 return CommandExecutor.SubmitRejectReason.OFFER_FAILED;
             }
+            offered = true;
 
             context.recordCommandEnqueued(retainedBytes);
-            submitAccepted.increment();
+            recordedEnqueue = true;
             if (context.pending() >= backpressureHighWatermark) {
                 backpressureController.disableAutoRead(connection);
             }
@@ -113,13 +122,31 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
                 backpressureController.disableAutoRead(connection);
             }
             scheduleDrain.run();
+            submitAccepted.increment();
             return null;
         } catch (Throwable ignored) {
+            if (offered) {
+                boolean removed;
+                try {
+                    removed = taskQueue.remove(connection, task);
+                } catch (Throwable removalFailure) {
+                    // 无法证明任务仍在队列时，所有权必须保守地留给 executor。
+                    submitAccepted.increment();
+                    return null;
+                }
+                if (!removed) {
+                    // drain 可能已经取得任务；此时调用方不能再关闭 request/reply。
+                    submitAccepted.increment();
+                    return null;
+                }
+                if (recordedEnqueue) {
+                    context.rollbackCommandEnqueued(retainedBytes);
+                }
+            }
             if (reservedBytes) {
                 backlogBudget.releaseQueuedBytes(retainedBytes);
             }
             backlogBudget.releaseSlot();
-            context.recordCommandRejected();
             submitRejectedOfferFailed.increment();
             return CommandExecutor.SubmitRejectReason.OFFER_FAILED;
         }
@@ -143,6 +170,10 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
 
     long submitRejectedBytesBudget() {
         return submitRejectedBytesBudget.sum();
+    }
+
+    long submitRejectedRequestTooLarge() {
+        return submitRejectedRequestTooLarge.sum();
     }
 
     long submitRejectedOfferFailed() {

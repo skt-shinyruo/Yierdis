@@ -20,6 +20,11 @@
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-db-memory</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-networking-resp</artifactId>
         </dependency>
 

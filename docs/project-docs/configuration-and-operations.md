@@ -47,15 +47,21 @@ argv
 
 ## 网络和实例规模
 
-`--port` 决定 Netty bind 端口，默认 `6378`；`--databases` 决定 `SELECT 0..N-1` 的逻辑 DB 数，默认 `16`，校验范围是 `1..1024`；`--ioThreads` 决定 Netty worker 线程数，默认 `1`。
+`--bind` 决定监听地址，默认 `127.0.0.1`；`--port` 决定 Netty bind 端口，默认 `6378`；`--maxClients` 限制同时接受的客户端连接数，默认 `1024`；`--databases` 决定 `SELECT 0..N-1` 的逻辑 DB 数，默认 `16`，校验范围是 `1..1024`；`--ioThreads` 决定 Netty worker 线程数，默认 `1`。
+
+生产启动必须显式传入 `--maxmemoryBytes`，即使值为 `0`（禁用 maxmemory enforcement）。这是有意的安全护栏，避免把“忘记配置容量上限”和“明确选择无限制”混为一谈。
 
 这里最容易误解的是 `ioThreads`。它们是 Netty worker，负责 socket I/O、pipeline decode/encode 事件和定时器触发，不是 DB mutation 并行度。DB 读写和 maintenance 里的 DB 访问都通过 `CommandExecutor` 的 owner thread 进入；`YierdisInstance` 也要求 DB 访问先绑定到 owner thread，跨线程访问会 fail-fast。
+
+当前的单 owner 是有意保留的执行模型，不是把 `CommandExecutor` 线程数调大就能消除的临时限制。它让 keyspace、TTL、allocator、mutation ledger 和连接会话在同一条命令序列中推进，热路径不需要为共享 DB 状态增加锁；本轮吞吐优化集中在 raw handle、primitive topology、连续 native collection 和 bulk FFM access。
+
+真正的 shard-per-core 必须作为一套完整执行架构实现：每个 shard 拥有独立 DB、allocator 和 runtime；提交前按命令 key 规划路由；同一连接仍保持顺序执行，并正确携带 `SELECT`、RESP 协商和 `MULTI/EXEC` 状态；跨 key 命令还需要明确单 shard 限制或跨 shard 协调协议。global maxmemory、maintenance、shutdown 和 commit stream 也必须覆盖全部 shard。在这些契约同时落地前，增加 DB owner 数会破坏现有语义，因此当前配置不提供伪并行的 storage-shard 开关。
 
 本地运行命令应和根 `README.md` 保持一致：
 
 ```bash
 mvn -q -DskipTests package
-java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar --port 6378
+java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar --port 6378 --maxmemoryBytes 0
 ```
 
 然后可以用 `redis-cli` 或项目 CLI：
@@ -114,7 +120,7 @@ TTL 语义是“访问时惰性删除 + 轻量后台清理”。相关参数：
 - `--cleanupIntervalMillis`：后台 maintenance 间隔，默认 `1000` ms，`0` 禁用。
 - `--noCleanup`：归一化为 `cleanupIntervalMillis=0`。
 - `--expireCleanupTimeLimitMillis`：单次 expire cleanup 时间预算，默认 `5` ms。
-- `--keysTimeBudgetMillis`：`KEYS` 扫描时间预算，默认 `20` ms；`0` 禁用预算。
+- `--keysTimeBudgetMillis`：`KEYS` 扫描时间预算，默认 `0`（不设时间预算）；大 keyspace 应使用 `SCAN`，需要限制时显式设置正值。
 - `--keysMaxResults`：`KEYS` 最大返回条数，默认 `Integer.MAX_VALUE`；`0` 禁用 `KEYS`。
 - `--nativeDefragEnabled` 及 `--nativeDefragMaxMoveBytes`、`--nativeDefragMaxObjects`、`--nativeDefragTimeLimitMillis`：maintenance tick 里可选 native allocator defrag 预算。
 
@@ -124,6 +130,8 @@ bootstrap 使用 Netty worker event loop 做定时器，但定时器只提交 `e
 
 `KEYS` 的预算来自 `SlowCommandGovernor`，由 `DefaultCommandModules.create(...)` 注入命令模块。大 keyspace 运行时优先使用 `SCAN`，把 `KEYS` 当成受限诊断工具。
 
+连接空闲超时 `--clientIdleTimeoutMillis` 默认 `0`，表示不因空闲主动断开；不可信或资源紧张的部署可以显式设置正值。
+
 当前 native-memory 路径统一使用 JDK 25 FFM。更细的 runtime、region、arena 和 copy 边界见 [`native-memory-runtime.md`](./native-memory-runtime.md)。
 
 TTL 命令写路径、lazy expire、cleanup sample/budget 和 synthetic `EXPIRED` delete 见 [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)。这里的配置章节只保留参数和 runtime 调度顺序。
@@ -132,7 +140,7 @@ TTL 命令写路径、lazy expire、cleanup sample/budget 和 synthetic `EXPIRED
 
 maxmemory 参数：
 
-- `--maxmemoryBytes`：总预算，默认 `0` 表示不限制。
+- `--maxmemoryBytes`：总预算；命令行必须显式指定，`0` 表示明确选择不限制。
 - `--maxmemoryScope`：`global|per-db`，server 默认 `global`。
 - `--maxmemoryPolicy`：`noeviction|allkeys-random|allkeys-lru`，默认 `noeviction`。
 - `--maxmemorySamples`：采样数量，默认 `5`。

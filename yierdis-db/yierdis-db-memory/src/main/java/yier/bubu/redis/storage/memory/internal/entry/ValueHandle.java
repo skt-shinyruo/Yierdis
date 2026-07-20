@@ -7,7 +7,7 @@ public record ValueHandle(long raw) {
     public static final ValueHandle NULL = new ValueHandle(0L);
 
     public ValueHandle {
-        NativeHandle.fromRaw(raw);
+        NativeHandle.requireValidRaw(raw);
     }
 
     public static ValueHandle fromNativeHandle(NativeHandle handle) {
@@ -30,7 +30,7 @@ public record ValueHandle(long raw) {
     }
 
     public void requireDomain(NativeHandleDomain domain) {
-        if (nativeHandle().domain() != domain) {
+        if (domain == null || NativeHandle.domainCode(raw) != domain.code()) {
             throw new IllegalArgumentException("value handle domain mismatch: expected " + domain);
         }
     }

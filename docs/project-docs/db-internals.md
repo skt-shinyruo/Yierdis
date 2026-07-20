@@ -55,7 +55,8 @@ EntryTable
   EntryHandle -> ENTRY_RECORD
 
 EntryRecord
-  keyHandle + ValueType + ValueEncoding + ValueHandle + expireAtMillis + version + LRU/LFU
+  keyHandle + ValueType + ValueEncoding + ValueHandle + expireAtMillis
+  + legacy entry-accounting estimate(version slot) + LRU/LFU
 
 Type root
   ValueHandle -> payload
@@ -65,16 +66,19 @@ Type root
 
 `EntryTable` 保存 allocator-backed `ENTRY_RECORD` metadata。`EntryHandle` 包装 `ENTRY_RECORD` kind 的 stable `NativeHandle` raw value；DB 层保存的是稳定 handle，不是 native physical address。读取或替换 entry 时，`EntryTable` 通过 allocator `resolve(..., READ_ONLY/READ_WRITE)` 打开短生命周期 `NativeObjectView`，按固定 offset 读写 `EntryRecord`，然后关闭 view 释放 pin。
 
-`EntryRecord` 是 key 的 metadata，不保存 Java collection 本体。它包含 key handle identity、`ValueHandle`、key hash、`ValueType`、`ValueEncoding`、flags、`expireAtMillis`、version 和 LRU/LFU 槽位。
+`EntryRecord` 是 key 的 metadata，不保存 Java collection 本体。它包含 key handle identity、`ValueHandle`、key hash、`ValueType`、`ValueEncoding`、flags、`expireAtMillis`、`version` 和 LRU/LFU 槽位。这里的 `version` 是历史遗留字段名，当前保存 entry accounting estimate，供删除和 `MEMORY USAGE` 等路径复用；它不是 mutation version，也不参与 stale-plan 判断。prepare/commit 的过期计划校验依赖 source adapter/table、generation、size 和 raw handle/value 等条件。
 
 `ValueHandle` 也是 raw identity。string 的 `ValueHandle` 包装 allocator-backed `STRING_BYTES`；list/hash/set/zset 的 `ValueHandle` 包装对应 allocator-backed root record：`LIST_ROOT`、`HASH_ROOT`、`SET_ROOT`、`ZSET_ROOT`。这些 root record 让 DB graph 有统一入口，并通过 native handle graph 暴露 collection internal handles。
 
 type roots 管真实 payload：
 
 - `StringRoot` 创建、读取、修改和释放 string bytes，当前 string payload 是 allocator-backed object。
-- `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` 的 allocator-backed root record 提供稳定 root identity 和 validation；`NativeCollectionRootTable` 再用 native handle raw value 映射到 Java adapter，从而通过 `ValueHandle` 找回 native payload implementation。
-- `ListRoot` 的 quicklist 节点 metadata 有 allocator-backed `LIST_NODE` records。
-- collection payload bytes、list entry bytes 以及 hash/set/zset 内部结构都由 native handles 持有。active defrag 可以沿 `YierdisDbNativeHandleGraph` 发现这些 internal handles，并只通过 allocator stable handle resolve/move allocator-owned objects。
+- `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` 的 allocator-backed root record 提供稳定 root identity 和 validation。`NativeCollectionRootTable` 不使用 `Map<Long, adapter>`；它按 allocator slot id 直接定位分段 `Object[][]`，每段 4096 个槽位，并在槽内保存完整 raw handle 校验 generation 后返回 Java adapter。空段会被回收，目录和 adapter heap bytes 独立计量。
+- packed collection 的 payload 不是每个元素一个 native object。`NativeListpack` 把变长编码条目保存在一个连续 `LISTPACK_BYTES` block 中，heap 上只保留 `int[]` offset topology；扩容使用 stable-handle `realloc`，staged replacement 则一次分配最终 block。Hash packed 复用同一布局，ZSet packed 使用连续 member block 加 heap `double[]` score topology。
+- hash/set 的 hashtable topology 使用 `byte[]` state、`int[]` hash、`long[]` key raw handle，以及按 value layout 选择的 `long[]`、`Object[]` 或 constant value；这些 heap arrays 不进入 native handle graph。List quicklist 另外保留 allocator-backed `LIST_NODE` metadata，ZSet skiplist 使用 Java node links 和 primitive span arrays。
+- ZSet skiplist 每个 member 只分配一个 canonical `ZSET_MEMBER_BYTES`。skiplist node 持有该 handle，`byMember` 是 borrowed-key `NativeByteMap`，只索引同一个 handle，remove/clear/close 都不会释放 canonical member；memberStore 是唯一 owner。Hash/Set 的 owning-key map 则负责释放自己的 field/member handles。
+
+collection root identity 与内部 representation 要分开看。现有 List staged mutation、ZSet existing-key `ZADD`，以及 `HASH_HT` 的 HSET delta 都保持原 `ValueHandle`，只在 adapter 内发布 packed block、topology 或槽位变化；同值写入可以直接成为 no-op。packed Hash 和当前 Set 的 replacement 路径仍可能创建并发布新的 root handle，因此不能把“root record 是 stable handle”误解为所有命令都永远复用同一个 `ValueHandle`。
 
 这些事实要和 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md) 保持一致：DB hot path 只保存 stable handle，物理 page、offset、packed address、pin、epoch、quarantine、`realloc` 和 defrag 都属于 allocator 语义。
 
@@ -126,7 +130,13 @@ command
 - lazy expiration 把已过期 key 当作不存在，并顺手释放 entry、key、TTL metadata 和 payload。
 - LRU/LFU policy 启用时更新访问槽位。
 
-不同命令只在后半段分化：`TYPE` 读 `EntryRecord.type()`，`OBJECT ENCODING` 读 `EntryRecord.encoding()`，`MEMORY USAGE` 汇总 entry、key、expire index 和 root estimate，`SCAN` 通过 key lifecycle cursor 遍历 `NativeKeyDirectory` 并在 bounded epoch 内复制要返回的 key bytes。
+不同命令只在后半段分化：`TYPE` 读 `EntryRecord.type()`，`OBJECT ENCODING` 读 `EntryRecord.encoding()`，`MEMORY USAGE` 汇总 entry、key、expire index 和 root estimate，`SCAN` 通过 key lifecycle cursor 遍历 `NativeKeyDirectory`，但不会在 discovery 阶段复制本页 key bytes。
+
+`YierdisKeyspaceOps.KeyWindow` 把 keyspace 扫描拆成 discovery 和同步 replay 两步。discovery 在 DB owner thread 上开启 bounded `SCAN` epoch，扫描有限数量的物理 slot，只记录起止游标、inspected slot 数、匹配数量、RESP 编码长度、table generation/capacity 和统一的过期判断时刻。窗口接管 epoch 所有权，因此 key 即使在窗口存活期间被删除，其 native allocation 也只会进入 quarantine，不会被立即回收或复用。
+
+命令层完成 reply preflight 后调用一次 `KeyWindow.emitTo(...)`。它按同一起始游标和 slot 范围同步重放扫描，逐个构造指向 allocator-backed `KEY_BYTES` 的 `NativeBytesSlice`；slice 写入 `BulkStringSink` 时才打开短生命周期只读 view/pin，写完立即关闭，而不是把每个 key 复制成长期存活的 Java `byte[]`。replay 还会核对匹配数量、额外匹配和结束游标，防止 discovery 与输出看到不一致的窗口。
+
+`KeyWindow` 自身不逐 key 持有 retained pin；它持有的是 scan epoch。`emitTo(...)` 只保证 sink 在调用期间同步消费 slice，随后命令层把 window 的 close 所有权转交给 `RedisReplyWriter`：同步 writer 当场关闭，网络 writer 则由 reply slot/source cleanup 在回复生命周期结束时关闭。`close()` 最终释放 epoch，使 quarantine 中已不可达的 key allocation 可以回收。这个边界既避免预先复制整页 key，也要求任何新增 writer 保持 `BulkStringSink` 的同步消费和 reply source 的确定性关闭语义。
 
 ## 写路径
 
@@ -142,17 +152,27 @@ command
   -> estimate upper bound
      -> YierdisDbMutationExecutor.execute(plan)
         -> YierdisDbMemoryLedger.reserve(upperBound)
-     -> plan.apply()
-        -> YierdisDbKeyLifecycle.computeWithHandleResult(...)
-        -> Type root mutation
-        -> EntryRecord replacement / delete
-        -> TTL metadata update
-     -> ledger.commit(actualDelta)
+        -> NativeAllocationScope.begin()
+        -> plan.prepare()
+           -> allocate detached native payload / heap topology
+           -> validate source identity and generation
+        -> ledger.reconcile(nativeGrowth + stagedNonNativeGrowth)
+        -> commitStream.reserve() when publication is required
+        -> prepared.commit()
+           -> publish adapter state before EntryRecord when required
+           -> publish EntryRecord / key directory / TTL metadata
+        -> allocationScope.promote()
+        -> ledger.commit(actualDelta)
+        -> commitStream.publish()
+        -> prepared.releaseSuperseded()
+        -> optional nativeAllocator.trimEmptyPages()
 ```
 
-`YierdisDbMutationExecutor` 把 mutation 统一成 `MutationPlan.upperBoundBytes()`、`MutationPlan.apply()` 和 `MutationResult.actualDeltaBytes()`。它先检查 owner thread，再 reserve ledger 预算，执行实际 mutation，成功时按实际 delta commit；ledger OOM、off-heap OOM 或 runtime exception 时 rollback reservation，并把 maxmemory OOM 映射成 Redis 风格错误。
+`YierdisDbMutationExecutor` 把新写路径统一成 `MutationPlan.upperBoundBytes()`、`MutationPlan.prepare()` 和 `PreparedDbMutation` 的 `commit()` / `releaseSuperseded()` / `abort()`。prepare 阶段完成会失败的 native allocation、replacement topology 和 planner canonicalization，并记录 source table、generation、entry raw handle/value 等前置条件；staged collection 的 commit 只交换引用、写槽位或重连预分配节点。需要 commit stream 时，executor 在触及 DB 可见状态前预留发布容量，然后固定按 commit、allocation promote、ledger settle、stream publish、release superseded、optional trim 的顺序完成写入。
 
-upper bound 覆盖可能增长的新 key bytes、entry record、value payload、expire index entry、编码升级额外结构等。mutation 后再用 actual delta 修正，避免保守估算长期污染 `usedBytes`。
+失败边界以 `prepared.commit()` 开始为界。commit 开始前的失败可以依次 abort prepared resource、abort allocation scope、关闭 commit-stream reservation 并 rollback ledger reservation，旧 graph 保持可见；commit 一旦开始，executor 不再假设 mutation 可回滚，而会 best-effort 完成 allocation promote、ledger settle、superseded release 和 stream failure 标记，将 DB 标记为 degraded，并以 post-commit/result-unknown 结束请求。这个边界避免把“未能 publish stream”误报成“mutation 一定没有发生”。
+
+upper bound 覆盖新 key/entry/root、native payload 的物理增长、allocator metadata 与 allocation-scope bookkeeping、heap topology、expire index 和编码升级结构。prepare 后 executor 用 allocation scope 实测的 `NativeAllocationGrowth.effectiveBytes()` 加 `stagedNonNativeGrowthBytes()` reconcile reservation；这是旧值与 detached replacement 同时存活时的峰值边界。`actualDeltaBytes` 表示发布并清理后的稳态逻辑增量，成功后才进入 ledger `usedBytes`，因此保守峰值不会长期污染 ledger。allocation scope 中的新 native allocation 只有 commit 后才 `promote()`；abort 只回收本次 scope 和 prepared mutation 明确拥有的资源。`shouldTrimNativePagesAfterCommit()` 只是 superseded release 之后的回收尝试提示；是否释放 committed page 要看 `MemoryReclaimResult`，maxmemory 判断仍必须重新采样 owned physical snapshot。
 
 ## TTL 和过期清理
 
@@ -171,19 +191,20 @@ cleanup 不扫描全部 key，而是从 `YierdisFfmExpireIndex` 采样。它会�
 
 ## maxmemory 和 memory ledger
 
-`YierdisDbMemoryLedger` 维护 `usedBytes` 和 `reservedBytes`。`reservedBytes` 表示预算已通过但 mutation 还没 commit 的窗口；成功后 reservation 释放，actual delta 进入 `usedBytes`，失败时只撤销 reservation。
+`YierdisDbMemoryLedger` 维护逻辑账本 `usedBytes` 和预算窗口 `reservedBytes`。`usedBytes` 按 mutation 的 `actualDeltaBytes` 增减，不代表 allocator 当前实际 committed 的物理字节；`reservedBytes` 表示预算已通过但 mutation 还没 commit 的窗口。maxmemory enforcement 使用当前 DB 独占的 `MemoryUsageSnapshot`，口径固定为 `heap estimate + native metadata committed + native data committed`。
 
 per-DB maxmemory scope 下，`reserve(...)` 的顺序是：
 
 1. 有 maxmemory 时先 cleanup expired。
 2. 本次 upper bound 大于总 limit 时直接 OOM。
 3. 按 `maxmemoryBytes - estimatedExtraBytes` 计算写入前必须压到的目标。
-4. 当前 usage 超限时，`noeviction` 直接拒绝增长型写入，`allkeys-random` / `allkeys-lru` 调用 `YierdisDbMaxmemorySupport.evictUntilUnder(...)`。
-5. 仍超限则 OOM；通过后创建 reservation。
+4. 当前 owned physical snapshot 超限时调用 `YierdisDbMaxmemorySupport.evictUntilUnder(...)`；该入口先尝试 trim empty native pages 并重新采样。
+5. 重新采样后仍超限时，`noeviction` 才拒绝增长型写入；`allkeys-random` / `allkeys-lru` 则继续选择 victim，并在释放和 trim 后再次采样。
+6. 最终仍超限则 OOM；通过后创建 reservation。
 
 `YierdisDbMaxmemorySupport` 在 owner thread 内选 victim：random 策略随机采样，LRU 策略按 samples 选择 LRU clock 最小的 key；samples 覆盖所有 key 时可以扫描最佳候选，减少测试不稳定性。删除 victim 仍走 lifecycle，ledger delta callback 会扣减 usage。
 
-global maxmemory scope 下，ledger 把预算准备委托给 instance 级 `YierdisGlobalMaxmemoryGovernor.prepareWrite(...)`。governor 汇总各 DB participant 的 owned `MemoryUsageSnapshot`，跨 DB cleanup/evict，并以这些 participant snapshots 作为唯一的物理使用量输入。
+global maxmemory scope 下，ledger 把预算准备委托给 instance 级 `YierdisGlobalMaxmemoryGovernor.prepareWrite(...)`。governor 汇总各 DB participant 的 owned `MemoryUsageSnapshot`，跨 DB cleanup/trim/evict，并以这些 participant snapshots 作为唯一的 enforcement 输入。shared runtime counter 只用于 runtime lifecycle 和 leak 诊断，不再作为另一份使用量加到全局总数。
 
 ## 更细的 maxmemory 行为
 
@@ -195,8 +216,8 @@ ledger reservation、`usedBytes` / `reservedBytes` 口径、per-DB 与 global sc
 
 `MEMORY USAGE` / `MEMORY STATS` 汇总的是 explainable estimate，不是 JVM instrumentation object graph。来源包括：
 
-- ledger used/reserved bytes
-- `NativeAllocatorStats` / allocator off-heap usage
+- ledger 的逻辑 used/reserved bytes
+- owned `MemoryUsageSnapshot` 与 `NativeAllocatorStats` / allocator off-heap usage
 - allocator-backed `ENTRY_RECORD` 和 `KEY_BYTES`，主要通过 allocator stats 体现，而不是作为 `EntryTable` / `NativeKeyDirectory` 的独立重复加项
 - expire index/native adapter estimates where applicable
 - type root estimated bytes
@@ -204,12 +225,12 @@ ledger reservation、`usedBytes` / `reservedBytes` 口径、per-DB 与 global sc
 
 `YierdisMemoryStats` 里容易混淆的字段：
 
-- `usedBytesForMaxmemory`：参与 maxmemory 判断的 used 口径。
+- `usedBytesForMaxmemory`：owned physical snapshot 的 `heap estimate + native metadata committed + native data committed`。
 - `reservedBytes`：已 reserve、未 commit 的预算。
 - `effectiveUsedBytesForMaxmemory`：`usedBytesForMaxmemory + reservedBytes`。
 - `heapDataBytesEstimate`：DB/value 层估算，不是 JVM heap 精确值。
 - `offHeapUsedBytes`：allocator usage 加 DB 内部 native structure usage。
-- `offHeapIncludedInMaxmemory`：当前 stats 是否把 off-heap 纳入 maxmemory 口径；global scope 下单 DB 通常不重复计 shared off-heap。
+- `offHeapIncludedInMaxmemory`：当前 stats 的 maxmemory 口径包含 committed native bytes。global scope 直接汇总每个 DB 的 owned snapshot，不额外叠加 shared runtime counter。
 
 `OBJECT ENCODING` 从 `EntryRecord.encoding()` 映射出 Redis 风格名称，例如 `int`、`embstr`、`raw`、`listpack`、`hashtable`、`intset`、`quicklist`、`skiplist`。显式 introspection 会在需要输出 bytes 或构造结果对象时 materialize heap copy，这是有意边界，不应泄漏长期 native view。
 

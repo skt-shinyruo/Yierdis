@@ -45,7 +45,7 @@ public class YierdisDbNativeHandleGraphTest {
             Assert.assertEquals(Integer.valueOf(5), roleCounts.get(YierdisDbNativeHandleGraph.Role.ENTRY_RECORD));
             Assert.assertEquals(Integer.valueOf(1), roleCounts.get(YierdisDbNativeHandleGraph.Role.STRING_VALUE));
             Assert.assertEquals(Integer.valueOf(4), roleCounts.get(YierdisDbNativeHandleGraph.Role.COLLECTION_ROOT));
-            Assert.assertEquals(Integer.valueOf(5), roleCounts.get(YierdisDbNativeHandleGraph.Role.COLLECTION_INTERNAL));
+            Assert.assertEquals(Integer.valueOf(4), roleCounts.get(YierdisDbNativeHandleGraph.Role.COLLECTION_INTERNAL));
 
             Assert.assertEquals(Integer.valueOf(5), kindCounts.get(NativeObjectKind.KEY_BYTES));
             Assert.assertEquals(Integer.valueOf(5), kindCounts.get(NativeObjectKind.ENTRY_RECORD));
@@ -54,11 +54,11 @@ public class YierdisDbNativeHandleGraphTest {
             Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.HASH_ROOT));
             Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.SET_ROOT));
             Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.ZSET_ROOT));
-            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.LISTPACK_BYTES));
-            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.HASH_FIELD_BYTES));
-            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.HASH_VALUE_BYTES));
+            Assert.assertEquals(Integer.valueOf(3), kindCounts.get(NativeObjectKind.LISTPACK_BYTES));
+            Assert.assertNull(kindCounts.get(NativeObjectKind.HASH_FIELD_BYTES));
+            Assert.assertNull(kindCounts.get(NativeObjectKind.HASH_VALUE_BYTES));
             Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.SET_MEMBER_BYTES));
-            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.ZSET_MEMBER_BYTES));
+            Assert.assertNull(kindCounts.get(NativeObjectKind.ZSET_MEMBER_BYTES));
         } finally {
             db.shutdown();
         }

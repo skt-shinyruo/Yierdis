@@ -8,8 +8,10 @@ import yier.bubu.redis.execution.executor.ExecutionReply;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 /**
  * 一个已按接收顺序注册的回复槽位。
@@ -27,12 +29,15 @@ final class ReplySlot implements ExecutionReply {
     private final AtomicReference<CapacityWait> capacityWait = new AtomicReference<>();
     private final Object contentLock = new Object();
     private final List<ReplyChunk> pendingChunks = new ArrayList<>();
-    private final List<AutoCloseable> ownedResources = new ArrayList<>();
+    private final List<OwnedResource> ownedResources = new ArrayList<>();
+    private final CompletableFuture<Void> cleanupCompletion = new CompletableFuture<>();
 
     private volatile boolean closeAfterReply;
     private BytesSink sink;
     private int inFlightChunks;
+    private int pendingResourceCloses;
     private boolean leaseClosed;
+    private Throwable cleanupFailure;
 
     ReplySlot(
             long sequence,
@@ -78,16 +83,11 @@ final class ReplySlot implements ExecutionReply {
             chunk.release();
             throw new IllegalArgumentException("allocatedBytes must be non-negative");
         }
-        if (!enterProducing()) {
-            chunk.release();
-            releaseAllocation(allocatedBytes);
-            throw new IllegalStateException("reply slot is not accepting chunks");
-        }
         synchronized (contentLock) {
-            if (isTerminal(state.get())) {
+            if (cleanupOwner.get() != ReplyCleanupOwner.NONE || !enterProducing()) {
                 chunk.release();
                 releaseAllocation(allocatedBytes);
-                throw new IllegalStateException("reply slot has already terminated");
+                throw new IllegalStateException("reply slot is not accepting chunks");
             }
             pendingChunks.add(new ReplyChunk(chunk, allocatedBytes));
             replyEgressStats.chunkAdded();
@@ -95,13 +95,22 @@ final class ReplySlot implements ExecutionReply {
     }
 
     void addOwnedResource(AutoCloseable resource) {
+        addOwnedResource(resource, ReplySlot::closeSynchronously);
+    }
+
+    void addOwnedResource(
+            AutoCloseable resource,
+            Function<AutoCloseable, CompletableFuture<Void>> closer
+    ) {
         Objects.requireNonNull(resource, "resource");
+        Objects.requireNonNull(closer, "closer");
+        OwnedResource owned = new OwnedResource(resource, closer);
         boolean closeNow;
         boolean added = false;
         synchronized (contentLock) {
             closeNow = cleanupOwner.get() != ReplyCleanupOwner.NONE;
             if (!closeNow) {
-                ownedResources.add(resource);
+                ownedResources.add(owned);
                 added = true;
             }
         }
@@ -109,12 +118,20 @@ final class ReplySlot implements ExecutionReply {
             replyEgressStats.sourceAdded();
         }
         if (closeNow) {
-            closeQuietly(resource);
+            closeWithoutAccounting(owned);
         }
     }
 
+    CompletableFuture<Void> cleanupCompletion() {
+        return cleanupCompletion;
+    }
+
     void markWaitingForCapacity() {
-        state.compareAndSet(ReplySlotState.REGISTERED, ReplySlotState.WAITING_CAPACITY);
+        synchronized (contentLock) {
+            if (cleanupOwner.get() == ReplyCleanupOwner.NONE) {
+                state.compareAndSet(ReplySlotState.REGISTERED, ReplySlotState.WAITING_CAPACITY);
+            }
+        }
     }
 
     void waitForAdditionalCapacity(long additionalBytes, long singleReplyLimitBytes) {
@@ -142,7 +159,7 @@ final class ReplySlot implements ExecutionReply {
     public BytesSink sink() {
         synchronized (contentLock) {
             if (sink == null) {
-                if (isTerminal(state.get())) {
+                if (cleanupOwner.get() != ReplyCleanupOwner.NONE || isTerminal(state.get())) {
                     throw new IllegalStateException("reply slot has already terminated");
                 }
                 sink = sinkFactory.create(this);
@@ -155,7 +172,7 @@ final class ReplySlot implements ExecutionReply {
     public boolean awaitCapacity(Runnable wakeup) {
         Objects.requireNonNull(wakeup, "wakeup");
         CapacityWait waiting = capacityWait.get();
-        if (waiting == null || isTerminal(state.get())) {
+        if (waiting == null || cleanupOwner.get() != ReplyCleanupOwner.NONE || isTerminal(state.get())) {
             return false;
         }
         return lease.awaitAdditionalCapacity(waiting.additionalBytes(), waiting.singleReplyLimitBytes(), wakeup);
@@ -181,16 +198,25 @@ final class ReplySlot implements ExecutionReply {
 
     @Override
     public void markReady(boolean closeAfterReply) {
-        this.closeAfterReply = closeAfterReply;
-        while (true) {
-            ReplySlotState current = state.get();
-            if (isTerminal(current) || current == ReplySlotState.WRITING || current == ReplySlotState.READY) {
+        boolean ready = false;
+        synchronized (contentLock) {
+            if (cleanupOwner.get() != ReplyCleanupOwner.NONE) {
                 return;
             }
-            if (state.compareAndSet(current, ReplySlotState.READY)) {
-                sequencer.onSlotReady(this);
-                return;
+            this.closeAfterReply = closeAfterReply;
+            while (true) {
+                ReplySlotState current = state.get();
+                if (isTerminal(current) || current == ReplySlotState.WRITING || current == ReplySlotState.READY) {
+                    return;
+                }
+                if (state.compareAndSet(current, ReplySlotState.READY)) {
+                    ready = true;
+                    break;
+                }
             }
+        }
+        if (ready) {
+            sequencer.onSlotReady(this);
         }
     }
 
@@ -209,10 +235,11 @@ final class ReplySlot implements ExecutionReply {
     }
 
     List<ReplyChunk> takeChunksForWrite() {
-        if (!state.compareAndSet(ReplySlotState.READY, ReplySlotState.WRITING)) {
-            return List.of();
-        }
         synchronized (contentLock) {
+            if (cleanupOwner.get() != ReplyCleanupOwner.NONE
+                    || !state.compareAndSet(ReplySlotState.READY, ReplySlotState.WRITING)) {
+                return null;
+            }
             List<ReplyChunk> chunks = List.copyOf(pendingChunks);
             pendingChunks.clear();
             inFlightChunks += chunks.size();
@@ -226,19 +253,35 @@ final class ReplySlot implements ExecutionReply {
         }
         replyEgressStats.chunkReleased();
         releaseAllocation(chunk.allocatedBytes());
+        completeInFlightChunk();
+    }
+
+    void chunkWriteAborted(ReplyChunk chunk) {
+        if (chunk == null || !chunk.release()) {
+            return;
+        }
+        replyEgressStats.chunkReleased();
+        releaseAllocation(chunk.allocatedBytes());
+        completeInFlightChunk();
+    }
+
+    private void completeInFlightChunk() {
         boolean closeLease;
         synchronized (contentLock) {
             if (inFlightChunks <= 0) {
                 throw new IllegalStateException("reply slot chunk completion underflow");
             }
             inFlightChunks--;
-            closeLease = cleanupOwner.get() != ReplyCleanupOwner.NONE && inFlightChunks == 0 && !leaseClosed;
+            closeLease = cleanupOwner.get() != ReplyCleanupOwner.NONE
+                    && inFlightChunks == 0
+                    && pendingResourceCloses == 0
+                    && !leaseClosed;
             if (closeLease) {
                 leaseClosed = true;
             }
         }
         if (closeLease) {
-            lease.close();
+            closeLeaseAndCompleteCleanup();
         }
     }
 
@@ -252,6 +295,20 @@ final class ReplySlot implements ExecutionReply {
 
     boolean cancelNow(ReplyCleanupOwner owner) {
         return cleanup(owner, ReplySlotState.CANCELLED);
+    }
+
+    void runProducerAction(Runnable action) {
+        Objects.requireNonNull(action, "action");
+        synchronized (contentLock) {
+            ReplySlotState current = state.get();
+            if (cleanupOwner.get() != ReplyCleanupOwner.NONE
+                    || current == ReplySlotState.READY
+                    || current == ReplySlotState.WRITING
+                    || isTerminal(current)) {
+                throw new IllegalStateException("reply slot is not accepting producer writes");
+            }
+            action.run();
+        }
     }
 
     private boolean enterProducing() {
@@ -278,17 +335,20 @@ final class ReplySlot implements ExecutionReply {
         cancelCapacityWait();
 
         List<ReplyChunk> chunks;
-        List<AutoCloseable> resources;
+        List<OwnedResource> resources;
         boolean closeLease;
         synchronized (contentLock) {
             chunks = List.copyOf(pendingChunks);
             pendingChunks.clear();
             resources = List.copyOf(ownedResources);
             ownedResources.clear();
-            closeLease = inFlightChunks == 0 && !leaseClosed;
+            pendingResourceCloses += resources.size();
+            closeLease = inFlightChunks == 0 && pendingResourceCloses == 0 && !leaseClosed;
             if (closeLease) {
                 leaseClosed = true;
             }
+            // 先发布 terminal state，再让其他线程离开 contentLock，避免 cleanup 缝隙中重新进入 producer。
+            state.set(terminalState);
         }
         for (ReplyChunk chunk : chunks) {
             if (chunk.release()) {
@@ -296,20 +356,59 @@ final class ReplySlot implements ExecutionReply {
             }
             releaseAllocation(chunk.allocatedBytes());
         }
-        for (AutoCloseable resource : resources) {
-            closeQuietly(resource);
-            replyEgressStats.sourceReleased();
+        for (OwnedResource resource : resources) {
+            closeResource(resource).whenComplete((ignored, failure) -> resourceCloseCompleted(failure));
         }
-        state.set(terminalState);
         if (terminalState == ReplySlotState.CANCELLED) {
             replyEgressStats.cancelledSlot();
         } else if (terminalState == ReplySlotState.FAILED) {
             replyEgressStats.failedSlot();
         }
         if (closeLease) {
-            lease.close();
+            closeLeaseAndCompleteCleanup();
         }
         return true;
+    }
+
+    private void resourceCloseCompleted(Throwable failure) {
+        boolean closeLease;
+        synchronized (contentLock) {
+            if (pendingResourceCloses <= 0) {
+                throw new IllegalStateException("reply slot source completion underflow");
+            }
+            pendingResourceCloses--;
+            cleanupFailure = recordFailure(cleanupFailure, unwrapCompletionFailure(failure));
+            closeLease = cleanupOwner.get() != ReplyCleanupOwner.NONE
+                    && inFlightChunks == 0
+                    && pendingResourceCloses == 0
+                    && !leaseClosed;
+            if (closeLease) {
+                leaseClosed = true;
+            }
+        }
+        replyEgressStats.sourceReleased();
+        if (closeLease) {
+            closeLeaseAndCompleteCleanup();
+        }
+    }
+
+    private void closeLeaseAndCompleteCleanup() {
+        Throwable failure;
+        try {
+            lease.close();
+        } catch (Throwable closeFailure) {
+            synchronized (contentLock) {
+                cleanupFailure = recordFailure(cleanupFailure, closeFailure);
+            }
+        }
+        synchronized (contentLock) {
+            failure = cleanupFailure;
+        }
+        if (failure == null) {
+            cleanupCompletion.complete(null);
+        } else {
+            cleanupCompletion.completeExceptionally(failure);
+        }
     }
 
     private void releaseAllocation(long bytes) {
@@ -324,12 +423,48 @@ final class ReplySlot implements ExecutionReply {
                 || candidate == ReplySlotState.FAILED;
     }
 
-    private static void closeQuietly(AutoCloseable resource) {
+    private static CompletableFuture<Void> closeResource(OwnedResource owned) {
+        try {
+            CompletableFuture<Void> completion = owned.closer().apply(owned.resource());
+            return completion == null
+                    ? CompletableFuture.failedFuture(new IllegalStateException("reply source closer returned null"))
+                    : completion;
+        } catch (Throwable failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+    }
+
+    private static void closeWithoutAccounting(OwnedResource owned) {
+        closeResource(owned).exceptionally(ignored -> null);
+    }
+
+    private static CompletableFuture<Void> closeSynchronously(AutoCloseable resource) {
         try {
             resource.close();
-        } catch (Exception ignored) {
-            // 资源清理不能阻断同一槽位其余所有权的归还。
+            return CompletableFuture.completedFuture(null);
+        } catch (Throwable failure) {
+            return CompletableFuture.failedFuture(failure);
         }
+    }
+
+    private static Throwable unwrapCompletionFailure(Throwable failure) {
+        if (failure instanceof java.util.concurrent.CompletionException completion && completion.getCause() != null) {
+            return completion.getCause();
+        }
+        return failure;
+    }
+
+    private static Throwable recordFailure(Throwable current, Throwable next) {
+        if (next == null) {
+            return current;
+        }
+        if (current == null) {
+            return next;
+        }
+        if (current != next) {
+            current.addSuppressed(next);
+        }
+        return current;
     }
 
     static final class ReplyChunk {
@@ -366,6 +501,12 @@ final class ReplySlot implements ExecutionReply {
     @FunctionalInterface
     interface ReplySinkFactory {
         BytesSink create(ReplySlot slot);
+    }
+
+    private record OwnedResource(
+            AutoCloseable resource,
+            Function<AutoCloseable, CompletableFuture<Void>> closer
+    ) {
     }
 
     private record CapacityWait(long additionalBytes, long singleReplyLimitBytes) {

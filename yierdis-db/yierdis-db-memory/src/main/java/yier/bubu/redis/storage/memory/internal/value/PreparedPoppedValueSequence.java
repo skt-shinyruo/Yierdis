@@ -11,6 +11,7 @@ public final class PreparedPoppedValueSequence implements PoppedValueSequence {
     private static final PreparedPoppedValueSequence NULL_VALUE = new PreparedPoppedValueSequence(
             null,
             new NativeListEntryRef[0],
+            new NativeRawHandleSet(0),
             true,
             0L,
             0L
@@ -18,6 +19,7 @@ public final class PreparedPoppedValueSequence implements PoppedValueSequence {
     private static final PreparedPoppedValueSequence EMPTY_VALUE = new PreparedPoppedValueSequence(
             null,
             new NativeListEntryRef[0],
+            new NativeRawHandleSet(0),
             false,
             0L,
             0L
@@ -25,6 +27,7 @@ public final class PreparedPoppedValueSequence implements PoppedValueSequence {
 
     private final NativeAllocator allocator;
     private final NativeListEntryRef[] entries;
+    private final NativeRawHandleSet retainedRawHandles;
     private final int count;
     private final boolean nullValue;
     private final long encodedElementBytes;
@@ -36,15 +39,13 @@ public final class PreparedPoppedValueSequence implements PoppedValueSequence {
     private PreparedPoppedValueSequence(
             NativeAllocator allocator,
             NativeListEntryRef[] entries,
+            NativeRawHandleSet retainedRawHandles,
             boolean nullValue,
             long encodedElementBytes,
             long retainedMemoryBytes
     ) {
         Objects.requireNonNull(entries, "entries");
-        int count = entries.length;
-        if (count < 0) {
-            throw new IllegalArgumentException("count must be >= 0");
-        }
+        Objects.requireNonNull(retainedRawHandles, "retainedRawHandles");
         if (encodedElementBytes < 0L) {
             throw new IllegalArgumentException("encodedElementBytes must be >= 0");
         }
@@ -53,7 +54,8 @@ public final class PreparedPoppedValueSequence implements PoppedValueSequence {
         }
         this.allocator = allocator;
         this.entries = entries.clone();
-        this.count = count;
+        this.retainedRawHandles = retainedRawHandles;
+        this.count = entries.length;
         this.nullValue = nullValue;
         this.encodedElementBytes = encodedElementBytes;
         this.retainedMemoryBytes = retainedMemoryBytes;
@@ -72,14 +74,22 @@ public final class PreparedPoppedValueSequence implements PoppedValueSequence {
         Objects.requireNonNull(entries, "entries");
         long encodedElementBytes = 0L;
         long retainedMemoryBytes = 0L;
+        NativeRawHandleSet retainedRawHandles = new NativeRawHandleSet(entries.length);
         for (NativeListEntryRef entry : entries) {
             Objects.requireNonNull(entry, "entry");
             encodedElementBytes = addSaturating(encodedElementBytes, entry.encodedElementBytes());
-            retainedMemoryBytes = addSaturating(retainedMemoryBytes, entry.retainedBytes());
+            NativeHandle handle = entry.handle();
+            if (handle == null) {
+                continue;
+            }
+            if (retainedRawHandles.add(handle.raw())) {
+                retainedMemoryBytes = addSaturating(retainedMemoryBytes, entry.retainedBytes());
+            }
         }
         return new PreparedPoppedValueSequence(
                 allocator,
                 entries,
+                retainedRawHandles,
                 false,
                 encodedElementBytes,
                 retainedMemoryBytes
@@ -87,23 +97,18 @@ public final class PreparedPoppedValueSequence implements PoppedValueSequence {
     }
 
     public NativeHandle[] retainedHandles() {
-        int handleCount = 0;
-        for (NativeListEntryRef entry : entries) {
-            if (entry.handle() != null) {
-                handleCount++;
-            }
-        }
-        NativeHandle[] handles = new NativeHandle[handleCount];
-        int next = 0;
-        for (NativeListEntryRef entry : entries) {
-            if (entry.handle() != null) {
-                handles[next++] = entry.handle();
-            }
-        }
+        NativeHandle[] handles = new NativeHandle[retainedRawHandles.size()];
+        int[] next = {0};
+        retainedRawHandles.forEach(rawHandle -> handles[next[0]++] = NativeHandle.fromRaw(rawHandle));
         return handles;
     }
 
+    public boolean retainsRawHandle(long rawHandle) {
+        return retainedRawHandles.contains(rawHandle);
+    }
+
     public void activateOwnership() {
+        // commit 先让旧 listpack 放弃块计量，再由响应对象接管唯一一次 free。
         ownsHandles = true;
         releaseIfClosed();
     }
@@ -131,16 +136,18 @@ public final class PreparedPoppedValueSequence implements PoppedValueSequence {
     @Override
     public void emitTo(BulkStringSink out) {
         Objects.requireNonNull(out, "out");
-        if (count == 0) {
-            return;
-        }
         for (NativeListEntryRef entry : entries) {
             NativeHandle handle = entry.handle();
             if (handle == null) {
                 out.bulkStringNull();
                 continue;
             }
-            out.bulkString(new NativeBytesSlice(allocator, handle, 0, entry.payloadLength()));
+            out.bulkString(new NativeBytesSlice(
+                    allocator,
+                    handle,
+                    entry.payloadOffset(),
+                    entry.payloadLength()
+            ));
         }
     }
 
@@ -154,21 +161,7 @@ public final class PreparedPoppedValueSequence implements PoppedValueSequence {
         if (!ownsHandles || !closed.get() || !handlesReleased.compareAndSet(false, true)) {
             return;
         }
-        RuntimeException failure = null;
-        for (NativeListEntryRef entry : entries) {
-            NativeHandle handle = entry.handle();
-            if (handle == null) {
-                continue;
-            }
-            try {
-                allocator.free(handle);
-            } catch (RuntimeException e) {
-                failure = addFailure(failure, e);
-            }
-        }
-        if (failure != null) {
-            throw failure;
-        }
+        retainedRawHandles.freeAll(allocator);
     }
 
     private static long addSaturating(long left, long right) {
@@ -181,11 +174,4 @@ public final class PreparedPoppedValueSequence implements PoppedValueSequence {
         return left + right;
     }
 
-    private static RuntimeException addFailure(RuntimeException failure, RuntimeException next) {
-        if (failure == null) {
-            return next;
-        }
-        failure.addSuppressed(next);
-        return failure;
-    }
 }

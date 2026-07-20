@@ -49,6 +49,12 @@ public final class ExecutionConnectionContext {
         commandsEnqueued.incrementAndGet();
     }
 
+    void rollbackCommandEnqueued(int retainedBytes) {
+        pending.decrementAndGet();
+        pendingBytes.addAndGet(-Math.max(0, retainedBytes));
+        commandsEnqueued.decrementAndGet();
+    }
+
     public void recordCommandFinished(int retainedBytes, boolean executed) {
         pending.decrementAndGet();
         pendingBytes.addAndGet(-Math.max(0, retainedBytes));

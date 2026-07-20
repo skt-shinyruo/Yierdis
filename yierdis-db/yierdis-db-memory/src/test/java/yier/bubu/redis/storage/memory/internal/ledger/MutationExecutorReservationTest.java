@@ -1,5 +1,7 @@
 package yier.bubu.redis.storage.memory.internal.ledger;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -28,6 +30,7 @@ import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.memory.api.NativeCapacityExceededException;
+import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.OffHeapOutOfMemoryException;
@@ -126,6 +129,113 @@ public class MutationExecutorReservationTest {
         org.junit.Assert.assertThrows(IllegalStateException.class, prepared::commit);
         prepared.releaseSuperseded();
         org.junit.Assert.assertEquals(List.of("commit", "release"), order);
+    }
+
+    @Test
+    public void zeroDeltaOnlyTrimsNativePagesWhenPreparedMutationRequestsIt() {
+        AtomicInteger trimCalls = new AtomicInteger();
+        NativeAllocator recordingAllocator = allocatorThatCountsTrims(trimCalls);
+        YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(
+                () -> {
+                },
+                new InMemoryLedger(PREPARED_TEST_UPPER_BOUND_BYTES * 2L),
+                recordingAllocator
+        );
+
+        PreparedDbMutation<String> noTrim = prepared(
+                0L,
+                0L,
+                MutationOutcome.NONE,
+                () -> "noop",
+                () -> {
+                },
+                () -> {
+                }
+        );
+        executor.execute(plan(PREPARED_TEST_UPPER_BOUND_BYTES, noTrim));
+        Assert.assertEquals(0, trimCalls.get());
+
+        PreparedDbMutation<String> requestedTrim = new AbstractPreparedMutation<>(
+                0L,
+                0L,
+                MutationOutcome.VALUE_CHANGED
+        ) {
+            @Override
+            public boolean shouldTrimNativePagesAfterCommit() {
+                return true;
+            }
+
+            @Override
+            protected String commitPrepared() {
+                return "changed";
+            }
+
+            @Override
+            protected void releaseSupersededPrepared() {
+            }
+
+            @Override
+            protected void abortPrepared() {
+            }
+        };
+        executor.execute(plan(PREPARED_TEST_UPPER_BOUND_BYTES, requestedTrim));
+
+        Assert.assertEquals(1, trimCalls.get());
+        Assert.assertTrue(prepared(
+                -1L,
+                0L,
+                MutationOutcome.VALUE_CHANGED,
+                () -> "shrink",
+                () -> {
+                },
+                () -> {
+                }
+        ).shouldTrimNativePagesAfterCommit());
+    }
+
+    @Test
+    public void postCommitSettlementStillTrimsAfterSupersededReleaseFails() {
+        AtomicInteger trimCalls = new AtomicInteger();
+        AtomicInteger releaseCalls = new AtomicInteger();
+        YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(
+                () -> {
+                },
+                new InMemoryLedger(PREPARED_TEST_UPPER_BOUND_BYTES * 2L),
+                allocatorThatCountsTrims(trimCalls)
+        );
+        PreparedDbMutation<String> prepared = new AbstractPreparedMutation<>(
+                0L,
+                0L,
+                MutationOutcome.VALUE_CHANGED
+        ) {
+            @Override
+            public boolean shouldTrimNativePagesAfterCommit() {
+                return true;
+            }
+
+            @Override
+            protected String commitPrepared() {
+                return "changed";
+            }
+
+            @Override
+            protected void releaseSupersededPrepared() {
+                releaseCalls.incrementAndGet();
+                throw new IllegalStateException("release failed");
+            }
+
+            @Override
+            protected void abortPrepared() {
+            }
+        };
+
+        Assert.assertThrows(
+                PostCommitMutationException.class,
+                () -> executor.execute(plan(PREPARED_TEST_UPPER_BOUND_BYTES, prepared))
+        );
+
+        Assert.assertEquals(2, releaseCalls.get());
+        Assert.assertEquals(1, trimCalls.get());
     }
 
     @Test
@@ -587,6 +697,23 @@ public class MutationExecutorReservationTest {
                 abort.run();
             }
         };
+    }
+
+    private NativeAllocator allocatorThatCountsTrims(AtomicInteger trimCalls) {
+        return (NativeAllocator) Proxy.newProxyInstance(
+                NativeAllocator.class.getClassLoader(),
+                new Class<?>[]{NativeAllocator.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("trimEmptyPages")) {
+                        trimCalls.incrementAndGet();
+                    }
+                    try {
+                        return method.invoke(preparedAllocator, args);
+                    } catch (InvocationTargetException failure) {
+                        throw failure.getCause();
+                    }
+                }
+        );
     }
 
     private static final class AdmissionChangingLedger implements MemoryLedger {

@@ -10,6 +10,7 @@ import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceResult;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
@@ -580,7 +581,7 @@ public final class YierdisDb implements RuntimeDbEngine {
     }
 
     public yier.bubu.redis.storage.api.MutationOutcome flushDb() {
-        return maintenance.flushDb();
+        return maintenance.flushDb(MutationContext.none());
     }
 
     public int size() {

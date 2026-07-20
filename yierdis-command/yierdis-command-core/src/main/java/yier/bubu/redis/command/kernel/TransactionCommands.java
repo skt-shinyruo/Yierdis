@@ -3,7 +3,7 @@ package yier.bubu.redis.command.kernel;
 import yier.bubu.redis.command.api.CommandDescriptor;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParsers;
-import yier.bubu.redis.common.command.CommandRecordScope;
+import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.ReplyPlan;
@@ -12,6 +12,7 @@ import yier.bubu.redis.execution.api.TransactionState;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Function;
 
 /**
  * Redis 事务命令（最小实现）：MULTI/EXEC/DISCARD。
@@ -22,9 +23,18 @@ import java.util.Objects;
  */
 final class TransactionCommands implements CommandModule {
     private final QueuedCommandReplayer replayer;
+    private final Function<? super ExecutionRequest, ReplyPlan> replyPlanner;
 
     TransactionCommands(QueuedCommandReplayer replayer) {
+        this(replayer, ignored -> ReplyPlan.maximum());
+    }
+
+    TransactionCommands(
+            QueuedCommandReplayer replayer,
+            Function<? super ExecutionRequest, ReplyPlan> replyPlanner
+    ) {
         this.replayer = Objects.requireNonNull(replayer, "replayer");
+        this.replyPlanner = Objects.requireNonNull(replyPlanner, "replyPlanner");
     }
 
     @Override
@@ -82,18 +92,68 @@ final class TransactionCommands implements CommandModule {
             return;
         }
 
-        out.requireReply(ReplyPlan.maximum());
+        // envelope 必须在 drain 之前完成；容量不足时 executor 才能安全重试同一个 EXEC。
+        out.requireReplyEnvelope(tx.planExecReply(replyPlanner));
 
         List<ExecutionRequest> queued = tx.drain();
-        out.arrayHeader(queued.size());
-        for (ExecutionRequest queuedRequest : queued) {
-            try (ExecutionRequest replay = queuedRequest) {
-                CommandContext replayCtx = new CommandContext(ctx.sessionCapabilities(), out);
-                try (CommandRecordScope.Scope ignored = CommandRecordScope.open(replay)) {
-                    replayer.replay(replay, replayCtx);
+        int nextOwnedIndex = 0;
+        Throwable replayFailure = null;
+        try {
+            out.arrayHeader(queued.size());
+            while (nextOwnedIndex < queued.size()) {
+                ExecutionRequest replay = queued.get(nextOwnedIndex);
+                // 先推进所有权游标；当前请求交给 try-with-resources，finally 只回收尚未开始 replay 的队尾。
+                nextOwnedIndex++;
+                try (replay) {
+                    CommandContext replayCtx = new CommandContext(
+                            ctx.sessionCapabilities(),
+                            out,
+                            MutationContext.of(replay)
+                    );
+                    try {
+                        replayer.replay(replay, replayCtx);
+                    } finally {
+                        // TransactionCommands 创建 replay context，也负责结束借用；processor 的释放保持幂等。
+                        replayCtx.releaseMutationContext();
+                    }
+                }
+            }
+        } catch (RuntimeException | Error failure) {
+            replayFailure = failure;
+            throw failure;
+        } finally {
+            closeRemainingRequests(queued, nextOwnedIndex, replayFailure);
+        }
+    }
+
+    private static void closeRemainingRequests(
+            List<ExecutionRequest> queued,
+            int fromIndex,
+            Throwable replayFailure
+    ) {
+        Throwable cleanupFailure = null;
+        for (int index = fromIndex; index < queued.size(); index++) {
+            try {
+                queued.get(index).close();
+            } catch (RuntimeException | Error failure) {
+                if (cleanupFailure == null) {
+                    cleanupFailure = failure;
+                } else {
+                    cleanupFailure.addSuppressed(failure);
                 }
             }
         }
+        if (cleanupFailure == null) {
+            return;
+        }
+        if (replayFailure != null) {
+            replayFailure.addSuppressed(cleanupFailure);
+            return;
+        }
+        if (cleanupFailure instanceof RuntimeException runtimeFailure) {
+            throw runtimeFailure;
+        }
+        throw (Error) cleanupFailure;
     }
 
     private TransactionState tx(CommandContext ctx) {

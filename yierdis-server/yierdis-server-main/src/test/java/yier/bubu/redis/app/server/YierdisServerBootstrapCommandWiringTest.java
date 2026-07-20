@@ -52,7 +52,10 @@ import java.util.Map;
 public class YierdisServerBootstrapCommandWiringTest {
     @Test
     public void bootstrapBindsTransportNeutralExecutorIntoInfoProvider() throws Exception {
-        try (YierdisServerBootstrap bootstrap = YierdisServerBootstrap.start("--port", "0")) {
+        try (YierdisServerBootstrap bootstrap = YierdisServerBootstrap.start(
+                "--port", "0",
+                "--maxmemoryBytes", "0"
+        )) {
             NettyServerInfoProvider infoProvider = bootstrap.infoProviderForTests();
             Assert.assertNotNull(infoProvider);
             Assert.assertNotNull(infoProvider.boundExecutorForTests());
@@ -62,7 +65,11 @@ public class YierdisServerBootstrapCommandWiringTest {
 
     @Test
     public void bootstrapWiresServerAndCoreConnectionCommandsTogether() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start("--port", "0", "--databases", "2")) {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
+                "--port", "0",
+                "--maxmemoryBytes", "0",
+                "--databases", "2"
+        )) {
             try (Socket socket = new Socket()) {
                 socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
                 socket.setSoTimeout(2000);
@@ -190,7 +197,11 @@ public class YierdisServerBootstrapCommandWiringTest {
 
     @Test
     public void bootstrapStillProcessesHelloInfoStatsAndDataCommandsAfterByteBackedDecodePath() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start("--port", "0", "--databases", "2")) {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
+                "--port", "0",
+                "--maxmemoryBytes", "0",
+                "--databases", "2"
+        )) {
             try (Socket socket = new Socket()) {
                 socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
                 socket.setSoTimeout(2000);
@@ -243,7 +254,10 @@ public class YierdisServerBootstrapCommandWiringTest {
 
     @Test
     public void infoVariantsCoverDefaultKnownAndUnknownSections() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start("--port", "0")) {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
+                "--port", "0",
+                "--maxmemoryBytes", "0"
+        )) {
             try (Socket socket = new Socket()) {
                 socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
                 socket.setSoTimeout(2000);
@@ -273,6 +287,7 @@ public class YierdisServerBootstrapCommandWiringTest {
     public void structuredInfoAndStatsPreflightBeyondTheControlReservation() throws Exception {
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
                 "--port", "0",
+                "--maxmemoryBytes", "0",
                 "--replyControlReservationBytes", "1539"
         )) {
             try (Socket socket = new Socket()) {
@@ -295,6 +310,7 @@ public class YierdisServerBootstrapCommandWiringTest {
     public void metadataAndSessionRepliesPreflightBeyondTheControlReservation() throws Exception {
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
                 "--port", "0",
+                "--maxmemoryBytes", "0",
                 "--replyControlReservationBytes", "1539"
         )) {
             try (Socket socket = new Socket()) {
@@ -321,6 +337,7 @@ public class YierdisServerBootstrapCommandWiringTest {
     public void uncountedListPopPreflightsThePoppedValueBeforeMutation() throws Exception {
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
                 "--port", "0",
+                "--maxmemoryBytes", "0",
                 "--replyControlReservationBytes", "1539"
         )) {
             try (Socket socket = new Socket()) {
@@ -539,7 +556,9 @@ public class YierdisServerBootstrapCommandWiringTest {
         Assert.assertEquals("expected even RESP2 map array length", 0, values.size() % 2);
         Map<String, Object> map = new LinkedHashMap<>();
         for (int i = 0; i < values.size(); i += 2) {
-            map.put(asString(values.get(i)), values.get(i + 1));
+            String key = asString(values.get(i));
+            Assert.assertFalse("duplicate RESP map key: " + key, map.containsKey(key));
+            map.put(key, values.get(i + 1));
         }
         return map;
     }
@@ -587,7 +606,9 @@ public class YierdisServerBootstrapCommandWiringTest {
             int protocolMaxCommandBytes
     ) {
         return new YierdisServerRuntimeConfig(
+                "127.0.0.1",
                 0,
+                1024,
                 1,
                 1000,
                 1,

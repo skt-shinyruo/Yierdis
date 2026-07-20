@@ -64,7 +64,7 @@ public class OffHeapLeakRegressionTest {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
             YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
                     runtime,
-                    2_000_000,
+                    1_600_000,
                     MaxmemoryPolicy.ALLKEYS_RANDOM,
                     5,
                     5,
@@ -84,6 +84,7 @@ public class OffHeapLeakRegressionTest {
                     Assert.assertTrue("third SET reply: " + replyDescription(thirdSet), thirdSet instanceof ReplySimpleString);
 
                     ReplyInteger exists = (ReplyInteger) client.execute(cmd("EXISTS", "a", "b", "c"));
+                    Assert.assertTrue("third SET must trigger eviction", exists.value() < 3L);
                     Assert.assertEquals(2L, exists.value());
 
                     client.execute(cmd("DEL", "a", "b", "c"));

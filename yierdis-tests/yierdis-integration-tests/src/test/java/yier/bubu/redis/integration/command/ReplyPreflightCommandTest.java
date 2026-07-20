@@ -137,6 +137,50 @@ public class ReplyPreflightCommandTest {
     }
 
     @Test
+    public void collectionScanReservesItsNestedShapeAndMaterializedWindow() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
+                client.execute(cmd("HSET", "hash", "field", "value"));
+
+                TrackingReplyWriter writer = TrackingReplyWriter.rejecting();
+                Assert.assertThrows(
+                        ReplyCapacityUnavailableException.class,
+                        () -> execute(processor, new EngineSession(16, 16 * 1024L), writer, cmd("HSCAN", "hash", "0"))
+                );
+                Assert.assertEquals(37L, writer.requiredPlan().encodedUpperBoundBytes());
+                Assert.assertTrue(writer.requiredPlan().retainedSourceBytes() > 0L);
+            }
+        });
+    }
+
+    @Test
+    public void nativeCollectionScanChargesPinnedPayloadAndRejectsBeforeEmission() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
+                String largeMember = "x".repeat(256 * 1024);
+                client.execute(cmd("SADD", "large-set", largeMember));
+
+                TrackingReplyWriter writer = TrackingReplyWriter.rejecting();
+                Assert.assertThrows(
+                        ReplyCapacityUnavailableException.class,
+                        () -> execute(
+                                processor,
+                                new EngineSession(16, 16 * 1024L),
+                                writer,
+                                cmd("SSCAN", "large-set", "0", "COUNT", Integer.toString(Integer.MAX_VALUE))
+                        )
+                );
+
+                Assert.assertTrue(writer.requiredPlan().encodedUpperBoundBytes() > largeMember.length());
+                Assert.assertTrue(writer.requiredPlan().retainedSourceBytes() >= largeMember.length());
+                Assert.assertEquals(0, writer.arrayHeaderCalls());
+            }
+        });
+    }
+
+    @Test
     public void execCapacityRejectionDoesNotDrainOrExecuteTheQueuedTransaction() {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
@@ -219,6 +263,7 @@ public class ReplyPreflightCommandTest {
         private final List<ReplyPlan> requiredPlans = new ArrayList<>();
         private final List<AutoCloseable> transferredResources = new ArrayList<>();
         private boolean closeAfterReply;
+        private int arrayHeaderCalls;
 
         private TrackingReplyWriter(boolean rejectCapacity) {
             this.rejectCapacity = rejectCapacity;
@@ -239,6 +284,10 @@ public class ReplyPreflightCommandTest {
 
         List<AutoCloseable> transferredResources() {
             return transferredResources;
+        }
+
+        int arrayHeaderCalls() {
+            return arrayHeaderCalls;
         }
 
         void closeTransferredResources() {
@@ -317,6 +366,7 @@ public class ReplyPreflightCommandTest {
 
         @Override
         public void arrayHeader(int count) {
+            arrayHeaderCalls++;
         }
 
         @Override

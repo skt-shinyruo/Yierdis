@@ -349,6 +349,7 @@ public class YierdisClientTest {
             // Bind port=0 for ephemeral port (avoids conflicts on CI/dev machines).
             YierdisServerBootstrap server = YierdisServerBootstrap.start(
                     "--port", "0",
+                    "--maxmemoryBytes", "0",
                     "--ioThreads", "1",
                     "--noCleanup"
             );

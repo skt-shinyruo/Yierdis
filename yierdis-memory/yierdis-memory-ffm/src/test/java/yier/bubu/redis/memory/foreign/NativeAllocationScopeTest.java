@@ -75,7 +75,12 @@ public class NativeAllocationScopeTest {
     @Test
     public void promotedObjectTableCheckpointReleasesCowedDirectoryReferences() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-promote-release-test");
-             YierdisNativeObjectTable table = new YierdisNativeObjectTable(runtime, 128, 0)) {
+             YierdisNativeObjectTable table = new YierdisNativeObjectTable(
+                     runtime,
+                     128,
+                     0,
+                     (pageId, pageOffset, pageClass) -> 1
+             )) {
             YierdisNativeObjectTable.AllocationScopeCheckpoint checkpoint = table.allocationScopeCheckpoint();
             table.allocate(NativeObjectKind.STRING_BYTES, 1, 1, 0, 0L, 0, 0L);
             long duringScope = checkpoint.heapEstimatedBytes();
@@ -155,6 +160,33 @@ public class NativeAllocationScopeTest {
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 1);
             allocator.free(handle);
             Assert.assertEquals(0L, allocator.stats().liveObjects());
+        }
+    }
+
+    @Test
+    public void automaticCapacityAbortReleasesNewMetadataSegment() {
+        int firstSegmentSlots = YierdisNativeObjectSegment.SLOTS_PER_SEGMENT;
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-auto-segment-abort-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 0)) {
+            allocator.bindToCurrentThread();
+            NativeHandle[] retained = new NativeHandle[firstSegmentSlots];
+            for (int i = 0; i < retained.length; i++) {
+                retained[i] = allocator.allocate(NativeObjectKind.STRING_BYTES, 1);
+            }
+            MemoryUsageSnapshot before = allocator.memoryUsage();
+            Assert.assertEquals(1L, allocator.metadataStats().activeMetadataSegments());
+
+            try (NativeAllocationScope scope = allocator.beginAllocationScope()) {
+                allocator.allocate(NativeObjectKind.STRING_BYTES, 1);
+                Assert.assertEquals(2L, allocator.metadataStats().activeMetadataSegments());
+                scope.abort();
+            }
+
+            Assert.assertEquals(before, allocator.memoryUsage());
+            Assert.assertEquals(1L, allocator.metadataStats().activeMetadataSegments());
+            for (NativeHandle handle : retained) {
+                allocator.free(handle);
+            }
         }
     }
 

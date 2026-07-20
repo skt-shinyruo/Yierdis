@@ -51,7 +51,7 @@ public class NettyExecutionAdapterIntegrationTest {
     }
 
     @Test
-    public void queueFullWritesBusyIntoTheRejectedRequestsRegisteredSlot() throws Exception {
+    public void queueFullPausesIngressAndRetriesTheRegisteredRequest() throws Exception {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
         YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build());
@@ -83,14 +83,15 @@ public class NettyExecutionAdapterIntegrationTest {
 
             ExecutionConnectionContext context = fixture.connection().context();
             Assert.assertEquals(1L, context.statsSnapshot().commandsEnqueued());
-            Assert.assertEquals(1L, context.statsSnapshot().commandsRejected());
-            Assert.assertEquals(1, rejected.closeCalls());
+            Assert.assertEquals(0L, context.statsSnapshot().commandsRejected());
+            Assert.assertEquals(0, rejected.closeCalls());
             Assert.assertNull(fixture.channel().readOutbound());
 
             unblock.countDown();
 
             Assert.assertArrayEquals(ascii("+PONG\r\n"), awaitOutbound(fixture, 1_000));
-            Assert.assertArrayEquals(ascii("-ERR busy queue_full\r\n"), awaitOutbound(fixture, 1_000));
+            Assert.assertArrayEquals(ascii("+PONG\r\n"), awaitOutbound(fixture, 1_000));
+            Assert.assertEquals(1, rejected.closeCalls());
         } finally {
             unblock.countDown();
             executor.shutdownGracefully().join();

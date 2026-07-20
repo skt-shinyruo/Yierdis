@@ -9,6 +9,7 @@ import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
+import yier.bubu.redis.command.defaults.CollectionScanCommandSupport;
 import yier.bubu.redis.command.defaults.CommandSupport;
 
 import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequence;
@@ -62,6 +63,12 @@ public final class ZSetCommands implements CommandModule {
                 this::zremrangebyrank
         );
         registration.register("ZREM", CommandDescriptor.of(-3, 1, 1, 1), CommandParsers.minRequest(3, "zrem"), this::zrem);
+        registration.register(
+                "ZSCAN",
+                CommandDescriptor.of(-3, 1, 1, 1),
+                args -> CollectionScanCommandSupport.parse(args, "zscan", false),
+                this::zscan
+        );
     }
 
     private void zadd(ArgReader args, CommandContext ctx) {
@@ -285,5 +292,17 @@ public final class ZSetCommands implements CommandModule {
         } finally {
             support.clearScratch(membersLen);
         }
+    }
+
+    private void zscan(CollectionScanCommandSupport.Arguments args, CommandContext ctx) {
+        CollectionScanCommandSupport.writeReply(
+                ctx.out(),
+                support.commandDb(ctx).reads().zsets().zscan(
+                        args.key(),
+                        args.cursor(),
+                        args.match(),
+                        args.count()
+                )
+        );
     }
 }

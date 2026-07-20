@@ -1,7 +1,7 @@
 package yier.bubu.redis.execution.engine;
 
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
-import yier.bubu.redis.common.command.CommandRecordScope;
+import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.CommandSessionCapabilities;
 import yier.bubu.redis.execution.api.ExecutionRequest;
@@ -27,9 +27,14 @@ public final class DefaultYierdisEngine implements YierdisEngine {
 
     @Override
     public void execute(Session session, ExecutionRequest request, RedisReplyWriter out) {
-        try (CommandRecordScope.Scope ignored = CommandRecordScope.open(request)) {
-            commandProcessor.execute(request, new CommandContext(CommandSessionCapabilities.from(session), out));
-        }
+        commandProcessor.execute(
+                request,
+                new CommandContext(
+                        CommandSessionCapabilities.from(session),
+                        out,
+                        MutationContext.of(request)
+                )
+        );
     }
 
     @Override

@@ -21,8 +21,21 @@ public class ServerConfigArgsTest {
     }
 
     @Test
+    public void maxmemoryMustBeSpecifiedExplicitly() {
+        YierdisCliException error = assertThrows(
+                YierdisCliException.class,
+                () -> ServerConfig.fromArgs(new String[]{"--port", "0"})
+        );
+
+        Assert.assertEquals(2, error.exitCode());
+        Assert.assertTrue(error.shouldPrintUsage());
+        Assert.assertTrue(error.getMessage().contains("--maxmemoryBytes must be specified explicitly"));
+    }
+
+    @Test
     public void invalidWatermarkOrderFailsFast() {
         YierdisCliException error = assertThrows(YierdisCliException.class, () -> ServerConfig.fromArgs(new String[]{
+                "--maxmemoryBytes", "0",
                 "--backpressureHigh", "10",
                 "--backpressureLow", "10"
         }));
@@ -33,6 +46,7 @@ public class ServerConfigArgsTest {
     @Test
     public void invalidMaxmemoryPolicyFailsFast() {
         YierdisCliException error = assertThrows(YierdisCliException.class, () -> ServerConfig.fromArgs(new String[]{
+                "--maxmemoryBytes", "0",
                 "--maxmemoryPolicy", "random-evict"
         }));
         Assert.assertEquals(2, error.exitCode());
@@ -129,6 +143,7 @@ public class ServerConfigArgsTest {
     @Test
     public void maxmemoryPolicyUnderscoreInputNormalizesToCoreEnum() {
         ServerConfig config = ServerConfig.fromArgs(new String[]{
+                "--maxmemoryBytes", "0",
                 "--maxmemoryPolicy", "ALLKEYS_RANDOM"
         });
 

@@ -3,12 +3,17 @@ package yier.bubu.redis.storage.memory.internal.value;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.api.result.BulkStringValue;
+import yier.bubu.redis.storage.api.result.CollectionScanWindow;
+import yier.bubu.redis.storage.memory.MaterializedCollectionScanWindow;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMetrics;
+import yier.bubu.redis.storage.memory.internal.hash.SipHash24;
+import yier.bubu.redis.storage.memory.internal.keyspace.YierdisGlobMatcher;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -75,6 +80,52 @@ public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTra
 
     public static long preparedNewHeapUpperBound(List<byte[]> fieldValuePairs) {
         return heapUpperBoundForEntryCount(pairCount(fieldValuePairs));
+    }
+
+    public static int[] preparedBuildNativeAllocationSizes(List<byte[]> finalFieldValuePairs) {
+        validateFieldValuePairs(finalFieldValuePairs);
+        if (usesPackedEncoding(finalFieldValuePairs)) {
+            int encodedBytes = NativeListpack.encodedBytesOf(finalFieldValuePairs);
+            return encodedBytes == 0 ? new int[0] : new int[]{encodedBytes};
+        }
+
+        int allocationCount = finalFieldValuePairs.size() / 2;
+        for (int index = 1; index < finalFieldValuePairs.size(); index += 2) {
+            if (finalFieldValuePairs.get(index) != null) {
+                allocationCount++;
+            }
+        }
+        int[] sizes = new int[allocationCount];
+        int next = 0;
+        for (int index = 0; index < finalFieldValuePairs.size(); index += 2) {
+            sizes[next++] = Math.max(1, finalFieldValuePairs.get(index).length);
+            byte[] value = finalFieldValuePairs.get(index + 1);
+            if (value != null) {
+                sizes[next++] = Math.max(1, value.length);
+            }
+        }
+        return sizes;
+    }
+
+    public void loadForBuild(List<byte[]> finalFieldValuePairs) {
+        validateFieldValuePairs(finalFieldValuePairs);
+        if (size() != 0 || map != null || packed == null || !packed.isEmpty()) {
+            throw new IllegalStateException("staged hash build requires an empty value");
+        }
+        if (!usesPackedEncoding(finalFieldValuePairs)) {
+            convertToHashMap();
+            hsetMany(finalFieldValuePairs);
+            return;
+        }
+
+        int encodedBytes = NativeListpack.encodedBytesOf(finalFieldValuePairs);
+        if (encodedBytes > 0) {
+            packed.reserveForBuild(finalFieldValuePairs.size(), encodedBytes);
+        }
+        for (int index = 0; index < finalFieldValuePairs.size(); index += 2) {
+            packed.addLast(finalFieldValuePairs.get(index), NativeObjectKind.HASH_FIELD_BYTES);
+            packed.addLast(finalFieldValuePairs.get(index + 1), NativeObjectKind.HASH_VALUE_BYTES);
+        }
     }
 
     public HashTableMetrics memberTableMetrics() {
@@ -154,6 +205,23 @@ public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTra
         HashValue replacement = new HashValue(allocator, hashSeed, maintenanceRegistry);
         replacement.borrowedPackedSource = this;
         try {
+            int finalEntryCount = packed.size() + (pairIndex >= 0 ? 0 : 2);
+            int finalEncodedBytes = packed.encodedBytes();
+            if (pairIndex >= 0) {
+                finalEncodedBytes = Math.addExact(
+                        finalEncodedBytes - packed.encodedEntryBytesAt(pairIndex + 1),
+                        NativeListpack.entryEncodedBytes(value)
+                );
+            } else {
+                finalEncodedBytes = Math.addExact(
+                        finalEncodedBytes,
+                        Math.addExact(
+                                NativeListpack.entryEncodedBytes(field),
+                                NativeListpack.entryEncodedBytes(value)
+                        )
+                );
+            }
+            replacement.packed.reserveForBuild(finalEntryCount, finalEncodedBytes);
             for (int index = 0; index < packed.size(); index++) {
                 replacement.packed.addBorrowed(packed.entryRefAt(index));
             }
@@ -170,6 +238,107 @@ public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTra
             } catch (RuntimeException | Error closeFailure) {
                 failure.addSuppressed(closeFailure);
             }
+            throw failure;
+        }
+    }
+
+    public HashTableSetPlan planHashTableSet(List<byte[]> fieldValuePairs) {
+        validateFieldValuePairs(fieldValuePairs);
+        if (map == null) {
+            throw new IllegalStateException("hash-table set planning requires HASH_HT encoding");
+        }
+
+        ArrayList<byte[]> canonicalPairs = canonicalFieldValuePairs(fieldValuePairs);
+        HashTableSetEntry[] entries = new HashTableSetEntry[canonicalPairs.size() / 2];
+        int added = 0;
+        int changed = 0;
+        int valueAllocationCount = 0;
+        int fieldAllocationCount = 0;
+        for (int pairIndex = 0; pairIndex < canonicalPairs.size(); pairIndex += 2) {
+            byte[] field = canonicalPairs.get(pairIndex);
+            byte[] nextValue = canonicalPairs.get(pairIndex + 1);
+            NativeHandle previousValue = map.get(field);
+            boolean present = previousValue != null || map.containsKey(field);
+            boolean valueChanged = !present || !storedValueEquals(previousValue, nextValue);
+            entries[pairIndex / 2] = new HashTableSetEntry(
+                    field,
+                    nextValue,
+                    present,
+                    previousValue,
+                    valueChanged
+            );
+            if (!present) {
+                added++;
+            }
+            if (!valueChanged) {
+                continue;
+            }
+            changed++;
+            if (!present) {
+                fieldAllocationCount++;
+            }
+            if (nextValue != null) {
+                valueAllocationCount++;
+            }
+        }
+
+        int[] allocationSizes = new int[valueAllocationCount + fieldAllocationCount];
+        int nextSize = 0;
+        for (HashTableSetEntry entry : entries) {
+            if (entry.changed && entry.nextValue != null) {
+                allocationSizes[nextSize++] = Math.max(1, entry.nextValue.length);
+            }
+        }
+        for (HashTableSetEntry entry : entries) {
+            if (entry.changed && !entry.present) {
+                allocationSizes[nextSize++] = Math.max(1, entry.field.length);
+            }
+        }
+        long stagedHeapBytes = changed == 0
+                ? 0L
+                : map.estimatedPreparedPutHeapGrowthBytes(changed, added);
+        return new HashTableSetPlan(
+                this,
+                map,
+                entries,
+                added,
+                changed,
+                allocationSizes,
+                stagedHeapBytes
+        );
+    }
+
+    public PreparedHashTableSet prepareHashTableSet(HashTableSetPlan plan) {
+        Objects.requireNonNull(plan, "plan");
+        plan.validateFor(this, map);
+        if (!plan.changedAny()) {
+            return new PreparedHashTableSet(plan, null, new NativeHandle[0]);
+        }
+
+        NativeHandle[] nextValueHandles = new NativeHandle[plan.changedCount];
+        ArrayList<NativeByteMap.StagedPut<NativeHandle>> puts = new ArrayList<>(plan.changedCount);
+        NativeByteMap.PreparedMutation<NativeHandle> preparedMap = null;
+        int nextChanged = 0;
+        try {
+            for (HashTableSetEntry entry : plan.entries) {
+                if (!entry.changed) {
+                    continue;
+                }
+                NativeHandle nextValue = entry.nextValue == null ? null : valueStore.store(entry.nextValue);
+                nextValueHandles[nextChanged++] = nextValue;
+                puts.add(new NativeByteMap.StagedPut<>(entry.field, nextValue, entry.present));
+            }
+            preparedMap = map.preparePuts(puts);
+            return new PreparedHashTableSet(plan, preparedMap, nextValueHandles);
+        } catch (RuntimeException | Error failure) {
+            if (preparedMap != null) {
+                try {
+                    preparedMap.close();
+                } catch (RuntimeException | Error closeFailure) {
+                    failure.addSuppressed(closeFailure);
+                }
+            }
+            releaseHandles(nextValueHandles, failure);
             throw failure;
         }
     }
@@ -208,7 +377,9 @@ public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTra
             return BulkStringValue.nullValue();
         }
         NativeListEntryRef ref = packed.entryRefAt(pairIndex + 1);
-        return ref.handle() == null ? BulkStringValue.nullValue() : fieldStore.retainedValue(ref.handle());
+        return ref.handle() == null
+                ? BulkStringValue.nullValue()
+                : fieldStore.retainedValue(ref.handle(), ref.payloadOffset(), ref.payloadLength());
     }
 
     public int hdel(List<byte[]> fields) {
@@ -302,6 +473,65 @@ public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTra
 
     public int hgetallCount() {
         return size() * 2;
+    }
+
+    public CollectionScanWindow hscan(
+            ScanCursorV2 cursor,
+            byte[] globPattern,
+            int count,
+            boolean noValues
+    ) {
+        if (count <= 0) {
+            throw new IllegalArgumentException("count must be > 0");
+        }
+        ScanCursorV2 current = cursor == null ? ScanCursorV2.start() : cursor;
+        if (map != null) {
+            int boundedCount = NativeCollectionScanWindow.boundedMatchCount(count);
+            int[] matched = {0};
+            int expectedElements = boundedCount * (noValues ? 1 : 2);
+            try (NativeCollectionScanWindow.Builder builder =
+                         NativeCollectionScanWindow.builder(fieldStore.allocator(), expectedElements)) {
+                NativeByteMap.ScanResult result = map.scanWithWork(
+                        current,
+                        NativeCollectionScanWindow.slotBudget(boundedCount),
+                        (fieldRef, valueRef) -> {
+                            var fieldSlice = fieldStore.slice(fieldRef);
+                            if (globPattern != null && !YierdisGlobMatcher.matches(globPattern, fieldSlice)) {
+                                return true;
+                            }
+                            builder.addNative(fieldRef, fieldSlice.length());
+                            if (!noValues) {
+                                if (valueRef == null) {
+                                    builder.addNull();
+                                } else {
+                                    builder.addNative(valueRef, valueStore.length(valueRef));
+                                }
+                            }
+                            matched[0]++;
+                            return matched[0] < boundedCount;
+                        }
+                );
+                return builder.build(result.nextCursor());
+            }
+        }
+
+        // Redis 的 compact hash 在一次调用中完整返回；这样数组位置变化不会破坏跨调用完整迭代语义。
+        if (current.value() != 0L) {
+            return new MaterializedCollectionScanWindow(ScanCursorV2.start(), List.of());
+        }
+        int pairCount = packed.size() / 2;
+        List<byte[]> out = new ArrayList<>(pairCount * (noValues ? 1 : 2));
+        for (int pairIndex = 0; pairIndex < pairCount; pairIndex++) {
+            byte[] field = packed.get(pairIndex * 2);
+            if (globPattern != null && !YierdisGlobMatcher.matches(globPattern, field)) {
+                continue;
+            }
+            out.add(field);
+            if (!noValues) {
+                out.add(packed.get(pairIndex * 2 + 1));
+            }
+        }
+        return new MaterializedCollectionScanWindow(ScanCursorV2.start(), out);
     }
 
     public void hgetallPairsInto(BulkStringSink out) {
@@ -439,7 +669,7 @@ public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTra
         if (map != null) {
             return;
         }
-        NativeByteMap<NativeHandle> out = new NativeByteMap<>(
+        NativeByteMap<NativeHandle> out = NativeByteMap.nativeHandleValues(
                 fieldStore,
                 NativeObjectKind.HASH_FIELD_BYTES,
                 hashSeed,
@@ -484,13 +714,38 @@ public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTra
         return b != null && b.length > YierdisEncodingThresholds.HASH_MAX_LISTPACK_VALUE_BYTES;
     }
 
+    private static boolean usesPackedEncoding(List<byte[]> fieldValuePairs) {
+        if (fieldValuePairs.size() / 2 > YierdisEncodingThresholds.HASH_MAX_LISTPACK_ENTRIES) {
+            return false;
+        }
+        for (int index = 0; index < fieldValuePairs.size(); index += 2) {
+            if (isOversize(fieldValuePairs.get(index)) || isOversize(fieldValuePairs.get(index + 1))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static void validateFieldValuePairs(List<byte[]> fieldValuePairs) {
+        Objects.requireNonNull(fieldValuePairs, "fieldValuePairs");
+        if ((fieldValuePairs.size() & 1) != 0) {
+            throw new IllegalArgumentException("fieldValuePairs must contain field/value pairs");
+        }
+        for (int index = 0; index < fieldValuePairs.size(); index += 2) {
+            Objects.requireNonNull(fieldValuePairs.get(index), "hash field");
+        }
+    }
+
     private static long heapUpperBoundForEntryCount(long expectedEntries) {
         if (expectedEntries < 0L) {
             return Long.MAX_VALUE;
         }
         long packedEntries = multiplySaturating(expectedEntries, 2L);
         long packedBytes = addSaturating(FIXED_HEAP_BYTES, NativeListpack.heapUpperBoundForEntries(packedEntries));
-        long mapBytes = addSaturating(FIXED_HEAP_BYTES, NativeByteMap.heapUpperBoundForEntries(expectedEntries));
+        long mapBytes = addSaturating(
+                FIXED_HEAP_BYTES,
+                NativeByteMap.heapUpperBoundForNativeHandleValues(expectedEntries)
+        );
         return Math.max(packedBytes, mapBytes);
     }
 
@@ -520,6 +775,286 @@ public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTra
             }
         }
         return false;
+    }
+
+    private ArrayList<byte[]> canonicalFieldValuePairs(List<byte[]> fieldValuePairs) {
+        ArrayList<byte[]> canonical = new ArrayList<>(fieldValuePairs.size());
+        CanonicalFieldIndex index = new CanonicalFieldIndex(
+                canonical,
+                fieldValuePairs.size() / 2,
+                hashSeed
+        );
+        for (int pairIndex = 0; pairIndex < fieldValuePairs.size(); pairIndex += 2) {
+            byte[] field = fieldValuePairs.get(pairIndex);
+            byte[] value = fieldValuePairs.get(pairIndex + 1);
+            int existingPairIndex = index.find(field);
+            if (existingPairIndex >= 0) {
+                canonical.set(existingPairIndex + 1, value);
+                continue;
+            }
+            int canonicalPairIndex = canonical.size();
+            canonical.add(field);
+            canonical.add(value);
+            index.add(canonicalPairIndex);
+        }
+        return canonical;
+    }
+
+    private boolean storedValueEquals(NativeHandle previousValue, byte[] nextValue) {
+        if (previousValue == null || nextValue == null) {
+            return previousValue == null && nextValue == null;
+        }
+        return valueStore.equalsBytes(previousValue, nextValue);
+    }
+
+    private void releaseHandles(NativeHandle[] handles, Throwable failure) {
+        for (int index = 0; index < handles.length; index++) {
+            NativeHandle handle = handles[index];
+            if (handle == null) {
+                continue;
+            }
+            try {
+                valueStore.release(handle);
+            } catch (RuntimeException | Error releaseFailure) {
+                failure.addSuppressed(releaseFailure);
+            } finally {
+                handles[index] = null;
+            }
+        }
+    }
+
+    public static final class HashTableSetPlan {
+        private final HashValue owner;
+        private final NativeByteMap<NativeHandle> sourceMap;
+        private final HashTableSetEntry[] entries;
+        private final int added;
+        private final int changedCount;
+        private final int[] nativeAllocationSizes;
+        private final long stagedHeapBytes;
+
+        private HashTableSetPlan(
+                HashValue owner,
+                NativeByteMap<NativeHandle> sourceMap,
+                HashTableSetEntry[] entries,
+                int added,
+                int changedCount,
+                int[] nativeAllocationSizes,
+                long stagedHeapBytes
+        ) {
+            this.owner = owner;
+            this.sourceMap = sourceMap;
+            this.entries = entries;
+            this.added = added;
+            this.changedCount = changedCount;
+            this.nativeAllocationSizes = nativeAllocationSizes;
+            this.stagedHeapBytes = stagedHeapBytes;
+        }
+
+        public int added() {
+            return added;
+        }
+
+        public boolean changedAny() {
+            return changedCount != 0;
+        }
+
+        public int[] nativeAllocationSizes() {
+            return nativeAllocationSizes.clone();
+        }
+
+        public long stagedHeapBytes() {
+            return stagedHeapBytes;
+        }
+
+        private void validateFor(HashValue expectedOwner, NativeByteMap<NativeHandle> currentMap) {
+            if (owner != expectedOwner || sourceMap != currentMap || currentMap == null) {
+                throw new IllegalStateException("hash-table set plan no longer matches its source");
+            }
+            for (HashTableSetEntry entry : entries) {
+                NativeHandle currentValue = currentMap.get(entry.field);
+                boolean currentPresent = currentValue != null || currentMap.containsKey(entry.field);
+                if (currentPresent != entry.present || !Objects.equals(currentValue, entry.previousValue)) {
+                    throw new IllegalStateException("hash-table set plan source entry changed");
+                }
+            }
+        }
+    }
+
+    public final class PreparedHashTableSet implements AutoCloseable {
+        private final HashTableSetPlan plan;
+        private NativeByteMap.PreparedMutation<NativeHandle> preparedMap;
+        private final NativeHandle[] nextValueHandles;
+        private boolean committed;
+        private boolean released;
+
+        private PreparedHashTableSet(
+                HashTableSetPlan plan,
+                NativeByteMap.PreparedMutation<NativeHandle> preparedMap,
+                NativeHandle[] nextValueHandles
+        ) {
+            this.plan = Objects.requireNonNull(plan, "plan");
+            this.preparedMap = preparedMap;
+            this.nextValueHandles = Objects.requireNonNull(nextValueHandles, "nextValueHandles");
+        }
+
+        public int added() {
+            return plan.added();
+        }
+
+        public boolean changedAny() {
+            return plan.changedAny();
+        }
+
+        public long stagedHeapBytes() {
+            return preparedMap == null ? 0L : preparedMap.stagedHeapBytes();
+        }
+
+        public void commit() {
+            if (committed || released) {
+                throw new IllegalStateException("prepared hash-table set is closed");
+            }
+            plan.validateFor(HashValue.this, map);
+            if (preparedMap != null) {
+                preparedMap.validateForCommit();
+                preparedMap.commitValidated();
+            }
+            committed = true;
+        }
+
+        public void releaseSuperseded() {
+            if (!committed || released) {
+                throw new IllegalStateException("prepared hash-table set is not committed");
+            }
+            RuntimeException cleanupFailure = new RuntimeException(
+                    "committed hash-table set cleanup failed"
+            );
+            if (preparedMap != null) {
+                try {
+                    preparedMap.releaseSuperseded();
+                } catch (RuntimeException | Error releaseFailure) {
+                    cleanupFailure.addSuppressed(releaseFailure);
+                }
+            }
+            for (HashTableSetEntry entry : plan.entries) {
+                if (!entry.changed || entry.previousValue == null) {
+                    continue;
+                }
+                try {
+                    valueStore.release(entry.previousValue);
+                } catch (RuntimeException | Error releaseFailure) {
+                    cleanupFailure.addSuppressed(releaseFailure);
+                } finally {
+                    entry.previousValue = null;
+                }
+            }
+            if (cleanupFailure.getSuppressed().length != 0) {
+                throw cleanupFailure;
+            }
+            preparedMap = null;
+            released = true;
+        }
+
+        @Override
+        public void close() {
+            if (committed || released) {
+                return;
+            }
+            released = true;
+            RuntimeException cleanupFailure = new RuntimeException(
+                    "prepared hash-table set abort failed"
+            );
+            if (preparedMap != null) {
+                try {
+                    preparedMap.close();
+                } catch (RuntimeException | Error closeFailure) {
+                    cleanupFailure.addSuppressed(closeFailure);
+                } finally {
+                    preparedMap = null;
+                }
+            }
+            releaseHandles(nextValueHandles, cleanupFailure);
+            if (cleanupFailure.getSuppressed().length != 0) {
+                throw cleanupFailure;
+            }
+        }
+    }
+
+    private static final class HashTableSetEntry {
+        private final byte[] field;
+        private final byte[] nextValue;
+        private final boolean present;
+        private NativeHandle previousValue;
+        private final boolean changed;
+
+        private HashTableSetEntry(
+                byte[] field,
+                byte[] nextValue,
+                boolean present,
+                NativeHandle previousValue,
+                boolean changed
+        ) {
+            this.field = field;
+            this.nextValue = nextValue;
+            this.present = present;
+            this.previousValue = previousValue;
+            this.changed = changed;
+        }
+    }
+
+    private static final class CanonicalFieldIndex {
+        private static final int MAX_CAPACITY = 1 << 30;
+
+        private final List<byte[]> pairs;
+        private final HashSeed hashSeed;
+        private final int[] pairIndexes;
+
+        private CanonicalFieldIndex(List<byte[]> pairs, int expectedPairs, HashSeed hashSeed) {
+            this.pairs = pairs;
+            this.hashSeed = hashSeed;
+            this.pairIndexes = new int[indexCapacity(expectedPairs)];
+        }
+
+        private int find(byte[] field) {
+            int slot = slot(field);
+            int mask = pairIndexes.length - 1;
+            while (true) {
+                int encodedPairIndex = pairIndexes[slot];
+                if (encodedPairIndex == 0) {
+                    return -1;
+                }
+                int pairIndex = encodedPairIndex - 1;
+                if (Arrays.equals(pairs.get(pairIndex), field)) {
+                    return pairIndex;
+                }
+                slot = (slot + 1) & mask;
+            }
+        }
+
+        private void add(int pairIndex) {
+            int slot = slot(pairs.get(pairIndex));
+            int mask = pairIndexes.length - 1;
+            while (pairIndexes[slot] != 0) {
+                slot = (slot + 1) & mask;
+            }
+            pairIndexes[slot] = pairIndex + 1;
+        }
+
+        private int slot(byte[] field) {
+            int hash = SipHash24.foldToInt(SipHash24.hash(hashSeed, field));
+            return (hash ^ (hash >>> 16)) & (pairIndexes.length - 1);
+        }
+
+        private static int indexCapacity(int expectedPairs) {
+            long required = Math.max(16L, (long) expectedPairs * 2L);
+            if (required > MAX_CAPACITY) {
+                throw new IllegalArgumentException("too many hash fields to plan");
+            }
+            int capacity = 16;
+            while (capacity < required) {
+                capacity <<= 1;
+            }
+            return capacity;
+        }
     }
 
     public record PreparedPackedHset(HashValue replacement, int added) {

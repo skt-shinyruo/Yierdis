@@ -177,9 +177,9 @@ DB owns storage behavior, not RESP.
 
 ## CLI 和 benchmark
 
-`yierdis-cli` 和 `yierdis-benchmark` 都是外部消费者，主要通过 RESP codec 和 TCP 连接和服务端交互。
+`yierdis-cli` 和 `yierdis-benchmark` 的默认 RESP 模式都是外部消费者，通过 RESP codec 和 TCP 与服务端交互。
 
-它们不该绕过 server 内核去碰 DB，否则就失去验证真实 request path 的意义。
+默认 RESP 模式不该绕过 server 内核去碰 DB，否则就失去验证真实 request path 的意义。`yierdis-benchmark storage` 是显式隔离的诊断入口，允许 benchmark app 依赖 `yierdis-db-memory`，用于测量单 owner DB hot path 和 heap/native footprint；它的结果不代表真实 request path。
 
 ## architecture tests
 
