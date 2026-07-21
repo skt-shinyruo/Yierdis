@@ -296,127 +296,78 @@ public final class YierdisServerArgs {
             cleanupIntervalMillis = 0;
         }
 
+        normalizeAndValidateServer();
+        normalizeAndValidateExecutor();
+        validateProtocolAndClientLimits();
+        validateReplyLimits();
+        normalizeAndValidateMemoryAndMaintenance();
+    }
+
+    private void normalizeAndValidateServer() {
         if (bind == null || bind.isBlank()) {
             throw new IllegalArgumentException("bind must not be blank");
         }
         bind = bind.trim();
-        if (port < 0 || port > 65535) {
-            throw new IllegalArgumentException("port must be in range 0..65535");
-        }
-        if (maxClients <= 0) {
-            throw new IllegalArgumentException("maxClients must be > 0");
-        }
-        if (databases <= 0) {
-            throw new IllegalArgumentException("databases must be > 0");
-        }
-        if (databases > 1024) {
-            throw new IllegalArgumentException("databases must be <= 1024");
-        }
-        if (cleanupIntervalMillis < 0) {
-            throw new IllegalArgumentException("cleanupIntervalMillis must be >= 0");
-        }
-        if (ioThreads <= 0) {
-            throw new IllegalArgumentException("ioThreads must be > 0");
-        }
-        if (executorQueueCapacity <= 0) {
-            throw new IllegalArgumentException("executorQueueCapacity must be > 0");
-        }
-        if (executorQueueMaxBytes < 0) {
-            throw new IllegalArgumentException("executorQueueMaxBytes must be >= 0");
-        }
+        requireRange(port, 0, 65535, "port");
+        requirePositive(maxClients, "maxClients");
+        requirePositive(databases, "databases");
+        requireAtMost(databases, 1024, "databases");
+        requireNonNegative(cleanupIntervalMillis, "cleanupIntervalMillis");
+        requirePositive(ioThreads, "ioThreads");
+    }
+
+    private void normalizeAndValidateExecutor() {
+        requirePositive(executorQueueCapacity, "executorQueueCapacity");
+        requireNonNegative(executorQueueMaxBytes, "executorQueueMaxBytes");
         executorSchedulingPolicy = normalizeExecutorSchedulingPolicy(executorSchedulingPolicy);
-        if (backpressureHighWatermark <= 0) {
-            throw new IllegalArgumentException("backpressureHighWatermark must be > 0");
-        }
-        if (backpressureLowWatermark < 0) {
-            throw new IllegalArgumentException("backpressureLowWatermark must be >= 0");
-        }
+        requirePositive(backpressureHighWatermark, "backpressureHighWatermark");
+        requireNonNegative(backpressureLowWatermark, "backpressureLowWatermark");
         if (backpressureLowWatermark >= backpressureHighWatermark) {
             throw new IllegalArgumentException("backpressureLowWatermark must be < backpressureHighWatermark");
         }
-        if (backpressureBytesHighWatermark < 0) {
-            throw new IllegalArgumentException("backpressureBytesHighWatermark must be >= 0");
-        }
-        if (backpressureBytesLowWatermark < 0) {
-            throw new IllegalArgumentException("backpressureBytesLowWatermark must be >= 0");
-        }
+        requireNonNegative(backpressureBytesHighWatermark, "backpressureBytesHighWatermark");
+        requireNonNegative(backpressureBytesLowWatermark, "backpressureBytesLowWatermark");
         if (backpressureBytesHighWatermark == 0 && backpressureBytesLowWatermark != 0) {
             throw new IllegalArgumentException("backpressureBytesLowWatermark must be 0 when backpressureBytesHighWatermark is 0");
         }
         if (backpressureBytesHighWatermark > 0 && backpressureBytesLowWatermark >= backpressureBytesHighWatermark) {
             throw new IllegalArgumentException("backpressureBytesLowWatermark must be < backpressureBytesHighWatermark");
         }
-        if (executorMaxDrainCommands <= 0) {
-            throw new IllegalArgumentException("executorMaxDrainCommands must be > 0");
-        }
-        if (executorDrainTimeLimitMillis <= 0) {
-            throw new IllegalArgumentException("executorDrainTimeLimitMillis must be > 0");
-        }
-        if (transactionQueueMaxCommands < 0) {
-            throw new IllegalArgumentException("transactionQueueMaxCommands must be >= 0");
-        }
-        if (transactionQueueMaxBytes < 0) {
-            throw new IllegalArgumentException("transactionQueueMaxBytes must be >= 0");
-        }
-        if (protocolMaxBulkBytes <= 0) {
-            throw new IllegalArgumentException("protocolMaxBulkBytes must be > 0");
-        }
-        if (protocolMaxBulkBytes > RespProtocolLimits.MAX_BULK_BYTES) {
-            throw new IllegalArgumentException("protocolMaxBulkBytes must be <= " + RespProtocolLimits.MAX_BULK_BYTES);
-        }
-        if (protocolMaxArgs <= 0) {
-            throw new IllegalArgumentException("protocolMaxArgs must be > 0");
-        }
-        if (protocolMaxArgs > RespProtocolLimits.MAX_ARGS) {
-            throw new IllegalArgumentException("protocolMaxArgs must be <= " + RespProtocolLimits.MAX_ARGS);
-        }
-        if (protocolMaxLineBytes <= 0) {
-            throw new IllegalArgumentException("protocolMaxLineBytes must be > 0");
-        }
-        if (protocolMaxCommandBytes <= 0) {
-            throw new IllegalArgumentException("protocolMaxCommandBytes must be > 0");
-        }
-        if (protocolMaxCommandBytes > RespProtocolLimits.MAX_COMMAND_BYTES) {
-            throw new IllegalArgumentException("protocolMaxCommandBytes must be <= " + RespProtocolLimits.MAX_COMMAND_BYTES);
-        }
-        if (protocolGlobalInFlightBytes < 0) {
-            throw new IllegalArgumentException("protocolGlobalInFlightBytes must be >= 0");
-        }
-        if (clientIdleTimeoutMillis < 0) {
-            throw new IllegalArgumentException("clientIdleTimeoutMillis must be >= 0");
-        }
-        if (clientOutputBufferLimitBytes < 0) {
-            throw new IllegalArgumentException("clientOutputBufferLimitBytes must be >= 0");
-        }
-        if (clientOutputBufferOverLimitMillis < 0) {
-            throw new IllegalArgumentException("clientOutputBufferOverLimitMillis must be >= 0");
-        }
+        requirePositive(executorMaxDrainCommands, "executorMaxDrainCommands");
+        requirePositive(executorDrainTimeLimitMillis, "executorDrainTimeLimitMillis");
+        requireNonNegative(transactionQueueMaxCommands, "transactionQueueMaxCommands");
+        requireNonNegative(transactionQueueMaxBytes, "transactionQueueMaxBytes");
+    }
+
+    private void validateProtocolAndClientLimits() {
+        requirePositive(protocolMaxBulkBytes, "protocolMaxBulkBytes");
+        requireAtMost(protocolMaxBulkBytes, RespProtocolLimits.MAX_BULK_BYTES, "protocolMaxBulkBytes");
+        requirePositive(protocolMaxArgs, "protocolMaxArgs");
+        requireAtMost(protocolMaxArgs, RespProtocolLimits.MAX_ARGS, "protocolMaxArgs");
+        requirePositive(protocolMaxLineBytes, "protocolMaxLineBytes");
+        requirePositive(protocolMaxCommandBytes, "protocolMaxCommandBytes");
+        requireAtMost(protocolMaxCommandBytes, RespProtocolLimits.MAX_COMMAND_BYTES, "protocolMaxCommandBytes");
+        requireNonNegative(protocolGlobalInFlightBytes, "protocolGlobalInFlightBytes");
+        requireNonNegative(clientIdleTimeoutMillis, "clientIdleTimeoutMillis");
+        requireNonNegative(clientOutputBufferLimitBytes, "clientOutputBufferLimitBytes");
+        requireNonNegative(clientOutputBufferOverLimitMillis, "clientOutputBufferOverLimitMillis");
         if (clientOutputBufferLimitBytes > 0 && clientOutputBufferOverLimitMillis <= 0) {
             throw new IllegalArgumentException("clientOutputBufferOverLimitMillis must be > 0 when clientOutputBufferLimitBytes is enabled");
         }
-        if (replyGlobalCapacityBytes <= 0L) {
-            throw new IllegalArgumentException("replyGlobalCapacityBytes must be > 0");
-        }
-        if (replyPerConnectionCapacityBytes <= 0L) {
-            throw new IllegalArgumentException("replyPerConnectionCapacityBytes must be > 0");
-        }
-        if (replyMaxTotalBytes <= 0L) {
-            throw new IllegalArgumentException("replyMaxTotalBytes must be > 0");
-        }
-        if (replyChunkPayloadBytes <= 0) {
-            throw new IllegalArgumentException("replyChunkPayloadBytes must be > 0");
-        }
-        if (replyControlReservationBytes <= 0L) {
-            throw new IllegalArgumentException("replyControlReservationBytes must be > 0");
-        }
+    }
+
+    private void validateReplyLimits() {
+        requirePositive(replyGlobalCapacityBytes, "replyGlobalCapacityBytes");
+        requirePositive(replyPerConnectionCapacityBytes, "replyPerConnectionCapacityBytes");
+        requirePositive(replyMaxTotalBytes, "replyMaxTotalBytes");
+        requirePositive(replyChunkPayloadBytes, "replyChunkPayloadBytes");
+        requirePositive(replyControlReservationBytes, "replyControlReservationBytes");
         if (replyControlReservationBytes < YierdisServerRuntimeConfig.MIN_REPLY_CONTROL_RESERVATION_BYTES) {
             throw new IllegalArgumentException(
                     "replyControlReservationBytes must fit reply fixed overhead and the largest scalar error frame"
             );
         }
-        if (replyDrainTimeoutMillis <= 0L) {
-            throw new IllegalArgumentException("replyDrainTimeoutMillis must be > 0");
-        }
+        requirePositive(replyDrainTimeoutMillis, "replyDrainTimeoutMillis");
         if (replyControlReservationBytes > replyMaxTotalBytes) {
             throw new IllegalArgumentException("replyControlReservationBytes must be <= replyMaxTotalBytes");
         }
@@ -433,38 +384,21 @@ public final class YierdisServerArgs {
         if (minimumReplyCharge > replyMaxTotalBytes) {
             throw new IllegalArgumentException("reply chunk, control, and fixed overhead must fit replyMaxTotalBytes");
         }
-        if (maxmemoryBytes < 0) {
-            throw new IllegalArgumentException("maxmemoryBytes must be >= 0");
-        }
+    }
+
+    private void normalizeAndValidateMemoryAndMaintenance() {
+        requireNonNegative(maxmemoryBytes, "maxmemoryBytes");
         maxmemoryScope = normalizeMaxmemoryScope(maxmemoryScope);
         maxmemoryPolicy = normalizeMaxmemoryPolicy(maxmemoryPolicy);
-        if (maxmemorySamples <= 0) {
-            throw new IllegalArgumentException("maxmemorySamples must be > 0");
-        }
-        if (evictionTimeLimitMillis <= 0) {
-            throw new IllegalArgumentException("evictionTimeLimitMillis must be > 0");
-        }
-        if (expireCleanupTimeLimitMillis <= 0) {
-            throw new IllegalArgumentException("expireCleanupTimeLimitMillis must be > 0");
-        }
-        if (nativeDefragMaxMoveBytes < 0) {
-            throw new IllegalArgumentException("nativeDefragMaxMoveBytes must be >= 0");
-        }
-        if (nativeDefragMaxObjects < 0) {
-            throw new IllegalArgumentException("nativeDefragMaxObjects must be >= 0");
-        }
-        if (nativeDefragTimeLimitMillis < 0) {
-            throw new IllegalArgumentException("nativeDefragTimeLimitMillis must be >= 0");
-        }
-        if (nativeSlotCapacity < 0) {
-            throw new IllegalArgumentException("nativeSlotCapacity must be >= 0");
-        }
-        if (keysTimeBudgetMillis < 0) {
-            throw new IllegalArgumentException("keysTimeBudgetMillis must be >= 0");
-        }
-        if (keysMaxResults < 0) {
-            throw new IllegalArgumentException("keysMaxResults must be >= 0");
-        }
+        requirePositive(maxmemorySamples, "maxmemorySamples");
+        requirePositive(evictionTimeLimitMillis, "evictionTimeLimitMillis");
+        requirePositive(expireCleanupTimeLimitMillis, "expireCleanupTimeLimitMillis");
+        requireNonNegative(nativeDefragMaxMoveBytes, "nativeDefragMaxMoveBytes");
+        requireNonNegative(nativeDefragMaxObjects, "nativeDefragMaxObjects");
+        requireNonNegative(nativeDefragTimeLimitMillis, "nativeDefragTimeLimitMillis");
+        requireNonNegative(nativeSlotCapacity, "nativeSlotCapacity");
+        requireNonNegative(keysTimeBudgetMillis, "keysTimeBudgetMillis");
+        requireNonNegative(keysMaxResults, "keysMaxResults");
     }
 
     public YierdisServerArgs copy() {
@@ -584,113 +518,98 @@ public final class YierdisServerArgs {
             return out;
         }
 
-        out.add(YierdisServerArgNames.BIND);
-        out.add(bind);
-        out.add(YierdisServerArgNames.PORT);
-        out.add(Integer.toString(port));
-        out.add(YierdisServerArgNames.MAX_CLIENTS);
-        out.add(Integer.toString(maxClients));
-
-        out.add(YierdisServerArgNames.DATABASES);
-        out.add(Integer.toString(databases));
+        addArg(out, YierdisServerArgNames.BIND, bind);
+        addArg(out, YierdisServerArgNames.PORT, port);
+        addArg(out, YierdisServerArgNames.MAX_CLIENTS, maxClients);
+        addArg(out, YierdisServerArgNames.DATABASES, databases);
 
         if (noCleanup) {
             out.add(YierdisServerArgNames.NO_CLEANUP);
         } else {
-            out.add(YierdisServerArgNames.CLEANUP_INTERVAL_MILLIS);
-            out.add(Long.toString(cleanupIntervalMillis));
+            addArg(out, YierdisServerArgNames.CLEANUP_INTERVAL_MILLIS, cleanupIntervalMillis);
         }
 
-        out.add(YierdisServerArgNames.IO_THREADS);
-        out.add(Integer.toString(ioThreads));
-
-        out.add(YierdisServerArgNames.EXECUTOR_QUEUE_CAPACITY);
-        out.add(Integer.toString(executorQueueCapacity));
-        out.add(YierdisServerArgNames.EXECUTOR_QUEUE_MAX_BYTES);
-        out.add(Long.toString(executorQueueMaxBytes));
-        out.add(YierdisServerArgNames.EXECUTOR_SCHEDULING_POLICY);
-        out.add(executorSchedulingPolicy);
-        out.add(YierdisServerArgNames.BACKPRESSURE_HIGH);
-        out.add(Integer.toString(backpressureHighWatermark));
-        out.add(YierdisServerArgNames.BACKPRESSURE_LOW);
-        out.add(Integer.toString(backpressureLowWatermark));
-        out.add(YierdisServerArgNames.BACKPRESSURE_BYTES_HIGH);
-        out.add(Long.toString(backpressureBytesHighWatermark));
-        out.add(YierdisServerArgNames.BACKPRESSURE_BYTES_LOW);
-        out.add(Long.toString(backpressureBytesLowWatermark));
-        out.add(YierdisServerArgNames.EXECUTOR_MAX_DRAIN);
-        out.add(Integer.toString(executorMaxDrainCommands));
-        out.add(YierdisServerArgNames.EXECUTOR_DRAIN_MILLIS);
-        out.add(Long.toString(executorDrainTimeLimitMillis));
-
-        out.add(YierdisServerArgNames.TRANSACTION_QUEUE_MAX_COMMANDS);
-        out.add(Integer.toString(transactionQueueMaxCommands));
-        out.add(YierdisServerArgNames.TRANSACTION_QUEUE_MAX_BYTES);
-        out.add(Long.toString(transactionQueueMaxBytes));
-
-        out.add(YierdisServerArgNames.PROTOCOL_MAX_BULK_BYTES);
-        out.add(Integer.toString(protocolMaxBulkBytes));
-        out.add(YierdisServerArgNames.PROTOCOL_MAX_ARGS);
-        out.add(Integer.toString(protocolMaxArgs));
-        out.add(YierdisServerArgNames.PROTOCOL_MAX_LINE_BYTES);
-        out.add(Integer.toString(protocolMaxLineBytes));
-        out.add(YierdisServerArgNames.PROTOCOL_MAX_COMMAND_BYTES);
-        out.add(Integer.toString(protocolMaxCommandBytes));
-        out.add(YierdisServerArgNames.PROTOCOL_GLOBAL_IN_FLIGHT_BYTES);
-        out.add(Long.toString(protocolGlobalInFlightBytes));
-
-        out.add(YierdisServerArgNames.CLIENT_IDLE_TIMEOUT_MILLIS);
-        out.add(Long.toString(clientIdleTimeoutMillis));
-        out.add(YierdisServerArgNames.CLIENT_OUTPUT_BUFFER_LIMIT_BYTES);
-        out.add(Long.toString(clientOutputBufferLimitBytes));
-        out.add(YierdisServerArgNames.CLIENT_OUTPUT_BUFFER_OVER_LIMIT_MILLIS);
-        out.add(Long.toString(clientOutputBufferOverLimitMillis));
-
-        out.add(YierdisServerArgNames.REPLY_GLOBAL_CAPACITY_BYTES);
-        out.add(Long.toString(replyGlobalCapacityBytes));
-        out.add(YierdisServerArgNames.REPLY_PER_CONNECTION_CAPACITY_BYTES);
-        out.add(Long.toString(replyPerConnectionCapacityBytes));
-        out.add(YierdisServerArgNames.REPLY_MAX_TOTAL_BYTES);
-        out.add(Long.toString(replyMaxTotalBytes));
-        out.add(YierdisServerArgNames.REPLY_CHUNK_PAYLOAD_BYTES);
-        out.add(Integer.toString(replyChunkPayloadBytes));
-        out.add(YierdisServerArgNames.REPLY_CONTROL_RESERVATION_BYTES);
-        out.add(Long.toString(replyControlReservationBytes));
-        out.add(YierdisServerArgNames.REPLY_DRAIN_TIMEOUT_MILLIS);
-        out.add(Long.toString(replyDrainTimeoutMillis));
-
-        out.add(YierdisServerArgNames.MAXMEMORY_BYTES);
-        out.add(Long.toString(maxmemoryBytes));
-        out.add(YierdisServerArgNames.MAXMEMORY_SCOPE);
-        out.add(maxmemoryScope);
-        out.add(YierdisServerArgNames.MAXMEMORY_POLICY);
-        out.add(maxmemoryPolicy);
-        out.add(YierdisServerArgNames.MAXMEMORY_SAMPLES);
-        out.add(Integer.toString(maxmemorySamples));
-
-        out.add(YierdisServerArgNames.EVICTION_TIME_LIMIT_MILLIS);
-        out.add(Long.toString(evictionTimeLimitMillis));
-        out.add(YierdisServerArgNames.EXPIRE_CLEANUP_TIME_LIMIT_MILLIS);
-        out.add(Long.toString(expireCleanupTimeLimitMillis));
+        addArg(out, YierdisServerArgNames.IO_THREADS, ioThreads);
+        addArg(out, YierdisServerArgNames.EXECUTOR_QUEUE_CAPACITY, executorQueueCapacity);
+        addArg(out, YierdisServerArgNames.EXECUTOR_QUEUE_MAX_BYTES, executorQueueMaxBytes);
+        addArg(out, YierdisServerArgNames.EXECUTOR_SCHEDULING_POLICY, executorSchedulingPolicy);
+        addArg(out, YierdisServerArgNames.BACKPRESSURE_HIGH, backpressureHighWatermark);
+        addArg(out, YierdisServerArgNames.BACKPRESSURE_LOW, backpressureLowWatermark);
+        addArg(out, YierdisServerArgNames.BACKPRESSURE_BYTES_HIGH, backpressureBytesHighWatermark);
+        addArg(out, YierdisServerArgNames.BACKPRESSURE_BYTES_LOW, backpressureBytesLowWatermark);
+        addArg(out, YierdisServerArgNames.EXECUTOR_MAX_DRAIN, executorMaxDrainCommands);
+        addArg(out, YierdisServerArgNames.EXECUTOR_DRAIN_MILLIS, executorDrainTimeLimitMillis);
+        addArg(out, YierdisServerArgNames.TRANSACTION_QUEUE_MAX_COMMANDS, transactionQueueMaxCommands);
+        addArg(out, YierdisServerArgNames.TRANSACTION_QUEUE_MAX_BYTES, transactionQueueMaxBytes);
+        addArg(out, YierdisServerArgNames.PROTOCOL_MAX_BULK_BYTES, protocolMaxBulkBytes);
+        addArg(out, YierdisServerArgNames.PROTOCOL_MAX_ARGS, protocolMaxArgs);
+        addArg(out, YierdisServerArgNames.PROTOCOL_MAX_LINE_BYTES, protocolMaxLineBytes);
+        addArg(out, YierdisServerArgNames.PROTOCOL_MAX_COMMAND_BYTES, protocolMaxCommandBytes);
+        addArg(out, YierdisServerArgNames.PROTOCOL_GLOBAL_IN_FLIGHT_BYTES, protocolGlobalInFlightBytes);
+        addArg(out, YierdisServerArgNames.CLIENT_IDLE_TIMEOUT_MILLIS, clientIdleTimeoutMillis);
+        addArg(out, YierdisServerArgNames.CLIENT_OUTPUT_BUFFER_LIMIT_BYTES, clientOutputBufferLimitBytes);
+        addArg(out, YierdisServerArgNames.CLIENT_OUTPUT_BUFFER_OVER_LIMIT_MILLIS, clientOutputBufferOverLimitMillis);
+        addArg(out, YierdisServerArgNames.REPLY_GLOBAL_CAPACITY_BYTES, replyGlobalCapacityBytes);
+        addArg(out, YierdisServerArgNames.REPLY_PER_CONNECTION_CAPACITY_BYTES, replyPerConnectionCapacityBytes);
+        addArg(out, YierdisServerArgNames.REPLY_MAX_TOTAL_BYTES, replyMaxTotalBytes);
+        addArg(out, YierdisServerArgNames.REPLY_CHUNK_PAYLOAD_BYTES, replyChunkPayloadBytes);
+        addArg(out, YierdisServerArgNames.REPLY_CONTROL_RESERVATION_BYTES, replyControlReservationBytes);
+        addArg(out, YierdisServerArgNames.REPLY_DRAIN_TIMEOUT_MILLIS, replyDrainTimeoutMillis);
+        addArg(out, YierdisServerArgNames.MAXMEMORY_BYTES, maxmemoryBytes);
+        addArg(out, YierdisServerArgNames.MAXMEMORY_SCOPE, maxmemoryScope);
+        addArg(out, YierdisServerArgNames.MAXMEMORY_POLICY, maxmemoryPolicy);
+        addArg(out, YierdisServerArgNames.MAXMEMORY_SAMPLES, maxmemorySamples);
+        addArg(out, YierdisServerArgNames.EVICTION_TIME_LIMIT_MILLIS, evictionTimeLimitMillis);
+        addArg(out, YierdisServerArgNames.EXPIRE_CLEANUP_TIME_LIMIT_MILLIS, expireCleanupTimeLimitMillis);
 
         if (nativeDefragEnabled) {
             out.add(YierdisServerArgNames.NATIVE_DEFRAG_ENABLED);
         }
-        out.add(YierdisServerArgNames.NATIVE_DEFRAG_MAX_MOVE_BYTES);
-        out.add(Long.toString(nativeDefragMaxMoveBytes));
-        out.add(YierdisServerArgNames.NATIVE_DEFRAG_MAX_OBJECTS);
-        out.add(Long.toString(nativeDefragMaxObjects));
-        out.add(YierdisServerArgNames.NATIVE_DEFRAG_TIME_LIMIT_MILLIS);
-        out.add(Long.toString(nativeDefragTimeLimitMillis));
-        out.add(YierdisServerArgNames.NATIVE_SLOT_CAPACITY);
-        out.add(Integer.toString(nativeSlotCapacity));
-
-        out.add(YierdisServerArgNames.KEYS_TIME_BUDGET_MILLIS);
-        out.add(Long.toString(keysTimeBudgetMillis));
-        out.add(YierdisServerArgNames.KEYS_MAX_RESULTS);
-        out.add(Integer.toString(keysMaxResults));
+        addArg(out, YierdisServerArgNames.NATIVE_DEFRAG_MAX_MOVE_BYTES, nativeDefragMaxMoveBytes);
+        addArg(out, YierdisServerArgNames.NATIVE_DEFRAG_MAX_OBJECTS, nativeDefragMaxObjects);
+        addArg(out, YierdisServerArgNames.NATIVE_DEFRAG_TIME_LIMIT_MILLIS, nativeDefragTimeLimitMillis);
+        addArg(out, YierdisServerArgNames.NATIVE_SLOT_CAPACITY, nativeSlotCapacity);
+        addArg(out, YierdisServerArgNames.KEYS_TIME_BUDGET_MILLIS, keysTimeBudgetMillis);
+        addArg(out, YierdisServerArgNames.KEYS_MAX_RESULTS, keysMaxResults);
 
         return out;
+    }
+
+    private static void addArg(List<String> argv, String name, String value) {
+        argv.add(name);
+        argv.add(value);
+    }
+
+    private static void addArg(List<String> argv, String name, int value) {
+        addArg(argv, name, Integer.toString(value));
+    }
+
+    private static void addArg(List<String> argv, String name, long value) {
+        addArg(argv, name, Long.toString(value));
+    }
+
+    private static void requirePositive(long value, String name) {
+        if (value <= 0L) {
+            throw new IllegalArgumentException(name + " must be > 0");
+        }
+    }
+
+    private static void requireNonNegative(long value, String name) {
+        if (value < 0L) {
+            throw new IllegalArgumentException(name + " must be >= 0");
+        }
+    }
+
+    private static void requireAtMost(long value, long maximum, String name) {
+        if (value > maximum) {
+            throw new IllegalArgumentException(name + " must be <= " + maximum);
+        }
+    }
+
+    private static void requireRange(long value, long minimum, long maximum, String name) {
+        if (value < minimum || value > maximum) {
+            throw new IllegalArgumentException(name + " must be in range " + minimum + ".." + maximum);
+        }
     }
 
     private static String normalizeExecutorSchedulingPolicy(String rawValue) {

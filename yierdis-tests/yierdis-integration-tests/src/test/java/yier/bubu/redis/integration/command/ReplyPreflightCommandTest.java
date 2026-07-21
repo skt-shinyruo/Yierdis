@@ -124,6 +124,19 @@ public class ReplyPreflightCommandTest {
     }
 
     @Test
+    public void memoryStatsPreflightMatchesItsResp2WireShape() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
+            TrackingReplyWriter writer = TrackingReplyWriter.accepting();
+
+            execute(processor, new EngineSession(16, 16 * 1024L), writer, cmd("MEMORY", "STATS"));
+
+            Assert.assertEquals(writer.emittedResp2Bytes(), writer.requiredPlan().encodedUpperBoundBytes());
+            Assert.assertEquals(0L, writer.requiredPlan().retainedSourceBytes());
+        });
+    }
+
+    @Test
     public void keyDiscoveryRepliesReserveBeforeWritingTheirNestedWireShape() {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
@@ -264,6 +277,7 @@ public class ReplyPreflightCommandTest {
         private final List<AutoCloseable> transferredResources = new ArrayList<>();
         private boolean closeAfterReply;
         private int arrayHeaderCalls;
+        private long emittedResp2Bytes;
 
         private TrackingReplyWriter(boolean rejectCapacity) {
             this.rejectCapacity = rejectCapacity;
@@ -288,6 +302,10 @@ public class ReplyPreflightCommandTest {
 
         int arrayHeaderCalls() {
             return arrayHeaderCalls;
+        }
+
+        long emittedResp2Bytes() {
+            return emittedResp2Bytes;
         }
 
         void closeTransferredResources() {
@@ -334,6 +352,7 @@ public class ReplyPreflightCommandTest {
 
         @Override
         public void integer(long value) {
+            emittedResp2Bytes += 3L + Long.toString(value).length();
         }
 
         @Override
@@ -367,6 +386,7 @@ public class ReplyPreflightCommandTest {
         @Override
         public void arrayHeader(int count) {
             arrayHeaderCalls++;
+            emittedResp2Bytes += 3L + Integer.toString(count).length();
         }
 
         @Override
@@ -375,6 +395,8 @@ public class ReplyPreflightCommandTest {
 
         @Override
         public void mapHeader(int pairs) {
+            int elements = pairs * 2;
+            emittedResp2Bytes += 3L + Integer.toString(elements).length();
         }
 
         @Override
@@ -391,18 +413,38 @@ public class ReplyPreflightCommandTest {
 
         @Override
         public void bulkString(byte[] data) {
+            if (data == null) {
+                emittedResp2Bytes += 5L;
+                return;
+            }
+            emittedResp2Bytes += bulkStringEncodedBytes(data.length);
         }
 
         @Override
         public void bulkString(byte[] data, int off, int len) {
+            if (data == null) {
+                bulkString((byte[]) null);
+                return;
+            }
+            emittedResp2Bytes += bulkStringEncodedBytes(len);
         }
 
         @Override
         public void bulkString(BytesSlice slice) {
+            if (slice == null) {
+                bulkString((byte[]) null);
+                return;
+            }
+            emittedResp2Bytes += bulkStringEncodedBytes(slice.length());
         }
 
         @Override
         public void bulkStringLongAscii(long value) {
+            emittedResp2Bytes += bulkStringEncodedBytes(Long.toString(value).length());
+        }
+
+        private static long bulkStringEncodedBytes(int payloadBytes) {
+            return 5L + Integer.toString(payloadBytes).length() + payloadBytes;
         }
     }
 }

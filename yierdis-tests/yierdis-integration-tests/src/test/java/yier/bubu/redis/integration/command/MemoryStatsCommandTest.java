@@ -9,72 +9,56 @@ import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplyMap;
 import yier.bubu.redis.testutil.ReplyObject;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 import static yier.bubu.redis.testutil.TestBytes.cmd;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class MemoryStatsCommandTest {
+    private static final List<String> EXPECTED_KEYS = List.of(
+            "maxmemory_bytes",
+            "used_bytes_for_maxmemory",
+            "effective_used_bytes_for_maxmemory",
+            "ledger_used_bytes",
+            "offheap_used_bytes",
+            "ledger_reserved_bytes",
+            "offheap_included_in_maxmemory",
+            "keyspace_table_overhead_bytes_estimate",
+            "expire_table_overhead_bytes_estimate",
+            "expire_value_objects_bytes_estimate",
+            "total_estimated_bytes",
+            "keys_stored_offheap",
+            "key_count",
+            "expire_count",
+            "expired_entries_awaiting_physical_deletion",
+            "keyspace_rehashing",
+            "keyspace_table0_capacity",
+            "keyspace_table1_capacity",
+            "expire_rehashing",
+            "expire_table0_capacity",
+            "expire_table1_capacity"
+    );
+
     @Test
     public void memoryStatsReturnsStableKeyValuePairs() {
         forEachDb(db -> {
-                YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 ReplyObject resp = client.execute(cmd("MEMORY", "STATS"));
                 Assert.assertTrue(resp instanceof ReplyMap);
                 List<ReplyMap.Entry> entries = ((ReplyMap) resp).entries();
                 Assert.assertNotNull(entries);
-                Assert.assertEquals(21, entries.size());
-
-                Map<String, ReplyObject> map = toObjectMap(entries);
-                Assert.assertTrue(map.containsKey("maxmemory_bytes"));
-                Assert.assertTrue(map.containsKey("used_bytes_for_maxmemory"));
-                Assert.assertTrue(map.containsKey("effective_used_bytes_for_maxmemory"));
-                Assert.assertTrue(map.containsKey("ledger_used_bytes"));
-                Assert.assertTrue(map.containsKey("ledger_reserved_bytes"));
-                Assert.assertTrue(map.containsKey("offheap_used_bytes"));
-                Assert.assertTrue(map.containsKey("offheap_included_in_maxmemory"));
-                Assert.assertTrue(map.containsKey("total_estimated_bytes"));
-                Assert.assertTrue(map.containsKey("keyspace_rehashing"));
-                Assert.assertTrue(map.containsKey("keyspace_table0_capacity"));
-                Assert.assertTrue(map.containsKey("expire_rehashing"));
-                Assert.assertTrue(map.containsKey("expired_entries_awaiting_physical_deletion"));
-
-                assertLongValue(map.get("maxmemory_bytes"));
-                assertLongValue(map.get("used_bytes_for_maxmemory"));
-                assertLongValue(map.get("effective_used_bytes_for_maxmemory"));
-                assertLongValue(map.get("ledger_used_bytes"));
-                assertLongValue(map.get("ledger_reserved_bytes"));
-                assertLongValue(map.get("offheap_used_bytes"));
-                assertLongValue(map.get("total_estimated_bytes"));
-                assertLongValue(map.get("key_count"));
-                assertLongValue(map.get("expire_count"));
-                assertLongValue(map.get("expired_entries_awaiting_physical_deletion"));
+                Assert.assertEquals(EXPECTED_KEYS.size(), entries.size());
+                for (int i = 0; i < EXPECTED_KEYS.size(); i++) {
+                    ReplyMap.Entry entry = entries.get(i);
+                    Assert.assertTrue(entry.key() instanceof ReplyBulkString);
+                    Assert.assertEquals(EXPECTED_KEYS.get(i), ((ReplyBulkString) entry.key()).asString());
+                    Assert.assertTrue(
+                            EXPECTED_KEYS.get(i) + " must use integer reply form",
+                            entry.value() instanceof ReplyInteger
+                    );
+                }
             }
         });
-    }
-
-    private static Map<String, ReplyObject> toObjectMap(List<ReplyMap.Entry> entries) {
-        Map<String, ReplyObject> map = new HashMap<>();
-        for (ReplyMap.Entry e : entries) {
-            Assert.assertTrue(e.key() instanceof ReplyBulkString);
-            String k = ((ReplyBulkString) e.key()).asString();
-            map.put(k, e.value());
-        }
-        return map;
-    }
-
-    private static void assertLongValue(ReplyObject obj) {
-        Assert.assertNotNull(obj);
-        if (obj instanceof ReplyInteger i) {
-            return;
-        }
-        if (obj instanceof ReplyBulkString bs) {
-            Long.parseLong(bs.asString());
-            return;
-        }
-        Assert.fail("expected integer-like reply, got: " + obj.getClass().getSimpleName());
     }
 }
