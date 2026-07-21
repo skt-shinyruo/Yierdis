@@ -131,7 +131,7 @@
 
 | 类/模块 | 职责 | 关键入口 | 继续阅读 |
 | --- | --- | --- | --- |
-| `BytesView` / `BytesSlice` / `BytesSink` | 跨 heap/off-heap 的 bytes 读取和流式写出抽象 | view/slice/sink methods | [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md), [`offheap-copy-behavior.md`](./offheap-copy-behavior.md) |
+| `BytesView` / `BytesSlice` / `BytesSink` | 跨 heap/off-heap 的 bytes 读取和流式写出抽象 | view/slice/sink methods | [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md), [`offheap-copy-behavior.md`](./offheap-copy-behavior.md), [`netty-adapter-design.md`](./netty-adapter-design.md) |
 | [`NativeHandle`](../../yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeHandle.java) | native object stable handle 的 ABI 编码 | encode/decode methods | [`native-allocator-and-handles.md`](./native-allocator-and-handles.md) |
 | [`YierdisNativeObjectTable`](../../yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativeObjectTable.java) | object metadata、generation、pin、quarantine | allocate/free/resolve methods | [`native-allocator-and-handles.md`](./native-allocator-and-handles.md) |
 | [`YierdisStableNativeAllocator`](../../yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisStableNativeAllocator.java) | stable allocator、realloc、epoch、active defrag | allocate/realloc/defrag methods | [`native-allocator-and-handles.md`](./native-allocator-and-handles.md) |
