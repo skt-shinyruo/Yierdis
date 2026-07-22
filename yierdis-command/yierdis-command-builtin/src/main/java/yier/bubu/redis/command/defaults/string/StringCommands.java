@@ -233,10 +233,6 @@ public final class StringCommands implements CommandModule {
 
     private void bitcount(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 2 && request.argc() != 4) {
-            CommandSupport.wrongArity(out, "bitcount");
-            return;
-        }
         if (request.argc() == 2) {
             out.integer(support.commandDb(ctx).reads().strings().bitcount(support.argView(request, 1)));
             return;

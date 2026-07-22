@@ -97,24 +97,15 @@ public final class CoreConnectionCommands {
             writeRetainedArgument(request, 1, out);
             return;
         }
-        CommandSupport.wrongArity(out, "ping");
     }
 
     private void echo(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 2) {
-            CommandSupport.wrongArity(out, "echo");
-            return;
-        }
         writeRetainedArgument(request, 1, out);
     }
 
     private void select(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 2) {
-            CommandSupport.wrongArity(out, "select");
-            return;
-        }
         long idx;
         try {
             idx = CommandSupport.parseLong(request, 1, "index");
@@ -143,10 +134,6 @@ public final class CoreConnectionCommands {
 
     private void quit(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 1) {
-            CommandSupport.wrongArity(out, "quit");
-            return;
-        }
         out.simpleString("OK");
         out.requestCloseAfterReply();
     }
@@ -190,10 +177,6 @@ public final class CoreConnectionCommands {
 
     private void flushdb(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 1 && request.argc() != 2) {
-            CommandSupport.wrongArity(out, "flushdb");
-            return;
-        }
         if (request.argc() == 2) {
             if (!CommandSupport.asciiEqualsIgnoreCase(request, 1, "SYNC")
                     && !CommandSupport.asciiEqualsIgnoreCase(request, 1, "ASYNC")) {

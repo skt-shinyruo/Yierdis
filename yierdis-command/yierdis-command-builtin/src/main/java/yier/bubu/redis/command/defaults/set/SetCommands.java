@@ -52,10 +52,6 @@ public final class SetCommands implements CommandModule {
 
     private void sadd(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() < 3) {
-            CommandSupport.wrongArity(out, "sadd");
-            return;
-        }
         int membersLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, membersLen);
         try {
@@ -70,10 +66,6 @@ public final class SetCommands implements CommandModule {
 
     private void srem(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() < 3) {
-            CommandSupport.wrongArity(out, "srem");
-            return;
-        }
         int membersLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, membersLen);
         try {
@@ -88,10 +80,6 @@ public final class SetCommands implements CommandModule {
 
     private void smembers(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 2) {
-            CommandSupport.wrongArity(out, "smembers");
-            return;
-        }
 
         byte[] key = request.readOnlyByteArray(1);
         MeasuredBulkStringSequence seq = support.commandDb(ctx).reads().sets().smembers(key);
@@ -100,19 +88,11 @@ public final class SetCommands implements CommandModule {
 
     private void sismember(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 3) {
-            CommandSupport.wrongArity(out, "sismember");
-            return;
-        }
         out.integer(support.commandDb(ctx).reads().sets().sismember(request.readOnlyByteArray(1), request.readOnlyByteArray(2)) ? 1 : 0);
     }
 
     private void scard(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 2) {
-            CommandSupport.wrongArity(out, "scard");
-            return;
-        }
         out.integer(support.commandDb(ctx).reads().sets().scard(request.readOnlyByteArray(1)));
     }
 

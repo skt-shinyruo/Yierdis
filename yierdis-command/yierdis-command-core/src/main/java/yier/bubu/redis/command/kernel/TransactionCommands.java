@@ -67,10 +67,6 @@ final class TransactionCommands implements CommandModule {
 
     private void multi(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 1) {
-            wrongArity(out, "multi");
-            return;
-        }
         TransactionState tx = tx(ctx);
         if (tx.active()) {
             out.error("ERR MULTI calls can not be nested");
@@ -82,10 +78,6 @@ final class TransactionCommands implements CommandModule {
 
     private void discard(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 1) {
-            wrongArity(out, "discard");
-            return;
-        }
         TransactionState tx = tx(ctx);
         if (!tx.active()) {
             out.error("ERR DISCARD without MULTI");
@@ -97,10 +89,6 @@ final class TransactionCommands implements CommandModule {
 
     private void exec(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 1) {
-            wrongArity(out, "exec");
-            return;
-        }
         TransactionState tx = tx(ctx);
         if (!tx.active()) {
             out.error("ERR EXEC without MULTI");
@@ -207,7 +195,4 @@ final class TransactionCommands implements CommandModule {
         return ctx.transactionSession().transaction();
     }
 
-    private static void wrongArity(RedisReplyWriter out, String cmdLower) {
-        out.error("ERR wrong number of arguments for '" + cmdLower + "' command");
-    }
 }

@@ -29,6 +29,20 @@ public class CommandSyntaxTest {
         }
     }
 
+    @Test
+    public void commandParsersExposeOnlyTheTwoNonArityFactories() {
+        java.util.List<String> publicStaticSignatures = java.util.Arrays.stream(
+                        CommandParsers.class.getDeclaredMethods()
+                )
+                .filter(method -> java.lang.reflect.Modifier.isPublic(method.getModifiers()))
+                .filter(method -> java.lang.reflect.Modifier.isStatic(method.getModifiers()))
+                .map(method -> method.getName() + java.util.Arrays.toString(method.getParameterTypes()))
+                .sorted()
+                .toList();
+
+        Assert.assertEquals(java.util.List.of("args[]", "request[]"), publicStaticSignatures);
+    }
+
     private static ByteArrayExecutionRequest request(String... args) {
         return ByteArrayExecutionRequest.fromUtf8(args[0], java.util.List.of(args).subList(1, args.length));
     }

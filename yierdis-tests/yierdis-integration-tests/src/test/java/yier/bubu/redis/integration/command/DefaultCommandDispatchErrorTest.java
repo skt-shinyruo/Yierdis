@@ -41,7 +41,7 @@ public class DefaultCommandDispatchErrorTest {
 
     private static List<CommandErrorCase> registeredCommandErrorCases() {
         List<CommandErrorCase> cases = new ArrayList<>();
-        errorCase(cases, authWithoutConfiguredPassword(), "AUTH");
+        errorCase(cases, wrongArity("auth"), "AUTH");
         errorCase(cases, wrongArity("append"), "APPEND");
         errorCase(cases, wrongArity("bitcount"), "BITCOUNT");
         errorCase(cases, wrongArity("client"), "CLIENT");
@@ -113,11 +113,6 @@ public class DefaultCommandDispatchErrorTest {
 
     private static String wrongArity(String commandLower) {
         return "ERR wrong number of arguments for '" + commandLower + "' command";
-    }
-
-    private static String authWithoutConfiguredPassword() {
-        return "ERR AUTH <password> called without any password configured for the default user. "
-                + "Are you sure your configuration is correct?";
     }
 
     private static void withClient(ClientCase test) {
