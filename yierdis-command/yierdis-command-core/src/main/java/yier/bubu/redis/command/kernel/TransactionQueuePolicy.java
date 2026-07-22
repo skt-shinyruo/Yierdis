@@ -2,6 +2,7 @@ package yier.bubu.redis.command.kernel;
 
 import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
@@ -25,7 +26,7 @@ final class TransactionQueuePolicy {
         Objects.requireNonNull(registry, "registry");
 
         TransactionState tx = ctx.transactionSession().transaction();
-        if (!tx.active() || isTransactionControl(request)) {
+        if (!tx.active()) {
             return false;
         }
 
@@ -37,44 +38,28 @@ final class TransactionQueuePolicy {
             return true;
         }
 
-        String disallowedInMultiError = spec.disallowedInMultiError();
-        if (disallowedInMultiError != null) {
+        if (spec.syntax().transactionPolicy() == TransactionPolicy.TRANSACTION_CONTROL) {
+            return false;
+        }
+        if (spec.syntax().transactionPolicy() == TransactionPolicy.DISALLOWED_IN_MULTI) {
             tx.markAborted();
-            out.error(disallowedInMultiError);
+            out.error("ERR " + spec.syntax().nameUpper() + " is not allowed in MULTI");
             return true;
         }
 
-        if (!validateBeforeQueue(spec, request, tx, out)) {
+        CommandParseResult<?> parsed = spec.parse(request);
+        if (!parsed.ok()) {
+            tx.markAborted();
+            out.error(parsed.error().toReplyMessage());
             return true;
         }
 
-        String enqueueErr = tx.tryEnqueue(request);
-        if (enqueueErr != null) {
-            out.error(enqueueErr);
+        String enqueueError = tx.tryEnqueue(request);
+        if (enqueueError != null) {
+            out.error(enqueueError);
             return true;
         }
         out.simpleString("QUEUED");
         return true;
-    }
-
-    private boolean validateBeforeQueue(
-            CommandSpec<?> spec,
-            ExecutionRequest request,
-            TransactionState tx,
-            RedisReplyWriter out
-    ) {
-        CommandParseResult<?> parsed = spec.parse(request);
-        if (parsed.ok()) {
-            return true;
-        }
-        tx.markAborted();
-        out.error(parsed.error().toReplyMessage());
-        return false;
-    }
-
-    private static boolean isTransactionControl(ExecutionRequest request) {
-        return CommandRequestSupport.asciiEqualsIgnoreCase(request, 0, "MULTI")
-                || CommandRequestSupport.asciiEqualsIgnoreCase(request, 0, "EXEC")
-                || CommandRequestSupport.asciiEqualsIgnoreCase(request, 0, "DISCARD");
     }
 }

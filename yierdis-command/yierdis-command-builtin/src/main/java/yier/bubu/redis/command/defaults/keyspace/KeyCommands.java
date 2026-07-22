@@ -2,13 +2,16 @@ package yier.bubu.redis.command.defaults.keyspace;
 
 import yier.bubu.redis.command.api.ArgReader;
 import yier.bubu.redis.command.api.CommandArity;
-import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParseError;
 import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
+import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.defaults.CommandSupport;
 
 import yier.bubu.redis.storage.api.ValueType;
@@ -28,6 +31,8 @@ import java.util.function.ToLongFunction;
 
 public final class KeyCommands implements CommandModule {
     private static final int KEY_WINDOW_DISCOVERY_ATTEMPTS = 2;
+    private static final CommandKeySpec KEY = new CommandKeySpec(1, 1, 1);
+    private static final CommandKeySpec MULTI_KEYS = new CommandKeySpec(1, -1, 1);
     private static final MemoryStatField[] MEMORY_STATS_FIELDS = {
             memoryStat("maxmemory_bytes", YierdisMemoryStats::maxmemoryBytes),
             memoryStat("used_bytes_for_maxmemory", YierdisMemoryStats::usedBytesForMaxmemory),
@@ -64,20 +69,24 @@ public final class KeyCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register("TYPE", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exactRequest(2, "type"), this::type);
-        registration.register("MEMORY", CommandDescriptor.of(-2, 0, 0, 0), CommandParsers.minRequest(2, "memory"), this::memory);
-        registration.register("OBJECT", CommandDescriptor.of(-2, 0, 0, 0), CommandParsers.minRequest(2, "object"), this::object);
-        registration.register("KEYS", CommandDescriptor.of(2, 0, 0, 0), CommandParsers.exactRequest(2, "keys"), this::keys);
-        registration.register("SCAN", CommandDescriptor.of(-2, 0, 0, 0), this::parseScan, this::scan);
-        registration.register("DEL", CommandDescriptor.of(-2, 1, -1, 1), CommandParsers.minRequest(2, "del"), this::del);
-        registration.register("EXISTS", CommandDescriptor.of(-2, 1, -1, 1), CommandParsers.minRequest(2, "exists"), this::exists);
-        registration.register("EXPIRE", CommandDescriptor.of(3, 1, 1, 1), CommandParsers.exactRequest(3, "expire"), this::expire);
-        registration.register("PEXPIRE", CommandDescriptor.of(3, 1, 1, 1), CommandParsers.exactRequest(3, "pexpire"), this::pexpire);
-        registration.register("EXPIREAT", CommandDescriptor.of(3, 1, 1, 1), CommandParsers.exactRequest(3, "expireat"), this::expireat);
-        registration.register("PEXPIREAT", CommandDescriptor.of(3, 1, 1, 1), CommandParsers.exactRequest(3, "pexpireat"), this::pexpireat);
-        registration.register("PERSIST", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exactRequest(2, "persist"), this::persist);
-        registration.register("TTL", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exactRequest(2, "ttl"), this::ttl);
-        registration.register("PTTL", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exactRequest(2, "pttl"), this::pttl);
+        registration.register(CommandSpec.of(syntax("TYPE", CommandArity.exact(2), KEY), CommandParsers.request(), this::type));
+        registration.register(CommandSpec.of(syntax("MEMORY", CommandArity.min(2), CommandKeySpec.NONE), CommandParsers.request(), this::memory));
+        registration.register(CommandSpec.of(syntax("OBJECT", CommandArity.min(2), CommandKeySpec.NONE), CommandParsers.request(), this::object));
+        registration.register(CommandSpec.of(syntax("KEYS", CommandArity.exact(2), CommandKeySpec.NONE), CommandParsers.request(), this::keys));
+        registration.register(CommandSpec.of(syntax("SCAN", CommandArity.min(2), CommandKeySpec.NONE), this::parseScan, this::scan));
+        registration.register(CommandSpec.of(syntax("DEL", CommandArity.min(2), MULTI_KEYS), CommandParsers.request(), this::del));
+        registration.register(CommandSpec.of(syntax("EXISTS", CommandArity.min(2), MULTI_KEYS), CommandParsers.request(), this::exists));
+        registration.register(CommandSpec.of(syntax("EXPIRE", CommandArity.exact(3), KEY), CommandParsers.request(), this::expire));
+        registration.register(CommandSpec.of(syntax("PEXPIRE", CommandArity.exact(3), KEY), CommandParsers.request(), this::pexpire));
+        registration.register(CommandSpec.of(syntax("EXPIREAT", CommandArity.exact(3), KEY), CommandParsers.request(), this::expireat));
+        registration.register(CommandSpec.of(syntax("PEXPIREAT", CommandArity.exact(3), KEY), CommandParsers.request(), this::pexpireat));
+        registration.register(CommandSpec.of(syntax("PERSIST", CommandArity.exact(2), KEY), CommandParsers.request(), this::persist));
+        registration.register(CommandSpec.of(syntax("TTL", CommandArity.exact(2), KEY), CommandParsers.request(), this::ttl));
+        registration.register(CommandSpec.of(syntax("PTTL", CommandArity.exact(2), KEY), CommandParsers.request(), this::pttl));
+    }
+
+    private static CommandSyntax syntax(String nameUpper, CommandArity arity, CommandKeySpec keys) {
+        return new CommandSyntax(nameUpper, arity, keys, TransactionPolicy.QUEUEABLE);
     }
 
     private void type(ExecutionRequest request, CommandContext ctx) {
@@ -237,10 +246,6 @@ public final class KeyCommands implements CommandModule {
     }
 
     private CommandParseResult<ScanArgs> parseScan(ArgReader args) {
-        CommandParseError arity = CommandArity.min(2, "scan").validate(args);
-        if (arity != null) {
-            return CommandParseResult.error(arity);
-        }
         long cursor;
         try {
             cursor = args.nonNegativeLongAt(1);

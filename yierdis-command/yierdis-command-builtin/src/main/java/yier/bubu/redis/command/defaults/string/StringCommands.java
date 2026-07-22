@@ -2,13 +2,16 @@ package yier.bubu.redis.command.defaults.string;
 
 import yier.bubu.redis.command.api.ArgReader;
 import yier.bubu.redis.command.api.CommandArity;
-import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParseError;
 import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
+import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.defaults.BulkStringReplyAdapter;
 import yier.bubu.redis.command.defaults.CommandSupport;
 
@@ -26,6 +29,7 @@ import java.util.Objects;
 public final class StringCommands implements CommandModule {
     private static final long MAX_STRING_BYTES = 512L * 1024 * 1024;
     private static final String INVALID_SET_EXPIRE = "ERR invalid expire time in 'set' command";
+    private static final CommandKeySpec KEY = new CommandKeySpec(1, 1, 1);
 
     private final CommandSupport support;
 
@@ -36,25 +40,25 @@ public final class StringCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register("SET", CommandDescriptor.of(-3, 1, 1, 1), this::parseSet, this::set);
-        registration.register("GET", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exact(2, "get"), this::get);
-        registration.register("STRLEN", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exact(2, "strlen"), this::strlen);
-        registration.register("APPEND", CommandDescriptor.of(3, 1, 1, 1), CommandParsers.exact(3, "append"), this::append);
-        registration.register("SETBIT", CommandDescriptor.of(4, 1, 1, 1), CommandParsers.exact(4, "setbit"), this::setbit);
-        registration.register("GETBIT", CommandDescriptor.of(3, 1, 1, 1), CommandParsers.exact(3, "getbit"), this::getbit);
-        registration.register("BITCOUNT", CommandDescriptor.of(-2, 1, 1, 1), CommandParsers.oneOfRequest("bitcount", 2, 4), this::bitcount);
-        registration.register("INCR", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exact(2, "incr"), this::incr);
-        registration.register("DECR", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exact(2, "decr"), this::decr);
+        registration.register(CommandSpec.of(syntax("SET", CommandArity.min(3)), this::parseSet, this::set));
+        registration.register(CommandSpec.of(syntax("GET", CommandArity.exact(2)), CommandParsers.args(), this::get));
+        registration.register(CommandSpec.of(syntax("STRLEN", CommandArity.exact(2)), CommandParsers.args(), this::strlen));
+        registration.register(CommandSpec.of(syntax("APPEND", CommandArity.exact(3)), CommandParsers.args(), this::append));
+        registration.register(CommandSpec.of(syntax("SETBIT", CommandArity.exact(4)), CommandParsers.args(), this::setbit));
+        registration.register(CommandSpec.of(syntax("GETBIT", CommandArity.exact(3)), CommandParsers.args(), this::getbit));
+        registration.register(CommandSpec.of(syntax("BITCOUNT", CommandArity.oneOf(2, 4)), CommandParsers.request(), this::bitcount));
+        registration.register(CommandSpec.of(syntax("INCR", CommandArity.exact(2)), CommandParsers.args(), this::incr));
+        registration.register(CommandSpec.of(syntax("DECR", CommandArity.exact(2)), CommandParsers.args(), this::decr));
+    }
+
+    private static CommandSyntax syntax(String nameUpper, CommandArity arity) {
+        return new CommandSyntax(nameUpper, arity, KEY, TransactionPolicy.QUEUEABLE);
     }
 
     private record SetArgs(ExecutionRequest request, byte[] key, int valueIndex, SetMode mode, ExpireOption expire, boolean getOld) {
     }
 
     private CommandParseResult<SetArgs> parseSet(ArgReader args) {
-        CommandParseError arity = CommandArity.min(3, "set").validate(args);
-        if (arity != null) {
-            return CommandParseResult.error(arity);
-        }
         byte[] key = args.bytes(1);
         SetMode mode = SetMode.NORMAL;
         ExpireOption expire = null;

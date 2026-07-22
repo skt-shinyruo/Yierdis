@@ -3,9 +3,12 @@ package yier.bubu.redis.command.kernel;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.CommandSyntax;
+import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
@@ -25,12 +28,11 @@ public class YierdisFastCommandProcessorModuleTest {
     @Test
     public void explicitRegistryCanRegisterAdditionalCommands() {
         CommandRegistry registry = CommandRegistries.from(
-                registrar -> registrar.register(
-                        "LOCAL",
-                        CommandDescriptor.of(1, 0, 0, 0),
-                        CommandParsers.exactRequest(1, "local"),
+                registrar -> registrar.register(CommandSpec.of(
+                        syntax("LOCAL", CommandArity.exact(1)),
+                        CommandParsers.request(),
                         (request, ctx) -> ctx.out().simpleString("LOCAL")
-                )
+                ))
         );
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
         ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of());
@@ -45,14 +47,11 @@ public class YierdisFastCommandProcessorModuleTest {
     @Test
     public void modulesCanRegisterTypedCommandSpecsDirectly() {
         CommandRegistry registry = CommandRegistries.from(
-                registrar -> registrar.register(
-                        "LOCAL",
-                        CommandSpec.of(
-                                CommandDescriptor.of(1, 0, 0, 0),
-                                CommandParsers.exact(1, "local"),
-                                (args, ctx) -> ctx.out().simpleString("LOCAL_OK")
-                        )
-                )
+                registrar -> registrar.register(CommandSpec.of(
+                        syntax("LOCAL", CommandArity.exact(1)),
+                        CommandParsers.args(),
+                        (args, ctx) -> ctx.out().simpleString("LOCAL_OK")
+                ))
         );
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
 
@@ -61,6 +60,12 @@ public class YierdisFastCommandProcessorModuleTest {
 
         Assert.assertEquals("LOCAL_OK", out.simpleStringValue);
         Assert.assertNull(out.errorValue);
+    }
+
+    private static CommandSyntax syntax(String nameUpper, CommandArity arity) {
+        return new CommandSyntax(
+                nameUpper, arity, CommandKeySpec.NONE, TransactionPolicy.QUEUEABLE
+        );
     }
 
     private static void assertUnknownCommand(YierdisFastCommandProcessor processor, String commandName) {

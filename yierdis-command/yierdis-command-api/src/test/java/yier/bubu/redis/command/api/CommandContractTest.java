@@ -27,41 +27,41 @@ public class CommandContractTest {
 
     @Test
     public void arityValidatorsReturnNullWhenValidAndErrorsWhenInvalid() {
-        Assert.assertNull(CommandArity.exact(2, "get").validate(args("GET", "k")));
+        Assert.assertNull(CommandArity.exact(2).validate("get", args("GET", "k")));
         Assert.assertEquals(
                 "ERR wrong number of arguments for 'get' command",
-                CommandArity.exact(2, "get").validate(args("GET")).toReplyMessage()
+                CommandArity.exact(2).validate("get", args("GET")).toReplyMessage()
         );
 
-        Assert.assertNull(CommandArity.min(3, "del").validate(args("DEL", "a", "b")));
+        Assert.assertNull(CommandArity.min(3).validate("del", args("DEL", "a", "b")));
         Assert.assertEquals(
                 "ERR wrong number of arguments for 'del' command",
-                CommandArity.min(3, "del").validate(args("DEL", "a")).toReplyMessage()
+                CommandArity.min(3).validate("del", args("DEL", "a")).toReplyMessage()
         );
 
-        Assert.assertNull(CommandArity.range(4, 6, "zrange").validate(args("ZRANGE", "z", "0", "-1")));
-        Assert.assertNull(CommandArity.range(4, 6, "zrange").validate(args("ZRANGE", "z", "0", "-1", "WITHSCORES", "REV")));
+        Assert.assertNull(CommandArity.range(4, 6).validate("zrange", args("ZRANGE", "z", "0", "-1")));
+        Assert.assertNull(CommandArity.range(4, 6).validate("zrange", args("ZRANGE", "z", "0", "-1", "WITHSCORES", "REV")));
         Assert.assertEquals(
                 "ERR wrong number of arguments for 'zrange' command",
-                CommandArity.range(4, 6, "zrange").validate(args("ZRANGE", "z", "0", "-1", "WITHSCORES", "REV", "X")).toReplyMessage()
+                CommandArity.range(4, 6).validate("zrange", args("ZRANGE", "z", "0", "-1", "WITHSCORES", "REV", "X")).toReplyMessage()
         );
 
-        Assert.assertNull(CommandArity.oneOf("ping", 1, 2).validate(args("PING")));
-        Assert.assertNull(CommandArity.oneOf("ping", 1, 2).validate(args("PING", "hello")));
+        Assert.assertNull(CommandArity.oneOf(1, 2).validate("ping", args("PING")));
+        Assert.assertNull(CommandArity.oneOf(1, 2).validate("ping", args("PING", "hello")));
         Assert.assertEquals(
                 "ERR wrong number of arguments for 'ping' command",
-                CommandArity.oneOf("ping", 1, 2).validate(args("PING", "a", "b")).toReplyMessage()
+                CommandArity.oneOf(1, 2).validate("ping", args("PING", "a", "b")).toReplyMessage()
         );
 
-        Assert.assertNull(CommandArity.pairTail(4, 2, "hset").validate(args("HSET", "h", "f", "v")));
-        Assert.assertNull(CommandArity.pairTail(4, 2, "hset").validate(args("HSET", "h", "f1", "v1", "f2", "v2")));
+        Assert.assertNull(CommandArity.pairTail(4, 2).validate("hset", args("HSET", "h", "f", "v")));
+        Assert.assertNull(CommandArity.pairTail(4, 2).validate("hset", args("HSET", "h", "f1", "v1", "f2", "v2")));
         Assert.assertEquals(
                 "ERR wrong number of arguments for 'hset' command",
-                CommandArity.pairTail(4, 2, "hset").validate(args("HSET", "h", "f")).toReplyMessage()
+                CommandArity.pairTail(4, 2).validate("hset", args("HSET", "h", "f")).toReplyMessage()
         );
         Assert.assertEquals(
                 "ERR wrong number of arguments for 'hset' command",
-                CommandArity.pairTail(4, 2, "hset").validate(args("HSET", "h", "f1", "v1", "f2")).toReplyMessage()
+                CommandArity.pairTail(4, 2).validate("hset", args("HSET", "h", "f1", "v1", "f2")).toReplyMessage()
         );
     }
 

@@ -1,8 +1,12 @@
 package yier.bubu.redis.integration.command;
 
 import yier.bubu.redis.command.kernel.CommandRegistry;
-import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.CommandSyntax;
+import yier.bubu.redis.command.api.TransactionPolicy;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
@@ -13,12 +17,10 @@ import java.util.List;
 import java.util.Locale;
 
 public class CommandRegistryTest {
-    private static final CommandDescriptor PING = CommandDescriptor.of(1, 0, 0, 0);
-
     @Test
     public void findIsCaseInsensitive() {
         CommandRegistry registry = new CommandRegistry();
-        registerNoop(registry, "PING", PING);
+        registerNoop(registry, "PING");
 
         try (ExecutionRequest c1 = request("PING")) {
             Assert.assertNotNull(spec(registry, c1));
@@ -34,7 +36,7 @@ public class CommandRegistryTest {
     @Test
     public void unknownCommandReturnsNull() {
         CommandRegistry registry = new CommandRegistry();
-        registerNoop(registry, "PING", PING);
+        registerNoop(registry, "PING");
 
         try (ExecutionRequest cmd = request("NOPE")) {
             Assert.assertNull(spec(registry, cmd));
@@ -44,9 +46,9 @@ public class CommandRegistryTest {
     @Test
     public void duplicateRegistrationIsRejected() {
         CommandRegistry registry = new CommandRegistry();
-        registerNoop(registry, "PING", PING);
+        registerNoop(registry, "PING");
         try {
-            registerNoop(registry, "ping", PING);
+            registerNoop(registry, "ping");
             Assert.fail("expected duplicate registration to throw");
         } catch (IllegalArgumentException expected) {
             // ok
@@ -84,7 +86,7 @@ public class CommandRegistryTest {
         };
 
         for (String name : names) {
-            registerNoop(registry, name, CommandDescriptor.of(1, 0, 0, 0));
+            registerNoop(registry, name);
         }
 
         for (String name : names) {
@@ -94,14 +96,18 @@ public class CommandRegistryTest {
         }
     }
 
-    private static void registerNoop(CommandRegistry registry, String name, CommandDescriptor descriptor) {
-        registry.register(
-                name,
-                descriptor,
-                CommandParsers.exactRequest(1, name.toLowerCase(Locale.ROOT)),
+    private static void registerNoop(CommandRegistry registry, String name) {
+        registry.register(CommandSpec.of(
+                new CommandSyntax(
+                        name,
+                        CommandArity.exact(1),
+                        CommandKeySpec.NONE,
+                        TransactionPolicy.QUEUEABLE
+                ),
+                CommandParsers.request(),
                 (request, ctx) -> {
                 }
-        );
+        ));
     }
 
     private static ExecutionRequest request(String commandName) {

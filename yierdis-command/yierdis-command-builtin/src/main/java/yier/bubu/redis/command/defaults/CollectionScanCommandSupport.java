@@ -2,7 +2,6 @@ package yier.bubu.redis.command.defaults;
 
 import java.util.Objects;
 import yier.bubu.redis.command.api.ArgReader;
-import yier.bubu.redis.command.api.CommandArity;
 import yier.bubu.redis.command.api.CommandParseError;
 import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.execution.api.ReplyPlan;
@@ -20,14 +19,8 @@ public final class CollectionScanCommandSupport {
 
     public static CommandParseResult<Arguments> parse(
             ArgReader args,
-            String commandLower,
             boolean allowNoValues
     ) {
-        CommandParseError arity = CommandArity.min(3, commandLower).validate(args);
-        if (arity != null) {
-            return CommandParseResult.error(arity);
-        }
-
         ScanCursorV2 cursor;
         try {
             cursor = ScanCursorV2.of(args.nonNegativeLongAt(2));
