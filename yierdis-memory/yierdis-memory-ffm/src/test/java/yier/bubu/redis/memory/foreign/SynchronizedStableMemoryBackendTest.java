@@ -153,6 +153,55 @@ public class SynchronizedStableMemoryBackendTest {
     }
 
     @Test
+    public void sameAdapterRegionCopiesSerializeAsOneOperation() throws Exception {
+        CopyProbeRegion firstDelegateRegion = new CopyProbeRegion((byte) 1, true);
+        CopyProbeRegion secondDelegateRegion = new CopyProbeRegion((byte) 2, false);
+        try (SynchronizedStableMemoryBackend backend = new SynchronizedStableMemoryBackend(
+                new ProbeBackend(3L, firstDelegateRegion, secondDelegateRegion))) {
+            StableMemoryRegion first = backend.allocateRegion("first", 16);
+            StableMemoryRegion second = backend.allocateRegion("second", 16);
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+
+            Thread firstCopy = Thread.ofPlatform().start(() -> {
+                try {
+                    first.copyTo(0, second, 0, 1);
+                } catch (Throwable throwable) {
+                    failure.set(throwable);
+                }
+            });
+            Assert.assertTrue(firstDelegateRegion.copyEntered.await(5, TimeUnit.SECONDS));
+
+            CountDownLatch secondStarted = new CountDownLatch(1);
+            Thread secondCopy = Thread.ofPlatform().start(() -> {
+                secondStarted.countDown();
+                try {
+                    second.copyTo(0, first, 0, 1);
+                } catch (Throwable throwable) {
+                    failure.compareAndSet(null, throwable);
+                }
+            });
+            Assert.assertTrue(secondStarted.await(5, TimeUnit.SECONDS));
+            Assert.assertTrue(
+                    "reciprocal same-adapter copy did not wait for the first operation",
+                    awaitThreadState(secondCopy, Thread.State.BLOCKED, 5, TimeUnit.SECONDS)
+            );
+            Assert.assertEquals(1L, secondDelegateRegion.copyEntered.getCount());
+
+            firstDelegateRegion.releaseCopy.countDown();
+            firstCopy.join(5_000L);
+            secondCopy.join(5_000L);
+
+            Assert.assertFalse(firstCopy.isAlive());
+            Assert.assertFalse(secondCopy.isAlive());
+            Assert.assertNull(failure.get());
+            Assert.assertEquals(1, first.getByte(0));
+            Assert.assertEquals(1, second.getByte(0));
+            first.close();
+            second.close();
+        }
+    }
+
+    @Test
     public void completedScopeCannotClearLaterScopesOwnership() throws Exception {
         try (SynchronizedStableMemoryBackend backend = newBackend("synchronized-scope-generation", 128)) {
             backend.bindToCurrentThread();
@@ -205,6 +254,26 @@ public class SynchronizedStableMemoryBackendTest {
         });
     }
 
+    private static boolean awaitThreadState(
+            Thread thread,
+            Thread.State expected,
+            long timeout,
+            TimeUnit unit
+    ) {
+        long deadline = System.nanoTime() + unit.toNanos(timeout);
+        while (System.nanoTime() < deadline) {
+            Thread.State state = thread.getState();
+            if (state == expected) {
+                return true;
+            }
+            if (state == Thread.State.TERMINATED) {
+                return false;
+            }
+            Thread.onSpinWait();
+        }
+        return thread.getState() == expected;
+    }
+
     private static SynchronizedStableMemoryBackend newBackend(String name, int maxSlots) {
         return new SynchronizedStableMemoryBackend(
                 new YierdisFfmStableMemoryBackend(name, maxSlots, new SynchronizedTestOwner())
@@ -227,11 +296,12 @@ public class SynchronizedStableMemoryBackendTest {
 
     private static final class ProbeBackend implements StableMemoryBackend {
         private final long id;
-        private final StableMemoryRegion region;
+        private final StableMemoryRegion[] regions;
+        private int nextRegion;
 
-        private ProbeBackend(long id, StableMemoryRegion region) {
+        private ProbeBackend(long id, StableMemoryRegion... regions) {
             this.id = id;
-            this.region = region;
+            this.regions = regions;
         }
 
         @Override public long allocatorId() { return id; }
@@ -246,7 +316,13 @@ public class SynchronizedStableMemoryBackendTest {
         @Override public long estimateAllocationScopeBookkeepingBytes(int expectedAllocationCount) { throw unsupported(); }
         @Override public NativeObjectView resolve(NativeHandle handle, NativeAccessMode mode) { throw unsupported(); }
         @Override public NativeObjectView resolvePinned(NativeHandle handle, NativeAccessMode mode) { throw unsupported(); }
-        @Override public StableMemoryRegion allocateRegion(String owner, int bytes) { return region; }
+        @Override
+        public StableMemoryRegion allocateRegion(String owner, int bytes) {
+            if (nextRegion >= regions.length) {
+                throw new IllegalStateException("probe backend has no region for allocation");
+            }
+            return regions[nextRegion++];
+        }
         @Override public NativeDefragResult defragOne(NativeHandle handle, long maxMoveBytes) { throw unsupported(); }
         @Override public NativeDefragReport defragCycle(NativeDefragOptions options) { throw unsupported(); }
         @Override public long logicalUsedBytes() { throw unsupported(); }
@@ -302,6 +378,56 @@ public class SynchronizedStableMemoryBackendTest {
         @Override
         public void copyTo(int sourceOffset, StableMemoryRegion target, int targetOffset, int length) {
             target.setBytes(targetOffset, new byte[length], 0, length);
+        }
+
+        @Override public void close() { }
+    }
+
+    private static final class CopyProbeRegion implements StableMemoryRegion {
+        private final byte[] bytes = new byte[16];
+        private final boolean blockCopy;
+        private final CountDownLatch copyEntered = new CountDownLatch(1);
+        private final CountDownLatch releaseCopy = new CountDownLatch(1);
+
+        private CopyProbeRegion(byte initialValue, boolean blockCopy) {
+            bytes[0] = initialValue;
+            this.blockCopy = blockCopy;
+        }
+
+        @Override public int size() { return bytes.length; }
+        @Override public byte getByte(int offset) { return bytes[offset]; }
+        @Override public void setByte(int offset, byte value) { bytes[offset] = value; }
+        @Override public int getIntLittleEndian(int offset) { return 0; }
+        @Override public void setIntLittleEndian(int offset, int value) { }
+        @Override public long getLongLittleEndian(int offset) { return 0L; }
+        @Override public void setLongLittleEndian(int offset, long value) { }
+
+        @Override
+        public void getBytes(int offset, byte[] dst, int dstOffset, int length) {
+            System.arraycopy(bytes, offset, dst, dstOffset, length);
+        }
+
+        @Override
+        public void setBytes(int offset, byte[] src, int srcOffset, int length) {
+            System.arraycopy(src, srcOffset, bytes, offset, length);
+        }
+
+        @Override
+        public void copyTo(int sourceOffset, StableMemoryRegion target, int targetOffset, int length) {
+            copyEntered.countDown();
+            if (blockCopy) {
+                try {
+                    if (!releaseCopy.await(5, TimeUnit.SECONDS)) {
+                        throw new AssertionError("timed out waiting to release first copy");
+                    }
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(interrupted);
+                }
+            }
+            byte[] snapshot = new byte[length];
+            getBytes(sourceOffset, snapshot, 0, length);
+            target.setBytes(targetOffset, snapshot, 0, length);
         }
 
         @Override public void close() { }
