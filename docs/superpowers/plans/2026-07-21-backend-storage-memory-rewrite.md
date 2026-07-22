@@ -513,10 +513,10 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 \
 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
 mvn -pl yierdis-server/yierdis-server-runtime -am \
   -Dtest=DbEngineFactoryConfigContractTest,YierdisInstanceCapabilityValidationTest,DbEngineFactoryInjectionTest,DbEngineReadWriteBoundaryTest,YierdisGlobalMaxmemoryGovernorTest \
-  -Dsurefire.failIfNoSpecifiedTests=false test
+  -Dsurefire.failIfNoSpecifiedTests=false clean test
 ```
 
-Expected: PASS. Factory calls carry one immutable config, invalid compositions fail before attachment, and cleanup counters are exactly one.
+Expected: PASS. The clean phase removes the renamed `DbEngineFactoryPolicyContractTest` bytecode before the subsequent broad suite. Factory calls carry one immutable config, invalid compositions fail before attachment, and cleanup counters are exactly one.
 
 - [ ] **Step 8: Run the broader capability-owner suite**
 
@@ -552,12 +552,16 @@ git commit -m "refactor: make runtime database capabilities explicit"
 - Delete: `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeAllocator.java`
 - Rewrite: `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeHandle.java`
 - Create: `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/StableMemoryBackendIds.java`
+- Create: `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/StableMemoryBackendIdSequence.java`
 - Create: `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeHandleOwnershipException.java`
 - Create: `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/MemoryOwner.java`
 - Create: `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/StableMemoryBackendFactory.java`
 - Create: `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/StableMemoryRegion.java`
 - Create: `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/StableMemoryBackend.java`
-- Rewrite: `yierdis-memory/yierdis-memory-api/src/test/java/yier/bubu/redis/memory/api/NativeHandleTest.java`
+- Modify: `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeObjectView.java`
+- Modify: `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeAllocationScope.java`
+- Modify: `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeEpochScope.java`
+- Modify: `yierdis-memory/yierdis-memory-api/src/test/java/yier/bubu/redis/memory/api/NativeHandleTest.java`
 - Rename: `yierdis-memory/yierdis-memory-api/src/test/java/yier/bubu/redis/memory/api/NativeAllocatorContractTest.java` to `yierdis-memory/yierdis-memory-api/src/test/java/yier/bubu/redis/memory/api/StableMemoryBackendContractTest.java`
 - Rename: `yierdis-memory/yierdis-memory-testkit/src/main/java/yier/bubu/redis/memory/testkit/FailOnAllocationNativeAllocator.java` to `yierdis-memory/yierdis-memory-testkit/src/main/java/yier/bubu/redis/memory/testkit/FailOnAllocationStableMemoryBackend.java`
 - Rename: `yierdis-memory/yierdis-memory-testkit/src/test/java/yier/bubu/redis/memory/testkit/FailOnAllocationNativeAllocatorTest.java` to `yierdis-memory/yierdis-memory-testkit/src/test/java/yier/bubu/redis/memory/testkit/FailOnAllocationStableMemoryBackendTest.java`
@@ -567,117 +571,502 @@ git commit -m "refactor: make runtime database capabilities explicit"
 - Invariant: `allocatorId == 0 && localRaw == 0` is the sole null handle; a live backend ID is positive, process-unique, monotonic, and never reused.
 - Invariant: public code can carry `localRaw` as opaque data but cannot construct/decode the old packed local format or invoke a local-only operation.
 
-- [ ] **Step 1: Write the failing handle and ID tests**
+- [ ] **Step 1: Write the failing handle and ID tests without losing metadata coverage**
 
-Rewrite `NativeHandleTest.java`:
+Modify `NativeHandleTest.java`; do not replace the suite wholesale. Retain
+`domainLookupDoesNotAllocateForEveryDecodedHandle()`,
+`collectionNativeObjectKindsHaveDistinctCodesInsideTheirDomains()`, its exact
+domain-mapping assertions, `allocatedBytesBean()`, and the
+`java.lang.management.ManagementFactory` import verbatim. These tests cover
+allocation-free metadata lookup and per-domain object-kind code uniqueness,
+which remain valid after the public packed handle disappears.
+
+Remove the raw packed-handle tests from this public API suite:
+`nullHandleIsOnlyZeroRawValue()`, `encodesAndDecodesHandleFields()`,
+`primitiveDecodersMatchHandleAccessorsWithoutPerCallAllocation()`,
+`rejectsOutOfRangeFields()`, `rejectsMismatchedDomainAndKind()`, and
+`rejectsNonZeroReservedDomain()`, together with the now-unused `assertIllegal`
+and `consumeRawFields` helpers. Task 3 ports the still-valid codec behavior and
+allocation test to package-private `YierdisLocalHandleCodecTest`; only the raw
+public API location is deleted. Add imports for `ArrayList`, `HashSet`, `List`,
+`Set`, `CountDownLatch`, `ExecutorService`, `Executors`, `Future`, and
+`TimeUnit`, then add these two-part handle and backend-ID tests to the retained
+class:
 
 ```java
-package yier.bubu.redis.memory.api;
+@Test
+public void nullRequiresBothIdentityPartsToBeZero() {
+    Assert.assertTrue(NativeHandle.NULL.isNull());
+    Assert.assertEquals(0L, NativeHandle.NULL.allocatorId());
+    Assert.assertEquals(0L, NativeHandle.NULL.localRaw());
+    Assert.assertFalse(new NativeHandle(1L, 0L).isNull());
+    Assert.assertFalse(new NativeHandle(0L, 1L).isNull());
+}
 
-import org.junit.Assert;
-import org.junit.Test;
+@Test
+public void equalityIncludesAllocatorIdentity() {
+    NativeHandle first = new NativeHandle(11L, 77L);
+    NativeHandle same = new NativeHandle(11L, 77L);
+    NativeHandle otherAllocator = new NativeHandle(12L, 77L);
 
-public class NativeHandleTest {
-    @Test
-    public void nullRequiresBothIdentityPartsToBeZero() {
-        Assert.assertTrue(NativeHandle.NULL.isNull());
-        Assert.assertFalse(new NativeHandle(1L, 0L).isNull());
-        Assert.assertFalse(new NativeHandle(0L, 1L).isNull());
+    Assert.assertEquals(first, same);
+    Assert.assertNotEquals(first, otherAllocator);
+}
+
+@Test
+public void backendIdsArePositiveAndStrictlyMonotonic() {
+    long first = StableMemoryBackendIds.nextId();
+    long second = StableMemoryBackendIds.nextId();
+    long third = StableMemoryBackendIds.nextId();
+
+    Assert.assertTrue(first > 0L);
+    Assert.assertTrue(second > first);
+    Assert.assertTrue(third > second);
+}
+
+@Test
+public void backendIdsArePositiveAndUniqueAcrossConcurrentCallers() throws Exception {
+    int workerCount = 8;
+    int idsPerWorker = 1_000;
+    ExecutorService executor = Executors.newFixedThreadPool(workerCount);
+    CountDownLatch start = new CountDownLatch(1);
+    try {
+        List<Future<List<Long>>> futures = new ArrayList<>();
+        for (int worker = 0; worker < workerCount; worker++) {
+            futures.add(executor.submit(() -> {
+                start.await();
+                List<Long> generated = new ArrayList<>(idsPerWorker);
+                for (int index = 0; index < idsPerWorker; index++) {
+                    generated.add(StableMemoryBackendIds.nextId());
+                }
+                return generated;
+            }));
+        }
+        start.countDown();
+
+        Set<Long> unique = new HashSet<>();
+        for (Future<List<Long>> future : futures) {
+            for (long id : future.get(5L, TimeUnit.SECONDS)) {
+                Assert.assertTrue(id > 0L);
+                Assert.assertTrue("duplicate backend ID " + id, unique.add(id));
+            }
+        }
+        Assert.assertEquals(workerCount * idsPerWorker, unique.size());
+    } finally {
+        executor.shutdownNow();
+        Assert.assertTrue(executor.awaitTermination(5L, TimeUnit.SECONDS));
     }
+}
 
-    @Test
-    public void equalityIncludesAllocatorIdentity() {
-        NativeHandle first = new NativeHandle(11L, 77L);
-        NativeHandle same = new NativeHandle(11L, 77L);
-        NativeHandle otherAllocator = new NativeHandle(12L, 77L);
+@Test
+public void backendIdExhaustionIsPermanentInAnIsolatedSequence() {
+    StableMemoryBackendIdSequence sequence =
+            new StableMemoryBackendIdSequence(Long.MAX_VALUE);
 
-        Assert.assertEquals(first, same);
-        Assert.assertNotEquals(first, otherAllocator);
-    }
-
-    @Test
-    public void backendIdsArePositiveAndStrictlyMonotonic() {
-        long first = StableMemoryBackendIds.nextId();
-        long second = StableMemoryBackendIds.nextId();
-        long third = StableMemoryBackendIds.nextId();
-
-        Assert.assertTrue(first > 0L);
-        Assert.assertTrue(second > first);
-        Assert.assertTrue(third > second);
-    }
+    Assert.assertEquals(Long.MAX_VALUE, sequence.nextId());
+    Assert.assertThrows(IllegalStateException.class, sequence::nextId);
+    Assert.assertThrows(IllegalStateException.class, sequence::nextId);
 }
 ```
 
-- [ ] **Step 2: Write the failing complete-interface reflection test**
+- [ ] **Step 2: Extend the renamed contract suite without dropping record coverage**
 
-Replace `NativeAllocatorContractTest` with:
+Rename `NativeAllocatorContractTest` to `StableMemoryBackendContractTest` and
+rename the class, but retain these existing test methods and their bodies
+verbatim:
+
+- `statsRecordExposesAllocatorCounters`
+- `statsRecordExposesProductionAllocatorCounters`
+- `defragResultFactoriesExposeMovementOutcomes`
+- `defragCycleRecordsExposeBudgetsAndCounters`
+- `epochKindsCoverAllocatorReadSafetyScopes`
+- `exceptionTypesCarryMessages`
+- `nativeCapacityExceptionIsAnOffHeapOom`
+
+The final method preserves the API category invariant:
+`NativeCapacityExceededException` is an `OffHeapOutOfMemoryException`, not a
+`NativeMemoryException`. Add these imports and reflection/legacy-absence tests
+to that retained suite:
 
 ```java
-package yier.bubu.redis.memory.api;
-
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.Arrays;
 import java.util.Set;
 import java.util.stream.Collectors;
-import org.junit.Assert;
-import org.junit.Test;
+import yier.bubu.redis.common.memory.MemoryPressureBudget;
+import yier.bubu.redis.common.memory.MemoryReclaimResult;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 
-public class StableMemoryBackendContractTest {
-    @Test
-    public void requiredBackendBehaviorIsAbstract() {
-        Set<String> required = Set.of(
-                "allocatorId", "bindToCurrentThread", "allocate", "reallocate",
-                "free", "pin", "unpin", "beginEpoch", "beginAllocationScope",
-                "estimateAllocationScopeBookkeepingBytes", "resolve", "resolvePinned",
-                "allocateRegion", "defragOne", "defragCycle", "logicalUsedBytes",
-                "stats", "metadataStats", "memoryUsage", "trimEmptyPages",
-                "estimateAdditionalGrowth", "estimateConservativeAdditionalGrowth",
-                "liveRegionCount", "close"
-        );
-        Set<String> declared = Arrays.stream(StableMemoryBackend.class.getDeclaredMethods())
-                .peek(method -> Assert.assertTrue(
-                        method.getName() + " must be abstract",
-                        Modifier.isAbstract(method.getModifiers())
-                ))
-                .map(Method::getName)
-                .collect(Collectors.toSet());
+@Test
+public void requiredBackendBehaviorIsAbstract() {
+    Set<String> required = Set.of(
+            "allocatorId", "bindToCurrentThread", "allocate", "reallocate",
+            "free", "pin", "unpin", "beginEpoch", "beginAllocationScope",
+            "estimateAllocationScopeBookkeepingBytes", "resolve", "resolvePinned",
+            "allocateRegion", "defragOne", "defragCycle", "logicalUsedBytes",
+            "stats", "metadataStats", "memoryUsage", "trimEmptyPages",
+            "estimateAdditionalGrowth", "estimateConservativeAdditionalGrowth",
+            "liveRegionCount", "close"
+    );
+    Method[] declaredMethods = StableMemoryBackend.class.getDeclaredMethods();
+    Assert.assertEquals(required.size(), declaredMethods.length);
+    Set<String> declared = Arrays.stream(declaredMethods)
+            .peek(method -> Assert.assertTrue(
+                    method.getName() + " must be abstract",
+                    Modifier.isAbstract(method.getModifiers())
+            ))
+            .map(Method::getName)
+            .collect(Collectors.toSet());
 
-        Assert.assertEquals(required, declared);
+    Assert.assertEquals(required, declared);
+}
+
+@Test
+public void backendMethodSignaturesAreExact() throws Exception {
+    assertAbstractMethod(StableMemoryBackend.class, long.class, "allocatorId");
+    assertAbstractMethod(StableMemoryBackend.class, void.class, "bindToCurrentThread");
+    assertAbstractMethod(
+            StableMemoryBackend.class,
+            NativeHandle.class,
+            "allocate",
+            NativeObjectKind.class,
+            int.class
+    );
+    assertAbstractMethod(
+            StableMemoryBackend.class,
+            NativeHandle.class,
+            "reallocate",
+            NativeHandle.class,
+            int.class,
+            NativeReallocPolicy.class
+    );
+    assertAbstractMethod(StableMemoryBackend.class, void.class, "free", NativeHandle.class);
+    assertAbstractMethod(StableMemoryBackend.class, void.class, "pin", NativeHandle.class);
+    assertAbstractMethod(StableMemoryBackend.class, void.class, "unpin", NativeHandle.class);
+    assertAbstractMethod(
+            StableMemoryBackend.class,
+            NativeEpochScope.class,
+            "beginEpoch",
+            NativeEpochKind.class
+    );
+    assertAbstractMethod(
+            StableMemoryBackend.class,
+            NativeAllocationScope.class,
+            "beginAllocationScope"
+    );
+    assertAbstractMethod(
+            StableMemoryBackend.class,
+            long.class,
+            "estimateAllocationScopeBookkeepingBytes",
+            int.class
+    );
+    assertAbstractMethod(
+            StableMemoryBackend.class,
+            NativeObjectView.class,
+            "resolve",
+            NativeHandle.class,
+            NativeAccessMode.class
+    );
+    assertAbstractMethod(
+            StableMemoryBackend.class,
+            NativeObjectView.class,
+            "resolvePinned",
+            NativeHandle.class,
+            NativeAccessMode.class
+    );
+    assertAbstractMethod(
+            StableMemoryBackend.class,
+            StableMemoryRegion.class,
+            "allocateRegion",
+            String.class,
+            int.class
+    );
+    assertAbstractMethod(
+            StableMemoryBackend.class,
+            NativeDefragResult.class,
+            "defragOne",
+            NativeHandle.class,
+            long.class
+    );
+    assertAbstractMethod(
+            StableMemoryBackend.class,
+            NativeDefragReport.class,
+            "defragCycle",
+            NativeDefragOptions.class
+    );
+    assertAbstractMethod(StableMemoryBackend.class, long.class, "logicalUsedBytes");
+    assertAbstractMethod(StableMemoryBackend.class, NativeAllocatorStats.class, "stats");
+    assertAbstractMethod(
+            StableMemoryBackend.class,
+            NativeAllocatorMetadataStats.class,
+            "metadataStats"
+    );
+    assertAbstractMethod(StableMemoryBackend.class, MemoryUsageSnapshot.class, "memoryUsage");
+    assertAbstractMethod(
+            StableMemoryBackend.class,
+            MemoryReclaimResult.class,
+            "trimEmptyPages",
+            MemoryPressureBudget.class
+    );
+    assertAbstractMethod(
+            StableMemoryBackend.class,
+            NativeAllocationGrowth.class,
+            "estimateAdditionalGrowth",
+            int[].class
+    );
+    assertAbstractMethod(
+            StableMemoryBackend.class,
+            NativeAllocationGrowth.class,
+            "estimateConservativeAdditionalGrowth",
+            int[].class
+    );
+    assertAbstractMethod(StableMemoryBackend.class, long.class, "liveRegionCount");
+    assertAbstractMethod(StableMemoryBackend.class, void.class, "close");
+}
+
+@Test
+public void regionMethodSignaturesAreExact() throws Exception {
+    Assert.assertEquals(11, StableMemoryRegion.class.getDeclaredMethods().length);
+    assertAbstractMethod(StableMemoryRegion.class, int.class, "size");
+    assertAbstractMethod(StableMemoryRegion.class, byte.class, "getByte", int.class);
+    assertAbstractMethod(
+            StableMemoryRegion.class,
+            void.class,
+            "setByte",
+            int.class,
+            byte.class
+    );
+    assertAbstractMethod(
+            StableMemoryRegion.class,
+            int.class,
+            "getIntLittleEndian",
+            int.class
+    );
+    assertAbstractMethod(
+            StableMemoryRegion.class,
+            void.class,
+            "setIntLittleEndian",
+            int.class,
+            int.class
+    );
+    assertAbstractMethod(
+            StableMemoryRegion.class,
+            long.class,
+            "getLongLittleEndian",
+            int.class
+    );
+    assertAbstractMethod(
+            StableMemoryRegion.class,
+            void.class,
+            "setLongLittleEndian",
+            int.class,
+            long.class
+    );
+    assertAbstractMethod(
+            StableMemoryRegion.class,
+            void.class,
+            "getBytes",
+            int.class,
+            byte[].class,
+            int.class,
+            int.class
+    );
+    assertAbstractMethod(
+            StableMemoryRegion.class,
+            void.class,
+            "setBytes",
+            int.class,
+            byte[].class,
+            int.class,
+            int.class
+    );
+    assertAbstractMethod(
+            StableMemoryRegion.class,
+            void.class,
+            "copyTo",
+            int.class,
+            StableMemoryRegion.class,
+            int.class,
+            int.class
+    );
+    assertAbstractMethod(StableMemoryRegion.class, void.class, "close");
+}
+
+@Test
+public void ownerFactoryAndOwnershipExceptionContractsAreExact() throws Exception {
+    Assert.assertEquals(3, MemoryOwner.class.getDeclaredMethods().length);
+    assertAbstractMethod(MemoryOwner.class, void.class, "bindToCurrentThread");
+    assertAbstractMethod(MemoryOwner.class, void.class, "checkCurrentThread");
+    assertAbstractMethod(MemoryOwner.class, void.class, "checkCurrentThreadForShutdown");
+    Assert.assertEquals(1, StableMemoryBackendFactory.class.getDeclaredMethods().length);
+    assertAbstractMethod(
+            StableMemoryBackendFactory.class,
+            StableMemoryBackend.class,
+            "create",
+            String.class,
+            int.class,
+            MemoryOwner.class
+    );
+    Assert.assertTrue(
+            StableMemoryBackendFactory.class.isAnnotationPresent(FunctionalInterface.class)
+    );
+
+    NativeHandleOwnershipException failure =
+            new NativeHandleOwnershipException(11L, 12L);
+    Assert.assertEquals(
+            1,
+            NativeHandleOwnershipException.class.getDeclaredConstructors().length
+    );
+    Assert.assertNotNull(
+            NativeHandleOwnershipException.class.getConstructor(long.class, long.class)
+    );
+    Assert.assertEquals(
+            Set.of("expectedAllocatorId", "actualAllocatorId"),
+            Arrays.stream(NativeHandleOwnershipException.class.getDeclaredMethods())
+                    .map(Method::getName)
+                    .collect(Collectors.toSet())
+    );
+    Assert.assertEquals(
+            long.class,
+            NativeHandleOwnershipException.class
+                    .getDeclaredMethod("expectedAllocatorId")
+                    .getReturnType()
+    );
+    Assert.assertEquals(
+            long.class,
+            NativeHandleOwnershipException.class
+                    .getDeclaredMethod("actualAllocatorId")
+                    .getReturnType()
+    );
+    Assert.assertEquals(11L, failure.expectedAllocatorId());
+    Assert.assertEquals(12L, failure.actualAllocatorId());
+    Assert.assertEquals(
+            long.class,
+            NativeHandleOwnershipException.class
+                    .getDeclaredField("expectedAllocatorId")
+                    .getType()
+    );
+    Assert.assertEquals(
+            long.class,
+            NativeHandleOwnershipException.class
+                    .getDeclaredField("actualAllocatorId")
+                    .getType()
+    );
+    Assert.assertTrue(failure instanceof NativeMemoryException);
+}
+
+@Test
+public void publicMemoryApiHasNoRawOperationOrLegacyAllocator() throws Exception {
+    Set<String> methodNames = Arrays.stream(StableMemoryBackend.class.getMethods())
+            .map(Method::getName)
+            .collect(Collectors.toSet());
+
+    Assert.assertFalse(methodNames.stream().anyMatch(name -> name.endsWith("Raw")));
+    Assert.assertThrows(
+            ClassNotFoundException.class,
+            () -> Class.forName("yier.bubu.redis.memory.api.NativeAllocator")
+    );
+    Assert.assertArrayEquals(
+            new String[]{"allocatorId", "localRaw"},
+            Arrays.stream(NativeHandle.class.getRecordComponents())
+                    .map(component -> component.getName())
+                    .toArray(String[]::new)
+    );
+    Assert.assertEquals(1, NativeHandle.class.getDeclaredConstructors().length);
+    Assert.assertNotNull(NativeHandle.class.getConstructor(long.class, long.class));
+    Assert.assertEquals(
+            Set.of(
+                    "allocatorId():long",
+                    "localRaw():long",
+                    "isNull():boolean",
+                    "equals(java.lang.Object):boolean",
+                    "hashCode():int",
+                    "toString():java.lang.String"
+            ),
+            Arrays.stream(NativeHandle.class.getDeclaredMethods())
+                    .map(StableMemoryBackendContractTest::methodDescriptor)
+                    .collect(Collectors.toSet())
+    );
+    Set<String> retiredHandleMethods = Set.of(
+            "raw", "fromRaw", "rawOf", "of", "requireNonNull", "requireValidRaw", "domain",
+            "domainCode", "kindCode", "slotId", "generation", "flags"
+    );
+    Set<String> handleMethods = Arrays.stream(NativeHandle.class.getDeclaredMethods())
+            .map(Method::getName)
+            .collect(Collectors.toSet());
+    for (String retired : retiredHandleMethods) {
+        Assert.assertFalse("retired NativeHandle method remains: " + retired,
+                handleMethods.contains(retired));
     }
+    Assert.assertThrows(
+            NoSuchMethodException.class,
+            () -> NativeHandle.class.getDeclaredMethod("isNull", long.class)
+    );
+}
 
-    @Test
-    public void publicMemoryApiHasNoRawOperationOrLegacyAllocator() {
-        Set<String> methodNames = Arrays.stream(StableMemoryBackend.class.getMethods())
-                .map(Method::getName)
-                .collect(Collectors.toSet());
+private static void assertAbstractMethod(
+        Class<?> owner,
+        Class<?> returnType,
+        String name,
+        Class<?>... parameterTypes
+) throws Exception {
+    Method method = owner.getDeclaredMethod(name, parameterTypes);
+    Assert.assertEquals(name, returnType, method.getReturnType());
+    Assert.assertTrue(name + " must be abstract", Modifier.isAbstract(method.getModifiers()));
+}
 
-        Assert.assertFalse(methodNames.stream().anyMatch(name -> name.endsWith("Raw")));
-        Assert.assertThrows(
-                ClassNotFoundException.class,
-                () -> Class.forName("yier.bubu.redis.memory.api.NativeAllocator")
-        );
-        Assert.assertArrayEquals(
-                new String[]{"allocatorId", "localRaw"},
-                Arrays.stream(NativeHandle.class.getRecordComponents())
-                        .map(component -> component.getName())
-                        .toArray(String[]::new)
-        );
-    }
+private static String methodDescriptor(Method method) {
+    String parameters = Arrays.stream(method.getParameterTypes())
+            .map(Class::getTypeName)
+            .collect(Collectors.joining(","));
+    return method.getName() + "(" + parameters + "):" + method.getReturnType().getTypeName();
 }
 ```
+
+Rename `FailOnAllocationNativeAllocatorTest` to
+`FailOnAllocationStableMemoryBackendTest` and replace its allocator fixture
+with a handwritten recording backend, never a dynamic proxy. The renamed test
+proves allocation and capacity-growing reallocation consume attempts, whereas
+shrink and within-capacity reallocation neither consume the quota nor throw.
+The two failure paths must assert the allocation category directly:
+
+```java
+Assert.assertThrows(
+        NativeCapacityExceededException.class,
+        () -> backend.allocate(NativeObjectKind.STRING_BYTES, 8)
+);
+Assert.assertThrows(
+        NativeCapacityExceededException.class,
+        () -> backend.reallocate(handle, 32, NativeReallocPolicy.PRESERVE_PREFIX)
+);
+```
+
+The test method `delegatesEveryNonAllocationOperationExactlyOnce()` invokes
+every pass-through exactly once against an ordered recording backend and
+verifies both exact argument identity and returned sentinel identity for
+`allocatorId`, owner binding, `free`, `pin`, `unpin`, both scope factories,
+bookkeeping estimation, `resolve`, `resolvePinned`, region allocation, both
+defrag methods, `logicalUsedBytes`, `stats`, `metadataStats`, `memoryUsage`,
+trim, both growth estimators, `liveRegionCount`, and `close`. This prevents a
+complete-looking wrapper from forwarding a method to the wrong delegate
+operation.
 
 - [ ] **Step 3: Run the memory API tests and verify RED**
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 \
 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-mvn -pl yierdis-memory/yierdis-memory-api -am \
-  -Dtest=NativeHandleTest,StableMemoryBackendContractTest \
+mvn -pl yierdis-memory/yierdis-memory-api,yierdis-memory/yierdis-memory-testkit -am \
+  -Dtest=NativeHandleTest,StableMemoryBackendContractTest,FailOnAllocationStableMemoryBackendTest \
   -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-Expected: test compilation fails because the stable backend types and two-part handle do not exist. If the new types are added before deleting the old interface, `publicMemoryApiHasNoRawOperationOrLegacyAllocator` remains red because `NativeAllocator` is still loadable.
+Expected: test compilation fails because the stable backend types, two-part
+handle, and renamed `FailOnAllocationStableMemoryBackend` wrapper do not exist.
+If the new types are added before deleting the old interface,
+`publicMemoryApiHasNoRawOperationOrLegacyAllocator` remains red because
+`NativeAllocator` is still loadable.
 
 - [ ] **Step 4: Replace the public handle and allocate non-reusable backend IDs**
 
@@ -686,6 +1075,12 @@ Replace `NativeHandle` completely; domain, kind, slot, generation, flags, `fromR
 ```java
 package yier.bubu.redis.memory.api;
 
+/**
+ * 标识由某个 {@link StableMemoryBackend} 拥有的稳定内存对象。
+ * {@code allocatorId} 是后端身份，{@code localRaw} 是只能由所属后端解释的不透明局部值；
+ * 调用方不得解码该值，也不得把句柄交给其他后端。重分配和整理搬迁不改变句柄身份，
+ * 释放对象后句柄失效；仅当两个分量都为 {@code 0} 时表示空句柄。
+ */
 public record NativeHandle(long allocatorId, long localRaw) {
     public static final NativeHandle NULL = new NativeHandle(0L, 0L);
 
@@ -695,27 +1090,34 @@ public record NativeHandle(long allocatorId, long localRaw) {
 }
 ```
 
-Create the process-wide ID source with a permanent zero exhaustion sentinel. The final positive value may be returned once; no call after exhaustion can wrap back to a reused ID:
+Create a package-private sequence so exhaustion can be tested without mutating
+the process-global source. Its zero value is a permanent exhaustion sentinel:
+the final positive value may be returned once, and no later call can wrap to a
+reused ID.
 
 ```java
 package yier.bubu.redis.memory.api;
 
 import java.util.concurrent.atomic.AtomicLong;
 
-public final class StableMemoryBackendIds {
-    private static final AtomicLong NEXT = new AtomicLong(1L);
+final class StableMemoryBackendIdSequence {
+    private final AtomicLong next;
 
-    private StableMemoryBackendIds() {
+    StableMemoryBackendIdSequence(long initialId) {
+        if (initialId <= 0L) {
+            throw new IllegalArgumentException("initialId must be positive");
+        }
+        this.next = new AtomicLong(initialId);
     }
 
-    public static long nextId() {
+    long nextId() {
         for (;;) {
-            long current = NEXT.get();
+            long current = next.get();
             if (current <= 0L) {
                 throw new IllegalStateException("stable memory backend IDs are exhausted");
             }
-            long next = current == Long.MAX_VALUE ? 0L : current + 1L;
-            if (NEXT.compareAndSet(current, next)) {
+            long successor = current == Long.MAX_VALUE ? 0L : current + 1L;
+            if (next.compareAndSet(current, successor)) {
                 return current;
             }
         }
@@ -723,11 +1125,41 @@ public final class StableMemoryBackendIds {
 }
 ```
 
+The public process-wide source owns one non-resettable sequence:
+
+```java
+package yier.bubu.redis.memory.api;
+
+/**
+ * 分配进程范围内的稳定内存后端身份。
+ * 返回值始终为正且从不复用；可用正值耗尽后，当前进程中的后续分配永久失败。
+ */
+public final class StableMemoryBackendIds {
+    private static final StableMemoryBackendIdSequence PROCESS_IDS =
+            new StableMemoryBackendIdSequence(1L);
+
+    private StableMemoryBackendIds() {
+    }
+
+    /** 返回新的进程唯一身份；身份空间耗尽时抛出 {@link IllegalStateException}。 */
+    public static long nextId() {
+        return PROCESS_IDS.nextId();
+    }
+}
+```
+
+During review, verify there is no reset method or second production sequence;
+only the isolated package-private sequence test may choose a starting ID.
+
 Create the dedicated ownership error. Its fields make tests and callers independent of message wording:
 
 ```java
 package yier.bubu.redis.memory.api;
 
+/**
+ * 表示句柄所属后端与接收操作的后端不一致。
+ * expected/actual 身份作为结构化契约公开，调用方无需解析异常消息。
+ */
 public final class NativeHandleOwnershipException extends NativeMemoryException {
     private final long expectedAllocatorId;
     private final long actualAllocatorId;
@@ -738,10 +1170,12 @@ public final class NativeHandleOwnershipException extends NativeMemoryException 
         this.actualAllocatorId = actual;
     }
 
+    /** 返回接收本次操作的后端身份。 */
     public long expectedAllocatorId() {
         return expectedAllocatorId;
     }
 
+    /** 返回句柄携带的所属后端身份。 */
     public long actualAllocatorId() {
         return actualAllocatorId;
     }
@@ -755,9 +1189,18 @@ Create these interfaces exactly:
 ```java
 package yier.bubu.redis.memory.api;
 
+/**
+ * 为稳定内存后端提供显式 owner thread 绑定与校验。
+ * 普通访问不会隐式绑定；未绑定实例可以执行关闭校验，绑定后只能由 owner thread 关闭。
+ */
 public interface MemoryOwner {
+    /** 将未绑定 owner 绑定到当前线程；同一线程重复绑定有效，跨线程绑定失败。 */
     void bindToCurrentThread();
+
+    /** 校验普通访问来自已绑定的 owner thread；绑定前或跨线程访问失败。 */
     void checkCurrentThread();
+
+    /** 校验关闭来自 owner thread；尚未绑定时允许关闭，绑定后拒绝跨线程关闭。 */
     void checkCurrentThreadForShutdown();
 }
 ```
@@ -765,6 +1208,10 @@ public interface MemoryOwner {
 ```java
 package yier.bubu.redis.memory.api;
 
+/**
+ * 为指定 {@link MemoryOwner} 创建独立且尚未绑定的稳定内存后端。
+ * 每次调用都返回非 {@code null} 的新后端；调用方接管后端及其关闭责任，工厂不得代为绑定 owner。
+ */
 @FunctionalInterface
 public interface StableMemoryBackendFactory {
     StableMemoryBackend create(String name, int maxSlots, MemoryOwner owner);
@@ -774,17 +1221,25 @@ public interface StableMemoryBackendFactory {
 ```java
 package yier.bubu.redis.memory.api;
 
+/**
+ * 由后端分配并计入其内存用量的固定大小区域。
+ * 多字节整数固定使用 little-endian，{@link #copyTo} 在源和目标重叠时也保持复制语义。
+ * 复制只传递字节，不转移任一区域的所有权。区域沿用后端 owner 约束；
+ * 调用方须在关闭后端前关闭区域，关闭后不得继续访问。
+ */
 public interface StableMemoryRegion extends AutoCloseable {
     int size();
     byte getByte(int offset);
     void setByte(int offset, byte value);
-    int getInt(int offset);
-    void setInt(int offset, int value);
-    long getLong(int offset);
-    void setLong(int offset, long value);
+    int getIntLittleEndian(int offset);
+    void setIntLittleEndian(int offset, int value);
+    long getLongLittleEndian(int offset);
+    void setLongLittleEndian(int offset, long value);
     void getBytes(int offset, byte[] dst, int dstOffset, int length);
     void setBytes(int offset, byte[] src, int srcOffset, int length);
     void copyTo(int sourceOffset, StableMemoryRegion target, int targetOffset, int length);
+
+    /** 释放区域；重复关闭不重复释放资源或扣减后端统计。 */
     @Override void close();
 }
 ```
@@ -798,18 +1253,37 @@ import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.common.memory.MemoryReclaimResult;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 
+/**
+ * 提供稳定对象、独立区域、回收和统计能力的 owner-bound 后端。
+ * 每个实例具有进程内不复用的正 {@code allocatorId}；句柄必须先校验该身份，
+ * 再由所属后端解释 {@code localRaw}。内存访问须显式绑定，所有视图、scope、epoch、
+ * 显式 pin 和 region 都须在后端关闭前结束。
+ */
 public interface StableMemoryBackend extends AutoCloseable {
     long allocatorId();
+
+    /** 显式绑定 owner；任何普通内存访问都不得代替调用方完成绑定。 */
     void bindToCurrentThread();
     NativeHandle allocate(NativeObjectKind kind, int size);
+
+    /** 调整容量并保持完整句柄身份不变。 */
     NativeHandle reallocate(NativeHandle handle, int newSize, NativeReallocPolicy policy);
     void free(NativeHandle handle);
+
+    /** 保留对象；每次成功调用都必须由同一 owner 配对调用 {@link #unpin(NativeHandle)}。 */
     void pin(NativeHandle handle);
     void unpin(NativeHandle handle);
     NativeEpochScope beginEpoch(NativeEpochKind kind);
     NativeAllocationScope beginAllocationScope();
     long estimateAllocationScopeBookkeepingBytes(int expectedAllocationCount);
+
+    /** 返回拥有自身保留的视图；关闭视图会释放该保留。 */
     NativeObjectView resolve(NativeHandle handle, NativeAccessMode mode);
+
+    /**
+     * 借用调用方已经持有的 pin，只接受 {@link NativeAccessMode#READ_ONLY}；
+     * 关闭视图不会替调用方执行 {@link #unpin(NativeHandle)}。
+     */
     NativeObjectView resolvePinned(NativeHandle handle, NativeAccessMode mode);
     StableMemoryRegion allocateRegion(String owner, int bytes);
     NativeDefragResult defragOne(NativeHandle handle, long maxMoveBytes);
@@ -822,8 +1296,40 @@ public interface StableMemoryBackend extends AutoCloseable {
     NativeAllocationGrowth estimateAdditionalGrowth(int... requestedBytes);
     NativeAllocationGrowth estimateConservativeAdditionalGrowth(int... requestedBytes);
     long liveRegionCount();
+
+    /** 按 owner 的 shutdown 规则释放后端；调用前必须先结束所有派生资源和显式 pin。 */
     @Override void close();
 }
+```
+
+Add these caller-contract Javadocs immediately before the existing public type
+declarations; keep their method bodies and signatures unchanged:
+
+```java
+/**
+ * 在受限生命周期内访问稳定对象的当前内容。
+ * 视图沿用后端 owner 和访问模式；只读视图拒绝写入，关闭后任何内容访问都无效。
+ * 普通 resolve 的视图释放自身保留，resolvePinned 的视图不会替调用方 unpin。
+ */
+public interface NativeObjectView extends AutoCloseable {
+```
+
+```java
+/**
+ * 跟踪同一后端在单一活动分配范围内新建的对象。
+ * {@link #promote()} 提交对象并把后续释放责任交给调用方；{@link #abort()} 释放仍被跟踪的对象；
+ * {@link #close()} 等同 abort，因此成功路径必须显式 promote。终止操作可重复调用且不影响后续 scope。
+ */
+public interface NativeAllocationScope extends AutoCloseable {
+```
+
+```java
+/**
+ * 表示后端回收屏障中的活动 epoch。
+ * 关闭前，该 epoch 保护的退役存储不得回收；关闭只撤销屏障，不保证立即回收。
+ * scope 沿用后端 owner，必须在后端前关闭，重复关闭无效果。
+ */
+public interface NativeEpochScope extends AutoCloseable {
 ```
 
 Keep the existing stats type names in this migration; they are semantic memory records, not extension points. `NativeHandleDomain` and `NativeObjectKind` remain allocation metadata used by the FFM-local codec, but no public method decodes them from `NativeHandle.localRaw()`.
@@ -835,7 +1341,9 @@ Replace the renamed testkit class with this complete delegation surface; only `a
 ```java
 package yier.bubu.redis.memory.testkit;
 
+import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.common.memory.MemoryReclaimResult;
@@ -844,38 +1352,60 @@ import yier.bubu.redis.memory.api.*;
 
 public final class FailOnAllocationStableMemoryBackend implements StableMemoryBackend {
     private final StableMemoryBackend delegate;
-    private final AtomicLong successfulAllocations = new AtomicLong();
-    private volatile long failAfter = Long.MAX_VALUE;
+    private final AtomicLong attempts = new AtomicLong();
+    private final Map<NativeHandle, Integer> knownCapacities = new ConcurrentHashMap<>();
+    private volatile long failAt = -1L;
 
     public FailOnAllocationStableMemoryBackend(StableMemoryBackend delegate) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
     }
 
-    public void failAfterSuccessfulAllocations(long count) {
-        if (count < 0L) throw new IllegalArgumentException("count must be non-negative");
-        successfulAllocations.set(0L);
-        failAfter = count;
+    public void failOnAllocation(long oneBasedIndex) {
+        if (oneBasedIndex <= 0L) {
+            throw new IllegalArgumentException("oneBasedIndex must be > 0");
+        }
+        failAt = oneBasedIndex;
+    }
+
+    public void disableFailures() {
+        failAt = -1L;
+    }
+
+    public void resetAttempts() {
+        attempts.set(0L);
+    }
+
+    public long allocationAttempts() {
+        return attempts.get();
     }
 
     @Override
     public NativeHandle allocate(NativeObjectKind kind, int size) {
-        failIfDue();
+        checkAllocationAttempt();
         NativeHandle handle = delegate.allocate(kind, size);
-        successfulAllocations.incrementAndGet();
+        rememberCapacity(handle, size);
         return handle;
     }
 
     @Override
     public NativeHandle reallocate(NativeHandle handle, int newSize, NativeReallocPolicy policy) {
-        failIfDue();
-        NativeHandle result = delegate.reallocate(handle, newSize, policy);
-        successfulAllocations.incrementAndGet();
-        return result;
+        Objects.requireNonNull(handle, "handle");
+        int currentCapacity = capacityOf(handle);
+        if (newSize > currentCapacity) {
+            checkAllocationAttempt();
+        }
+        NativeHandle resized = delegate.reallocate(handle, newSize, policy);
+        knownCapacities.remove(handle);
+        rememberCapacity(resized, Math.max(newSize, currentCapacity));
+        return resized;
     }
 
     @Override public long allocatorId() { return delegate.allocatorId(); }
     @Override public void bindToCurrentThread() { delegate.bindToCurrentThread(); }
-    @Override public void free(NativeHandle handle) { delegate.free(handle); }
+    @Override public void free(NativeHandle handle) {
+        knownCapacities.remove(handle);
+        delegate.free(handle);
+    }
     @Override public void pin(NativeHandle handle) { delegate.pin(handle); }
     @Override public void unpin(NativeHandle handle) { delegate.unpin(handle); }
     @Override public NativeEpochScope beginEpoch(NativeEpochKind kind) {
@@ -916,17 +1446,64 @@ public final class FailOnAllocationStableMemoryBackend implements StableMemoryBa
         return delegate.estimateConservativeAdditionalGrowth(requestedBytes);
     }
     @Override public long liveRegionCount() { return delegate.liveRegionCount(); }
-    @Override public void close() { delegate.close(); }
+    @Override public void close() {
+        knownCapacities.clear();
+        delegate.close();
+    }
 
-    private void failIfDue() {
-        if (successfulAllocations.get() >= failAfter) {
-            throw new NativeMemoryException("injected stable memory allocation failure");
+    private void checkAllocationAttempt() {
+        long attempt = attempts.incrementAndGet();
+        if (attempt == failAt) {
+            throw new NativeCapacityExceededException(
+                    "injected stable memory allocation failure at attempt " + attempt
+            );
         }
+    }
+
+    private int capacityOf(NativeHandle handle) {
+        Integer known = knownCapacities.get(handle);
+        if (known != null) {
+            return known;
+        }
+        NativeObjectView view = delegate.resolve(handle, NativeAccessMode.READ_ONLY);
+        if (view == null) {
+            return 0;
+        }
+        try {
+            int capacity = view.capacity();
+            knownCapacities.put(handle, capacity);
+            return capacity;
+        } finally {
+            view.close();
+        }
+    }
+
+    private void rememberCapacity(NativeHandle handle, int fallback) {
+        if (handle == null) {
+            return;
+        }
+        int capacity = fallback;
+        try {
+            NativeObjectView view = delegate.resolve(handle, NativeAccessMode.READ_ONLY);
+            if (view != null) {
+                try {
+                    capacity = view.capacity();
+                } finally {
+                    view.close();
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // 测试替身可能不提供对象视图，此时用请求大小作为容量下界。
+        }
+        knownCapacities.put(handle, capacity);
     }
 }
 ```
 
-The renamed test asserts identity preservation, the configured failure boundary for both allocation methods, direct region delegation, and close delegation. Do not use a dynamic proxy to hide a newly added abstract method.
+Keep `failOnAllocation`, `disableFailures`, `resetAttempts`, and
+`allocationAttempts` as the single canonical controls so Task 4 changes
+`MutationFaultInjectionTest` and `ZSetValueTest` only to the renamed type and
+backend construction. The map is keyed by the complete `NativeHandle`.
 
 - [ ] **Step 7: Run focused API and testkit tests and verify GREEN**
 
@@ -935,10 +1512,15 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 \
 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
 mvn -pl yierdis-memory/yierdis-memory-api,yierdis-memory/yierdis-memory-testkit -am \
   -Dtest=NativeHandleTest,StableMemoryBackendContractTest,FailOnAllocationStableMemoryBackendTest \
-  -Dsurefire.failIfNoSpecifiedTests=false test
+  -Dsurefire.failIfNoSpecifiedTests=false clean test
 ```
 
-Expected: PASS. Reflection finds only abstract backend behavior, the legacy class is absent, and the failure wrapper preserves allocator identity.
+Expected: PASS. The clean phase removes deleted `NativeAllocator` bytecode
+before the `Class.forName` absence assertion. Reflection proves exact abstract
+signatures, the public handle exposes no packed codec, backend IDs stay unique
+under concurrent allocation and permanently exhaust in isolated state, and the
+capacity-aware failure wrapper preserves allocator identity and every delegate
+operation.
 
 - [ ] **Step 8: Run the broader API-side memory suite**
 
@@ -976,6 +1558,7 @@ git commit -m "refactor: define allocator-scoped stable memory API"
 - Rename: `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/SynchronizedNativeAllocator.java` to `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/SynchronizedStableMemoryBackend.java`
 - Delete: `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisAllocatorThreadGuard.java`
 - Create: `yierdis-memory/yierdis-memory-ffm/src/test/java/yier/bubu/redis/memory/foreign/YierdisStableNativeAllocatorOwnershipTest.java`
+- Create: `yierdis-memory/yierdis-memory-ffm/src/test/java/yier/bubu/redis/memory/foreign/YierdisLocalHandleCodecTest.java`
 - Rename: `yierdis-memory/yierdis-memory-ffm/src/test/java/yier/bubu/redis/memory/foreign/SynchronizedNativeAllocatorTest.java` to `yierdis-memory/yierdis-memory-ffm/src/test/java/yier/bubu/redis/memory/foreign/SynchronizedStableMemoryBackendTest.java`
 - Modify: `yierdis-memory/yierdis-memory-ffm/src/test/java/yier/bubu/redis/memory/foreign/NativeAllocationScopeTest.java`
 - Modify: `yierdis-memory/yierdis-memory-ffm/src/test/java/yier/bubu/redis/memory/foreign/YierdisFfmMemoryRuntimeTest.java`
@@ -989,7 +1572,7 @@ git commit -m "refactor: define allocator-scoped stable memory API"
 - Invariant: reallocate, resolve, resolve-pinned, free, pin, unpin, and defrag validate `allocatorId` before interpreting `localRaw` or looking up a slot.
 - Invariant: backend access never binds on first use. `bindToCurrentThread()` delegates to the supplied `MemoryOwner`; every other operation checks it.
 
-- [ ] **Step 1: Write failing cross-backend ownership and binding tests**
+- [ ] **Step 1: Write failing ownership, binding, and local-codec tests**
 
 Create `YierdisStableNativeAllocatorOwnershipTest.java`:
 
@@ -1044,6 +1627,7 @@ public class YierdisStableNativeAllocatorOwnershipTest {
             backend.bindToCurrentThread();
             NativeHandle foreignMalformed = new NativeHandle(backend.allocatorId() + 1L, Long.MIN_VALUE);
 
+            assertOwnershipFailure(backend, foreignMalformed);
             NativeHandleOwnershipException failure = Assert.assertThrows(
                     NativeHandleOwnershipException.class,
                     () -> backend.resolve(foreignMalformed, NativeAccessMode.READ_ONLY)
@@ -1051,6 +1635,99 @@ public class YierdisStableNativeAllocatorOwnershipTest {
 
             Assert.assertEquals(backend.allocatorId(), failure.expectedAllocatorId());
             Assert.assertEquals(foreignMalformed.allocatorId(), failure.actualAllocatorId());
+        }
+    }
+
+    @Test
+    public void everyDerivedResourceOperationChecksTheBoundOwner() throws Exception {
+        TestOwner owner = new TestOwner();
+        try (StableMemoryBackend backend = backend("derived-owner", owner)) {
+            backend.bindToCurrentThread();
+            NativeHandle handle = backend.allocate(NativeObjectKind.GENERIC, 16);
+            NativeObjectView view = backend.resolve(handle, NativeAccessMode.READ_WRITE);
+
+            assertWrongThreadRejected(view::handle);
+            assertWrongThreadRejected(view::size);
+            assertWrongThreadRejected(view::capacity);
+            assertWrongThreadRejected(() -> view.getByte(0));
+            assertWrongThreadRejected(() -> view.setByte(0, (byte) 1));
+            assertWrongThreadRejected(() -> view.getBytes(0, new byte[1], 0, 1));
+            assertWrongThreadRejected(() -> view.setBytes(0, new byte[1], 0, 1));
+            assertWrongThreadRejected(() -> view.copyBytes(0, 1, 1));
+            assertWrongThreadRejected(() -> view.contentEquals(0, new byte[1], 0, 1));
+            assertWrongThreadRejected(() -> view.getIntLittleEndian(0));
+            assertWrongThreadRejected(() -> view.setIntLittleEndian(0, 1));
+            assertWrongThreadRejected(() -> view.getLongLittleEndian(0));
+            assertWrongThreadRejected(() -> view.setLongLittleEndian(0, 1L));
+            assertWrongThreadRejected(view::close);
+            Assert.assertEquals(16, view.size());
+            Assert.assertEquals(0, view.getByte(0));
+            view.close();
+            backend.free(handle);
+
+            NativeAllocationScope allocationScope = backend.beginAllocationScope();
+            assertWrongThreadRejected(allocationScope::growth);
+            assertWrongThreadRejected(allocationScope::promote);
+            assertWrongThreadRejected(allocationScope::abort);
+            assertWrongThreadRejected(allocationScope::close);
+            NativeHandle scoped = backend.allocate(NativeObjectKind.GENERIC, 8);
+            allocationScope.abort();
+            Assert.assertThrows(
+                    StaleNativeHandleException.class,
+                    () -> backend.resolve(scoped, NativeAccessMode.READ_ONLY)
+            );
+
+            NativeEpochScope epochScope = backend.beginEpoch(NativeEpochKind.COMMAND);
+            assertWrongThreadRejected(epochScope::kind);
+            assertWrongThreadRejected(epochScope::epoch);
+            assertWrongThreadRejected(epochScope::close);
+            epochScope.close();
+
+            StableMemoryRegion region = backend.allocateRegion("derived-region", 16);
+            assertWrongThreadRejected(region::size);
+            assertWrongThreadRejected(() -> region.getByte(0));
+            assertWrongThreadRejected(() -> region.setByte(0, (byte) 1));
+            assertWrongThreadRejected(() -> region.getIntLittleEndian(0));
+            assertWrongThreadRejected(() -> region.setIntLittleEndian(0, 1));
+            assertWrongThreadRejected(() -> region.getLongLittleEndian(0));
+            assertWrongThreadRejected(() -> region.setLongLittleEndian(0, 1L));
+            assertWrongThreadRejected(() -> region.getBytes(0, new byte[1], 0, 1));
+            assertWrongThreadRejected(() -> region.setBytes(0, new byte[1], 0, 1));
+            assertWrongThreadRejected(() -> region.copyTo(0, region, 1, 1));
+            assertWrongThreadRejected(region::close);
+            Assert.assertEquals(16, region.size());
+            Assert.assertEquals(0, region.getByte(0));
+            region.close();
+        }
+    }
+
+    @Test
+    public void pinnedViewsAreReadOnlyAndDoNotOwnTheCallersPin() {
+        TestOwner owner = new TestOwner();
+        try (StableMemoryBackend backend = backend("pinned-view", owner)) {
+            backend.bindToCurrentThread();
+            NativeHandle handle = backend.allocate(NativeObjectKind.GENERIC, 8);
+            backend.pin(handle);
+
+            Assert.assertThrows(
+                    NativeMemoryException.class,
+                    () -> backend.resolvePinned(handle, NativeAccessMode.READ_WRITE)
+            );
+            try (NativeObjectView borrowed =
+                         backend.resolvePinned(handle, NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(handle, borrowed.handle());
+                Assert.assertThrows(
+                        NativeMemoryException.class,
+                        () -> borrowed.setByte(0, (byte) 1)
+                );
+            }
+            try (NativeObjectView ignored =
+                         backend.resolvePinned(handle, NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(handle, ignored.handle());
+            }
+
+            backend.unpin(handle);
+            backend.free(handle);
         }
     }
 
@@ -1063,13 +1740,42 @@ public class YierdisStableNativeAllocatorOwnershipTest {
                 NativeHandleOwnershipException.class,
                 () -> backend.resolve(foreign, NativeAccessMode.READ_ONLY)
         );
+        Assert.assertThrows(
+                NativeHandleOwnershipException.class,
+                () -> backend.resolvePinned(foreign, NativeAccessMode.READ_ONLY)
+        );
         Assert.assertThrows(NativeHandleOwnershipException.class, () -> backend.free(foreign));
         Assert.assertThrows(NativeHandleOwnershipException.class, () -> backend.pin(foreign));
         Assert.assertThrows(NativeHandleOwnershipException.class, () -> backend.unpin(foreign));
+        Assert.assertThrows(
+                NativeHandleOwnershipException.class,
+                () -> backend.defragOne(foreign, 16L)
+        );
     }
 
     private static StableMemoryBackend backend(String name, TestOwner owner) {
         return new YierdisFfmStableMemoryBackend(name, 128, owner);
+    }
+
+    private static void assertWrongThreadRejected(Runnable operation) throws Exception {
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread worker = new Thread(() -> {
+            try {
+                operation.run();
+            } catch (Throwable throwable) {
+                failure.set(throwable);
+            }
+        }, "wrong-memory-owner");
+        worker.setDaemon(true);
+        worker.start();
+        worker.join(5_000L);
+
+        if (worker.isAlive()) worker.interrupt();
+        Assert.assertFalse("wrong-owner operation did not finish", worker.isAlive());
+        Assert.assertTrue(
+                "expected owner rejection, got " + failure.get(),
+                failure.get() instanceof IllegalStateException
+        );
     }
 
     private static final class TestOwner implements MemoryOwner {
@@ -1103,6 +1809,155 @@ public class YierdisStableNativeAllocatorOwnershipTest {
 }
 ```
 
+Create `YierdisLocalHandleCodecTest.java` by moving the still-valid packed
+format coverage out of the public `NativeHandleTest`. The codec remains
+package-private, so the test lives in the same FFM package:
+
+```java
+package yier.bubu.redis.memory.foreign;
+
+import java.lang.management.ManagementFactory;
+import org.junit.Assert;
+import org.junit.Test;
+import yier.bubu.redis.memory.api.NativeHandleDomain;
+import yier.bubu.redis.memory.api.NativeObjectKind;
+
+public class YierdisLocalHandleCodecTest {
+    @Test
+    public void encodesAndDecodesHandleFields() {
+        long localRaw = YierdisLocalHandleCodec.encode(
+                NativeHandleDomain.STORAGE_OBJECT,
+                NativeObjectKind.STRING_BYTES,
+                123456789L,
+                77,
+                3
+        );
+
+        YierdisLocalHandleCodec.requireValid(localRaw);
+        Assert.assertEquals(0x1100_075b_cd15_04d3L, localRaw);
+        Assert.assertEquals(
+                NativeHandleDomain.STORAGE_OBJECT,
+                YierdisLocalHandleCodec.domain(localRaw)
+        );
+        Assert.assertEquals(
+                NativeObjectKind.STRING_BYTES.code(),
+                YierdisLocalHandleCodec.kindCode(localRaw)
+        );
+        Assert.assertEquals(123456789L, YierdisLocalHandleCodec.slotId(localRaw));
+        Assert.assertEquals(77, YierdisLocalHandleCodec.generation(localRaw));
+        Assert.assertEquals(3, YierdisLocalHandleCodec.flags(localRaw));
+    }
+
+    @Test
+    public void primitiveLocalDecodersDoNotAllocatePerCall() {
+        long localRaw = YierdisLocalHandleCodec.encode(
+                NativeHandleDomain.STORAGE_OBJECT,
+                NativeObjectKind.STRING_BYTES,
+                123456789L,
+                77,
+                3
+        );
+
+        com.sun.management.ThreadMXBean bean = allocatedBytesBean();
+        for (int index = 0; index < 10_000; index++) {
+            consumeLocalFields(localRaw);
+        }
+        long before = bean.getThreadAllocatedBytes(Thread.currentThread().threadId());
+        for (int index = 0; index < 100_000; index++) {
+            consumeLocalFields(localRaw);
+        }
+        long allocatedBytes = bean.getThreadAllocatedBytes(Thread.currentThread().threadId()) - before;
+
+        Assert.assertEquals(
+                NativeHandleDomain.STORAGE_OBJECT,
+                YierdisLocalHandleCodec.domain(localRaw)
+        );
+        Assert.assertEquals(
+                NativeObjectKind.STRING_BYTES.code(),
+                YierdisLocalHandleCodec.kindCode(localRaw)
+        );
+        Assert.assertEquals(123456789L, YierdisLocalHandleCodec.slotId(localRaw));
+        Assert.assertEquals(77, YierdisLocalHandleCodec.generation(localRaw));
+        Assert.assertEquals(3, YierdisLocalHandleCodec.flags(localRaw));
+        Assert.assertTrue(
+                "primitive local-handle decoding allocated " + allocatedBytes + " bytes",
+                allocatedBytes < 4_096L
+        );
+    }
+
+    @Test
+    public void rejectsOutOfRangeFields() {
+        assertIllegal(() -> encode(-1L, 1, 0));
+        assertIllegal(() -> encode(1L << 40, 1, 0));
+        assertIllegal(() -> encode(1L, -1, 0));
+        assertIllegal(() -> encode(1L, 4096, 0));
+        assertIllegal(() -> encode(1L, 1, -1));
+        assertIllegal(() -> encode(1L, 1, 16));
+    }
+
+    @Test
+    public void rejectsMismatchedDomainAndKind() {
+        assertIllegal(() -> YierdisLocalHandleCodec.encode(
+                NativeHandleDomain.STORAGE_OBJECT,
+                NativeObjectKind.ENTRY_RECORD,
+                1L,
+                1,
+                0
+        ));
+    }
+
+    @Test
+    public void rejectsNonZeroReservedDomain() {
+        assertIllegal(() -> YierdisLocalHandleCodec.requireValid(0x10L));
+    }
+
+    private static long encode(long slotId, int generation, int flags) {
+        return YierdisLocalHandleCodec.encode(
+                NativeHandleDomain.STORAGE_OBJECT,
+                NativeObjectKind.STRING_BYTES,
+                slotId,
+                generation,
+                flags
+        );
+    }
+
+    private static void assertIllegal(Runnable runnable) {
+        try {
+            runnable.run();
+            Assert.fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+            Assert.assertNotNull(expected.getMessage());
+        }
+    }
+
+    private static long consumeLocalFields(long localRaw) {
+        return YierdisLocalHandleCodec.domain(localRaw).code()
+                + YierdisLocalHandleCodec.kindCode(localRaw)
+                + YierdisLocalHandleCodec.slotId(localRaw)
+                + YierdisLocalHandleCodec.generation(localRaw)
+                + YierdisLocalHandleCodec.flags(localRaw);
+    }
+
+    private static com.sun.management.ThreadMXBean allocatedBytesBean() {
+        java.lang.management.ThreadMXBean bean = ManagementFactory.getThreadMXBean();
+        Assert.assertTrue(
+                "thread allocation accounting is unavailable",
+                bean instanceof com.sun.management.ThreadMXBean
+        );
+        com.sun.management.ThreadMXBean allocatedBytesBean =
+                (com.sun.management.ThreadMXBean) bean;
+        Assert.assertTrue(
+                "thread allocation accounting is unsupported",
+                allocatedBytesBean.isThreadAllocatedMemorySupported()
+        );
+        if (!allocatedBytesBean.isThreadAllocatedMemoryEnabled()) {
+            allocatedBytesBean.setThreadAllocatedMemoryEnabled(true);
+        }
+        return allocatedBytesBean;
+    }
+}
+```
+
 - [ ] **Step 2: Add failing region/accounting coverage**
 
 Add these methods to the same test class:
@@ -1116,15 +1971,67 @@ public void regionProvidesBackendNeutralTypedAccessAndCopy() {
         try (StableMemoryRegion source = backend.allocateRegion("source", 32);
              StableMemoryRegion target = backend.allocateRegion("target", 32)) {
             source.setByte(0, (byte) 7);
-            source.setInt(4, 1234);
-            source.setLong(8, 9876L);
+            source.setIntLittleEndian(4, 0x78563412);
+            source.setLongLittleEndian(8, 0x0102030405060708L);
+            byte[] sourceBytes = new byte[12];
+            source.getBytes(4, sourceBytes, 0, sourceBytes.length);
+            Assert.assertArrayEquals(
+                    new byte[]{
+                            0x12, 0x34, 0x56, 0x78,
+                            0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01
+                    },
+                    sourceBytes
+            );
             source.copyTo(0, target, 0, 16);
 
             Assert.assertEquals(7, target.getByte(0));
-            Assert.assertEquals(1234, target.getInt(4));
-            Assert.assertEquals(9876L, target.getLong(8));
+            Assert.assertEquals(0x78563412, target.getIntLittleEndian(4));
+            Assert.assertEquals(0x0102030405060708L, target.getLongLittleEndian(8));
+            byte[] targetBytes = new byte[12];
+            target.getBytes(4, targetBytes, 0, targetBytes.length);
+            Assert.assertArrayEquals(sourceBytes, targetBytes);
             Assert.assertTrue(backend.liveRegionCount() >= 2L);
         }
+    }
+}
+
+@Test
+public void sameRegionCopyIsOverlapSafeAcrossPortableChunkBoundary() {
+    TestOwner owner = new TestOwner();
+    try (StableMemoryBackend backend = backend("overlap", owner)) {
+        backend.bindToCurrentThread();
+        try (StableMemoryRegion region = backend.allocateRegion("overlap", 16_384)) {
+            byte[] original = new byte[16_384];
+            for (int index = 0; index < original.length; index++) {
+                original[index] = (byte) (index % 251);
+            }
+            region.setBytes(0, original, 0, original.length);
+
+            region.copyTo(0, region, 4_096, 12_000);
+
+            byte[] expected = original.clone();
+            System.arraycopy(original, 0, expected, 4_096, 12_000);
+            byte[] actual = new byte[expected.length];
+            region.getBytes(0, actual, 0, actual.length);
+            Assert.assertArrayEquals(expected, actual);
+        }
+    }
+}
+
+@Test
+public void regionRejectsUseAfterClose() {
+    TestOwner owner = new TestOwner();
+    try (StableMemoryBackend backend = backend("closed-region", owner)) {
+        backend.bindToCurrentThread();
+        StableMemoryRegion region = backend.allocateRegion("closed", 16);
+        region.close();
+
+        Assert.assertThrows(IllegalStateException.class, region::size);
+        Assert.assertThrows(IllegalStateException.class, () -> region.getByte(0));
+        Assert.assertThrows(
+                IllegalStateException.class,
+                () -> region.setIntLittleEndian(0, 1)
+        );
     }
 }
 
@@ -1151,7 +2058,7 @@ public void externallyAllocatedRegionIsCountedOnce() {
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 \
 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
 mvn -pl yierdis-memory/yierdis-memory-ffm -am \
-  -Dtest=YierdisStableNativeAllocatorOwnershipTest \
+  -Dtest=YierdisStableNativeAllocatorOwnershipTest,YierdisLocalHandleCodecTest \
   -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
@@ -1283,6 +2190,20 @@ public void free(NativeHandle handle) {
 Apply the identical owner-check then `requireOwned` ordering to `reallocate`, `resolvePinned`, `pin`, `unpin`, and `defragOne`. Allocation wraps the object table's private local result with `publicHandle(...)`. Every `NativeObjectView.handle()` returns the scoped public handle. Delete all raw overloads rather than forwarding them.
 
 `bindToCurrentThread()` is exactly `owner.bindToCurrentThread()`. Normal operations call `owner.checkCurrentThread()` and never bind. `close()` calls `owner.checkCurrentThreadForShutdown()` before freeing allocator state.
+
+Apply the same no-implicit-bind rule to every derived resource returned by the
+allocator. Every public `NativeObjectView` operation, including `handle`, size
+and capacity access, byte/typed reads and writes, copies, comparisons, and
+`close`, calls `owner.checkCurrentThread()` before touching view state. Every
+`NativeAllocationScope` operation (`growth`, `promote`, `abort`, and `close`)
+and every `NativeEpochScope` operation (`kind`, `epoch`, and `close`) does the
+same, including repeated terminal calls. Replace the old
+`checkOrBindCurrentThread()` paths; no derived-resource operation may call
+`bindToCurrentThread()`.
+
+`resolvePinned` first checks the owner and complete handle identity, then
+rejects any mode other than `NativeAccessMode.READ_ONLY`. Its returned view
+borrows the caller's existing pin and never unpins it on close.
 
 - [ ] **Step 6: Build the public facade and backend-neutral region implementation**
 
@@ -1424,28 +2345,34 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
             this.bytes = bytes;
         }
 
-        @Override public int size() { checkOwner(); return delegate.size(); }
-        @Override public byte getByte(int offset) { checkOwner(); return delegate.getByte(offset); }
+        @Override public int size() { checkOpen(); return delegate.size(); }
+        @Override public byte getByte(int offset) { checkOpen(); return delegate.getByte(offset); }
         @Override public void setByte(int offset, byte value) {
-            checkOwner();
+            checkOpen();
             delegate.setByte(offset, value);
         }
-        @Override public int getInt(int offset) { checkOwner(); return delegate.getInt(offset); }
-        @Override public void setInt(int offset, int value) {
-            checkOwner();
-            delegate.setInt(offset, value);
+        @Override public int getIntLittleEndian(int offset) {
+            checkOpen();
+            return delegate.getIntLittleEndian(offset);
         }
-        @Override public long getLong(int offset) { checkOwner(); return delegate.getLong(offset); }
-        @Override public void setLong(int offset, long value) {
-            checkOwner();
-            delegate.setLong(offset, value);
+        @Override public void setIntLittleEndian(int offset, int value) {
+            checkOpen();
+            delegate.setIntLittleEndian(offset, value);
+        }
+        @Override public long getLongLittleEndian(int offset) {
+            checkOpen();
+            return delegate.getLongLittleEndian(offset);
+        }
+        @Override public void setLongLittleEndian(int offset, long value) {
+            checkOpen();
+            delegate.setLongLittleEndian(offset, value);
         }
         @Override public void getBytes(int offset, byte[] dst, int dstOffset, int length) {
-            checkOwner();
+            checkOpen();
             delegate.getBytes(offset, dst, dstOffset, length);
         }
         @Override public void setBytes(int offset, byte[] src, int srcOffset, int length) {
-            checkOwner();
+            checkOpen();
             delegate.setBytes(offset, src, srcOffset, length);
         }
         @Override public void copyTo(
@@ -1454,7 +2381,18 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
                 int targetOffset,
                 int length
         ) {
-            checkOwner();
+            checkOpen();
+            Objects.requireNonNull(target, "target");
+            if (target instanceof TrackingRegion trackingTarget) {
+                trackingTarget.checkOpen();
+                delegate.copyTo(
+                        sourceOffset,
+                        trackingTarget.delegate,
+                        targetOffset,
+                        length
+                );
+                return;
+            }
             delegate.copyTo(sourceOffset, target, targetOffset, length);
         }
 
@@ -1472,6 +2410,13 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
         private void checkOwner() {
             owner.checkCurrentThread();
         }
+
+        private void checkOpen() {
+            checkOwner();
+            if (closed.get()) {
+                throw new IllegalStateException("stable memory region is closed");
+            }
+        }
     }
 }
 ```
@@ -1482,24 +2427,33 @@ Make `YierdisFfmRegion` implement `StableMemoryRegion` and make its interface me
 @Override
 public void copyTo(int sourceOffset, StableMemoryRegion target, int targetOffset, int length) {
     Objects.requireNonNull(target, "target");
+    ensureOpen();
     checkRange(sourceOffset, length);
     if (target instanceof YierdisFfmRegion ffmTarget) {
+        ffmTarget.ensureOpen();
         ffmTarget.checkRange(targetOffset, length);
         MemorySegment.copy(segment, sourceOffset, ffmTarget.segment, targetOffset, length);
         return;
     }
-    byte[] buffer = new byte[Math.min(8192, Math.max(1, length))];
-    int copied = 0;
-    while (copied < length) {
-        int chunk = Math.min(buffer.length, length - copied);
-        getBytes(sourceOffset + copied, buffer, 0, chunk);
-        target.setBytes(targetOffset + copied, buffer, 0, chunk);
-        copied += chunk;
-    }
+    byte[] snapshot = new byte[length];
+    getBytes(sourceOffset, snapshot, 0, length);
+    target.setBytes(targetOffset, snapshot, 0, length);
 }
 ```
 
-This prevents allocator page regions, already represented by `allocator.memoryUsage()`, from being counted again through `runtime.usedBytes()`. Close order is allocator, any facade state, then runtime; combine failures with suppression. A live externally allocated region makes runtime close fail visibly rather than silently leaking.
+Every `YierdisFfmRegion` interface method, including `size()`, calls
+`ensureOpen()` before returning or mutating data; closed regions reject all
+subsequent access.
+
+`TrackingRegion.copyTo` unwraps another tracking target before this method so
+FFM-to-FFM copies, including same-region overlap, always use
+`MemorySegment.copy`. The full snapshot fallback preserves overlap semantics
+even for an opaque `StableMemoryRegion` implementation. This also prevents
+allocator page regions, already represented by `allocator.memoryUsage()`, from
+being counted again through `runtime.usedBytes()`. Close order is allocator,
+any facade state, then runtime; combine failures with suppression. A live
+externally allocated region makes runtime close fail visibly rather than
+silently leaking.
 
 - [ ] **Step 7: Port synchronized and existing FFM tests to the complete interface**
 
@@ -1513,11 +2467,18 @@ Do not make internal classes package-private until Task 4 has migrated all downs
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 \
 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
 mvn -pl yierdis-memory/yierdis-memory-ffm -am \
-  -Dtest=YierdisStableNativeAllocatorOwnershipTest,YierdisStableNativeAllocatorTest,SynchronizedStableMemoryBackendTest,YierdisFfmMemoryRuntimeTest \
-  -Dsurefire.failIfNoSpecifiedTests=false test
+  -Dtest=YierdisStableNativeAllocatorOwnershipTest,YierdisLocalHandleCodecTest,YierdisStableNativeAllocatorTest,SynchronizedStableMemoryBackendTest,YierdisFfmMemoryRuntimeTest \
+  -Dsurefire.failIfNoSpecifiedTests=false clean test
 ```
 
-Expected: PASS. Cross-backend operations fail with `NativeHandleOwnershipException`, malformed foreign local values are never decoded, access does not auto-bind, and external regions change accounting exactly once.
+Expected: PASS. The clean phase removes deleted guard/wrapper classes and the
+renamed synchronized test bytecode. Cross-backend operations fail with
+`NativeHandleOwnershipException`, malformed foreign local values are never
+decoded, public access and every derived-resource operation check without
+auto-binding, pinned views remain read-only and retain the caller's pin, local
+codec coverage is preserved behind the package boundary, explicit
+little-endian bytes survive copying, overlapping region copies are safe, and
+external regions change accounting exactly once.
 
 - [ ] **Step 9: Run the complete FFM module suite**
 
@@ -1553,6 +2514,15 @@ git commit -m "refactor: scope FFM memory handles by backend"
 - Modify: `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbOwnedResources.java`
 - Modify: `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java`
 - Modify: `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporter.java`
+- Modify: every existing source under `yierdis-db/yierdis-db-memory/src/main/java`
+  that consumes `NativeAllocator`, an FFM implementation type, a raw-handle
+  operation, or an accessor whose return type changes to `StableMemoryBackend`.
+  This main-source migration closure includes `DbComponentMemoryUsage`,
+  `YierdisDbNativeHandleGraph`, `YierdisDbDataMaintenance`,
+  `YierdisDbIntrospection`, `YierdisKeyspaceOps`, every `Yierdis*Ops`
+  implementation, every collection/string root, the mutation-ledger sources,
+  `HashValue`, `SetValue`, and the native scan/popped-value sources; Step 14's
+  source scan must return no retired consumer.
 - Modify: `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryHandle.java`
 - Modify: `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/ValueHandle.java`
 - Modify: `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryRecord.java`
@@ -1572,6 +2542,7 @@ git commit -m "refactor: scope FFM memory handles by backend"
 - Rename: `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmExpireIndex.java` to `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/expire/YierdisNativeExpireIndex.java`
 - Delete: `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmIntSet.java`
 - Create: `yierdis-memory/yierdis-memory-testkit/src/main/java/yier/bubu/redis/memory/testkit/HeapStableMemoryBackend.java`
+- Create: `yierdis-memory/yierdis-memory-testkit/src/test/java/yier/bubu/redis/memory/testkit/HeapStableMemoryBackendTest.java`
 - Create: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/StableMemoryBackendCompositionTest.java`
 - Create: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/DbOwnerBindingTest.java`
 - Modify: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/expire/ExpireIndexContractTest.java`
@@ -1644,16 +2615,224 @@ public class StableMemoryBackendCompositionTest {
                 new DbDefragConfig(false, 0L, 0L, 0L)
         ));
 
-        engine.bindToCurrentThread();
-        byte[] key = "key".getBytes(StandardCharsets.US_ASCII);
-        byte[] value = "value".getBytes(StandardCharsets.US_ASCII);
-        WriteResult<Boolean> result = engine.writes().strings()
-                .setString(key, value, SetMode.NORMAL, null);
-        Assert.assertTrue(result.value());
-        Assert.assertArrayEquals(value, engine.reads().strings().getStringBytes(key));
-
-        engine.shutdown();
+        try {
+            engine.bindToCurrentThread();
+            byte[] key = "key".getBytes(StandardCharsets.US_ASCII);
+            byte[] value = "value".getBytes(StandardCharsets.US_ASCII);
+            WriteResult<Boolean> result = engine.writes().strings()
+                    .setString(key, value, SetMode.NORMAL, null);
+            Assert.assertTrue(result.value());
+            Assert.assertArrayEquals(value, engine.reads().strings().getStringBytes(key));
+        } finally {
+            engine.shutdown();
+        }
         Assert.assertTrue(created.get().isClosedForTesting());
+    }
+}
+```
+
+Create `HeapStableMemoryBackendTest.java` so the backend-neutral fake is held
+to the same derived-resource, pinned-view, byte-order, and overlap contracts:
+
+```java
+package yier.bubu.redis.memory.testkit;
+
+import java.util.concurrent.atomic.AtomicReference;
+import org.junit.Assert;
+import org.junit.Test;
+import yier.bubu.redis.memory.api.*;
+
+public class HeapStableMemoryBackendTest {
+    @Test
+    public void everyDerivedResourceOperationChecksTheBoundOwner() throws Exception {
+        TestOwner owner = new TestOwner();
+        try (StableMemoryBackend backend = backend("derived-owner", owner)) {
+            backend.bindToCurrentThread();
+            NativeHandle handle = backend.allocate(NativeObjectKind.GENERIC, 16);
+            NativeObjectView view = backend.resolve(handle, NativeAccessMode.READ_WRITE);
+
+            assertWrongThreadRejected(view::handle);
+            assertWrongThreadRejected(view::size);
+            assertWrongThreadRejected(view::capacity);
+            assertWrongThreadRejected(() -> view.getByte(0));
+            assertWrongThreadRejected(() -> view.setByte(0, (byte) 1));
+            assertWrongThreadRejected(() -> view.getBytes(0, new byte[1], 0, 1));
+            assertWrongThreadRejected(() -> view.setBytes(0, new byte[1], 0, 1));
+            assertWrongThreadRejected(() -> view.copyBytes(0, 1, 1));
+            assertWrongThreadRejected(() -> view.contentEquals(0, new byte[1], 0, 1));
+            assertWrongThreadRejected(() -> view.getIntLittleEndian(0));
+            assertWrongThreadRejected(() -> view.setIntLittleEndian(0, 1));
+            assertWrongThreadRejected(() -> view.getLongLittleEndian(0));
+            assertWrongThreadRejected(() -> view.setLongLittleEndian(0, 1L));
+            assertWrongThreadRejected(view::close);
+            Assert.assertEquals(16, view.size());
+            Assert.assertEquals(0, view.getByte(0));
+            view.close();
+            backend.free(handle);
+
+            NativeAllocationScope allocationScope = backend.beginAllocationScope();
+            assertWrongThreadRejected(allocationScope::growth);
+            assertWrongThreadRejected(allocationScope::promote);
+            assertWrongThreadRejected(allocationScope::abort);
+            assertWrongThreadRejected(allocationScope::close);
+            NativeHandle scoped = backend.allocate(NativeObjectKind.GENERIC, 8);
+            allocationScope.abort();
+            Assert.assertThrows(
+                    StaleNativeHandleException.class,
+                    () -> backend.resolve(scoped, NativeAccessMode.READ_ONLY)
+            );
+
+            NativeEpochScope epochScope = backend.beginEpoch(NativeEpochKind.COMMAND);
+            assertWrongThreadRejected(epochScope::kind);
+            assertWrongThreadRejected(epochScope::epoch);
+            assertWrongThreadRejected(epochScope::close);
+            epochScope.close();
+
+            StableMemoryRegion region = backend.allocateRegion("derived-region", 16);
+            assertWrongThreadRejected(region::size);
+            assertWrongThreadRejected(() -> region.getByte(0));
+            assertWrongThreadRejected(() -> region.setByte(0, (byte) 1));
+            assertWrongThreadRejected(() -> region.getIntLittleEndian(0));
+            assertWrongThreadRejected(() -> region.setIntLittleEndian(0, 1));
+            assertWrongThreadRejected(() -> region.getLongLittleEndian(0));
+            assertWrongThreadRejected(() -> region.setLongLittleEndian(0, 1L));
+            assertWrongThreadRejected(() -> region.getBytes(0, new byte[1], 0, 1));
+            assertWrongThreadRejected(() -> region.setBytes(0, new byte[1], 0, 1));
+            assertWrongThreadRejected(() -> region.copyTo(0, region, 1, 1));
+            assertWrongThreadRejected(region::close);
+            Assert.assertEquals(16, region.size());
+            Assert.assertEquals(0, region.getByte(0));
+            region.close();
+        }
+    }
+
+    @Test
+    public void pinnedViewsAreReadOnlyAndDoNotOwnTheCallersPin() {
+        TestOwner owner = new TestOwner();
+        try (StableMemoryBackend backend = backend("pinned-view", owner)) {
+            backend.bindToCurrentThread();
+            NativeHandle handle = backend.allocate(NativeObjectKind.GENERIC, 8);
+            backend.pin(handle);
+
+            Assert.assertThrows(
+                    NativeMemoryException.class,
+                    () -> backend.resolvePinned(handle, NativeAccessMode.READ_WRITE)
+            );
+            try (NativeObjectView borrowed =
+                         backend.resolvePinned(handle, NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(handle, borrowed.handle());
+                Assert.assertThrows(
+                        NativeMemoryException.class,
+                        () -> borrowed.setByte(0, (byte) 1)
+                );
+            }
+            try (NativeObjectView ignored =
+                         backend.resolvePinned(handle, NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(handle, ignored.handle());
+            }
+
+            backend.unpin(handle);
+            backend.free(handle);
+        }
+    }
+
+    @Test
+    public void regionsUseLittleEndianBytesAndOverlapSafeCopy() {
+        TestOwner owner = new TestOwner();
+        try (StableMemoryBackend backend = backend("regions", owner)) {
+            backend.bindToCurrentThread();
+            try (StableMemoryRegion layout = backend.allocateRegion("layout", 16)) {
+                layout.setIntLittleEndian(0, 0x78563412);
+                layout.setLongLittleEndian(4, 0x0102030405060708L);
+                byte[] actual = new byte[12];
+                layout.getBytes(0, actual, 0, actual.length);
+                byte[] littleEndian = new byte[]{
+                        0x12, 0x34, 0x56, 0x78,
+                        0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01
+                };
+                Assert.assertArrayEquals(littleEndian, actual);
+                layout.setBytes(0, littleEndian, 0, littleEndian.length);
+                Assert.assertEquals(0x78563412, layout.getIntLittleEndian(0));
+                Assert.assertEquals(0x0102030405060708L, layout.getLongLittleEndian(4));
+            }
+            try (StableMemoryRegion region = backend.allocateRegion("overlap", 16_384)) {
+                byte[] original = new byte[16_384];
+                for (int index = 0; index < original.length; index++) {
+                    original[index] = (byte) (index % 251);
+                }
+                region.setBytes(0, original, 0, original.length);
+
+                region.copyTo(0, region, 4_096, 12_000);
+
+                byte[] expected = original.clone();
+                System.arraycopy(original, 0, expected, 4_096, 12_000);
+                byte[] actual = new byte[expected.length];
+                region.getBytes(0, actual, 0, actual.length);
+                Assert.assertArrayEquals(expected, actual);
+            }
+            StableMemoryRegion closed = backend.allocateRegion("closed", 16);
+            closed.close();
+            Assert.assertThrows(IllegalStateException.class, closed::size);
+            Assert.assertThrows(IllegalStateException.class, () -> closed.getByte(0));
+            Assert.assertThrows(
+                    IllegalStateException.class,
+                    () -> closed.setIntLittleEndian(0, 1)
+            );
+        }
+    }
+
+    private static StableMemoryBackend backend(String name, TestOwner owner) {
+        return new HeapStableMemoryBackend(name, 128, owner);
+    }
+
+    private static void assertWrongThreadRejected(Runnable operation) throws Exception {
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread worker = new Thread(() -> {
+            try {
+                operation.run();
+            } catch (Throwable throwable) {
+                failure.set(throwable);
+            }
+        }, "wrong-memory-owner");
+        worker.setDaemon(true);
+        worker.start();
+        worker.join(5_000L);
+
+        if (worker.isAlive()) worker.interrupt();
+        Assert.assertFalse("wrong-owner operation did not finish", worker.isAlive());
+        Assert.assertTrue(
+                "expected owner rejection, got " + failure.get(),
+                failure.get() instanceof IllegalStateException
+        );
+    }
+
+    private static final class TestOwner implements MemoryOwner {
+        private final AtomicReference<Thread> owner = new AtomicReference<>();
+
+        @Override
+        public void bindToCurrentThread() {
+            Thread current = Thread.currentThread();
+            Thread existing = owner.get();
+            if (existing == current) return;
+            if (existing != null || !owner.compareAndSet(null, current)) {
+                throw new IllegalStateException("memory owner already belongs to another thread");
+            }
+        }
+
+        @Override
+        public void checkCurrentThread() {
+            if (owner.get() != Thread.currentThread()) {
+                throw new IllegalStateException("memory access is outside the owner thread");
+            }
+        }
+
+        @Override
+        public void checkCurrentThreadForShutdown() {
+            Thread existing = owner.get();
+            if (existing != null && existing != Thread.currentThread()) {
+                throw new IllegalStateException("memory shutdown is outside the owner thread");
+            }
+        }
     }
 }
 ```
@@ -1679,6 +2858,7 @@ public class DbOwnerBindingTest {
         AtomicInteger rejectedBinds = new AtomicInteger();
         CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch bindAttemptsFinished = new CountDownLatch(2);
         CountDownLatch winnerMayClose = new CountDownLatch(1);
         RuntimeDbEngine engine = new YierdisDbEngineFactory(
                 HeapStableMemoryBackend::new,
@@ -1692,12 +2872,17 @@ public class DbOwnerBindingTest {
                 try {
                     engine.bindToCurrentThread();
                     successfulBinds.incrementAndGet();
-                    Assert.assertFalse(engine.reads().keyspace().existsKey(new ByteArrayView("absent")));
-                    winnerMayClose.await();
-                    engine.shutdown();
                 } catch (IllegalStateException expected) {
                     rejectedBinds.incrementAndGet();
+                    return null;
+                } finally {
+                    bindAttemptsFinished.countDown();
                 }
+                Assert.assertFalse(
+                        engine.reads().keyspace().existsKey(new ByteArrayView("absent"))
+                );
+                Assert.assertTrue(winnerMayClose.await(5L, TimeUnit.SECONDS));
+                engine.shutdown();
                 return null;
             };
 
@@ -1705,7 +2890,7 @@ public class DbOwnerBindingTest {
             Future<Void> second = pool.submit(contender);
             Assert.assertTrue(ready.await(5, TimeUnit.SECONDS));
             start.countDown();
-            while (successfulBinds.get() + rejectedBinds.get() < 2) Thread.onSpinWait();
+            Assert.assertTrue(bindAttemptsFinished.await(5L, TimeUnit.SECONDS));
             winnerMayClose.countDown();
             first.get(5, TimeUnit.SECONDS);
             second.get(5, TimeUnit.SECONDS);
@@ -1822,17 +3007,55 @@ private static String childText(Element parent, String tagName) {
 
 Add imports for `javax.xml.parsers.DocumentBuilderFactory`, `org.w3c.dom.Document`, `org.w3c.dom.Element`, and `org.w3c.dom.NodeList`.
 
+Add this source-level visibility guard to `ArchitectureBoundaryTest`; the
+line-anchored declaration pattern intentionally checks top-level types and
+rejects any second public FFM implementation entry point:
+
+```java
+@Test
+public void ffmModuleExposesOnlyStableBackendFacade() throws IOException {
+    Path repoRoot = resolveRepoRoot();
+    Assert.assertNotNull("unable to resolve repository root", repoRoot);
+    Path ffmSources = repoRoot.resolve(
+            "yierdis-memory/yierdis-memory-ffm/src/main/java/"
+                    + "yier/bubu/redis/memory/foreign"
+    );
+    Pattern declaration = Pattern.compile(
+            "(?m)^public\\s+(?:(?:abstract|final|sealed|non-sealed|strictfp)\\s+)*"
+                    + "(?:class|interface|@interface|enum|record)\\s+"
+                    + "([A-Za-z][A-Za-z0-9_]*)\\b"
+    );
+    List<String> publicTypes = new ArrayList<>();
+    try (Stream<Path> files = Files.walk(ffmSources)) {
+        for (Path file : files.filter(path -> path.toString().endsWith(".java")).toList()) {
+            var matcher = declaration.matcher(Files.readString(file, StandardCharsets.UTF_8));
+            while (matcher.find()) {
+                publicTypes.add(matcher.group(1));
+            }
+        }
+    }
+    publicTypes.sort(String::compareTo);
+
+    Assert.assertEquals(List.of("YierdisFfmStableMemoryBackend"), publicTypes);
+}
+```
+
 - [ ] **Step 4: Run the focused tests and verify RED**
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 \
 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
 mvn -pl yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-architecture-tests -am \
-  -Dtest=StableMemoryBackendCompositionTest,DbOwnerBindingTest,ExpireIndexContractTest,YierdisDbArchitectureGuardTest \
+  -Dtest=HeapStableMemoryBackendTest,StableMemoryBackendCompositionTest,DbOwnerBindingTest,ExpireIndexContractTest,YierdisDbArchitectureGuardTest,ArchitectureBoundaryTest \
   -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-Expected: compilation fails because the factory still constructs FFM runtime/allocator directly, the heap backend and backend-neutral expire index do not exist, and `db-memory` main has an FFM compile dependency.
+Expected: compilation fails because the factory still constructs FFM
+runtime/allocator directly, the heap backend and backend-neutral expire index
+do not exist, and `db-memory` main has an FFM compile dependency. Once those
+types compile but before visibility is finalized,
+`ffmModuleExposesOnlyStableBackendFacade` remains red because the internal FFM
+types are still public.
 
 - [ ] **Step 5: Implement one atomic DB/backend owner and named backend config**
 
@@ -2061,7 +3284,11 @@ public YierdisNativeExpireIndex(
 }
 ```
 
-Replace FFM region/span fields with `StableMemoryRegion` and direct typed offset access. Keep state, hash, and expiry data in regions and full key handles in `NativeHandle[]`. Region cleanup remains reverse allocation order and close-once. Delete the unused `YierdisFfmIntSet` source and tests instead of porting it.
+Replace FFM region/span fields with `StableMemoryRegion` and explicit
+little-endian typed offset access. Keep state, hash, and expiry data in regions
+and full key handles in `NativeHandle[]`. Region cleanup remains reverse
+allocation order and close-once. Delete the unused `YierdisFfmIntSet` source
+and tests instead of porting it.
 
 - [ ] **Step 9: Supply a complete heap backend test double**
 
@@ -2226,6 +3453,9 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
     public NativeObjectView resolvePinned(NativeHandle handle, NativeAccessMode mode) {
         checkOpen();
         Objects.requireNonNull(mode, "mode");
+        if (mode != NativeAccessMode.READ_ONLY) {
+            throw new NativeMemoryException("retained native views must be read-only");
+        }
         long localRaw = requireLive(handle);
         if (!pinned.contains(localRaw)) throw new NativeMemoryException("native object is not pinned");
         HeapView view = new HeapView(handle, localRaw, objects.get(localRaw), mode);
@@ -2420,8 +3650,14 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
             this.epoch = epoch;
         }
 
-        @Override public NativeEpochKind kind() { return kind; }
-        @Override public long epoch() { return epoch; }
+        @Override public NativeEpochKind kind() {
+            owner.checkCurrentThread();
+            return kind;
+        }
+        @Override public long epoch() {
+            owner.checkCurrentThread();
+            return epoch;
+        }
 
         @Override
         public void close() {
@@ -2556,7 +3792,7 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
         private void checkWritable() {
             checkReadable();
             if (mode != NativeAccessMode.READ_WRITE) {
-                throw new IllegalStateException("heap object view is read-only");
+                throw new NativeMemoryException("heap object view is read-only");
             }
         }
     }
@@ -2575,20 +3811,20 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
             checkRange(offset, 1);
             data[offset] = value;
         }
-        @Override public int getInt(int offset) {
+        @Override public int getIntLittleEndian(int offset) {
             checkRange(offset, Integer.BYTES);
             return (data[offset] & 0xff)
                     | ((data[offset + 1] & 0xff) << 8)
                     | ((data[offset + 2] & 0xff) << 16)
                     | ((data[offset + 3] & 0xff) << 24);
         }
-        @Override public void setInt(int offset, int value) {
+        @Override public void setIntLittleEndian(int offset, int value) {
             checkRange(offset, Integer.BYTES);
             for (int index = 0; index < Integer.BYTES; index++) {
                 data[offset + index] = (byte) (value >>> (index * 8));
             }
         }
-        @Override public long getLong(int offset) {
+        @Override public long getLongLittleEndian(int offset) {
             checkRange(offset, Long.BYTES);
             long value = 0L;
             for (int index = 0; index < Long.BYTES; index++) {
@@ -2596,7 +3832,7 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
             }
             return value;
         }
-        @Override public void setLong(int offset, long value) {
+        @Override public void setLongLittleEndian(int offset, long value) {
             checkRange(offset, Long.BYTES);
             for (int index = 0; index < Long.BYTES; index++) {
                 data[offset + index] = (byte) (value >>> (index * 8));
@@ -2647,11 +3883,23 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
 }
 ```
 
-Every interface method is declared directly on the class; the fake imports neither the FFM package nor reflection/proxy APIs. `NO_MOVE` rejects any heap-array size change because the fake has no spare capacity. The fake uses little-endian typed region access to match the DB layouts, and the temporary full-array copy in `copyTo` preserves overlap semantics.
+Every interface method is declared directly on the class; the fake imports
+neither the FFM package nor reflection/proxy APIs. `NO_MOVE` rejects any
+heap-array size change because the fake has no spare capacity. Every derived
+view/scope/epoch operation checks `owner.checkCurrentThread()` and never binds;
+`resolvePinned` is read-only and does not own the caller's pin. The fake uses
+explicit little-endian typed region access to match the DB layouts, and the
+temporary full-array copy in `copyTo` preserves overlap semantics.
 
 - [ ] **Step 10: Remove every DB-to-FFM dependency and inject FFM at the composition root**
 
 In `yierdis-db-memory/pom.xml`, retain `yierdis-memory-api` at compile scope and delete the `yierdis-memory-ffm` dependency completely. Convert backend-neutral DB unit tests to `HeapStableMemoryBackend`. Keep allocator-page, FFM defrag, and native leak behavior in `yierdis-memory-ffm` tests or `yierdis-integration-tests`, where the composition root may depend on both modules; no DB-memory main or test source imports `yier.bubu.redis.memory.foreign`.
+
+In `MutationFaultInjectionTest` and `ZSetValueTest`, retain the existing
+`failOnAllocation`, `disableFailures`, `resetAttempts`, and
+`allocationAttempts` calls unchanged. Migrate only the fixture type and its
+construction to `FailOnAllocationStableMemoryBackend`; do not add aliases or
+reinterpret the one-based allocation-attempt contract.
 
 In `yierdis-server-main/pom.xml`, add a direct compile dependency on `yierdis-memory-api` because bootstrap declares `StableMemoryBackendFactory`; retain its direct `yierdis-db-api`, `yierdis-db-memory`, and `yierdis-memory-ffm` composition dependencies. In `yierdis-integration-tests/pom.xml`, add direct test-scope dependencies on `yierdis-memory-api` and `yierdis-memory-ffm`, retaining the direct test dependencies on `yierdis-db-api` and `yierdis-db-memory`. Neither module may rely on the removed `db-memory -> memory-ffm` transitive edge.
 
@@ -2832,11 +4080,21 @@ The test double implements only the baseline `RuntimeDbEngine` contract; do not 
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 \
 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
 mvn -pl yierdis-db/yierdis-db-memory,yierdis-server/yierdis-server-main,yierdis-tests/yierdis-architecture-tests,yierdis-tests/yierdis-integration-tests,yierdis-benchmark -am \
-  -Dtest=StableMemoryBackendCompositionTest,DbOwnerBindingTest,ExpireIndexContractTest,EntryHandleContractTest,ValueHandleContractTest,EntryTableContractTest,YierdisDbArchitectureGuardTest,YierdisServerBootstrapCloseTest,YierdisServerBootstrapCommandWiringTest,NettyExecutionAdapterIntegrationTest,YierdisInstanceTest,CommitStreamIntegrationTest,GlobalMaxmemoryLruAcrossDbsTest,MaxmemoryPhysicalProgressTest,EmptyDatabaseFootprintTest,YierdisSnapshotTest,OffHeapLeakRegressionTest,MaxmemoryEvictionTest,TtlMaxmemoryTest,MaxmemoryDoubleReplyRegressionTest,HllCommandTest,OffHeapKeysZeroCopyReadPathTest,OffHeapKeysCommandSmokeTest,StringCommandTest,CollectionScanCommandTest,StorageBenchmarkRunnerTest \
-  -Dsurefire.failIfNoSpecifiedTests=false test
+  -Dtest=HeapStableMemoryBackendTest,StableMemoryBackendCompositionTest,DbOwnerBindingTest,ExpireIndexContractTest,EntryHandleContractTest,ValueHandleContractTest,EntryTableContractTest,YierdisDbArchitectureGuardTest,ArchitectureBoundaryTest,YierdisServerBootstrapCloseTest,YierdisServerBootstrapCommandWiringTest,NettyExecutionAdapterIntegrationTest,YierdisInstanceTest,CommitStreamIntegrationTest,GlobalMaxmemoryLruAcrossDbsTest,MaxmemoryPhysicalProgressTest,EmptyDatabaseFootprintTest,YierdisSnapshotTest,OffHeapLeakRegressionTest,MaxmemoryEvictionTest,TtlMaxmemoryTest,MaxmemoryDoubleReplyRegressionTest,HllCommandTest,OffHeapKeysZeroCopyReadPathTest,OffHeapKeysCommandSmokeTest,StringCommandTest,CollectionScanCommandTest,StorageBenchmarkRunnerTest \
+  -Dsurefire.failIfNoSpecifiedTests=false clean test
 ```
 
-Expected: PASS. A heap backend constructs and mutates a DB, concurrent binding has one winner shared by DB/backend, full handles round-trip through entry/collection/expire layouts, main DB source/POM have no FFM implementation edge, server close/configuration tests use `DbEngineConfig` and baseline/capability-typed doubles, governor tests use `GlobalMaxmemoryDbEngine[]`, every named integration construction/accounting path uses the public backend facade, and the benchmark requires the physical-memory capability.
+Expected: PASS. The clean phase removes renamed/deleted DB classes before the
+expire-index `Class.forName` absence assertion. The heap backend matches owner,
+pinned-view, little-endian, and overlap contracts; it constructs and mutates a
+DB, concurrent binding has one winner shared by DB/backend, full handles
+round-trip through entry/collection/expire layouts, main DB source/POM have no
+FFM implementation edge, server close/configuration tests use
+`DbEngineConfig` and baseline/capability-typed doubles, governor tests use
+`GlobalMaxmemoryDbEngine[]`, every named integration construction/accounting
+path uses the public backend facade, and the benchmark requires the
+physical-memory capability. `ArchitectureBoundaryTest` also proves that
+`YierdisFfmStableMemoryBackend` is the sole public top-level FFM type.
 
 - [ ] **Step 13: Run broader storage, server composition, architecture, integration, benchmark, and CLI tests**
 
@@ -3789,10 +5047,13 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 \
 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
 mvn -pl yierdis-db/yierdis-db-api,yierdis-db/yierdis-db-memory -am \
   -Dtest=SemanticResultSourceTest,ByteValueTest,PreparedMutationContractTest,PreparedMutationStorageTest,NativeCollectionReadStreamingTest,NativeCollectionScanWindowTest,PinnedPoppedValueSequenceTest \
-  -Dsurefire.failIfNoSpecifiedTests=false test
+  -Dsurefire.failIfNoSpecifiedTests=false clean test
 ```
 
-Expected: PASS. Storage modules compile without any old result interface, repeated visitors preserve sources, and prepared SET/POP paths mutate only during one current commit.
+Expected: PASS. The clean phase removes deleted result APIs and renamed test
+classes before compilation and focused discovery. Storage modules compile
+without any old result interface, repeated visitors preserve sources, and
+prepared SET/POP paths mutate only during one current commit.
 
 - [ ] **Step 11: Run the broader DB suite**
 
@@ -3866,10 +5127,11 @@ Run these only after command/runtime Task 3 has migrated the assigned consumers 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 \
 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-mvn test
+mvn clean test
 ```
 
-Expected: PASS across the complete reactor with no skipped migration regression.
+Expected: PASS across a clean complete reactor with no stale deleted class and
+no skipped migration regression.
 
 - [ ] **Run architecture and integration acceptance explicitly**
 
