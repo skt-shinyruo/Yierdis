@@ -4,6 +4,15 @@ import org.junit.Assert;
 import org.junit.Test;
 
 import java.lang.management.ManagementFactory;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 public class NativeHandleTest {
     @Test
@@ -24,79 +33,77 @@ public class NativeHandleTest {
     }
 
     @Test
-    public void nullHandleIsOnlyZeroRawValue() {
+    public void nullRequiresBothIdentityPartsToBeZero() {
         Assert.assertTrue(NativeHandle.NULL.isNull());
-        Assert.assertEquals(0L, NativeHandle.NULL.raw());
+        Assert.assertEquals(0L, NativeHandle.NULL.allocatorId());
+        Assert.assertEquals(0L, NativeHandle.NULL.localRaw());
+        Assert.assertFalse(new NativeHandle(1L, 0L).isNull());
+        Assert.assertFalse(new NativeHandle(0L, 1L).isNull());
     }
 
     @Test
-    public void encodesAndDecodesHandleFields() {
-        NativeHandle handle = NativeHandle.of(
-                NativeHandleDomain.STORAGE_OBJECT,
-                NativeObjectKind.STRING_BYTES,
-                123456789L,
-                77,
-                3
-        );
+    public void equalityIncludesAllocatorIdentity() {
+        NativeHandle first = new NativeHandle(11L, 77L);
+        NativeHandle same = new NativeHandle(11L, 77L);
+        NativeHandle otherAllocator = new NativeHandle(12L, 77L);
 
-        Assert.assertFalse(handle.isNull());
-        Assert.assertEquals(0x1100_075b_cd15_04d3L, handle.raw());
-        Assert.assertEquals(NativeHandleDomain.STORAGE_OBJECT, handle.domain());
-        Assert.assertEquals(NativeObjectKind.STRING_BYTES.code(), handle.kindCode());
-        Assert.assertEquals(123456789L, handle.slotId());
-        Assert.assertEquals(77, handle.generation());
-        Assert.assertEquals(3, handle.flags());
+        Assert.assertEquals(first, same);
+        Assert.assertNotEquals(first, otherAllocator);
     }
 
     @Test
-    public void primitiveDecodersMatchHandleAccessorsWithoutPerCallAllocation() {
-        NativeHandle handle = NativeHandle.of(
-                NativeHandleDomain.STORAGE_OBJECT,
-                NativeObjectKind.STRING_BYTES,
-                123456789L,
-                77,
-                3
-        );
-        long raw = handle.raw();
-        Assert.assertEquals(raw, NativeHandle.rawOf(
-                NativeHandleDomain.STORAGE_OBJECT,
-                NativeObjectKind.STRING_BYTES,
-                123456789L,
-                77,
-                3
-        ));
+    public void backendIdsArePositiveAndStrictlyMonotonic() {
+        long first = StableMemoryBackendIds.nextId();
+        long second = StableMemoryBackendIds.nextId();
+        long third = StableMemoryBackendIds.nextId();
 
-        com.sun.management.ThreadMXBean bean = allocatedBytesBean();
-        for (int index = 0; index < 10_000; index++) {
-            consumeRawFields(raw);
+        Assert.assertTrue(first > 0L);
+        Assert.assertTrue(second > first);
+        Assert.assertTrue(third > second);
+    }
+
+    @Test
+    public void backendIdsArePositiveAndUniqueAcrossConcurrentCallers() throws Exception {
+        int workerCount = 8;
+        int idsPerWorker = 1_000;
+        ExecutorService executor = Executors.newFixedThreadPool(workerCount);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            List<Future<List<Long>>> futures = new ArrayList<>();
+            for (int worker = 0; worker < workerCount; worker++) {
+                futures.add(executor.submit(() -> {
+                    start.await();
+                    List<Long> generated = new ArrayList<>(idsPerWorker);
+                    for (int index = 0; index < idsPerWorker; index++) {
+                        generated.add(StableMemoryBackendIds.nextId());
+                    }
+                    return generated;
+                }));
+            }
+            start.countDown();
+
+            Set<Long> unique = new HashSet<>();
+            for (Future<List<Long>> future : futures) {
+                for (long id : future.get(5L, TimeUnit.SECONDS)) {
+                    Assert.assertTrue(id > 0L);
+                    Assert.assertTrue("duplicate backend ID " + id, unique.add(id));
+                }
+            }
+            Assert.assertEquals(workerCount * idsPerWorker, unique.size());
+        } finally {
+            executor.shutdownNow();
+            Assert.assertTrue(executor.awaitTermination(5L, TimeUnit.SECONDS));
         }
-        long before = bean.getThreadAllocatedBytes(Thread.currentThread().threadId());
-        for (int index = 0; index < 100_000; index++) {
-            consumeRawFields(raw);
-        }
-        long allocatedBytes = bean.getThreadAllocatedBytes(Thread.currentThread().threadId()) - before;
-
-        Assert.assertEquals(handle.domain(), NativeHandle.domain(raw));
-        Assert.assertEquals(handle.kindCode(), NativeHandle.kindCode(raw));
-        Assert.assertEquals(handle.slotId(), NativeHandle.slotId(raw));
-        Assert.assertEquals(handle.generation(), NativeHandle.generation(raw));
-        Assert.assertEquals(handle.flags(), NativeHandle.flags(raw));
-        Assert.assertTrue("primitive handle decoding allocated " + allocatedBytes + " bytes", allocatedBytes < 4_096L);
     }
 
     @Test
-    public void rejectsOutOfRangeFields() {
-        assertIllegal(() -> NativeHandle.of(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.STRING_BYTES, -1, 1, 0));
-        assertIllegal(() -> NativeHandle.of(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.STRING_BYTES, 1L << 40, 1, 0));
-        assertIllegal(() -> NativeHandle.of(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.STRING_BYTES, 1, -1, 0));
-        assertIllegal(() -> NativeHandle.of(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.STRING_BYTES, 1, 4096, 0));
-        assertIllegal(() -> NativeHandle.of(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.STRING_BYTES, 1, 1, -1));
-        assertIllegal(() -> NativeHandle.of(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.STRING_BYTES, 1, 1, 16));
-    }
+    public void backendIdExhaustionIsPermanentInAnIsolatedSequence() {
+        StableMemoryBackendIdSequence sequence =
+                new StableMemoryBackendIdSequence(Long.MAX_VALUE);
 
-    @Test
-    public void rejectsMismatchedDomainAndKind() {
-        assertIllegal(() -> NativeHandle.of(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.ENTRY_RECORD, 1, 1, 0));
+        Assert.assertEquals(Long.MAX_VALUE, sequence.nextId());
+        Assert.assertThrows(IllegalStateException.class, sequence::nextId);
+        Assert.assertThrows(IllegalStateException.class, sequence::nextId);
     }
 
     @Test
@@ -116,29 +123,6 @@ public class NativeHandleTest {
         Assert.assertEquals(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.HASH_VALUE_BYTES.domain());
         Assert.assertEquals(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.SET_MEMBER_BYTES.domain());
         Assert.assertEquals(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.ZSET_MEMBER_BYTES.domain());
-    }
-
-    @Test
-    public void rejectsNonZeroReservedDomain() {
-        long raw = 0x0000_0000_0000_0010L;
-        assertIllegal(() -> NativeHandle.fromRaw(raw));
-    }
-
-    private static void assertIllegal(Runnable runnable) {
-        try {
-            runnable.run();
-            Assert.fail("expected IllegalArgumentException");
-        } catch (IllegalArgumentException expected) {
-            Assert.assertNotNull(expected.getMessage());
-        }
-    }
-
-    private static long consumeRawFields(long raw) {
-        return NativeHandle.domainCode(raw)
-                + NativeHandle.kindCode(raw)
-                + NativeHandle.slotId(raw)
-                + NativeHandle.generation(raw)
-                + NativeHandle.flags(raw);
     }
 
     private static com.sun.management.ThreadMXBean allocatedBytesBean() {
