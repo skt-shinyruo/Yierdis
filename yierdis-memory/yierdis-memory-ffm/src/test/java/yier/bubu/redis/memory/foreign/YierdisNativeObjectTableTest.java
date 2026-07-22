@@ -2,12 +2,9 @@ package yier.bubu.redis.memory.foreign;
 
 import java.lang.reflect.Field;
 import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
@@ -115,9 +112,8 @@ public class YierdisNativeObjectTableTest {
     public void allocationCrossing4096SlotsCommitsExactlyTwoSegments() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("segment-boundary");
              YierdisNativeObjectTable table = newTable(runtime, 4_097, 0)) {
-            List<NativeHandle> handles = new ArrayList<>();
             for (int i = 0; i < 4_097; i++) {
-                handles.add(table.allocate(NativeObjectKind.STRING_BYTES, 1, 1, 1, i + 1L, 0, 0));
+                table.allocate(NativeObjectKind.STRING_BYTES, 1, 1, 1, i + 1L, 0, 0);
             }
 
             Assert.assertEquals(2, table.stats().activeSegments());
@@ -132,13 +128,19 @@ public class YierdisNativeObjectTableTest {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("object-table-basic");
              YierdisNativeObjectTable table = newTable(runtime, 4, 77)) {
 
-            NativeHandle handle = table.allocate(NativeObjectKind.STRING_BYTES, 32, 48, 55, 1234L, 2, 9L);
-            YierdisNativeObjectMeta meta = table.resolve(handle);
+            long localRaw = table.allocate(NativeObjectKind.STRING_BYTES, 32, 48, 55, 1234L, 2, 9L);
+            YierdisNativeObjectMeta meta = table.resolve(localRaw);
 
-            Assert.assertEquals(NativeObjectKind.STRING_BYTES.domain(), handle.domain());
-            Assert.assertEquals(NativeObjectKind.STRING_BYTES.code(), handle.kindCode());
-            Assert.assertEquals(1L, handle.slotId());
-            Assert.assertEquals(1, handle.generation());
+            Assert.assertEquals(
+                    NativeObjectKind.STRING_BYTES.domain(),
+                    YierdisLocalHandleCodec.domain(localRaw)
+            );
+            Assert.assertEquals(
+                    NativeObjectKind.STRING_BYTES.code(),
+                    YierdisLocalHandleCodec.kindCode(localRaw)
+            );
+            Assert.assertEquals(1L, YierdisLocalHandleCodec.slotId(localRaw));
+            Assert.assertEquals(1, YierdisLocalHandleCodec.generation(localRaw));
             Assert.assertEquals(32, meta.size());
             Assert.assertEquals(48, meta.capacity());
             Assert.assertEquals(1234L, meta.address());
@@ -165,19 +167,25 @@ public class YierdisNativeObjectTableTest {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("object-table-reuse");
              YierdisNativeObjectTable table = newTable(runtime, 1, 7)) {
 
-            NativeHandle first = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 1, 11L, 1, 1L);
-            table.free(first, 2L);
+            long firstLocalRaw = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 1, 11L, 1, 1L);
+            table.free(firstLocalRaw, 2L);
 
             try {
-                table.resolve(first);
+                table.resolve(firstLocalRaw);
                 Assert.fail("expected stale handle");
             } catch (StaleNativeHandleException expected) {
                 Assert.assertTrue(expected.getMessage().contains("stale native handle"));
             }
 
-            NativeHandle second = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 2, 22L, 1, 3L);
-            Assert.assertEquals(first.slotId(), second.slotId());
-            Assert.assertEquals(first.generation() + 1, second.generation());
+            long secondLocalRaw = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 2, 22L, 1, 3L);
+            Assert.assertEquals(
+                    YierdisLocalHandleCodec.slotId(firstLocalRaw),
+                    YierdisLocalHandleCodec.slotId(secondLocalRaw)
+            );
+            Assert.assertEquals(
+                    YierdisLocalHandleCodec.generation(firstLocalRaw) + 1,
+                    YierdisLocalHandleCodec.generation(secondLocalRaw)
+            );
         }
     }
 
@@ -187,9 +195,9 @@ public class YierdisNativeObjectTableTest {
              YierdisNativeObjectTable table = newTable(runtime, 1, 7)) {
 
             for (int generation = 1; generation <= 0x0fff; generation++) {
-                NativeHandle handle = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 1, generation, 1, generation);
-                Assert.assertEquals(generation, handle.generation());
-                table.free(handle, generation);
+                long localRaw = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 1, generation, 1, generation);
+                Assert.assertEquals(generation, YierdisLocalHandleCodec.generation(localRaw));
+                table.free(localRaw, generation);
             }
 
             try {
@@ -209,10 +217,10 @@ public class YierdisNativeObjectTableTest {
     public void statsTrackLiveFreeAndPerStateTransitions() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("object-table-stats");
              YierdisNativeObjectTable table = newTable(runtime, 2, 7)) {
-            NativeHandle first = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 1, 11L, 1, 1L);
-            NativeHandle second = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 2, 22L, 1, 1L);
-            table.pin(first);
-            table.free(first, 2L);
+            long firstLocalRaw = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 1, 11L, 1, 1L);
+            long secondLocalRaw = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 2, 22L, 1, 1L);
+            table.pin(firstLocalRaw);
+            table.free(firstLocalRaw, 2L);
 
             YierdisNativeObjectTableStats quarantined = table.stats();
             Assert.assertEquals(2L, quarantined.liveSlots());
@@ -221,8 +229,8 @@ public class YierdisNativeObjectTableTest {
             Assert.assertEquals(1L, quarantined.stateCount(YierdisNativeObjectTable.STATE_ALLOCATED));
             Assert.assertEquals(1L, quarantined.stateCount(YierdisNativeObjectTable.STATE_FREED_QUARANTINED));
 
-            table.unpin(first);
-            table.free(second, 3L);
+            table.unpin(firstLocalRaw);
+            table.free(secondLocalRaw, 3L);
 
             YierdisNativeObjectTableStats released = table.stats();
             Assert.assertEquals(0L, released.liveSlots());
@@ -236,24 +244,24 @@ public class YierdisNativeObjectTableTest {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("object-table-quarantine");
              YierdisNativeObjectTable table = newTable(runtime, 1, 7)) {
 
-            NativeHandle handle = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 1, 11L, 1, 1L);
-            table.pin(handle);
-            table.free(handle, 2L);
+            long localRaw = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 1, 11L, 1, 1L);
+            table.pin(localRaw);
+            table.free(localRaw, 2L);
 
-            YierdisNativeObjectMeta quarantined = table.snapshot(handle, true);
+            YierdisNativeObjectMeta quarantined = table.snapshot(localRaw, true);
             Assert.assertEquals(YierdisNativeObjectTable.STATE_FREED_QUARANTINED, quarantined.state());
             Assert.assertEquals(1, quarantined.pinCount());
             Assert.assertEquals(2L, quarantined.freeEpoch());
 
             try {
-                table.free(handle, 3L);
+                table.free(localRaw, 3L);
                 Assert.fail("expected quarantined double-free stale rejection");
             } catch (StaleNativeHandleException expected) {
                 Assert.assertTrue(expected.getMessage().contains("quarantined"));
             }
 
             try {
-                table.resolve(handle);
+                table.resolve(localRaw);
                 Assert.fail("expected quarantined handle rejection");
             } catch (StaleNativeHandleException expected) {
                 Assert.assertTrue(expected.getMessage().contains("quarantined"));
@@ -266,11 +274,17 @@ public class YierdisNativeObjectTableTest {
                 Assert.assertTrue(expected.getMessage().contains("slot limit"));
             }
 
-            table.unpin(handle);
+            table.unpin(localRaw);
 
-            NativeHandle second = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 2, 22L, 1, 3L);
-            Assert.assertEquals(handle.slotId(), second.slotId());
-            Assert.assertEquals(handle.generation() + 1, second.generation());
+            long secondLocalRaw = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 2, 22L, 1, 3L);
+            Assert.assertEquals(
+                    YierdisLocalHandleCodec.slotId(localRaw),
+                    YierdisLocalHandleCodec.slotId(secondLocalRaw)
+            );
+            Assert.assertEquals(
+                    YierdisLocalHandleCodec.generation(localRaw) + 1,
+                    YierdisLocalHandleCodec.generation(secondLocalRaw)
+            );
         }
     }
 
@@ -279,28 +293,42 @@ public class YierdisNativeObjectTableTest {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("object-table-invalid");
              YierdisNativeObjectTable table = newTable(runtime, 2, 7)) {
 
-            NativeHandle handle = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 1, 11L, 1, 1L);
-            NativeHandle wrongKind = NativeHandle.of(handle.domain(), NativeObjectKind.GENERIC, handle.slotId(), handle.generation(), 0);
-            NativeHandle wrongDomain = NativeHandle.of(NativeObjectKind.ENTRY_RECORD.domain(), NativeObjectKind.ENTRY_RECORD, handle.slotId(), handle.generation(), 0);
+            long localRaw = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 1, 11L, 1, 1L);
+            long slotId = YierdisLocalHandleCodec.slotId(localRaw);
+            int generation = YierdisLocalHandleCodec.generation(localRaw);
+            long wrongKindLocalRaw = YierdisLocalHandleCodec.encode(
+                    NativeObjectKind.GENERIC.domain(),
+                    NativeObjectKind.GENERIC,
+                    slotId,
+                    generation,
+                    0
+            );
+            long wrongDomainLocalRaw = YierdisLocalHandleCodec.encode(
+                    NativeObjectKind.ENTRY_RECORD.domain(),
+                    NativeObjectKind.ENTRY_RECORD,
+                    slotId,
+                    generation,
+                    0
+            );
 
             try {
-                table.resolve(wrongKind);
+                table.resolve(wrongKindLocalRaw);
                 Assert.fail("expected wrong-kind rejection");
             } catch (NativeMemoryException expected) {
                 Assert.assertTrue(expected.getMessage().contains("kind/domain"));
             }
 
             try {
-                table.resolve(wrongDomain);
+                table.resolve(wrongDomainLocalRaw);
                 Assert.fail("expected wrong-domain rejection");
             } catch (NativeMemoryException expected) {
                 Assert.assertTrue(expected.getMessage().contains("kind/domain"));
             }
 
-            table.free(handle, 2L);
+            table.free(localRaw, 2L);
 
             try {
-                table.free(handle, 3L);
+                table.free(localRaw, 3L);
                 Assert.fail("expected double-free stale rejection");
             } catch (StaleNativeHandleException expected) {
                 Assert.assertTrue(expected.getMessage().contains("stale native handle"));
@@ -337,22 +365,22 @@ public class YierdisNativeObjectTableTest {
     public void locationMutationsValidateCapacityBeforePublishingMetadata() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("object-table-location-capacity");
              YierdisNativeObjectTable table = newTable(runtime, 1, 0)) {
-            NativeHandle handle = table.allocate(NativeObjectKind.STRING_BYTES, 8, 16, 1, 0L, 1, 1L);
-            YierdisNativeObjectMeta original = table.resolve(handle);
+            long localRaw = table.allocate(NativeObjectKind.STRING_BYTES, 8, 16, 1, 0L, 1, 1L);
+            YierdisNativeObjectMeta original = table.resolve(localRaw);
 
             Assert.assertThrows(
                     IllegalArgumentException.class,
-                    () -> table.updateLocation(handle, 8, 15, 1, 0L, 1)
+                    () -> table.updateLocation(localRaw, 8, 15, 1, 0L, 1)
             );
-            Assert.assertEquals(original, table.resolve(handle));
+            Assert.assertEquals(original, table.resolve(localRaw));
 
-            table.beginMove(handle);
+            table.beginMove(localRaw);
             Assert.assertThrows(
                     IllegalArgumentException.class,
-                    () -> table.publishMoved(handle, 8, 47, 2, 0L, 2)
+                    () -> table.publishMoved(localRaw, 8, 47, 2, 0L, 2)
             );
-            table.abortMove(handle);
-            Assert.assertEquals(original, table.resolve(handle));
+            table.abortMove(localRaw);
+            Assert.assertEquals(original, table.resolve(localRaw));
         }
     }
 

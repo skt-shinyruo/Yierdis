@@ -6,12 +6,13 @@ import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeAllocationScope;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.memory.api.StableMemoryBackendIds;
 
 public class NativeAllocationScopeTest {
     @Test
     public void abortedNativeScopeRestoresCommittedSnapshot() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 128)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 128)) {
             allocator.bindToCurrentThread();
             NativeHandle warmPageValue = allocator.allocate(NativeObjectKind.STRING_BYTES, 32);
             allocator.free(warmPageValue);
@@ -33,7 +34,7 @@ public class NativeAllocationScopeTest {
     @Test
     public void scopedSnapshotCountsCheckpointAndScopeBookkeepingHeap() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-bookkeeping-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 128)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 128)) {
             allocator.bindToCurrentThread();
             NativeHandle warmPageValue = allocator.allocate(NativeObjectKind.STRING_BYTES, 32);
             allocator.free(warmPageValue);
@@ -94,7 +95,7 @@ public class NativeAllocationScopeTest {
     @Test
     public void scopeBookkeepingEstimateCoversLargeTrackedHandleArray() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-bookkeeping-estimate-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 2_048)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 2_048)) {
             allocator.bindToCurrentThread();
             NativeHandle anchor = allocator.allocate(NativeObjectKind.STRING_BYTES, 32);
             try {
@@ -122,7 +123,7 @@ public class NativeAllocationScopeTest {
     @Test
     public void abortDoesNotAllocateWhileRecoveringPageDirectoryIds() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-abort-directory-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 128)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 128)) {
             allocator.bindToCurrentThread();
             MemoryUsageSnapshot before = allocator.memoryUsage();
             NativeAllocationScope scope = allocator.beginAllocationScope();
@@ -146,7 +147,7 @@ public class NativeAllocationScopeTest {
     public void abortDoesNotGrowTheObjectTableAvailabilityQueue() {
         int allocationCount = YierdisNativeObjectSegment.SLOTS_PER_SEGMENT * 2;
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-abort-object-table-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, allocationCount)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, allocationCount)) {
             allocator.bindToCurrentThread();
             MemoryUsageSnapshot before = allocator.memoryUsage();
             NativeAllocationScope scope = allocator.beginAllocationScope();
@@ -167,7 +168,7 @@ public class NativeAllocationScopeTest {
     public void automaticCapacityAbortReleasesNewMetadataSegment() {
         int firstSegmentSlots = YierdisNativeObjectSegment.SLOTS_PER_SEGMENT;
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-auto-segment-abort-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 0)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 0)) {
             allocator.bindToCurrentThread();
             NativeHandle[] retained = new NativeHandle[firstSegmentSlots];
             for (int i = 0; i < retained.length; i++) {
@@ -193,7 +194,7 @@ public class NativeAllocationScopeTest {
     @Test
     public void growthRetainsTransientNativePeakAfterTheHandleIsFreed() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-transient-peak-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 128)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 128)) {
             allocator.bindToCurrentThread();
             try (NativeAllocationScope scope = allocator.beginAllocationScope()) {
                 NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 70_000);
@@ -210,7 +211,7 @@ public class NativeAllocationScopeTest {
     @Test
     public void memorySnapshotUsesRetainedAllocatorCountersWithoutWalkingPagesOrSegments() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-o1-snapshot-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 256)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 256)) {
             allocator.bindToCurrentThread();
             NativeHandle[] handles = new NativeHandle[64];
             for (int i = 0; i < handles.length; i++) {
@@ -232,7 +233,7 @@ public class NativeAllocationScopeTest {
     private static long scopeOpeningHeapOverhead(int segmentCount) {
         int allocationCount = segmentCount * YierdisNativeObjectSegment.SLOTS_PER_SEGMENT;
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-directory-overhead-" + segmentCount);
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, allocationCount)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, allocationCount)) {
             allocator.bindToCurrentThread();
             NativeHandle[] handles = new NativeHandle[allocationCount];
             for (int i = 0; i < handles.length; i++) {
@@ -249,5 +250,19 @@ public class NativeAllocationScopeTest {
                 return overhead;
             }
         }
+    }
+
+    private static YierdisStableNativeAllocator newAllocator(
+            YierdisFfmMemoryRuntime runtime,
+            int maxSlots
+    ) {
+        YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(
+                runtime,
+                maxSlots,
+                StableMemoryBackendIds.nextId(),
+                new FfmTestOwner()
+        );
+        allocator.bindToCurrentThread();
+        return allocator;
     }
 }

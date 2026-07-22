@@ -5,8 +5,9 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.ByteOrder;
 import java.util.Objects;
+import yier.bubu.redis.memory.api.StableMemoryRegion;
 
-public final class YierdisFfmRegion implements AutoCloseable {
+public final class YierdisFfmRegion implements StableMemoryRegion {
     private static final int COMPARE_CHUNK_BYTES = 8 * 1024;
     private static final ThreadLocal<byte[]> COMPARE_BUFFER =
             ThreadLocal.withInitial(() -> new byte[COMPARE_CHUNK_BYTES]);
@@ -39,7 +40,9 @@ public final class YierdisFfmRegion implements AutoCloseable {
         this.size = size;
     }
 
+    @Override
     public int size() {
+        ensureOpen();
         return size;
     }
 
@@ -53,13 +56,15 @@ public final class YierdisFfmRegion implements AutoCloseable {
         return new YierdisFfmSpan(segment.asSlice(offset, length));
     }
 
-    byte getByte(int offset) {
+    @Override
+    public byte getByte(int offset) {
         ensureOpen();
         checkRange(offset, 1);
         return segment.get(ValueLayout.JAVA_BYTE, offset);
     }
 
-    void setByte(int offset, byte value) {
+    @Override
+    public void setByte(int offset, byte value) {
         ensureOpen();
         checkRange(offset, 1);
         segment.set(ValueLayout.JAVA_BYTE, offset, value);
@@ -89,33 +94,38 @@ public final class YierdisFfmRegion implements AutoCloseable {
         segment.set(ValueLayout.JAVA_INT_UNALIGNED, offset, value);
     }
 
-    int getIntLittleEndian(int offset) {
+    @Override
+    public int getIntLittleEndian(int offset) {
         ensureOpen();
         checkRange(offset, Integer.BYTES);
         return segment.get(LITTLE_ENDIAN_INT, offset);
     }
 
-    void setIntLittleEndian(int offset, int value) {
+    @Override
+    public void setIntLittleEndian(int offset, int value) {
         ensureOpen();
         checkRange(offset, Integer.BYTES);
         segment.set(LITTLE_ENDIAN_INT, offset, value);
     }
 
-    long getLongLittleEndian(int offset) {
+    @Override
+    public long getLongLittleEndian(int offset) {
         ensureOpen();
         checkRange(offset, Long.BYTES);
         return segment.get(LITTLE_ENDIAN_LONG, offset);
     }
 
-    void setLongLittleEndian(int offset, long value) {
+    @Override
+    public void setLongLittleEndian(int offset, long value) {
         ensureOpen();
         checkRange(offset, Long.BYTES);
         segment.set(LITTLE_ENDIAN_LONG, offset, value);
     }
 
-    void getBytes(int offset, byte[] destination, int destinationOffset, int length) {
-        checkArrayRange(destination, destinationOffset, length, "destination");
+    @Override
+    public void getBytes(int offset, byte[] destination, int destinationOffset, int length) {
         ensureOpen();
+        checkArrayRange(destination, destinationOffset, length, "destination");
         checkRange(offset, length);
         MemorySegment.copy(
                 segment,
@@ -127,9 +137,10 @@ public final class YierdisFfmRegion implements AutoCloseable {
         );
     }
 
-    void setBytes(int offset, byte[] source, int sourceOffset, int length) {
-        checkArrayRange(source, sourceOffset, length, "source");
+    @Override
+    public void setBytes(int offset, byte[] source, int sourceOffset, int length) {
         ensureOpen();
+        checkArrayRange(source, sourceOffset, length, "source");
         checkRange(offset, length);
         MemorySegment.copy(
                 source,
@@ -146,6 +157,27 @@ public final class YierdisFfmRegion implements AutoCloseable {
         checkRange(sourceOffset, length);
         checkRange(targetOffset, length);
         MemorySegment.copy(segment, sourceOffset, segment, targetOffset, length);
+    }
+
+    @Override
+    public void copyTo(
+            int sourceOffset,
+            StableMemoryRegion target,
+            int targetOffset,
+            int length
+    ) {
+        Objects.requireNonNull(target, "target");
+        ensureOpen();
+        checkRange(sourceOffset, length);
+        if (target instanceof YierdisFfmRegion ffmTarget) {
+            ffmTarget.ensureOpen();
+            ffmTarget.checkRange(targetOffset, length);
+            MemorySegment.copy(segment, sourceOffset, ffmTarget.segment, targetOffset, length);
+            return;
+        }
+        byte[] snapshot = new byte[length];
+        getBytes(sourceOffset, snapshot, 0, length);
+        target.setBytes(targetOffset, snapshot, 0, length);
     }
 
     boolean contentEquals(int offset, byte[] other, int otherOffset, int length) {
@@ -189,8 +221,25 @@ public final class YierdisFfmRegion implements AutoCloseable {
             return;
         }
         closed = true;
-        arena.close();
-        runtime.onRegionClosed(this);
+        int releasedBytes = size;
+        RuntimeException failure = null;
+        try {
+            arena.close();
+        } catch (RuntimeException closeFailure) {
+            failure = closeFailure;
+        }
+        try {
+            runtime.onRegionClosed(releasedBytes);
+        } catch (RuntimeException accountingFailure) {
+            if (failure == null) {
+                failure = accountingFailure;
+            } else {
+                failure.addSuppressed(accountingFailure);
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
     }
 
     private void checkRange(int offset, int length) {

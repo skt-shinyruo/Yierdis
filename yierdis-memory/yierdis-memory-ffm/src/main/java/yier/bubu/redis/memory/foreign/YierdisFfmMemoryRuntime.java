@@ -47,9 +47,9 @@ public final class YierdisFfmMemoryRuntime implements AutoCloseable {
         return region;
     }
 
-    void onRegionClosed(YierdisFfmRegion region) {
+    void onRegionClosed(int releasedBytes) {
         long regions = liveRegionCount.decrementAndGet();
-        long bytes = usedBytes.addAndGet(-region.size());
+        long bytes = usedBytes.addAndGet(-releasedBytes);
         if (regions < 0 || bytes < 0) {
             throw new IllegalStateException("native memory runtime accounting underflow");
         }

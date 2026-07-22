@@ -7,7 +7,6 @@ import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocationGrowth;
 import yier.bubu.redis.memory.api.NativeAllocationScope;
-import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeAllocatorMetadataStats;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
@@ -19,25 +18,24 @@ import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.NativeReallocPolicy;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
+import yier.bubu.redis.memory.api.StableMemoryRegion;
 
-public final class SynchronizedNativeAllocator implements NativeAllocator {
+public final class SynchronizedStableMemoryBackend implements StableMemoryBackend {
     private final Object lock = new Object();
-    private final NativeAllocator delegate;
+    private final StableMemoryBackend delegate;
     private Thread allocationScopeOwner;
     private SynchronizedAllocationScope activeAllocationScope;
 
-    public SynchronizedNativeAllocator(YierdisFfmMemoryRuntime runtime, int maxSlots) {
-        this(new YierdisStableNativeAllocator(
-                runtime,
-                maxSlots,
-                (handle, sourceMeta, target) -> {
-                },
-                new YierdisAllocatorThreadGuard(false)
-        ));
+    public SynchronizedStableMemoryBackend(StableMemoryBackend delegate) {
+        this.delegate = Objects.requireNonNull(delegate, "delegate");
     }
 
-    SynchronizedNativeAllocator(NativeAllocator delegate) {
-        this.delegate = Objects.requireNonNull(delegate, "delegate");
+    @Override
+    public long allocatorId() {
+        synchronized (lock) {
+            return delegate.allocatorId();
+        }
     }
 
     @Override
@@ -56,26 +54,10 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
     }
 
     @Override
-    public long allocateRaw(NativeObjectKind kind, int size) {
+    public NativeHandle reallocate(NativeHandle handle, int newSize, NativeReallocPolicy policy) {
         synchronized (lock) {
             requireAllocationScopeOwner();
-            return delegate.allocateRaw(kind, size);
-        }
-    }
-
-    @Override
-    public NativeHandle realloc(NativeHandle handle, int newSize, NativeReallocPolicy policy) {
-        synchronized (lock) {
-            requireAllocationScopeOwner();
-            return delegate.realloc(handle, newSize, policy);
-        }
-    }
-
-    @Override
-    public long reallocRaw(long rawHandle, int newSize, NativeReallocPolicy policy) {
-        synchronized (lock) {
-            requireAllocationScopeOwner();
-            return delegate.reallocRaw(rawHandle, newSize, policy);
+            return delegate.reallocate(handle, newSize, policy);
         }
     }
 
@@ -88,14 +70,6 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
     }
 
     @Override
-    public void freeRaw(long rawHandle) {
-        synchronized (lock) {
-            requireAllocationScopeOwner();
-            delegate.freeRaw(rawHandle);
-        }
-    }
-
-    @Override
     public void pin(NativeHandle handle) {
         synchronized (lock) {
             delegate.pin(handle);
@@ -103,23 +77,9 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
     }
 
     @Override
-    public void pinRaw(long rawHandle) {
-        synchronized (lock) {
-            delegate.pinRaw(rawHandle);
-        }
-    }
-
-    @Override
     public void unpin(NativeHandle handle) {
         synchronized (lock) {
             delegate.unpin(handle);
-        }
-    }
-
-    @Override
-    public void unpinRaw(long rawHandle) {
-        synchronized (lock) {
-            delegate.unpinRaw(rawHandle);
         }
     }
 
@@ -143,9 +103,10 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
         }
     }
 
-    private void requireAllocationScopeOwner() {
-        if (allocationScopeOwner != null && allocationScopeOwner != Thread.currentThread()) {
-            throw new IllegalStateException("native allocation scope belongs to another thread");
+    @Override
+    public long estimateAllocationScopeBookkeepingBytes(int expectedAllocationCount) {
+        synchronized (lock) {
+            return delegate.estimateAllocationScopeBookkeepingBytes(expectedAllocationCount);
         }
     }
 
@@ -157,13 +118,6 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
     }
 
     @Override
-    public NativeObjectView resolveRaw(long rawHandle, NativeAccessMode mode) {
-        synchronized (lock) {
-            return new SynchronizedObjectView(delegate.resolveRaw(rawHandle, mode));
-        }
-    }
-
-    @Override
     public NativeObjectView resolvePinned(NativeHandle handle, NativeAccessMode mode) {
         synchronized (lock) {
             return new SynchronizedObjectView(delegate.resolvePinned(handle, mode));
@@ -171,9 +125,9 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
     }
 
     @Override
-    public NativeObjectView resolvePinnedRaw(long rawHandle, NativeAccessMode mode) {
+    public StableMemoryRegion allocateRegion(String owner, int bytes) {
         synchronized (lock) {
-            return new SynchronizedObjectView(delegate.resolvePinnedRaw(rawHandle, mode));
+            return new SynchronizedRegion(delegate.allocateRegion(owner, bytes));
         }
     }
 
@@ -241,16 +195,30 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
     }
 
     @Override
-    public long estimateAllocationScopeBookkeepingBytes(int expectedAllocationCount) {
+    public long liveRegionCount() {
         synchronized (lock) {
-            return delegate.estimateAllocationScopeBookkeepingBytes(expectedAllocationCount);
+            return delegate.liveRegionCount();
         }
     }
 
     @Override
     public void close() {
         synchronized (lock) {
-            delegate.close();
+            requireAllocationScopeOwner();
+            SynchronizedAllocationScope scope = activeAllocationScope;
+            try {
+                delegate.close();
+            } finally {
+                if (scope != null) {
+                    scope.finish();
+                }
+            }
+        }
+    }
+
+    private void requireAllocationScopeOwner() {
+        if (allocationScopeOwner != null && allocationScopeOwner != Thread.currentThread()) {
+            throw new IllegalStateException("native allocation scope belongs to another thread");
         }
     }
 
@@ -258,7 +226,7 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
         private final NativeEpochScope delegateScope;
 
         private SynchronizedEpochScope(NativeEpochScope delegateScope) {
-            this.delegateScope = delegateScope;
+            this.delegateScope = Objects.requireNonNull(delegateScope, "delegateScope");
         }
 
         @Override
@@ -325,6 +293,17 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
             }
         }
 
+        @Override
+        public void close() {
+            synchronized (lock) {
+                requireOwner();
+                if (!terminal) {
+                    delegateScope.close();
+                    finish();
+                }
+            }
+        }
+
         private void finish() {
             terminal = true;
             if (activeAllocationScope == this) {
@@ -344,7 +323,7 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
         private final NativeObjectView delegateView;
 
         private SynchronizedObjectView(NativeObjectView delegateView) {
-            this.delegateView = delegateView;
+            this.delegateView = Objects.requireNonNull(delegateView, "delegateView");
         }
 
         @Override
@@ -442,6 +421,98 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
         public void close() {
             synchronized (lock) {
                 delegateView.close();
+            }
+        }
+    }
+
+    private final class SynchronizedRegion implements StableMemoryRegion {
+        private final StableMemoryRegion delegateRegion;
+
+        private SynchronizedRegion(StableMemoryRegion delegateRegion) {
+            this.delegateRegion = Objects.requireNonNull(delegateRegion, "delegateRegion");
+        }
+
+        @Override
+        public int size() {
+            synchronized (lock) {
+                return delegateRegion.size();
+            }
+        }
+
+        @Override
+        public byte getByte(int offset) {
+            synchronized (lock) {
+                return delegateRegion.getByte(offset);
+            }
+        }
+
+        @Override
+        public void setByte(int offset, byte value) {
+            synchronized (lock) {
+                delegateRegion.setByte(offset, value);
+            }
+        }
+
+        @Override
+        public int getIntLittleEndian(int offset) {
+            synchronized (lock) {
+                return delegateRegion.getIntLittleEndian(offset);
+            }
+        }
+
+        @Override
+        public void setIntLittleEndian(int offset, int value) {
+            synchronized (lock) {
+                delegateRegion.setIntLittleEndian(offset, value);
+            }
+        }
+
+        @Override
+        public long getLongLittleEndian(int offset) {
+            synchronized (lock) {
+                return delegateRegion.getLongLittleEndian(offset);
+            }
+        }
+
+        @Override
+        public void setLongLittleEndian(int offset, long value) {
+            synchronized (lock) {
+                delegateRegion.setLongLittleEndian(offset, value);
+            }
+        }
+
+        @Override
+        public void getBytes(int offset, byte[] dst, int dstOffset, int length) {
+            synchronized (lock) {
+                delegateRegion.getBytes(offset, dst, dstOffset, length);
+            }
+        }
+
+        @Override
+        public void setBytes(int offset, byte[] src, int srcOffset, int length) {
+            synchronized (lock) {
+                delegateRegion.setBytes(offset, src, srcOffset, length);
+            }
+        }
+
+        @Override
+        public void copyTo(int sourceOffset, StableMemoryRegion target, int targetOffset, int length) {
+            Objects.requireNonNull(target, "target");
+            if (length < 0) {
+                throw new IllegalArgumentException("length must be >= 0");
+            }
+            byte[] snapshot;
+            synchronized (lock) {
+                snapshot = new byte[length];
+                delegateRegion.getBytes(sourceOffset, snapshot, 0, length);
+            }
+            target.setBytes(targetOffset, snapshot, 0, length);
+        }
+
+        @Override
+        public void close() {
+            synchronized (lock) {
+                delegateRegion.close();
             }
         }
     }

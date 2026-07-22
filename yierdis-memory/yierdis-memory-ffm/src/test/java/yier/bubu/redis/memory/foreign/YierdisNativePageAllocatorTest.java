@@ -14,6 +14,7 @@ import yier.bubu.redis.memory.api.NativeAllocationGrowth;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.OffHeapOutOfMemoryException;
+import yier.bubu.redis.memory.api.StableMemoryBackendIds;
 
 public class YierdisNativePageAllocatorTest {
     @Test
@@ -111,7 +112,13 @@ public class YierdisNativePageAllocatorTest {
     @Test
     public void allocationEstimateIncludesOnlyNewSegmentsAndPages() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("allocation-estimate");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 8_192)) {
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(
+                     runtime,
+                     8_192,
+                     StableMemoryBackendIds.nextId(),
+                     new FfmTestOwner()
+             )) {
+            allocator.bindToCurrentThread();
             NativeAllocationGrowth first = allocator.estimateAdditionalGrowth(32);
             Assert.assertEquals(4_096L * YierdisNativeObjectTable.META_BYTES,
                     first.nativeMetadataCommittedBytes());
