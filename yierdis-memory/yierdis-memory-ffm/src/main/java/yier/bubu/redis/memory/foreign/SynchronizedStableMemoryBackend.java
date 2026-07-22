@@ -501,12 +501,28 @@ public final class SynchronizedStableMemoryBackend implements StableMemoryBacken
             if (length < 0) {
                 throw new IllegalArgumentException("length must be >= 0");
             }
+            if (target instanceof SynchronizedRegion sameTarget
+                    && sameTarget.belongsTo(SynchronizedStableMemoryBackend.this)) {
+                synchronized (lock) {
+                    delegateRegion.copyTo(
+                            sourceOffset,
+                            sameTarget.delegateRegion,
+                            targetOffset,
+                            length
+                    );
+                }
+                return;
+            }
             byte[] snapshot;
             synchronized (lock) {
                 snapshot = new byte[length];
                 delegateRegion.getBytes(sourceOffset, snapshot, 0, length);
             }
             target.setBytes(targetOffset, snapshot, 0, length);
+        }
+
+        private boolean belongsTo(SynchronizedStableMemoryBackend backend) {
+            return SynchronizedStableMemoryBackend.this == backend;
         }
 
         @Override
