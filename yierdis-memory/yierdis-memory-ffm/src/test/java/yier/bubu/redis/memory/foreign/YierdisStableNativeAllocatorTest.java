@@ -23,13 +23,14 @@ import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.NativeReallocPolicy;
+import yier.bubu.redis.memory.api.StableMemoryBackendIds;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
 
 public class YierdisStableNativeAllocatorTest {
     @Test
     public void typedLittleEndianAccessSupportsUnalignedValues() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-typed-access");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 16)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 16)) {
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
 
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
@@ -63,7 +64,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void nativeCopyBytesPreservesOverlappingMemmoveSemantics() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-overlap-copy");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 16)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 16)) {
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 10);
             byte[] initial = new byte[]{0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
 
@@ -89,7 +90,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void automaticSlotCapacityStartsLazyAndAllocatesNormally() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-auto-capacity");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 0)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 0)) {
             Assert.assertEquals(0L, allocator.metadataStats().activeMetadataSegments());
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 1);
@@ -104,7 +105,12 @@ public class YierdisStableNativeAllocatorTest {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-negative-capacity")) {
             Assert.assertThrows(
                     IllegalArgumentException.class,
-                    () -> new YierdisStableNativeAllocator(runtime, -1)
+                    () -> new YierdisStableNativeAllocator(
+                            runtime,
+                            -1,
+                            StableMemoryBackendIds.nextId(),
+                            new FfmTestOwner()
+                    )
             );
             Assert.assertEquals(0L, runtime.usedBytes());
         }
@@ -112,7 +118,7 @@ public class YierdisStableNativeAllocatorTest {
 
     @Test
     public void productionAllocatorMethodsAreNotSynchronized() {
-        for (String name : List.of("allocate", "realloc", "free", "pin", "unpin", "resolve", "stats")) {
+        for (String name : List.of("allocate", "reallocate", "free", "pin", "unpin", "resolve", "stats")) {
             Assert.assertFalse(Modifier.isSynchronized(Arrays.stream(YierdisStableNativeAllocator.class.getMethods())
                     .filter(method -> method.getName().equals(name)).findFirst().orElseThrow().getModifiers()));
         }
@@ -121,7 +127,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void crossThreadProductionAccessFailsFast() throws Exception {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("owner-guard");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 16)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 16)) {
             allocator.bindToCurrentThread();
             AtomicReference<Throwable> failure = new AtomicReference<>();
             Thread thread = Thread.ofPlatform().start(() -> {
@@ -145,12 +151,12 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void objectCanResolveReallocateDefragAndFreeFromMetadataLocation() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("metadata-location");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 32)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 32)) {
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 32);
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
                 view.setByte(0, (byte) 42);
             }
-            allocator.realloc(handle, 128, NativeReallocPolicy.PRESERVE_PREFIX);
+            allocator.reallocate(handle, 128, NativeReallocPolicy.PRESERVE_PREFIX);
             allocator.defragOne(handle, 1_024);
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
                 Assert.assertEquals(42, view.getByte(0));
@@ -163,12 +169,12 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void allocatesFromPageAllocatorAndRecordsNativeMetadata() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1024)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
             Assert.assertFalse(handle.isNull());
-            Assert.assertEquals(NativeObjectKind.STRING_BYTES.domain(), handle.domain());
-            Assert.assertEquals(NativeObjectKind.STRING_BYTES.code(), handle.kindCode());
+            Assert.assertEquals(NativeObjectKind.STRING_BYTES.domain(), YierdisLocalHandleCodec.domain(handle.localRaw()));
+            Assert.assertEquals(NativeObjectKind.STRING_BYTES.code(), YierdisLocalHandleCodec.kindCode(handle.localRaw()));
 
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
                 Assert.assertEquals(8, view.size());
@@ -176,9 +182,9 @@ public class YierdisStableNativeAllocatorTest {
                 view.setByte(0, (byte) 42);
             }
 
-            YierdisNativeObjectMeta meta = allocator.objectMeta(handle, false);
-            Assert.assertEquals(handle.slotId(), meta.slotId());
-            Assert.assertEquals(handle.generation(), meta.generation());
+            YierdisNativeObjectMeta meta = allocator.objectMeta(handle.localRaw(), false);
+            Assert.assertEquals(YierdisLocalHandleCodec.slotId(handle.localRaw()), meta.slotId());
+            Assert.assertEquals(YierdisLocalHandleCodec.generation(handle.localRaw()), meta.generation());
             Assert.assertEquals(8, meta.size());
             Assert.assertEquals(16, meta.capacity());
             Assert.assertEquals(YierdisNativePageClass.SMALL.ordinal(), meta.pageClass());
@@ -200,7 +206,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void detectsUseAfterFree() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1024)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
             allocator.free(handle);
@@ -219,7 +225,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void freePinnedObjectQuarantinesUntilUnpin() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
             allocator.pin(handle);
@@ -233,7 +239,7 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertEquals(1L, quarantined.liveObjects());
             Assert.assertEquals(
                     YierdisNativeObjectTable.STATE_FREED_QUARANTINED,
-                    allocator.objectMeta(handle, true).state()
+                    allocator.objectMeta(handle.localRaw(), true).state()
             );
 
             try {
@@ -264,7 +270,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void quarantinedObjectRejectsResolveReallocAndDoubleFreeUntilUnpinned() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
             allocator.pin(handle);
@@ -278,7 +284,7 @@ public class YierdisStableNativeAllocatorTest {
             }
 
             try {
-                allocator.realloc(handle, 24, NativeReallocPolicy.PRESERVE_PREFIX);
+                allocator.reallocate(handle, 24, NativeReallocPolicy.PRESERVE_PREFIX);
                 Assert.fail("expected quarantined realloc rejection");
             } catch (StaleNativeHandleException expected) {
                 Assert.assertTrue(expected.getMessage().contains("quarantined"));
@@ -305,7 +311,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void multiplePinsRequireMatchingUnpinsBeforeQuarantineRelease() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
             allocator.pin(handle);
@@ -329,7 +335,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void activeEpochDelaysFreedSlotReuseUntilClosed() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1)) {
 
             NativeHandle first = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
             NativeEpochScope epoch = allocator.beginEpoch(NativeEpochKind.SCAN);
@@ -358,8 +364,8 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertEquals(0L, released.liveObjects());
 
             NativeHandle second = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
-            Assert.assertEquals(first.slotId(), second.slotId());
-            Assert.assertEquals(first.generation() + 1, second.generation());
+            Assert.assertEquals(YierdisLocalHandleCodec.slotId(first.localRaw()), YierdisLocalHandleCodec.slotId(second.localRaw()));
+            Assert.assertEquals(YierdisLocalHandleCodec.generation(first.localRaw()) + 1, YierdisLocalHandleCodec.generation(second.localRaw()));
             allocator.free(second);
         }
     }
@@ -367,7 +373,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void activeSnapshotEpochDelaysFreedSlotReuseUntilClosed() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1)) {
 
             NativeHandle first = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
             NativeEpochScope epoch = allocator.beginEpoch(NativeEpochKind.SNAPSHOT);
@@ -396,8 +402,8 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertEquals(0L, released.liveObjects());
 
             NativeHandle second = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
-            Assert.assertEquals(first.slotId(), second.slotId());
-            Assert.assertEquals(first.generation() + 1, second.generation());
+            Assert.assertEquals(YierdisLocalHandleCodec.slotId(first.localRaw()), YierdisLocalHandleCodec.slotId(second.localRaw()));
+            Assert.assertEquals(YierdisLocalHandleCodec.generation(first.localRaw()) + 1, YierdisLocalHandleCodec.generation(second.localRaw()));
             allocator.free(second);
         }
     }
@@ -405,7 +411,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void unpinWithoutPinThrows() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1024)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
 
@@ -422,7 +428,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void reallocPinnedObjectFailsWithoutChangingObject() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1024)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
@@ -435,7 +441,7 @@ public class YierdisStableNativeAllocatorTest {
             allocator.pin(handle);
 
             try {
-                allocator.realloc(handle, 24, NativeReallocPolicy.PRESERVE_PREFIX);
+                allocator.reallocate(handle, 24, NativeReallocPolicy.PRESERVE_PREFIX);
                 Assert.fail("expected pinned realloc rejection");
             } catch (NativeMemoryException expected) {
                 Assert.assertTrue(expected.getMessage().contains("pinned"));
@@ -465,39 +471,33 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void detectsNullHandle() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1024)) {
 
-            try {
-                allocator.resolve(null, NativeAccessMode.READ_ONLY);
-                Assert.fail("expected stale handle");
-            } catch (StaleNativeHandleException expected) {
-                Assert.assertTrue(expected.getMessage().contains("stale native handle"));
-            }
-
-            Assert.assertEquals(1L, allocator.stats().staleHandleDetections());
+            Assert.assertThrows(
+                    NullPointerException.class,
+                    () -> allocator.resolve(null, NativeAccessMode.READ_ONLY)
+            );
+            Assert.assertEquals(0L, allocator.stats().staleHandleDetections());
         }
     }
 
     @Test
     public void detectsNativeNullHandle() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1024)) {
 
-            try {
-                allocator.resolve(NativeHandle.NULL, NativeAccessMode.READ_ONLY);
-                Assert.fail("expected stale handle");
-            } catch (StaleNativeHandleException expected) {
-                Assert.assertTrue(expected.getMessage().contains("stale native handle"));
-            }
-
-            Assert.assertEquals(1L, allocator.stats().staleHandleDetections());
+            Assert.assertThrows(
+                    yier.bubu.redis.memory.api.NativeHandleOwnershipException.class,
+                    () -> allocator.resolve(NativeHandle.NULL, NativeAccessMode.READ_ONLY)
+            );
+            Assert.assertEquals(0L, allocator.stats().staleHandleDetections());
         }
     }
 
     @Test
     public void oldViewFailsAfterFreeAndSlotReuseAfterClose() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1)) {
 
             NativeHandle first = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
             NativeObjectView oldView = allocator.resolve(first, NativeAccessMode.READ_WRITE);
@@ -520,7 +520,7 @@ public class YierdisStableNativeAllocatorTest {
             oldView.close();
 
             NativeHandle second = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
-            Assert.assertNotEquals(first.generation(), second.generation());
+            Assert.assertNotEquals(YierdisLocalHandleCodec.generation(first.localRaw()), YierdisLocalHandleCodec.generation(second.localRaw()));
             try (NativeObjectView newView = allocator.resolve(second, NativeAccessMode.READ_WRITE)) {
                 newView.setByte(0, (byte) 22);
             }
@@ -542,7 +542,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void resolvedViewPinsObjectUntilClosed() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
             NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE);
@@ -578,44 +578,43 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertEquals(0L, released.liveObjects());
 
             NativeHandle reused = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
-            Assert.assertNotEquals(handle.generation(), reused.generation());
+            Assert.assertNotEquals(YierdisLocalHandleCodec.generation(handle.localRaw()), YierdisLocalHandleCodec.generation(reused.localRaw()));
             allocator.free(reused);
         }
     }
 
     @Test
-    public void rawHandleLifecycleMatchesObjectHandleLifecycle() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-raw-handle-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
+    public void pairedHandleLifecyclePreservesIdentity() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-paired-handle-test");
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1)) {
 
-            long rawHandle = allocator.allocateRaw(NativeObjectKind.STRING_BYTES, 8);
-            NativeHandle handle = NativeHandle.fromRaw(rawHandle);
-            try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_WRITE)) {
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
                 Assert.assertEquals(handle, view.handle());
                 view.setByte(0, (byte) 41);
             }
 
-            long resizedRawHandle = allocator.reallocRaw(
-                    rawHandle,
+            NativeHandle resized = allocator.reallocate(
+                    handle,
                     24,
                     NativeReallocPolicy.PRESERVE_PREFIX
             );
-            Assert.assertEquals(rawHandle, resizedRawHandle);
-            try (NativeObjectView resized = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_ONLY)) {
-                Assert.assertEquals(24, resized.size());
-                Assert.assertEquals(41, resized.getByte(0));
+            Assert.assertEquals(handle, resized);
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(24, view.size());
+                Assert.assertEquals(41, view.getByte(0));
             }
 
-            allocator.pinRaw(rawHandle);
-            NativeObjectView retained = allocator.resolvePinnedRaw(rawHandle, NativeAccessMode.READ_ONLY);
-            allocator.freeRaw(rawHandle);
+            allocator.pin(handle);
+            NativeObjectView retained = allocator.resolvePinned(handle, NativeAccessMode.READ_ONLY);
+            allocator.free(handle);
             Assert.assertEquals(41, retained.getByte(0));
             retained.close();
-            allocator.unpinRaw(rawHandle);
+            allocator.unpin(handle);
 
             Assert.assertEquals(0L, allocator.stats().liveObjects());
             NativeHandle reused = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
-            Assert.assertNotEquals(handle.generation(), reused.generation());
+            Assert.assertNotEquals(YierdisLocalHandleCodec.generation(handle.localRaw()), YierdisLocalHandleCodec.generation(reused.localRaw()));
             allocator.free(reused);
         }
     }
@@ -623,14 +622,14 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void openViewByteReadsDoNotRebuildMetadataObjects() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-view-allocation-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
-            long rawHandle = allocator.allocateRaw(NativeObjectKind.STRING_BYTES, 1);
-            try (NativeObjectView writable = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_WRITE)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1)) {
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 1);
+            try (NativeObjectView writable = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
                 writable.setByte(0, (byte) 7);
             }
 
             com.sun.management.ThreadMXBean bean = allocatedBytesBean();
-            try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_ONLY)) {
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
                 int checksum = 0;
                 for (int index = 0; index < 10_000; index++) {
                     checksum += view.getByte(0);
@@ -644,14 +643,14 @@ public class YierdisStableNativeAllocatorTest {
                 Assert.assertEquals(770_000, checksum);
                 Assert.assertTrue("open view reads allocated " + allocatedBytes + " bytes", allocatedBytes < 4_096L);
             }
-            allocator.freeRaw(rawHandle);
+            allocator.free(handle);
         }
     }
 
     @Test
     public void readOnlyViewRejectsMutation() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1024)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
@@ -669,7 +668,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void rejectsOverflowingViewRanges() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
@@ -687,7 +686,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void reallocPreservesHandlePrefixAndUpdatesMetadataWhenMoved() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1024)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 16);
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
@@ -696,12 +695,12 @@ public class YierdisStableNativeAllocatorTest {
                 view.setByte(2, (byte) 3);
                 view.setByte(3, (byte) 4);
             }
-            NativeLocation beforeLocation = locationOf(allocator.objectMeta(handle, false));
+            NativeLocation beforeLocation = locationOf(allocator.objectMeta(handle.localRaw(), false));
 
-            NativeHandle resized = allocator.realloc(handle, 24, NativeReallocPolicy.PRESERVE_PREFIX);
+            NativeHandle resized = allocator.reallocate(handle, 24, NativeReallocPolicy.PRESERVE_PREFIX);
             Assert.assertEquals(handle, resized);
 
-            YierdisNativeObjectMeta after = allocator.objectMeta(handle, false);
+            YierdisNativeObjectMeta after = allocator.objectMeta(handle.localRaw(), false);
             Assert.assertEquals(24, after.size());
             Assert.assertEquals(24, after.capacity());
             Assert.assertNotEquals(beforeLocation, locationOf(after));
@@ -726,7 +725,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void reallocNoMoveGrowsWithinCapacityAfterShrink() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1024)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
@@ -736,10 +735,10 @@ public class YierdisStableNativeAllocatorTest {
                 view.setByte(3, (byte) 4);
             }
 
-            NativeHandle shrunk = allocator.realloc(handle, 4, NativeReallocPolicy.NO_MOVE);
+            NativeHandle shrunk = allocator.reallocate(handle, 4, NativeReallocPolicy.NO_MOVE);
             Assert.assertEquals(handle, shrunk);
 
-            NativeHandle grown = allocator.realloc(handle, 6, NativeReallocPolicy.NO_MOVE);
+            NativeHandle grown = allocator.reallocate(handle, 6, NativeReallocPolicy.NO_MOVE);
             Assert.assertEquals(handle, grown);
 
             try (NativeObjectView view = allocator.resolve(grown, NativeAccessMode.READ_ONLY)) {
@@ -762,7 +761,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void reallocNoMoveFailsWithoutChangingObjectWhenGrowthNeedsMove() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1024)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 16);
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
@@ -773,7 +772,7 @@ public class YierdisStableNativeAllocatorTest {
             }
 
             try {
-                allocator.realloc(handle, 24, NativeReallocPolicy.NO_MOVE);
+                allocator.reallocate(handle, 24, NativeReallocPolicy.NO_MOVE);
                 Assert.fail("expected no-move realloc failure");
             } catch (NativeMemoryException expected) {
                 Assert.assertTrue(expected.getMessage().contains("cannot grow in place"));
@@ -800,7 +799,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void defragMovesUnpinnedObjectWithoutChangingHandle() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1024)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
@@ -808,15 +807,15 @@ public class YierdisStableNativeAllocatorTest {
                 view.setByte(1, (byte) 2);
                 view.setByte(2, (byte) 3);
             }
-            NativeLocation beforeLocation = locationOf(allocator.objectMeta(handle, false));
+            NativeLocation beforeLocation = locationOf(allocator.objectMeta(handle.localRaw(), false));
 
             NativeDefragResult result = allocator.defragOne(handle, 24);
 
             Assert.assertTrue(result.moved());
             Assert.assertEquals(24L, result.movedBytes());
-            YierdisNativeObjectMeta after = allocator.objectMeta(handle, false);
-            Assert.assertEquals(handle.slotId(), after.slotId());
-            Assert.assertEquals(handle.generation(), after.generation());
+            YierdisNativeObjectMeta after = allocator.objectMeta(handle.localRaw(), false);
+            Assert.assertEquals(YierdisLocalHandleCodec.slotId(handle.localRaw()), after.slotId());
+            Assert.assertEquals(YierdisLocalHandleCodec.generation(handle.localRaw()), after.generation());
             Assert.assertEquals(24, after.size());
             Assert.assertNotEquals(beforeLocation, locationOf(after));
 
@@ -836,7 +835,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void activeEpochDelaysDefragOldBlockReleaseUntilClosed() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1024)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
@@ -862,7 +861,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void activeSnapshotEpochDelaysDefragOldBlockReleaseUntilClosed() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1024)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
@@ -888,17 +887,17 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void defragSkipsPinnedAndOverBudgetObjects() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1024)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
-            NativeLocation location = locationOf(allocator.objectMeta(handle, false));
+            NativeLocation location = locationOf(allocator.objectMeta(handle.localRaw(), false));
 
             NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY);
             try {
                 NativeDefragResult pinned = allocator.defragOne(handle, 24);
                 Assert.assertFalse(pinned.moved());
                 Assert.assertTrue(pinned.skippedPinned());
-                Assert.assertEquals(location, locationOf(allocator.objectMeta(handle, false)));
+                Assert.assertEquals(location, locationOf(allocator.objectMeta(handle.localRaw(), false)));
                 Assert.assertEquals(1L, allocator.stats().defragSkippedPinnedObjects());
             } finally {
                 view.close();
@@ -907,7 +906,7 @@ public class YierdisStableNativeAllocatorTest {
             NativeDefragResult budget = allocator.defragOne(handle, 23);
             Assert.assertFalse(budget.moved());
             Assert.assertTrue(budget.skippedBudget());
-            Assert.assertEquals(location, locationOf(allocator.objectMeta(handle, false)));
+            Assert.assertEquals(location, locationOf(allocator.objectMeta(handle.localRaw(), false)));
             allocator.free(handle);
         }
     }
@@ -915,14 +914,14 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void defragCycleMovesEligibleObjectsWithinByteBudget() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1024)) {
 
             NativeHandle first = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
             NativeHandle second = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
             NativeHandle third = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
-            NativeLocation firstLocation = locationOf(allocator.objectMeta(first, false));
-            NativeLocation secondLocation = locationOf(allocator.objectMeta(second, false));
-            NativeLocation thirdLocation = locationOf(allocator.objectMeta(third, false));
+            NativeLocation firstLocation = locationOf(allocator.objectMeta(first.localRaw(), false));
+            NativeLocation secondLocation = locationOf(allocator.objectMeta(second.localRaw(), false));
+            NativeLocation thirdLocation = locationOf(allocator.objectMeta(third.localRaw(), false));
 
             NativeDefragReport report = allocator.defragCycle(new NativeDefragOptions(48, 10, Long.MAX_VALUE));
 
@@ -930,9 +929,9 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertEquals(48L, report.movedBytes());
             Assert.assertEquals(1L, report.skippedBudgetObjects());
             Assert.assertTrue(report.stoppedByByteBudget());
-            Assert.assertNotEquals(firstLocation, locationOf(allocator.objectMeta(first, false)));
-            Assert.assertNotEquals(secondLocation, locationOf(allocator.objectMeta(second, false)));
-            Assert.assertEquals(thirdLocation, locationOf(allocator.objectMeta(third, false)));
+            Assert.assertNotEquals(firstLocation, locationOf(allocator.objectMeta(first.localRaw(), false)));
+            Assert.assertNotEquals(secondLocation, locationOf(allocator.objectMeta(second.localRaw(), false)));
+            Assert.assertEquals(thirdLocation, locationOf(allocator.objectMeta(third.localRaw(), false)));
             allocator.free(first);
             allocator.free(second);
             allocator.free(third);
@@ -942,12 +941,12 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void defragCycleSkipsPinnedObjectsAndContinues() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1024)) {
 
             NativeHandle pinned = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
             NativeHandle movable = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
-            NativeLocation pinnedLocation = locationOf(allocator.objectMeta(pinned, false));
-            NativeLocation movableLocation = locationOf(allocator.objectMeta(movable, false));
+            NativeLocation pinnedLocation = locationOf(allocator.objectMeta(pinned.localRaw(), false));
+            NativeLocation movableLocation = locationOf(allocator.objectMeta(movable.localRaw(), false));
             allocator.pin(pinned);
 
             NativeDefragReport report = allocator.defragCycle(new NativeDefragOptions(48, 10, Long.MAX_VALUE));
@@ -955,8 +954,8 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertEquals(1L, report.movedObjects());
             Assert.assertEquals(24L, report.movedBytes());
             Assert.assertEquals(1L, report.skippedPinnedObjects());
-            Assert.assertEquals(pinnedLocation, locationOf(allocator.objectMeta(pinned, false)));
-            Assert.assertNotEquals(movableLocation, locationOf(allocator.objectMeta(movable, false)));
+            Assert.assertEquals(pinnedLocation, locationOf(allocator.objectMeta(pinned.localRaw(), false)));
+            Assert.assertNotEquals(movableLocation, locationOf(allocator.objectMeta(movable.localRaw(), false)));
             allocator.unpin(pinned);
             allocator.free(pinned);
             allocator.free(movable);
@@ -966,7 +965,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void defragValidationFailureRollsBackMove() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(
+             YierdisStableNativeAllocator allocator = newAllocator(
                      runtime,
                      1024,
                      (handle, sourceMeta, target) -> {
@@ -978,13 +977,13 @@ public class YierdisStableNativeAllocatorTest {
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
                 view.setByte(0, (byte) 7);
             }
-            NativeLocation beforeLocation = locationOf(allocator.objectMeta(handle, false));
+            NativeLocation beforeLocation = locationOf(allocator.objectMeta(handle.localRaw(), false));
 
             NativeDefragReport report = allocator.defragCycle(new NativeDefragOptions(24, 10, Long.MAX_VALUE));
 
             Assert.assertEquals(0L, report.movedObjects());
             Assert.assertEquals(1L, report.failedMoves());
-            Assert.assertEquals(beforeLocation, locationOf(allocator.objectMeta(handle, false)));
+            Assert.assertEquals(beforeLocation, locationOf(allocator.objectMeta(handle.localRaw(), false)));
             Assert.assertEquals(0L, allocator.stats().defragMovedBytes());
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
                 Assert.assertEquals(7, view.getByte(0));
@@ -996,7 +995,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void statsExposeProductionAllocatorMetrics() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1024)) {
 
             NativeHandle string = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
             NativeHandle entry = allocator.allocate(NativeObjectKind.ENTRY_RECORD, 70_000);
@@ -1011,7 +1010,7 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertEquals(0L, allocated.freePages());
             Assert.assertTrue(allocated.allocationLatencyHistogram().allocationCount() >= 2L);
 
-            long reclaimedPages = allocator.objectMeta(entry, false).capacity()
+            long reclaimedPages = allocator.objectMeta(entry.localRaw(), false).capacity()
                     / YierdisNativePageAllocator.PAGE_BYTES;
             NativeDefragResult moved = allocator.defragOne(entry, 70_000);
             Assert.assertTrue(moved.moved());
@@ -1037,7 +1036,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void deterministicAllocatorChurnStressMaintainsAccounting() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-churn");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 128)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 128)) {
 
             Random random = new Random(0x5eed1234L);
             List<NativeHandle> live = new ArrayList<>();
@@ -1052,7 +1051,7 @@ public class YierdisStableNativeAllocatorTest {
                 int index = random.nextInt(live.size());
                 NativeHandle handle = live.get(index);
                 if (op < 55) {
-                    allocator.realloc(handle, 1 + random.nextInt(192), NativeReallocPolicy.PRESERVE_PREFIX);
+                    allocator.reallocate(handle, 1 + random.nextInt(192), NativeReallocPolicy.PRESERVE_PREFIX);
                 } else if (op < 70) {
                     try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
                         view.setByte(0, (byte) i);
@@ -1098,7 +1097,7 @@ public class YierdisStableNativeAllocatorTest {
     public void deterministicAllocatorFuzzCoversEpochPinDefragAndStaleHandles() {
         YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-fuzz");
         try {
-            try (YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 96)) {
+            try (YierdisStableNativeAllocator allocator = newAllocator(runtime, 96)) {
                 class LiveObject {
                     NativeHandle handle;
                     int size;
@@ -1153,7 +1152,7 @@ public class YierdisStableNativeAllocatorTest {
                             LiveObject object = live.get(random.nextInt(live.size()));
                             if (!object.pinned) {
                                 int newSize = 1 + random.nextInt(128);
-                                NativeHandle resized = allocator.realloc(
+                                NativeHandle resized = allocator.reallocate(
                                         object.handle,
                                         newSize,
                                         NativeReallocPolicy.PRESERVE_PREFIX
@@ -1260,7 +1259,7 @@ public class YierdisStableNativeAllocatorTest {
         }
 
         try (YierdisFfmMemoryRuntime oomRuntime = new YierdisFfmMemoryRuntime("stable-fuzz-oom");
-             YierdisStableNativeAllocator oomAllocator = new YierdisStableNativeAllocator(oomRuntime, 1)) {
+             YierdisStableNativeAllocator oomAllocator = newAllocator(oomRuntime, 1)) {
             NativeHandle only = oomAllocator.allocate(NativeObjectKind.STRING_BYTES, 8);
             try {
                 oomAllocator.allocate(NativeObjectKind.STRING_BYTES, 8);
@@ -1276,7 +1275,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void preservePrefixGrowsWithinCapacityAfterShrinkWithoutMove() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1024)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
@@ -1286,8 +1285,8 @@ public class YierdisStableNativeAllocatorTest {
                 view.setByte(3, (byte) 8);
             }
 
-            allocator.realloc(handle, 4, NativeReallocPolicy.PRESERVE_PREFIX);
-            NativeHandle grown = allocator.realloc(handle, 6, NativeReallocPolicy.PRESERVE_PREFIX);
+            allocator.reallocate(handle, 4, NativeReallocPolicy.PRESERVE_PREFIX);
+            NativeHandle grown = allocator.reallocate(handle, 6, NativeReallocPolicy.PRESERVE_PREFIX);
             Assert.assertEquals(handle, grown);
 
             try (NativeObjectView view = allocator.resolve(grown, NativeAccessMode.READ_ONLY)) {
@@ -1310,14 +1309,14 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void retiresSlotWhenGenerationSpaceIsExhausted() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 1)) {
 
             NativeHandle original = allocator.allocate(NativeObjectKind.STRING_BYTES, 1);
             allocator.free(original);
 
             for (int generation = 2; generation <= 0x0fff; generation++) {
                 NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 1);
-                Assert.assertEquals(generation, handle.generation());
+                Assert.assertEquals(generation, YierdisLocalHandleCodec.generation(handle.localRaw()));
                 allocator.free(handle);
             }
 
@@ -1340,7 +1339,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void closeReleasesAllocatorRuntimeMemory() {
         YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-close");
-        YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4);
+        YierdisStableNativeAllocator allocator = newAllocator(runtime, 4);
         try {
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
             Assert.assertTrue(runtime.usedBytes() > 0L);
@@ -1366,7 +1365,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void closeReportsLiveObjectLeakAfterForcingRuntimeCleanup() {
         YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-close-live-leak");
-        YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4);
+        YierdisStableNativeAllocator allocator = newAllocator(runtime, 4);
         try {
             allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
             allocator.allocate(NativeObjectKind.ENTRY_RECORD, 56);
@@ -1389,7 +1388,7 @@ public class YierdisStableNativeAllocatorTest {
     @Test
     public void zeroLengthObjectHasStableHandleAndCanGrowShrinkAndFree() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-zero-length");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 16)) {
+             YierdisStableNativeAllocator allocator = newAllocator(runtime, 16)) {
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 0);
             try (NativeObjectView initial = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
                 Assert.assertEquals(0, initial.size());
@@ -1401,14 +1400,14 @@ public class YierdisStableNativeAllocatorTest {
                 empty.getBytes(0, new byte[0], 0, 0);
             }
 
-            NativeHandle grown = allocator.realloc(handle, 3, NativeReallocPolicy.PRESERVE_PREFIX);
-            Assert.assertEquals(handle.raw(), grown.raw());
+            NativeHandle grown = allocator.reallocate(handle, 3, NativeReallocPolicy.PRESERVE_PREFIX);
+            Assert.assertEquals(handle.localRaw(), grown.localRaw());
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
                 view.setBytes(0, new byte[] { 'a', 'b', 'c' }, 0, 3);
             }
 
-            NativeHandle shrunk = allocator.realloc(handle, 0, NativeReallocPolicy.PRESERVE_PREFIX);
-            Assert.assertEquals(handle.raw(), shrunk.raw());
+            NativeHandle shrunk = allocator.reallocate(handle, 0, NativeReallocPolicy.PRESERVE_PREFIX);
+            Assert.assertEquals(handle.localRaw(), shrunk.localRaw());
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
                 Assert.assertEquals(0, view.size());
                 view.getBytes(0, new byte[0], 0, 0);
@@ -1432,6 +1431,31 @@ public class YierdisStableNativeAllocatorTest {
 
     private static NativeLocation locationOf(YierdisNativeObjectMeta meta) {
         return new NativeLocation(meta.segmentId(), meta.address());
+    }
+
+    private static YierdisStableNativeAllocator newAllocator(
+            YierdisFfmMemoryRuntime runtime,
+            int maxSlots
+    ) {
+        return newAllocator(runtime, maxSlots, (localRaw, sourceMeta, target) -> {
+        });
+    }
+
+    private static YierdisStableNativeAllocator newAllocator(
+            YierdisFfmMemoryRuntime runtime,
+            int maxSlots,
+            YierdisNativeDefragValidator validator
+    ) {
+        FfmTestOwner owner = new FfmTestOwner();
+        YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(
+                runtime,
+                maxSlots,
+                StableMemoryBackendIds.nextId(),
+                owner,
+                validator
+        );
+        owner.bindToCurrentThread();
+        return allocator;
     }
 
     private static com.sun.management.ThreadMXBean allocatedBytesBean() {

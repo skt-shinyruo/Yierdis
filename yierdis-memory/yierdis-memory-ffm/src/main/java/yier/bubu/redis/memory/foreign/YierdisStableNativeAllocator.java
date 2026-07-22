@@ -9,7 +9,6 @@ import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocationGrowth;
 import yier.bubu.redis.memory.api.NativeAllocationScope;
 import yier.bubu.redis.memory.api.NativeAllocationLatencyHistogram;
-import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeAllocatorMetadataStats;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
@@ -18,6 +17,7 @@ import yier.bubu.redis.memory.api.NativeDefragResult;
 import yier.bubu.redis.memory.api.NativeEpochKind;
 import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.MemoryOwner;
 import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKindCounts;
 import yier.bubu.redis.memory.api.NativeObjectKind;
@@ -25,7 +25,7 @@ import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
 
-public final class YierdisStableNativeAllocator implements NativeAllocator {
+public final class YierdisStableNativeAllocator implements AutoCloseable {
     private static final int REALLOC_COPY_CHUNK_BYTES = 64 * 1024;
     private static final long ALLOCATION_SCOPE_HEAP_BYTES = 96L;
     private static final long ARRAY_HEADER_BYTES = 16L;
@@ -36,7 +36,8 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     private final YierdisNativeObjectTable objectTable;
     private final YierdisNativeEpochManager epochManager = new YierdisNativeEpochManager();
     private final YierdisNativeDefragValidator defragValidator;
-    private final YierdisAllocatorThreadGuard threadGuard;
+    private final long allocatorId;
+    private final MemoryOwner owner;
     private int[] retainedPageIds = new int[0];
     private int[] retainedPageOffsets = new int[0];
     private int[] retainedCapacities = new int[0];
@@ -65,48 +66,46 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     private long allocationAtLeast1Millis;
     private AllocatorAllocationScope activeAllocationScope;
 
-    public YierdisStableNativeAllocator(YierdisFfmMemoryRuntime runtime, int maxSlots) {
-        this(runtime, maxSlots, (handle, sourceMeta, target) -> {
+    public YierdisStableNativeAllocator(
+            YierdisFfmMemoryRuntime runtime,
+            int maxSlots,
+            long allocatorId,
+            MemoryOwner owner
+    ) {
+        this(runtime, maxSlots, allocatorId, owner, (localRaw, sourceMeta, target) -> {
         });
     }
 
     YierdisStableNativeAllocator(
             YierdisFfmMemoryRuntime runtime,
             int maxSlots,
+            long allocatorId,
+            MemoryOwner owner,
             YierdisNativeDefragValidator defragValidator
-    ) {
-        this(runtime, maxSlots, defragValidator, new YierdisAllocatorThreadGuard(true));
-    }
-
-    YierdisStableNativeAllocator(
-            YierdisFfmMemoryRuntime runtime,
-            int maxSlots,
-            YierdisNativeDefragValidator defragValidator,
-            YierdisAllocatorThreadGuard threadGuard
     ) {
         Objects.requireNonNull(runtime, "runtime");
         if (maxSlots < 0) {
             throw new IllegalArgumentException("maxSlots must be >= 0");
         }
+        if (allocatorId <= 0L) {
+            throw new IllegalArgumentException("allocatorId must be > 0");
+        }
+        this.allocatorId = allocatorId;
+        this.owner = Objects.requireNonNull(owner, "owner");
         this.defragValidator = Objects.requireNonNull(defragValidator, "defragValidator");
-        this.threadGuard = Objects.requireNonNull(threadGuard, "threadGuard");
         this.pageAllocator = new YierdisNativePageAllocator(runtime);
         this.objectTable = new YierdisNativeObjectTable(runtime, maxSlots, 0, pageAllocator);
     }
 
-    @Override
+    public long allocatorId() {
+        return allocatorId;
+    }
+
     public void bindToCurrentThread() {
-        threadGuard.bindToCurrentThread();
-        ensureOpen();
+        owner.bindToCurrentThread();
     }
 
-    @Override
     public NativeHandle allocate(NativeObjectKind kind, int size) {
-        return NativeHandle.fromRaw(allocateRaw(kind, size));
-    }
-
-    @Override
-    public long allocateRaw(NativeObjectKind kind, int size) {
         ensureOpen();
         Objects.requireNonNull(kind, "kind");
 
@@ -114,7 +113,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         YierdisNativeBlock block = pageAllocator.allocate(physicalAllocationBytes(size));
         boolean allocated = false;
         try {
-            long rawHandle = objectTable.allocateRaw(
+            long localRaw = objectTable.allocate(
                     kind,
                     size,
                     block.capacity(),
@@ -129,13 +128,13 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             allocated = true;
             if (activeAllocationScope != null) {
                 try {
-                    activeAllocationScope.track(rawHandle);
+                    activeAllocationScope.track(localRaw);
                 } catch (RuntimeException | Error failure) {
-                    freeRaw(rawHandle);
+                    freeLocal(localRaw);
                     throw failure;
                 }
             }
-            return rawHandle;
+            return publicHandle(localRaw);
         } finally {
             recordAllocationLatency(System.nanoTime() - startedNanos);
             if (!allocated) {
@@ -144,29 +143,27 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         }
     }
 
-    @Override
-    public NativeHandle realloc(NativeHandle handle, int newSize, NativeReallocPolicy policy) {
-        Objects.requireNonNull(handle, "handle");
-        return NativeHandle.fromRaw(reallocRaw(handle.raw(), newSize, policy));
+    public NativeHandle reallocate(NativeHandle handle, int newSize, NativeReallocPolicy policy) {
+        ensureOpen();
+        long localRaw = requireOwned(handle);
+        return publicHandle(reallocateLocal(localRaw, newSize, policy));
     }
 
-    @Override
-    public long reallocRaw(long rawHandle, int newSize, NativeReallocPolicy policy) {
-        ensureOpen();
+    private long reallocateLocal(long localRaw, int newSize, NativeReallocPolicy policy) {
         Objects.requireNonNull(policy, "policy");
         if (newSize < 0) {
             throw new IllegalArgumentException("newSize must be >= 0");
         }
 
-        YierdisNativeObjectMeta meta = requireLiveMetaRaw(rawHandle);
+        YierdisNativeObjectMeta meta = requireLiveMeta(localRaw);
         if (meta.pinCount() > 0) {
             throw new NativeMemoryException("native object is pinned");
         }
 
         int oldSize = meta.size();
         if (newSize <= meta.capacity()) {
-            objectTable.updateLocationRaw(
-                    rawHandle,
+            objectTable.updateLocation(
+                    localRaw,
                     newSize,
                     meta.capacity(),
                     meta.segmentId(),
@@ -175,7 +172,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             );
             logicalUsedBytes += (long) newSize - oldSize;
             reallocInPlaceCount++;
-            return rawHandle;
+            return localRaw;
         }
 
         if (policy == NativeReallocPolicy.NO_MOVE) {
@@ -187,8 +184,8 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         boolean moved = false;
         try {
             copyPrefix(previous, next, oldSize);
-            objectTable.updateLocationRaw(
-                    rawHandle,
+            objectTable.updateLocation(
+                    localRaw,
                     newSize,
                     next.capacity(),
                     next.pageId(),
@@ -202,7 +199,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             if (activeAllocationScope != null) {
                 activeAllocationScope.recordGrowth();
             }
-            return rawHandle;
+            return localRaw;
         } finally {
             if (!moved) {
                 next.close();
@@ -210,98 +207,61 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         }
     }
 
-    @Override
     public void free(NativeHandle handle) {
         ensureOpen();
+        long localRaw = requireOwned(handle);
+        freeLocal(localRaw);
+    }
+
+    private void freeLocal(long localRaw) {
         if (activeAllocationScope != null) {
             activeAllocationScope.recordGrowth();
         }
-        YierdisNativeObjectMeta meta = requireLiveMetaForFree(handle);
+        YierdisNativeObjectMeta meta = requireLiveMetaForFree(localRaw);
         long freeEpoch = epochManager.nextEpoch();
         boolean delayRelease = meta.pinCount() > 0 || !epochManager.canReclaim(freeEpoch);
-        objectTable.free(handle, freeEpoch, delayRelease);
+        objectTable.free(localRaw, freeEpoch, delayRelease);
         if (delayRelease) {
             reclaimEligibleQuarantine();
-            untrackScopedHandle(handle);
+            untrackScopedHandle(localRaw);
             return;
         }
         releaseAllocation(meta);
-        untrackScopedHandle(handle);
+        untrackScopedHandle(localRaw);
     }
 
-    @Override
-    public void freeRaw(long rawHandle) {
-        ensureOpen();
-        if (activeAllocationScope != null) {
-            activeAllocationScope.recordGrowth();
-        }
-        YierdisNativeObjectMeta meta = requireLiveMetaForFreeRaw(rawHandle);
-        long freeEpoch = epochManager.nextEpoch();
-        boolean delayRelease = meta.pinCount() > 0 || !epochManager.canReclaim(freeEpoch);
-        objectTable.freeRaw(rawHandle, freeEpoch, delayRelease);
-        if (delayRelease) {
-            reclaimEligibleQuarantine();
-            untrackScopedHandle(rawHandle);
-            return;
-        }
-        releaseAllocation(meta);
-        untrackScopedHandle(rawHandle);
-    }
-
-    @Override
     public void pin(NativeHandle handle) {
         ensureOpen();
-        trackStale(() -> {
-            objectTable.pin(trackStale(handle));
-            return objectTable.snapshot(handle, false);
-        });
-    }
-
-    @Override
-    public void pinRaw(long rawHandle) {
-        ensureOpen();
+        long localRaw = requireOwned(handle);
         try {
-            objectTable.pinRaw(rawHandle);
-            objectTable.snapshotRaw(rawHandle, false);
+            objectTable.pin(localRaw);
+            objectTable.snapshot(localRaw, false);
         } catch (StaleNativeHandleException e) {
             staleHandleDetections++;
             throw e;
         }
     }
 
-    @Override
     public void unpin(NativeHandle handle) {
         ensureOpen();
-        YierdisNativeObjectMeta before = objectMeta(handle, true);
-        objectTable.unpin(trackStale(handle), false);
+        long localRaw = requireOwned(handle);
+        unpinLocal(localRaw);
+    }
+
+    private void unpinLocal(long localRaw) {
+        YierdisNativeObjectMeta before = objectMeta(localRaw, true);
+        objectTable.unpin(localRaw, false);
         if (before.state() == YierdisNativeObjectTable.STATE_FREED_QUARANTINED && before.pinCount() == 1) {
             reclaimEligibleQuarantine();
         }
     }
 
-    @Override
-    public void unpinRaw(long rawHandle) {
-        ensureOpen();
-        YierdisNativeObjectMeta before = objectMetaRaw(rawHandle, true);
-        try {
-            objectTable.unpinRaw(rawHandle, false);
-        } catch (StaleNativeHandleException e) {
-            staleHandleDetections++;
-            throw e;
-        }
-        if (before.state() == YierdisNativeObjectTable.STATE_FREED_QUARANTINED && before.pinCount() == 1) {
-            reclaimEligibleQuarantine();
-        }
-    }
-
-    @Override
     public NativeEpochScope beginEpoch(NativeEpochKind kind) {
         ensureOpen();
         NativeEpochScope delegate = epochManager.begin(kind);
         return new AllocatorEpochScope(delegate);
     }
 
-    @Override
     public NativeAllocationScope beginAllocationScope() {
         ensureOpen();
         if (activeAllocationScope != null) {
@@ -316,7 +276,6 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         return scope;
     }
 
-    @Override
     public long estimateAllocationScopeBookkeepingBytes(int expectedAllocationCount) {
         ensureOpen();
         if (expectedAllocationCount < 0) {
@@ -336,106 +295,57 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         );
     }
 
-    @Override
     public NativeObjectView resolve(NativeHandle handle, NativeAccessMode mode) {
         ensureOpen();
+        long localRaw = requireOwned(handle);
         Objects.requireNonNull(mode, "mode");
-        YierdisNativeObjectMeta meta = requireLiveMeta(handle);
-        objectTable.pin(trackStale(handle));
+        YierdisNativeObjectMeta meta = requireLiveMeta(localRaw);
+        objectTable.pin(localRaw);
         try {
             return new StableObjectView(
-                    handle.raw(),
+                    localRaw,
                     pageAllocator.view(meta),
                     meta.size(),
-                    objectTable.resolvedSlotRaw(handle.raw(), false),
+                    objectTable.resolvedSlot(localRaw, false),
                     mode,
                     true,
                     false
             );
         } catch (RuntimeException e) {
-            objectTable.unpin(handle);
+            objectTable.unpin(localRaw);
             throw e;
         }
     }
 
-    @Override
-    public NativeObjectView resolveRaw(long rawHandle, NativeAccessMode mode) {
-        ensureOpen();
-        Objects.requireNonNull(mode, "mode");
-        YierdisNativeObjectMeta meta = requireLiveMetaRaw(rawHandle);
-        try {
-            objectTable.pinRaw(rawHandle);
-        } catch (StaleNativeHandleException e) {
-            staleHandleDetections++;
-            throw e;
-        }
-        try {
-            return new StableObjectView(
-                    rawHandle,
-                    pageAllocator.view(meta),
-                    meta.size(),
-                    objectTable.resolvedSlotRaw(rawHandle, false),
-                    mode,
-                    true,
-                    false
-            );
-        } catch (RuntimeException e) {
-            objectTable.unpinRaw(rawHandle, true);
-            throw e;
-        }
-    }
-
-    @Override
     public NativeObjectView resolvePinned(NativeHandle handle, NativeAccessMode mode) {
         ensureOpen();
+        long localRaw = requireOwned(handle);
         Objects.requireNonNull(mode, "mode");
         if (mode != NativeAccessMode.READ_ONLY) {
             throw new NativeMemoryException("retained native views must be read-only");
         }
-        YierdisNativeObjectMeta meta = objectMeta(handle, true);
+        YierdisNativeObjectMeta meta = objectMeta(localRaw, true);
         if (meta.pinCount() <= 0) {
             throw new NativeMemoryException("retained native view requires a pin");
         }
         return new StableObjectView(
-                handle.raw(),
+                localRaw,
                 pageAllocator.view(meta),
                 meta.size(),
-                objectTable.resolvedSlotRaw(handle.raw(), true),
+                objectTable.resolvedSlot(localRaw, true),
                 mode,
                 false,
                 true
         );
     }
 
-    @Override
-    public NativeObjectView resolvePinnedRaw(long rawHandle, NativeAccessMode mode) {
-        ensureOpen();
-        Objects.requireNonNull(mode, "mode");
-        if (mode != NativeAccessMode.READ_ONLY) {
-            throw new NativeMemoryException("retained native views must be read-only");
-        }
-        YierdisNativeObjectMeta meta = objectMetaRaw(rawHandle, true);
-        if (meta.pinCount() <= 0) {
-            throw new NativeMemoryException("retained native view requires a pin");
-        }
-        return new StableObjectView(
-                rawHandle,
-                pageAllocator.view(meta),
-                meta.size(),
-                objectTable.resolvedSlotRaw(rawHandle, true),
-                mode,
-                false,
-                true
-        );
-    }
-
-    @Override
     public NativeDefragResult defragOne(NativeHandle handle, long maxMoveBytes) {
         ensureOpen();
+        long localRaw = requireOwned(handle);
         if (maxMoveBytes < 0) {
             throw new IllegalArgumentException("maxMoveBytes must be >= 0");
         }
-        YierdisNativeObjectMeta meta = requireLiveMeta(handle);
+        YierdisNativeObjectMeta meta = requireLiveMeta(localRaw);
         if (meta.size() > maxMoveBytes) {
             return NativeDefragResult.skippedMoveBudget();
         }
@@ -444,10 +354,9 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             return NativeDefragResult.skippedPinnedObject();
         }
 
-        return moveLiveObject(handle);
+        return moveLiveObject(localRaw);
     }
 
-    @Override
     public NativeDefragReport defragCycle(NativeDefragOptions options) {
         ensureOpen();
         Objects.requireNonNull(options, "options");
@@ -487,8 +396,8 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             }
 
             try {
-                NativeHandle handle = handleFor(meta);
-                NativeDefragResult result = moveLiveObject(handle);
+                long localRaw = localHandleFor(meta);
+                NativeDefragResult result = moveLiveObject(localRaw);
                 if (result.moved()) {
                     movedObjects++;
                     planner.onMoved(result.movedBytes());
@@ -512,13 +421,11 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         );
     }
 
-    @Override
     public long logicalUsedBytes() {
         ensureOpen();
         return Math.max(0L, logicalUsedBytes);
     }
 
-    @Override
     public NativeAllocatorStats stats() {
         ensureOpen();
         YierdisNativePageAllocatorStats pageStats = pageAllocator.stats();
@@ -558,14 +465,12 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         );
     }
 
-    @Override
     public NativeAllocatorMetadataStats metadataStats() {
         ensureOpen();
         YierdisNativeObjectTableStats tableStats = objectTable.stats();
         return new NativeAllocatorMetadataStats(tableStats.activeSegments(), tableStats.freeSlots());
     }
 
-    @Override
     public MemoryUsageSnapshot memoryUsage() {
         ensureOpen();
         YierdisNativePageAllocatorStats pageStats = pageAllocator.stats();
@@ -612,7 +517,6 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         pageAllocator.disarmHeapIterationTrapsForTesting();
     }
 
-    @Override
     public MemoryReclaimResult trimEmptyPages(MemoryPressureBudget budget) {
         ensureOpen();
         MemoryReclaimResult result = pageAllocator.trimEmptyPages(budget);
@@ -623,7 +527,6 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         return result;
     }
 
-    @Override
     public NativeAllocationGrowth estimateAdditionalGrowth(int... requestedBytes) {
         ensureOpen();
         validateRequestedBytes(requestedBytes);
@@ -639,7 +542,6 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         return new NativeAllocationGrowth(heapBytes, metadataBytes, pageGrowth.nativeDataCommittedBytes());
     }
 
-    @Override
     public NativeAllocationGrowth estimateConservativeAdditionalGrowth(int... requestedBytes) {
         ensureOpen();
         validateRequestedBytes(requestedBytes);
@@ -656,9 +558,8 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         return new NativeAllocationGrowth(heapBytes, metadataBytes, pageGrowth.nativeDataCommittedBytes());
     }
 
-    @Override
     public void close() {
-        threadGuard.checkOrBindCurrentThread();
+        owner.checkCurrentThreadForShutdown();
         if (closed) {
             return;
         }
@@ -698,46 +599,28 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         }
     }
 
-    YierdisNativeObjectMeta objectMeta(NativeHandle handle, boolean allowQuarantined) {
-        ensureOpen();
-        return trackStale(() -> objectTable.snapshot(handle, allowQuarantined));
-    }
-
-    YierdisNativeObjectMeta objectMetaRaw(long rawHandle, boolean allowQuarantined) {
+    YierdisNativeObjectMeta objectMeta(long localRaw, boolean allowQuarantined) {
         ensureOpen();
         try {
-            return objectTable.snapshotRaw(rawHandle, allowQuarantined);
+            return objectTable.snapshot(localRaw, allowQuarantined);
         } catch (StaleNativeHandleException e) {
             staleHandleDetections++;
             throw e;
         }
     }
 
-    private YierdisNativeObjectMeta requireLiveMeta(NativeHandle handle) {
-        return trackStale(() -> objectTable.resolve(handle));
-    }
-
-    private YierdisNativeObjectMeta requireLiveMetaRaw(long rawHandle) {
+    private YierdisNativeObjectMeta requireLiveMeta(long localRaw) {
         try {
-            return objectTable.resolveRaw(rawHandle);
+            return objectTable.resolve(localRaw);
         } catch (StaleNativeHandleException e) {
             staleHandleDetections++;
             throw e;
         }
     }
 
-    private YierdisNativeObjectMeta requireLiveMetaForFree(NativeHandle handle) {
+    private YierdisNativeObjectMeta requireLiveMetaForFree(long localRaw) {
         try {
-            return requireLiveMeta(handle);
-        } catch (StaleNativeHandleException e) {
-            doubleFreeDetections++;
-            throw e;
-        }
-    }
-
-    private YierdisNativeObjectMeta requireLiveMetaForFreeRaw(long rawHandle) {
-        try {
-            return requireLiveMetaRaw(rawHandle);
+            return requireLiveMeta(localRaw);
         } catch (StaleNativeHandleException e) {
             doubleFreeDetections++;
             throw e;
@@ -760,8 +643,8 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         }
     }
 
-    private NativeDefragResult moveLiveObject(NativeHandle handle) {
-        YierdisNativeObjectMeta sourceMeta = objectTable.beginMove(handle);
+    private NativeDefragResult moveLiveObject(long localRaw) {
+        YierdisNativeObjectMeta sourceMeta = objectTable.beginMove(localRaw);
         YierdisNativeBlock previous = null;
         YierdisNativeBlock target = null;
         boolean published = false;
@@ -769,11 +652,11 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             previous = pageAllocator.moveSource(sourceMeta);
             target = pageAllocator.allocate(physicalAllocationBytes(sourceMeta.size()));
             copyPrefix(previous, target, sourceMeta.size());
-            defragValidator.validate(handle, sourceMeta, target);
+            defragValidator.validate(localRaw, sourceMeta, target);
 
             int targetCapacity = target.capacity();
             objectTable.publishMoved(
-                    handle,
+                    localRaw,
                     sourceMeta.size(),
                     targetCapacity,
                     target.pageId(),
@@ -790,7 +673,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         } catch (RuntimeException e) {
             if (!published) {
                 try {
-                    objectTable.abortMove(handle);
+                    objectTable.abortMove(localRaw);
                 } catch (RuntimeException abortFailure) {
                     e.addSuppressed(abortFailure);
                 }
@@ -803,27 +686,6 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         }
     }
 
-    private NativeHandle trackStale(NativeHandle handle) {
-        try {
-            if (handle == null || handle.isNull()) {
-                throw new StaleNativeHandleException("stale native handle: null");
-            }
-            return handle;
-        } catch (StaleNativeHandleException e) {
-            staleHandleDetections++;
-            throw e;
-        }
-    }
-
-    private YierdisNativeObjectMeta trackStale(MetaSupplier supplier) {
-        try {
-            return supplier.get();
-        } catch (StaleNativeHandleException e) {
-            staleHandleDetections++;
-            throw e;
-        }
-    }
-
     private void releaseAllocation(YierdisNativeObjectMeta meta) {
         logicalUsedBytes -= meta.size();
         reservedBytes -= meta.capacity();
@@ -831,20 +693,14 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         pageAllocator.free(meta);
     }
 
-    private void untrackScopedHandle(NativeHandle handle) {
+    private void untrackScopedHandle(long localRaw) {
         if (activeAllocationScope != null) {
-            activeAllocationScope.untrack(handle);
-        }
-    }
-
-    private void untrackScopedHandle(long rawHandle) {
-        if (activeAllocationScope != null) {
-            activeAllocationScope.untrack(rawHandle);
+            activeAllocationScope.untrack(localRaw);
         }
     }
 
     private void releaseQuarantinedAllocation(YierdisNativeObjectMeta meta) {
-        objectTable.releaseQuarantined(handleFor(meta));
+        objectTable.releaseQuarantined(localHandleFor(meta));
         releaseAllocation(meta);
     }
 
@@ -1077,12 +933,14 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         return null;
     }
 
-    private static NativeHandle handleFor(YierdisNativeObjectMeta meta) {
+    private static long localHandleFor(YierdisNativeObjectMeta meta) {
         NativeObjectKind kind = kindFor(meta);
         if (kind == null) {
             throw new NativeMemoryException("unknown native object kind: " + meta.kindCode());
         }
-        return NativeHandle.of(meta.domain(), kind, meta.slotId(), meta.generation(), meta.flags() & 0x0f);
+        return YierdisLocalHandleCodec.encode(
+                meta.domain(), kind, meta.slotId(), meta.generation(), meta.flags() & 0x0f
+        );
     }
 
     private void ensureRetainedCapacity(int required) {
@@ -1127,10 +985,26 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     }
 
     private void ensureOpen() {
-        threadGuard.checkOrBindCurrentThread();
+        owner.checkCurrentThread();
         if (closed) {
             throw new IllegalStateException("stable native allocator is closed");
         }
+    }
+
+    private NativeHandle publicHandle(long localRaw) {
+        return localRaw == 0L ? NativeHandle.NULL : new NativeHandle(allocatorId, localRaw);
+    }
+
+    private long requireOwned(NativeHandle handle) {
+        Objects.requireNonNull(handle, "handle");
+        if (handle.allocatorId() != allocatorId) {
+            throw new yier.bubu.redis.memory.api.NativeHandleOwnershipException(
+                    allocatorId, handle.allocatorId()
+            );
+        }
+        long localRaw = handle.localRaw();
+        YierdisLocalHandleCodec.requireValid(localRaw);
+        return localRaw;
     }
 
     private static RuntimeException addFailure(RuntimeException failure, RuntimeException next) {
@@ -1151,17 +1025,19 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
 
         @Override
         public NativeEpochKind kind() {
+            owner.checkCurrentThread();
             return delegate.kind();
         }
 
         @Override
         public long epoch() {
+            owner.checkCurrentThread();
             return delegate.epoch();
         }
 
         @Override
         public void close() {
-            threadGuard.checkOrBindCurrentThread();
+            owner.checkCurrentThread();
             if (closedScope) {
                 return;
             }
@@ -1194,6 +1070,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
 
         @Override
         public NativeAllocationGrowth growth() {
+            owner.checkCurrentThread();
             if (terminal) {
                 return NativeAllocationGrowth.zero();
             }
@@ -1226,6 +1103,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
 
         @Override
         public void promote() {
+            owner.checkCurrentThread();
             if (terminal) {
                 return;
             }
@@ -1239,6 +1117,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
 
         @Override
         public void abort() {
+            owner.checkCurrentThread();
             if (terminal) {
                 return;
             }
@@ -1250,7 +1129,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             try {
                 for (int i = handleCount - 1; i >= 0; i--) {
                     try {
-                        freeRaw(handles[i]);
+                        freeLocal(handles[i]);
                     } catch (RuntimeException releaseFailure) {
                         failure = addFailure(failure, releaseFailure);
                     }
@@ -1274,18 +1153,20 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             }
         }
 
-        private void track(NativeHandle handle) {
-            track(handle.raw());
+        @Override
+        public void close() {
+            owner.checkCurrentThread();
+            abort();
         }
 
-        private void track(long rawHandle) {
+        private void track(long localRaw) {
             if (terminal) {
                 throw new IllegalStateException("native allocation scope is closed");
             }
             if (handleCount == handles.length) {
                 handles = Arrays.copyOf(handles, Math.max(8, handles.length << 1));
             }
-            handles[handleCount++] = rawHandle;
+            handles[handleCount++] = localRaw;
             recordGrowth();
         }
 
@@ -1296,13 +1177,9 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
                     + pageCheckpoint.heapEstimatedBytes();
         }
 
-        private void untrack(NativeHandle handle) {
-            untrack(handle.raw());
-        }
-
-        private void untrack(long raw) {
+        private void untrack(long localRaw) {
             for (int i = handleCount - 1; i >= 0; i--) {
-                if (handles[i] != raw) {
+                if (handles[i] != localRaw) {
                     continue;
                 }
                 handles[i] = handles[--handleCount];
@@ -1334,7 +1211,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     }
 
     private final class StableObjectView implements NativeObjectView {
-        private final long rawHandle;
+        private final long localRaw;
         private final YierdisNativeBlock block;
         private final int logicalSize;
         private final YierdisNativeObjectTable.ResolvedSlot resolvedSlot;
@@ -1344,7 +1221,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         private boolean closedView;
 
         private StableObjectView(
-                long rawHandle,
+                long localRaw,
                 YierdisNativeBlock block,
                 int logicalSize,
                 YierdisNativeObjectTable.ResolvedSlot resolvedSlot,
@@ -1352,7 +1229,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
                 boolean ownsPin,
                 boolean allowsQuarantined
         ) {
-            this.rawHandle = rawHandle;
+            this.localRaw = localRaw;
             this.block = block;
             this.logicalSize = logicalSize;
             this.resolvedSlot = resolvedSlot;
@@ -1364,7 +1241,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         @Override
         public NativeHandle handle() {
             ensureLive();
-            return NativeHandle.fromRaw(rawHandle);
+            return publicHandle(localRaw);
         }
 
         @Override
@@ -1461,13 +1338,13 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
 
         @Override
         public void close() {
-            threadGuard.checkOrBindCurrentThread();
+            owner.checkCurrentThread();
             if (closedView) {
                 return;
             }
             closedView = true;
             if (ownsPin && !closed) {
-                unpinRaw(rawHandle);
+                unpinLocal(localRaw);
             }
         }
 
@@ -1498,8 +1375,4 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         }
     }
 
-    @FunctionalInterface
-    private interface MetaSupplier {
-        YierdisNativeObjectMeta get();
-    }
 }
