@@ -26,6 +26,7 @@ import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.DbEngine;
 import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
@@ -208,10 +209,12 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 .maxmemorySamples(runtimeConfig.maxmemorySamples())
                 .evictionTimeLimitMillis(runtimeConfig.evictionTimeLimitMillis())
                 .expireCleanupTimeLimitMillis(runtimeConfig.expireCleanupTimeLimitMillis())
-                .nativeDefragEnabled(runtimeConfig.nativeDefragEnabled())
-                .nativeDefragMaxMoveBytes(runtimeConfig.nativeDefragMaxMoveBytes())
-                .nativeDefragMaxObjects(runtimeConfig.nativeDefragMaxObjects())
-                .nativeDefragTimeLimitMillis(runtimeConfig.nativeDefragTimeLimitMillis());
+                .defrag(new DbDefragConfig(
+                        runtimeConfig.nativeDefragEnabled(),
+                        runtimeConfig.nativeDefragMaxMoveBytes(),
+                        runtimeConfig.nativeDefragMaxObjects(),
+                        runtimeConfig.nativeDefragTimeLimitMillis()
+                ));
         configureDefaultDbEngineFactory(instanceConfig, scope, runtimeConfig);
         instanceConfigCustomizer.accept(instanceConfig);
         instance = YierdisInstance.create(instanceConfig.build());

@@ -1,12 +1,7 @@
 package yier.bubu.redis.storage.api;
 
-// DbEngine：DB 核心编排入口（orchestrator 边界），对命令层提供稳定的“能力组合”视图。
-
 /**
- * DB engine boundary (orchestrator-facing).
- * <p>
- * 该接口用于降低 command 层与具体 DB 实现（例如 {@code YierdisDb}）的直接耦合；
- * 新代码应优先通过 {@link #reads()} / {@link #writes()} 访问读写边界。
+ * DB 的语义操作边界；运行期生命周期与可选维护能力由独立接口声明。
  */
 public interface DbEngine {
     DbReads reads();

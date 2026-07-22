@@ -11,6 +11,7 @@ import yier.bubu.redis.integration.command.TestCommandProcessors;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.TransactionState;
+import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.DbEngineFactory;
 import yier.bubu.redis.storage.api.DbCommitStreamUnavailableException;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
@@ -213,10 +214,7 @@ public class YierdisInstanceTest {
     public void nativeDefragConfigEnablesDefaultFactoryMaintenance() {
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(1)
-                .nativeDefragEnabled(true)
-                .nativeDefragMaxMoveBytes(1_000_000)
-                .nativeDefragMaxObjects(1_000)
-                .nativeDefragTimeLimitMillis(1000)
+                .defrag(new DbDefragConfig(true, 1_000_000L, 1_000L, 1_000L))
                 .build();
 
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {

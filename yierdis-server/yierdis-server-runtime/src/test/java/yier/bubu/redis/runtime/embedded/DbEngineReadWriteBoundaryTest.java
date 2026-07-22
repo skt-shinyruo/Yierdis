@@ -60,10 +60,11 @@ public class DbEngineReadWriteBoundaryTest {
     }
 
     @Test
-    public void runtimeDbEngineExposesRuntimeOnlyMaxmemoryMaintenanceHook() throws Exception {
-        Method maintenance = RuntimeDbEngine.class.getMethod("enforceMaxmemoryMaintenance");
+    public void runtimeDbEngineExposesRuntimeOnlyMaintenanceHook() throws Exception {
+        Method maintenance = RuntimeDbEngine.class.getMethod("runMaintenance");
 
         Assert.assertEquals(void.class, maintenance.getReturnType());
+        Assert.assertNull(findMethod(DbEngine.class, "runMaintenance"));
         Assert.assertNull(findMethod(DbEngine.class, "enforceMaxmemoryMaintenance"));
     }
 

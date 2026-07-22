@@ -5,6 +5,10 @@ package yier.bubu.redis.runtime.embedded;
 import yier.bubu.redis.storage.api.DbEngine;
 import yier.bubu.redis.storage.api.DbEngineFactory;
 import yier.bubu.redis.storage.api.DbCommitPublisher;
+import yier.bubu.redis.storage.api.DbEngineConfig;
+import yier.bubu.redis.storage.api.CommitPublishingDbEngine;
+import yier.bubu.redis.storage.api.DefragmentableDbEngine;
+import yier.bubu.redis.storage.api.GlobalMaxmemoryDbEngine;
 import yier.bubu.redis.storage.api.RuntimeDbEngine;
 import yier.bubu.redis.runtime.api.YierdisChangeSink;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
@@ -56,16 +60,6 @@ public final class YierdisInstance implements AutoCloseable {
     ) {
         int databases = Math.max(1, config.databases());
         boolean perDbScope = config.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.PER_DB;
-        CommitStream commitStream = config.changeSink() == YierdisChangeSink.NOOP
-                ? null
-                : CommitStream.prepare(
-                        config.changeSink(),
-                        config.commitStreamMaxEvents(),
-                        config.commitStreamMaxRetainedBytes(),
-                        config.commitStreamShutdownTimeoutMillis()
-                );
-        DbCommitPublisher commitPublisher = commitStream == null ? DbCommitPublisher.NOOP : commitStream;
-
         long perDbMaxmemory = 0;
         long remainder = 0;
         if (perDbScope && config.maxmemoryBytes() > 0) {
@@ -77,6 +71,7 @@ public final class YierdisInstance implements AutoCloseable {
         }
 
         RuntimeDbEngine[] dbs = new RuntimeDbEngine[databases];
+        CommitStream commitStream = null;
         try {
             for (int i = 0; i < databases; i++) {
                 long dbMax = config.maxmemoryBytes();
@@ -87,21 +82,38 @@ public final class YierdisInstance implements AutoCloseable {
                         remainder--;
                     }
                 }
-                dbs[i] = engineFactory.create(
+                RuntimeDbEngine engine = engineFactory.create(new DbEngineConfig(
                         i,
                         dbMax,
                         config.maxmemoryPolicy(),
                         config.maxmemorySamples(),
                         config.evictionTimeLimitMillis(),
-                        config.expireCleanupTimeLimitMillis()
+                        config.expireCleanupTimeLimitMillis(),
+                        config.defrag()
+                ));
+                if (engine == null) {
+                    throw new IllegalStateException("DbEngineFactory returned null for dbIndex=" + i);
+                }
+                dbs[i] = engine;
+            }
+
+            // 配置与 capability 一致性校验在任何 publisher/coordinator 绑定前完成。
+            CapabilityVector capabilities = validateCapabilities(dbs, config);
+            if (config.changeSink() != YierdisChangeSink.NOOP) {
+                commitStream = CommitStream.prepare(
+                        config.changeSink(),
+                        config.commitStreamMaxEvents(),
+                        config.commitStreamMaxRetainedBytes(),
+                        config.commitStreamShutdownTimeoutMillis()
                 );
             }
+            DbCommitPublisher commitPublisher = commitStream == null ? DbCommitPublisher.NOOP : commitStream;
 
             YierdisGlobalMaxmemoryGovernor governor = null;
             if (!perDbScope && config.maxmemoryBytes() > 0) {
-                RuntimeDbEngine[] participants = new RuntimeDbEngine[dbs.length];
+                GlobalMaxmemoryDbEngine[] participants = new GlobalMaxmemoryDbEngine[dbs.length];
                 for (int i = 0; i < dbs.length; i++) {
-                    participants[i] = dbs[i];
+                    participants[i] = (GlobalMaxmemoryDbEngine) dbs[i];
                 }
 
                 governor = new YierdisGlobalMaxmemoryGovernor(
@@ -112,18 +124,14 @@ public final class YierdisInstance implements AutoCloseable {
                         TimeUnit.MILLISECONDS.toNanos(config.evictionTimeLimitMillis())
                 );
 
-                for (RuntimeDbEngine engine : dbs) {
-                    if (engine == null) {
-                        continue;
-                    }
+                for (GlobalMaxmemoryDbEngine engine : participants) {
                     engine.attachMaxmemoryCoordinator(governor);
                 }
             }
 
-            for (int index = 0; index < dbs.length; index++) {
-                RuntimeDbEngine engine = dbs[index];
-                if (engine != null) {
-                    engine.attachCommitPublisher(commitPublisher, index);
+            if (capabilities.commit()) {
+                for (int index = 0; index < dbs.length; index++) {
+                    ((CommitPublishingDbEngine) dbs[index]).attachCommitPublisher(commitPublisher, index);
                 }
             }
             if (commitStream != null) {
@@ -135,15 +143,52 @@ public final class YierdisInstance implements AutoCloseable {
                     new YierdisInstanceResources(dbs, closeables(ownedEngineFactoryResource), governor, commitStream)
             );
         } catch (Throwable t) {
-            if (commitStream != null) {
-                try {
-                    commitStream.close();
-                } catch (Throwable closeFailure) {
-                    t.addSuppressed(closeFailure);
-                }
-            }
-            throw YierdisInstanceResources.startupFailure(t, dbs, closeables(ownedEngineFactoryResource));
+            throw YierdisInstanceResources.startupFailure(
+                    t,
+                    dbs,
+                    commitStream,
+                    closeables(ownedEngineFactoryResource)
+            );
         }
+    }
+
+    private record CapabilityVector(boolean commit, boolean globalMaxmemory, boolean defrag) {
+        static CapabilityVector of(RuntimeDbEngine engine) {
+            return new CapabilityVector(
+                    engine instanceof CommitPublishingDbEngine,
+                    engine instanceof GlobalMaxmemoryDbEngine,
+                    engine instanceof DefragmentableDbEngine
+            );
+        }
+    }
+
+    private static CapabilityVector validateCapabilities(
+            RuntimeDbEngine[] engines,
+            YierdisInstanceConfig config
+    ) {
+        CapabilityVector expected = CapabilityVector.of(engines[0]);
+        for (int index = 1; index < engines.length; index++) {
+            CapabilityVector actual = CapabilityVector.of(engines[index]);
+            if (!expected.equals(actual)) {
+                throw new IllegalStateException(
+                        "inconsistent DB capabilities: dbIndex=0 " + expected
+                                + ", dbIndex=" + index + " " + actual
+                );
+            }
+        }
+        boolean commitRequired = config.changeSink() != YierdisChangeSink.NOOP;
+        boolean globalRequired = config.maxmemoryBytes() > 0L
+                && config.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.GLOBAL;
+        if (commitRequired && !expected.commit()) {
+            throw new IllegalStateException("configured change sink requires CommitPublishingDbEngine");
+        }
+        if (globalRequired && !expected.globalMaxmemory()) {
+            throw new IllegalStateException("global maxmemory requires GlobalMaxmemoryDbEngine");
+        }
+        if (config.defrag().enabled() && !expected.defrag()) {
+            throw new IllegalStateException("native defrag requires DefragmentableDbEngine");
+        }
+        return expected;
     }
 
     private static List<AutoCloseable> closeables(AutoCloseable resource) {

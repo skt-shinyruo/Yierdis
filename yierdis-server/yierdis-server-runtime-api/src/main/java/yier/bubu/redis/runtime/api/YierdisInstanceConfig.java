@@ -1,6 +1,7 @@
 package yier.bubu.redis.runtime.api;
 
 import yier.bubu.redis.storage.api.DbEngineFactory;
+import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
 import java.util.Objects;
@@ -32,10 +33,7 @@ public final class YierdisInstanceConfig {
     private final int maxmemorySamples;
     private final long evictionTimeLimitMillis;
     private final long expireCleanupTimeLimitMillis;
-    private final boolean nativeDefragEnabled;
-    private final long nativeDefragMaxMoveBytes;
-    private final long nativeDefragMaxObjects;
-    private final long nativeDefragTimeLimitMillis;
+    private final DbDefragConfig defrag;
     private final int commitStreamMaxEvents;
     private final long commitStreamMaxRetainedBytes;
     private final long commitStreamShutdownTimeoutMillis;
@@ -51,10 +49,7 @@ public final class YierdisInstanceConfig {
         this.maxmemorySamples = b.maxmemorySamples;
         this.evictionTimeLimitMillis = b.evictionTimeLimitMillis;
         this.expireCleanupTimeLimitMillis = b.expireCleanupTimeLimitMillis;
-        this.nativeDefragEnabled = b.nativeDefragEnabled;
-        this.nativeDefragMaxMoveBytes = b.nativeDefragMaxMoveBytes;
-        this.nativeDefragMaxObjects = b.nativeDefragMaxObjects;
-        this.nativeDefragTimeLimitMillis = b.nativeDefragTimeLimitMillis;
+        this.defrag = b.defrag;
         this.commitStreamMaxEvents = b.commitStreamMaxEvents;
         this.commitStreamMaxRetainedBytes = b.commitStreamMaxRetainedBytes;
         this.commitStreamShutdownTimeoutMillis = b.commitStreamShutdownTimeoutMillis;
@@ -104,20 +99,8 @@ public final class YierdisInstanceConfig {
         return expireCleanupTimeLimitMillis;
     }
 
-    public boolean nativeDefragEnabled() {
-        return nativeDefragEnabled;
-    }
-
-    public long nativeDefragMaxMoveBytes() {
-        return nativeDefragMaxMoveBytes;
-    }
-
-    public long nativeDefragMaxObjects() {
-        return nativeDefragMaxObjects;
-    }
-
-    public long nativeDefragTimeLimitMillis() {
-        return nativeDefragTimeLimitMillis;
+    public DbDefragConfig defrag() {
+        return defrag;
     }
 
     public int commitStreamMaxEvents() {
@@ -144,10 +127,7 @@ public final class YierdisInstanceConfig {
         private int maxmemorySamples = 5;
         private long evictionTimeLimitMillis = 5;
         private long expireCleanupTimeLimitMillis = 5;
-        private boolean nativeDefragEnabled;
-        private long nativeDefragMaxMoveBytes = 64L * 1024L;
-        private long nativeDefragMaxObjects = 64L;
-        private long nativeDefragTimeLimitMillis = 1L;
+        private DbDefragConfig defrag = new DbDefragConfig(false, 64L * 1024L, 64L, 1L);
         private int commitStreamMaxEvents = 8_192;
         private long commitStreamMaxRetainedBytes = 64L * 1024L * 1024L;
         private long commitStreamShutdownTimeoutMillis = 5_000L;
@@ -207,23 +187,8 @@ public final class YierdisInstanceConfig {
             return this;
         }
 
-        public Builder nativeDefragEnabled(boolean nativeDefragEnabled) {
-            this.nativeDefragEnabled = nativeDefragEnabled;
-            return this;
-        }
-
-        public Builder nativeDefragMaxMoveBytes(long nativeDefragMaxMoveBytes) {
-            this.nativeDefragMaxMoveBytes = nativeDefragMaxMoveBytes;
-            return this;
-        }
-
-        public Builder nativeDefragMaxObjects(long nativeDefragMaxObjects) {
-            this.nativeDefragMaxObjects = nativeDefragMaxObjects;
-            return this;
-        }
-
-        public Builder nativeDefragTimeLimitMillis(long nativeDefragTimeLimitMillis) {
-            this.nativeDefragTimeLimitMillis = nativeDefragTimeLimitMillis;
+        public Builder defrag(DbDefragConfig defrag) {
+            this.defrag = Objects.requireNonNull(defrag, "defrag");
             return this;
         }
 
@@ -255,15 +220,6 @@ public final class YierdisInstanceConfig {
             }
             if (expireCleanupTimeLimitMillis <= 0) {
                 throw new IllegalArgumentException("expireCleanupTimeLimitMillis must be > 0");
-            }
-            if (nativeDefragMaxMoveBytes < 0) {
-                throw new IllegalArgumentException("nativeDefragMaxMoveBytes must be >= 0");
-            }
-            if (nativeDefragMaxObjects < 0) {
-                throw new IllegalArgumentException("nativeDefragMaxObjects must be >= 0");
-            }
-            if (nativeDefragTimeLimitMillis < 0) {
-                throw new IllegalArgumentException("nativeDefragTimeLimitMillis must be >= 0");
             }
             if (commitStreamMaxEvents <= 0) {
                 throw new IllegalArgumentException("commitStreamMaxEvents must be > 0");

@@ -2,7 +2,6 @@ package yier.bubu.redis.runtime.embedded;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.storage.api.DbHealthSnapshot;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
@@ -66,12 +65,7 @@ public class YierdisInstanceObservabilityTest {
                 YierdisInstanceConfig.builder()
                         .databases(engines.length)
                         .maxmemoryBytes(0L)
-                        .engineFactory((dbIndex,
-                                        maxmemoryBytes,
-                                        maxmemoryPolicy,
-                                        maxmemorySamples,
-                                        evictionTimeLimitMillis,
-                                        expireCleanupTimeLimitMillis) -> engines[dbIndex])
+                        .engineFactory(config -> engines[config.dbIndex()])
                         .build()
         );
     }
@@ -98,12 +92,7 @@ public class YierdisInstanceObservabilityTest {
         }
 
         @Override
-        public MemoryUsageSnapshot memoryUsage() {
-            return MemoryUsageSnapshot.zero();
-        }
-
-        @Override
-        public void enforceMaxmemoryMaintenance() {
+        public void runMaintenance() {
         }
 
         @Override

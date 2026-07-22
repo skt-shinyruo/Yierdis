@@ -2,7 +2,10 @@ package yier.bubu.redis.runtime.embedded;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.common.memory.MemoryPressureBudget;
+import yier.bubu.redis.common.memory.MemoryReclaimResult;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
+import yier.bubu.redis.storage.api.DbEngineConfig;
 import yier.bubu.redis.storage.api.DbReads;
 import yier.bubu.redis.storage.api.DbWrites;
 import yier.bubu.redis.storage.api.DbEngineFactory;
@@ -10,6 +13,8 @@ import yier.bubu.redis.storage.api.RuntimeDbEngine;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbEngine;
 import yier.bubu.redis.storage.api.ExpirationManager;
+import yier.bubu.redis.storage.api.GlobalMaxmemoryDbEngine;
+import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.MemoryOps;
@@ -41,19 +46,12 @@ public class DbEngineFactoryInjectionTest {
 
         DbEngineFactory factory = new DbEngineFactory() {
             @Override
-            public RuntimeDbEngine create(
-                    int dbIndex,
-                    long maxmemoryBytes,
-                    MaxmemoryPolicy maxmemoryPolicy,
-                    int maxmemorySamples,
-                    long evictionTimeLimitMillis,
-                    long expireCleanupTimeLimitMillis
-            ) {
+            public RuntimeDbEngine create(DbEngineConfig config) {
                 created.incrementAndGet();
-                receivedPolicy.set(maxmemoryPolicy);
+                receivedPolicy.set(config.maxmemoryPolicy());
                 StubEngine engine = new StubEngine();
-                if (dbIndex >= 0 && dbIndex < createdEngines.length) {
-                    createdEngines[dbIndex] = engine;
+                if (config.dbIndex() >= 0 && config.dbIndex() < createdEngines.length) {
+                    createdEngines[config.dbIndex()] = engine;
                 }
                 return engine;
             }
@@ -81,13 +79,8 @@ public class DbEngineFactoryInjectionTest {
     @Test
     public void engineFactoryBindingClosesOwnedResourceWhenInstanceCloses() {
         List<String> closeOrder = new ArrayList<>();
-        DbEngineFactory factory = (dbIndex,
-                                   maxmemoryBytes,
-                                   maxmemoryPolicy,
-                                   maxmemorySamples,
-                                   evictionTimeLimitMillis,
-                                   expireCleanupTimeLimitMillis) ->
-                new ShutdownTrackingEngine("db-" + dbIndex, closeOrder);
+        DbEngineFactory factory = config ->
+                new ShutdownTrackingEngine("db-" + config.dbIndex(), closeOrder);
         AutoCloseable ownedResource = () -> closeOrder.add("runtime");
 
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
@@ -105,16 +98,11 @@ public class DbEngineFactoryInjectionTest {
     @Test
     public void engineFactoryBindingClosesOwnedResourceWhenStartupFails() {
         List<String> closeOrder = new ArrayList<>();
-        DbEngineFactory factory = (dbIndex,
-                                   maxmemoryBytes,
-                                   maxmemoryPolicy,
-                                   maxmemorySamples,
-                                   evictionTimeLimitMillis,
-                                   expireCleanupTimeLimitMillis) -> {
-            if (dbIndex == 0) {
-                return new ShutdownTrackingEngine("db-" + dbIndex, closeOrder);
+        DbEngineFactory factory = config -> {
+            if (config.dbIndex() == 0) {
+                return new ShutdownTrackingEngine("db-" + config.dbIndex(), closeOrder);
             }
-            throw new IllegalStateException("boom-create-" + dbIndex);
+            throw new IllegalStateException("boom-create-" + config.dbIndex());
         };
         AutoCloseable ownedResource = () -> closeOrder.add("runtime");
 
@@ -139,12 +127,7 @@ public class DbEngineFactoryInjectionTest {
         PhysicalTrackingEngine second = new PhysicalTrackingEngine(new MemoryUsageSnapshot(10L, 0L, 0L, 0L, 0L));
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(2)
-                .engineFactory((dbIndex,
-                                maxmemoryBytes,
-                                maxmemoryPolicy,
-                                maxmemorySamples,
-                                evictionTimeLimitMillis,
-                                expireCleanupTimeLimitMillis) -> dbIndex == 0 ? first : second)
+                .engineFactory(engineConfig -> engineConfig.dbIndex() == 0 ? first : second)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
                 .maxmemoryBytes(100L)
                 .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
@@ -174,12 +157,7 @@ public class DbEngineFactoryInjectionTest {
         ObservabilityTrackingEngine second = new ObservabilityTrackingEngine(40L, 20L, 2, 0);
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(2)
-                .engineFactory((dbIndex,
-                                maxmemoryBytes,
-                                maxmemoryPolicy,
-                                maxmemorySamples,
-                                evictionTimeLimitMillis,
-                                expireCleanupTimeLimitMillis) -> dbIndex == 0 ? first : second)
+                .engineFactory(engineConfig -> engineConfig.dbIndex() == 0 ? first : second)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
                 .maxmemoryBytes(100L)
                 .build();
@@ -198,16 +176,11 @@ public class DbEngineFactoryInjectionTest {
 
     private static final class StubEngine implements RuntimeDbEngine {
         @Override
-        public MemoryUsageSnapshot memoryUsage() {
-            return MemoryUsageSnapshot.zero();
-        }
-
-        @Override
         public void bindToCurrentThread() {
         }
 
         @Override
-        public void enforceMaxmemoryMaintenance() {
+        public void runMaintenance() {
         }
 
         @Override
@@ -250,16 +223,11 @@ public class DbEngineFactoryInjectionTest {
         }
 
         @Override
-        public MemoryUsageSnapshot memoryUsage() {
-            return MemoryUsageSnapshot.zero();
-        }
-
-        @Override
         public void bindToCurrentThread() {
         }
 
         @Override
-        public void enforceMaxmemoryMaintenance() {
+        public void runMaintenance() {
         }
 
         @Override
@@ -293,7 +261,7 @@ public class DbEngineFactoryInjectionTest {
         }
     }
 
-    private static final class PhysicalTrackingEngine implements RuntimeDbEngine {
+    private static final class PhysicalTrackingEngine implements GlobalMaxmemoryDbEngine {
         private final MemoryUsageSnapshot usage;
         private MaxmemoryCoordinator attachedCoordinator;
         private final AtomicInteger memoryUsageCalls = new AtomicInteger();
@@ -308,7 +276,7 @@ public class DbEngineFactoryInjectionTest {
         }
 
         @Override
-        public void enforceMaxmemoryMaintenance() {
+        public void runMaintenance() {
         }
 
         @Override
@@ -324,6 +292,35 @@ public class DbEngineFactoryInjectionTest {
         public MemoryUsageSnapshot memoryUsage() {
             memoryUsageCalls.incrementAndGet();
             return usage;
+        }
+
+        @Override
+        public MemoryReclaimResult trimMemory(MemoryPressureBudget budget) {
+            return MemoryReclaimResult.empty();
+        }
+
+        @Override
+        public int keyCountEstimate() {
+            return 0;
+        }
+
+        @Override
+        public void cleanupExpired(long nowMillis) {
+        }
+
+        @Override
+        public MaxmemoryCandidate sampleCandidate(MaxmemoryPolicy policy, long nowMillis) {
+            return null;
+        }
+
+        @Override
+        public MaxmemoryCandidate scanBestCandidate(MaxmemoryPolicy policy, long nowMillis) {
+            return null;
+        }
+
+        @Override
+        public boolean evict(MaxmemoryCandidate candidate, long nowMillis) {
+            return false;
         }
 
         @Override
@@ -370,7 +367,7 @@ public class DbEngineFactoryInjectionTest {
         }
     }
 
-    private static final class ObservabilityTrackingEngine implements RuntimeDbEngine {
+    private static final class ObservabilityTrackingEngine implements GlobalMaxmemoryDbEngine {
         private final YierdisMemoryStats stats;
         private final MemoryUsageSnapshot usage;
 
@@ -432,11 +429,44 @@ public class DbEngineFactoryInjectionTest {
         }
 
         @Override
-        public void enforceMaxmemoryMaintenance() {
+        public void runMaintenance() {
         }
 
         @Override
         public void shutdown() {
+        }
+
+        @Override
+        public void attachMaxmemoryCoordinator(MaxmemoryCoordinator coordinator) {
+        }
+
+        @Override
+        public MemoryReclaimResult trimMemory(MemoryPressureBudget budget) {
+            return MemoryReclaimResult.empty();
+        }
+
+        @Override
+        public int keyCountEstimate() {
+            return 0;
+        }
+
+        @Override
+        public void cleanupExpired(long nowMillis) {
+        }
+
+        @Override
+        public MaxmemoryCandidate sampleCandidate(MaxmemoryPolicy policy, long nowMillis) {
+            return null;
+        }
+
+        @Override
+        public MaxmemoryCandidate scanBestCandidate(MaxmemoryPolicy policy, long nowMillis) {
+            return null;
+        }
+
+        @Override
+        public boolean evict(MaxmemoryCandidate candidate, long nowMillis) {
+            return false;
         }
 
         @Override

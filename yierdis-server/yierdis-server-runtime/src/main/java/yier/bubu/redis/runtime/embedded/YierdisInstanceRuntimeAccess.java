@@ -1,5 +1,6 @@
 package yier.bubu.redis.runtime.embedded;
 
+import yier.bubu.redis.storage.api.DefragmentableDbEngine;
 import yier.bubu.redis.storage.api.RuntimeDbEngine;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 
@@ -41,25 +42,17 @@ public final class YierdisInstanceRuntimeAccess implements AutoCloseable {
     }
 
     private void runMaintenanceTick(YierdisInstanceConfig config, int databases) {
-        boolean maxmemoryEnabled = config.maxmemoryBytes() > 0;
-        boolean perDb = maxmemoryEnabled && config.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.PER_DB;
-        boolean global = maxmemoryEnabled && config.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.GLOBAL;
+        boolean defragEnabled = config.defrag().enabled();
 
         for (int i = 0; i < databases; i++) {
             RuntimeDbEngine engine = engine(i);
-            if (engine == null) {
-                continue;
-            }
-            engine.expiration().cleanupExpired();
-            engine.defragMaintenance();
-            if (perDb) {
-                engine.enforceMaxmemoryMaintenance();
+            engine.runMaintenance();
+            if (defragEnabled) {
+                ((DefragmentableDbEngine) engine).defragMaintenance();
             }
         }
 
-        if (global) {
-            instance.resources().enforceGlobalMaxmemoryMaintenance();
-        }
+        instance.resources().enforceGlobalMaxmemoryMaintenance();
     }
 
     /**
