@@ -45,10 +45,6 @@ public final class HllCommands implements CommandModule {
 
     private void pfadd(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() < 3) {
-            CommandSupport.wrongArity(out, "pfadd");
-            return;
-        }
         int elementsLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, elementsLen);
         try {
@@ -63,10 +59,6 @@ public final class HllCommands implements CommandModule {
 
     private void pfcount(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() < 2) {
-            CommandSupport.wrongArity(out, "pfcount");
-            return;
-        }
         int len = request.argc() - 1;
         support.sliceResetFromRequest(request, 1, len);
         try {
@@ -78,10 +70,6 @@ public final class HllCommands implements CommandModule {
 
     private void pfmerge(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() < 3) {
-            CommandSupport.wrongArity(out, "pfmerge");
-            return;
-        }
         int sourcesLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, sourcesLen);
         try {

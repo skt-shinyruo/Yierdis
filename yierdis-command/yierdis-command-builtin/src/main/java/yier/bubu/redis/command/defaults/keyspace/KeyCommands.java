@@ -91,10 +91,6 @@ public final class KeyCommands implements CommandModule {
 
     private void type(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 2) {
-            CommandSupport.wrongArity(out, "type");
-            return;
-        }
         ValueType t = support.commandDb(ctx).reads().keyspace().typeOf(support.argView(request, 1));
         if (t == null) {
             out.simpleString("none");
@@ -105,11 +101,6 @@ public final class KeyCommands implements CommandModule {
 
     private void memory(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() < 2) {
-            CommandSupport.wrongArity(out, "memory");
-            return;
-        }
-
         if (CommandSupport.asciiEqualsIgnoreCase(request, 1, "USAGE")) {
             if (request.argc() != 3) {
                 CommandSupport.wrongArity(out, "memory");
@@ -208,10 +199,6 @@ public final class KeyCommands implements CommandModule {
 
     private void keys(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 2) {
-            CommandSupport.wrongArity(out, "keys");
-            return;
-        }
         SlowCommandGovernor governor = support.slowGovernor();
         long timeBudgetNanos = governor.keysTimeBudgetNanos(ctx);
         long deadlineNanos = deadlineNanos(timeBudgetNanos);
@@ -354,10 +341,6 @@ public final class KeyCommands implements CommandModule {
 
     private void del(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() < 2) {
-            CommandSupport.wrongArity(out, "del");
-            return;
-        }
         int len = request.argc() - 1;
         support.sliceResetFromRequest(request, 1, len);
         try {
@@ -370,11 +353,6 @@ public final class KeyCommands implements CommandModule {
 
     private void exists(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() < 2) {
-            CommandSupport.wrongArity(out, "exists");
-            return;
-        }
-
         long count = 0;
         for (int i = 1; i < request.argc(); i++) {
             if (support.commandDb(ctx).reads().keyspace().existsKey(support.argView(request, i))) {
@@ -386,10 +364,6 @@ public final class KeyCommands implements CommandModule {
 
     private void expire(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 3) {
-            CommandSupport.wrongArity(out, "expire");
-            return;
-        }
         long seconds = CommandSupport.parseLong(request, 2, "seconds");
         boolean applied = support.commandDb(ctx).writes().ttl()
                 .expire(support.argView(request, 1), seconds)
@@ -399,10 +373,6 @@ public final class KeyCommands implements CommandModule {
 
     private void pexpire(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 3) {
-            CommandSupport.wrongArity(out, "pexpire");
-            return;
-        }
         long millis = CommandSupport.parseLong(request, 2, "milliseconds");
         boolean applied = support.commandDb(ctx).writes().ttl()
                 .pexpire(support.argView(request, 1), millis)
@@ -412,10 +382,6 @@ public final class KeyCommands implements CommandModule {
 
     private void expireat(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 3) {
-            CommandSupport.wrongArity(out, "expireat");
-            return;
-        }
         long seconds = CommandSupport.parseLong(request, 2, "seconds");
         boolean applied = support.commandDb(ctx).writes().ttl()
                 .expireAtSeconds(support.argView(request, 1), seconds)
@@ -425,10 +391,6 @@ public final class KeyCommands implements CommandModule {
 
     private void pexpireat(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 3) {
-            CommandSupport.wrongArity(out, "pexpireat");
-            return;
-        }
         long millis = CommandSupport.parseLong(request, 2, "milliseconds");
         boolean applied = support.commandDb(ctx).writes().ttl()
                 .expireAtMillis(support.argView(request, 1), millis)
@@ -438,10 +400,6 @@ public final class KeyCommands implements CommandModule {
 
     private void persist(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 2) {
-            CommandSupport.wrongArity(out, "persist");
-            return;
-        }
         boolean applied = support.commandDb(ctx).writes().ttl()
                 .persist(support.argView(request, 1))
                 .value();
@@ -450,19 +408,11 @@ public final class KeyCommands implements CommandModule {
 
     private void ttl(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 2) {
-            CommandSupport.wrongArity(out, "ttl");
-            return;
-        }
         out.integer(support.commandDb(ctx).reads().ttl().ttlSeconds(support.argView(request, 1)));
     }
 
     private void pttl(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 2) {
-            CommandSupport.wrongArity(out, "pttl");
-            return;
-        }
         out.integer(support.commandDb(ctx).reads().ttl().ttlMillis(support.argView(request, 1)));
     }
 }

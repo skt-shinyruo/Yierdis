@@ -67,10 +67,6 @@ public final class ListCommands implements CommandModule {
 
     private void push(ExecutionRequest request, CommandContext ctx, boolean left) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() < 3) {
-            CommandSupport.wrongArity(out, left ? "lpush" : "rpush");
-            return;
-        }
         int valuesLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, valuesLen);
         try {
@@ -86,10 +82,6 @@ public final class ListCommands implements CommandModule {
 
     private void lrange(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 4) {
-            CommandSupport.wrongArity(out, "lrange");
-            return;
-        }
         int start = CommandSupport.parseIntClamped(request, 2, "start");
         int stop = CommandSupport.parseIntClamped(request, 3, "stop");
 
@@ -100,10 +92,6 @@ public final class ListCommands implements CommandModule {
 
     private void pop(ExecutionRequest request, CommandContext ctx, boolean left) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 2 && request.argc() != 3) {
-            CommandSupport.wrongArity(out, left ? "lpop" : "rpop");
-            return;
-        }
         int count = 1;
         boolean hasCount = request.argc() == 3;
         if (hasCount) {

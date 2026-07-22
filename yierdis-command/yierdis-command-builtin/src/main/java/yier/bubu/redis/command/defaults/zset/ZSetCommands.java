@@ -133,10 +133,6 @@ public final class ZSetCommands implements CommandModule {
 
     private void zrevrange(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 4 && request.argc() != 5) {
-            CommandSupport.wrongArity(out, "zrevrange");
-            return;
-        }
         long start = CommandSupport.parseLong(request, 2, "start");
         long stop = CommandSupport.parseLong(request, 3, "stop");
 
@@ -224,11 +220,6 @@ public final class ZSetCommands implements CommandModule {
 
     private void zremrangebyscore(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 4) {
-            CommandSupport.wrongArity(out, "zremrangebyscore");
-            return;
-        }
-
         CommandSupport.ScoreBound min = CommandSupport.parseScoreBound(request.readOnlyByteArray(2));
         CommandSupport.ScoreBound max = CommandSupport.parseScoreBound(request.readOnlyByteArray(3));
         var result = support.commandDb(ctx).writes().zsets().zremrangeByScore(
@@ -258,10 +249,6 @@ public final class ZSetCommands implements CommandModule {
 
     private void zremrangebyrank(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() != 4) {
-            CommandSupport.wrongArity(out, "zremrangebyrank");
-            return;
-        }
         long start = CommandSupport.parseLong(request, 2, "start");
         long stop = CommandSupport.parseLong(request, 3, "stop");
         long removed = support.commandDb(ctx).writes().zsets()
@@ -272,10 +259,6 @@ public final class ZSetCommands implements CommandModule {
 
     private void zrem(ExecutionRequest request, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        if (request.argc() < 3) {
-            CommandSupport.wrongArity(out, "zrem");
-            return;
-        }
         int membersLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, membersLen);
         try {

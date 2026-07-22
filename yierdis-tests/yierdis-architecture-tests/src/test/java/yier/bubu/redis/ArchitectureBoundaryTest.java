@@ -579,12 +579,7 @@ public class ArchitectureBoundaryTest {
         String[] retiredCommandApis = {
                 deletedDescriptor,
                 "registerDisallowed" + "InMulti",
-                "isTransaction" + "Control",
-                "CommandParsers." + "exact",
-                "CommandParsers." + "min",
-                "CommandParsers." + "range",
-                "CommandParsers." + "oneOf",
-                "CommandParsers." + "pairTail"
+                "isTransaction" + "Control"
         };
 
         List<String> offenders = new ArrayList<>();
@@ -622,6 +617,116 @@ public class ArchitectureBoundaryTest {
         );
 
         Assert.assertTrue("legacy command registration remains:\n" + String.join("\n", offenders), offenders.isEmpty());
+    }
+
+    @Test
+    public void knownCommandHandlersMustNotRestoreDuplicateTopLevelArityChecks() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
+
+        List<String> knownDuplicates = new ArrayList<>();
+        scanFileForForbiddenText(
+                repoRoot,
+                commandKernelFile(repoRoot, "TransactionCommands.java"),
+                knownDuplicates,
+                "wrongArity(out, \"multi\");",
+                "wrongArity(out, \"discard\");",
+                "wrongArity(out, \"exec\");"
+        );
+        scanFileForForbiddenText(
+                repoRoot,
+                commandDefaultsFile(repoRoot, "CoreConnectionCommands.java"),
+                knownDuplicates,
+                "CommandSupport.wrongArity(out, \"ping\");",
+                "CommandSupport.wrongArity(out, \"echo\");",
+                "CommandSupport.wrongArity(out, \"select\");",
+                "CommandSupport.wrongArity(out, \"quit\");",
+                "CommandSupport.wrongArity(out, \"flushdb\");"
+        );
+        scanFileForForbiddenText(
+                repoRoot,
+                commandDefaultsFile(repoRoot, "KeyCommands.java"),
+                knownDuplicates,
+                "CommandSupport.wrongArity(out, \"type\");",
+                "CommandSupport.wrongArity(out, \"keys\");",
+                "CommandSupport.wrongArity(out, \"del\");",
+                "CommandSupport.wrongArity(out, \"exists\");",
+                "CommandSupport.wrongArity(out, \"expire\");",
+                "CommandSupport.wrongArity(out, \"pexpire\");",
+                "CommandSupport.wrongArity(out, \"expireat\");",
+                "CommandSupport.wrongArity(out, \"pexpireat\");",
+                "CommandSupport.wrongArity(out, \"persist\");",
+                "CommandSupport.wrongArity(out, \"ttl\");",
+                "CommandSupport.wrongArity(out, \"pttl\");"
+        );
+        scanMethodForForbiddenText(
+                repoRoot,
+                commandDefaultsFile(repoRoot, "KeyCommands.java"),
+                "private void memory(",
+                knownDuplicates,
+                "if (request.argc() < 2)"
+        );
+        scanFileForForbiddenText(
+                repoRoot,
+                commandDefaultsFile(repoRoot, "StringCommands.java"),
+                knownDuplicates,
+                "CommandSupport.wrongArity(out, \"bitcount\");"
+        );
+        scanFileForForbiddenText(
+                repoRoot,
+                commandDefaultsFile(repoRoot, "ListCommands.java"),
+                knownDuplicates,
+                "CommandSupport.wrongArity(out, left ? \"lpush\" : \"rpush\");",
+                "CommandSupport.wrongArity(out, \"lrange\");",
+                "CommandSupport.wrongArity(out, left ? \"lpop\" : \"rpop\");"
+        );
+        scanFileForForbiddenText(
+                repoRoot,
+                commandDefaultsFile(repoRoot, "HashCommands.java"),
+                knownDuplicates,
+                "CommandSupport.wrongArity(out, \"hget\");",
+                "CommandSupport.wrongArity(out, \"hgetall\");",
+                "CommandSupport.wrongArity(out, \"hlen\");",
+                "CommandSupport.wrongArity(out, \"hdel\");"
+        );
+        scanFileForForbiddenText(
+                repoRoot,
+                commandDefaultsFile(repoRoot, "SetCommands.java"),
+                knownDuplicates,
+                "CommandSupport.wrongArity(out, \"sadd\");",
+                "CommandSupport.wrongArity(out, \"srem\");",
+                "CommandSupport.wrongArity(out, \"smembers\");",
+                "CommandSupport.wrongArity(out, \"sismember\");",
+                "CommandSupport.wrongArity(out, \"scard\");"
+        );
+        scanFileForForbiddenText(
+                repoRoot,
+                commandDefaultsFile(repoRoot, "HllCommands.java"),
+                knownDuplicates,
+                "CommandSupport.wrongArity(out, \"pfadd\");",
+                "CommandSupport.wrongArity(out, \"pfcount\");",
+                "CommandSupport.wrongArity(out, \"pfmerge\");"
+        );
+        scanFileForForbiddenText(
+                repoRoot,
+                commandDefaultsFile(repoRoot, "ZSetCommands.java"),
+                knownDuplicates,
+                "CommandSupport.wrongArity(out, \"zrevrange\");",
+                "CommandSupport.wrongArity(out, \"zremrangebyscore\");",
+                "CommandSupport.wrongArity(out, \"zremrangebyrank\");",
+                "CommandSupport.wrongArity(out, \"zrem\");"
+        );
+        scanFileForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/ServerCommandModule.java"),
+                knownDuplicates,
+                "out.error(\"ERR wrong number of arguments for 'info' command\");"
+        );
+
+        Assert.assertTrue(
+                "known duplicate outer-command arity checks remain:\n" + String.join("\n", knownDuplicates),
+                knownDuplicates.isEmpty()
+        );
     }
 
     @Test

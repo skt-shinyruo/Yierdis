@@ -60,11 +60,6 @@ final class ServerCommandModule implements CommandModule {
     }
 
     private void info(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
-        if (request.argc() != 1 && request.argc() != 2) {
-            out.error("ERR wrong number of arguments for 'info' command");
-            return;
-        }
         infoProvider.info(request, ctx);
     }
 
