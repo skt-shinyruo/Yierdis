@@ -1,5 +1,10 @@
 package yier.bubu.redis.memory.api;
 
+/**
+ * 在受限生命周期内访问稳定对象的当前内容。
+ * 视图沿用后端 owner 和访问模式；只读视图拒绝写入，关闭后任何内容访问都无效。
+ * 普通 resolve 的视图释放自身保留，resolvePinned 的视图不会替调用方 unpin。
+ */
 public interface NativeObjectView extends AutoCloseable {
     NativeHandle handle();
 

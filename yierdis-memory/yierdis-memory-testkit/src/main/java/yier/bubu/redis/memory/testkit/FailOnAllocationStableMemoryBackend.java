@@ -10,7 +10,7 @@ import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocationGrowth;
 import yier.bubu.redis.memory.api.NativeAllocationScope;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeAllocatorMetadataStats;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
@@ -22,20 +22,21 @@ import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.NativeReallocPolicy;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
+import yier.bubu.redis.memory.api.StableMemoryRegion;
 
-/** 用固定的分配序号注入一次可重复的 native 容量失败。 */
-public final class FailOnAllocationNativeAllocator implements NativeAllocator {
-    private final NativeAllocator delegate;
+public final class FailOnAllocationStableMemoryBackend implements StableMemoryBackend {
+    private final StableMemoryBackend delegate;
     private final AtomicLong attempts = new AtomicLong();
-    private final Map<Long, Integer> knownCapacities = new ConcurrentHashMap<>();
+    private final Map<NativeHandle, Integer> knownCapacities = new ConcurrentHashMap<>();
     private volatile long failAt = -1L;
 
-    public FailOnAllocationNativeAllocator(NativeAllocator delegate) {
+    public FailOnAllocationStableMemoryBackend(StableMemoryBackend delegate) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
     }
 
     public void failOnAllocation(long oneBasedIndex) {
-        if (oneBasedIndex <= 0) {
+        if (oneBasedIndex <= 0L) {
             throw new IllegalArgumentException("oneBasedIndex must be > 0");
         }
         failAt = oneBasedIndex;
@@ -54,11 +55,6 @@ public final class FailOnAllocationNativeAllocator implements NativeAllocator {
     }
 
     @Override
-    public void bindToCurrentThread() {
-        delegate.bindToCurrentThread();
-    }
-
-    @Override
     public NativeHandle allocate(NativeObjectKind kind, int size) {
         checkAllocationAttempt();
         NativeHandle handle = delegate.allocate(kind, size);
@@ -67,33 +63,32 @@ public final class FailOnAllocationNativeAllocator implements NativeAllocator {
     }
 
     @Override
-    public NativeHandle realloc(NativeHandle handle, int newSize, NativeReallocPolicy policy) {
+    public NativeHandle reallocate(NativeHandle handle, int newSize, NativeReallocPolicy policy) {
         Objects.requireNonNull(handle, "handle");
-        return NativeHandle.fromRaw(reallocRaw(handle.raw(), newSize, policy));
-    }
-
-    @Override
-    public long reallocRaw(long rawHandle, int newSize, NativeReallocPolicy policy) {
-        int currentCapacity = capacityOf(rawHandle);
+        int currentCapacity = capacityOf(handle);
         if (newSize > currentCapacity) {
             checkAllocationAttempt();
         }
-        long resized = delegate.reallocRaw(rawHandle, newSize, policy);
-        knownCapacities.remove(rawHandle);
+        NativeHandle resized = delegate.reallocate(handle, newSize, policy);
+        knownCapacities.remove(handle);
         rememberCapacity(resized, Math.max(newSize, currentCapacity));
         return resized;
     }
 
     @Override
-    public void free(NativeHandle handle) {
-        knownCapacities.remove(handle.raw());
-        delegate.free(handle);
+    public long allocatorId() {
+        return delegate.allocatorId();
     }
 
     @Override
-    public void freeRaw(long rawHandle) {
-        knownCapacities.remove(rawHandle);
-        delegate.freeRaw(rawHandle);
+    public void bindToCurrentThread() {
+        delegate.bindToCurrentThread();
+    }
+
+    @Override
+    public void free(NativeHandle handle) {
+        knownCapacities.remove(handle);
+        delegate.free(handle);
     }
 
     @Override
@@ -117,8 +112,23 @@ public final class FailOnAllocationNativeAllocator implements NativeAllocator {
     }
 
     @Override
+    public long estimateAllocationScopeBookkeepingBytes(int expectedAllocationCount) {
+        return delegate.estimateAllocationScopeBookkeepingBytes(expectedAllocationCount);
+    }
+
+    @Override
     public NativeObjectView resolve(NativeHandle handle, NativeAccessMode mode) {
         return delegate.resolve(handle, mode);
+    }
+
+    @Override
+    public NativeObjectView resolvePinned(NativeHandle handle, NativeAccessMode mode) {
+        return delegate.resolvePinned(handle, mode);
+    }
+
+    @Override
+    public StableMemoryRegion allocateRegion(String owner, int bytes) {
+        return delegate.allocateRegion(owner, bytes);
     }
 
     @Override
@@ -142,6 +152,11 @@ public final class FailOnAllocationNativeAllocator implements NativeAllocator {
     }
 
     @Override
+    public NativeAllocatorMetadataStats metadataStats() {
+        return delegate.metadataStats();
+    }
+
+    @Override
     public MemoryUsageSnapshot memoryUsage() {
         return delegate.memoryUsage();
     }
@@ -162,8 +177,8 @@ public final class FailOnAllocationNativeAllocator implements NativeAllocator {
     }
 
     @Override
-    public long estimateAllocationScopeBookkeepingBytes(int expectedAllocationCount) {
-        return delegate.estimateAllocationScopeBookkeepingBytes(expectedAllocationCount);
+    public long liveRegionCount() {
+        return delegate.liveRegionCount();
     }
 
     @Override
@@ -176,23 +191,23 @@ public final class FailOnAllocationNativeAllocator implements NativeAllocator {
         long attempt = attempts.incrementAndGet();
         if (attempt == failAt) {
             throw new NativeCapacityExceededException(
-                    "injected native allocation failure at attempt " + attempt
+                    "injected stable memory allocation failure at attempt " + attempt
             );
         }
     }
 
-    private int capacityOf(long rawHandle) {
-        Integer known = knownCapacities.get(rawHandle);
+    private int capacityOf(NativeHandle handle) {
+        Integer known = knownCapacities.get(handle);
         if (known != null) {
             return known;
         }
-        NativeObjectView view = delegate.resolveRaw(rawHandle, NativeAccessMode.READ_ONLY);
+        NativeObjectView view = delegate.resolve(handle, NativeAccessMode.READ_ONLY);
         if (view == null) {
             return 0;
         }
         try {
             int capacity = view.capacity();
-            rememberCapacity(rawHandle, capacity);
+            knownCapacities.put(handle, capacity);
             return capacity;
         } finally {
             view.close();
@@ -203,13 +218,9 @@ public final class FailOnAllocationNativeAllocator implements NativeAllocator {
         if (handle == null) {
             return;
         }
-        rememberCapacity(handle.raw(), fallback);
-    }
-
-    private void rememberCapacity(long rawHandle, int fallback) {
         int capacity = fallback;
         try {
-            NativeObjectView view = delegate.resolveRaw(rawHandle, NativeAccessMode.READ_ONLY);
+            NativeObjectView view = delegate.resolve(handle, NativeAccessMode.READ_ONLY);
             if (view != null) {
                 try {
                     capacity = view.capacity();
@@ -220,6 +231,6 @@ public final class FailOnAllocationNativeAllocator implements NativeAllocator {
         } catch (RuntimeException ignored) {
             // 测试替身可能不提供对象视图，此时用请求大小作为容量下界。
         }
-        knownCapacities.put(rawHandle, capacity);
+        knownCapacities.put(handle, capacity);
     }
 }
