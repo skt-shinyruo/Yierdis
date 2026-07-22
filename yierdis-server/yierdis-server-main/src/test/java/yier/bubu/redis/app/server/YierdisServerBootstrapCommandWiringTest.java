@@ -8,16 +8,11 @@ import org.junit.Test;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
-import yier.bubu.redis.execution.api.ClientMetadataSession;
-import yier.bubu.redis.execution.api.ConnectionStatsSession;
+import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
-import yier.bubu.redis.execution.api.DbIndexSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ProtocolNegotiationSession;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
-import yier.bubu.redis.execution.api.Session;
-import yier.bubu.redis.execution.api.TransactionSession;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.execution.engine.DefaultYierdisEngine;
 import yier.bubu.redis.execution.engine.YierdisEngine;
@@ -790,18 +785,20 @@ public class YierdisServerBootstrapCommandWiringTest {
         }
     }
 
-    private static final class EngineSession implements DbIndexSession,
-            ClientMetadataSession,
-            TransactionSession,
-            ConnectionStatsSession,
-            ProtocolNegotiationSession {
+    private static final class EngineSession implements CommandSession {
         private final TransactionState tx = new TransactionState() {
             private final List<ExecutionRequest> queue = new ArrayList<>();
             private boolean active;
+            private boolean aborted;
 
             @Override
             public synchronized boolean active() {
                 return active;
+            }
+
+            @Override
+            public synchronized boolean aborted() {
+                return aborted;
             }
 
             @Override
@@ -811,19 +808,26 @@ public class YierdisServerBootstrapCommandWiringTest {
             }
 
             @Override
+            public synchronized void markAborted() {
+                aborted = true;
+            }
+
+            @Override
             public synchronized void discard() {
                 for (ExecutionRequest request : queue) {
                     request.close();
                 }
                 queue.clear();
                 active = false;
+                aborted = false;
             }
 
             @Override
-            public synchronized void enqueue(ExecutionRequest request) {
+            public synchronized String tryEnqueue(ExecutionRequest request) {
                 if (request != null) {
                     queue.add(ByteArrayExecutionRequest.copyOf(request));
                 }
+                return null;
             }
 
             @Override
@@ -832,11 +836,25 @@ public class YierdisServerBootstrapCommandWiringTest {
             }
 
             @Override
+            public synchronized void forEachQueued(
+                    java.util.function.Consumer<? super ExecutionRequest> visitor
+            ) {
+                java.util.Objects.requireNonNull(visitor, "visitor");
+                queue.forEach(visitor);
+            }
+
+            @Override
             public synchronized List<ExecutionRequest> drain() {
                 List<ExecutionRequest> drained = new ArrayList<>(queue);
                 queue.clear();
                 active = false;
+                aborted = false;
                 return drained;
+            }
+
+            @Override
+            public synchronized void close() {
+                discard();
             }
         };
 
@@ -910,6 +928,11 @@ public class YierdisServerBootstrapCommandWiringTest {
 
                 @Override
                 public boolean inputDisabledByExecutor() {
+                    return false;
+                }
+
+                @Override
+                public boolean inputPausedByReply() {
                     return false;
                 }
 

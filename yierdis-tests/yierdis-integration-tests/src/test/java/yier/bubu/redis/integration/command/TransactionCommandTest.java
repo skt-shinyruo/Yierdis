@@ -294,12 +294,7 @@ public class TransactionCommandTest {
         });
     }
 
-    private static final class TestSession implements
-            yier.bubu.redis.execution.api.DbIndexSession,
-            yier.bubu.redis.execution.api.ClientMetadataSession,
-            yier.bubu.redis.execution.api.TransactionSession,
-            yier.bubu.redis.execution.api.ConnectionStatsSession,
-            yier.bubu.redis.execution.api.ProtocolNegotiationSession {
+    private static final class TestSession implements yier.bubu.redis.execution.api.CommandSession {
         private int dbIndex;
         private String clientName;
         private boolean authenticated;
@@ -350,6 +345,15 @@ public class TransactionCommandTest {
             return null;
         }
 
+        @Override
+        public int respVersion() {
+            return 2;
+        }
+
+        @Override
+        public void setRespVersion(int respVersion) {
+        }
+
         private TestTransactionState transactionState() {
             return tx;
         }
@@ -367,24 +371,25 @@ public class TransactionCommandTest {
 
         @Override
         public void begin() {
+            closeQueued();
             active = true;
             aborted = false;
-            queue.clear();
         }
 
         @Override
         public void discard() {
+            closeQueued();
             active = false;
             aborted = false;
-            queue.clear();
         }
 
         @Override
-        public void enqueue(ExecutionRequest request) {
+        public String tryEnqueue(ExecutionRequest request) {
             if (request == null) {
-                return;
+                return null;
             }
             queue.add(ByteArrayExecutionRequest.copyOf(request));
+            return null;
         }
 
         @Override
@@ -403,6 +408,12 @@ public class TransactionCommandTest {
         }
 
         @Override
+        public void forEachQueued(java.util.function.Consumer<? super ExecutionRequest> visitor) {
+            java.util.Objects.requireNonNull(visitor, "visitor");
+            queue.forEach(visitor);
+        }
+
+        @Override
         public List<ExecutionRequest> drain() {
             ArrayList<ExecutionRequest> out = new ArrayList<>(queue);
             queue.clear();
@@ -413,6 +424,18 @@ public class TransactionCommandTest {
 
         private ExecutionRequest queued(int index) {
             return queue.get(index);
+        }
+
+        @Override
+        public void close() {
+            discard();
+        }
+
+        private void closeQueued() {
+            for (ExecutionRequest request : queue) {
+                request.close();
+            }
+            queue.clear();
         }
     }
 }

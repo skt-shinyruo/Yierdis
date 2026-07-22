@@ -3,8 +3,8 @@ package yier.bubu.redis.protocol.resp.netty;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.util.ReferenceCountUtil;
+import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
-import yier.bubu.redis.execution.api.Session;
 
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -30,7 +30,7 @@ public final class RespProtocolErrorReplyHandler extends ChannelInboundHandlerAd
 
     public RespProtocolErrorReplyHandler(
             RedisReplyWriterFactory replyWriterFactory,
-            Function<ChannelHandlerContext, Session> sessionProvider,
+            Function<ChannelHandlerContext, CommandSession> sessionProvider,
             Predicate<ChannelHandlerContext> closingStateProvider,
             Consumer<ChannelHandlerContext> closeAfterReplyObserver
     ) {
@@ -45,7 +45,7 @@ public final class RespProtocolErrorReplyHandler extends ChannelInboundHandlerAd
 
     RespProtocolErrorReplyHandler(
             RedisReplyWriterFactory replyWriterFactory,
-            Function<ChannelHandlerContext, Session> sessionProvider,
+            Function<ChannelHandlerContext, CommandSession> sessionProvider,
             Predicate<ChannelHandlerContext> closingStateProvider,
             Consumer<ChannelHandlerContext> closeAfterReplyObserver,
             Consumer<Object> droppedMessageCloser

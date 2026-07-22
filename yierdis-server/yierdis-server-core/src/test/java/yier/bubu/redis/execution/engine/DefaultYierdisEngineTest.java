@@ -10,14 +10,9 @@ import yier.bubu.redis.command.kernel.CommandRegistry;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
-import yier.bubu.redis.execution.api.ClientMetadataSession;
-import yier.bubu.redis.execution.api.ConnectionStatsSession;
+import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
-import yier.bubu.redis.execution.api.DbIndexSession;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
-import yier.bubu.redis.execution.api.ProtocolNegotiationSession;
-import yier.bubu.redis.execution.api.Session;
-import yier.bubu.redis.execution.api.TransactionSession;
 import yier.bubu.redis.execution.api.TransactionState;
 
 import java.io.IOException;
@@ -145,7 +140,7 @@ public class DefaultYierdisEngineTest {
     }
 
     @Test
-    public void executeAcceptsNarrowCommandSessionCapabilities() {
+    public void executeAcceptsCompleteCommandSession() {
         CommandRegistry registry = CommandRegistries.from(
                 registration -> registration.register(
                         "LOCAL",
@@ -169,37 +164,6 @@ public class DefaultYierdisEngineTest {
         );
 
         Assert.assertEquals("DB_7", out.simpleStringValue);
-        Assert.assertNull(out.errorValue);
-    }
-
-    @Test
-    public void executeRejectsSessionWithoutCommandCapabilitiesBeforeCommandModulesRun() {
-        CommandRegistry registry = CommandRegistries.from(
-                registration -> registration.register(
-                        "LOCAL",
-                        CommandDescriptor.of(1, 0, 0, 0),
-                        CommandParsers.exactRequest(1, "local"),
-                        (request, ctx) -> ctx.out().simpleString("LOCAL_OK")
-                )
-        );
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
-        YierdisEngine engine = new DefaultYierdisEngine(processor, () -> {
-        });
-
-        CapturingReplyWriter out = new CapturingReplyWriter();
-        try {
-            engine.execute(
-                    new Session() {
-                    },
-                    ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of()),
-                    out
-            );
-            Assert.fail("expected IllegalArgumentException");
-        } catch (IllegalArgumentException e) {
-            Assert.assertEquals("YierdisEngine requires command session capabilities", e.getMessage());
-        }
-
-        Assert.assertNull(out.simpleStringValue);
         Assert.assertNull(out.errorValue);
     }
 
@@ -330,14 +294,15 @@ public class DefaultYierdisEngineTest {
         }
     }
 
-    private static final class NarrowEngineSession implements DbIndexSession,
-            ClientMetadataSession,
-            TransactionSession,
-            ConnectionStatsSession,
-            ProtocolNegotiationSession {
+    private static final class NarrowEngineSession implements CommandSession {
         private final TransactionState tx = new TransactionState() {
             @Override
             public boolean active() {
+                return false;
+            }
+
+            @Override
+            public boolean aborted() {
                 return false;
             }
 
@@ -346,11 +311,16 @@ public class DefaultYierdisEngineTest {
             }
 
             @Override
+            public void markAborted() {
+            }
+
+            @Override
             public void discard() {
             }
 
             @Override
-            public void enqueue(yier.bubu.redis.execution.api.ExecutionRequest request) {
+            public String tryEnqueue(yier.bubu.redis.execution.api.ExecutionRequest request) {
+                return null;
             }
 
             @Override
@@ -361,6 +331,16 @@ public class DefaultYierdisEngineTest {
             @Override
             public List<yier.bubu.redis.execution.api.ExecutionRequest> drain() {
                 return List.of();
+            }
+
+            @Override
+            public void forEachQueued(
+                    java.util.function.Consumer<? super yier.bubu.redis.execution.api.ExecutionRequest> visitor
+            ) {
+            }
+
+            @Override
+            public void close() {
             }
         };
 

@@ -1,8 +1,8 @@
 package yier.bubu.redis.execution.engine;
 
+import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
-import yier.bubu.redis.execution.api.Session;
 
 /**
  * Engine facade for command execution and owner-thread maintenance.
@@ -10,7 +10,7 @@ import yier.bubu.redis.execution.api.Session;
  * writer; the engine/command layer owns the command context construction.
  */
 public interface YierdisEngine extends AutoCloseable {
-    void execute(Session session, ExecutionRequest request, RedisReplyWriter out);
+    void execute(CommandSession session, ExecutionRequest request, RedisReplyWriter reply);
 
     void maintenanceTick();
 

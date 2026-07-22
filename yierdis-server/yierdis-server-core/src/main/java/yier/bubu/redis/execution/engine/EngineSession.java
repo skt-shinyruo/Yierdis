@@ -1,32 +1,21 @@
 package yier.bubu.redis.execution.engine;
 
-import yier.bubu.redis.execution.api.ClientMetadataSession;
-import yier.bubu.redis.execution.api.ConnectionStatsSession;
+import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
-import yier.bubu.redis.execution.api.DbIndexSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ProtocolNegotiationSession;
-import yier.bubu.redis.execution.api.ReplyPlan;
-import yier.bubu.redis.execution.api.ReplyPlans;
 import yier.bubu.redis.execution.api.TransactionState;
-import yier.bubu.redis.execution.api.TransactionSession;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Function;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
  * Engine-owned per-connection command session state.
  */
-public final class EngineSession implements
-        DbIndexSession,
-        ClientMetadataSession,
-        TransactionSession,
-        ConnectionStatsSession,
-        ProtocolNegotiationSession {
+public final class EngineSession implements CommandSession {
     private static final AtomicLong NEXT_CLIENT_ID = new AtomicLong(1);
 
     private final long clientId = NEXT_CLIENT_ID.getAndIncrement();
@@ -163,11 +152,6 @@ public final class EngineSession implements
         }
 
         @Override
-        public synchronized void enqueue(ExecutionRequest request) {
-            tryEnqueue(request);
-        }
-
-        @Override
         public synchronized String tryEnqueue(ExecutionRequest request) {
             if (request == null) {
                 return null;
@@ -208,21 +192,11 @@ public final class EngineSession implements
         }
 
         @Override
-        public synchronized ReplyPlan planExecReply(
-                Function<? super ExecutionRequest, ReplyPlan> planner
-        ) {
-            Objects.requireNonNull(planner, "planner");
-            long encodedElementBytes = 0L;
-            long retainedSourceBytes = 0L;
+        public synchronized void forEachQueued(Consumer<? super ExecutionRequest> visitor) {
+            Objects.requireNonNull(visitor, "visitor");
             for (ExecutionRequest request : queue) {
-                ReplyPlan child = planner.apply(request);
-                if (child == null || child.reserveMaximum()) {
-                    return ReplyPlan.maximum();
-                }
-                encodedElementBytes = saturatedAdd(encodedElementBytes, child.encodedUpperBoundBytes());
-                retainedSourceBytes = saturatedAdd(retainedSourceBytes, child.retainedSourceBytes());
+                visitor.accept(request);
             }
-            return ReplyPlans.array(queue.size(), encodedElementBytes, retainedSourceBytes);
         }
 
         @Override
@@ -233,6 +207,11 @@ public final class EngineSession implements
             aborted = false;
             queuedBytes = 0;
             return out;
+        }
+
+        @Override
+        public synchronized void close() {
+            discard();
         }
 
         private void closeOwnedRequests() {
@@ -249,11 +228,5 @@ public final class EngineSession implements
             queue.clear();
         }
 
-        private static long saturatedAdd(long left, long right) {
-            if (left < 0L || right < 0L || left > Long.MAX_VALUE - right) {
-                return Long.MAX_VALUE;
-            }
-            return left + right;
-        }
     }
 }

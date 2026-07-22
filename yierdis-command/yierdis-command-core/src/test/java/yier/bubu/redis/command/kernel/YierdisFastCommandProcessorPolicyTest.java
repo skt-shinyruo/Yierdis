@@ -10,19 +10,18 @@ import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandContext;
-import yier.bubu.redis.execution.api.CommandSessionCapabilities;
+import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.ReplyPlan;
-import yier.bubu.redis.execution.api.ReplyPlans;
 import yier.bubu.redis.execution.api.TransactionState;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Function;
+import java.util.function.Consumer;
 
 public class YierdisFastCommandProcessorPolicyTest {
     @Test
@@ -269,15 +268,10 @@ public class YierdisFastCommandProcessorPolicyTest {
     }
 
     private static CommandContext context(TestSession session, CapturingReplyWriter out) {
-        return new CommandContext(CommandSessionCapabilities.of(session, session, session, session, session), out);
+        return new CommandContext(session, out);
     }
 
-    private static final class TestSession implements
-            yier.bubu.redis.execution.api.DbIndexSession,
-            yier.bubu.redis.execution.api.ClientMetadataSession,
-            yier.bubu.redis.execution.api.TransactionSession,
-            yier.bubu.redis.execution.api.ConnectionStatsSession,
-            yier.bubu.redis.execution.api.ProtocolNegotiationSession {
+    private static final class TestSession implements CommandSession {
         private final TestTransactionState tx = new TestTransactionState();
         private int dbIndex;
 
@@ -324,6 +318,15 @@ public class YierdisFastCommandProcessorPolicyTest {
             return null;
         }
 
+        @Override
+        public int respVersion() {
+            return 2;
+        }
+
+        @Override
+        public void setRespVersion(int respVersion) {
+        }
+
         private TestTransactionState transactionState() {
             return tx;
         }
@@ -341,23 +344,24 @@ public class YierdisFastCommandProcessorPolicyTest {
 
         @Override
         public void begin() {
+            closeQueued();
             active = true;
             aborted = false;
-            queue.clear();
         }
 
         @Override
         public void discard() {
+            closeQueued();
             active = false;
             aborted = false;
-            queue.clear();
         }
 
         @Override
-        public void enqueue(ExecutionRequest request) {
+        public String tryEnqueue(ExecutionRequest request) {
             if (request != null) {
                 queue.add(ByteArrayExecutionRequest.copyOf(request));
             }
+            return null;
         }
 
         @Override
@@ -376,18 +380,10 @@ public class YierdisFastCommandProcessorPolicyTest {
         }
 
         @Override
-        public ReplyPlan planExecReply(Function<? super ExecutionRequest, ReplyPlan> planner) {
-            long encodedElementBytes = 0L;
-            long retainedSourceBytes = 0L;
+        public void forEachQueued(Consumer<? super ExecutionRequest> visitor) {
             for (ExecutionRequest request : queue) {
-                ReplyPlan child = planner.apply(request);
-                if (child == null || child.reserveMaximum()) {
-                    return ReplyPlan.maximum();
-                }
-                encodedElementBytes = addSaturating(encodedElementBytes, child.encodedUpperBoundBytes());
-                retainedSourceBytes = addSaturating(retainedSourceBytes, child.retainedSourceBytes());
+                visitor.accept(request);
             }
-            return ReplyPlans.array(queue.size(), encodedElementBytes, retainedSourceBytes);
         }
 
         @Override
@@ -403,8 +399,16 @@ public class YierdisFastCommandProcessorPolicyTest {
             queue.add(request);
         }
 
-        private static long addSaturating(long left, long right) {
-            return left > Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
+        @Override
+        public void close() {
+            discard();
+        }
+
+        private void closeQueued() {
+            for (ExecutionRequest request : queue) {
+                request.close();
+            }
+            queue.clear();
         }
     }
 

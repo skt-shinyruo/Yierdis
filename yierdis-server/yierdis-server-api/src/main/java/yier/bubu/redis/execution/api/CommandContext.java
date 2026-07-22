@@ -11,16 +11,16 @@ import yier.bubu.redis.common.command.MutationContext;
  * server session semantics.
  */
 public final class CommandContext {
-    private CommandSessionCapabilities session;
+    private CommandSession session;
     private RedisReplyWriter out;
     private MutationContext mutationContext;
 
-    public CommandContext(CommandSessionCapabilities session, RedisReplyWriter out) {
+    public CommandContext(CommandSession session, RedisReplyWriter out) {
         this(session, out, MutationContext.none());
     }
 
     public CommandContext(
-            CommandSessionCapabilities session,
+            CommandSession session,
             RedisReplyWriter out,
             MutationContext mutationContext
     ) {
@@ -29,12 +29,12 @@ public final class CommandContext {
         this.mutationContext = Objects.requireNonNull(mutationContext, "mutationContext");
     }
 
-    public CommandContext reset(CommandSessionCapabilities session, RedisReplyWriter out) {
+    public CommandContext reset(CommandSession session, RedisReplyWriter out) {
         return reset(session, out, MutationContext.none());
     }
 
     public CommandContext reset(
-            CommandSessionCapabilities session,
+            CommandSession session,
             RedisReplyWriter out,
             MutationContext mutationContext
     ) {
@@ -44,28 +44,28 @@ public final class CommandContext {
         return this;
     }
 
-    public CommandSessionCapabilities sessionCapabilities() {
+    public CommandSession commandSession() {
         return session;
     }
 
     public DbIndexSession dbIndexSession() {
-        return session.dbIndexSession();
+        return session;
     }
 
     public ClientMetadataSession clientMetadataSession() {
-        return session.clientMetadataSession();
+        return session;
     }
 
     public TransactionSession transactionSession() {
-        return session.transactionSession();
+        return session;
     }
 
     public ConnectionStatsSession connectionStatsSession() {
-        return session.connectionStatsSession();
+        return session;
     }
 
     public ProtocolNegotiationSession protocolNegotiationSession() {
-        return session.protocolNegotiationSession();
+        return session;
     }
 
     public RedisReplyWriter out() {

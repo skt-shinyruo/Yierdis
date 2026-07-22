@@ -11,13 +11,12 @@
  *     <li>ReplySink - API. Audience: command/storage value streaming adapters and reply writer implementations.</li>
  *     <li>RedisReplyWriter - API. Audience: command handlers and server reply implementations that need the explicit Redis command reply model.</li>
  *     <li>RedisReplyWriterFactory - API. Audience: executor, server/protocol adapter composition, tests.</li>
- *     <li>Session - API. Audience: executor, engine, server session implementations, tests.</li>
+ *     <li>CommandSession - API。受众：executor、engine、server 会话实现与测试。</li>
  *     <li>DbIndexSession - API. Audience: DB routing and SELECT command handlers.</li>
  *     <li>ClientMetadataSession - API. Audience: CLIENT, AUTH, and server HELLO command handlers.</li>
  *     <li>TransactionSession - API. Audience: transaction command handlers and command processor queueing.</li>
  *     <li>ConnectionStatsSession - API. Audience: server INFO/STATS views.</li>
  *     <li>ProtocolNegotiationSession - API. Audience: protocol reply writers and HELLO command handlers.</li>
- *     <li>CommandSessionCapabilities - API. Audience: engine and command context construction requiring the narrow command session surface.</li>
  *     <li>DbIndexProvider - compatibility/deprecated. Audience: legacy embedders only; command routing uses DbIndexSession.</li>
  *     <li>ConnectionStatsView - API. Audience: server INFO/STATS views, executor/server observability, tests.</li>
  *     <li>TransactionState - API. Audience: command transaction handlers, engine sessions, server sessions, tests.</li>

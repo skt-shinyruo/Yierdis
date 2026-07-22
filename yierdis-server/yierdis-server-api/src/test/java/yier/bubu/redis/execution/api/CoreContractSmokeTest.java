@@ -8,9 +8,9 @@ import java.util.List;
 
 public class CoreContractSmokeTest {
     @Test
-    public void commandContextStoresNarrowSessionCapabilities() throws Exception {
+    public void commandContextStoresCompleteCommandSession() throws Exception {
         Assert.assertEquals(
-                "yier.bubu.redis.execution.api.CommandSessionCapabilities",
+                "yier.bubu.redis.execution.api.CommandSession",
                 CommandContext.class.getDeclaredField("session").getType().getName()
         );
     }
@@ -30,10 +30,7 @@ public class CoreContractSmokeTest {
         RedisReplyWriter writer = noopWriter();
         NarrowSession session = new NarrowSession();
 
-        CommandContext ctx = new CommandContext(
-                CommandSessionCapabilities.of(session, session, session, session, session),
-                writer
-        );
+        CommandContext ctx = new CommandContext(session, writer);
 
         ctx.dbIndexSession().setDbIndex(2);
         ctx.clientMetadataSession().setClientName(" client ");
@@ -72,30 +69,11 @@ public class CoreContractSmokeTest {
     }
 
     @Test
-    public void commandSessionCapabilitiesDoesNotKeepServerSessionFactory() {
-        for (Method method : CommandSessionCapabilities.class.getDeclaredMethods()) {
-            if (!method.getName().equals("from")) {
-                continue;
-            }
-            for (Class<?> parameterType : method.getParameterTypes()) {
-                Assert.assertNotEquals(
-                        "CommandSessionCapabilities must not keep the deleted aggregate-session factory overload",
-                        "yier.bubu.redis.execution.api.ServerSession",
-                        parameterType.getName()
-                );
-            }
-        }
-    }
-
-    @Test
     public void contractTypesComposeWithoutServerSessionAggregate() {
         RedisReplyWriter writer = noopWriter();
         NarrowSession session = new NarrowSession();
 
-        CommandContext ctx = new CommandContext(
-                CommandSessionCapabilities.of(session, session, session, session, session),
-                writer
-        );
+        CommandContext ctx = new CommandContext(session, writer);
 
         session.setDbIndex(4);
         session.setClientName("client");
@@ -212,14 +190,15 @@ public class CoreContractSmokeTest {
         };
     }
 
-    private static final class NarrowSession implements DbIndexSession,
-            ClientMetadataSession,
-            TransactionSession,
-            ConnectionStatsSession,
-            ProtocolNegotiationSession {
+    private static final class NarrowSession implements CommandSession {
         private final TransactionState tx = new TransactionState() {
             @Override
             public boolean active() {
+                return false;
+            }
+
+            @Override
+            public boolean aborted() {
                 return false;
             }
 
@@ -232,7 +211,12 @@ public class CoreContractSmokeTest {
             }
 
             @Override
-            public void enqueue(ExecutionRequest request) {
+            public void markAborted() {
+            }
+
+            @Override
+            public String tryEnqueue(ExecutionRequest request) {
+                return null;
             }
 
             @Override
@@ -243,6 +227,14 @@ public class CoreContractSmokeTest {
             @Override
             public List<ExecutionRequest> drain() {
                 return List.of();
+            }
+
+            @Override
+            public void forEachQueued(java.util.function.Consumer<? super ExecutionRequest> visitor) {
+            }
+
+            @Override
+            public void close() {
             }
         };
 
