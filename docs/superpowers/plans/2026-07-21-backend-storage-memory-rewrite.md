@@ -2151,7 +2151,7 @@ All object-table/page/defrag code uses this package-private codec. No method acc
 
 - [ ] **Step 5: Scope every public allocator operation before local lookup**
 
-Make `YierdisStableNativeAllocator` package-private, implement `StableMemoryBackend`, accept `long allocatorId` and `MemoryOwner` in its constructor, and use these helpers at the first line of every handle-taking operation:
+Keep `YierdisStableNativeAllocator` as the internal stable-object engine; `YierdisFfmStableMemoryBackend` is the sole complete `StableMemoryBackend` facade. Pass `allocatorId` and `MemoryOwner` to the allocator, and defer final package-private visibility for internal FFM classes until Task 4 has migrated downstream imports.
 
 ```java
 private NativeHandle publicHandle(long localRaw) {
