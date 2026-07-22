@@ -1,7 +1,7 @@
 package yier.bubu.redis.storage.api;
 
 /**
- * DB 的语义操作边界；运行期生命周期与可选维护能力由独立接口声明。
+ * DB 的语义操作边界，提供读取、写入、过期、内存诊断、数据库管理与健康状态视图。
  */
 public interface DbEngine {
     DbReads reads();
