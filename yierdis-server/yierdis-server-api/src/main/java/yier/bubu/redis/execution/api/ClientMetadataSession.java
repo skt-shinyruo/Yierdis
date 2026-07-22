@@ -3,7 +3,7 @@ package yier.bubu.redis.execution.api;
 /**
  * Connection-scoped client metadata and AUTH state.
  */
-public interface ClientMetadataSession extends Session {
+public interface ClientMetadataSession {
     long clientId();
 
     String clientName();

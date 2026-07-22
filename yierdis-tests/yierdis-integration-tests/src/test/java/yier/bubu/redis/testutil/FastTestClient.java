@@ -5,7 +5,7 @@ import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandContext;
-import yier.bubu.redis.execution.api.CommandSessionCapabilities;
+import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.TransactionState;
@@ -23,13 +23,13 @@ import java.util.Objects;
  */
 public final class FastTestClient implements AutoCloseable {
     private final YierdisFastCommandProcessor processor;
-    private final yier.bubu.redis.execution.api.Session session;
+    private final CommandSession session;
 
     public FastTestClient(YierdisFastCommandProcessor processor) {
         this(processor, null);
     }
 
-    public FastTestClient(YierdisFastCommandProcessor processor, yier.bubu.redis.execution.api.Session session) {
+    public FastTestClient(YierdisFastCommandProcessor processor, CommandSession session) {
         Objects.requireNonNull(processor, "processor");
         this.processor = processor;
         this.session = session != null ? session : new DefaultTestSession();
@@ -47,7 +47,7 @@ public final class FastTestClient implements AutoCloseable {
             processor.execute(
                     request,
                     new CommandContext(
-                            CommandSessionCapabilities.from(session),
+                            session,
                             writer,
                             MutationContext.of(request)
                     )
@@ -316,12 +316,7 @@ public final class FastTestClient implements AutoCloseable {
         }
     }
 
-    private static final class DefaultTestSession implements
-            yier.bubu.redis.execution.api.DbIndexSession,
-            yier.bubu.redis.execution.api.ClientMetadataSession,
-            yier.bubu.redis.execution.api.TransactionSession,
-            yier.bubu.redis.execution.api.ConnectionStatsSession,
-            yier.bubu.redis.execution.api.ProtocolNegotiationSession {
+    private static final class DefaultTestSession implements CommandSession {
         private int dbIndex;
         private String clientName;
         private boolean authenticated;
@@ -371,6 +366,15 @@ public final class FastTestClient implements AutoCloseable {
         public yier.bubu.redis.execution.api.ConnectionStatsView connectionStats() {
             return null;
         }
+
+        @Override
+        public int respVersion() {
+            return 2;
+        }
+
+        @Override
+        public void setRespVersion(int respVersion) {
+        }
     }
 
     private static final class DefaultTransactionState implements TransactionState {
@@ -385,24 +389,25 @@ public final class FastTestClient implements AutoCloseable {
 
         @Override
         public synchronized void begin() {
+            closeQueued();
             active = true;
             aborted = false;
-            queue.clear();
         }
 
         @Override
         public synchronized void discard() {
+            closeQueued();
             active = false;
             aborted = false;
-            queue.clear();
         }
 
         @Override
-        public synchronized void enqueue(ExecutionRequest request) {
+        public synchronized String tryEnqueue(ExecutionRequest request) {
             if (request == null) {
-                return;
+                return null;
             }
             queue.add(ByteArrayExecutionRequest.copyOf(request));
+            return null;
         }
 
         @Override
@@ -421,12 +426,32 @@ public final class FastTestClient implements AutoCloseable {
         }
 
         @Override
+        public synchronized void forEachQueued(
+                java.util.function.Consumer<? super ExecutionRequest> visitor
+        ) {
+            Objects.requireNonNull(visitor, "visitor");
+            queue.forEach(visitor);
+        }
+
+        @Override
         public synchronized List<ExecutionRequest> drain() {
             ArrayList<ExecutionRequest> out = new ArrayList<>(queue);
             queue.clear();
             active = false;
             aborted = false;
             return out;
+        }
+
+        @Override
+        public synchronized void close() {
+            discard();
+        }
+
+        private void closeQueued() {
+            for (ExecutionRequest request : queue) {
+                request.close();
+            }
+            queue.clear();
         }
     }
 }

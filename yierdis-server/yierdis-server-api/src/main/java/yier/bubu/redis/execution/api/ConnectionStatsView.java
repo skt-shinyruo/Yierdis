@@ -10,9 +10,7 @@ public interface ConnectionStatsView {
 
     boolean inputDisabledByExecutor();
 
-    default boolean inputPausedByReply() {
-        return false;
-    }
+    boolean inputPausedByReply();
 
     boolean closing();
 

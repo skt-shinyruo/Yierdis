@@ -5,12 +5,14 @@ import org.junit.Test;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.TransactionState;
 
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -144,26 +146,36 @@ public class EngineSessionTest {
     }
 
     @Test
-    public void transactionPlansExecEnvelopeWithoutDrainingOwnedRequests() {
+    public void forEachQueuedPlansWithoutTransferringOwnership() {
         EngineSession session = new EngineSession(4, 64);
         TransactionState tx = session.transaction();
         tx.begin();
-        Assert.assertNull(tx.tryEnqueue(ByteArrayExecutionRequest.fromUtf8("FIRST", List.of())));
-        Assert.assertNull(tx.tryEnqueue(ByteArrayExecutionRequest.fromUtf8("SECOND", List.of())));
+        ExecutionRequest request = request("SET", "k", "v");
+        Assert.assertNull(tx.tryEnqueue(request));
 
-        AtomicInteger index = new AtomicInteger();
-        ReplyPlan envelope = tx.planExecReply(request -> index.getAndIncrement() == 0
-                ? ReplyPlan.exact(5L, 2L)
-                : ReplyPlan.exact(7L, 3L));
+        java.util.List<ExecutionRequest> seen = new java.util.ArrayList<>();
+        tx.forEachQueued(seen::add);
 
-        Assert.assertEquals(ReplyPlan.exact(16L, 5L), envelope);
-        Assert.assertTrue(tx.active());
-        Assert.assertEquals(2, tx.size());
-        Assert.assertEquals(
-                ReplyPlan.maximum(),
-                tx.planExecReply(request -> ReplyPlan.maximum())
-        );
+        Assert.assertEquals(1, seen.size());
+        Assert.assertEquals(1, tx.size());
         tx.discard();
+        request.close();
+    }
+
+    @Test
+    public void closeReleasesQueuedRequestsExactlyOnce() {
+        EngineSession session = new EngineSession(4, 64);
+        TransactionState tx = session.transaction();
+        tx.begin();
+        CountingExecutionRequest request = new CountingExecutionRequest("SET", "k", "v");
+        Assert.assertNull(tx.tryEnqueue(request));
+
+        tx.close();
+        tx.close();
+
+        Assert.assertEquals(1, request.retainedCloseCount());
+        Assert.assertFalse(tx.active());
+        Assert.assertEquals(0, tx.size());
     }
 
     @Test
@@ -189,6 +201,11 @@ public class EngineSessionTest {
     ) implements ConnectionStatsView {
         @Override
         public boolean inputDisabledByExecutor() {
+            return false;
+        }
+
+        @Override
+        public boolean inputPausedByReply() {
             return false;
         }
 
@@ -313,6 +330,90 @@ public class EngineSessionTest {
         private final AtomicInteger references = new AtomicInteger(1);
         private final AtomicInteger retainCalls = new AtomicInteger();
         private final AtomicInteger finalReleases = new AtomicInteger();
+    }
+
+    private static ExecutionRequest request(String command, String... args) {
+        String[] values = new String[args.length + 1];
+        values[0] = command;
+        System.arraycopy(args, 0, values, 1, args.length);
+        return new CountingExecutionRequest(values);
+    }
+
+    private static final class CountingExecutionRequest implements ExecutionRequest {
+        private final byte[][] argv;
+        private final AtomicInteger retainedCloseCount;
+        private final boolean retained;
+        private final AtomicBoolean closed = new AtomicBoolean();
+
+        private CountingExecutionRequest(String... args) {
+            this(
+                    Arrays.stream(args)
+                            .map(value -> value == null ? null : value.getBytes(StandardCharsets.UTF_8))
+                            .toArray(byte[][]::new),
+                    new AtomicInteger(),
+                    false
+            );
+        }
+
+        private CountingExecutionRequest(byte[][] argv, AtomicInteger retainedCloseCount, boolean retained) {
+            this.argv = argv;
+            this.retainedCloseCount = retainedCloseCount;
+            this.retained = retained;
+        }
+
+        private int retainedCloseCount() {
+            return retainedCloseCount.get();
+        }
+
+        @Override
+        public int argc() {
+            return argv.length;
+        }
+
+        @Override
+        public boolean isNull(int index) {
+            return argv[index] == null;
+        }
+
+        @Override
+        public int len(int index) {
+            return argv[index] == null ? -1 : argv[index].length;
+        }
+
+        @Override
+        public byte byteAt(int index, int offset) {
+            return argv[index][offset];
+        }
+
+        @Override
+        public void copyToByteArray(int index, byte[] dst, int dstOff) {
+            System.arraycopy(argv[index], 0, dst, dstOff, argv[index].length);
+        }
+
+        @Override
+        public byte[] toByteArray(int index) {
+            return argv[index] == null ? null : argv[index].clone();
+        }
+
+        @Override
+        public int retainedBytes() {
+            return Arrays.stream(argv)
+                    .filter(Objects::nonNull)
+                    .mapToInt(value -> value.length)
+                    .sum();
+        }
+
+        @Override
+        public ExecutionRequest retain() {
+            return new CountingExecutionRequest(argv, retainedCloseCount, true);
+        }
+
+        @Override
+        public void close() {
+            if (retained && closed.compareAndSet(false, true)) {
+                retainedCloseCount.incrementAndGet();
+            }
+        }
     }
 
     private static final class RetainedTrackingExecutionRequest implements ExecutionRequest {

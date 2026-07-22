@@ -677,8 +677,12 @@ public class ArchitectureBoundaryTest {
         Assert.assertTrue("缺少 YierdisEngine.java，无法约束 engine 执行边界", Files.isRegularFile(engineFile));
         String engineSource = Files.readString(engineFile, StandardCharsets.UTF_8);
         Assert.assertTrue(
-                "YierdisEngine public execution boundary must expose Session + ExecutionRequest + RedisReplyWriter",
-                engineSource.contains("void execute(Session session, ExecutionRequest request, RedisReplyWriter out);")
+                "YierdisEngine public execution boundary must expose CommandSession + ExecutionRequest + RedisReplyWriter",
+                engineSource.contains("void execute(CommandSession session, ExecutionRequest request, RedisReplyWriter")
+        );
+        Assert.assertFalse(
+                "YierdisEngine must not import or reference the deleted marker session",
+                engineSource.contains("execution.api." + "Session")
         );
         Assert.assertFalse(
                 "YierdisEngine public API must not expose CommandContext compatibility overloads",
@@ -691,8 +695,12 @@ public class ArchitectureBoundaryTest {
         Assert.assertTrue("缺少 CommandExecutionEngine.java，无法约束 executor 执行边界", Files.isRegularFile(executorEngineFile));
         String executorEngineSource = Files.readString(executorEngineFile, StandardCharsets.UTF_8);
         Assert.assertTrue(
-                "CommandExecutionEngine must accept Session + ExecutionRequest + RedisReplyWriter",
-                executorEngineSource.contains("void execute(Session session, ExecutionRequest request, RedisReplyWriter out);")
+                "CommandExecutionEngine must accept CommandSession + ExecutionRequest + RedisReplyWriter",
+                executorEngineSource.contains("void execute(CommandSession session, ExecutionRequest request, RedisReplyWriter")
+        );
+        Assert.assertFalse(
+                "CommandExecutionEngine must not import or reference the deleted marker session",
+                executorEngineSource.contains("execution.api." + "Session")
         );
         Assert.assertFalse(
                 "executor-core execution seam must not expose CommandContext",
@@ -1315,6 +1323,9 @@ public class ArchitectureBoundaryTest {
         ).normalize();
 
         Path serverSessionFile = apiPackage.resolve("ServerSession.java");
+        Path markerSessionFile = apiPackage.resolve("Session.java");
+        Path commandSessionFile = apiPackage.resolve("CommandSession.java");
+        Path capabilityAdapterFile = apiPackage.resolve("Command" + "SessionCapabilities.java");
         Path dbIndexSessionFile = apiPackage.resolve("DbIndexSession.java");
         Path clientMetadataSessionFile = apiPackage.resolve("ClientMetadataSession.java");
         Path transactionSessionFile = apiPackage.resolve("TransactionSession.java");
@@ -1325,14 +1336,17 @@ public class ArchitectureBoundaryTest {
                 clientMetadataSessionFile,
                 transactionSessionFile,
                 connectionStatsSessionFile,
-                protocolNegotiationSessionFile
+                protocolNegotiationSessionFile,
+                commandSessionFile
         )) {
             Assert.assertTrue("缺少拆分后的 session 能力接口: " + relativePath(repoRoot, required), Files.isRegularFile(required));
         }
         Assert.assertFalse(
-                "ServerSession aggregate must be deleted; use narrow session capabilities or CommandSessionCapabilities",
+                "ServerSession aggregate must be deleted; use CommandSession",
                 Files.exists(serverSessionFile)
         );
+        Assert.assertFalse("marker Session must be deleted", Files.exists(markerSessionFile));
+        Assert.assertFalse("capability adapter must be deleted", Files.exists(capabilityAdapterFile));
 
         String protocolNegotiationSession = Files.readString(protocolNegotiationSessionFile, StandardCharsets.UTF_8);
         Assert.assertTrue(
@@ -1364,11 +1378,12 @@ public class ArchitectureBoundaryTest {
         Assert.assertTrue("DbIndexSession must own DB index writes", dbIndexSession.contains("void setDbIndex(int dbIndex)"));
         Assert.assertFalse("DbIndexSession must not own RESP version", dbIndexSession.contains("respVersion("));
 
-        Path commandSessionCapabilitiesFile = apiPackage.resolve("CommandSessionCapabilities.java");
-        String commandSessionCapabilities = Files.readString(commandSessionCapabilitiesFile, StandardCharsets.UTF_8);
-        Assert.assertFalse(
-                "CommandSessionCapabilities must not keep from(ServerSession)",
-                commandSessionCapabilities.contains("from(ServerSession")
+        String commandSession = Files.readString(commandSessionFile, StandardCharsets.UTF_8).replaceAll("\\s+", " ");
+        Assert.assertTrue(
+                "CommandSession must compose every connection capability",
+                commandSession.contains(
+                        "extends DbIndexSession, ClientMetadataSession, TransactionSession, ConnectionStatsSession, ProtocolNegotiationSession"
+                )
         );
 
         Path commandContextFile = apiPackage.resolve("CommandContext.java");
@@ -1387,10 +1402,8 @@ public class ArchitectureBoundaryTest {
         ).normalize();
         String engineSession = Files.readString(engineSessionFile, StandardCharsets.UTF_8).replaceAll("\\s+", " ");
         Assert.assertTrue(
-                "EngineSession must implement narrow session capabilities directly",
-                engineSession.contains(
-                        "implements DbIndexSession, ClientMetadataSession, TransactionSession, ConnectionStatsSession, ProtocolNegotiationSession"
-                )
+                "EngineSession must implement the complete command session",
+                engineSession.contains("implements CommandSession")
         );
 
         Path respFactoryFile = repoRoot.resolve(
@@ -1399,8 +1412,16 @@ public class ArchitectureBoundaryTest {
         Assert.assertTrue("缺少 RespReplyWriterFactory.java", Files.isRegularFile(respFactoryFile));
         String respFactory = Files.readString(respFactoryFile, StandardCharsets.UTF_8);
         Assert.assertTrue(
-                "RESP writer factory should depend on ProtocolNegotiationSession, not the full ServerSession",
-                respFactory.contains("ProtocolNegotiationSession")
+                "RESP writer factory must require the complete command session",
+                respFactory.contains("newWriter(CommandSession session, BytesSink out)")
+        );
+        Assert.assertFalse(
+                "RESP writer factory must not retain a session-free overload",
+                respFactory.contains("newWriter(BytesSink")
+        );
+        Assert.assertFalse(
+                "RESP writer factory must not retain the deleted marker-session overload",
+                respFactory.contains("newWriter(" + "Session")
         );
         Assert.assertFalse(
                 "RESP writer factory must not require full ServerSession just to read RESP version",

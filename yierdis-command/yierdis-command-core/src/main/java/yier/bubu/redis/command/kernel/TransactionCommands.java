@@ -7,6 +7,7 @@ import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.ReplyPlan;
+import yier.bubu.redis.execution.api.ReplyPlans;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.TransactionState;
 
@@ -93,7 +94,7 @@ final class TransactionCommands implements CommandModule {
         }
 
         // envelope 必须在 drain 之前完成；容量不足时 executor 才能安全重试同一个 EXEC。
-        out.requireReplyEnvelope(tx.planExecReply(replyPlanner));
+        out.requireReplyEnvelope(planExecReply(tx));
 
         List<ExecutionRequest> queued = tx.drain();
         int nextOwnedIndex = 0;
@@ -106,7 +107,7 @@ final class TransactionCommands implements CommandModule {
                 nextOwnedIndex++;
                 try (replay) {
                     CommandContext replayCtx = new CommandContext(
-                            ctx.sessionCapabilities(),
+                            ctx.commandSession(),
                             out,
                             MutationContext.of(replay)
                     );
@@ -124,6 +125,33 @@ final class TransactionCommands implements CommandModule {
         } finally {
             closeRemainingRequests(queued, nextOwnedIndex, replayFailure);
         }
+    }
+
+    private ReplyPlan planExecReply(TransactionState tx) {
+        long[] totals = new long[2];
+        boolean[] maximum = new boolean[1];
+        tx.forEachQueued(request -> {
+            if (maximum[0]) {
+                return;
+            }
+            ReplyPlan child = replyPlanner.apply(request);
+            if (child == null || child.reserveMaximum()) {
+                maximum[0] = true;
+                return;
+            }
+            totals[0] = saturatedAdd(totals[0], child.encodedUpperBoundBytes());
+            totals[1] = saturatedAdd(totals[1], child.retainedSourceBytes());
+        });
+        return maximum[0]
+                ? ReplyPlan.maximum()
+                : ReplyPlans.array(tx.size(), totals[0], totals[1]);
+    }
+
+    private static long saturatedAdd(long left, long right) {
+        if (left < 0L || right < 0L || left > Long.MAX_VALUE - right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 
     private static void closeRemainingRequests(

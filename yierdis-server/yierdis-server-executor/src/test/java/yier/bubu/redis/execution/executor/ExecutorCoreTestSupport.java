@@ -2,12 +2,14 @@ package yier.bubu.redis.execution.executor;
 
 import org.junit.Assert;
 import yier.bubu.redis.bytes.BytesSink;
+import yier.bubu.redis.execution.api.CommandSession;
+import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.ReplyReservationSink;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
-import yier.bubu.redis.execution.api.Session;
+import yier.bubu.redis.execution.api.TransactionState;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -18,6 +20,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 final class ExecutorCoreTestSupport {
     private ExecutorCoreTestSupport() {
@@ -49,7 +52,7 @@ final class ExecutorCoreTestSupport {
     }
 
     static RedisReplyWriterFactory simpleReplyWriterFactory() {
-        return SimpleReplyWriter::new;
+        return (session, out) -> new SimpleReplyWriter(out);
     }
 
     static CommandExecutionEngine simpleCommandEngine() {
@@ -88,7 +91,7 @@ final class ExecutorCoreTestSupport {
 
 final class TestConnection implements ExecutionConnection {
     private final String connectionId;
-    private final Session session = new TestSession();
+    private final CommandSession session = new TestSession();
     private final ExecutionConnectionContext context;
 
     TestConnection(String connectionId) {
@@ -106,7 +109,7 @@ final class TestConnection implements ExecutionConnection {
     }
 
     @Override
-    public Session session() {
+    public CommandSession session() {
         return session;
     }
 
@@ -120,7 +123,107 @@ final class TestConnection implements ExecutionConnection {
         return context.markClosing();
     }
 
-    private static final class TestSession implements Session {
+    private static final class TestSession implements CommandSession {
+        private final TransactionState transaction = new TestTransactionState();
+
+        @Override
+        public int dbIndex() {
+            return 0;
+        }
+
+        @Override
+        public void setDbIndex(int dbIndex) {
+        }
+
+        @Override
+        public long clientId() {
+            return 1L;
+        }
+
+        @Override
+        public String clientName() {
+            return null;
+        }
+
+        @Override
+        public void setClientName(String clientName) {
+        }
+
+        @Override
+        public boolean authenticated() {
+            return false;
+        }
+
+        @Override
+        public void setAuthenticated(boolean authenticated) {
+        }
+
+        @Override
+        public TransactionState transaction() {
+            return transaction;
+        }
+
+        @Override
+        public ConnectionStatsView connectionStats() {
+            return null;
+        }
+
+        @Override
+        public int respVersion() {
+            return 2;
+        }
+
+        @Override
+        public void setRespVersion(int respVersion) {
+        }
+    }
+
+    private static final class TestTransactionState implements TransactionState {
+        @Override
+        public boolean active() {
+            return false;
+        }
+
+        @Override
+        public boolean aborted() {
+            return false;
+        }
+
+        @Override
+        public void begin() {
+        }
+
+        @Override
+        public void markAborted() {
+        }
+
+        @Override
+        public String tryEnqueue(ExecutionRequest request) {
+            return null;
+        }
+
+        @Override
+        public int size() {
+            return 0;
+        }
+
+        @Override
+        public void forEachQueued(Consumer<? super ExecutionRequest> visitor) {
+            Objects.requireNonNull(visitor, "visitor");
+        }
+
+        @Override
+        public List<ExecutionRequest> drain() {
+            return List.of();
+        }
+
+        @Override
+        public void discard() {
+        }
+
+        @Override
+        public void close() {
+        }
     }
 }
 

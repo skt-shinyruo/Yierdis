@@ -3,8 +3,10 @@ package yier.bubu.redis.protocol.resp;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
-import yier.bubu.redis.execution.api.ProtocolNegotiationSession;
+import yier.bubu.redis.execution.api.CommandSession;
+import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.TransactionState;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -37,36 +39,78 @@ public class RespReplyWriterFactoryTest {
     }
 
     @Test
-    public void fallsBackToResp2WhenSessionIsMissing() {
+    public void usesResp2FromCompleteSession() {
         ByteArraySink sink = new ByteArraySink();
         RespReplyWriterFactory factory = new RespReplyWriterFactory();
 
-        RedisReplyWriter writer = factory.newWriter(null, sink);
+        RedisReplyWriter writer = factory.newWriter(serverSession(2), sink);
         writer.booleanValue(true);
 
         Assert.assertEquals(":1\r\n", sink.utf8());
     }
 
-    private static ProtocolNegotiationSession serverSession(int respVersion) {
+    private static CommandSession serverSession(int respVersion) {
         return new MutableSession(respVersion);
     }
 
-    private static final class MutableSession implements ProtocolNegotiationSession {
+    private static final class MutableSession implements CommandSession {
         private int respVersion;
 
         private MutableSession(int respVersion) {
             this.respVersion = respVersion;
         }
 
-            @Override
-            public int respVersion() {
-                return respVersion;
-            }
+        @Override
+        public int dbIndex() {
+            return 0;
+        }
 
-            @Override
-            public void setRespVersion(int respVersion) {
-                this.respVersion = respVersion;
-            }
+        @Override
+        public void setDbIndex(int dbIndex) {
+        }
+
+        @Override
+        public long clientId() {
+            return 0L;
+        }
+
+        @Override
+        public String clientName() {
+            return null;
+        }
+
+        @Override
+        public void setClientName(String clientName) {
+        }
+
+        @Override
+        public boolean authenticated() {
+            return false;
+        }
+
+        @Override
+        public void setAuthenticated(boolean authenticated) {
+        }
+
+        @Override
+        public TransactionState transaction() {
+            return null;
+        }
+
+        @Override
+        public ConnectionStatsView connectionStats() {
+            return null;
+        }
+
+        @Override
+        public int respVersion() {
+            return respVersion;
+        }
+
+        @Override
+        public void setRespVersion(int respVersion) {
+            this.respVersion = respVersion;
+        }
     }
 
     private static final class ByteArraySink implements BytesSink {

@@ -8,7 +8,6 @@ import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandContext;
-import yier.bubu.redis.execution.api.CommandSessionCapabilities;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.ReplyCapacityUnavailableException;
@@ -265,7 +264,7 @@ public class ReplyPreflightCommandTest {
             ExecutionRequest request
     ) {
         try {
-            processor.execute(request, new CommandContext(CommandSessionCapabilities.from(session), writer));
+            processor.execute(request, new CommandContext(session, writer));
         } finally {
             request.close();
         }

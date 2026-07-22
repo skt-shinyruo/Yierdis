@@ -3,7 +3,7 @@ package yier.bubu.redis.execution.api;
 /**
  * Connection-scoped DB selection state.
  */
-public interface DbIndexSession extends Session, DbIndexProvider {
+public interface DbIndexSession extends DbIndexProvider {
     @Override
     int dbIndex();
 

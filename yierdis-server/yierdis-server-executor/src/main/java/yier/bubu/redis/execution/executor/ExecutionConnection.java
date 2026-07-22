@@ -1,11 +1,11 @@
 package yier.bubu.redis.execution.executor;
 
-import yier.bubu.redis.execution.api.Session;
+import yier.bubu.redis.execution.api.CommandSession;
 
 public interface ExecutionConnection {
     String connectionId();
 
-    Session session();
+    CommandSession session();
 
     ExecutionConnectionContext context();
 

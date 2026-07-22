@@ -704,12 +704,7 @@ public class YierdisInstanceTest {
         }
     }
 
-    private static final class TestSession implements
-            yier.bubu.redis.execution.api.DbIndexSession,
-            yier.bubu.redis.execution.api.ClientMetadataSession,
-            yier.bubu.redis.execution.api.TransactionSession,
-            yier.bubu.redis.execution.api.ConnectionStatsSession,
-            yier.bubu.redis.execution.api.ProtocolNegotiationSession {
+    private static final class TestSession implements yier.bubu.redis.execution.api.CommandSession {
         private int dbIndex;
         private String clientName;
         private boolean authenticated;
@@ -759,6 +754,15 @@ public class YierdisInstanceTest {
         public yier.bubu.redis.execution.api.ConnectionStatsView connectionStats() {
             return null;
         }
+
+        @Override
+        public int respVersion() {
+            return 2;
+        }
+
+        @Override
+        public void setRespVersion(int respVersion) {
+        }
     }
 
     private static final class NoopTransactionState implements TransactionState {
@@ -768,7 +772,16 @@ public class YierdisInstanceTest {
         }
 
         @Override
+        public boolean aborted() {
+            return false;
+        }
+
+        @Override
         public void begin() {
+        }
+
+        @Override
+        public void markAborted() {
         }
 
         @Override
@@ -776,7 +789,8 @@ public class YierdisInstanceTest {
         }
 
         @Override
-        public void enqueue(ExecutionRequest request) {
+        public String tryEnqueue(ExecutionRequest request) {
+            return null;
         }
 
         @Override
@@ -785,8 +799,17 @@ public class YierdisInstanceTest {
         }
 
         @Override
+        public void forEachQueued(java.util.function.Consumer<? super ExecutionRequest> visitor) {
+            java.util.Objects.requireNonNull(visitor, "visitor");
+        }
+
+        @Override
         public java.util.List<ExecutionRequest> drain() {
             return java.util.Collections.emptyList();
+        }
+
+        @Override
+        public void close() {
         }
     }
 
