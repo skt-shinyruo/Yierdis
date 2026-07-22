@@ -99,7 +99,7 @@ Use this order even though the detailed plans are separate documents:
 
 At each numbered boundary, run the exact focused command in the child task. Do not combine commits across boundaries. A planned contract-first compile break must list every affected downstream module and the next task that restores it; an accidental missing type inside the owner module is not an acceptable red checkpoint.
 
-Storage/memory Task 1 deliberately breaks `yierdis-db-memory`, `yierdis-server-main`, `yierdis-architecture-tests`, `yierdis-integration-tests`, and `yierdis-benchmark`; Storage/memory Task 4 is the immediate restoration owner for all five modules. No adapter, compatibility overload, fallback benchmark snapshot path, or second composition owner may bridge that checkpoint.
+Storage/memory Task 1 deliberately breaks five direct downstream modules: `yierdis-db-memory`, `yierdis-server-main`, `yierdis-architecture-tests`, `yierdis-integration-tests`, and `yierdis-benchmark`. `yierdis-cli` is the exact sixth, transitively affected leaf module because its tests have a test-scoped dependency on `yierdis-server-main`; its source tree consumes no retired storage API and therefore receives no Task 4 source migration. Storage/memory Task 4 is the immediate migration owner for the five direct modules and must include `yierdis-cli` in its broad restoration verification. No adapter, compatibility overload, fallback benchmark snapshot path, alternate per-root composition path, or second DB/backend owner may bridge that checkpoint.
 
 Storage/memory Task 1 is the sole owner of deleting the four flat
 `YierdisInstanceConfig` defrag accessors and introducing `DbDefragConfig`.

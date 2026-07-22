@@ -26,7 +26,7 @@
 | --- | --- | --- |
 | `yierdis-db-api` | `DbEngineConfig`, runtime capability interfaces, `PreparedMutation`, `ByteValue`, sequence/map visitors | runtime and command |
 | `yierdis-memory-api` | allocator-scoped `NativeHandle`, `StableMemoryBackend`, `StableMemoryRegion`, owner/factory contracts | DB implementations and memory backends |
-| `yierdis-memory-ffm` | public `YierdisFfmStableMemoryBackend`; internal allocator/runtime/regions/local codec | server and benchmark composition only through `StableMemoryBackendFactory` |
+| `yierdis-memory-ffm` | public `YierdisFfmStableMemoryBackend`; internal allocator/runtime/regions/local codec | server, benchmark, and integration-test composition only through `StableMemoryBackendFactory` |
 | `yierdis-db-memory` | one `DbThreadGuard`, backend-neutral expire index, full-handle storage layouts, semantic sources | `DbEngineFactory` and `db-api` |
 | `yierdis-server-api` | `ReplyShape`, `ReplyPlan`, `ReplySizer` | command, executor, protocol adapters |
 | `yierdis-networking-resp` | RESP2/RESP3 implementation of `ReplySizer` | networking composition |
@@ -526,7 +526,7 @@ PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
 mvn -pl yierdis-db/yierdis-db-api,yierdis-server/yierdis-server-runtime -am test
 ```
 
-Expected: PASS with all DB API and runtime capability, commit-stream, maxmemory, and embedded-instance tests green. At this deliberate API-break checkpoint, `yierdis-db-memory`, `yierdis-server-main`, `yierdis-architecture-tests`, `yierdis-integration-tests`, and `yierdis-benchmark` still contain concrete positional-factory/default-capability consumers; Task 4 migrates all five modules to `DbEngineConfig` and explicit capabilities before selecting them in its GREEN commands.
+Expected: PASS with all DB API and runtime capability, commit-stream, maxmemory, and embedded-instance tests green. At this deliberate API-break checkpoint, `yierdis-db-memory`, `yierdis-server-main`, `yierdis-architecture-tests`, `yierdis-integration-tests`, and `yierdis-benchmark` are the five direct downstream modules with positional-factory/default-capability source or deliberately broken dependencies. `yierdis-cli` is the one transitively affected leaf module because its tests depend on `yierdis-server-main`; its own sources consume no retired API. Task 4 migrates the five direct modules and verifies all six in its GREEN commands.
 
 - [ ] **Step 9: Commit the runtime capability boundary**
 
@@ -948,7 +948,7 @@ PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
 mvn -pl yierdis-memory/yierdis-memory-api,yierdis-memory/yierdis-memory-testkit -am test
 ```
 
-Expected: PASS for the API owner and testkit checkpoint. At this deliberate API-break checkpoint, `yierdis-memory-ffm` fails on the deleted allocator/raw-handle surface until Task 3, while `yierdis-db-memory`, `yierdis-server-main`, `yierdis-architecture-tests`, and `yierdis-integration-tests` fail on their memory implementation consumers until Task 4. No legacy adapter is introduced at either boundary.
+Expected: PASS for the API owner and testkit checkpoint. At this deliberate API-break checkpoint, `yierdis-memory-ffm` is the direct owner-side consumer of the deleted allocator/raw-handle surface and Task 3 restores it. The exact Task 4 direct restoration set is `yierdis-db-memory`, `yierdis-server-main`, `yierdis-architecture-tests`, `yierdis-integration-tests`, and `yierdis-benchmark`; `yierdis-cli` is additionally broken only through its test-scoped dependency on `yierdis-server-main`. Task 4 migrates the five direct modules and verifies the transitive CLI restoration. No legacy adapter is introduced at either boundary.
 
 - [ ] **Step 9: Commit the stable memory API break**
 
@@ -1527,7 +1527,7 @@ PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
 mvn -pl yierdis-memory/yierdis-memory-ffm -am test
 ```
 
-Expected: PASS for memory API, object table, page allocator, scopes, epochs, defrag, synchronized backend, facade, ownership, regions, and close-order tests. At this deliberate checkpoint, `yierdis-db-memory`, `yierdis-server-main`, `yierdis-architecture-tests`, and `yierdis-integration-tests` still import old FFM implementation classes or raw handles; Task 4 migrates those exact modules and then makes the implementation classes package-private.
+Expected: PASS for memory API, object table, page allocator, scopes, epochs, defrag, synchronized backend, facade, ownership, regions, and close-order tests. At this deliberate checkpoint, the exact direct Task 4 restoration set remains `yierdis-db-memory`, `yierdis-server-main`, `yierdis-architecture-tests`, `yierdis-integration-tests`, and `yierdis-benchmark`: the first four still contain old FFM implementation/raw-handle source or depend directly on the unmigrated DB implementation, while the benchmark still uses retired Task 1 factory/capability forms and depends on `yierdis-db-memory`. `yierdis-cli` remains transitively broken only through its test-scoped `yierdis-server-main` dependency. Task 4 migrates the five direct modules, makes internal FFM classes package-private, and verifies CLI restoration without a CLI source change.
 
 - [ ] **Step 10: Commit the FFM stable backend**
 
@@ -1580,8 +1580,22 @@ git commit -m "refactor: scope FFM memory handles by backend"
 - Modify: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/entry/EntryTableContractTest.java`
 - Delete: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/entry/RawPathRecordingAllocator.java`
 - Modify: all existing `yierdis-db/yierdis-db-memory/src/test/java` tests that construct the old allocator, FFM runtime/region, or raw handles.
+- Modify: `yierdis-server/yierdis-server-main/pom.xml`
 - Modify: `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
 - Modify: `yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/TestYierdisInstances.java`
+- Modify: `yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/YierdisServerBootstrapCloseTest.java`
+- Modify: `yierdis-tests/yierdis-integration-tests/pom.xml`
+- Modify: `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/runtime/YierdisInstanceTest.java`
+- Modify: `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/runtime/MaxmemoryPhysicalProgressTest.java`
+- Modify: `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/runtime/EmptyDatabaseFootprintTest.java`
+- Modify: `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/HllCommandTest.java`
+- Modify: `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/MaxmemoryDoubleReplyRegressionTest.java`
+- Modify: `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/MaxmemoryEvictionTest.java`
+- Modify: `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/OffHeapKeysCommandSmokeTest.java`
+- Modify: `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/OffHeapKeysZeroCopyReadPathTest.java`
+- Modify: `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/TtlMaxmemoryTest.java`
+- Modify: `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/storage/memory/OffHeapLeakRegressionTest.java`
+- Modify: `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/storage/memory/YierdisSnapshotTest.java`
 - Modify: `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/testutil/TestDbs.java`
 - Modify: `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/testutil/TestYierdisInstances.java`
 - Modify: `yierdis-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/storage/memory/YierdisDbArchitectureGuardTest.java`
@@ -2639,6 +2653,8 @@ Every interface method is declared directly on the class; the fake imports neith
 
 In `yierdis-db-memory/pom.xml`, retain `yierdis-memory-api` at compile scope and delete the `yierdis-memory-ffm` dependency completely. Convert backend-neutral DB unit tests to `HeapStableMemoryBackend`. Keep allocator-page, FFM defrag, and native leak behavior in `yierdis-memory-ffm` tests or `yierdis-integration-tests`, where the composition root may depend on both modules; no DB-memory main or test source imports `yier.bubu.redis.memory.foreign`.
 
+In `yierdis-server-main/pom.xml`, add a direct compile dependency on `yierdis-memory-api` because bootstrap declares `StableMemoryBackendFactory`; retain its direct `yierdis-db-api`, `yierdis-db-memory`, and `yierdis-memory-ffm` composition dependencies. In `yierdis-integration-tests/pom.xml`, add direct test-scope dependencies on `yierdis-memory-api` and `yierdis-memory-ffm`, retaining the direct test dependencies on `yierdis-db-api` and `yierdis-db-memory`. Neither module may rely on the removed `db-memory -> memory-ffm` transitive edge.
+
 At this checkpoint `YierdisServerBootstrap` still owns the old
 `YierdisServerRuntimeConfig`. Adapt that existing input through the named DB
 implementation record so Task 4 remains compilable before grouped configuration
@@ -2655,6 +2671,79 @@ DbEngineFactory dbEngineFactory = new YierdisDbEngineFactory(
 Command/runtime Task 5 replaces this one `runtimeConfig.nativeSlotCapacity()`
 expression with `storage.nativeSlotCapacity()` while it introduces
 `StorageConfig`; Task 4 must not refer to `StorageConfig` directly.
+
+Migrate all downstream sources named in this Task 4 file list at this checkpoint. Apply these exact Task 1 contract rules to `YierdisServerBootstrapCloseTest` and `YierdisInstanceTest`:
+
+```java
+DbEngineFactory factory = config ->
+        new FailingRuntimeDbEngine("db-" + config.dbIndex(), closeOrder);
+```
+
+An anonymous factory overrides only the configured signature:
+
+```java
+@Override
+public RuntimeDbEngine create(DbEngineConfig config) {
+    if (calls++ == 0) {
+        return new CloseTrackingRuntimeDbEngine(
+                "db-" + config.dbIndex(),
+                closeOrder
+        );
+    }
+    throw new IllegalStateException("boom-create-" + config.dbIndex());
+}
+```
+
+Delete every six-argument factory lambda/override and do not unpack `DbEngineConfig` into a compatibility call. Every baseline test double implements `reads()`, `writes()`, `expiration()`, `memory()`, `lifecycle()`, `bindToCurrentThread()`, `runMaintenance()`, and `shutdown()`. It does not implement `memoryUsage()`, `enforceMaxmemoryMaintenance()`, commit attachment, maxmemory participation, or defrag. A test double implements `CommitPublishingDbEngine`, `GlobalMaxmemoryDbEngine`, or `DefragmentableDbEngine` only when that test's configured change sink, global maxmemory, or enabled defrag requires the capability; a combined test double implements only the required combination. Keep the corresponding capability methods and counters on those explicit types, with no default methods, adapter, or fallback.
+
+`MaxmemoryPhysicalProgressTest` declares its fake as `GlobalMaxmemoryDbEngine` and constructs the governor with the exact array type:
+
+```java
+GlobalMaxmemoryDbEngine participant = new PhysicalProgressEngine(evictions);
+YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
+        new GlobalMaxmemoryDbEngine[]{participant},
+        100,
+        MaxmemoryPolicy.ALLKEYS_RANDOM,
+        5,
+        0
+);
+```
+
+`PhysicalProgressEngine` implements the complete baseline runtime methods plus `GlobalMaxmemoryDbEngine` methods, including `memoryUsage()`, `trimMemory(...)`, `scanBestCandidate(...)`, coordinator attachment, key/expiry/candidate/eviction behavior, and `runMaintenance()`. Do not pass `MaxmemoryParticipant[]` to the governor.
+
+All server-main and integration FFM/DB construction goes through `YierdisFfmStableMemoryBackend`, `StableMemoryBackendFactory`, `YierdisDbEngineFactory`, `YierdisDbBackendConfig`, and `DbEngineConfig`. `TestDbs` may centralize concrete-only integration fixtures with this exact construction shape:
+
+```java
+public static YierdisDb createFfmDb(DbEngineConfig config, int nativeSlotCapacity) {
+    StableMemoryBackendFactory backendFactory =
+            YierdisFfmStableMemoryBackend::new;
+    RuntimeDbEngine engine = new YierdisDbEngineFactory(
+            backendFactory,
+            new YierdisDbBackendConfig(nativeSlotCapacity)
+    ).create(Objects.requireNonNull(config, "config"));
+    if (engine instanceof YierdisDb db) {
+        return db;
+    }
+    engine.shutdown();
+    throw new IllegalStateException("YierdisDbEngineFactory did not create YierdisDb");
+}
+```
+
+The helper is `public` because command, runtime, and storage integration packages consume it. It returns an unbound, caller-owned `YierdisDb`; each direct caller binds it, shuts it down exactly once in `finally`, and does not close the injected backend separately. Instance helpers pass the same configured `YierdisDbEngineFactory` to `YierdisInstance`; the runtime supplies one `DbEngineConfig` per database and the instance owns shutdown. Do not reconstruct the positional arguments, call a deleted `YierdisDb` constructor/static FFM factory, construct/share `YierdisFfmMemoryRuntime`, or expose the stable allocator. Each database receives one backend and the same `DbThreadGuard` as its owner; callers bind only the engine/instance, never a second owner.
+
+For `EmptyDatabaseFootprintTest` and `OffHeapLeakRegressionTest`, capture each public facade produced by the injected factory when physical assertions need it:
+
+```java
+List<YierdisFfmStableMemoryBackend> createdBackends = new ArrayList<>();
+StableMemoryBackendFactory backendFactory = (name, maxSlots, owner) -> {
+    YierdisFfmStableMemoryBackend backend =
+            new YierdisFfmStableMemoryBackend(name, maxSlots, owner);
+    createdBackends.add(backend);
+    return backend;
+};
+```
+
+Preserve the existing empty-footprint, eviction-progress, reclaim, and no-leak assertions with `backend.memoryUsage()`, `backend.liveRegionCount()`, and the engine's checked `GlobalMaxmemoryDbEngine.memoryUsage()` while the owner is bound. Record a physical construction baseline and the workload high-water snapshot. After deleting/expiring the workload's remaining keys, call `backend.trimEmptyPages(MemoryPressureBudget.unlimited())`; assert `nativeDataLiveBytes()` and `liveRegionCount()` return to their fixture baselines, and that metadata/data committed bytes do not exceed their workload high-water values. Do not require total committed bytes to equal the construction baseline, because empty allocator pages may remain committed/reclaimable until close. Do not replace physical assertions with semantic `MemoryStats` alone or delete the after-eviction/expiry inequalities. The database/instance remains the sole close owner; successful shutdown must prove the facade can release allocator state and all external regions without a leak failure, and no test reads a backend snapshot after close.
 
 No FFM runtime or allocator escapes into server or DB composition. After downstream imports are removed, make the FFM runtime, region, stable allocator, synchronized wrapper, spans, object table, page allocator, and local codec package-private. Keep only `YierdisFfmStableMemoryBackend` public.
 
@@ -2737,27 +2826,27 @@ private static final class BaselineEngine implements RuntimeDbEngine {
 
 The test double implements only the baseline `RuntimeDbEngine` contract; do not make it implement `GlobalMaxmemoryDbEngine` or add a compatibility capability.
 
-- [ ] **Step 12: Run focused DB, binding, layout, architecture, and benchmark tests and verify GREEN**
+- [ ] **Step 12: Run focused DB, downstream restoration, architecture, and benchmark tests and verify GREEN**
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 \
 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-mvn -pl yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-architecture-tests,yierdis-benchmark -am \
-  -Dtest=StableMemoryBackendCompositionTest,DbOwnerBindingTest,ExpireIndexContractTest,EntryHandleContractTest,ValueHandleContractTest,EntryTableContractTest,YierdisDbArchitectureGuardTest,StorageBenchmarkRunnerTest \
+mvn -pl yierdis-db/yierdis-db-memory,yierdis-server/yierdis-server-main,yierdis-tests/yierdis-architecture-tests,yierdis-tests/yierdis-integration-tests,yierdis-benchmark -am \
+  -Dtest=StableMemoryBackendCompositionTest,DbOwnerBindingTest,ExpireIndexContractTest,EntryHandleContractTest,ValueHandleContractTest,EntryTableContractTest,YierdisDbArchitectureGuardTest,YierdisServerBootstrapCloseTest,YierdisServerBootstrapCommandWiringTest,NettyExecutionAdapterIntegrationTest,YierdisInstanceTest,CommitStreamIntegrationTest,GlobalMaxmemoryLruAcrossDbsTest,MaxmemoryPhysicalProgressTest,EmptyDatabaseFootprintTest,YierdisSnapshotTest,OffHeapLeakRegressionTest,MaxmemoryEvictionTest,TtlMaxmemoryTest,MaxmemoryDoubleReplyRegressionTest,HllCommandTest,OffHeapKeysZeroCopyReadPathTest,OffHeapKeysCommandSmokeTest,StringCommandTest,CollectionScanCommandTest,StorageBenchmarkRunnerTest \
   -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-Expected: PASS. A heap backend constructs and mutates a DB, concurrent binding has one winner shared by DB/backend, full handles round-trip through entry/collection/expire layouts, main DB source/POM have no FFM implementation edge, and the benchmark composes the FFM backend explicitly while requiring the physical-memory capability for accounting.
+Expected: PASS. A heap backend constructs and mutates a DB, concurrent binding has one winner shared by DB/backend, full handles round-trip through entry/collection/expire layouts, main DB source/POM have no FFM implementation edge, server close/configuration tests use `DbEngineConfig` and baseline/capability-typed doubles, governor tests use `GlobalMaxmemoryDbEngine[]`, every named integration construction/accounting path uses the public backend facade, and the benchmark requires the physical-memory capability.
 
-- [ ] **Step 13: Run broader storage, server composition, architecture, integration, and benchmark tests**
+- [ ] **Step 13: Run broader storage, server composition, architecture, integration, benchmark, and CLI tests**
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 \
 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-mvn -pl yierdis-db/yierdis-db-memory,yierdis-server/yierdis-server-main,yierdis-tests/yierdis-architecture-tests,yierdis-tests/yierdis-integration-tests,yierdis-benchmark -am test
+mvn -pl yierdis-db/yierdis-db-memory,yierdis-server/yierdis-server-main,yierdis-tests/yierdis-architecture-tests,yierdis-tests/yierdis-integration-tests,yierdis-benchmark,yierdis-cli -am test
 ```
 
-Expected: PASS, including fault injection, native regression, benchmark physical-memory accounting, maxmemory, defrag, expiry, server bootstrap, architecture, and off-heap leak tests.
+Expected: PASS, including fault injection, native regression, benchmark physical-memory accounting, maxmemory, defrag, expiry, server bootstrap, architecture, off-heap leak tests, and the CLI tests that transitively exercise the restored `yierdis-server-main` dependency. The CLI requires no source migration because its source tree has no retired storage API consumer.
 
 - [ ] **Step 14: Verify removal mechanically**
 
@@ -2777,12 +2866,25 @@ rg -n '<artifactId>yierdis-memory-ffm</artifactId>' \
 Expected: no matches. `YierdisDbArchitectureGuardTest.dbMemoryPomDependsOnMemoryApiAndNotFfm` enforces the same rule structurally.
 
 ```bash
-rg -n \
-  'new[[:space:]]+YierdisDbEngineFactory\(\)|factory\.create\(0,|engine\.memoryUsage\(\)' \
-  yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/storage/StorageBenchmarkRunner.java
+rg -n -U --pcre2 \
+  -e 'new\s+YierdisDbEngineFactory\(\)' \
+  -e 'new\s+YierdisDbEngineFactory\(\s*(?:nativeDefragOptions|memoryRuntime|runtime)\b' \
+  -e 'engineFactory\(\s*\(\s*dbIndex\s*,' \
+  -e 'DbEngineFactory\s+\w+\s*=\s*\(\s*dbIndex\s*,' \
+  -e 'RuntimeDbEngine\s+create\(\s*int\s+dbIndex\b' \
+  -e '\.create\(\s*\d+\s*,\s*\d+L\s*,\s*MaxmemoryPolicy\.' \
+  -e '\b(?:NativeDefragOptions|enforceMaxmemoryMaintenance|YierdisStableNativeAllocator|NativeAllocator)\b' \
+  -e '\bYierdisFfm(?!StableMemoryBackend\b)\w*\b' \
+  -e 'YierdisDb\.createWith(?:Owned|Shared)FfmRuntime\s*\(' \
+  -e 'new\s+YierdisDb\s*\(' \
+  -e 'MaxmemoryParticipant\s*\[\s*\]' \
+  -e '\bengine\.memoryUsage\s*\(' \
+  yierdis-server/yierdis-server-main/src \
+  yierdis-tests/yierdis-integration-tests/src/test/java \
+  yierdis-benchmark/src
 ```
 
-Expected: no matches. The benchmark has one named-config FFM composition path and obtains physical memory usage only from the checked `GlobalMaxmemoryDbEngine` capability.
+Expected: no matches. These roots contain no positional/no-argument/old-constructor factory form, retired baseline runtime method, old FFM runtime/allocator type, deleted `YierdisDb` construction path, old governor participant array, or unchecked `RuntimeDbEngine` physical-memory call. `YierdisFfmStableMemoryBackend` is the only allowed FFM implementation type outside `memory-ffm`.
 
 - [ ] **Step 15: Commit DB-memory decoupling and handle migration**
 
@@ -2793,7 +2895,8 @@ git add \
   yierdis-memory/yierdis-memory-ffm/src/main/java \
   yierdis-server/yierdis-server-main \
   yierdis-tests/yierdis-architecture-tests \
-  yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/testutil \
+  yierdis-tests/yierdis-integration-tests/pom.xml \
+  yierdis-tests/yierdis-integration-tests/src/test/java \
   yierdis-benchmark/pom.xml \
   yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/storage/StorageBenchmarkRunner.java \
   yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/storage/StorageBenchmarkRunnerTest.java
