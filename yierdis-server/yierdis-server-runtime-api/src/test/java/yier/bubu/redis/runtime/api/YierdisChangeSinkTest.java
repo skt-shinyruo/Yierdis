@@ -5,6 +5,7 @@ import org.junit.Test;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRecord;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
 import java.nio.charset.StandardCharsets;
@@ -63,24 +64,15 @@ public class YierdisChangeSinkTest {
         Assert.assertEquals(5L, config.evictionTimeLimitMillis());
         Assert.assertEquals(5L, config.expireCleanupTimeLimitMillis());
         Assert.assertSame(YierdisChangeSink.NOOP, config.changeSink());
-        Assert.assertFalse(config.nativeDefragEnabled());
-        Assert.assertEquals(64L * 1024L, config.nativeDefragMaxMoveBytes());
-        Assert.assertEquals(64L, config.nativeDefragMaxObjects());
-        Assert.assertEquals(1L, config.nativeDefragTimeLimitMillis());
+        Assert.assertEquals(new DbDefragConfig(false, 64L * 1024L, 64L, 1L), config.defrag());
         Assert.assertEquals(8_192, config.commitStreamMaxEvents());
         Assert.assertEquals(64L * 1024L * 1024L, config.commitStreamMaxRetainedBytes());
         Assert.assertEquals(5_000L, config.commitStreamShutdownTimeoutMillis());
 
         YierdisInstanceConfig defragConfig = YierdisInstanceConfig.builder()
-                .nativeDefragEnabled(true)
-                .nativeDefragMaxMoveBytes(1024)
-                .nativeDefragMaxObjects(7)
-                .nativeDefragTimeLimitMillis(3)
+                .defrag(new DbDefragConfig(true, 1024L, 7L, 3L))
                 .build();
-        Assert.assertTrue(defragConfig.nativeDefragEnabled());
-        Assert.assertEquals(1024L, defragConfig.nativeDefragMaxMoveBytes());
-        Assert.assertEquals(7L, defragConfig.nativeDefragMaxObjects());
-        Assert.assertEquals(3L, defragConfig.nativeDefragTimeLimitMillis());
+        Assert.assertEquals(new DbDefragConfig(true, 1024L, 7L, 3L), defragConfig.defrag());
 
         YierdisInstanceConfig streamConfig = YierdisInstanceConfig.builder()
                 .commitStreamMaxEvents(7)
@@ -108,12 +100,17 @@ public class YierdisChangeSinkTest {
                 () -> YierdisInstanceConfig.builder().evictionTimeLimitMillis(0).build());
         expectIllegalArgument("expireCleanupTimeLimitMillis must be > 0",
                 () -> YierdisInstanceConfig.builder().expireCleanupTimeLimitMillis(0).build());
-        expectIllegalArgument("nativeDefragMaxMoveBytes must be >= 0",
-                () -> YierdisInstanceConfig.builder().nativeDefragMaxMoveBytes(-1).build());
-        expectIllegalArgument("nativeDefragMaxObjects must be >= 0",
-                () -> YierdisInstanceConfig.builder().nativeDefragMaxObjects(-1).build());
-        expectIllegalArgument("nativeDefragTimeLimitMillis must be >= 0",
-                () -> YierdisInstanceConfig.builder().nativeDefragTimeLimitMillis(-1).build());
+        expectIllegalArgument("defrag limits must be non-negative",
+                () -> new DbDefragConfig(false, -1L, 0L, 0L));
+        expectIllegalArgument("defrag limits must be non-negative",
+                () -> new DbDefragConfig(false, 0L, -1L, 0L));
+        expectIllegalArgument("defrag limits must be non-negative",
+                () -> new DbDefragConfig(false, 0L, 0L, -1L));
+        NullPointerException nullDefrag = Assert.assertThrows(
+                NullPointerException.class,
+                () -> YierdisInstanceConfig.builder().defrag(null)
+        );
+        Assert.assertEquals("defrag", nullDefrag.getMessage());
         expectIllegalArgument("commitStreamMaxEvents must be > 0",
                 () -> YierdisInstanceConfig.builder().commitStreamMaxEvents(0).build());
         expectIllegalArgument("commitStreamMaxRetainedBytes must be > 0",

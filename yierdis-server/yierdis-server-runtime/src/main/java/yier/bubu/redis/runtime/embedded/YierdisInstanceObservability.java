@@ -2,6 +2,7 @@ package yier.bubu.redis.runtime.embedded;
 
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.api.DbHealthSnapshot;
+import yier.bubu.redis.storage.api.GlobalMaxmemoryDbEngine;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 
@@ -109,11 +110,20 @@ public final class YierdisInstanceObservability {
 
         for (int dbIndex = 0; dbIndex < databases; dbIndex++) {
             var engine = instance.runtimeEngine(dbIndex);
-            MemoryUsageSnapshot dbUsage = engine.memoryUsage();
+            YierdisMemoryStats s = engine.memory().memoryStats();
+            // global capability 的 snapshot 是 admission 权威物理视图；baseline 则从同一次语义 stats 读取投影五个物理字段。
+            MemoryUsageSnapshot dbUsage = engine instanceof GlobalMaxmemoryDbEngine globalEngine
+                    ? globalEngine.memoryUsage()
+                    : new MemoryUsageSnapshot(
+                            s.heapDataBytesEstimate(),
+                            s.nativeMetadataCommittedBytes(),
+                            s.nativeDataCommittedBytes(),
+                            s.nativeDataLiveBytes(),
+                            s.nativeReclaimableBytes()
+                    );
             if (dbUsage != null) {
                 physicalUsage = physicalUsage.plus(dbUsage);
             }
-            YierdisMemoryStats s = engine.memory().memoryStats();
             keyspaceOverhead = addSaturating(keyspaceOverhead, s.keyspaceTableOverheadBytesEstimate());
             expireOverhead = addSaturating(expireOverhead, s.expireTableOverheadBytesEstimate());
             expireValueObjects = addSaturating(expireValueObjects, s.expireValueObjectsBytesEstimate());

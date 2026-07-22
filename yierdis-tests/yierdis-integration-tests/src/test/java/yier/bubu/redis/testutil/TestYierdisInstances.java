@@ -4,6 +4,7 @@ import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
+import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.memory.YierdisDbEngineFactory;
 
 import java.util.Objects;
@@ -47,23 +48,21 @@ public final class TestYierdisInstances {
                 .maxmemorySamples(config.maxmemorySamples())
                 .evictionTimeLimitMillis(config.evictionTimeLimitMillis())
                 .expireCleanupTimeLimitMillis(config.expireCleanupTimeLimitMillis())
-                .nativeDefragEnabled(config.nativeDefragEnabled())
-                .nativeDefragMaxMoveBytes(config.nativeDefragMaxMoveBytes())
-                .nativeDefragMaxObjects(config.nativeDefragMaxObjects())
-                .nativeDefragTimeLimitMillis(config.nativeDefragTimeLimitMillis())
+                .defrag(config.defrag())
                 .commitStreamMaxEvents(config.commitStreamMaxEvents())
                 .commitStreamMaxRetainedBytes(config.commitStreamMaxRetainedBytes())
                 .commitStreamShutdownTimeoutMillis(config.commitStreamShutdownTimeoutMillis());
     }
 
     private static NativeDefragOptions nativeDefragOptions(YierdisInstanceConfig config) {
-        if (!config.nativeDefragEnabled()) {
+        DbDefragConfig defrag = config.defrag();
+        if (!defrag.enabled()) {
             return null;
         }
         return new NativeDefragOptions(
-                config.nativeDefragMaxMoveBytes(),
-                config.nativeDefragMaxObjects(),
-                TimeUnit.MILLISECONDS.toNanos(config.nativeDefragTimeLimitMillis())
+                defrag.maxMoveBytes(),
+                defrag.maxObjects(),
+                TimeUnit.MILLISECONDS.toNanos(defrag.timeLimitMillis())
         );
     }
 }

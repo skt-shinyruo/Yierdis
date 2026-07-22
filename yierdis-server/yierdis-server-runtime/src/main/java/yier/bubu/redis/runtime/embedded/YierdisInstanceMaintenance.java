@@ -26,11 +26,7 @@ public final class YierdisInstanceMaintenance {
     }
 
     /**
-     * Perform a single best-effort maintenance tick:
-     * <ul>
-     *   <li>cleanup expired keys for every DB</li>
-     *   <li>enforce maxmemory (per-db or global) when configured</li>
-     * </ul>
+     * 在 owner thread 上依次执行各 DB 的 baseline maintenance、可选 defrag，最后执行全局 maxmemory maintenance。
      */
     public void maintenanceTick() {
         runtimeAccess.maintenanceTick();

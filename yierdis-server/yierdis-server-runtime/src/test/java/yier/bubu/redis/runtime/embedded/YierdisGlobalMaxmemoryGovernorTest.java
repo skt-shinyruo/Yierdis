@@ -6,11 +6,17 @@ import org.junit.Test;
 import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.common.memory.MemoryReclaimResult;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
+import yier.bubu.redis.storage.api.DbLifecycleOps;
+import yier.bubu.redis.storage.api.DbReads;
+import yier.bubu.redis.storage.api.DbWrites;
+import yier.bubu.redis.storage.api.ExpirationManager;
+import yier.bubu.redis.storage.api.GlobalMaxmemoryDbEngine;
 import yier.bubu.redis.storage.api.KeyHandle;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
+import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
-import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
+import yier.bubu.redis.storage.api.MemoryOps;
 
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -20,7 +26,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
     @Test
     public void prepareWriteThrowsOomUnderNoevictionWhenGrowthWriteAndFull() {
         long maxmemoryBytes = 100;
-        MaxmemoryParticipant participant = new MaxmemoryParticipant() {
+        GlobalMaxmemoryDbEngine participant = new GlobalEngine() {
             @Override
             public MemoryUsageSnapshot memoryUsage() {
                 return snapshot(maxmemoryBytes);
@@ -47,7 +53,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
         };
 
         YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
-                new MaxmemoryParticipant[]{participant},
+                new GlobalMaxmemoryDbEngine[]{participant},
                 maxmemoryBytes,
                 MaxmemoryPolicy.NOEVICTION,
                 5,
@@ -65,7 +71,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
     @Test
     public void prepareWriteUsesPhysicalMemoryUsageSnapshotsForAdmission() {
         long maxmemoryBytes = 60;
-        MaxmemoryParticipant participant = new MaxmemoryParticipant() {
+        GlobalMaxmemoryDbEngine participant = new GlobalEngine() {
             @Override
             public MemoryUsageSnapshot memoryUsage() {
                 return new MemoryUsageSnapshot(10, 20, 30, 0, 0);
@@ -97,7 +103,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
         };
 
         YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
-                new MaxmemoryParticipant[]{participant},
+                new GlobalMaxmemoryDbEngine[]{participant},
                 maxmemoryBytes,
                 MaxmemoryPolicy.NOEVICTION,
                 5,
@@ -118,7 +124,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
         AtomicLong reclaimableUsedBytes = new AtomicLong(90);
         AtomicInteger trimCalls = new AtomicInteger(0);
 
-        MaxmemoryParticipant reclaimable = new MaxmemoryParticipant() {
+        GlobalMaxmemoryDbEngine reclaimable = new GlobalEngine() {
             @Override
             public MemoryUsageSnapshot memoryUsage() {
                 return snapshot(reclaimableUsedBytes.get());
@@ -151,7 +157,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
             }
         };
 
-        MaxmemoryParticipant requester = new MaxmemoryParticipant() {
+        GlobalMaxmemoryDbEngine requester = new GlobalEngine() {
             @Override
             public MemoryUsageSnapshot memoryUsage() {
                 return snapshot(20);
@@ -178,7 +184,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
         };
 
         YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
-                new MaxmemoryParticipant[]{reclaimable, requester},
+                new GlobalMaxmemoryDbEngine[]{reclaimable, requester},
                 maxmemoryBytes,
                 MaxmemoryPolicy.NOEVICTION,
                 5,
@@ -195,7 +201,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
     public void prepareWriteUsesBoundedTrimBudgetWithMinimumInspectionAllowance() {
         AtomicLong usedBytes = new AtomicLong(90L);
         AtomicReference<MemoryPressureBudget> observedBudget = new AtomicReference<>();
-        MaxmemoryParticipant participant = new MaxmemoryParticipant() {
+        GlobalMaxmemoryDbEngine participant = new GlobalEngine() {
             @Override
             public MemoryUsageSnapshot memoryUsage() {
                 return snapshot(usedBytes.get());
@@ -228,7 +234,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
             }
         };
         YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
-                new MaxmemoryParticipant[]{participant},
+                new GlobalMaxmemoryDbEngine[]{participant},
                 100L,
                 MaxmemoryPolicy.NOEVICTION,
                 5,
@@ -252,7 +258,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
         AtomicLong usedBytes = new AtomicLong(150);
         AtomicInteger evictions = new AtomicInteger(0);
 
-        MaxmemoryParticipant participant = new MaxmemoryParticipant() {
+        GlobalMaxmemoryDbEngine participant = new GlobalEngine() {
             @Override
             public MemoryUsageSnapshot memoryUsage() {
                 return snapshot(usedBytes.get());
@@ -284,7 +290,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
         };
 
         YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
-                new MaxmemoryParticipant[]{participant},
+                new GlobalMaxmemoryDbEngine[]{participant},
                 maxmemoryBytes,
                 MaxmemoryPolicy.ALLKEYS_RANDOM,
                 5,
@@ -307,7 +313,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
         AtomicLong usedBytes = new AtomicLong(200);
         AtomicInteger evictions = new AtomicInteger(0);
 
-        MaxmemoryParticipant participant = new MaxmemoryParticipant() {
+        GlobalMaxmemoryDbEngine participant = new GlobalEngine() {
             @Override
             public MemoryUsageSnapshot memoryUsage() {
                 return snapshot(usedBytes.get());
@@ -339,7 +345,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
         };
 
         YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
-                new MaxmemoryParticipant[]{participant},
+                new GlobalMaxmemoryDbEngine[]{participant},
                 maxmemoryBytes,
                 MaxmemoryPolicy.ALLKEYS_RANDOM,
                 5,
@@ -360,7 +366,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
 
         AtomicInteger evictions = new AtomicInteger(0);
 
-        MaxmemoryParticipant participant = new MaxmemoryParticipant() {
+        GlobalMaxmemoryDbEngine participant = new GlobalEngine() {
             @Override
             public MemoryUsageSnapshot memoryUsage() {
                 return snapshot(150);
@@ -388,7 +394,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
         };
 
         YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
-                new MaxmemoryParticipant[]{participant},
+                new GlobalMaxmemoryDbEngine[]{participant},
                 maxmemoryBytes,
                 MaxmemoryPolicy.ALLKEYS_RANDOM,
                 5,
@@ -417,7 +423,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
         Assume.assumeTrue("nanoTime must be > 0 to reproduce overflow", nowNanos > 0);
         long evictionTimeLimitNanos = Long.MAX_VALUE - nowNanos + 1;
 
-        MaxmemoryParticipant participant = new MaxmemoryParticipant() {
+        GlobalMaxmemoryDbEngine participant = new GlobalEngine() {
             @Override
             public MemoryUsageSnapshot memoryUsage() {
                 return snapshot(usedBytes.get());
@@ -446,7 +452,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
         };
 
         YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
-                new MaxmemoryParticipant[]{participant},
+                new GlobalMaxmemoryDbEngine[]{participant},
                 maxmemoryBytes,
                 MaxmemoryPolicy.ALLKEYS_RANDOM,
                 5,
@@ -470,7 +476,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
         AtomicReference<byte[]> evictedKey = new AtomicReference<>(null);
         AtomicInteger sampled = new AtomicInteger(0);
 
-        MaxmemoryParticipant participant = new MaxmemoryParticipant() {
+        GlobalMaxmemoryDbEngine participant = new GlobalEngine() {
             @Override
             public MemoryUsageSnapshot memoryUsage() {
                 return snapshot(usedBytes.get());
@@ -505,7 +511,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
         };
 
         YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
-                new MaxmemoryParticipant[]{participant},
+                new GlobalMaxmemoryDbEngine[]{participant},
                 maxmemoryBytes,
                 MaxmemoryPolicy.ALLKEYS_LRU,
                 5,
@@ -516,6 +522,59 @@ public class YierdisGlobalMaxmemoryGovernorTest {
 
         Assert.assertEquals("sampling should not be used", 0, sampled.get());
         Assert.assertArrayEquals("must evict expected key", expectedKey, evictedKey.get());
+    }
+
+    private abstract static class GlobalEngine implements GlobalMaxmemoryDbEngine {
+        @Override
+        public void bindToCurrentThread() {
+        }
+
+        @Override
+        public void runMaintenance() {
+        }
+
+        @Override
+        public void shutdown() {
+        }
+
+        @Override
+        public void attachMaxmemoryCoordinator(MaxmemoryCoordinator coordinator) {
+        }
+
+        @Override
+        public MemoryReclaimResult trimMemory(MemoryPressureBudget budget) {
+            return MemoryReclaimResult.empty();
+        }
+
+        @Override
+        public MaxmemoryCandidate scanBestCandidate(MaxmemoryPolicy policy, long nowMillis) {
+            return null;
+        }
+
+        @Override
+        public DbReads reads() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public DbWrites writes() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public ExpirationManager expiration() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public MemoryOps memory() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public DbLifecycleOps lifecycle() {
+            throw new UnsupportedOperationException();
+        }
     }
 
     private static KeyHandle handle(byte[] key) {
@@ -557,7 +616,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
     public void prepareWriteDoesNotThrowUnderNoevictionForNoGrowthWrites() {
         long maxmemoryBytes = 100;
 
-        MaxmemoryParticipant participant = new MaxmemoryParticipant() {
+        GlobalMaxmemoryDbEngine participant = new GlobalEngine() {
             @Override
             public MemoryUsageSnapshot memoryUsage() {
                 return snapshot(maxmemoryBytes + 1);
@@ -584,7 +643,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
         };
 
         YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
-                new MaxmemoryParticipant[]{participant},
+                new GlobalMaxmemoryDbEngine[]{participant},
                 maxmemoryBytes,
                 MaxmemoryPolicy.NOEVICTION,
                 5,

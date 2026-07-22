@@ -2,6 +2,7 @@ package yier.bubu.redis.runtime.embedded;
 
 import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
+import yier.bubu.redis.storage.api.GlobalMaxmemoryDbEngine;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
@@ -20,7 +21,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * independent participants (e.g. multiple DBs). Each participant reports an owned physical snapshot.
  */
 public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinator {
-    private final MaxmemoryParticipant[] participants;
+    private final GlobalMaxmemoryDbEngine[] participants;
     private final long maxmemoryBytes;
     private final MaxmemoryPolicy policy;
     private final int samples;
@@ -29,7 +30,7 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
     private int nextTrimParticipantIndex;
 
     public YierdisGlobalMaxmemoryGovernor(
-            MaxmemoryParticipant[] participants,
+            GlobalMaxmemoryDbEngine[] participants,
             long maxmemoryBytes,
             MaxmemoryPolicy policy,
             int samples,
@@ -102,7 +103,7 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
     }
 
     private void cleanupExpiredAll(long nowMillis) {
-        for (MaxmemoryParticipant participant : participants) {
+        for (GlobalMaxmemoryDbEngine participant : participants) {
             if (participant == null) {
                 continue;
             }
@@ -120,7 +121,7 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
             if (deadlineReached(deadline)) {
                 return;
             }
-            MaxmemoryParticipant participant = participants[(start + i) % participants.length];
+            GlobalMaxmemoryDbEngine participant = participants[(start + i) % participants.length];
             if (participant == null) {
                 continue;
             }
@@ -131,7 +132,7 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
     private long globalUsedBytesForMaxmemory() {
         long total = 0;
 
-        for (MaxmemoryParticipant participant : participants) {
+        for (GlobalMaxmemoryDbEngine participant : participants) {
             if (participant == null) {
                 continue;
             }
@@ -151,7 +152,7 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
 
     private int globalKeyCountEstimate() {
         int total = 0;
-        for (MaxmemoryParticipant participant : participants) {
+        for (GlobalMaxmemoryDbEngine participant : participants) {
             if (participant == null) {
                 continue;
             }
@@ -274,7 +275,7 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
 
     private MaxmemoryCandidate scanBestCandidate(long nowMillis) {
         MaxmemoryCandidate best = null;
-        for (MaxmemoryParticipant participant : participants) {
+        for (GlobalMaxmemoryDbEngine participant : participants) {
             if (participant == null) {
                 continue;
             }
@@ -296,7 +297,7 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
 
         int start = ThreadLocalRandom.current().nextInt(participants.length);
         for (int i = 0; i < participants.length; i++) {
-            MaxmemoryParticipant participant = participants[(start + i) % participants.length];
+            GlobalMaxmemoryDbEngine participant = participants[(start + i) % participants.length];
             if (participant == null) {
                 continue;
             }

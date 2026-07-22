@@ -40,9 +40,6 @@ final class TestYierdisInstances {
                 .maxmemorySamples(config.maxmemorySamples())
                 .evictionTimeLimitMillis(config.evictionTimeLimitMillis())
                 .expireCleanupTimeLimitMillis(config.expireCleanupTimeLimitMillis())
-                .nativeDefragEnabled(config.nativeDefragEnabled())
-                .nativeDefragMaxMoveBytes(config.nativeDefragMaxMoveBytes())
-                .nativeDefragMaxObjects(config.nativeDefragMaxObjects())
-                .nativeDefragTimeLimitMillis(config.nativeDefragTimeLimitMillis());
+                .defrag(config.defrag());
     }
 }

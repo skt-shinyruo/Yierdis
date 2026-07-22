@@ -103,6 +103,7 @@ final class YierdisInstanceResources implements AutoCloseable {
     static RuntimeException startupFailure(
             Throwable failure,
             RuntimeDbEngine[] dbs,
+            CommitStream commitStream,
             List<AutoCloseable> ownedResources
     ) {
         Throwable cleanupFailure = null;
@@ -116,6 +117,13 @@ final class YierdisInstanceResources implements AutoCloseable {
                 } catch (Throwable t) {
                     cleanupFailure = recordFailure(cleanupFailure, t);
                 }
+            }
+        }
+        if (commitStream != null) {
+            try {
+                commitStream.close();
+            } catch (Throwable t) {
+                cleanupFailure = recordFailure(cleanupFailure, t);
             }
         }
         cleanupFailure = closeOwnedResources(cleanupFailure, ownedResources);

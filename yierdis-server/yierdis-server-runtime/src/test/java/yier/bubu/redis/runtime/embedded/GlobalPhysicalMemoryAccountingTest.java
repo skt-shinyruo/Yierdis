@@ -3,12 +3,16 @@ package yier.bubu.redis.runtime.embedded;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.common.memory.MemoryPressureBudget;
+import yier.bubu.redis.common.memory.MemoryReclaimResult;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbReads;
 import yier.bubu.redis.storage.api.DbWrites;
 import yier.bubu.redis.storage.api.ExpirationManager;
+import yier.bubu.redis.storage.api.GlobalMaxmemoryDbEngine;
+import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
@@ -25,12 +29,7 @@ public class GlobalPhysicalMemoryAccountingTest {
         TrackingEngine second = new TrackingEngine(new MemoryUsageSnapshot(1L, 2L, 3L, 2L, 1L));
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(2)
-                .engineFactory((dbIndex,
-                                maxmemoryBytes,
-                                maxmemoryPolicy,
-                                maxmemorySamples,
-                                evictionTimeLimitMillis,
-                                expireCleanupTimeLimitMillis) -> dbIndex == 0 ? first : second)
+                .engineFactory(engineConfig -> engineConfig.dbIndex() == 0 ? first : second)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
                 .maxmemoryBytes(100L)
                 .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
@@ -70,12 +69,7 @@ public class GlobalPhysicalMemoryAccountingTest {
         );
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(2)
-                .engineFactory((dbIndex,
-                                maxmemoryBytes,
-                                maxmemoryPolicy,
-                                maxmemorySamples,
-                                evictionTimeLimitMillis,
-                                expireCleanupTimeLimitMillis) -> dbIndex == 0 ? first : second)
+                .engineFactory(engineConfig -> engineConfig.dbIndex() == 0 ? first : second)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
                 .maxmemoryBytes(123L)
                 .build();
@@ -107,12 +101,7 @@ public class GlobalPhysicalMemoryAccountingTest {
         );
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(1)
-                .engineFactory((dbIndex,
-                                maxmemoryBytes,
-                                maxmemoryPolicy,
-                                maxmemorySamples,
-                                evictionTimeLimitMillis,
-                                expireCleanupTimeLimitMillis) -> engine)
+                .engineFactory(ignored -> engine)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
                 .maxmemoryBytes(0L)
                 .build();
@@ -128,6 +117,27 @@ public class GlobalPhysicalMemoryAccountingTest {
             Assert.assertEquals(Long.MAX_VALUE, stats.totalEstimatedBytes());
             Assert.assertEquals(Long.MAX_VALUE, stats.usedBytesForMaxmemory());
             Assert.assertEquals(Long.MAX_VALUE, stats.effectiveUsedBytesForMaxmemory());
+        }
+    }
+
+    @Test
+    public void observabilityProjectsPhysicalUsageFromSemanticStatsForBaselineEngine() {
+        YierdisMemoryStats dbStats = stats(7L, 11L, 13L, 9L, 4L, 2, 1);
+        BaselineTrackingEngine engine = new BaselineTrackingEngine(dbStats);
+        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
+                .engineFactory(ignored -> engine)
+                .build();
+
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
+            YierdisMemoryStats stats = instance.observability().memoryStats();
+
+            Assert.assertEquals(7L, stats.heapDataBytesEstimate());
+            Assert.assertEquals(11L, stats.nativeMetadataCommittedBytes());
+            Assert.assertEquals(13L, stats.nativeDataCommittedBytes());
+            Assert.assertEquals(9L, stats.nativeDataLiveBytes());
+            Assert.assertEquals(4L, stats.nativeReclaimableBytes());
+            Assert.assertEquals(31L, stats.usedBytesForMaxmemory());
+            Assert.assertEquals(1, engine.memoryStatsCalls.get());
         }
     }
 
@@ -182,7 +192,7 @@ public class GlobalPhysicalMemoryAccountingTest {
         );
     }
 
-    private static final class TrackingEngine implements RuntimeDbEngine {
+    private static final class TrackingEngine implements GlobalMaxmemoryDbEngine {
         private final MemoryUsageSnapshot usage;
         private final YierdisMemoryStats stats;
         private final AtomicInteger memoryUsageCalls = new AtomicInteger();
@@ -204,7 +214,7 @@ public class GlobalPhysicalMemoryAccountingTest {
         }
 
         @Override
-        public void enforceMaxmemoryMaintenance() {
+        public void runMaintenance() {
         }
 
         @Override
@@ -220,6 +230,35 @@ public class GlobalPhysicalMemoryAccountingTest {
         public MemoryUsageSnapshot memoryUsage() {
             memoryUsageCalls.incrementAndGet();
             return usage;
+        }
+
+        @Override
+        public MemoryReclaimResult trimMemory(MemoryPressureBudget budget) {
+            return MemoryReclaimResult.empty();
+        }
+
+        @Override
+        public int keyCountEstimate() {
+            return 0;
+        }
+
+        @Override
+        public void cleanupExpired(long nowMillis) {
+        }
+
+        @Override
+        public MaxmemoryCandidate sampleCandidate(MaxmemoryPolicy policy, long nowMillis) {
+            return null;
+        }
+
+        @Override
+        public MaxmemoryCandidate scanBestCandidate(MaxmemoryPolicy policy, long nowMillis) {
+            return null;
+        }
+
+        @Override
+        public boolean evict(MaxmemoryCandidate candidate, long nowMillis) {
+            return false;
         }
 
         @Override
@@ -257,6 +296,68 @@ public class GlobalPhysicalMemoryAccountingTest {
 
                 @Override
                 public YierdisMemoryStats memoryStats() {
+                    return stats;
+                }
+
+                @Override
+                public String objectEncoding(BytesView keyView) {
+                    throw new UnsupportedOperationException();
+                }
+            };
+        }
+
+        @Override
+        public DbLifecycleOps lifecycle() {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    private static final class BaselineTrackingEngine implements RuntimeDbEngine {
+        private final YierdisMemoryStats stats;
+        private final AtomicInteger memoryStatsCalls = new AtomicInteger();
+
+        private BaselineTrackingEngine(YierdisMemoryStats stats) {
+            this.stats = stats;
+        }
+
+        @Override
+        public void bindToCurrentThread() {
+        }
+
+        @Override
+        public void runMaintenance() {
+        }
+
+        @Override
+        public void shutdown() {
+        }
+
+        @Override
+        public DbReads reads() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public DbWrites writes() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public ExpirationManager expiration() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public MemoryOps memory() {
+            return new MemoryOps() {
+                @Override
+                public long memoryUsage(BytesView keyView) {
+                    throw new UnsupportedOperationException();
+                }
+
+                @Override
+                public YierdisMemoryStats memoryStats() {
+                    memoryStatsCalls.incrementAndGet();
                     return stats;
                 }
 
