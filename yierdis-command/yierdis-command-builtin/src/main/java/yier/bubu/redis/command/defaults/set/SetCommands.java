@@ -2,13 +2,16 @@ package yier.bubu.redis.command.defaults.set;
 
 import yier.bubu.redis.command.api.ArgReader;
 import yier.bubu.redis.command.api.CommandArity;
-import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParseError;
 import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
+import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.defaults.CollectionScanCommandSupport;
 import yier.bubu.redis.command.defaults.CommandSupport;
 
@@ -20,6 +23,8 @@ import yier.bubu.redis.execution.api.RedisReplyWriter;
 import java.util.Objects;
 
 public final class SetCommands implements CommandModule {
+    private static final CommandKeySpec KEY = new CommandKeySpec(1, 1, 1);
+
     private final CommandSupport support;
 
     public SetCommands(CommandSupport support) {
@@ -29,17 +34,20 @@ public final class SetCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register("SADD", CommandDescriptor.of(-3, 1, 1, 1), CommandParsers.minRequest(3, "sadd"), this::sadd);
-        registration.register("SREM", CommandDescriptor.of(-3, 1, 1, 1), CommandParsers.minRequest(3, "srem"), this::srem);
-        registration.register("SMEMBERS", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exactRequest(2, "smembers"), this::smembers);
-        registration.register("SISMEMBER", CommandDescriptor.of(3, 1, 1, 1), CommandParsers.exactRequest(3, "sismember"), this::sismember);
-        registration.register("SCARD", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exactRequest(2, "scard"), this::scard);
-        registration.register(
-                "SSCAN",
-                CommandDescriptor.of(-3, 1, 1, 1),
-                args -> CollectionScanCommandSupport.parse(args, "sscan", false),
+        registration.register(CommandSpec.of(syntax("SADD", CommandArity.min(3)), CommandParsers.request(), this::sadd));
+        registration.register(CommandSpec.of(syntax("SREM", CommandArity.min(3)), CommandParsers.request(), this::srem));
+        registration.register(CommandSpec.of(syntax("SMEMBERS", CommandArity.exact(2)), CommandParsers.request(), this::smembers));
+        registration.register(CommandSpec.of(syntax("SISMEMBER", CommandArity.exact(3)), CommandParsers.request(), this::sismember));
+        registration.register(CommandSpec.of(syntax("SCARD", CommandArity.exact(2)), CommandParsers.request(), this::scard));
+        registration.register(CommandSpec.of(
+                syntax("SSCAN", CommandArity.min(3)),
+                args -> CollectionScanCommandSupport.parse(args, false),
                 this::sscan
-        );
+        ));
+    }
+
+    private static CommandSyntax syntax(String nameUpper, CommandArity arity) {
+        return new CommandSyntax(nameUpper, arity, KEY, TransactionPolicy.QUEUEABLE);
     }
 
     private void sadd(ExecutionRequest request, CommandContext ctx) {

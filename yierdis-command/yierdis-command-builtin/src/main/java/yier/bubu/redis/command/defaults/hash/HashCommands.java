@@ -2,13 +2,16 @@ package yier.bubu.redis.command.defaults.hash;
 
 import yier.bubu.redis.command.api.ArgReader;
 import yier.bubu.redis.command.api.CommandArity;
-import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParseError;
 import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
+import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.defaults.CollectionScanCommandSupport;
 import yier.bubu.redis.command.defaults.CommandSupport;
 
@@ -21,6 +24,8 @@ import yier.bubu.redis.execution.api.RedisReplyWriter;
 import java.util.Objects;
 
 public final class HashCommands implements CommandModule {
+    private static final CommandKeySpec KEY = new CommandKeySpec(1, 1, 1);
+
     private final CommandSupport support;
 
     public HashCommands(CommandSupport support) {
@@ -30,22 +35,24 @@ public final class HashCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register(
-                "HSET",
-                CommandDescriptor.of(-4, 1, 1, 1),
-                CommandParsers.pairTail(4, 2, "hset"),
+        registration.register(CommandSpec.of(
+                syntax("HSET", CommandArity.pairTail(4, 2)),
+                CommandParsers.args(),
                 this::hset
-        );
-        registration.register("HGET", CommandDescriptor.of(3, 1, 1, 1), CommandParsers.exactRequest(3, "hget"), this::hget);
-        registration.register("HGETALL", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exactRequest(2, "hgetall"), this::hgetall);
-        registration.register("HLEN", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exactRequest(2, "hlen"), this::hlen);
-        registration.register("HDEL", CommandDescriptor.of(-3, 1, 1, 1), CommandParsers.minRequest(3, "hdel"), this::hdel);
-        registration.register(
-                "HSCAN",
-                CommandDescriptor.of(-3, 1, 1, 1),
-                args -> CollectionScanCommandSupport.parse(args, "hscan", true),
+        ));
+        registration.register(CommandSpec.of(syntax("HGET", CommandArity.exact(3)), CommandParsers.request(), this::hget));
+        registration.register(CommandSpec.of(syntax("HGETALL", CommandArity.exact(2)), CommandParsers.request(), this::hgetall));
+        registration.register(CommandSpec.of(syntax("HLEN", CommandArity.exact(2)), CommandParsers.request(), this::hlen));
+        registration.register(CommandSpec.of(syntax("HDEL", CommandArity.min(3)), CommandParsers.request(), this::hdel));
+        registration.register(CommandSpec.of(
+                syntax("HSCAN", CommandArity.min(3)),
+                args -> CollectionScanCommandSupport.parse(args, true),
                 this::hscan
-        );
+        ));
+    }
+
+    private static CommandSyntax syntax(String nameUpper, CommandArity arity) {
+        return new CommandSyntax(nameUpper, arity, KEY, TransactionPolicy.QUEUEABLE);
     }
 
     private void hset(ArgReader args, CommandContext ctx) {

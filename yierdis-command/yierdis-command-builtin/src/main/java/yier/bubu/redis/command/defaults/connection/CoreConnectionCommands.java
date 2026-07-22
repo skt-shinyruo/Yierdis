@@ -2,13 +2,16 @@ package yier.bubu.redis.command.defaults.connection;
 
 import yier.bubu.redis.command.api.ArgReader;
 import yier.bubu.redis.command.api.CommandArity;
-import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParseError;
 import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
+import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.defaults.BulkStringReplyAdapter;
 import yier.bubu.redis.command.defaults.CommandSupport;
 
@@ -36,19 +39,52 @@ public final class CoreConnectionCommands {
 
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register("PING", CommandDescriptor.of(-1, 0, 0, 0), CommandParsers.oneOfRequest("ping", 1, 2), this::ping);
-        registration.register("ECHO", CommandDescriptor.of(2, 0, 0, 0), CommandParsers.exactRequest(2, "echo"), this::echo);
-        registration.register(
-                "COMMAND",
-                CommandDescriptor.of(-1, 0, 0, 0),
-                CommandParsers.minRequest(1, "command"),
+        registration.register(CommandSpec.of(
+                syntax("PING", CommandArity.oneOf(1, 2)),
+                CommandParsers.request(),
+                this::ping
+        ));
+        registration.register(CommandSpec.of(
+                syntax("ECHO", CommandArity.exact(2)),
+                CommandParsers.request(),
+                this::echo
+        ));
+        registration.register(CommandSpec.of(
+                syntax("COMMAND", CommandArity.min(1)),
+                CommandParsers.request(),
                 (cmd, ctx) -> command(cmd, ctx.out(), registration)
+        ));
+        registration.register(CommandSpec.of(
+                syntax("SELECT", CommandArity.exact(2)),
+                CommandParsers.request(),
+                this::select
+        ));
+        registration.register(CommandSpec.of(
+                syntax("QUIT", CommandArity.exact(1)),
+                CommandParsers.request(),
+                this::quit
+        ));
+        registration.register(CommandSpec.of(
+                syntax("CLIENT", CommandArity.min(2)),
+                CommandParsers.request(),
+                this::client
+        ));
+        registration.register(CommandSpec.of(
+                syntax("AUTH", CommandArity.min(2)),
+                CommandParsers.request(),
+                this::auth
+        ));
+        registration.register(CommandSpec.of(
+                syntax("FLUSHDB", CommandArity.oneOf(1, 2)),
+                CommandParsers.request(),
+                this::flushdb
+        ));
+    }
+
+    private static CommandSyntax syntax(String nameUpper, CommandArity arity) {
+        return new CommandSyntax(
+                nameUpper, arity, CommandKeySpec.NONE, TransactionPolicy.QUEUEABLE
         );
-        registration.register("SELECT", CommandDescriptor.of(2, 0, 0, 0), CommandParsers.exactRequest(2, "select"), this::select);
-        registration.register("QUIT", CommandDescriptor.of(1, 0, 0, 0), CommandParsers.exactRequest(1, "quit"), this::quit);
-        registration.register("CLIENT", CommandDescriptor.of(-2, 0, 0, 0), CommandParsers.minRequest(2, "client"), this::client);
-        registration.register("AUTH", CommandDescriptor.of(-2, 0, 0, 0), CommandParsers.minRequest(1, "auth"), this::auth);
-        registration.register("FLUSHDB", CommandDescriptor.of(-1, 0, 0, 0), CommandParsers.oneOfRequest("flushdb", 1, 2), this::flushdb);
     }
 
     private void ping(ExecutionRequest request, CommandContext ctx) {
@@ -190,12 +226,12 @@ public final class CoreConnectionCommands {
             out.requireReply(commandListReplyPlan(names, registration));
             out.arrayHeader(names.length);
             for (String upper : names) {
-                CommandDescriptor descriptor = registration.descriptorByUpperName(upper);
-                if (descriptor == null) {
+                CommandSpec<?> spec = registration.specByUpperName(upper);
+                if (spec == null) {
                     out.nullArray();
                     continue;
                 }
-                writeCommandInfo(out, upper, descriptor);
+                writeCommandInfo(out, spec.syntax());
             }
             return;
         }
@@ -219,12 +255,12 @@ public final class CoreConnectionCommands {
                     out.nullArray();
                     continue;
                 }
-                CommandDescriptor descriptor = registration.descriptorByUpperName(upper);
-                if (descriptor == null) {
+                CommandSpec<?> spec = registration.specByUpperName(upper);
+                if (spec == null) {
                     out.nullArray();
                     continue;
                 }
-                writeCommandInfo(out, upper, descriptor);
+                writeCommandInfo(out, spec.syntax());
             }
             return;
         }
@@ -235,10 +271,10 @@ public final class CoreConnectionCommands {
     private static ReplyPlan commandListReplyPlan(String[] names, CommandModule.Registration registration) {
         long encodedElementBytes = 0L;
         for (String upper : names) {
-            CommandDescriptor descriptor = registration.descriptorByUpperName(upper);
+            CommandSpec<?> spec = registration.specByUpperName(upper);
             encodedElementBytes = saturatingAdd(
                     encodedElementBytes,
-                    descriptor == null ? 5L : commandInfoEncodedBytes(upper, descriptor)
+                    spec == null ? 5L : commandInfoEncodedBytes(spec.syntax())
             );
         }
         return ReplyPlans.bulkStringArray(names.length, encodedElementBytes, 0L);
@@ -249,10 +285,10 @@ public final class CoreConnectionCommands {
         long encodedElementBytes = 0L;
         for (int index = 2; index < request.argc(); index++) {
             String upper = commandInfoName(request, index);
-            CommandDescriptor descriptor = upper == null ? null : registration.descriptorByUpperName(upper);
+            CommandSpec<?> spec = upper == null ? null : registration.specByUpperName(upper);
             encodedElementBytes = saturatingAdd(
                     encodedElementBytes,
-                    descriptor == null ? 5L : commandInfoEncodedBytes(upper, descriptor)
+                    spec == null ? 5L : commandInfoEncodedBytes(spec.syntax())
             );
         }
         return ReplyPlans.bulkStringArray(count, encodedElementBytes, 0L);
@@ -269,17 +305,17 @@ public final class CoreConnectionCommands {
         return upper.trim().toUpperCase(Locale.ROOT);
     }
 
-    private static long commandInfoEncodedBytes(String nameUpper, CommandDescriptor descriptor) {
-        byte[] name = nameUpper.toLowerCase(Locale.ROOT).getBytes(StandardCharsets.US_ASCII);
+    private static long commandInfoEncodedBytes(CommandSyntax syntax) {
+        byte[] name = syntax.nameLower().getBytes(StandardCharsets.US_ASCII);
         long encodedElementBytes = ReplyPlans.bulkString(name.length, 0L).encodedUpperBoundBytes();
-        encodedElementBytes = saturatingAdd(encodedElementBytes, integerEncodedBytes(descriptor.arity()));
+        encodedElementBytes = saturatingAdd(encodedElementBytes, integerEncodedBytes(syntax.arity().redisMetadataArity()));
         encodedElementBytes = saturatingAdd(
                 encodedElementBytes,
                 ReplyPlans.bulkStringArray(0, 0L, 0L).encodedUpperBoundBytes()
         );
-        encodedElementBytes = saturatingAdd(encodedElementBytes, integerEncodedBytes(descriptor.firstKeyIndex()));
-        encodedElementBytes = saturatingAdd(encodedElementBytes, integerEncodedBytes(descriptor.lastKeyIndex()));
-        encodedElementBytes = saturatingAdd(encodedElementBytes, integerEncodedBytes(descriptor.keyStep()));
+        encodedElementBytes = saturatingAdd(encodedElementBytes, integerEncodedBytes(syntax.keys().firstKeyIndex()));
+        encodedElementBytes = saturatingAdd(encodedElementBytes, integerEncodedBytes(syntax.keys().lastKeyIndex()));
+        encodedElementBytes = saturatingAdd(encodedElementBytes, integerEncodedBytes(syntax.keys().keyStep()));
         return ReplyPlans.bulkStringArray(6, encodedElementBytes, 0L).encodedUpperBoundBytes();
     }
 
@@ -294,15 +330,14 @@ public final class CoreConnectionCommands {
         return left + right;
     }
 
-    private static void writeCommandInfo(RedisReplyWriter out, String nameUpper, CommandDescriptor descriptor) {
-        Objects.requireNonNull(nameUpper, "nameUpper");
-        Objects.requireNonNull(descriptor, "descriptor");
+    private static void writeCommandInfo(RedisReplyWriter out, CommandSyntax syntax) {
+        Objects.requireNonNull(syntax, "syntax");
         out.arrayHeader(6);
-        out.bulkString(nameUpper.toLowerCase(Locale.ROOT).getBytes(StandardCharsets.US_ASCII));
-        out.integer(descriptor.arity());
+        out.bulkString(syntax.nameLower().getBytes(StandardCharsets.US_ASCII));
+        out.integer(syntax.arity().redisMetadataArity());
         out.arrayHeader(0);
-        out.integer(descriptor.firstKeyIndex());
-        out.integer(descriptor.lastKeyIndex());
-        out.integer(descriptor.keyStep());
+        out.integer(syntax.keys().firstKeyIndex());
+        out.integer(syntax.keys().lastKeyIndex());
+        out.integer(syntax.keys().keyStep());
     }
 }

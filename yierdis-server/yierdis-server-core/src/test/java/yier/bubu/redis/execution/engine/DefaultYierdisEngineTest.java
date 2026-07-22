@@ -3,8 +3,12 @@ package yier.bubu.redis.execution.engine;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.CommandSyntax;
+import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.kernel.CommandRegistries;
 import yier.bubu.redis.command.kernel.CommandRegistry;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
@@ -47,12 +51,11 @@ public class DefaultYierdisEngineTest {
     @Test
     public void executeDelegatesThroughOwnedCommandProcessor() {
         CommandRegistry registry = CommandRegistries.from(
-                registration -> registration.register(
-                        "LOCAL",
-                        CommandDescriptor.of(1, 0, 0, 0),
-                        CommandParsers.exactRequest(1, "local"),
+                registration -> registration.register(CommandSpec.of(
+                        syntax("LOCAL"),
+                        CommandParsers.request(),
                         (request, ctx) -> ctx.out().simpleString("LOCAL_OK")
-                )
+                ))
         );
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
         YierdisEngine engine = new DefaultYierdisEngine(processor, () -> {
@@ -75,26 +78,24 @@ public class DefaultYierdisEngineTest {
         AtomicReference<MutationContext> failedContext = new AtomicReference<>();
         CommandRegistry registry = CommandRegistries.from(
                 registration -> {
-                    registration.register(
-                            "SCOPED",
-                            CommandDescriptor.of(1, 0, 0, 0),
-                            CommandParsers.exactRequest(1, "scoped"),
+                    registration.register(CommandSpec.of(
+                            syntax("SCOPED"),
+                            CommandParsers.request(),
                             (request, ctx) -> {
                                 Assert.assertSame(request, ctx.mutationContext().commandRecord());
                                 successfulContext.set(ctx.mutationContext());
                                 ctx.out().simpleString("OK");
                             }
-                    );
-                    registration.register(
-                            "FAIL",
-                            CommandDescriptor.of(1, 0, 0, 0),
-                            CommandParsers.exactRequest(1, "fail"),
+                    ));
+                    registration.register(CommandSpec.of(
+                            syntax("FAIL"),
+                            CommandParsers.request(),
                             (request, ctx) -> {
                                 Assert.assertSame(request, ctx.mutationContext().commandRecord());
                                 failedContext.set(ctx.mutationContext());
                                 throw new IllegalStateException("injected");
                             }
-                    );
+                    ));
                 }
         );
         YierdisEngine engine = new DefaultYierdisEngine(new YierdisFastCommandProcessor(registry), () -> {
@@ -117,16 +118,15 @@ public class DefaultYierdisEngineTest {
         CommandRegistry registry = new CommandRegistry();
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
         CommandRegistries.registerTransactionSupport(registry, processor::execute);
-        registry.register(
-                "SCOPED",
-                CommandDescriptor.of(1, 0, 0, 0),
-                CommandParsers.exactRequest(1, "scoped"),
+        registry.register(CommandSpec.of(
+                syntax("SCOPED"),
+                CommandParsers.request(),
                 (request, ctx) -> {
                     Assert.assertSame(request, ctx.mutationContext().commandRecord());
                     replayContext.set(ctx.mutationContext());
                     ctx.out().simpleString("OK");
                 }
-        );
+        ));
         YierdisEngine engine = new DefaultYierdisEngine(processor, () -> {
         });
         EngineSession session = new EngineSession(16, 1024);
@@ -142,12 +142,11 @@ public class DefaultYierdisEngineTest {
     @Test
     public void executeAcceptsCompleteCommandSession() {
         CommandRegistry registry = CommandRegistries.from(
-                registration -> registration.register(
-                        "LOCAL",
-                        CommandDescriptor.of(1, 0, 0, 0),
-                        CommandParsers.exactRequest(1, "local"),
+                registration -> registration.register(CommandSpec.of(
+                        syntax("LOCAL"),
+                        CommandParsers.request(),
                         (request, ctx) -> ctx.out().simpleString("DB_" + ctx.dbIndexSession().dbIndex())
-                )
+                ))
         );
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
         YierdisEngine engine = new DefaultYierdisEngine(processor, () -> {
@@ -179,6 +178,15 @@ public class DefaultYierdisEngineTest {
         engine.maintenanceTick();
 
         Assert.assertEquals(2, ticks.get());
+    }
+
+    private static CommandSyntax syntax(String nameUpper) {
+        return new CommandSyntax(
+                nameUpper,
+                CommandArity.exact(1),
+                CommandKeySpec.NONE,
+                TransactionPolicy.QUEUEABLE
+        );
     }
 
     private static final class CapturingReplyWriter implements RedisReplyWriter {

@@ -3,12 +3,16 @@ package yier.bubu.redis.command.kernel;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.CommandSyntax;
+import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 
 import java.lang.reflect.Method;
@@ -19,12 +23,11 @@ import java.util.List;
 public class YierdisFastCommandProcessorRegistrationTest {
     @Test
     public void explicitRegistryRegistersCallerSuppliedModulesOnly() {
-        CommandModule extraModule = registration -> registration.register(
-                "TRACE",
-                CommandDescriptor.of(1, 0, 0, 0),
-                CommandParsers.exactRequest(1, "trace"),
+        CommandModule extraModule = registration -> registration.register(CommandSpec.of(
+                syntax("TRACE", CommandArity.exact(1)),
+                CommandParsers.request(),
                 (request, ctx) -> ctx.out().simpleString("TRACE-OK")
-        );
+        ));
 
         CommandRegistry registry = CommandRegistries.from(extraModule);
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
@@ -49,7 +52,7 @@ public class YierdisFastCommandProcessorRegistrationTest {
             Assert.assertNotEquals("Handler", nested.getSimpleName());
         }
         for (Method method : CommandModule.Registration.class.getMethods()) {
-            if (!"register".equals(method.getName()) && !"registerDisallowedInMulti".equals(method.getName())) {
+            if (!"register".equals(method.getName())) {
                 continue;
             }
             for (Class<?> parameterType : method.getParameterTypes()) {
@@ -63,24 +66,21 @@ public class YierdisFastCommandProcessorRegistrationTest {
         Method spec = CommandRegistry.class.getDeclaredMethod("spec", ExecutionRequest.class);
         Assert.assertEquals(CommandSpec.class, spec.getReturnType());
 
-        Method descriptor = CommandRegistry.class.getDeclaredMethod("descriptor", ExecutionRequest.class);
-        Assert.assertEquals(CommandDescriptor.class, descriptor.getReturnType());
+        Method specByUpperName = CommandRegistry.class.getDeclaredMethod("specByUpperName", String.class);
+        Assert.assertEquals(CommandSpec.class, specByUpperName.getReturnType());
 
-        Method disallowed = CommandRegistry.class.getDeclaredMethod("disallowedInMultiError", ExecutionRequest.class);
-        Assert.assertEquals(String.class, disallowed.getReturnType());
+        Method replyPlan = CommandRegistry.class.getDeclaredMethod("replyPlan", ExecutionRequest.class);
+        Assert.assertEquals(ReplyPlan.class, replyPlan.getReturnType());
     }
 
     @Test
     public void typedCommandSpecCanBeRegisteredAndExecuted() {
         CommandRegistry registry = CommandRegistries.from(
-                registration -> registration.register(
-                        "TYPED",
-                        CommandSpec.of(
-                                CommandDescriptor.of(2, 0, 0, 0),
-                                CommandParsers.exact(2, "typed"),
-                                (args, ctx) -> ctx.out().bulkString(args.bytes(1))
-                        )
-                )
+                registration -> registration.register(CommandSpec.of(
+                        syntax("TYPED", CommandArity.exact(2)),
+                        CommandParsers.args(),
+                        (args, ctx) -> ctx.out().bulkString(args.bytes(1))
+                ))
         );
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
 
@@ -91,17 +91,14 @@ public class YierdisFastCommandProcessorRegistrationTest {
     public void processorReturnsParseErrorBeforeTypedHandlerRuns() {
         final boolean[] handlerCalled = {false};
         CommandRegistry registry = CommandRegistries.from(
-                registration -> registration.register(
-                        "STRICT",
-                        CommandSpec.of(
-                                CommandDescriptor.of(2, 0, 0, 0),
-                                CommandParsers.exact(2, "strict"),
-                                (args, ctx) -> {
-                                    handlerCalled[0] = true;
-                                    ctx.out().simpleString("OK");
-                                }
-                        )
-                )
+                registration -> registration.register(CommandSpec.of(
+                        syntax("STRICT", CommandArity.exact(2)),
+                        CommandParsers.args(),
+                        (args, ctx) -> {
+                            handlerCalled[0] = true;
+                            ctx.out().simpleString("OK");
+                        }
+                ))
         );
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
 
@@ -115,18 +112,16 @@ public class YierdisFastCommandProcessorRegistrationTest {
     @Test
     public void commandRegistriesRegistersModulesInOrder() {
         CommandRegistry registry = CommandRegistries.from(
-                registration -> registration.register(
-                        "FIRST",
-                        CommandDescriptor.of(1, 0, 0, 0),
-                        CommandParsers.exactRequest(1, "first"),
+                registration -> registration.register(CommandSpec.of(
+                        syntax("FIRST", CommandArity.exact(1)),
+                        CommandParsers.request(),
                         (request, ctx) -> ctx.out().simpleString("FIRST")
-                ),
-                registration -> registration.register(
-                        "SECOND",
-                        CommandDescriptor.of(1, 0, 0, 0),
-                        CommandParsers.exactRequest(1, "second"),
+                )),
+                registration -> registration.register(CommandSpec.of(
+                        syntax("SECOND", CommandArity.exact(1)),
+                        CommandParsers.request(),
                         (request, ctx) -> ctx.out().simpleString("SECOND")
-                )
+                ))
         );
 
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
@@ -139,12 +134,11 @@ public class YierdisFastCommandProcessorRegistrationTest {
         try {
             CommandRegistries.from(
                     java.util.Arrays.asList(
-                            registration -> registration.register(
-                                    "OK",
-                                    CommandDescriptor.of(1, 0, 0, 0),
-                                    CommandParsers.exactRequest(1, "ok"),
+                            registration -> registration.register(CommandSpec.of(
+                                    syntax("OK", CommandArity.exact(1)),
+                                    CommandParsers.request(),
                                     (request, ctx) -> ctx.out().simpleString("OK")
-                            ),
+                            )),
                             null
                     )
             );
@@ -152,6 +146,12 @@ public class YierdisFastCommandProcessorRegistrationTest {
         } catch (IllegalArgumentException e) {
             Assert.assertEquals("modules must not contain null", e.getMessage());
         }
+    }
+
+    private static CommandSyntax syntax(String nameUpper, CommandArity arity) {
+        return new CommandSyntax(
+                nameUpper, arity, CommandKeySpec.NONE, TransactionPolicy.QUEUEABLE
+        );
     }
 
     private static String executeSimpleString(YierdisFastCommandProcessor processor, String... argv) {

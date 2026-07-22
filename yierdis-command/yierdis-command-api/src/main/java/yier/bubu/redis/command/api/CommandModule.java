@@ -11,32 +11,13 @@ public interface CommandModule {
     void register(Registration registration);
 
     interface Registration {
-        void register(String name, CommandSpec spec);
-
-        default <T> void register(
-                String name,
-                CommandDescriptor descriptor,
-                CommandParser<T> parser,
-                CommandHandler<T> handler
-        ) {
-            register(name, CommandSpec.of(descriptor, parser, handler));
-        }
-
-        default <T> void registerDisallowedInMulti(
-                String name,
-                CommandDescriptor descriptor,
-                CommandParser<T> parser,
-                CommandHandler<T> handler,
-                String errorMessage
-        ) {
-            register(name, CommandSpec.disallowedInMulti(descriptor, parser, handler, errorMessage));
-        }
+        void register(CommandSpec<?> spec);
 
         int commandCount();
 
         boolean containsUpperName(String nameUpper);
 
-        CommandDescriptor descriptorByUpperName(String nameUpper);
+        CommandSpec<?> specByUpperName(String nameUpper);
 
         String[] upperNamesSorted();
     }

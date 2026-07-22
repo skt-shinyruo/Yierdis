@@ -2,13 +2,16 @@ package yier.bubu.redis.command.defaults.zset;
 
 import yier.bubu.redis.command.api.ArgReader;
 import yier.bubu.redis.command.api.CommandArity;
-import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParseError;
 import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
+import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.defaults.CollectionScanCommandSupport;
 import yier.bubu.redis.command.defaults.CommandSupport;
 
@@ -21,6 +24,8 @@ import yier.bubu.redis.execution.api.RedisReplyWriter;
 import java.util.Objects;
 
 public final class ZSetCommands implements CommandModule {
+    private static final CommandKeySpec KEY = new CommandKeySpec(1, 1, 1);
+
     private final CommandSupport support;
 
     public ZSetCommands(CommandSupport support) {
@@ -30,45 +35,43 @@ public final class ZSetCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register(
-                "ZADD",
-                CommandDescriptor.of(-4, 1, 1, 1),
-                CommandParsers.pairTail(4, 2, "zadd"),
+        registration.register(CommandSpec.of(
+                syntax("ZADD", CommandArity.pairTail(4, 2)),
+                CommandParsers.args(),
                 this::zadd
-        );
-        registration.register("ZRANGE", CommandDescriptor.of(-4, 1, 1, 1), this::parseZRange, this::zrange);
-        registration.register("ZREVRANGE", CommandDescriptor.of(-4, 1, 1, 1), CommandParsers.oneOfRequest("zrevrange", 4, 5), this::zrevrange);
-        registration.register(
-                "ZRANGEBYSCORE",
-                CommandDescriptor.of(-4, 1, 1, 1),
+        ));
+        registration.register(CommandSpec.of(syntax("ZRANGE", CommandArity.range(4, 6)), this::parseZRange, this::zrange));
+        registration.register(CommandSpec.of(syntax("ZREVRANGE", CommandArity.oneOf(4, 5)), CommandParsers.request(), this::zrevrange));
+        registration.register(CommandSpec.of(
+                syntax("ZRANGEBYSCORE", CommandArity.min(4)),
                 args -> parseZRangeByScore(args, false),
                 this::zrangebyscore
-        );
-        registration.register(
-                "ZREVRANGEBYSCORE",
-                CommandDescriptor.of(-4, 1, 1, 1),
+        ));
+        registration.register(CommandSpec.of(
+                syntax("ZREVRANGEBYSCORE", CommandArity.min(4)),
                 args -> parseZRangeByScore(args, true),
                 this::zrevrangebyscore
-        );
-        registration.register(
-                "ZREMRANGEBYSCORE",
-                CommandDescriptor.of(4, 1, 1, 1),
-                CommandParsers.exactRequest(4, "zremrangebyscore"),
+        ));
+        registration.register(CommandSpec.of(
+                syntax("ZREMRANGEBYSCORE", CommandArity.exact(4)),
+                CommandParsers.request(),
                 this::zremrangebyscore
-        );
-        registration.register(
-                "ZREMRANGEBYRANK",
-                CommandDescriptor.of(4, 1, 1, 1),
-                CommandParsers.exactRequest(4, "zremrangebyrank"),
+        ));
+        registration.register(CommandSpec.of(
+                syntax("ZREMRANGEBYRANK", CommandArity.exact(4)),
+                CommandParsers.request(),
                 this::zremrangebyrank
-        );
-        registration.register("ZREM", CommandDescriptor.of(-3, 1, 1, 1), CommandParsers.minRequest(3, "zrem"), this::zrem);
-        registration.register(
-                "ZSCAN",
-                CommandDescriptor.of(-3, 1, 1, 1),
-                args -> CollectionScanCommandSupport.parse(args, "zscan", false),
+        ));
+        registration.register(CommandSpec.of(syntax("ZREM", CommandArity.min(3)), CommandParsers.request(), this::zrem));
+        registration.register(CommandSpec.of(
+                syntax("ZSCAN", CommandArity.min(3)),
+                args -> CollectionScanCommandSupport.parse(args, false),
                 this::zscan
-        );
+        ));
+    }
+
+    private static CommandSyntax syntax(String nameUpper, CommandArity arity) {
+        return new CommandSyntax(nameUpper, arity, KEY, TransactionPolicy.QUEUEABLE);
     }
 
     private void zadd(ArgReader args, CommandContext ctx) {
@@ -90,10 +93,6 @@ public final class ZSetCommands implements CommandModule {
     }
 
     private CommandParseResult<ZRangeArgs> parseZRange(ArgReader args) {
-        CommandParseError arity = CommandArity.range(4, 6, "zrange").validate(args);
-        if (arity != null) {
-            return CommandParseResult.error(arity);
-        }
         long start;
         long stop;
         try {
@@ -166,11 +165,6 @@ public final class ZSetCommands implements CommandModule {
     }
 
     private CommandParseResult<ZRangeByScoreArgs> parseZRangeByScore(ArgReader args, boolean reverse) {
-        String commandLower = reverse ? "zrevrangebyscore" : "zrangebyscore";
-        CommandParseError arity = CommandArity.min(4, commandLower).validate(args);
-        if (arity != null) {
-            return CommandParseResult.error(arity);
-        }
         CommandSupport.ScoreBound first;
         CommandSupport.ScoreBound second;
         try {

@@ -1,6 +1,5 @@
 package yier.bubu.redis.command.kernel;
 
-import yier.bubu.redis.command.api.CommandDescriptor;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.execution.api.ExecutionRequest;
@@ -30,12 +29,12 @@ public final class CommandRegistry implements CommandModule.Registration {
     private static final class Entry {
         private final byte[] nameUpperAscii;
         private final long hash;
-        private final CommandSpec spec;
+        private final CommandSpec<?> spec;
 
         private Entry(
                 byte[] nameUpperAscii,
                 long hash,
-                CommandSpec spec
+                CommandSpec<?> spec
         ) {
             this.nameUpperAscii = Objects.requireNonNull(nameUpperAscii, "nameUpperAscii");
             this.hash = hash;
@@ -50,21 +49,13 @@ public final class CommandRegistry implements CommandModule.Registration {
     private int size = 0;
 
     @Override
-    public void register(String name, CommandSpec spec) {
-        registerInternal(name, spec);
+    public void register(CommandSpec<?> spec) {
+        registerInternal(spec);
     }
 
-    private void registerInternal(String name, CommandSpec spec) {
-        Objects.requireNonNull(name, "name");
+    private void registerInternal(CommandSpec<?> spec) {
         Objects.requireNonNull(spec, "spec");
-        String nameUpper = name.trim().toUpperCase(Locale.ROOT);
-        if (nameUpper.isEmpty()) {
-            throw new IllegalArgumentException("command name must not be empty");
-        }
-        String disallowedInMultiError = spec.disallowedInMultiError();
-        if (disallowedInMultiError != null && disallowedInMultiError.isBlank()) {
-            throw new IllegalArgumentException("disallowedInMultiError must not be blank");
-        }
+        String nameUpper = spec.syntax().nameUpper();
         if (!namesUpper.add(nameUpper)) {
             throw new IllegalArgumentException("duplicate command registration: " + nameUpper);
         }
@@ -75,7 +66,6 @@ public final class CommandRegistry implements CommandModule.Registration {
 
         byte[] ascii = asciiUpperBytes(nameUpper);
         long hash = hashUpperAscii(ascii, 0, ascii.length);
-        Objects.requireNonNull(spec.descriptor(), "descriptor");
         insert(new Entry(
                 ascii,
                 hash,
@@ -83,23 +73,7 @@ public final class CommandRegistry implements CommandModule.Registration {
         ));
     }
 
-    String disallowedInMultiError(ExecutionRequest request) {
-        CommandSpec spec = spec(request);
-        return spec == null ? null : spec.disallowedInMultiError();
-    }
-
-    CommandDescriptor descriptor(ExecutionRequest request) {
-        CommandSpec spec = spec(request);
-        return spec == null ? null : spec.descriptor();
-    }
-
-    @Override
-    public CommandDescriptor descriptorByUpperName(String nameUpper) {
-        CommandSpec spec = specByUpperName(nameUpper);
-        return spec == null ? null : spec.descriptor();
-    }
-
-    CommandSpec spec(ExecutionRequest request) {
+    CommandSpec<?> spec(ExecutionRequest request) {
         Entry entry = findEntry(request);
         return entry == null ? null : entry.spec;
     }
@@ -109,7 +83,8 @@ public final class CommandRegistry implements CommandModule.Registration {
         return spec == null ? ReplyPlan.maximum() : spec.planReply(request);
     }
 
-    CommandSpec specByUpperName(String nameUpper) {
+    @Override
+    public CommandSpec<?> specByUpperName(String nameUpper) {
         if (nameUpper == null || nameUpper.isBlank()) {
             return null;
         }

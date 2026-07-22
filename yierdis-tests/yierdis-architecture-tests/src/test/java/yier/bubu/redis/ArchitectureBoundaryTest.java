@@ -309,13 +309,13 @@ public class ArchitectureBoundaryTest {
                 "case \"INFO\":",
                 "case \"STATS\":"
         );
-        Path descriptorFile = repoRoot.resolve(
-                "yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandDescriptor.java"
+        Path syntaxFile = repoRoot.resolve(
+                "yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandSyntax.java"
         ).normalize();
-        Assert.assertTrue("缺少 CommandDescriptor.java，无法执行 COMMAND descriptor 护栏", Files.isRegularFile(descriptorFile));
+        Assert.assertTrue("缺少 CommandSyntax.java，无法执行 COMMAND metadata 护栏", Files.isRegularFile(syntaxFile));
         scanFileForForbiddenText(
                 repoRoot,
-                descriptorFile,
+                syntaxFile,
                 offenders,
                 "case \"HELLO\":",
                 "case \"INFO\":",
@@ -572,15 +572,30 @@ public class ArchitectureBoundaryTest {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
 
+        String deletedDescriptor = "Command" + "Descriptor";
+        Path deletedDescriptorFile = commandApiMain(repoRoot)
+                .resolve("yier/bubu/redis/command/api/" + deletedDescriptor + ".java");
+        Assert.assertFalse("retired command metadata contract must stay deleted", Files.exists(deletedDescriptorFile));
+        String[] retiredCommandApis = {
+                deletedDescriptor,
+                "registerDisallowed" + "InMulti",
+                "isTransaction" + "Control",
+                "CommandParsers." + "exact",
+                "CommandParsers." + "min",
+                "CommandParsers." + "range",
+                "CommandParsers." + "oneOf",
+                "CommandParsers." + "pairTail"
+        };
+
         List<String> offenders = new ArrayList<>();
         scanCommandMainForForbiddenText(
                 repoRoot,
                 offenders,
                 "CommandModule.Handler",
                 "new CommandSpec(",
-                "register(String name, Handler",
-                "registerDisallowedInMulti(String name, Handler"
+                "register(String name, Handler"
         );
+        scanCommandMainForForbiddenText(repoRoot, offenders, retiredCommandApis);
         scanFilesMatchingRegex(
                 repoRoot,
                 commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command"),
@@ -597,8 +612,13 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 repoRoot.resolve("yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server").normalize(),
                 offenders,
-                "registration\\.register\\(\\s*\"[A-Z0-9_]+\"\\s*,\\s*this::",
-                "registration\\.registerDisallowedInMulti\\("
+                "registration\\.register\\(\\s*\"[A-Z0-9_]+\"\\s*,\\s*this::"
+        );
+        scanForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-server/yierdis-server-main/src/main/java").normalize(),
+                offenders,
+                retiredCommandApis
         );
 
         Assert.assertTrue("legacy command registration remains:\n" + String.join("\n", offenders), offenders.isEmpty());
@@ -915,7 +935,7 @@ public class ArchitectureBoundaryTest {
 
         assertPackageDeclaration(
                 repoRoot,
-                commandApiMain(repoRoot).resolve("yier/bubu/redis/command/api/CommandDescriptor.java"),
+                commandApiMain(repoRoot).resolve("yier/bubu/redis/command/api/CommandSyntax.java"),
                 "package yier.bubu.redis.command.api;"
         );
         assertPackageDeclaration(

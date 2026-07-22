@@ -3,10 +3,13 @@ package yier.bubu.redis.command.kernel;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.CommandSyntax;
+import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandContext;
@@ -27,12 +30,11 @@ public class YierdisFastCommandProcessorPolicyTest {
     @Test
     public void unknownCommandInMultiMarksTransactionAbortedAndExecDiscardsQueue() {
         YierdisFastCommandProcessor processor = processorWithTransactions(
-                registration -> registration.register(
-                        "LOCAL",
-                        CommandDescriptor.of(1, 0, 0, 0),
-                        CommandParsers.exactRequest(1, "local"),
+                registration -> registration.register(CommandSpec.of(
+                        syntax("LOCAL", CommandArity.exact(1)),
+                        CommandParsers.request(),
                         (request, ctx) -> ctx.out().simpleString("LOCAL")
-                )
+                ))
         );
         TestSession session = new TestSession();
         CapturingReplyWriter out = new CapturingReplyWriter();
@@ -57,18 +59,14 @@ public class YierdisFastCommandProcessorPolicyTest {
     public void disallowedInMultiMarksTransactionAbortedWithoutCallingHandler() {
         boolean[] handlerCalled = {false};
         YierdisFastCommandProcessor processor = processorWithTransactions(
-                registration -> registration.register(
-                        "FORBIDDEN",
-                        CommandSpec.disallowedInMulti(
-                                CommandDescriptor.of(1, 0, 0, 0),
-                                CommandParsers.exactRequest(1, "forbidden"),
-                                (request, ctx) -> {
-                                    handlerCalled[0] = true;
-                                    ctx.out().simpleString("FORBIDDEN");
-                                },
-                                "ERR FORBIDDEN is not allowed in MULTI"
-                        )
-                )
+                registration -> registration.register(CommandSpec.of(
+                        syntax("FORBIDDEN", CommandArity.exact(1), TransactionPolicy.DISALLOWED_IN_MULTI),
+                        CommandParsers.request(),
+                        (request, ctx) -> {
+                            handlerCalled[0] = true;
+                            ctx.out().simpleString("FORBIDDEN");
+                        }
+                ))
         );
         TestSession session = new TestSession();
         CapturingReplyWriter out = new CapturingReplyWriter();
@@ -142,12 +140,11 @@ public class YierdisFastCommandProcessorPolicyTest {
                     replayed.add(arg(request, 0));
                     ctx.out().simpleString("REPLAY_" + arg(request, 0));
                 }),
-                registration -> registration.register(
-                        "WRITE",
-                        CommandDescriptor.of(1, 0, 0, 0),
-                        CommandParsers.exactRequest(1, "write"),
+                registration -> registration.register(CommandSpec.of(
+                        syntax("WRITE", CommandArity.exact(1)),
+                        CommandParsers.request(),
                         (request, ctx) -> ctx.out().simpleString("WRITE")
-                )
+                ))
         );
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
         TestSession session = new TestSession();
@@ -202,14 +199,11 @@ public class YierdisFastCommandProcessorPolicyTest {
         CommandRegistry registry = new CommandRegistry();
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
         CommandRegistries.registerTransactionSupport(registry, processor::execute);
-        registry.register(
-                "PLANNED",
-                CommandSpec.of(
-                        CommandDescriptor.of(1, 0, 0, 0),
-                        CommandParsers.exactRequest(1, "planned"),
-                        (request, ctx) -> ctx.out().simpleString("OK")
-                ).withReplyPlanner(request -> ReplyPlan.exact(5L, 3L))
-        );
+        registry.register(CommandSpec.of(
+                syntax("PLANNED", CommandArity.exact(1)),
+                CommandParsers.request(),
+                (request, ctx) -> ctx.out().simpleString("OK")
+        ).withReplyPlanner(request -> ReplyPlan.exact(5L, 3L)));
         TestSession session = new TestSession();
         CapturingReplyWriter out = new CapturingReplyWriter();
         CommandContext ctx = context(session, out);
@@ -229,12 +223,11 @@ public class YierdisFastCommandProcessorPolicyTest {
         CommandRegistry registry = new CommandRegistry();
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
         CommandRegistries.registerTransactionSupport(registry, processor::execute);
-        registry.register(
-                "UNPLANNED",
-                CommandDescriptor.of(1, 0, 0, 0),
-                CommandParsers.exactRequest(1, "unplanned"),
+        registry.register(CommandSpec.of(
+                syntax("UNPLANNED", CommandArity.exact(1)),
+                CommandParsers.request(),
                 (request, ctx) -> ctx.out().simpleString("OK")
-        );
+        ));
         TestSession session = new TestSession();
         CapturingReplyWriter out = new CapturingReplyWriter();
         CommandContext ctx = context(session, out);
@@ -245,6 +238,18 @@ public class YierdisFastCommandProcessorPolicyTest {
         processor.execute(request("EXEC"), ctx);
 
         Assert.assertEquals(ReplyPlan.maximum(), out.envelopePlan());
+    }
+
+    private static CommandSyntax syntax(String nameUpper, CommandArity arity) {
+        return syntax(nameUpper, arity, TransactionPolicy.QUEUEABLE);
+    }
+
+    private static CommandSyntax syntax(
+            String nameUpper,
+            CommandArity arity,
+            TransactionPolicy transactionPolicy
+    ) {
+        return new CommandSyntax(nameUpper, arity, CommandKeySpec.NONE, transactionPolicy);
     }
 
     private static YierdisFastCommandProcessor processorWithTransactions(CommandModule module) {

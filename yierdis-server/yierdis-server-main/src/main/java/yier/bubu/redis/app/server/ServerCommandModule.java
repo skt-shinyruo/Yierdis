@@ -1,10 +1,13 @@
 package yier.bubu.redis.app.server;
 
+import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParsers;
-import yier.bubu.redis.command.api.CommandDescriptor;
 import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.ServerInfoProvider;
+import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.defaults.CommandSupport;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
@@ -36,17 +39,24 @@ final class ServerCommandModule implements CommandModule {
     @Override
     public void register(Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register(
-                "HELLO",
-                CommandSpec.disallowedInMulti(
-                        CommandDescriptor.of(-1, 0, 0, 0),
-                        CommandParsers.minRequest(1, "hello"),
-                        this::hello,
-                        "ERR HELLO is not allowed in MULTI"
-                )
-        );
-        registration.register("INFO", CommandDescriptor.of(-1, 0, 0, 0), CommandParsers.oneOfRequest("info", 1, 2), this::info);
-        registration.register("STATS", CommandDescriptor.of(1, 0, 0, 0), CommandParsers.exactRequest(1, "stats"), this::stats);
+        registration.register(CommandSpec.of(
+                new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
+                        TransactionPolicy.DISALLOWED_IN_MULTI),
+                CommandParsers.request(),
+                this::hello
+        ));
+        registration.register(CommandSpec.of(
+                new CommandSyntax("INFO", CommandArity.oneOf(1, 2), CommandKeySpec.NONE,
+                        TransactionPolicy.QUEUEABLE),
+                CommandParsers.request(),
+                this::info
+        ));
+        registration.register(CommandSpec.of(
+                new CommandSyntax("STATS", CommandArity.exact(1), CommandKeySpec.NONE,
+                        TransactionPolicy.QUEUEABLE),
+                CommandParsers.request(),
+                this::stats
+        ));
     }
 
     private void info(ExecutionRequest request, CommandContext ctx) {

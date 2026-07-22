@@ -1,8 +1,12 @@
 package yier.bubu.redis.command.kernel;
 
-import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.CommandSyntax;
+import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
@@ -41,9 +45,24 @@ final class TransactionCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register("MULTI", CommandDescriptor.of(1, 0, 0, 0), CommandParsers.exactRequest(1, "multi"), this::multi);
-        registration.register("DISCARD", CommandDescriptor.of(1, 0, 0, 0), CommandParsers.exactRequest(1, "discard"), this::discard);
-        registration.register("EXEC", CommandDescriptor.of(1, 0, 0, 0), CommandParsers.exactRequest(1, "exec"), this::exec);
+        registration.register(CommandSpec.of(
+                new CommandSyntax("MULTI", CommandArity.exact(1), CommandKeySpec.NONE,
+                        TransactionPolicy.TRANSACTION_CONTROL),
+                CommandParsers.request(),
+                this::multi
+        ));
+        registration.register(CommandSpec.of(
+                new CommandSyntax("DISCARD", CommandArity.exact(1), CommandKeySpec.NONE,
+                        TransactionPolicy.TRANSACTION_CONTROL),
+                CommandParsers.request(),
+                this::discard
+        ));
+        registration.register(CommandSpec.of(
+                new CommandSyntax("EXEC", CommandArity.exact(1), CommandKeySpec.NONE,
+                        TransactionPolicy.TRANSACTION_CONTROL),
+                CommandParsers.request(),
+                this::exec
+        ));
     }
 
     private void multi(ExecutionRequest request, CommandContext ctx) {

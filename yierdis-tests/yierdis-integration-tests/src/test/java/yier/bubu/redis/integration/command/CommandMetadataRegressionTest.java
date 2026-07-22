@@ -1,10 +1,13 @@
 package yier.bubu.redis.integration.command;
 
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
-import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandModule;
+import yier.bubu.redis.command.api.CommandSyntax;
+import yier.bubu.redis.command.api.TransactionPolicy;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.testutil.FastTestClient;
@@ -20,7 +23,7 @@ import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class CommandMetadataRegressionTest {
     @Test
-    public void registrationInterfaceExposesUnifiedCommandSpecRegistration() throws Exception {
+    public void registrationInterfaceExposesNameFreeCommandSpecRegistration() throws Exception {
         Class<?> specType;
         try {
             specType = Class.forName("yier.bubu.redis.command.api.CommandSpec");
@@ -30,16 +33,16 @@ public class CommandMetadataRegressionTest {
         }
 
         try {
-            Assert.assertNotNull(CommandModule.Registration.class.getMethod("register", String.class, specType));
+            Assert.assertNotNull(CommandModule.Registration.class.getMethod("register", specType));
         } catch (NoSuchMethodException e) {
-            Assert.fail("CommandModule.Registration should expose register(String, CommandSpec)");
+            Assert.fail("CommandModule.Registration should expose register(CommandSpec)");
         }
 
         Class<?> parserType = Class.forName("yier.bubu.redis.command.api.CommandParser");
         Class<?> handlerType = Class.forName("yier.bubu.redis.command.api.CommandHandler");
         Assert.assertNotNull(CommandSpec.class.getMethod(
                 "of",
-                CommandDescriptor.class,
+                CommandSyntax.class,
                 parserType,
                 handlerType
         ));
@@ -50,25 +53,27 @@ public class CommandMetadataRegressionTest {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(
                     db,
-                    registration -> registration.register(
-                            "HELLO",
-                            CommandDescriptor.of(-1, 0, 0, 0),
-                            CommandParsers.minRequest(1, "hello"),
+                    registration -> registration.register(CommandSpec.of(
+                            new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
+                                    TransactionPolicy.QUEUEABLE),
+                            CommandParsers.request(),
                             (cmd, ctx) -> ctx.out().simpleString("OK")
-                    )
+                    ))
             );
             try (FastTestClient client = new FastTestClient(processor)) {
                 ReplyArray info = (ReplyArray) client.execute(Arrays.asList(
                         b("COMMAND"),
                         b("INFO"),
                         b("GET"),
+                        b("AUTH"),
                         b("HELLO")
                 ));
 
                 Assert.assertNotNull(info.values());
-                Assert.assertEquals(2, info.values().size());
+                Assert.assertEquals(3, info.values().size());
                 assertCommandInfo(info.values().get(0), "get", 2, 1, 1, 1);
-                assertCommandInfo(info.values().get(1), "hello", -1, 0, 0, 0);
+                assertCommandInfo(info.values().get(1), "auth", -2, 0, 0, 0);
+                assertCommandInfo(info.values().get(2), "hello", -1, 0, 0, 0);
             }
         });
     }

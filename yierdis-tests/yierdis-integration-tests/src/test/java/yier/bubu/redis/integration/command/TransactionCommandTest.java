@@ -1,9 +1,12 @@
 package yier.bubu.redis.integration.command;
 
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
-import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.CommandSyntax;
+import yier.bubu.redis.command.api.TransactionPolicy;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
@@ -116,13 +119,12 @@ public class TransactionCommandTest {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(
                     db,
-                    registration -> registration.registerDisallowedInMulti(
-                            "HELLO",
-                            CommandDescriptor.of(-1, 0, 0, 0),
-                            CommandParsers.minRequest(1, "hello"),
-                            (cmd, ctx) -> ctx.out().simpleString("HELLO"),
-                            "ERR HELLO is not allowed in MULTI"
-                    )
+                    registration -> registration.register(CommandSpec.of(
+                            new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
+                                    TransactionPolicy.DISALLOWED_IN_MULTI),
+                            CommandParsers.request(),
+                            (cmd, ctx) -> ctx.out().simpleString("HELLO")
+                    ))
             );
             TestSession session = new TestSession();
             try (FastTestClient client = new FastTestClient(processor, session)) {
@@ -144,14 +146,12 @@ public class TransactionCommandTest {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(
                     db,
-                    registration -> registration.register(
-                            "STRICT",
-                            CommandSpec.of(
-                                    CommandDescriptor.of(2, 0, 0, 0),
-                                    CommandParsers.exact(2, "strict"),
-                                    (args, ctx) -> ctx.out().simpleString("OK")
-                            )
-                    )
+                    registration -> registration.register(CommandSpec.of(
+                            new CommandSyntax("STRICT", CommandArity.exact(2), CommandKeySpec.NONE,
+                                    TransactionPolicy.QUEUEABLE),
+                            CommandParsers.args(),
+                            (args, ctx) -> ctx.out().simpleString("OK")
+                    ))
             );
             TestSession session = new TestSession();
             try (FastTestClient client = new FastTestClient(processor, session)) {
@@ -290,6 +290,31 @@ public class TransactionCommandTest {
             try (FastTestClient client = new FastTestClient(processor, session)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("DISCARD")))).value());
+            }
+        });
+    }
+
+    @Test
+    public void bareAuthOutsideMultiUsesTheSyntaxArity() {
+        forEachDb(db -> {
+            try (FastTestClient client = new FastTestClient(TestCommandComposition.createProcessor(db))) {
+                ReplyError error = (ReplyError) client.execute(List.of(b("AUTH")));
+                Assert.assertEquals("ERR wrong number of arguments for 'auth' command", error.message());
+            }
+        });
+    }
+
+    @Test
+    public void bareAuthInsideMultiMarksDirtyAndExecDoesNotApplyQueuedWrites() {
+        forEachDb(db -> {
+            try (FastTestClient client = new FastTestClient(TestCommandComposition.createProcessor(db))) {
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+                Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(List.of(b("SET"), b("k"), b("v")))).value());
+                ReplyError arity = (ReplyError) client.execute(List.of(b("AUTH")));
+                Assert.assertEquals("ERR wrong number of arguments for 'auth' command", arity.message());
+                ReplyError abort = (ReplyError) client.execute(List.of(b("EXEC")));
+                Assert.assertEquals("EXECABORT Transaction discarded because of previous errors.", abort.message());
+                Assert.assertTrue(client.execute(List.of(b("GET"), b("k"))) instanceof ReplyNull);
             }
         });
     }

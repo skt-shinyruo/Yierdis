@@ -2,13 +2,16 @@ package yier.bubu.redis.command.defaults.list;
 
 import yier.bubu.redis.command.api.ArgReader;
 import yier.bubu.redis.command.api.CommandArity;
-import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParseError;
 import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
+import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.defaults.BulkStringReplyAdapter;
 import yier.bubu.redis.command.defaults.CommandSupport;
 
@@ -24,6 +27,8 @@ import yier.bubu.redis.common.command.ResultUnknownException;
 import java.util.Objects;
 
 public final class ListCommands implements CommandModule {
+    private static final CommandKeySpec KEY = new CommandKeySpec(1, 1, 1);
+
     private final CommandSupport support;
 
     public ListCommands(CommandSupport support) {
@@ -33,11 +38,15 @@ public final class ListCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register("LPUSH", CommandDescriptor.of(-3, 1, 1, 1), CommandParsers.minRequest(3, "lpush"), this::lpush);
-        registration.register("RPUSH", CommandDescriptor.of(-3, 1, 1, 1), CommandParsers.minRequest(3, "rpush"), this::rpush);
-        registration.register("LRANGE", CommandDescriptor.of(4, 1, 1, 1), CommandParsers.exactRequest(4, "lrange"), this::lrange);
-        registration.register("LPOP", CommandDescriptor.of(-2, 1, 1, 1), CommandParsers.oneOfRequest("lpop", 2, 3), this::lpop);
-        registration.register("RPOP", CommandDescriptor.of(-2, 1, 1, 1), CommandParsers.oneOfRequest("rpop", 2, 3), this::rpop);
+        registration.register(CommandSpec.of(syntax("LPUSH", CommandArity.min(3)), CommandParsers.request(), this::lpush));
+        registration.register(CommandSpec.of(syntax("RPUSH", CommandArity.min(3)), CommandParsers.request(), this::rpush));
+        registration.register(CommandSpec.of(syntax("LRANGE", CommandArity.exact(4)), CommandParsers.request(), this::lrange));
+        registration.register(CommandSpec.of(syntax("LPOP", CommandArity.oneOf(2, 3)), CommandParsers.request(), this::lpop));
+        registration.register(CommandSpec.of(syntax("RPOP", CommandArity.oneOf(2, 3)), CommandParsers.request(), this::rpop));
+    }
+
+    private static CommandSyntax syntax(String nameUpper, CommandArity arity) {
+        return new CommandSyntax(nameUpper, arity, KEY, TransactionPolicy.QUEUEABLE);
     }
 
     private void lpush(ExecutionRequest request, CommandContext ctx) {
