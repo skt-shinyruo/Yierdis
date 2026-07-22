@@ -26,7 +26,7 @@
 | --- | --- | --- |
 | `yierdis-db-api` | `DbEngineConfig`, runtime capability interfaces, `PreparedMutation`, `ByteValue`, sequence/map visitors | runtime and command |
 | `yierdis-memory-api` | allocator-scoped `NativeHandle`, `StableMemoryBackend`, `StableMemoryRegion`, owner/factory contracts | DB implementations and memory backends |
-| `yierdis-memory-ffm` | public `YierdisFfmStableMemoryBackend`; internal allocator/runtime/regions/local codec | server composition only through `StableMemoryBackendFactory` |
+| `yierdis-memory-ffm` | public `YierdisFfmStableMemoryBackend`; internal allocator/runtime/regions/local codec | server and benchmark composition only through `StableMemoryBackendFactory` |
 | `yierdis-db-memory` | one `DbThreadGuard`, backend-neutral expire index, full-handle storage layouts, semantic sources | `DbEngineFactory` and `db-api` |
 | `yierdis-server-api` | `ReplyShape`, `ReplyPlan`, `ReplySizer` | command, executor, protocol adapters |
 | `yierdis-networking-resp` | RESP2/RESP3 implementation of `ReplySizer` | networking composition |
@@ -526,7 +526,7 @@ PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
 mvn -pl yierdis-db/yierdis-db-api,yierdis-server/yierdis-server-runtime -am test
 ```
 
-Expected: PASS with all DB API and runtime capability, commit-stream, maxmemory, and embedded-instance tests green. At this deliberate API-break checkpoint, `yierdis-db-memory`, `yierdis-server-main`, `yierdis-architecture-tests`, and `yierdis-integration-tests` still contain concrete positional-factory/default-capability consumers; Task 4 migrates those exact modules to `DbEngineConfig` and explicit capabilities before selecting them in its GREEN commands.
+Expected: PASS with all DB API and runtime capability, commit-stream, maxmemory, and embedded-instance tests green. At this deliberate API-break checkpoint, `yierdis-db-memory`, `yierdis-server-main`, `yierdis-architecture-tests`, `yierdis-integration-tests`, and `yierdis-benchmark` still contain concrete positional-factory/default-capability consumers; Task 4 migrates all five modules to `DbEngineConfig` and explicit capabilities before selecting them in its GREEN commands.
 
 - [ ] **Step 9: Commit the runtime capability boundary**
 
@@ -1586,6 +1586,9 @@ git commit -m "refactor: scope FFM memory handles by backend"
 - Modify: `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/testutil/TestYierdisInstances.java`
 - Modify: `yierdis-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/storage/memory/YierdisDbArchitectureGuardTest.java`
 - Modify: `yierdis-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
+- Modify: `yierdis-benchmark/pom.xml`
+- Modify: `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/storage/StorageBenchmarkRunner.java`
+- Modify: `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/storage/StorageBenchmarkRunnerTest.java`
 - Finalize visibility: every FFM implementation class listed as internal in Task 3 becomes package-private; only `YierdisFfmStableMemoryBackend` remains public for composition.
 
 **Interfaces:**
@@ -2655,29 +2658,108 @@ expression with `storage.nativeSlotCapacity()` while it introduces
 
 No FFM runtime or allocator escapes into server or DB composition. After downstream imports are removed, make the FFM runtime, region, stable allocator, synchronized wrapper, spans, object table, page allocator, and local codec package-private. Keep only `YierdisFfmStableMemoryBackend` public.
 
-- [ ] **Step 11: Run focused DB, binding, layout, and architecture tests and verify GREEN**
+- [ ] **Step 11: Migrate benchmark composition and require physical-memory capability**
+
+Make `yierdis-benchmark` an explicit FFM composition root. In `yierdis-benchmark/pom.xml`, retain the direct `yierdis-db-memory` dependency and add direct compile dependencies on `yierdis-db-api`, `yierdis-memory-api`, and `yierdis-memory-ffm`. Do not add a server or runtime module dependency.
+
+In `StorageBenchmarkRunner.defaultEngineFactory()`, preserve the existing `Supplier<RuntimeDbEngine>` seam and replace the no-argument factory plus positional `create(...)` call with this exact composition:
+
+```java
+StableMemoryBackendFactory backendFactory = YierdisFfmStableMemoryBackend::new;
+YierdisDbEngineFactory factory = new YierdisDbEngineFactory(
+        backendFactory,
+        new YierdisDbBackendConfig(0)
+);
+DbEngineConfig engineConfig = new DbEngineConfig(
+        0,
+        0L,
+        MaxmemoryPolicy.NOEVICTION,
+        5,
+        5L,
+        5L,
+        new DbDefragConfig(false, 0L, 0L, 0L)
+);
+return () -> factory.create(engineConfig);
+```
+
+The benchmark reports physical storage accounting, so capability-check the engine before taking a snapshot. Add this package-visible helper:
+
+```java
+static GlobalMaxmemoryDbEngine requirePhysicalMemoryCapability(RuntimeDbEngine engine) {
+    Objects.requireNonNull(engine, "engine");
+    if (engine instanceof GlobalMaxmemoryDbEngine globalEngine) {
+        return globalEngine;
+    }
+    throw new IllegalStateException(
+            "storage benchmark requires GlobalMaxmemoryDbEngine"
+    );
+}
+```
+
+At the start of `snapshot(...)`, before reading RSS or any memory views, require the capability:
+
+```java
+GlobalMaxmemoryDbEngine globalEngine =
+        requirePhysicalMemoryCapability(engine);
+```
+
+Pass `globalEngine.memoryUsage()` to `StorageMemorySnapshot.from(...)`; retain `engine.memory().memoryStats()` for the semantic DB view. There is no `engine.memoryUsage()` call through `RuntimeDbEngine`, compatibility overload, fallback snapshot, or alternate accounting path.
+
+Keep `smallRealDatabaseRunReportsConsistentStructureAndAccounting()` in `StorageBenchmarkRunnerTest` unchanged in purpose. Add a focused regression proving that a baseline runtime engine is rejected:
+
+```java
+@Test
+public void physicalSnapshotCapabilityIsRequired() {
+    RuntimeDbEngine engine = new BaselineEngine();
+
+    IllegalStateException failure = Assert.assertThrows(
+            IllegalStateException.class,
+            () -> StorageBenchmarkRunner.requirePhysicalMemoryCapability(engine)
+    );
+
+    Assert.assertEquals(
+            "storage benchmark requires GlobalMaxmemoryDbEngine",
+            failure.getMessage()
+    );
+}
+
+private static final class BaselineEngine implements RuntimeDbEngine {
+    @Override public DbReads reads() { return null; }
+    @Override public DbWrites writes() { return null; }
+    @Override public ExpirationManager expiration() { return null; }
+    @Override public MemoryOps memory() { return null; }
+    @Override public DbLifecycleOps lifecycle() { return null; }
+    @Override public void bindToCurrentThread() { }
+    @Override public void runMaintenance() { }
+    @Override public void shutdown() { }
+}
+```
+
+The test double implements only the baseline `RuntimeDbEngine` contract; do not make it implement `GlobalMaxmemoryDbEngine` or add a compatibility capability.
+
+- [ ] **Step 12: Run focused DB, binding, layout, architecture, and benchmark tests and verify GREEN**
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 \
 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-mvn -pl yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-architecture-tests -am \
-  -Dtest=StableMemoryBackendCompositionTest,DbOwnerBindingTest,ExpireIndexContractTest,EntryHandleContractTest,ValueHandleContractTest,EntryTableContractTest,YierdisDbArchitectureGuardTest \
+mvn -pl yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-architecture-tests,yierdis-benchmark -am \
+  -Dtest=StableMemoryBackendCompositionTest,DbOwnerBindingTest,ExpireIndexContractTest,EntryHandleContractTest,ValueHandleContractTest,EntryTableContractTest,YierdisDbArchitectureGuardTest,StorageBenchmarkRunnerTest \
   -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-Expected: PASS. A heap backend constructs and mutates a DB, concurrent binding has one winner shared by DB/backend, full handles round-trip through entry/collection/expire layouts, and main DB source/POM have no FFM implementation edge.
+Expected: PASS. A heap backend constructs and mutates a DB, concurrent binding has one winner shared by DB/backend, full handles round-trip through entry/collection/expire layouts, main DB source/POM have no FFM implementation edge, and the benchmark composes the FFM backend explicitly while requiring the physical-memory capability for accounting.
 
-- [ ] **Step 12: Run broader storage, server composition, architecture, and integration tests**
+- [ ] **Step 13: Run broader storage, server composition, architecture, integration, and benchmark tests**
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 \
 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-mvn -pl yierdis-db/yierdis-db-memory,yierdis-server/yierdis-server-main,yierdis-tests/yierdis-architecture-tests,yierdis-tests/yierdis-integration-tests -am test
+mvn -pl yierdis-db/yierdis-db-memory,yierdis-server/yierdis-server-main,yierdis-tests/yierdis-architecture-tests,yierdis-tests/yierdis-integration-tests,yierdis-benchmark -am test
 ```
 
-Expected: PASS, including fault injection, native regression, memory accounting, maxmemory, defrag, expiry, server bootstrap, architecture, and off-heap leak tests.
+Expected: PASS, including fault injection, native regression, benchmark physical-memory accounting, maxmemory, defrag, expiry, server bootstrap, architecture, and off-heap leak tests.
 
-- [ ] **Step 13: Verify removal mechanically**
+- [ ] **Step 14: Verify removal mechanically**
 
 ```bash
 rg -n \
@@ -2694,7 +2776,15 @@ rg -n '<artifactId>yierdis-memory-ffm</artifactId>' \
 
 Expected: no matches. `YierdisDbArchitectureGuardTest.dbMemoryPomDependsOnMemoryApiAndNotFfm` enforces the same rule structurally.
 
-- [ ] **Step 14: Commit DB-memory decoupling and handle migration**
+```bash
+rg -n \
+  'new[[:space:]]+YierdisDbEngineFactory\(\)|factory\.create\(0,|engine\.memoryUsage\(\)' \
+  yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/storage/StorageBenchmarkRunner.java
+```
+
+Expected: no matches. The benchmark has one named-config FFM composition path and obtains physical memory usage only from the checked `GlobalMaxmemoryDbEngine` capability.
+
+- [ ] **Step 15: Commit DB-memory decoupling and handle migration**
 
 ```bash
 git add \
@@ -2703,7 +2793,10 @@ git add \
   yierdis-memory/yierdis-memory-ffm/src/main/java \
   yierdis-server/yierdis-server-main \
   yierdis-tests/yierdis-architecture-tests \
-  yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/testutil
+  yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/testutil \
+  yierdis-benchmark/pom.xml \
+  yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/storage/StorageBenchmarkRunner.java \
+  yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/storage/StorageBenchmarkRunnerTest.java
 git commit -m "refactor: decouple database memory from FFM"
 ```
 
