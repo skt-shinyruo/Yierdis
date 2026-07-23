@@ -328,6 +328,34 @@ accepting commands:
 Test doubles implement only the interfaces needed by their test configuration.
 Production and test requirements no longer share silent defaults.
 
+### DB Owner, Lifecycle, And Factory Composition
+
+`YierdisDbEngineFactory` is the sole public composition entry for the in-memory
+DB. It receives a `StableMemoryBackendFactory`, creates one `DbThreadGuard`,
+and passes that exact guard object to the backend factory as its `MemoryOwner`.
+The DB and backend therefore bind and validate one identity rather than two
+independently synchronized owner checks. `YierdisDb` has no public constructor
+and no `createWith*FfmRuntime` factory; direct FFM composition is not a DB API.
+
+`DbThreadGuard` owns an atomic `OPEN -> CLOSING -> CLOSED` lifecycle. Public DB
+operations, owner binding, and maintenance require `OPEN` and the bound owner
+thread. The first owner-thread shutdown atomically enters `CLOSING` before
+releasing resources. During `CLOSING`, new DB operations are rejected while
+backend cleanup may use the same bound `MemoryOwner`. A `finally` transition to
+`CLOSED` is mandatory even when cleanup fails; the initiating shutdown reports
+that failure after the transition and later shutdown calls are no-ops that do
+not release the resource graph again.
+
+`RuntimeDbEngine.runMaintenance()` is a public owner-thread operation in
+`OPEN`. One tick performs, in order: configured bounded expiration cleanup,
+bounded hash-table maintenance, and per-DB maxmemory admission. Expiration uses
+its configured time limit and sampling limits; hash maintenance uses
+`HashTableWorkBudget.of(64L, expireCleanupTimeLimitNanos)`; per-DB maxmemory
+uses its configured eviction time limit. Instance-level global maxmemory remains
+a separate pass after every DB tick, and defrag remains a separate explicit
+capability pass. A failure stops the remainder of that DB's tick and propagates
+to the caller; it is not retried within the tick.
+
 ## Stable Memory Backend And Handle Identity
 
 Replace the partial `NativeAllocator` extension point with the complete
@@ -357,11 +385,21 @@ identity that is not reused. `resolve`, `free`, `pin`, `unpin`, and reallocation
 validate allocator identity before inspecting the local slot. Cross-allocator
 operations throw a dedicated ownership exception.
 
-Compact local raw references may remain inside one backend's private native
-data structures because the allocator identity is implicit there. They cannot
-be constructed or resolved through the public API. `AllocatorKeyHandle` uses a
-raw-handle equality fast path only when allocator identities also match;
-otherwise semantic equality compares content.
+Compact local raw references may remain inside one backend's private data
+structures because the allocator identity is implicit there. This exception is
+backend-private, not FFM-private, so the heap test backend may use local map
+keys internally too. They cannot be constructed or resolved through the public
+API. Every DB storage layout retains the complete `NativeHandle`, including
+entry and expiration indexes, key directories, collection roots, byte maps,
+listpacks, handle sets, scan windows, and popped-value sources.
+`AllocatorKeyHandle` uses a raw-handle equality fast path only when allocator
+identities also match; otherwise semantic equality compares content.
+
+The fault-injection backend retains independent channels for object allocation
+(allocation and growing reallocation) and region allocation. Resetting,
+counting, enabling, or disabling one channel does not affect the other. Region
+tests continue to inject failures in TTL/index allocation and verify the
+mutation is failure-atomic, rather than reusing an object-allocation counter.
 
 ## Protocol-Neutral DB Results
 
@@ -451,6 +489,20 @@ cannot express:
 - execution entry points accept `CommandSession`, not a marker interface;
 - production runtime capabilities do not use default no-op implementations.
 
+Factory-only DB composition is verified with reflection: `YierdisDb` exposes no
+public constructor or FFM factory method, and `YierdisDbEngineFactory` retains
+only the declared backend-factory composition constructors. `db-memory` main
+and test sources import only `yier.bubu.redis.memory.api` from memory modules;
+FFM-specific physical, defrag, and leak tests live in the FFM or integration
+modules. Source guards also require deleted raw-path fixtures and retired FFM
+DB implementation types to be absent.
+
+The direct dependency edges required for final composition are checked from the
+direct child elements of each active POM's top-level `<dependencies>` element;
+dependency management, profiles, and transitive resolution cannot satisfy the
+test. This includes the required memory API/FFM edges of `server-main`,
+integration tests, and the benchmark module.
+
 Current architecture documentation is updated from the same actual module graph
 and no longer shows stale edges.
 
@@ -464,6 +516,10 @@ and no longer shows stale edges.
   reply slot, lease, and result sources.
 - Connection close, shutdown, stale re-preparation, and task rejection each
   close retained resources exactly once.
+- DB shutdown enters `CLOSING` before backend cleanup, rejects new public DB
+  access during cleanup, and reaches `CLOSED` even when a cleanup action
+  throws. A repeated shutdown observes `CLOSED` and does not retry freeing
+  resources.
 - A failure after mutation begins is never retried automatically.
 - Unknown mutation visibility closes the connection and cancels later ordered
   slots.
@@ -534,9 +590,17 @@ All Java and Maven commands use JDK 25.
 - two allocators may create the same local raw value, but cross-allocator
   resolve, free, pin, and equality fast paths cannot alias;
 - concurrent first owner binding has one winner and cannot split DB and backend
-  ownership;
+  ownership; the backend factory receives the exact same `MemoryOwner` object
+  used by DB access checks;
 - a non-FFM fake stable backend can exercise the DB construction and basic
   mutation contract without importing FFM implementation types;
+- object-allocation and TTL-region-allocation fault channels are independent,
+  and either injected failure leaves the affected mutation unchanged;
+- every persistent DB handle layout rejects a cross-backend handle collision;
+- shutdown rejects new operations while cleanup is in progress, reaches a
+  terminal state after a cleanup failure, and cannot free resources twice;
+- one maintenance tick executes expiration, hash maintenance, and local
+  maxmemory admission in that order with their stated limits.
 - semantic sequence sizing can be consumed by RESP2 and RESP3 sizers without
   storage knowing either encoding.
 
@@ -545,6 +609,10 @@ All Java and Maven commands use JDK 25.
 - parsed Maven dependencies satisfy the forbidden graph;
 - policy module and package names all resolve to active sources;
 - storage sources have no RESP byte formulas;
+- `db-memory` main and test sources have no `memory.foreign` import, and
+  factory-only/reflection guards reject deleted DB construction paths;
+- server-main, integration, and benchmark POMs declare their required memory
+  dependencies directly in their active top-level dependency lists;
 - `server-main` has no command implementation;
 - each grouped configuration validates independently and bootstrap passes the
   exact group to each component;
@@ -596,6 +664,8 @@ shape.
 - Runtime engine capability mismatches fail startup; production capabilities
   have no default no-op.
 - Cross-allocator native-handle operations cannot alias another live object.
+- Every persistent DB layout retains a full allocator-scoped handle, and a DB
+  and backend share exactly one owner guard and lifecycle.
 - `db-api` and `db-memory` contain no RESP wire-size calculation.
 - `db-memory` imports only the stable memory API, not FFM implementation types.
 - INFO/STATS rendering and server command definitions no longer live in
