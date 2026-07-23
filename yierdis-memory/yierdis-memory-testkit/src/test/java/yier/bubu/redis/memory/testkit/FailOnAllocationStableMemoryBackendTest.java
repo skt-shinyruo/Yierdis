@@ -80,6 +80,48 @@ public class FailOnAllocationStableMemoryBackendTest {
     }
 
     @Test
+    public void regionFailuresHaveAnIndependentAttemptCounter() {
+        RecordingBackend delegate = new RecordingBackend();
+        FailOnAllocationStableMemoryBackend backend =
+                new FailOnAllocationStableMemoryBackend(delegate);
+        backend.failOnAllocation(1L);
+        backend.failOnRegionAllocation(2L);
+
+        Assert.assertThrows(
+                NativeCapacityExceededException.class,
+                () -> backend.allocate(NativeObjectKind.GENERIC, 8)
+        );
+        Assert.assertSame(delegate.region, backend.allocateRegion("first", 8));
+        Assert.assertThrows(
+                NativeCapacityExceededException.class,
+                () -> backend.allocateRegion("second", 8)
+        );
+        Assert.assertEquals(1L, backend.allocationAttempts());
+        Assert.assertEquals(2L, backend.regionAllocationAttempts());
+    }
+
+    @Test
+    public void regionFailuresCanBeDisabledAndAttemptsCanBeReset() {
+        RecordingBackend delegate = new RecordingBackend();
+        FailOnAllocationStableMemoryBackend backend =
+                new FailOnAllocationStableMemoryBackend(delegate);
+        backend.failOnRegionAllocation(1L);
+
+        Assert.assertThrows(
+                NativeCapacityExceededException.class,
+                () -> backend.allocateRegion("first", 8)
+        );
+        Assert.assertEquals(1L, backend.regionAllocationAttempts());
+
+        backend.disableRegionFailures();
+        Assert.assertSame(delegate.region, backend.allocateRegion("second", 8));
+        Assert.assertEquals(2L, backend.regionAllocationAttempts());
+
+        backend.resetRegionAttempts();
+        Assert.assertEquals(0L, backend.regionAllocationAttempts());
+    }
+
+    @Test
     public void delegatesEveryNonAllocationOperationExactlyOnce() {
         RecordingBackend delegate = new RecordingBackend();
         FailOnAllocationStableMemoryBackend backend =
