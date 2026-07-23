@@ -28,8 +28,10 @@ import yier.bubu.redis.memory.api.StableMemoryRegion;
 public final class FailOnAllocationStableMemoryBackend implements StableMemoryBackend {
     private final StableMemoryBackend delegate;
     private final AtomicLong attempts = new AtomicLong();
+    private final AtomicLong regionAttempts = new AtomicLong();
     private final Map<NativeHandle, Integer> knownCapacities = new ConcurrentHashMap<>();
     private volatile long failAt = -1L;
+    private volatile long failRegionAt = -1L;
 
     public FailOnAllocationStableMemoryBackend(StableMemoryBackend delegate) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
@@ -52,6 +54,25 @@ public final class FailOnAllocationStableMemoryBackend implements StableMemoryBa
 
     public long allocationAttempts() {
         return attempts.get();
+    }
+
+    public void failOnRegionAllocation(long oneBasedIndex) {
+        if (oneBasedIndex <= 0L) {
+            throw new IllegalArgumentException("oneBasedIndex must be > 0");
+        }
+        failRegionAt = oneBasedIndex;
+    }
+
+    public void disableRegionFailures() {
+        failRegionAt = -1L;
+    }
+
+    public void resetRegionAttempts() {
+        regionAttempts.set(0L);
+    }
+
+    public long regionAllocationAttempts() {
+        return regionAttempts.get();
     }
 
     @Override
@@ -128,6 +149,7 @@ public final class FailOnAllocationStableMemoryBackend implements StableMemoryBa
 
     @Override
     public StableMemoryRegion allocateRegion(String owner, int bytes) {
+        checkRegionAllocationAttempt();
         return delegate.allocateRegion(owner, bytes);
     }
 
@@ -192,6 +214,15 @@ public final class FailOnAllocationStableMemoryBackend implements StableMemoryBa
         if (attempt == failAt) {
             throw new NativeCapacityExceededException(
                     "injected stable memory allocation failure at attempt " + attempt
+            );
+        }
+    }
+
+    private void checkRegionAllocationAttempt() {
+        long attempt = regionAttempts.incrementAndGet();
+        if (attempt == failRegionAt) {
+            throw new NativeCapacityExceededException(
+                    "injected stable memory region allocation failure at attempt " + attempt
             );
         }
     }
