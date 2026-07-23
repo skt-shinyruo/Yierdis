@@ -2545,10 +2545,21 @@ git commit -m "refactor: scope FFM memory handles by backend"
 - Create: `yierdis-memory/yierdis-memory-testkit/src/test/java/yier/bubu/redis/memory/testkit/HeapStableMemoryBackendTest.java`
 - Create: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/StableMemoryBackendCompositionTest.java`
 - Create: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/DbOwnerBindingTest.java`
+- Create: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/YierdisDbLifecycleContractTest.java`
+- Create: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/YierdisDbMaintenanceContractTest.java`
 - Modify: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/expire/ExpireIndexContractTest.java`
 - Modify: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/entry/EntryHandleContractTest.java`
 - Modify: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/entry/ValueHandleContractTest.java`
 - Modify: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/entry/EntryTableContractTest.java`
+- Modify: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/entry/CollectionRootTest.java`
+- Modify: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectoryTest.java`
+- Modify: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/value/NativeByteMapTest.java`
+- Modify: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/value/NativeListpackTest.java`
+- Create: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/value/NativeHandleSetTest.java`
+- Modify: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/value/NativeCollectionScanWindowTest.java`
+- Modify: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/value/PinnedPoppedValueSequenceTest.java`
+- Modify: `yierdis-memory/yierdis-memory-testkit/src/test/java/yier/bubu/redis/memory/testkit/FailOnAllocationStableMemoryBackendTest.java`
+- Modify: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/MutationFaultInjectionTest.java`
 - Delete: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/entry/RawPathRecordingAllocator.java`
 - Modify: all existing `yierdis-db/yierdis-db-memory/src/test/java` tests that construct the old allocator, FFM runtime/region, or raw handles.
 - Modify: `yierdis-server/yierdis-server-main/pom.xml`
@@ -2580,7 +2591,153 @@ git commit -m "refactor: scope FFM memory handles by backend"
 - Consumes: `StableMemoryBackendFactory`; `db-memory` main code imports only `yier.bubu.redis.memory.api`.
 - Produces: `YierdisDb`, which explicitly implements `CommitPublishingDbEngine`, `GlobalMaxmemoryDbEngine`, and `DefragmentableDbEngine` in addition to baseline runtime.
 - Invariant: one `DbThreadGuard` is constructed before the backend, passed to the backend as `MemoryOwner`, and reused by all DB owner checks.
-- Invariant: a handle stored outside `memory-ffm` retains both longs. Only FFM-private native structures may rely on implicit allocator identity and store local raw values alone.
+- Invariant: a handle stored outside `memory-ffm` retains both longs. Only backend-private structures may rely on implicit allocator identity and store local raw values alone.
+
+#### Approved Task 4 Hardening Amendment (2026-07-23)
+
+The following requirements replace any conflicting Task 4 text below. They are
+part of this task's RED/GREEN cycle, not follow-up cleanup.
+
+| Concern | Required production contract | Required regression proof |
+| --- | --- | --- |
+| Fault injection | `FailOnAllocationStableMemoryBackend` keeps its existing object-allocation API and adds a separate region-allocation channel. | An object failure does not advance or arm the region counter, and TTL/index region failure remains failure-atomic. |
+| Ownership | The exact `DbThreadGuard` instance passed to `StableMemoryBackendFactory` is the DB's owner guard. | Factory capture uses `Assert.assertSame`, in addition to the existing two-thread race. |
+| Shutdown | `DbThreadGuard` has `OPEN`, `CLOSING`, and `CLOSED`; DB access and backend cleanup use different guard paths. | CLOSING rejects public DB work, permits owner cleanup, reaches CLOSED after close failure, and makes a second shutdown a no-op. |
+| Full handles | Every persistent DB layout stores both `allocatorId` and `localRaw`; only a backend's own private structures may store a local raw value. | Two backends deliberately allocate equal local raws and every layout family preserves/rejects identity without aliasing. |
+| Maintenance | `runMaintenance()` is one DB-local ordered tick. | A test proves expiry before local admission, hash work advances in the tick, and global/defrag work is not duplicated there. |
+| Boundaries | DB-memory never imports FFM in either main or test sources; final composition POM edges are direct. | Source scans cover `src/main` and `src/test`; XML assertions inspect only direct top-level dependency children. |
+
+- [ ] **Step 0: Write the missing RED contract tests before changing Task 4 production code**
+
+Extend `FailOnAllocationStableMemoryBackendTest` with the following test
+*before* declaring the new region methods. The existing `failOnAllocation`,
+`disableFailures`, `resetAttempts`, and `allocationAttempts` methods continue
+to mean object allocation/growing reallocation only:
+
+```java
+@Test
+public void regionFailuresHaveAnIndependentAttemptCounter() {
+    RecordingBackend delegate = new RecordingBackend();
+    FailOnAllocationStableMemoryBackend backend =
+            new FailOnAllocationStableMemoryBackend(delegate);
+    backend.failOnAllocation(1L);
+    backend.failOnRegionAllocation(2L);
+
+    Assert.assertThrows(
+            NativeCapacityExceededException.class,
+            () -> backend.allocate(NativeObjectKind.GENERIC, 8)
+    );
+    Assert.assertSame(delegate.region, backend.allocateRegion("first", 8));
+    Assert.assertThrows(
+            NativeCapacityExceededException.class,
+            () -> backend.allocateRegion("second", 8)
+    );
+    Assert.assertEquals(1L, backend.allocationAttempts());
+    Assert.assertEquals(2L, backend.regionAllocationAttempts());
+}
+```
+
+Migrate `MutationFaultInjectionTest.FaultFixture` to one
+`FailOnAllocationStableMemoryBackend` around the selected backend. Delete the
+test-local `FailOnRegionAllocator`; change the two TTL loops to call
+`fixture.backend.failOnRegionAllocation(failAt)` and
+`fixture.backend.disableRegionFailures()`. Retain the existing object-failure
+loops unchanged. The RED assertion remains the full snapshot equality after
+the `YierdisCommandException` carrying `MaxmemoryErrors.OOM_ERR`.
+
+Extend `DbOwnerBindingTest` with identity capture rather than relying only on
+two threads binding to the same physical thread:
+
+```java
+@Test
+public void factoryPassesTheDatabaseOwnerObjectToTheBackend() {
+    AtomicReference<MemoryOwner> received = new AtomicReference<>();
+    YierdisDbEngineFactory factory = new YierdisDbEngineFactory(
+            (name, slots, owner) -> {
+                received.set(owner);
+                return new HeapStableMemoryBackend(name, slots, owner);
+            },
+            new YierdisDbBackendConfig(64)
+    );
+    YierdisDb engine = (YierdisDb) factory.create(config());
+
+    Assert.assertSame(engine.memoryOwnerForTesting(), received.get());
+    engine.bindToCurrentThread();
+    engine.shutdown();
+}
+```
+
+`memoryOwnerForTesting()` is package-private, returns the stored
+`DbThreadGuard` as `MemoryOwner`, and is used only by same-package contract
+tests. Do not add it to `RuntimeDbEngine` or any public API.
+
+Create `YierdisDbLifecycleContractTest` with a factory-provided
+`CallbackAndFailingCloseBackend`. Its `close()` first invokes a callback while
+the owner thread is still active, then optionally throws once. The callback
+calls `engine.runMaintenance()` and must observe `IllegalStateException` whose
+message mentions `CLOSING`; the backend's own cleanup calls must complete. The
+two terminal-state assertions are:
+
+```java
+Assert.assertThrows(IllegalStateException.class, engine::runMaintenance);
+Assert.assertEquals(1, backend.closeCalls());
+engine.shutdown();
+Assert.assertEquals(1, backend.closeCalls());
+```
+
+The first assertion runs after the first shutdown throws its injected close
+failure. It demonstrates that public work is rejected after a failed cleanup;
+the second proves that shutdown does not free the resource graph twice.
+
+Create `YierdisDbMaintenanceContractTest`. Build one DB with local
+maxmemory, one expired key, one live key, and enough hash writes to create
+rehash debt. A call to `runMaintenance()` must leave the live key present
+because expiry reclamation happened before local admission, advance the
+registered hash-table maintenance cursor/debt, and invoke neither global
+eviction nor defrag. Use a recording `MaxmemoryCoordinator` and a recording
+backend `defragCycle` counter; both counts must remain zero. The test binds and
+shuts down on its creating thread.
+
+Add collision regressions in the named package-local tests. Each uses two
+`HeapStableMemoryBackend` instances with different `MemoryOwner`s, binds both
+to the test thread, and allocates the first object from each backend so both
+handles have `localRaw() == 1L` but different `allocatorId()` values:
+
+```java
+private static void assertCollisionPair(NativeHandle left, NativeHandle right) {
+    Assert.assertEquals(left.localRaw(), right.localRaw());
+    Assert.assertNotEquals(left.allocatorId(), right.allocatorId());
+    Assert.assertNotEquals(left, right);
+}
+```
+
+Apply that pair to these concrete assertions, not only a source scan:
+
+| Test file | Assertion that must retain the pair |
+| --- | --- |
+| `EntryTableContractTest` | read an `EntryRecord` and compare both key/value `NativeHandle` values exactly. |
+| `ExpireIndexContractTest` | insert and retrieve an expiry key handle; it remains the originating handle. |
+| `NativeKeyDirectoryTest` | `compute`/`get` returns the exact entry handle and a foreign equal-local-raw handle does not resolve the local entry. |
+| `CollectionRootTest` | a synthetic foreign `ValueHandle` with an equal local raw does not select the local adapter slot. |
+| `NativeByteMapTest` | two native-handle map values round-trip with their original allocator IDs. |
+| `NativeListpackTest` | every exported/pinned backing handle resolves only on its owning backend after a grow/copy path. |
+| `NativeHandleSetTest` | both collision handles can coexist, be pinned, unpinned, and freed without coalescing. |
+| `NativeCollectionScanWindowTest` and `PinnedPoppedValueSequenceTest` | emitted retained handles are unpinned/freed on their owner backend, never reconstructed against the consumer backend. |
+
+Run this RED command before any production migration. The expected result is
+compilation or assertion failure because the region API, lifecycle state,
+full-handle layouts, and source/POM guards do not yet exist:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 \
+PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
+mvn -pl yierdis-memory/yierdis-memory-testkit,yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-architecture-tests -am \
+  -Dtest=FailOnAllocationStableMemoryBackendTest,DbOwnerBindingTest,YierdisDbLifecycleContractTest,YierdisDbMaintenanceContractTest,EntryTableContractTest,CollectionRootTest,NativeKeyDirectoryTest,NativeByteMapTest,NativeListpackTest,NativeHandleSetTest,NativeCollectionScanWindowTest,PinnedPoppedValueSequenceTest,ExpireIndexContractTest,YierdisDbArchitectureGuardTest,ArchitectureBoundaryTest \
+  -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+Expected: FAIL before GREEN. Do not accept an already-green run: it means the
+test does not exercise the missing contract and must be corrected first.
 
 - [ ] **Step 1: Write the failing non-FFM composition test**
 
@@ -2952,64 +3109,15 @@ public void expireIndexUsesOnlyStableMemoryApi() throws Exception {
 }
 ```
 
-Add two source/POM guards to `YierdisDbArchitectureGuardTest`. Parse the POM as XML instead of matching dependency text:
+Add the source and POM guards from the **Mandatory source, factory, and
+direct-POM guard extension** later in this step. That consolidated contract
+supersedes the original main-only scan and recursive XML helper: it scans both
+DB-memory source roots and inspects only direct top-level POM dependencies.
 
-```java
-@Test
-public void dbMemoryMainHasNoFfmImplementationImport() throws Exception {
-    Path repoRoot = resolveRepoRoot();
-    Assert.assertNotNull("unable to resolve repository root", repoRoot);
-    List<String> offenders = new ArrayList<>();
-    int scanned = scanForForbiddenText(
-            repoRoot,
-            storageMemoryMain(repoRoot),
-            offenders,
-            "yier.bubu.redis.memory.foreign",
-            "java.lang.foreign"
-    );
-    Assert.assertTrue("expected to scan DB-memory main sources", scanned > 0);
-    if (!offenders.isEmpty()) {
-        Assert.fail("DB-memory main must depend only on memory-api:\n" + String.join("\n", offenders));
-    }
-}
-
-@Test
-public void dbMemoryPomDependsOnMemoryApiAndNotFfm() throws Exception {
-    Path repoRoot = resolveRepoRoot();
-    Assert.assertNotNull("unable to resolve repository root", repoRoot);
-    Path pomPath = repoRoot.resolve("yierdis-db/yierdis-db-memory/pom.xml");
-    DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-    factory.setNamespaceAware(false);
-    Document pom = factory.newDocumentBuilder().parse(pomPath.toFile());
-
-    Assert.assertEquals("compile", dependencyScope(pom, "yierdis-memory-api"));
-    Assert.assertNull(dependencyScope(pom, "yierdis-memory-ffm"));
-}
-
-private static String dependencyScope(Document pom, String artifactId) {
-    NodeList dependencies = pom.getElementsByTagName("dependency");
-    for (int index = 0; index < dependencies.getLength(); index++) {
-        Element dependency = (Element) dependencies.item(index);
-        if (!artifactId.equals(childText(dependency, "artifactId"))) {
-            continue;
-        }
-        String scope = childText(dependency, "scope");
-        return scope == null || scope.isBlank() ? "compile" : scope;
-    }
-    return null;
-}
-
-private static String childText(Element parent, String tagName) {
-    NodeList children = parent.getElementsByTagName(tagName);
-    return children.getLength() == 0 ? null : children.item(0).getTextContent().trim();
-}
-```
-
-Add imports for `javax.xml.parsers.DocumentBuilderFactory`, `org.w3c.dom.Document`, `org.w3c.dom.Element`, and `org.w3c.dom.NodeList`.
-
-Add this source-level visibility guard to `ArchitectureBoundaryTest`; the
-line-anchored declaration pattern intentionally checks top-level types and
-rejects any second public FFM implementation entry point:
+Add this source-level visibility guard to `ArchitectureBoundaryTest`. Strip
+comments and literals first, then use an unanchored whitespace-tolerant
+declaration pattern; a line-anchored pattern can miss legal declarations split
+across lines:
 
 ```java
 @Test
@@ -3021,14 +3129,17 @@ public void ffmModuleExposesOnlyStableBackendFacade() throws IOException {
                     + "yier/bubu/redis/memory/foreign"
     );
     Pattern declaration = Pattern.compile(
-            "(?m)^public\\s+(?:(?:abstract|final|sealed|non-sealed|strictfp)\\s+)*"
+            "(?s)\\bpublic\\s+(?:(?:abstract|final|sealed|non-sealed|strictfp)\\s+)*"
                     + "(?:class|interface|@interface|enum|record)\\s+"
                     + "([A-Za-z][A-Za-z0-9_]*)\\b"
     );
     List<String> publicTypes = new ArrayList<>();
     try (Stream<Path> files = Files.walk(ffmSources)) {
         for (Path file : files.filter(path -> path.toString().endsWith(".java")).toList()) {
-            var matcher = declaration.matcher(Files.readString(file, StandardCharsets.UTF_8));
+            String source = stripJavaCommentsAndLiterals(
+                    Files.readString(file, StandardCharsets.UTF_8)
+            );
+            var matcher = declaration.matcher(source);
             while (matcher.find()) {
                 publicTypes.add(matcher.group(1));
             }
@@ -3040,13 +3151,146 @@ public void ffmModuleExposesOnlyStableBackendFacade() throws IOException {
 }
 ```
 
+Use this helper in the same test class; it preserves whitespace so split
+declarations remain detectable while comments and examples cannot produce a
+false public type:
+
+```java
+private static String stripJavaCommentsAndLiterals(String source) {
+    return source.replaceAll(
+            "(?s)/\\*.*?\\*/|//[^\\R]*|\\\"(?:\\\\.|[^\\\"\\\\])*\\\"|'(?:\\\\.|[^'\\\\])*'",
+            " "
+    );
+}
+```
+
+**Mandatory source, factory, and direct-POM guard extension:** Replace the
+main-only FFM source scan with a two-root scan and add factory-only reflection
+checks in `YierdisDbArchitectureGuardTest`:
+
+```java
+@Test
+public void dbMemoryMainAndTestHaveNoFfmImports() throws IOException {
+    Path repoRoot = resolveRepoRoot();
+    Assert.assertNotNull("unable to resolve repository root", repoRoot);
+    List<String> offenders = new ArrayList<>();
+    int scanned = 0;
+    for (Path root : List.of(storageMemoryMain(repoRoot), storageMemoryTest(repoRoot))) {
+        scanned += scanForForbiddenText(
+                repoRoot, root, offenders,
+                "yier.bubu.redis.memory.foreign", "java.lang.foreign"
+        );
+    }
+    Assert.assertTrue("expected DB-memory Java sources", scanned > 0);
+    Assert.assertTrue("DB-memory must not import FFM:\n" + String.join("\n", offenders),
+            offenders.isEmpty());
+}
+
+@Test
+public void yierdisDbHasFactoryOnlyComposition() {
+    Assert.assertEquals(0, YierdisDb.class.getConstructors().length);
+    Assert.assertFalse(Arrays.stream(YierdisDb.class.getDeclaredMethods())
+            .anyMatch(method -> method.getName().startsWith("createWith")));
+    Constructor<?>[] constructors = YierdisDbEngineFactory.class.getConstructors();
+    Assert.assertEquals(1, constructors.length);
+    Assert.assertArrayEquals(
+            new Class<?>[]{StableMemoryBackendFactory.class, YierdisDbBackendConfig.class},
+            constructors[0].getParameterTypes()
+    );
+}
+```
+
+Import `java.lang.reflect.Constructor`, `java.util.Arrays`,
+`yier.bubu.redis.memory.api.StableMemoryBackendFactory`, and only the DB-memory
+types already in this test package. Also assert that these retired paths are
+absent after a clean build:
+
+```java
+Assert.assertThrows(ClassNotFoundException.class, () -> Class.forName(
+        "yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmIntSet"));
+Assert.assertThrows(ClassNotFoundException.class, () -> Class.forName(
+        "yier.bubu.redis.storage.memory.internal.value.NativeRawHandleSet"));
+Assert.assertFalse(Files.exists(storageMemoryTest(repoRoot).resolve(
+        "yier/bubu/redis/storage/memory/internal/entry/RawPathRecordingAllocator.java")));
+```
+
+Add `storageCompositionPomsDeclareMemoryDependenciesDirectly()` to
+`ArchitectureBoundaryTest`. Parse each POM with its existing direct-child XML
+helpers; do not call `getElementsByTagName("dependency")`. The helper must
+inspect only `project`'s direct `<dependencies>` child and that element's direct
+`<dependency>` children:
+
+```java
+private static String directDependencyScope(Path pom, String artifactId) throws IOException {
+    Document document = parsePom(pom);
+    Element project = document.getDocumentElement();
+    Element dependencies = childElements(project, "dependencies").stream()
+            .findFirst()
+            .orElse(null);
+    if (dependencies == null) {
+        return null;
+    }
+    for (Element dependency : childElements(dependencies, "dependency")) {
+        if (artifactId.equals(directChildText(dependency, "artifactId"))) {
+            String scope = directChildText(dependency, "scope");
+            return scope == null || scope.isBlank() ? "compile" : scope;
+        }
+    }
+    return null;
+}
+
+private static void assertDirectDependency(Path pom, String artifactId, String scope)
+        throws IOException {
+    Assert.assertEquals(pom + " -> " + artifactId, scope,
+            directDependencyScope(pom, artifactId));
+}
+```
+
+Use this exact parser helper so a dependency in `dependencyManagement`, a
+profile, or a nested plugin cannot satisfy the assertion:
+
+```java
+private static Document parsePom(Path pom) throws IOException {
+    try (InputStream in = Files.newInputStream(pom)) {
+        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        factory.setNamespaceAware(true);
+        return factory.newDocumentBuilder().parse(in);
+    } catch (Exception failure) {
+        throw new IOException("failed to parse pom.xml: " + pom, failure);
+    }
+}
+```
+
+Implement the named test with these exact POM paths and direct edges:
+
+```java
+@Test
+public void storageCompositionPomsDeclareMemoryDependenciesDirectly() throws IOException {
+    Path repoRoot = resolveRepoRoot();
+    Assert.assertNotNull("cannot locate repository root", repoRoot);
+    Path dbMemoryPom = repoRoot.resolve("yierdis-db/yierdis-db-memory/pom.xml");
+    Path serverMainPom = repoRoot.resolve("yierdis-server/yierdis-server-main/pom.xml");
+    Path integrationPom = repoRoot.resolve("yierdis-tests/yierdis-integration-tests/pom.xml");
+    Path benchmarkPom = repoRoot.resolve("yierdis-benchmark/pom.xml");
+
+    assertDirectDependency(dbMemoryPom, "yierdis-memory-api", "compile");
+    Assert.assertNull(directDependencyScope(dbMemoryPom, "yierdis-memory-ffm"));
+    assertDirectDependency(serverMainPom, "yierdis-memory-api", "compile");
+    assertDirectDependency(serverMainPom, "yierdis-memory-ffm", "compile");
+    assertDirectDependency(integrationPom, "yierdis-memory-api", "test");
+    assertDirectDependency(integrationPom, "yierdis-memory-ffm", "test");
+    assertDirectDependency(benchmarkPom, "yierdis-memory-api", "compile");
+    assertDirectDependency(benchmarkPom, "yierdis-memory-ffm", "compile");
+}
+```
+
 - [ ] **Step 4: Run the focused tests and verify RED**
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 \
 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-mvn -pl yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-architecture-tests -am \
-  -Dtest=HeapStableMemoryBackendTest,StableMemoryBackendCompositionTest,DbOwnerBindingTest,ExpireIndexContractTest,YierdisDbArchitectureGuardTest,ArchitectureBoundaryTest \
+mvn -pl yierdis-memory/yierdis-memory-testkit,yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-architecture-tests -am \
+  -Dtest=FailOnAllocationStableMemoryBackendTest,HeapStableMemoryBackendTest,StableMemoryBackendCompositionTest,DbOwnerBindingTest,YierdisDbLifecycleContractTest,YierdisDbMaintenanceContractTest,EntryTableContractTest,CollectionRootTest,NativeKeyDirectoryTest,NativeByteMapTest,NativeListpackTest,NativeHandleSetTest,NativeCollectionScanWindowTest,PinnedPoppedValueSequenceTest,ExpireIndexContractTest,YierdisDbArchitectureGuardTest,ArchitectureBoundaryTest \
   -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
@@ -3073,42 +3317,10 @@ public record YierdisDbBackendConfig(int nativeSlotCapacity) {
 }
 ```
 
-Make `DbThreadGuard` implement `MemoryOwner` with a single atomic owner reference:
-
-```java
-public final class DbThreadGuard implements MemoryOwner {
-    private final AtomicReference<Thread> owner = new AtomicReference<>();
-
-    @Override
-    public void bindToCurrentThread() {
-        Thread current = Thread.currentThread();
-        Thread existing = owner.get();
-        if (existing == current) return;
-        if (existing != null || !owner.compareAndSet(null, current)) {
-            throw new IllegalStateException("YierdisDb is already bound to another thread");
-        }
-    }
-
-    @Override
-    public void checkCurrentThread() {
-        Thread existing = owner.get();
-        if (existing == null) {
-            throw new IllegalStateException("YierdisDb accessed before bindToCurrentThread()");
-        }
-        if (existing != Thread.currentThread()) {
-            throw new IllegalStateException("YierdisDb accessed from a non-owner thread");
-        }
-    }
-
-    @Override
-    public void checkCurrentThreadForShutdown() {
-        Thread existing = owner.get();
-        if (existing != null && existing != Thread.currentThread()) {
-            throw new IllegalStateException("YierdisDb shutdown from a non-owner thread");
-        }
-    }
-}
-```
+Make `DbThreadGuard` implement `MemoryOwner` with the lifecycle-aware
+two-path contract defined below. It retains a single atomic owner reference,
+rejects public DB work outside `OPEN`, and permits owner-thread backend cleanup
+while `CLOSING`.
 
 `YierdisDbEngineFactory` has one exact public constructor:
 
@@ -3156,6 +3368,211 @@ void bindToCurrentThread() {
 ```
 
 All DB checks continue through the shared `DbThreadGuard`. There is no second guard bind and no backend-local first-use binding.
+
+**Lifecycle contract:** `checkDbAccess` is used by every public DB operation
+through `YierdisDbRuntimeState.checkThread`; the `MemoryOwner` methods remain
+available to owner-thread backend cleanup in `CLOSING`.
+
+```java
+public final class DbThreadGuard implements MemoryOwner {
+    private enum Lifecycle { OPEN, CLOSING, CLOSED }
+
+    private final AtomicReference<Thread> owner = new AtomicReference<>();
+    private final AtomicReference<Lifecycle> lifecycle =
+            new AtomicReference<>(Lifecycle.OPEN);
+
+    @Override
+    public void bindToCurrentThread() {
+        requireOpen();
+        Thread current = Thread.currentThread();
+        Thread existing = owner.get();
+        if (existing == current) {
+            return;
+        }
+        if (existing != null || !owner.compareAndSet(null, current)) {
+            throw new IllegalStateException("YierdisDb is already bound to another thread");
+        }
+    }
+
+    void checkDbAccess() {
+        requireOpen();
+        requireOwner("YierdisDb accessed before bindToCurrentThread()",
+                "YierdisDb accessed from a non-owner thread");
+    }
+
+    @Override
+    public void checkCurrentThread() {
+        if (lifecycle.get() == Lifecycle.CLOSED) {
+            throw new IllegalStateException("YierdisDb is CLOSED");
+        }
+        requireOwner("memory accessed before bindToCurrentThread()",
+                "memory accessed from a non-owner thread");
+    }
+
+    @Override
+    public void checkCurrentThreadForShutdown() {
+        Thread existing = owner.get();
+        if (existing != null && existing != Thread.currentThread()) {
+            throw new IllegalStateException("YierdisDb shutdown from a non-owner thread");
+        }
+    }
+
+    boolean beginShutdown() {
+        checkCurrentThreadForShutdown();
+        return lifecycle.compareAndSet(Lifecycle.OPEN, Lifecycle.CLOSING);
+    }
+
+    void finishShutdown() {
+        lifecycle.set(Lifecycle.CLOSED);
+    }
+
+    private void requireOpen() {
+        Lifecycle current = lifecycle.get();
+        if (current != Lifecycle.OPEN) {
+            throw new IllegalStateException("YierdisDb is " + current);
+        }
+    }
+
+    private void requireOwner(String unboundMessage, String foreignMessage) {
+        Thread existing = owner.get();
+        if (existing == null) {
+            throw new IllegalStateException(unboundMessage);
+        }
+        if (existing != Thread.currentThread()) {
+            throw new IllegalStateException(foreignMessage);
+        }
+    }
+}
+```
+
+Implement shutdown as a two-phase best-effort cleanup. `releaseAll` already
+owns close ordering; it must attempt every resource close, collect suppressed
+failures, and close the backend last. `YierdisDbRuntimeState.shutdown()` must
+not mark CLOSED before that cleanup:
+
+```java
+void shutdown() {
+    if (!threadGuard.beginShutdown()) {
+        return;
+    }
+    Throwable failure = null;
+    try {
+        ledger().resetUsage();
+    } catch (Throwable next) {
+        failure = next;
+    }
+    try {
+        YierdisDbStorageComponents current = storage();
+        current.resources.releaseAll(
+                current.expires, current.entries, current.keyDirectory,
+                current.stringRoot, current.listRoot, current.hashRoot,
+                current.setRoot, current.zsetRoot
+        );
+    } catch (Throwable next) {
+        if (failure == null) {
+            failure = next;
+        } else {
+            failure.addSuppressed(next);
+        }
+    } finally {
+        threadGuard.finishShutdown();
+    }
+    if (failure instanceof RuntimeException runtimeFailure) {
+        throw runtimeFailure;
+    }
+    if (failure instanceof Error errorFailure) {
+        throw errorFailure;
+    }
+    if (failure != null) {
+        throw new IllegalStateException("YierdisDb shutdown failed", failure);
+    }
+}
+```
+
+Keep the test-only identity seam narrow and route all ordinary DB guards through
+the OPEN-only method:
+
+```java
+// YierdisDbRuntimeState
+void checkThread() {
+    threadGuard.checkDbAccess();
+}
+
+MemoryOwner memoryOwnerForTesting() {
+    return threadGuard;
+}
+
+// YierdisDb
+MemoryOwner memoryOwnerForTesting() {
+    return runtimeState.memoryOwnerForTesting();
+}
+```
+
+`YierdisDbRuntimeState.bindToCurrentThread()` still delegates only to
+`stableMemoryBackend.bindToCurrentThread()`. That call binds the exact guard
+already supplied to the backend factory; it must not call a second owner bind.
+
+Implement the required baseline maintenance method on `YierdisDb` and its
+delegate before moving on to downstream modules. Pass
+`config.expireCleanupTimeLimitNanos` into the `YierdisDbDataMaintenance`
+constructor from `YierdisDbComponentFactory`:
+
+```java
+@Override
+public void runMaintenance() {
+    maintenance.runMaintenance();
+}
+
+private static final long MAINTENANCE_REHASH_MAX_INSPECTED_SLOTS = 64L;
+private final long maintenanceTimeLimitNanos;
+
+void runMaintenance() {
+    runtimeState.checkThread();
+    health.requireWritable();
+    expirationSupport.cleanupExpired();
+    rehashMaintenance(HashTableWorkBudget.of(
+            MAINTENANCE_REHASH_MAX_INSPECTED_SLOTS,
+            maintenanceTimeLimitNanos
+    ));
+    enforceMaxmemory();
+}
+```
+
+Add the constructor field assignment rather than reading configuration through a
+global or an old `YierdisInstanceConfig` accessor:
+
+```java
+YierdisDbDataMaintenance(
+        YierdisDbRuntimeState runtimeState,
+        YierdisDbHealth health,
+        HashTableMaintenanceRegistry hashTableMaintenanceRegistry,
+        YierdisDbMutationExecutor mutationExecutor,
+        YierdisDbExpirationSupport expirationSupport,
+        YierdisDbMaxmemorySupport maxmemorySupport,
+        YierdisDbMemoryReporter memoryReporter,
+        long maintenanceTimeLimitNanos
+) {
+    this.runtimeState = Objects.requireNonNull(runtimeState, "runtimeState");
+    this.health = Objects.requireNonNull(health, "health");
+    this.hashTableMaintenanceRegistry = Objects.requireNonNull(
+            hashTableMaintenanceRegistry, "hashTableMaintenanceRegistry");
+    this.mutationExecutor = Objects.requireNonNull(mutationExecutor, "mutationExecutor");
+    this.expirationSupport = Objects.requireNonNull(expirationSupport, "expirationSupport");
+    this.maxmemorySupport = Objects.requireNonNull(maxmemorySupport, "maxmemorySupport");
+    this.memoryReporter = Objects.requireNonNull(memoryReporter, "memoryReporter");
+    if (maintenanceTimeLimitNanos < 0L) {
+        throw new IllegalArgumentException("maintenanceTimeLimitNanos must be >= 0");
+    }
+    this.maintenanceTimeLimitNanos = maintenanceTimeLimitNanos;
+}
+```
+
+The component factory supplies `config.expireCleanupTimeLimitNanos`; no other
+component owns this per-tick hash maintenance bound.
+
+Keep global eviction in `YierdisInstanceRuntimeAccess` after all DB ticks and
+keep `defragMaintenance()` in its capability branch. Do not call either from
+`runMaintenance()`.
 
 - [ ] **Step 6: Replace runtime/allocator ownership with one backend resource**
 
@@ -3897,9 +4314,63 @@ In `yierdis-db-memory/pom.xml`, retain `yierdis-memory-api` at compile scope and
 
 In `MutationFaultInjectionTest` and `ZSetValueTest`, retain the existing
 `failOnAllocation`, `disableFailures`, `resetAttempts`, and
-`allocationAttempts` calls unchanged. Migrate only the fixture type and its
-construction to `FailOnAllocationStableMemoryBackend`; do not add aliases or
-reinterpret the one-based allocation-attempt contract.
+`allocationAttempts` calls unchanged for object allocation. Migrate each
+fixture to `FailOnAllocationStableMemoryBackend` and use its independent
+`failOnRegionAllocation`, `disableRegionFailures`, `resetRegionAttempts`, and
+`regionAllocationAttempts` methods for TTL/index regions. Do not add aliases,
+reuse an object counter for regions, or reinterpret either one-based attempt
+contract.
+
+Implement the region channel in `FailOnAllocationStableMemoryBackend` after
+the Step 0 RED test has failed. It is deliberately separate from the existing
+`attempts` and `failAt` fields:
+
+```java
+private final AtomicLong regionAttempts = new AtomicLong();
+private volatile long failRegionAt = -1L;
+
+public void failOnRegionAllocation(long oneBasedIndex) {
+    if (oneBasedIndex <= 0L) {
+        throw new IllegalArgumentException("oneBasedIndex must be > 0");
+    }
+    failRegionAt = oneBasedIndex;
+}
+
+public void disableRegionFailures() {
+    failRegionAt = -1L;
+}
+
+public void resetRegionAttempts() {
+    regionAttempts.set(0L);
+}
+
+public long regionAllocationAttempts() {
+    return regionAttempts.get();
+}
+
+@Override
+public StableMemoryRegion allocateRegion(String owner, int bytes) {
+    long attempt = regionAttempts.incrementAndGet();
+    if (attempt == failRegionAt) {
+        throw new NativeCapacityExceededException(
+                "injected stable memory region allocation failure at attempt " + attempt
+        );
+    }
+    return delegate.allocateRegion(owner, bytes);
+}
+```
+
+The DB-memory test boundary is as strict as its production boundary. Convert
+all remaining DB-memory tests that import `yier.bubu.redis.memory.foreign` to
+`HeapStableMemoryBackend` or another `memory-api`-only testkit fixture. Move
+the FFM-specific physical-page, defrag, and post-close leak assertions from
+`MaxmemoryPageTrimTest`, `PhysicalMemoryAccountingTest`, and
+`YierdisDbDefragMaintenanceTest` into
+`yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/storage/memory/`.
+Those integration tests compose `YierdisFfmStableMemoryBackend` through the
+factory; DB-memory tests never import an FFM type. Keep behavior-only tests in
+DB-memory and give them a heap backend. Do not add a test-scope FFM dependency
+back to `yierdis-db-memory`.
 
 In `yierdis-server-main/pom.xml`, add a direct compile dependency on `yierdis-memory-api` because bootstrap declares `StableMemoryBackendFactory`; retain its direct `yierdis-db-api`, `yierdis-db-memory`, and `yierdis-memory-ffm` composition dependencies. In `yierdis-integration-tests/pom.xml`, add direct test-scope dependencies on `yierdis-memory-api` and `yierdis-memory-ffm`, retaining the direct test dependencies on `yierdis-db-api` and `yierdis-db-memory`. Neither module may rely on the removed `db-memory -> memory-ffm` transitive edge.
 
@@ -4079,17 +4550,22 @@ The test double implements only the baseline `RuntimeDbEngine` contract; do not 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 \
 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-mvn -pl yierdis-db/yierdis-db-memory,yierdis-server/yierdis-server-main,yierdis-tests/yierdis-architecture-tests,yierdis-tests/yierdis-integration-tests,yierdis-benchmark -am \
-  -Dtest=HeapStableMemoryBackendTest,StableMemoryBackendCompositionTest,DbOwnerBindingTest,ExpireIndexContractTest,EntryHandleContractTest,ValueHandleContractTest,EntryTableContractTest,YierdisDbArchitectureGuardTest,ArchitectureBoundaryTest,YierdisServerBootstrapCloseTest,YierdisServerBootstrapCommandWiringTest,NettyExecutionAdapterIntegrationTest,YierdisInstanceTest,CommitStreamIntegrationTest,GlobalMaxmemoryLruAcrossDbsTest,MaxmemoryPhysicalProgressTest,EmptyDatabaseFootprintTest,YierdisSnapshotTest,OffHeapLeakRegressionTest,MaxmemoryEvictionTest,TtlMaxmemoryTest,MaxmemoryDoubleReplyRegressionTest,HllCommandTest,OffHeapKeysZeroCopyReadPathTest,OffHeapKeysCommandSmokeTest,StringCommandTest,CollectionScanCommandTest,StorageBenchmarkRunnerTest \
+mvn -pl yierdis-memory/yierdis-memory-testkit,yierdis-db/yierdis-db-memory,yierdis-server/yierdis-server-main,yierdis-tests/yierdis-architecture-tests,yierdis-tests/yierdis-integration-tests,yierdis-benchmark -am \
+  -Dtest=FailOnAllocationStableMemoryBackendTest,HeapStableMemoryBackendTest,StableMemoryBackendCompositionTest,DbOwnerBindingTest,YierdisDbLifecycleContractTest,YierdisDbMaintenanceContractTest,MutationFaultInjectionTest,ExpireIndexContractTest,EntryHandleContractTest,ValueHandleContractTest,EntryTableContractTest,CollectionRootTest,NativeKeyDirectoryTest,NativeByteMapTest,NativeListpackTest,NativeHandleSetTest,NativeCollectionScanWindowTest,PinnedPoppedValueSequenceTest,YierdisDbArchitectureGuardTest,ArchitectureBoundaryTest,YierdisServerBootstrapCloseTest,YierdisServerBootstrapCommandWiringTest,NettyExecutionAdapterIntegrationTest,YierdisInstanceTest,CommitStreamIntegrationTest,GlobalMaxmemoryLruAcrossDbsTest,MaxmemoryPhysicalProgressTest,EmptyDatabaseFootprintTest,YierdisSnapshotTest,OffHeapLeakRegressionTest,MaxmemoryEvictionTest,TtlMaxmemoryTest,MaxmemoryDoubleReplyRegressionTest,HllCommandTest,OffHeapKeysZeroCopyReadPathTest,OffHeapKeysCommandSmokeTest,StringCommandTest,CollectionScanCommandTest,StorageBenchmarkRunnerTest \
   -Dsurefire.failIfNoSpecifiedTests=false clean test
 ```
 
 Expected: PASS. The clean phase removes renamed/deleted DB classes before the
 expire-index `Class.forName` absence assertion. The heap backend matches owner,
 pinned-view, little-endian, and overlap contracts; it constructs and mutates a
-DB, concurrent binding has one winner shared by DB/backend, full handles
-round-trip through entry/collection/expire layouts, main DB source/POM have no
-FFM implementation edge, server close/configuration tests use
+DB, concurrent binding has one winner shared by DB/backend, factory capture
+proves that both use the same owner object, and shutdown reaches a terminal
+state after a cleanup failure without a second close. Full handles round-trip
+through entry, collection, key-directory, byte-map, listpack, handle-set,
+scan/popped, and expiry layouts under equal-local-raw collisions. Both DB main
+and test source/POM have no FFM implementation edge, and direct-child POM
+guards prove the server-main, integration, and benchmark composition edges.
+Server close/configuration tests use
 `DbEngineConfig` and baseline/capability-typed doubles, governor tests use
 `GlobalMaxmemoryDbEngine[]`, every named integration construction/accounting
 path uses the public backend facade, and the benchmark requires the
@@ -4110,18 +4586,29 @@ Expected: PASS, including fault injection, native regression, benchmark physical
 
 ```bash
 rg -n \
-  'NativeAllocator|allocateRaw|reallocRaw|resolveRaw|resolvePinnedRaw|freeRaw|pinRaw|unpinRaw|NativeHandle\.fromRaw|\.raw\(\)|memory\.foreign|java\.lang\.foreign' \
-  yierdis-db/yierdis-db-memory/src/main
+  'NativeAllocator|allocateRaw|reallocRaw|resolveRaw|resolvePinnedRaw|freeRaw|pinRaw|unpinRaw|NativeHandle\.fromRaw|\.raw\(\)|memory\.foreign|java\.lang\.foreign|YierdisFfmMemoryRuntime|YierdisFfmRegion|YierdisStableNativeAllocator' \
+  yierdis-db/yierdis-db-memory/src/main \
+  yierdis-db/yierdis-db-memory/src/test
 ```
 
 Expected: no matches.
+
+```bash
+rg -n --pcre2 \
+  'YierdisFfmIntSet|NativeRawHandleSet|RawPathRecordingAllocator|createWith(?:Owned|Shared)FfmRuntime|new\s+YierdisDb\s*\(' \
+  yierdis-db/yierdis-db-memory/src/main \
+  yierdis-db/yierdis-db-memory/src/test
+```
+
+Expected: no matches. `NativeHandleSet` is the replacement class name and may
+appear; the retired `NativeRawHandleSet` may not.
 
 ```bash
 rg -n '<artifactId>yierdis-memory-ffm</artifactId>' \
   yierdis-db/yierdis-db-memory/pom.xml
 ```
 
-Expected: no matches. `YierdisDbArchitectureGuardTest.dbMemoryPomDependsOnMemoryApiAndNotFfm` enforces the same rule structurally.
+Expected: no matches. `ArchitectureBoundaryTest.storageCompositionPomsDeclareMemoryDependenciesDirectly` enforces the same direct dependency rule structurally.
 
 ```bash
 rg -n -U --pcre2 \
