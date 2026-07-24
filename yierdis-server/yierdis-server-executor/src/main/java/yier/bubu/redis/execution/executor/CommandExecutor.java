@@ -1,12 +1,11 @@
 package yier.bubu.redis.execution.executor;
 
-import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.CapacityRegistration;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -31,7 +30,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
         }
     }
 
-    private final Executor ownerExecutor;
+    private final SerialOwnerExecutor ownerExecutor;
     private final ExecutorBacklogBudget backlogBudget;
     private final ExecutorBackpressureController<C> backpressureController;
     private final ExecutorTaskQueue<C, CommandExecutorTask<C>> taskQueue;
@@ -46,7 +45,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
     public CommandExecutor(
             Runnable bindToCurrentThread,
             CommandExecutionEngine commandProcessor,
-            Executor ownerExecutor,
+            SerialOwnerExecutor ownerExecutor,
             RedisReplyWriterFactory replyWriterFactory,
             ExecutionIoAdapter<C> ioAdapter,
             CommandExecutorConfig config
@@ -62,81 +61,9 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
                 config.backpressureLowWatermark(),
                 config.backpressureBytesHighWatermark(),
                 config.backpressureBytesLowWatermark(),
-                new ExecutorBackpressureIo<>() {
-                    @Override
-                    public boolean isActive(C key) {
-                        return ioAdapter.isActive(key);
-                    }
-
-                    @Override
-                    public boolean isWritable(C key) {
-                        return ioAdapter.isWritable(key);
-                    }
-
-                    @Override
-                    public void disableAutoRead(C key) {
-                        ioAdapter.disableInput(key);
-                    }
-
-                    @Override
-                    public void enableAutoRead(C key) {
-                        ioAdapter.enableInput(key);
-                    }
-
-                    @Override
-                    public void onClose(C key, Runnable callback) {
-                        ioAdapter.onClose(key, callback);
-                    }
-                },
-                new ExecutorBackpressureRuntime<>() {
-                    @Override
-                    public int pending(C key) {
-                        return key.context().pending();
-                    }
-
-                    @Override
-                    public long pendingBytes(C key) {
-                        return key.context().pendingBytes();
-                    }
-
-                    @Override
-                    public boolean isClosing(C key) {
-                        return key.context().isClosing();
-                    }
-
-                    @Override
-                    public boolean markAutoReadDisabledByExecutor(C key) {
-                        return key.context().markInputDisabledByExecutor();
-                    }
-
-                    @Override
-                    public boolean autoReadDisabledByExecutor(C key) {
-                        return key.context().autoReadDisabledByExecutor();
-                    }
-
-                    @Override
-                    public boolean clearAutoReadDisabledByExecutor(C key) {
-                        return key.context().clearAutoReadDisabledByExecutor();
-                    }
-
-                    @Override
-                    public boolean inputPausedByReply(C key) {
-                        return key.context().inputPausedByReply();
-                    }
-                },
-                new ExecutorBackpressureObserver<>() {
-                    @Override
-                    public void onEnter(C key) {
-                        key.context().recordBackpressureEnter();
-                        backpressureEnter.increment();
-                    }
-
-                    @Override
-                    public void onExit(C key) {
-                        key.context().recordBackpressureExit();
-                        backpressureExit.increment();
-                    }
-                },
+                backpressureIo(ioAdapter),
+                backpressureRuntime(),
+                backpressureObserver(),
                 () -> running
         );
 
@@ -155,14 +82,6 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
                 config.backpressureBytesLowWatermark(),
                 () -> running
         );
-        this.submitter = new CommandExecutorSubmitter<>(
-                taskQueue,
-                backlogBudget,
-                backpressureController,
-                config.backpressureHighWatermark(),
-                config.backpressureBytesHighWatermark(),
-                () -> running
-        );
         this.drainLoop = new CommandExecutorDrainLoop<>(
                 this.ownerExecutor,
                 taskQueue,
@@ -171,6 +90,59 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
                 TimeUnit.MILLISECONDS.toNanos(config.drainTimeLimitMillis()),
                 () -> running
         );
+        this.submitter = new CommandExecutorSubmitter<>(
+                taskQueue,
+                backlogBudget,
+                backpressureController,
+                config.backpressureHighWatermark(),
+                config.backpressureBytesHighWatermark(),
+                () -> running,
+                drainLoop::scheduleDrain
+        );
+    }
+
+    private ExecutorBackpressureIo<C> backpressureIo(ExecutionIoAdapter<C> ioAdapter) {
+        return new ExecutorBackpressureIo<>() {
+            @Override public boolean isActive(C key) { return ioAdapter.isActive(key); }
+            @Override public boolean isWritable(C key) { return ioAdapter.isWritable(key); }
+            @Override public void disableAutoRead(C key) { ioAdapter.disableInput(key); }
+            @Override public void enableAutoRead(C key) { ioAdapter.enableInput(key); }
+            @Override public void onClose(C key, Runnable callback) { ioAdapter.onClose(key, callback); }
+        };
+    }
+
+    private ExecutorBackpressureRuntime<C> backpressureRuntime() {
+        return new ExecutorBackpressureRuntime<>() {
+            @Override public int pending(C key) { return key.context().pending(); }
+            @Override public long pendingBytes(C key) { return key.context().pendingBytes(); }
+            @Override public boolean isClosing(C key) { return key.context().isClosing(); }
+            @Override public boolean markAutoReadDisabledByExecutor(C key) {
+                return key.context().markInputDisabledByExecutor();
+            }
+            @Override public boolean autoReadDisabledByExecutor(C key) {
+                return key.context().autoReadDisabledByExecutor();
+            }
+            @Override public boolean clearAutoReadDisabledByExecutor(C key) {
+                return key.context().clearAutoReadDisabledByExecutor();
+            }
+            @Override public boolean inputPausedByReply(C key) { return key.context().inputPausedByReply(); }
+        };
+    }
+
+    private ExecutorBackpressureObserver<C> backpressureObserver() {
+        return new ExecutorBackpressureObserver<>() {
+            @Override
+            public void onEnter(C key) {
+                key.context().recordBackpressureEnter();
+                backpressureEnter.increment();
+            }
+
+            @Override
+            public void onExit(C key) {
+                key.context().recordBackpressureExit();
+                backpressureExit.increment();
+            }
+        };
     }
 
     public void start() {
@@ -178,23 +150,17 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
         drainLoop.markStarted();
     }
 
-    public SubmitRejectReason trySubmit(C connection, ExecutionRequest request) {
-        return submitter.trySubmit(connection, request, drainLoop::scheduleDrain);
+    public ExecutorAdmissionAttempt<C> tryAcquire(C connection, int retainedBytes) {
+        return submitter.tryAcquire(connection, retainedBytes);
     }
 
-    public SubmitRejectReason trySubmit(C connection, ExecutionRequest request, ExecutionReply reply) {
-        Objects.requireNonNull(reply, "reply");
-        return submitter.trySubmit(connection, request, reply, drainLoop::scheduleDrain);
-    }
-
-    public CapacityRegistration onCapacityAvailable(ExecutionRequest request, Runnable callback) {
-        Objects.requireNonNull(request, "request");
+    public CapacityRegistration onAdmissionAvailable(int retainedBytes, Runnable callback) {
         Objects.requireNonNull(callback, "callback");
         if (!running) {
             callback.run();
             return CapacityRegistration.NONE;
         }
-        return backlogBudget.onCapacityAvailable(safeRetainedBytes(request), callback);
+        return backlogBudget.onCapacityAvailable(retainedBytes, callback);
     }
 
     public StatsSnapshot statsSnapshot() {
@@ -225,6 +191,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
     public void executeMaintenance(Runnable task) {
         Objects.requireNonNull(task, "task");
         ownerExecutor.execute(() -> {
+            ownerExecutor.requireOwnerThread();
             if (running) {
                 task.run();
             }
@@ -235,6 +202,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
         Objects.requireNonNull(task, "task");
         CompletableFuture<Void> future = new CompletableFuture<>();
         ownerExecutor.execute(() -> {
+            ownerExecutor.requireOwnerThread();
             try {
                 task.run();
                 future.complete(null);
@@ -256,7 +224,10 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
         if (connection == null || !running) {
             return;
         }
-        ownerExecutor.execute(() -> executionSupport.recoverInputIfPossible(connection));
+        ownerExecutor.execute(() -> {
+            ownerExecutor.requireOwnerThread();
+            executionSupport.recoverInputIfPossible(connection);
+        });
     }
 
     public CompletableFuture<Void> shutdownGracefully() {
@@ -264,6 +235,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
         backlogBudget.wakeAllCapacityWaiters();
         CompletableFuture<Void> future = new CompletableFuture<>();
         ownerExecutor.execute(() -> {
+            ownerExecutor.requireOwnerThread();
             drainLoop.drainLeftoverCommands();
             future.complete(null);
         });
@@ -274,7 +246,11 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
     public void close() {
         running = false;
         backlogBudget.wakeAllCapacityWaiters();
-        drainLoop.drainLeftoverCommands();
+        if (ownerExecutor.inOwnerThread()) {
+            drainLoop.drainLeftoverCommands();
+        } else {
+            ownerExecutor.execute(drainLoop::drainLeftoverCommands);
+        }
     }
 
     public record StatsSnapshot(
@@ -299,20 +275,6 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
             long deferredFairReplyHeads,
             long deferredGlobalReplyHeads
     ) {
-    }
-
-    public interface CapacityRegistration {
-        CapacityRegistration NONE = () -> { };
-
-        void cancel();
-    }
-
-    private static int safeRetainedBytes(ExecutionRequest request) {
-        try {
-            return Math.max(0, request.retainedBytes());
-        } catch (Throwable ignored) {
-            return 0;
-        }
     }
 
     @SuppressWarnings("unchecked")

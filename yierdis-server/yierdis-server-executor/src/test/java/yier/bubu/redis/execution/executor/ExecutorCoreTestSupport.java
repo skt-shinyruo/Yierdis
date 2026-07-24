@@ -2,11 +2,14 @@ package yier.bubu.redis.execution.executor;
 
 import org.junit.Assert;
 import yier.bubu.redis.bytes.BytesSink;
+import yier.bubu.redis.execution.api.CapacityRegistration;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
+import yier.bubu.redis.execution.api.ExecutionReply;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.ReplyReservationSink;
+import yier.bubu.redis.execution.api.ReplyReservationResult;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.api.TransactionState;
@@ -68,6 +71,25 @@ final class ExecutorCoreTestSupport {
             }
             out.error("ERR unsupported test command");
         };
+    }
+
+    static <C extends ExecutionConnection> void publish(
+            CommandExecutor<C> executor,
+            C connection,
+            ExecutionRequest request,
+            ExecutionReply reply
+    ) {
+        ExecutorAdmissionAttempt<C> attempt = executor.tryAcquire(connection, request.retainedBytes());
+        Assert.assertTrue(attempt instanceof ExecutorAdmissionAttempt.Acquired<C>);
+        ((ExecutorAdmissionAttempt.Acquired<C>) attempt).admission().publish(request, reply);
+    }
+
+    static ExecutionReply ioReply(RecordingIoAdapter io, TestConnection connection) {
+        return new IoExecutionReply(io, connection);
+    }
+
+    static SerialOwnerExecutor serialOwner(Executor delegate) {
+        return new DelegatingSerialOwnerExecutor(delegate);
     }
 
     private static boolean asciiEqualsIgnoreCase(ExecutionRequest request, int index, String expectedUpperAscii) {
@@ -227,12 +249,109 @@ final class TestConnection implements ExecutionConnection {
     }
 }
 
-final class ManualOwnerExecutor implements Executor {
+final class DelegatingSerialOwnerExecutor implements SerialOwnerExecutor {
+    private final Executor delegate;
+    private final AtomicInteger runningActions = new AtomicInteger();
+    private volatile Thread ownerThread;
+
+    DelegatingSerialOwnerExecutor(Executor delegate) {
+        this.delegate = Objects.requireNonNull(delegate, "delegate");
+    }
+
+    @Override
+    public void execute(Runnable command) {
+        Objects.requireNonNull(command, "command");
+        delegate.execute(() -> {
+            Thread current = Thread.currentThread();
+            Thread established = ownerThread;
+            if (established == null) {
+                ownerThread = current;
+            } else if (established != current) {
+                throw new IllegalStateException("serial owner changed physical thread");
+            }
+            if (!runningActions.compareAndSet(0, 1)) {
+                throw new IllegalStateException("serial owner actions overlapped");
+            }
+            try {
+                command.run();
+            } finally {
+                runningActions.set(0);
+            }
+        });
+    }
+
+    @Override
+    public boolean inOwnerThread() {
+        return runningActions.get() == 1 && Thread.currentThread() == ownerThread;
+    }
+}
+
+final class IoExecutionReply implements ExecutionReply {
+    private final RecordingIoAdapter io;
+    private final TestConnection connection;
+    private BytesSink sink;
+
+    IoExecutionReply(RecordingIoAdapter io, TestConnection connection) {
+        this.io = Objects.requireNonNull(io, "io");
+        this.connection = Objects.requireNonNull(connection, "connection");
+    }
+
+    @Override
+    public ReplyReservationResult tryReserve(ReplyPlan plan) {
+        return ReplyReservationResult.RESERVED;
+    }
+
+    @Override
+    public CapacityRegistration onCapacityAvailable(Runnable wakeup) {
+        return CapacityRegistration.NONE;
+    }
+
+    @Override
+    public BytesSink sink() {
+        if (sink == null) {
+            sink = io.newReplySink(connection);
+        }
+        return sink;
+    }
+
+    @Override
+    public void markReady(boolean closeAfterReply) {
+        io.writeBufferedReply(connection, closeAfterReply);
+        io.flushPending(List.of(connection));
+    }
+
+    @Override
+    public void cancel() {
+    }
+
+    @Override
+    public boolean hasWrittenBytes() {
+        return sink != null && !io.bufferedReply(connection).isEmpty();
+    }
+
+    @Override
+    public void markResultUnknown() {
+    }
+
+    @Override
+    public void close() {
+        cancel();
+    }
+}
+
+final class ManualOwnerExecutor implements SerialOwnerExecutor {
     private final List<Runnable> tasks = new ArrayList<>();
+    private Thread ownerThread;
+    private boolean runningAction;
 
     @Override
     public void execute(Runnable command) {
         tasks.add(Objects.requireNonNull(command, "command"));
+    }
+
+    @Override
+    public boolean inOwnerThread() {
+        return runningAction && Thread.currentThread() == ownerThread;
     }
 
     int pendingTasks() {
@@ -240,11 +359,25 @@ final class ManualOwnerExecutor implements Executor {
     }
 
     void runAll() {
+        Thread caller = Thread.currentThread();
+        if (ownerThread == null) {
+            ownerThread = caller;
+        } else if (ownerThread != caller) {
+            throw new IllegalStateException("manual owner changed physical thread");
+        }
         while (!tasks.isEmpty()) {
             List<Runnable> pending = new ArrayList<>(tasks);
             tasks.clear();
             for (Runnable task : pending) {
-                task.run();
+                if (runningAction) {
+                    throw new IllegalStateException("serial owner actions overlapped");
+                }
+                runningAction = true;
+                try {
+                    task.run();
+                } finally {
+                    runningAction = false;
+                }
             }
         }
     }

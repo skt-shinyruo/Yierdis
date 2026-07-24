@@ -3,6 +3,7 @@ package yier.bubu.redis.app.server;
 import io.netty.buffer.ByteBuf;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutor;
+import io.netty.util.concurrent.ImmediateEventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
@@ -31,7 +32,7 @@ public class NettyExecutionAdapterIntegrationTest {
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
                     engine::execute,
-                    Runnable::run,
+                    new NettySerialOwnerExecutor(ImmediateEventExecutor.INSTANCE),
                     replyWriterFactory,
                     new NettyExecutionIoAdapter(),
                     new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -59,7 +60,7 @@ public class NettyExecutionAdapterIntegrationTest {
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
                 TestYierdisEngines.forInstance(instance)::execute,
-                eventExecutor,
+                new NettySerialOwnerExecutor(eventExecutor),
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
                 new CommandExecutorConfig(1, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -110,7 +111,7 @@ public class NettyExecutionAdapterIntegrationTest {
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
                 TestYierdisEngines.forInstance(instance)::execute,
-                eventExecutor,
+                new NettySerialOwnerExecutor(eventExecutor),
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
                 new CommandExecutorConfig(1_024, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -157,7 +158,7 @@ public class NettyExecutionAdapterIntegrationTest {
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
                     TestYierdisEngines.forInstance(instance)::execute,
-                    Runnable::run,
+                    new NettySerialOwnerExecutor(ImmediateEventExecutor.INSTANCE),
                     replyWriterFactory,
                     new NettyExecutionIoAdapter(),
                     new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -183,7 +184,7 @@ public class NettyExecutionAdapterIntegrationTest {
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
                     TestYierdisEngines.forInstance(instance)::execute,
-                    Runnable::run,
+                    new NettySerialOwnerExecutor(ImmediateEventExecutor.INSTANCE),
                     replyWriterFactory,
                     new NettyExecutionIoAdapter(),
                     new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)

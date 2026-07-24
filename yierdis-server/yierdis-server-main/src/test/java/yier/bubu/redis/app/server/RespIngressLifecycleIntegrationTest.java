@@ -313,7 +313,7 @@ public class RespIngressLifecycleIntegrationTest {
                         executions.incrementAndGet();
                         out.simpleString("OK");
                     },
-                    owner,
+                    new NettySerialOwnerExecutor(owner),
                     new RespReplyWriterFactory(),
                     new NettyExecutionIoAdapter(),
                     new CommandExecutorConfig(queueCapacity, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -379,7 +379,7 @@ public class RespIngressLifecycleIntegrationTest {
                         executions.incrementAndGet();
                         out.simpleString("OK");
                     },
-                    owner,
+                    new NettySerialOwnerExecutor(owner),
                     replyWriterFactory,
                     new NettyExecutionIoAdapter(),
                     new CommandExecutorConfig(queueCapacity, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)

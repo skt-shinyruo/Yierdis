@@ -2,20 +2,15 @@ package yier.bubu.redis.execution.executor;
 
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
 /**
- * Executor backpressure controller:\n
- * - tracks which connections have autoRead disabled by the executor\n
- * - coordinates best-effort global recovery scanning\n
- * <p>
- * This controller is Netty-free; I/O effects are delegated to {@link ExecutorBackpressureIo}.\n
- * Callers are responsible for deciding *when* to attempt enable/disable based on watermarks and budgets.
+ * 跟踪 executor 暂停的连接，并在串行 owner 上按全局水位恢复输入。
+ * I/O 副作用通过 {@link ExecutorBackpressureIo} 隔离，因此该类型不依赖 Netty。
  */
 public final class ExecutorBackpressureController<K> {
-    private final Executor decisionExecutor;
+    private final SerialOwnerExecutor decisionExecutor;
     private final ExecutorBacklogBudget backlogBudget;
     private final int backpressureLowWatermark;
     private final long backpressureBytesHighWatermark;
@@ -29,7 +24,7 @@ public final class ExecutorBackpressureController<K> {
     private final ConcurrentHashMap<K, Boolean> keysWithAutoReadDisabled = new ConcurrentHashMap<>();
 
     public ExecutorBackpressureController(
-            Executor decisionExecutor,
+            SerialOwnerExecutor decisionExecutor,
             ExecutorBacklogBudget backlogBudget,
             int backpressureLowWatermark,
             long backpressureBytesHighWatermark,
@@ -104,6 +99,7 @@ public final class ExecutorBackpressureController<K> {
     }
 
     private void recoverGlobalAutoRead() {
+        decisionExecutor.requireOwnerThread();
         globalRecoveryScheduled.set(false);
         if (!isRunning.getAsBoolean()) {
             return;

@@ -1,16 +1,14 @@
 package yier.bubu.redis.execution.executor;
 
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
+import yier.bubu.redis.execution.api.CapacityRegistration;
+
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Executor backlog global budget:\n
- * - hard cap by task count (capacity)\n
- * - optional cap by retained bytes\n
- * <p>
- * Also exposes global backpressure hysteresis (high/low watermarks) derived from capacity/maxBytes.
+ * executor backlog 的全局任务数与保留字节预算，并提供基于同一计数的背压水位。
  */
 public final class ExecutorBacklogBudget {
     private final int queueCapacity;
@@ -147,7 +145,26 @@ public final class ExecutorBacklogBudget {
         return queueMaxBytes <= 0 || Math.max(0, bytes) <= queueMaxBytes;
     }
 
-    CommandExecutor.CapacityRegistration onCapacityAvailable(int retainedBytes, Runnable callback) {
+    ExecutorAdmissionAttempt.BlockReason tryReserve(int retainedBytes) {
+        if (!tryReserveSlot()) {
+            return ExecutorAdmissionAttempt.BlockReason.QUEUE_SLOTS;
+        }
+        if (!tryReserveQueuedBytes(retainedBytes)) {
+            releaseSlot();
+            return ExecutorAdmissionAttempt.BlockReason.QUEUE_BYTES;
+        }
+        return null;
+    }
+
+    void release(int retainedBytes) {
+        try {
+            releaseQueuedBytes(retainedBytes);
+        } finally {
+            releaseSlot();
+        }
+    }
+
+    CapacityRegistration onCapacityAvailable(int retainedBytes, Runnable callback) {
         if (retainedBytes < 0) {
             throw new IllegalArgumentException("retainedBytes must be >= 0");
         }
@@ -191,7 +208,7 @@ public final class ExecutorBacklogBudget {
         return current <= queueMaxBytes - retainedBytes;
     }
 
-    private final class CapacityWaiter implements CommandExecutor.CapacityRegistration {
+    private final class CapacityWaiter implements CapacityRegistration {
         private final int retainedBytes;
         private final Runnable callback;
         private final AtomicBoolean active = new AtomicBoolean(true);

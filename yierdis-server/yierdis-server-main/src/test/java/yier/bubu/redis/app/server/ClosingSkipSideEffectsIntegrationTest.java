@@ -36,7 +36,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
                 engine::execute,
-                eventExecutor,
+                new NettySerialOwnerExecutor(eventExecutor),
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
                 new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -70,7 +70,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
                 engine::execute,
-                eventExecutor,
+                new NettySerialOwnerExecutor(eventExecutor),
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
                 new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -151,7 +151,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
                 engine::execute,
-                eventExecutor,
+                new NettySerialOwnerExecutor(eventExecutor),
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
                 new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -191,7 +191,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
                 engine::execute,
-                eventExecutor,
+                new NettySerialOwnerExecutor(eventExecutor),
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
                 new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -254,7 +254,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
                 engine::execute,
-                eventExecutor,
+                new NettySerialOwnerExecutor(eventExecutor),
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
                 new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)

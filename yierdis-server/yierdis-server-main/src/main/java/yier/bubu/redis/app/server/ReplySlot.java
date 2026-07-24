@@ -2,8 +2,13 @@ package yier.bubu.redis.app.server;
 
 import io.netty.buffer.ByteBuf;
 import yier.bubu.redis.bytes.BytesSink;
+import yier.bubu.redis.execution.api.CapacityRegistration;
+import yier.bubu.redis.execution.api.ExecutionReply;
+import yier.bubu.redis.execution.api.ReplyCapacityUnavailableException;
+import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.ReplyReservationSink;
-import yier.bubu.redis.execution.executor.ExecutionReply;
+import yier.bubu.redis.execution.api.ReplyReservationResult;
+import yier.bubu.redis.execution.api.ReplyTooLargeException;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -169,13 +174,52 @@ final class ReplySlot implements ExecutionReply {
     }
 
     @Override
-    public boolean awaitCapacity(Runnable wakeup) {
+    public ReplyReservationResult tryReserve(ReplyPlan plan) {
+        try {
+            BytesSink current = sink();
+            if (!(current instanceof ReplyReservationSink reservationSink)) {
+                throw new IllegalStateException("reply sink does not support reservation");
+            }
+            reservationSink.require(Objects.requireNonNull(plan, "plan"));
+            return ReplyReservationResult.RESERVED;
+        } catch (ReplyCapacityUnavailableException unavailable) {
+            return ReplyReservationResult.WAITING;
+        } catch (ReplyTooLargeException tooLarge) {
+            return ReplyReservationResult.TOO_LARGE;
+        } catch (IllegalStateException closedSlot) {
+            if (cleanupOwner.get() == ReplyCleanupOwner.NONE) {
+                throw closedSlot;
+            }
+            return ReplyReservationResult.CLOSED;
+        }
+    }
+
+    @Override
+    public CapacityRegistration onCapacityAvailable(Runnable wakeup) {
         Objects.requireNonNull(wakeup, "wakeup");
         CapacityWait waiting = capacityWait.get();
         if (waiting == null || cleanupOwner.get() != ReplyCleanupOwner.NONE || isTerminal(state.get())) {
-            return false;
+            return CapacityRegistration.NONE;
         }
-        return lease.awaitAdditionalCapacity(waiting.additionalBytes(), waiting.singleReplyLimitBytes(), wakeup);
+        AtomicBoolean active = new AtomicBoolean(true);
+        boolean retained = lease.awaitAdditionalCapacity(
+                waiting.additionalBytes(),
+                waiting.singleReplyLimitBytes(),
+                () -> {
+                    if (active.compareAndSet(true, false)) {
+                        wakeup.run();
+                    }
+                }
+        );
+        if (!retained) {
+            active.set(false);
+            return CapacityRegistration.NONE;
+        }
+        return () -> {
+            if (active.compareAndSet(true, false)) {
+                cancelCapacityWait();
+            }
+        };
     }
 
     @Override

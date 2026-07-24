@@ -25,12 +25,18 @@ public class CommandExecutorFairSchedulingTest {
         TestConnection c1 = ExecutorCoreTestSupport.newConnection("c1");
         TestConnection c2 = ExecutorCoreTestSupport.newConnection("c2");
 
-        Assert.assertNull(executor.trySubmit(c1, TrackingExecutionRequest.ofUtf8("PING")));
-        Assert.assertNull(executor.trySubmit(c1, TrackingExecutionRequest.ofUtf8("PING")));
-        Assert.assertNull(executor.trySubmit(c2, TrackingExecutionRequest.ofUtf8("PING")));
+        TrackingExecutionRequest c1First = TrackingExecutionRequest.ofUtf8("PING");
+        TrackingExecutionRequest c1Second = TrackingExecutionRequest.ofUtf8("PING");
+        TrackingExecutionRequest c2First = TrackingExecutionRequest.ofUtf8("PING");
+        ExecutorCoreTestSupport.publish(executor, c1, c1First, ExecutorCoreTestSupport.ioReply(io, c1));
+        ExecutorCoreTestSupport.publish(executor, c1, c1Second, ExecutorCoreTestSupport.ioReply(io, c1));
+        ExecutorCoreTestSupport.publish(executor, c2, c2First, ExecutorCoreTestSupport.ioReply(io, c2));
 
         ownerExecutor.runAll();
 
         Assert.assertEquals(List.of("c1", "c2", "c1"), io.executionOrder());
+
+        executor.close();
+        ownerExecutor.runAll();
     }
 }
