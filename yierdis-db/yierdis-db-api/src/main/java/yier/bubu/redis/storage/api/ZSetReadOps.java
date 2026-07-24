@@ -3,14 +3,14 @@ package yier.bubu.redis.storage.api;
 // ZSetReadOps：zset 只读能力边界。
 
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
-import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequence;
+import yier.bubu.redis.storage.api.result.ByteSequenceSource;
 
 public interface ZSetReadOps {
-    MeasuredBulkStringSequence zrange(byte[] keyBytes, long start, long stop, boolean withScores);
+    ByteSequenceSource zrange(byte[] keyBytes, long start, long stop, boolean withScores);
 
-    MeasuredBulkStringSequence zrevrange(byte[] keyBytes, long start, long stop, boolean withScores);
+    ByteSequenceSource zrevrange(byte[] keyBytes, long start, long stop, boolean withScores);
 
-    MeasuredBulkStringSequence zrangeByScore(
+    ByteSequenceSource zrangeByScore(
             byte[] keyBytes,
             double min,
             boolean minExclusive,
@@ -21,7 +21,7 @@ public interface ZSetReadOps {
             long count
     );
 
-    MeasuredBulkStringSequence zrevrangeByScore(
+    ByteSequenceSource zrevrangeByScore(
             byte[] keyBytes,
             double min,
             boolean minExclusive,

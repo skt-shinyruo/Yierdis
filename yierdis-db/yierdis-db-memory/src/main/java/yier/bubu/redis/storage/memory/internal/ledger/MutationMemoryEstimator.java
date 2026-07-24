@@ -2,14 +2,14 @@ package yier.bubu.redis.storage.memory.internal.ledger;
 
 import java.util.Objects;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 
 public final class MutationMemoryEstimator {
     private MutationMemoryEstimator() {
     }
 
     public static long nativeAllocationScopeBookkeepingBytes(
-            NativeAllocator allocator,
+            StableMemoryBackend allocator,
             int expectedNativeAllocationCount
     ) {
         Objects.requireNonNull(allocator, "allocator");
@@ -24,7 +24,7 @@ public final class MutationMemoryEstimator {
     }
 
     public static long peakAdditionalBytes(
-            NativeAllocator allocator,
+            StableMemoryBackend allocator,
             long ffmRegionGrowthBytes,
             long heapGrowthBytes,
             int... nativeAllocationSizes

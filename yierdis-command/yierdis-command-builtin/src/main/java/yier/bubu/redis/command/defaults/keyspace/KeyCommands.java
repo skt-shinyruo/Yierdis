@@ -283,7 +283,7 @@ public final class KeyCommands implements CommandModule {
                 if (!window.current()) {
                     continue;
                 }
-                byte[] nextCursor = window.nextCursor().toBulkStringAscii();
+                byte[] nextCursor = window.nextCursor().toAsciiBytes();
                 out.requireReply(scanReplyPlan(window, nextCursor));
                 out.arrayHeader(2);
                 out.bulkString(nextCursor);

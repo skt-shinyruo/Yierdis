@@ -64,7 +64,7 @@ public class TtlLifecycleDirectOpsTest {
             Assert.assertNull(db.reads().keyspace().typeOf(view("s")));
             Assert.assertEquals(-1L, db.memory().memoryUsage(view("s")));
             Assert.assertEquals(0L, db.memory().memoryStats().keyCount());
-            NativeAllocatorStats empty = db.keyLifecycle().nativeAllocator().stats();
+            NativeAllocatorStats empty = db.keyLifecycle().stableMemoryBackend().stats();
             Assert.assertEquals(0L, empty.objectCount(NativeObjectKind.ENTRY_RECORD));
             Assert.assertEquals(0L, empty.objectCount(NativeObjectKind.STRING_BYTES));
             Assert.assertEquals(0L, empty.liveObjects());
@@ -73,7 +73,7 @@ public class TtlLifecycleDirectOpsTest {
     }
 
     private static void withDb(DbConsumer consumer) {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             consumer.accept(db);

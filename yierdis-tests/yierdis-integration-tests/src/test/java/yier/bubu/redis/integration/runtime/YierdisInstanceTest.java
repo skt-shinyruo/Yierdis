@@ -6,18 +6,25 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.common.command.MutationContext;
+import yier.bubu.redis.common.memory.MemoryPressureBudget;
+import yier.bubu.redis.common.memory.MemoryReclaimResult;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.integration.command.TestCommandProcessors;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.storage.api.DbDefragConfig;
+import yier.bubu.redis.storage.api.DbEngineConfig;
 import yier.bubu.redis.storage.api.DbEngineFactory;
 import yier.bubu.redis.storage.api.DbCommitStreamUnavailableException;
+import yier.bubu.redis.storage.api.DefragmentableDbEngine;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbReads;
 import yier.bubu.redis.storage.api.DbWrites;
 import yier.bubu.redis.storage.api.ExpirationManager;
+import yier.bubu.redis.storage.api.GlobalMaxmemoryDbEngine;
+import yier.bubu.redis.storage.api.MaxmemoryCandidate;
+import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.MemoryOps;
@@ -527,12 +534,7 @@ public class YierdisInstanceTest {
     @Test
     public void closePropagatesDbAndAllocatorFailuresAfterBestEffortCleanup() {
         List<String> closeOrder = new ArrayList<>();
-        DbEngineFactory factory = (dbIndex,
-                                   maxmemoryBytes,
-                                   maxmemoryPolicy,
-                                   maxmemorySamples,
-                                   evictionTimeLimitMillis,
-                                   expireCleanupTimeLimitMillis) -> new FailingRuntimeDbEngine("db-" + dbIndex, closeOrder);
+        DbEngineFactory factory = config -> new FailingRuntimeDbEngine("db-" + config.dbIndex(), closeOrder);
 
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder()
                 .databases(2)
@@ -557,18 +559,11 @@ public class YierdisInstanceTest {
             private int calls;
 
             @Override
-            public RuntimeDbEngine create(
-                    int dbIndex,
-                    long maxmemoryBytes,
-                    MaxmemoryPolicy maxmemoryPolicy,
-                    int maxmemorySamples,
-                    long evictionTimeLimitMillis,
-                    long expireCleanupTimeLimitMillis
-            ) {
+            public RuntimeDbEngine create(DbEngineConfig config) {
                 if (calls++ == 0) {
-                    return new CloseTrackingRuntimeDbEngine("db-" + dbIndex, closeOrder);
+                    return new CloseTrackingRuntimeDbEngine("db-" + config.dbIndex(), closeOrder);
                 }
-                throw new IllegalStateException("boom-create-" + dbIndex);
+                throw new IllegalStateException("boom-create-" + config.dbIndex());
             }
         };
 
@@ -586,17 +581,13 @@ public class YierdisInstanceTest {
 
     @Test
     public void runtimeAccessExposesOwnerThreadLifecycleHooks() {
-        TrackingRuntimeDbEngine engine = new TrackingRuntimeDbEngine();
+        DefragmentingTrackingRuntimeDbEngine engine = new DefragmentingTrackingRuntimeDbEngine();
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder()
                 .databases(1)
-                .engineFactory((dbIndex,
-                                maxmemoryBytes,
-                                maxmemoryPolicy,
-                                maxmemorySamples,
-                                evictionTimeLimitMillis,
-                                expireCleanupTimeLimitMillis) -> engine)
+                .engineFactory(config -> engine)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.PER_DB)
                 .maxmemoryBytes(128)
+                .defrag(new DbDefragConfig(true, 0L, 0L, 0L))
                 .build());
 
         try {
@@ -612,23 +603,17 @@ public class YierdisInstanceTest {
         }
 
         Assert.assertEquals(1, engine.bindCalls);
-        Assert.assertEquals(1, engine.expirationCleanupCalls);
+        Assert.assertEquals(1, engine.runMaintenanceCalls);
         Assert.assertEquals(1, engine.defragMaintenanceCalls);
-        Assert.assertEquals(1, engine.maxmemoryMaintenanceCalls);
         Assert.assertEquals(1, engine.shutdownCalls);
     }
 
     @Test
-    public void maintenanceUsesRuntimeMaxmemoryHookForPerDbScope() {
+    public void maintenanceRunsDbLocalTickForPerDbScope() {
         TrackingRuntimeDbEngine engine = new TrackingRuntimeDbEngine();
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(1)
-                .engineFactory((dbIndex,
-                                maxmemoryBytes,
-                                maxmemoryPolicy,
-                                maxmemorySamples,
-                                evictionTimeLimitMillis,
-                                expireCleanupTimeLimitMillis) -> engine)
+                .engineFactory(ignored -> engine)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.PER_DB)
                 .maxmemoryBytes(128)
                 .build();
@@ -638,23 +623,16 @@ public class YierdisInstanceTest {
             new YierdisInstanceMaintenance(instance).maintenanceTick();
         }
 
-        Assert.assertEquals(1, engine.expirationCleanupCalls);
-        Assert.assertEquals(1, engine.defragMaintenanceCalls);
-        Assert.assertEquals(1, engine.maxmemoryMaintenanceCalls);
+        Assert.assertEquals(1, engine.runMaintenanceCalls);
     }
 
     @Test
-    public void globalMaintenanceUsesGovernorInsteadOfFirstEngineRuntimeHook() {
-        TrackingRuntimeDbEngine engine0 = new TrackingRuntimeDbEngine();
-        TrackingRuntimeDbEngine engine1 = new TrackingRuntimeDbEngine();
+    public void globalMaintenanceUsesGovernorAfterEachDbTick() {
+        GlobalTrackingRuntimeDbEngine engine0 = new GlobalTrackingRuntimeDbEngine();
+        GlobalTrackingRuntimeDbEngine engine1 = new GlobalTrackingRuntimeDbEngine();
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(2)
-                .engineFactory((dbIndex,
-                                maxmemoryBytes,
-                                maxmemoryPolicy,
-                                maxmemorySamples,
-                                evictionTimeLimitMillis,
-                                expireCleanupTimeLimitMillis) -> dbIndex == 0 ? engine0 : engine1)
+                .engineFactory(configured -> configured.dbIndex() == 0 ? engine0 : engine1)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
                 .maxmemoryBytes(128)
                 .build();
@@ -664,12 +642,8 @@ public class YierdisInstanceTest {
             new YierdisInstanceMaintenance(instance).maintenanceTick();
         }
 
-        Assert.assertEquals(1, engine0.expirationCleanupCalls);
-        Assert.assertEquals(1, engine1.expirationCleanupCalls);
-        Assert.assertEquals(1, engine0.defragMaintenanceCalls);
-        Assert.assertEquals(1, engine1.defragMaintenanceCalls);
-        Assert.assertEquals(0, engine0.maxmemoryMaintenanceCalls);
-        Assert.assertEquals(0, engine1.maxmemoryMaintenanceCalls);
+        Assert.assertEquals(1, engine0.runMaintenanceCalls);
+        Assert.assertEquals(1, engine1.runMaintenanceCalls);
         Assert.assertEquals(1, engine0.participantCleanupCalls);
         Assert.assertEquals(1, engine1.participantCleanupCalls);
     }
@@ -821,16 +795,11 @@ public class YierdisInstanceTest {
         }
 
         @Override
-        public MemoryUsageSnapshot memoryUsage() {
-            return MemoryUsageSnapshot.zero();
-        }
-
-        @Override
         public void bindToCurrentThread() {
         }
 
         @Override
-        public void enforceMaxmemoryMaintenance() {
+        public void runMaintenance() {
         }
 
         @Override
@@ -874,16 +843,11 @@ public class YierdisInstanceTest {
         }
 
         @Override
-        public MemoryUsageSnapshot memoryUsage() {
-            return MemoryUsageSnapshot.zero();
-        }
-
-        @Override
         public void bindToCurrentThread() {
         }
 
         @Override
-        public void enforceMaxmemoryMaintenance() {
+        public void runMaintenance() {
         }
 
         @Override
@@ -918,18 +882,11 @@ public class YierdisInstanceTest {
         }
     }
 
-    private static final class TrackingRuntimeDbEngine implements RuntimeDbEngine {
-        private int bindCalls;
-        private int expirationCleanupCalls;
-        private int defragMaintenanceCalls;
-        private int maxmemoryMaintenanceCalls;
-        private int shutdownCalls;
-        private int participantCleanupCalls;
-
-        @Override
-        public MemoryUsageSnapshot memoryUsage() {
-            return MemoryUsageSnapshot.zero();
-        }
+    private static class TrackingRuntimeDbEngine implements RuntimeDbEngine {
+        protected int bindCalls;
+        protected int runMaintenanceCalls;
+        protected int defragMaintenanceCalls;
+        protected int shutdownCalls;
 
         @Override
         public void bindToCurrentThread() {
@@ -937,23 +894,13 @@ public class YierdisInstanceTest {
         }
 
         @Override
-        public void enforceMaxmemoryMaintenance() {
-            maxmemoryMaintenanceCalls++;
-        }
-
-        @Override
-        public void defragMaintenance() {
-            defragMaintenanceCalls++;
+        public void runMaintenance() {
+            runMaintenanceCalls++;
         }
 
         @Override
         public void shutdown() {
             shutdownCalls++;
-        }
-
-        @Override
-        public void cleanupExpired(long nowMillis) {
-            participantCleanupCalls++;
         }
 
         @Override
@@ -968,7 +915,7 @@ public class YierdisInstanceTest {
 
         @Override
         public ExpirationManager expiration() {
-            return () -> expirationCleanupCalls++;
+            throw new UnsupportedOperationException();
         }
 
         @Override
@@ -979,6 +926,58 @@ public class YierdisInstanceTest {
         @Override
         public DbLifecycleOps lifecycle() {
             throw new UnsupportedOperationException();
+        }
+    }
+
+    private static final class DefragmentingTrackingRuntimeDbEngine
+            extends TrackingRuntimeDbEngine implements DefragmentableDbEngine {
+        @Override
+        public void defragMaintenance() {
+            defragMaintenanceCalls++;
+        }
+    }
+
+    private static final class GlobalTrackingRuntimeDbEngine
+            extends TrackingRuntimeDbEngine implements GlobalMaxmemoryDbEngine {
+        private int participantCleanupCalls;
+
+        @Override
+        public MemoryUsageSnapshot memoryUsage() {
+            return MemoryUsageSnapshot.zero();
+        }
+
+        @Override
+        public MemoryReclaimResult trimMemory(MemoryPressureBudget budget) {
+            return MemoryReclaimResult.empty();
+        }
+
+        @Override
+        public int keyCountEstimate() {
+            return 0;
+        }
+
+        @Override
+        public void cleanupExpired(long nowMillis) {
+            participantCleanupCalls++;
+        }
+
+        @Override
+        public MaxmemoryCandidate sampleCandidate(MaxmemoryPolicy policy, long nowMillis) {
+            return null;
+        }
+
+        @Override
+        public MaxmemoryCandidate scanBestCandidate(MaxmemoryPolicy policy, long nowMillis) {
+            return null;
+        }
+
+        @Override
+        public boolean evict(MaxmemoryCandidate candidate, long nowMillis) {
+            return false;
+        }
+
+        @Override
+        public void attachMaxmemoryCoordinator(MaxmemoryCoordinator coordinator) {
         }
     }
 }

@@ -1,53 +1,40 @@
 package yier.bubu.redis.storage.memory;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
-import yier.bubu.redis.storage.memory.internal.entry.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
+import java.util.Objects;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.common.command.MutationContext;
-import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceResult;
-import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
-import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
-import yier.bubu.redis.memory.api.NativeDefragOptions;
-import yier.bubu.redis.memory.api.NativeDefragReport;
-import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.common.memory.MemoryReclaimResult;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.storage.api.DbLifecycleOps;
-import yier.bubu.redis.storage.api.DbHealthSnapshot;
+import yier.bubu.redis.memory.api.MemoryOwner;
+import yier.bubu.redis.memory.api.NativeDefragReport;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
+import yier.bubu.redis.storage.api.CommitPublishingDbEngine;
 import yier.bubu.redis.storage.api.DbCommitPublisher;
+import yier.bubu.redis.storage.api.DbEngineConfig;
+import yier.bubu.redis.storage.api.DbHealthSnapshot;
+import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbReads;
 import yier.bubu.redis.storage.api.DbWrites;
+import yier.bubu.redis.storage.api.DefragmentableDbEngine;
 import yier.bubu.redis.storage.api.ExpirationManager;
+import yier.bubu.redis.storage.api.GlobalMaxmemoryDbEngine;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.MemoryOps;
-import yier.bubu.redis.storage.api.RuntimeDbEngine;
-import yier.bubu.redis.storage.api.SetMode;
-import yier.bubu.redis.storage.api.StringWriteOps;
-import yier.bubu.redis.storage.api.WrongTypeException;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
-import yier.bubu.redis.storage.api.result.BulkStringValue;
+import yier.bubu.redis.storage.api.MutationOutcome;
+import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceResult;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
+import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMemoryLedger;
 
-import java.util.Objects;
-
-public final class YierdisDb implements RuntimeDbEngine {
-    /**
-     * @deprecated Use {@link MaxmemoryErrors#OOM_ERR}.
-     */
-    @Deprecated
-    static final String OOM_ERR = yier.bubu.redis.storage.api.MaxmemoryErrors.OOM_ERR;
-
+/**
+ * 基于稳定内存后端的单 owner DB；只能由 {@link YierdisDbEngineFactory} 组合。
+ */
+public final class YierdisDb
+        implements CommitPublishingDbEngine, GlobalMaxmemoryDbEngine, DefragmentableDbEngine, AutoCloseable {
     private final YierdisDbRuntimeState runtimeState;
     private final YierdisDbHealth health;
     private final DbComponentMemoryUsage memoryUsage;
@@ -55,335 +42,38 @@ public final class YierdisDb implements RuntimeDbEngine {
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final YierdisDbIntrospection introspection;
     private final YierdisDbDataMaintenance maintenance;
-
     private final DbReads reads;
     private final DbWrites writes;
     private final ExpirationManager expirationManager;
     private final MemoryOps memoryOps;
     private final DbLifecycleOps lifecycleOps;
 
-    public YierdisDb() {
-        this(null, false, 0, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5, null);
-    }
-
-    public static YierdisDb createWithSharedFfmRuntime(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            long maxmemoryBytes,
-            MaxmemoryPolicy maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis
-    ) {
-        return new YierdisDb(memoryRuntime, false, 0, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis, null);
-    }
-
-    public static YierdisDb createWithSharedFfmRuntime(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            long maxmemoryBytes,
-            MaxmemoryPolicy maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis,
-            NativeDefragOptions nativeDefragOptions
-    ) {
-        return createWithSharedFfmRuntimeAndNativeSlotCapacity(
-                memoryRuntime,
-                maxmemoryBytes,
-                maxmemoryPolicy,
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis,
-                nativeDefragOptions,
-                0
-        );
-    }
-
-    public static YierdisDb createWithSharedFfmRuntimeAndNativeSlotCapacity(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            long maxmemoryBytes,
-            MaxmemoryPolicy maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis,
-            NativeDefragOptions nativeDefragOptions,
-            int nativeSlotCapacity
-    ) {
-        return new YierdisDb(
-                memoryRuntime,
-                false,
-                nativeSlotCapacity,
-                maxmemoryBytes,
-                maxmemoryPolicy,
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis,
-                nativeDefragOptions
-        );
-    }
-
-    static YierdisDb createWithSharedFfmRuntime(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            long maxmemoryBytes,
-            MaxmemoryPolicy maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis,
-            NativeDefragOptions nativeDefragOptions,
-            int dbIndex
-    ) {
-        return createWithSharedFfmRuntime(
-                memoryRuntime,
-                maxmemoryBytes,
-                maxmemoryPolicy,
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis,
-                nativeDefragOptions,
-                0,
-                dbIndex
-        );
-    }
-
-    static YierdisDb createWithSharedFfmRuntime(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            long maxmemoryBytes,
-            MaxmemoryPolicy maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis,
-            NativeDefragOptions nativeDefragOptions,
-            int nativeSlotCapacity,
-            int dbIndex
-    ) {
-        return createWithSharedFfmRuntime(
-                memoryRuntime,
-                maxmemoryBytes,
-                maxmemoryPolicy,
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis,
-                nativeDefragOptions,
-                nativeSlotCapacity,
-                dbIndex,
-                HashSeed.random()
-        );
-    }
-
-    static YierdisDb createWithSharedFfmRuntime(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            long maxmemoryBytes,
-            MaxmemoryPolicy maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis,
-            NativeDefragOptions nativeDefragOptions,
-            int nativeSlotCapacity,
-            int dbIndex,
+    static YierdisDb create(
+            DbEngineConfig config,
+            StableMemoryBackend stableMemoryBackend,
+            DbThreadGuard threadGuard,
             HashSeed hashSeed
     ) {
-        return new YierdisDb(
-                memoryRuntime,
-                false,
-                nativeSlotCapacity,
-                maxmemoryBytes,
-                maxmemoryPolicy,
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis,
-                nativeDefragOptions,
-                dbIndex,
-                hashSeed
-        );
-    }
-
-    public static YierdisDb createWithOwnedFfmRuntime(
-            long maxmemoryBytes,
-            MaxmemoryPolicy maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis
-    ) {
-        return new YierdisDb(
-                null,
-                true,
-                0,
-                maxmemoryBytes,
-                maxmemoryPolicy,
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis,
-                null
-        );
-    }
-
-    public static YierdisDb createWithOwnedFfmRuntime(
-            long maxmemoryBytes,
-            MaxmemoryPolicy maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis,
-            NativeDefragOptions nativeDefragOptions
-    ) {
-        return createWithOwnedFfmRuntimeAndNativeSlotCapacity(
-                maxmemoryBytes,
-                maxmemoryPolicy,
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis,
-                nativeDefragOptions,
-                0
-        );
-    }
-
-    public static YierdisDb createWithOwnedFfmRuntimeAndNativeSlotCapacity(
-            long maxmemoryBytes,
-            MaxmemoryPolicy maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis,
-            NativeDefragOptions nativeDefragOptions,
-            int nativeSlotCapacity
-    ) {
-        return new YierdisDb(
-                null,
-                true,
-                nativeSlotCapacity,
-                maxmemoryBytes,
-                maxmemoryPolicy,
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis,
-                nativeDefragOptions
-        );
-    }
-
-    static YierdisDb createWithOwnedFfmRuntime(
-            long maxmemoryBytes,
-            MaxmemoryPolicy maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis,
-            NativeDefragOptions nativeDefragOptions,
-            int dbIndex
-    ) {
-        return createWithOwnedFfmRuntime(
-                maxmemoryBytes,
-                maxmemoryPolicy,
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis,
-                nativeDefragOptions,
-                0,
-                dbIndex
-        );
-    }
-
-    static YierdisDb createWithOwnedFfmRuntime(
-            long maxmemoryBytes,
-            MaxmemoryPolicy maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis,
-            NativeDefragOptions nativeDefragOptions,
-            int nativeSlotCapacity,
-            int dbIndex
-    ) {
-        return createWithOwnedFfmRuntime(
-                maxmemoryBytes,
-                maxmemoryPolicy,
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis,
-                nativeDefragOptions,
-                nativeSlotCapacity,
-                dbIndex,
-                HashSeed.random()
-        );
-    }
-
-    static YierdisDb createWithOwnedFfmRuntime(
-            long maxmemoryBytes,
-            MaxmemoryPolicy maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis,
-            NativeDefragOptions nativeDefragOptions,
-            int nativeSlotCapacity,
-            int dbIndex,
-            HashSeed hashSeed
-    ) {
-        return new YierdisDb(
-                null,
-                true,
-                nativeSlotCapacity,
-                maxmemoryBytes,
-                maxmemoryPolicy,
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis,
-                nativeDefragOptions,
-                dbIndex,
-                hashSeed
-        );
+        return new YierdisDb(config, stableMemoryBackend, threadGuard, hashSeed);
     }
 
     private YierdisDb(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            boolean ownsMemoryRuntime,
-            int nativeSlotCapacity,
-            long maxmemoryBytes,
-            MaxmemoryPolicy maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis,
-            NativeDefragOptions nativeDefragOptions
-    ) {
-        this(
-                memoryRuntime,
-                ownsMemoryRuntime,
-                nativeSlotCapacity,
-                maxmemoryBytes,
-                maxmemoryPolicy,
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis,
-                nativeDefragOptions,
-                0,
-                HashSeed.random()
-        );
-    }
-
-    private YierdisDb(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            boolean ownsMemoryRuntime,
-            int nativeSlotCapacity,
-            long maxmemoryBytes,
-            MaxmemoryPolicy maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis,
-            NativeDefragOptions nativeDefragOptions,
-            int dbIndex,
+            DbEngineConfig config,
+            StableMemoryBackend stableMemoryBackend,
+            DbThreadGuard threadGuard,
             HashSeed hashSeed
     ) {
-        YierdisDbRuntimeState runtimeState = new YierdisDbRuntimeState(dbIndex);
+        DbEngineConfig checkedConfig = Objects.requireNonNull(config, "config");
+        YierdisDbRuntimeState composedRuntimeState = new YierdisDbRuntimeState(
+                checkedConfig.dbIndex(),
+                Objects.requireNonNull(threadGuard, "threadGuard"),
+                Objects.requireNonNull(stableMemoryBackend, "stableMemoryBackend")
+        );
         YierdisDbComponents components = YierdisDbComponentFactory.create(
-                new YierdisDbComponentFactory.OwnerCallbacks() {
-                    @Override
-                    public void checkThread() {
-                        runtimeState.checkThread();
-                    }
-                },
-                runtimeState,
-                memoryRuntime,
-                ownsMemoryRuntime,
-                nativeSlotCapacity,
-                maxmemoryBytes,
-                maxmemoryPolicy,
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis,
-                nativeDefragOptions,
+                composedRuntimeState::checkThread,
+                composedRuntimeState,
+                stableMemoryBackend,
+                checkedConfig,
                 Objects.requireNonNull(hashSeed, "hashSeed")
         );
 
@@ -400,7 +90,6 @@ public final class YierdisDb implements RuntimeDbEngine {
         this.memoryOps = components.memoryOps;
         this.lifecycleOps = components.lifecycleOps;
         runtimeState.bindMaxmemoryParticipant(this);
-        // 这里不启动独立调度线程；过期清理、maxmemory 淘汰和 defrag 只会在上层 event loop/调用线程里触发。
     }
 
     @Override
@@ -434,6 +123,26 @@ public final class YierdisDb implements RuntimeDbEngine {
     }
 
     @Override
+    public void bindToCurrentThread() {
+        runtimeState.bindToCurrentThread();
+    }
+
+    @Override
+    public void runMaintenance() {
+        maintenance.runMaintenance();
+    }
+
+    @Override
+    public void shutdown() {
+        maintenance.shutdown();
+    }
+
+    @Override
+    public void close() {
+        shutdown();
+    }
+
+    @Override
     public void attachMaxmemoryCoordinator(MaxmemoryCoordinator coordinator) {
         runtimeState.attachMaxmemoryCoordinator(coordinator);
     }
@@ -443,48 +152,9 @@ public final class YierdisDb implements RuntimeDbEngine {
         runtimeState.attachCommitPublisher(publisher, dbIndex);
     }
 
-    public void adjustUsedBytes(long deltaBytes) {
-        runtimeState.adjustUsedBytes(deltaBytes);
-    }
-
-    public void enforceMaxmemory() {
-        maintenance.enforceMaxmemory();
-    }
-
-    @Override
-    public void enforceMaxmemoryMaintenance() {
-        enforceMaxmemory();
-    }
-
     @Override
     public void defragMaintenance() {
         maintenance.defragMaintenance();
-    }
-
-    public HashTableMaintenanceResult rehashMaintenance(HashTableWorkBudget budget) {
-        return maintenance.rehashMaintenance(budget);
-    }
-
-    NativeDefragReport lastNativeDefragReport() {
-        return runtimeState.lastNativeDefragReport();
-    }
-
-    static byte[] toByteArray(BytesView view) {
-        if (view == null) {
-            throw new IllegalArgumentException("view must not be null");
-        }
-        int len = view.length();
-        if (len < 0) {
-            return null;
-        }
-        if (len == 0) {
-            return new byte[0];
-        }
-        byte[] out = new byte[len];
-        for (int i = 0; i < len; i++) {
-            out[i] = view.getByte(i);
-        }
-        return out;
     }
 
     @Override
@@ -517,41 +187,76 @@ public final class YierdisDb implements RuntimeDbEngine {
         return maintenance.evict(this, candidate, nowMillis);
     }
 
-    long nextLruClock() {
-        return runtimeState.nextLruClock();
-    }
-
-    public void bindToCurrentThread() {
-        runtimeState.bindToCurrentThread();
-    }
-
-    public void checkThread() {
-        runtimeState.checkThread();
-    }
-
-    public YierdisDbMemoryLedger memoryLedger() {
-        return ledger;
-    }
-
-    public YierdisDbHealth healthMonitor() {
-        return health;
-    }
-
-    public NativeAllocator nativeAllocator() {
-        return keyLifecycle.nativeAllocator();
-    }
-
-    public DbCommitPublisher commitPublisher() {
-        return runtimeState.commitPublisher();
-    }
-
-    public int commitDbIndex() {
-        return runtimeState.commitDbIndex();
-    }
-
     @Override
     public MemoryUsageSnapshot memoryUsage() {
         return memoryUsage.snapshot();
+    }
+
+    @Override
+    public MemoryReclaimResult trimMemory(MemoryPressureBudget budget) {
+        runtimeState.checkThread();
+        return keyLifecycle.stableMemoryBackend().trimEmptyPages(
+                Objects.requireNonNull(budget, "budget")
+        );
+    }
+
+    void adjustUsedBytes(long deltaBytes) {
+        runtimeState.adjustUsedBytes(deltaBytes);
+    }
+
+    void enforceMaxmemory() {
+        maintenance.enforceMaxmemory();
+    }
+
+    HashTableMaintenanceResult rehashMaintenance(HashTableWorkBudget budget) {
+        return maintenance.rehashMaintenance(budget);
+    }
+
+    NativeDefragReport lastNativeDefragReport() {
+        return runtimeState.lastNativeDefragReport();
+    }
+
+    static byte[] toByteArray(BytesView view) {
+        if (view == null) {
+            throw new IllegalArgumentException("view must not be null");
+        }
+        int length = view.length();
+        if (length < 0) {
+            return null;
+        }
+        byte[] bytes = new byte[length];
+        for (int index = 0; index < length; index++) {
+            bytes[index] = view.getByte(index);
+        }
+        return bytes;
+    }
+
+    void checkThread() {
+        runtimeState.checkThread();
+    }
+
+    YierdisDbMemoryLedger memoryLedger() {
+        return ledger;
+    }
+
+    YierdisDbHealth healthMonitor() {
+        return health;
+    }
+
+    StableMemoryBackend stableMemoryBackend() {
+        return keyLifecycle.stableMemoryBackend();
+    }
+
+    DbCommitPublisher commitPublisher() {
+        return runtimeState.commitPublisher();
+    }
+
+    int commitDbIndex() {
+        return runtimeState.commitDbIndex();
+    }
+
+    MemoryOwner memoryOwnerForTesting() {
+        return runtimeState.memoryOwnerForTesting();
     }
 
     void armMemoryUsageIterationTrapsForTesting() {
@@ -570,25 +275,15 @@ public final class YierdisDb implements RuntimeDbEngine {
         keyLifecycle.zsetRoot().disarmIterationTrapForTesting();
     }
 
-    @Override
-    public MemoryReclaimResult trimMemory(MemoryPressureBudget budget) {
-        runtimeState.checkThread();
-        return keyLifecycle.nativeAllocator().trimEmptyPages(Objects.requireNonNull(budget, "budget"));
-    }
-
-    public void shutdown() {
-        maintenance.shutdown();
-    }
-
-    public yier.bubu.redis.storage.api.MutationOutcome flushDb() {
+    MutationOutcome flushDb() {
         return maintenance.flushDb(MutationContext.none());
     }
 
-    public int size() {
+    int size() {
         return maintenance.size();
     }
 
-    public long estimatedUsedBytes() {
+    long estimatedUsedBytes() {
         return maintenance.estimatedUsedBytes();
     }
 
@@ -596,16 +291,13 @@ public final class YierdisDb implements RuntimeDbEngine {
         return introspection;
     }
 
-    public void cleanupExpired() {
+    void cleanupExpired() {
         maintenance.cleanupExpired();
     }
 
     boolean isKeyExpired(byte[] keyBytes, long nowMillis) {
         KeyHandle handle = keyLifecycle.keyHandle(keyBytes);
-        if (handle == null) {
-            return false;
-        }
-        return isKeyExpired(handle, nowMillis);
+        return handle != null && isKeyExpired(handle, nowMillis);
     }
 
     boolean isKeyExpired(KeyHandle keyHandle, long nowMillis) {
@@ -624,12 +316,11 @@ public final class YierdisDb implements RuntimeDbEngine {
         keyLifecycle.removeExpire(keyBytes);
     }
 
-    public void removeExpire(KeyHandle keyHandle) {
+    void removeExpire(KeyHandle keyHandle) {
         keyLifecycle.removeExpire(keyHandle);
     }
 
-    public YierdisDbKeyLifecycle keyLifecycle() {
+    YierdisDbKeyLifecycle keyLifecycle() {
         return keyLifecycle;
     }
-
 }

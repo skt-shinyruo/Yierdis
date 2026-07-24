@@ -1,7 +1,7 @@
 package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.memory.api.NativeAccessMode;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.storage.api.ValueType;
@@ -31,7 +31,7 @@ final class YierdisDbNativeHandleGraph {
     static void visitReachable(YierdisDbKeyLifecycle lifecycle, Visitor visitor) {
         Objects.requireNonNull(lifecycle, "lifecycle");
         Objects.requireNonNull(visitor, "visitor");
-        NativeAllocator allocator = lifecycle.nativeAllocator();
+        StableMemoryBackend allocator = lifecycle.stableMemoryBackend();
         // 以 keyDirectory 为根遍历当前可达 native 对象；未从目录发布的半创建对象不会出现在这张图里。
         lifecycle.keyDirectory().forEachEntry((keyHandle, entryHandle) -> {
             EntryRecord record = lifecycle.entryTable().get(entryHandle);
@@ -46,7 +46,7 @@ final class YierdisDbNativeHandleGraph {
 
     private static void visitValueHandle(
             YierdisDbKeyLifecycle lifecycle,
-            NativeAllocator allocator,
+            StableMemoryBackend allocator,
             EntryRecord record,
             Visitor visitor
     ) {
@@ -69,7 +69,7 @@ final class YierdisDbNativeHandleGraph {
 
     private static void visitCollectionInternals(
             YierdisDbKeyLifecycle lifecycle,
-            NativeAllocator allocator,
+            StableMemoryBackend allocator,
             EntryRecord record,
             ValueHandle valueHandle,
             Visitor visitor
@@ -107,7 +107,7 @@ final class YierdisDbNativeHandleGraph {
     }
 
     private static void visitResolved(
-            NativeAllocator allocator,
+            StableMemoryBackend allocator,
             NativeHandle handle,
             Role role,
             EntryRecord record,

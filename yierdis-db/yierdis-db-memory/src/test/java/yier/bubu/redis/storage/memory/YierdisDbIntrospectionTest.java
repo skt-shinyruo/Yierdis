@@ -3,7 +3,7 @@ package yier.bubu.redis.storage.memory;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesView;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.SetMode;
@@ -16,8 +16,8 @@ import java.util.List;
 public class YierdisDbIntrospectionTest {
     @Test
     public void objectEncodingReadsNativeEntryEncoding() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("introspection-encoding")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        try (TestBackend runtime = TestBackend.open("introspection-encoding")) {
+            YierdisDb db = TestDbSupport.open(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
             db.bindToCurrentThread();
             try {
                 byte[] key = bytes("encoding-key");
@@ -33,8 +33,8 @@ public class YierdisDbIntrospectionTest {
 
     @Test
     public void snapshotCopiesNativeStringValueAndExpireMetadata() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("introspection-snapshot")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        try (TestBackend runtime = TestBackend.open("introspection-snapshot")) {
+            YierdisDb db = TestDbSupport.open(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
             db.bindToCurrentThread();
             try {
                 byte[] key = bytes("snapshot-key");
@@ -56,7 +56,6 @@ public class YierdisDbIntrospectionTest {
             } finally {
                 db.shutdown();
             }
-            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 

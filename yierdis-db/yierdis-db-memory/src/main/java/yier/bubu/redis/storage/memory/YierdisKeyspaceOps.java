@@ -2,7 +2,6 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -24,7 +23,7 @@ import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.WriteResult;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.KeyScanWindow;
 
 import java.util.Collection;
@@ -180,7 +179,7 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
         }
 
         long deadlineNanos = deadlineNanos(timeBudgetNanos);
-        NativeEpochScope epoch = keyLifecycle.nativeAllocator().beginEpoch(NativeEpochKind.SCAN);
+        NativeEpochScope epoch = keyLifecycle.stableMemoryBackend().beginEpoch(NativeEpochKind.SCAN);
         boolean transferred = false;
         try {
             ScanCursorV2 next = ScanCursorV2.start();
@@ -225,7 +224,6 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                     next,
                     globPattern,
                     discovery.count,
-                    discovery.encodedElementBytes,
                     inspected,
                     generation,
                     keyLifecycle.keyDirectory().metrics().capacity(),
@@ -250,7 +248,7 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
         }
 
         long nowMillis = System.currentTimeMillis();
-        NativeEpochScope epoch = keyLifecycle.nativeAllocator().beginEpoch(NativeEpochKind.SCAN);
+        NativeEpochScope epoch = keyLifecycle.stableMemoryBackend().beginEpoch(NativeEpochKind.SCAN);
         boolean transferred = false;
         try {
             KeyDiscovery discovery = new KeyDiscovery();
@@ -271,7 +269,6 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                     result.nextCursor(),
                     globPattern,
                     discovery.count,
-                    discovery.encodedElementBytes,
                     result.inspectedSlots(),
                     result.tableGeneration(),
                     keyLifecycle.keyDirectory().metrics().capacity(),
@@ -296,7 +293,6 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                 result.nextCursor(),
                 globPattern,
                 0,
-                0L,
                 0L,
                 result.tableGeneration(),
                 keyLifecycle.keyDirectory().metrics().capacity(),
@@ -329,21 +325,6 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
 
     private static long scanSlotBudget(int count) {
         return Math.max(SCAN_MIN_SLOT_BUDGET, (long) count * SCAN_SLOT_MULTIPLIER);
-    }
-
-    private static long encodedBulkStringBytes(int payloadLength) {
-        long prefix = 1L + decimalDigits(payloadLength) + 2L;
-        return addSaturating(addSaturating(prefix, payloadLength), 2L);
-    }
-
-    private static int decimalDigits(int value) {
-        int digits = 1;
-        int remaining = value;
-        while (remaining >= 10) {
-            remaining /= 10;
-            digits++;
-        }
-        return digits;
     }
 
     private static long addSaturating(long left, long right) {
@@ -406,14 +387,12 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
 
     private static final class KeyDiscovery {
         private int count;
-        private long encodedElementBytes;
 
         void record(int payloadLength) {
             if (count == Integer.MAX_VALUE) {
                 throw new IllegalStateException("key scan count exceeds Integer.MAX_VALUE");
             }
             count++;
-            encodedElementBytes = addSaturating(encodedElementBytes, encodedBulkStringBytes(payloadLength));
         }
     }
 
@@ -423,13 +402,11 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
         private final ScanCursorV2 nextCursor;
         private final byte[] globPattern;
         private final int count;
-        private final long encodedElementBytes;
         private final long inspectedSlots;
         private final long tableGeneration;
         private final int activeTableCapacity;
         private final int oldTableCapacity;
         private final long expiryEvaluationMillis;
-        private boolean emitted;
         private boolean closed;
 
         private KeyWindow(
@@ -438,7 +415,6 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                 ScanCursorV2 nextCursor,
                 byte[] globPattern,
                 int count,
-                long encodedElementBytes,
                 long inspectedSlots,
                 long tableGeneration,
                 int activeTableCapacity,
@@ -450,7 +426,6 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
             this.nextCursor = Objects.requireNonNull(nextCursor, "nextCursor");
             this.globPattern = globPattern;
             this.count = count;
-            this.encodedElementBytes = encodedElementBytes;
             this.inspectedSlots = inspectedSlots;
             this.tableGeneration = tableGeneration;
             this.activeTableCapacity = activeTableCapacity;
@@ -461,11 +436,6 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
         @Override
         public ScanCursorV2 nextCursor() {
             return nextCursor;
-        }
-
-        @Override
-        public long encodedElementBytes() {
-            return encodedElementBytes;
         }
 
         @Override
@@ -493,34 +463,44 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
         }
 
         @Override
-        public int count() {
+        public int elementCount() {
             return count;
         }
 
         @Override
-        public void emitTo(BulkStringSink out) {
+        public long retainedMemoryBytes() {
+            return 0L;
+        }
+
+        @Override
+        public void visitElementLengths(yier.bubu.redis.storage.api.result.PayloadLengthSink out) {
             Objects.requireNonNull(out, "out");
+            replay(key -> out.payloadLength(key.length()));
+        }
+
+        @Override
+        public void emitTo(ByteValueSink out) {
+            Objects.requireNonNull(out, "out");
+            replay(key -> out.value(new NativeBytesSlice(
+                    keyLifecycle.stableMemoryBackend(),
+                    KeyHandleAccess.allocatorNativeHandle(key),
+                    0,
+                    key.length()
+            )));
+        }
+
+        private void replay(KeyEmitter emitter) {
             ensureOpen();
-            if (emitted) {
-                throw new IllegalStateException("key scan window has already been emitted");
-            }
-            emitted = true;
             if (count == 0 || !current()) {
                 return;
             }
-
             ReplayDiscovery replay = new ReplayDiscovery();
             NativeKeyDirectory.ScanResult result = keyLifecycle.scanWithWork(startCursor, inspectedSlots, (key, record) -> {
                 if (!matchesForWindow(globPattern, key, record, expiryEvaluationMillis)) {
                     return true;
                 }
                 if (replay.count < count) {
-                    out.bulkString(new NativeBytesSlice(
-                            keyLifecycle.nativeAllocator(),
-                            KeyHandleAccess.allocatorNativeHandle(key),
-                            0,
-                            key.length()
-                    ));
+                    emitter.accept(key);
                     replay.count++;
                 } else {
                     replay.extraMatch = true;
@@ -541,6 +521,11 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                                 + ", old capacity=" + keyLifecycle.keyDirectory().metrics().oldCapacity()
                 );
             }
+        }
+
+        @FunctionalInterface
+        private interface KeyEmitter {
+            void accept(KeyHandle key);
         }
 
         @Override

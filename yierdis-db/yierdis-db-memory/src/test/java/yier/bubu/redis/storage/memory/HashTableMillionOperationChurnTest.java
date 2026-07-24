@@ -2,11 +2,10 @@ package yier.bubu.redis.storage.memory;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
+import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
@@ -32,8 +31,8 @@ public class HashTableMillionOperationChurnTest {
     @Test
     public void boundedTablesConvergeAfterOneMillionFixedSeedOperations() {
         HashTableMaintenanceRegistry registry = new HashTableMaintenanceRegistry();
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("hash-table-million-operation-churn");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 65_536);
+        try (TestBackend runtime = TestBackend.open("hash-table-million-operation-churn");
+             StableMemoryBackend allocator = runtime.backend();
              NativeKeyDirectory directory = new NativeKeyDirectory(allocator, FIXED_SEED, registry);
              HashValue hash = new HashValue(allocator, FIXED_SEED, registry);
              SetValue set = new SetValue(allocator, FIXED_SEED, registry);
@@ -112,14 +111,14 @@ public class HashTableMillionOperationChurnTest {
 
     private static void upsertDirectory(
             NativeKeyDirectory directory,
-            NativeAllocator allocator,
+            StableMemoryBackend allocator,
             byte[] key,
             NativeHandle[] entries,
             int index
     ) {
         NativeHandle existing = entries[index];
         if (existing != null) {
-            EntryHandle expected = EntryHandle.fromNativeHandle(existing);
+            EntryHandle expected = new EntryHandle(existing);
             Assert.assertEquals(expected, directory.compute(key, (ignored, previous) -> previous));
             return;
         }
@@ -127,7 +126,7 @@ public class HashTableMillionOperationChurnTest {
         NativeHandle allocated = allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32);
         boolean inserted = false;
         try {
-            EntryHandle next = EntryHandle.fromNativeHandle(allocated);
+            EntryHandle next = new EntryHandle(allocated);
             Assert.assertEquals(next, directory.compute(key, (ignored, previous) -> next));
             entries[index] = allocated;
             inserted = true;
@@ -140,7 +139,7 @@ public class HashTableMillionOperationChurnTest {
 
     private static void deleteDirectory(
             NativeKeyDirectory directory,
-            NativeAllocator allocator,
+            StableMemoryBackend allocator,
             byte[] key,
             NativeHandle[] entries,
             int index
@@ -149,7 +148,7 @@ public class HashTableMillionOperationChurnTest {
         if (existing == null) {
             return;
         }
-        Assert.assertEquals(EntryHandle.fromNativeHandle(existing), directory.remove(key));
+        Assert.assertEquals(new EntryHandle(existing), directory.remove(key));
         allocator.free(existing);
         entries[index] = null;
     }

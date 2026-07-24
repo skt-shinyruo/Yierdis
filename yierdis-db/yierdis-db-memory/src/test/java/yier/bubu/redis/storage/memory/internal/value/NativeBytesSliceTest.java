@@ -4,12 +4,11 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.memory.api.NativeAccessMode;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
+import yier.bubu.redis.storage.memory.TestBackend;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -17,8 +16,8 @@ import java.nio.charset.StandardCharsets;
 public class NativeBytesSliceTest {
     @Test
     public void writesNativeBytesAndAllowsDefragAfterWriteCompletes() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-slice-test");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-slice-test");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeHandle handle = allocateString(allocator, "hello");
 
             NativeBytesSlice slice = new NativeBytesSlice(allocator, handle, 1, 3);
@@ -35,8 +34,8 @@ public class NativeBytesSliceTest {
 
     @Test
     public void copiesRangeAndRejectsInvalidBounds() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-slice-bounds-test");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-slice-bounds-test");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeHandle handle = allocateString(allocator, "hello");
             try {
                 NativeBytesSlice slice = new NativeBytesSlice(allocator, handle, 1, 3);
@@ -59,8 +58,8 @@ public class NativeBytesSliceTest {
 
     @Test
     public void rejectsInvalidConstructorArgumentsAndNullSink() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-slice-validation-test");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-slice-validation-test");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeHandle handle = allocateString(allocator, "hello");
             try {
                 assertThrows(NullPointerException.class, () -> new NativeBytesSlice(null, handle, 0, 1));
@@ -75,7 +74,7 @@ public class NativeBytesSliceTest {
         }
     }
 
-    private static NativeHandle allocateString(NativeAllocator allocator, String value) {
+    private static NativeHandle allocateString(StableMemoryBackend allocator, String value) {
         byte[] bytes = value.getBytes(StandardCharsets.US_ASCII);
         NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, bytes.length);
         try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {

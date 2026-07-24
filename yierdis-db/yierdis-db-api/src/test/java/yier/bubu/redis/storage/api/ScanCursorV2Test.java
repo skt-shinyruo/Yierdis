@@ -9,7 +9,7 @@ public class ScanCursorV2Test {
     public void cursorRoundTripsGenerationPhaseAndPosition() {
         ScanCursorV2 cursor = ScanCursorV2.of(12345, 1, 0xfedcba98L);
 
-        ScanCursorV2 parsed = ScanCursorV2.of(Long.parseLong(new String(cursor.toBulkStringAscii(), StandardCharsets.US_ASCII)));
+        ScanCursorV2 parsed = ScanCursorV2.of(Long.parseLong(new String(cursor.toAsciiBytes(), StandardCharsets.US_ASCII)));
 
         Assert.assertEquals(12345, parsed.generation());
         Assert.assertEquals(1, parsed.phase());

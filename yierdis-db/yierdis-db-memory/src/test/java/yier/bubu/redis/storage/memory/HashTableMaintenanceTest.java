@@ -2,15 +2,14 @@ package yier.bubu.redis.storage.memory;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
+import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
-import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmExpireIndex;
+import yier.bubu.redis.storage.memory.internal.expire.YierdisNativeExpireIndex;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceResult;
@@ -27,7 +26,7 @@ import java.util.List;
 public class HashTableMaintenanceTest {
     @Test
     public void dbMaintenanceUsesTheRegistryAndRespectsTheSlotBudget() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             for (int i = 0; i < 13; i++) {
@@ -56,7 +55,7 @@ public class HashTableMaintenanceTest {
 
     @Test
     public void dbMaintenanceStartsPendingShrinkThroughPreparedMutationBeforeMigratingSlots() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             List<byte[]> keys = new ArrayList<>();
@@ -85,7 +84,7 @@ public class HashTableMaintenanceTest {
 
     @Test
     public void memoryStatsExposePendingHashTableWorkAndTheLatestStopReason() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             for (int i = 0; i < 13; i++) {
@@ -116,8 +115,8 @@ public class HashTableMaintenanceTest {
     public void capacityRefusalKeepsThePendingTableAuthoritativeAndRegistered() {
         HashSeed seed = new HashSeed(0x0123456789abcdefL, 0xfedcba9876543210L);
         HashTableMaintenanceRegistry registry = new HashTableMaintenanceRegistry();
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("hash-table-maintenance-capacity");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4_096)) {
+        try (TestBackend runtime = TestBackend.open("hash-table-maintenance-capacity");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeByteMap<Integer> map = new NativeByteMap<>(
                     new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES),
                     NativeObjectKind.SET_MEMBER_BYTES,
@@ -161,10 +160,10 @@ public class HashTableMaintenanceTest {
     public void registrySkipsTenThousandIdleMapsAndFairlyAdvancesFiveDebtParticipants() {
         HashSeed seed = new HashSeed(0x0123456789abcdefL, 0xfedcba9876543210L);
         HashTableMaintenanceRegistry registry = new HashTableMaintenanceRegistry();
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("hash-table-maintenance-scale");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 16_384);
+        try (TestBackend runtime = TestBackend.open("hash-table-maintenance-scale");
+             StableMemoryBackend allocator = runtime.backend();
              NativeKeyDirectory directory = new NativeKeyDirectory(allocator, seed, registry)) {
-            YierdisFfmExpireIndex expires = new YierdisFfmExpireIndex(runtime, allocator, seed, registry);
+            YierdisNativeExpireIndex expires = new YierdisNativeExpireIndex(allocator, seed, registry);
             NativeByteMap<Integer> hashMembers = new NativeByteMap<>(
                     new NativeByteStore(allocator, NativeObjectKind.HASH_FIELD_BYTES),
                     NativeObjectKind.HASH_FIELD_BYTES,
@@ -196,7 +195,7 @@ public class HashTableMaintenanceTest {
                     byte[] key = bytes("maintenance-key-" + i);
                     NativeHandle entry = allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32);
                     entries.add(entry);
-                    directory.compute(key, (ignored, old) -> EntryHandle.fromNativeHandle(entry));
+                    directory.compute(key, (ignored, old) -> new EntryHandle(entry));
                     expires.setExpireAtMillis(directory.getKeyHandle(key), 10_000L + i);
                     hashMembers.put(bytes("hash-member-" + i), i);
                     setMembers.put(bytes("set-member-" + i), i);

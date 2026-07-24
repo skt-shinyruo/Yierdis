@@ -3,9 +3,11 @@ package yier.bubu.redis.storage.memory;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MutationOutcome;
+import yier.bubu.redis.storage.api.PreparedMutation;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.StringReadOps;
 import yier.bubu.redis.storage.api.StringWriteOps;
@@ -13,9 +15,10 @@ import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.WriteResult;
 import yier.bubu.redis.storage.api.YierdisCommandException;
-import yier.bubu.redis.storage.api.result.BulkStringValue;
+import yier.bubu.redis.storage.api.result.ByteValue;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
@@ -29,10 +32,10 @@ import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     private static final long TTL_ENTRY_BYTES_ESTIMATE = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-    private static final int ENTRY_RECORD_NATIVE_BYTES = 56;
     private static final int MAX_STRING_BYTES = 512 * 1024 * 1024;
     private static final int EMBSTR_BYTES_LIMIT = 44;
     private static final String INTEGER_RANGE_ERROR = "ERR value is not an integer or out of range";
@@ -48,7 +51,17 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     }
 
     @Override
-    public WriteResult<SetStringValue> set(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption, boolean returnOldValue) {
+    public WriteResult<SetStringValue> set(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption) {
+        return setInternal(keyBytes, value, mode, expireOption, false);
+    }
+
+    private WriteResult<SetStringValue> setInternal(
+            byte[] keyBytes,
+            BytesSlice value,
+            SetMode mode,
+            ExpireOption expireOption,
+            boolean returnOldValue
+    ) {
         internals.checkThread();
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
@@ -84,13 +97,13 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 EntryRecord current = currentEntry.record();
                 if (mode == SetMode.NX && current != null) {
                     WriteResult<SetStringValue> result = WriteResult.unchanged(
-                            new SetStringValue(false, BulkStringValue.nullValue())
+                            new SetStringValue(false, ByteValue.nullValue())
                     );
                     return preparedNoEntry(result, MutationOutcome.NONE);
                 }
                 if (mode == SetMode.XX && current == null) {
                     WriteResult<SetStringValue> result = WriteResult.unchanged(
-                            new SetStringValue(false, BulkStringValue.nullValue())
+                            new SetStringValue(false, ByteValue.nullValue())
                     );
                     return preparedNoEntry(result, MutationOutcome.NONE);
                 }
@@ -101,8 +114,10 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 StagedEntry staged = null;
                 StoredString stored = null;
                 PreparedTtlMutation ttlMutation = PreparedTtlMutation.NONE;
-                BulkStringValue oldValue = BulkStringValue.nullValue();
+                ByteValue oldValue = ByteValue.nullValue();
                 boolean oldValueOwnedByPreparedMutation = false;
+                AtomicBoolean releaseOldValueOnClose = null;
+                Runnable releaseOldValueHook = null;
                 try {
                     KeyHandle targetKey = currentEntry.keyHandle();
                     if (current == null) {
@@ -118,7 +133,17 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     ttlMutation = setTtlMutation(targetKey, current, keepTtl, expireAtMillis);
                     boolean ttlChanged = ttlChangedForSet(targetKey, current, keepTtl, expireAtMillis);
                     if (returnOldValue && current != null) {
-                        oldValue = stringRoot.retainedValue(requireStringHandle(current));
+                        releaseOldValueOnClose = new AtomicBoolean();
+                        AtomicBoolean releaseOnClose = releaseOldValueOnClose;
+                        oldValue = stringRoot.retainedValueWithCloseHook(
+                                requireStringHandle(current),
+                                () -> {
+                                    if (releaseOnClose.get()) {
+                                        keyLifecycle.releaseValue(current);
+                                    }
+                                }
+                        );
+                        releaseOldValueHook = () -> releaseOnClose.set(true);
                     }
                     MutationOutcome outcome = MutationOutcome.of(true, ttlChanged);
                     WriteResult<SetStringValue> result = WriteResult.of(
@@ -137,8 +162,8 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                             staged == null ? null : staged.stagedKey(),
                             current,
                             next,
-                            true,
-                            null,
+                            !returnOldValue,
+                            releaseOldValueHook,
                             ttlMutation,
                             oldValue
                     );
@@ -162,14 +187,45 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     }
 
     @Override
+    public PreparedMutation<SetStringValue> prepareSet(
+            byte[] keyBytes,
+            BytesSlice value,
+            SetMode mode,
+            ExpireOption expireOption
+    ) {
+        internals.checkThread();
+        Objects.requireNonNull(keyBytes, "keyBytes");
+        byte[] preparedKey = Arrays.copyOf(keyBytes, keyBytes.length);
+        byte[] preparedValue = bytesOf(value);
+        PreparedEntryState state = preparedEntryState(preparedKey);
+        EntryRecord current = state.liveRecord();
+        boolean applied = (mode != SetMode.NX || current == null)
+                && (mode != SetMode.XX || current != null);
+        if (applied && current != null && current.type() != ValueType.STRING) {
+            throw new WrongTypeException();
+        }
+        ByteValue oldValue = applied && current != null
+                ? stringRoot.retainedValue(requireStringHandle(current))
+                : ByteValue.nullValue();
+        return new PreparedSetMutation(
+                preparedKey,
+                preparedValue,
+                mode,
+                expireOption,
+                state,
+                new SetStringValue(applied, oldValue)
+        );
+    }
+
+    @Override
     public WriteResult<Boolean> setString(byte[] keyBytes, byte[] value, SetMode mode, ExpireOption expireOption) {
-        WriteResult<SetStringValue> result = set(keyBytes, sliceOf(value), mode, expireOption, false);
+        WriteResult<SetStringValue> result = set(keyBytes, sliceOf(value), mode, expireOption);
         return WriteResult.of(result.value().applied(), result.mutationOutcome());
     }
 
     @Override
     public WriteResult<Boolean> setString(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption) {
-        WriteResult<SetStringValue> result = set(keyBytes, value, mode, expireOption, false);
+        WriteResult<SetStringValue> result = set(keyBytes, value, mode, expireOption);
         return WriteResult.of(result.value().applied(), result.mutationOutcome());
     }
 
@@ -449,21 +505,11 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     }
 
     @Override
-    public BulkStringValue getStringValue(BytesView keyView) {
+    public ByteValue getStringValue(BytesView keyView) {
         internals.checkThread();
         EntryRecord record = liveTouchedStringRecord(keyView);
         if (record == null) {
-            return BulkStringValue.nullValue();
-        }
-        return stringRoot.retainedValue(requireStringHandle(record));
-    }
-
-    @Override
-    public BulkStringValue previewStringValue(BytesView keyView) {
-        internals.checkThread();
-        EntryRecord record = previewStringRecord(keyView);
-        if (record == null) {
-            return BulkStringValue.nullValue();
+            return ByteValue.nullValue();
         }
         return stringRoot.retainedValue(requireStringHandle(record));
     }
@@ -548,16 +594,6 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         return liveTouchedStringRecord(keyHandle);
     }
 
-    private EntryRecord previewStringRecord(BytesView keyView) {
-        KeyHandle keyHandle = keyLifecycle.keyHandle(keyView);
-        EntryRecord record = keyHandle == null ? null : keyLifecycle.entryRecord(keyHandle);
-        if (record == null || keyLifecycle.isKeyExpired(keyHandle, System.currentTimeMillis())) {
-            return null;
-        }
-        requireString(record);
-        return record;
-    }
-
     private EntryRecord liveTouchedStringRecord(KeyHandle keyHandle) {
         EntryRecord record = internals.liveEntryRecord(keyHandle);
         if (record == null) {
@@ -591,7 +627,6 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 ValueType.STRING,
                 encoding,
                 expireAtMillis,
-                stringMetadataBytes(encoding),
                 previous
         );
     }
@@ -599,7 +634,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     private ValueHandle requireStringHandle(EntryRecord record) {
         ValueHandle handle = record.valueHandle();
         if (!stringRoot.contains(handle)) {
-            throw new IllegalStateException("native string value handle is not available: " + (handle == null ? "null" : handle.raw()));
+            throw new IllegalStateException("native string value handle is not available: " + (handle == null ? "null" : handle.nativeHandle()));
         }
         return handle;
     }
@@ -635,6 +670,16 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         EntryRecord record = entryHandle == null ? null : keyLifecycle.entryRecord(entryHandle);
         KeyHandle keyHandle = entryHandle == null ? null : keyLifecycle.keyHandle(keyBytes);
         return new CurrentEntry(entryHandle, keyHandle, record);
+    }
+
+    private PreparedEntryState preparedEntryState(byte[] keyBytes) {
+        EntryHandle entryHandle = keyLifecycle.entryHandle(keyBytes);
+        EntryRecord record = entryHandle == null ? null : keyLifecycle.entryRecord(entryHandle);
+        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+        boolean expired = record != null
+                && keyHandle != null
+                && keyLifecycle.isKeyExpired(keyHandle, System.currentTimeMillis());
+        return new PreparedEntryState(entryHandle, record, record == null ? 0L : record.version(), expired);
     }
 
     private void reclaimExpiredBeforeMutation(byte[] keyBytes, long nowMillis) {
@@ -804,7 +849,11 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     private long setNativeUpperBound(byte[] keyBytes, SetMode mode, int valueLength, long nowMillis) {
         EntryRecord current = keyLifecycle.entryRecord(keyBytes);
         if (current == null) {
-            return mode == SetMode.XX ? 0L : nativePeak(keyLength(keyBytes), ENTRY_RECORD_NATIVE_BYTES, valueLength);
+            return mode == SetMode.XX ? 0L : nativePeak(
+                    keyLength(keyBytes),
+                    NativeStorageLayout.ENTRY_RECORD_BYTES,
+                    valueLength
+            );
         }
 
         KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
@@ -882,21 +931,16 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     }
 
     private long newStringNativeUpperBound(byte[] keyBytes, int valueLength) {
-        return nativePeak(keyLength(keyBytes), ENTRY_RECORD_NATIVE_BYTES, valueLength);
+        return nativePeak(keyLength(keyBytes), NativeStorageLayout.ENTRY_RECORD_BYTES, valueLength);
     }
 
     private long nativePeak(int... nativeAllocationSizes) {
         return MutationMemoryEstimator.peakAdditionalBytes(
-                keyLifecycle.nativeAllocator(),
+                keyLifecycle.stableMemoryBackend(),
                 0L,
                 0L,
                 nativeAllocationSizes
         );
-    }
-
-    private static long stringMetadataBytes(ValueEncoding encoding) {
-        return DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE
-                + (encoding == ValueEncoding.STRING_INT ? Long.BYTES : 0L);
     }
 
     private static int keyLength(byte[] keyBytes) {
@@ -916,7 +960,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     private long withScopeBookkeeping(long upperBound) {
         return Math.max(
                 Math.max(0L, upperBound),
-                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(keyLifecycle.nativeAllocator(), 0)
+                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(keyLifecycle.stableMemoryBackend(), 0)
         );
     }
 
@@ -924,7 +968,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         return value == null ? 0 : value.length();
     }
 
-    private static void closeReplyValue(BulkStringValue value, Throwable failure) {
+    private static void closeReplyValue(ByteValue value, Throwable failure) {
         try {
             value.close();
         } catch (RuntimeException | Error closeFailure) {
@@ -1109,6 +1153,92 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
             KeyHandle keyHandle,
             EntryRecord record
     ) {
+    }
+
+    private record PreparedEntryState(
+            EntryHandle entryHandle,
+            EntryRecord record,
+            long version,
+            boolean expired
+    ) {
+        private EntryRecord liveRecord() {
+            return expired ? null : record;
+        }
+    }
+
+    private final class PreparedSetMutation implements PreparedMutation<SetStringValue> {
+        private final byte[] keyBytes;
+        private final byte[] valueBytes;
+        private final SetMode mode;
+        private final ExpireOption expireOption;
+        private final PreparedEntryState expectedState;
+        private final SetStringValue preview;
+        private boolean closed;
+        private boolean committed;
+
+        private PreparedSetMutation(
+                byte[] keyBytes,
+                byte[] valueBytes,
+                SetMode mode,
+                ExpireOption expireOption,
+                PreparedEntryState expectedState,
+                SetStringValue preview
+        ) {
+            this.keyBytes = keyBytes;
+            this.valueBytes = valueBytes;
+            this.mode = mode;
+            this.expireOption = expireOption;
+            this.expectedState = expectedState;
+            this.preview = preview;
+        }
+
+        @Override
+        public SetStringValue preview() {
+            return preview;
+        }
+
+        @Override
+        public boolean isCurrent() {
+            internals.checkThread();
+            PreparedEntryState current = preparedEntryState(keyBytes);
+            return Objects.equals(expectedState.entryHandle(), current.entryHandle())
+                    && expectedState.version() == current.version()
+                    && expectedState.expired() == current.expired();
+        }
+
+        @Override
+        public MutationOutcome commit(MutationContext context) {
+            internals.checkThread();
+            Objects.requireNonNull(context, "context");
+            requireCommittable();
+            WriteResult<SetStringValue> result = internals.withMutationContext(
+                    context,
+                    () -> set(keyBytes, sliceOf(valueBytes), mode, expireOption)
+            );
+            committed = true;
+            return result.mutationOutcome();
+        }
+
+        @Override
+        public void close() {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            preview.close();
+        }
+
+        private void requireCommittable() {
+            if (closed) {
+                throw new IllegalStateException("prepared mutation is closed");
+            }
+            if (committed) {
+                throw new IllegalStateException("prepared mutation is already committed");
+            }
+            if (!isCurrent()) {
+                throw new IllegalStateException("prepared mutation is stale");
+            }
+        }
     }
 
     private record StagedEntry(

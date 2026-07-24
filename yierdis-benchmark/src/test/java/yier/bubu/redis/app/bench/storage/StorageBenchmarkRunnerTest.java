@@ -3,6 +3,12 @@ package yier.bubu.redis.app.bench.storage;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.bench.redis.BenchmarkFormat;
+import yier.bubu.redis.storage.api.DbLifecycleOps;
+import yier.bubu.redis.storage.api.DbReads;
+import yier.bubu.redis.storage.api.DbWrites;
+import yier.bubu.redis.storage.api.ExpirationManager;
+import yier.bubu.redis.storage.api.MemoryOps;
+import yier.bubu.redis.storage.api.RuntimeDbEngine;
 
 public class StorageBenchmarkRunnerTest {
     @Test
@@ -35,5 +41,31 @@ public class StorageBenchmarkRunnerTest {
         Assert.assertEquals(0, result.loaded().pendingHashTableCount());
         Assert.assertTrue(result.accountedDeltaBytes() > 0L);
         Assert.assertTrue(result.accountedDeltaBytesPerKey() > 0.0);
+    }
+
+    @Test
+    public void physicalSnapshotCapabilityIsRequired() {
+        RuntimeDbEngine engine = new BaselineEngine();
+
+        IllegalStateException failure = Assert.assertThrows(
+                IllegalStateException.class,
+                () -> StorageBenchmarkRunner.requirePhysicalMemoryCapability(engine)
+        );
+
+        Assert.assertEquals(
+                "storage benchmark requires GlobalMaxmemoryDbEngine",
+                failure.getMessage()
+        );
+    }
+
+    private static final class BaselineEngine implements RuntimeDbEngine {
+        @Override public DbReads reads() { return null; }
+        @Override public DbWrites writes() { return null; }
+        @Override public ExpirationManager expiration() { return null; }
+        @Override public MemoryOps memory() { return null; }
+        @Override public DbLifecycleOps lifecycle() { return null; }
+        @Override public void bindToCurrentThread() { }
+        @Override public void runMaintenance() { }
+        @Override public void shutdown() { }
     }
 }

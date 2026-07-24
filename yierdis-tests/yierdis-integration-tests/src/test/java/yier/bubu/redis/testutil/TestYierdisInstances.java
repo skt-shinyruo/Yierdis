@@ -1,14 +1,13 @@
 package yier.bubu.redis.testutil;
 
-import yier.bubu.redis.memory.api.NativeDefragOptions;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.memory.api.StableMemoryBackendFactory;
+import yier.bubu.redis.memory.foreign.YierdisFfmStableMemoryBackend;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
-import yier.bubu.redis.storage.api.DbDefragConfig;
+import yier.bubu.redis.storage.memory.YierdisDbBackendConfig;
 import yier.bubu.redis.storage.memory.YierdisDbEngineFactory;
 
 import java.util.Objects;
-import java.util.concurrent.TimeUnit;
 
 public final class TestYierdisInstances {
     private TestYierdisInstances() {
@@ -20,22 +19,16 @@ public final class TestYierdisInstances {
             return YierdisInstance.create(config);
         }
 
-        NativeDefragOptions nativeDefragOptions = nativeDefragOptions(config);
-        if (config.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.PER_DB) {
-            return YierdisInstance.create(
-                    copyConfig(config)
-                            .engineFactory(new YierdisDbEngineFactory(nativeDefragOptions))
-                            .build()
-            );
-        }
-
-        YierdisFfmMemoryRuntime memoryRuntime = new YierdisFfmMemoryRuntime("instance");
-        YierdisDbEngineFactory engineFactory = new YierdisDbEngineFactory(memoryRuntime, nativeDefragOptions);
         return YierdisInstance.create(
                 copyConfig(config)
-                        .engineFactoryBinding(new YierdisInstanceConfig.EngineFactoryBinding(engineFactory, memoryRuntime))
+                        .engineFactory(defaultEngineFactory())
                         .build()
         );
+    }
+
+    private static YierdisDbEngineFactory defaultEngineFactory() {
+        StableMemoryBackendFactory backendFactory = YierdisFfmStableMemoryBackend::new;
+        return new YierdisDbEngineFactory(backendFactory, new YierdisDbBackendConfig(0));
     }
 
     private static YierdisInstanceConfig.Builder copyConfig(YierdisInstanceConfig config) {
@@ -54,15 +47,4 @@ public final class TestYierdisInstances {
                 .commitStreamShutdownTimeoutMillis(config.commitStreamShutdownTimeoutMillis());
     }
 
-    private static NativeDefragOptions nativeDefragOptions(YierdisInstanceConfig config) {
-        DbDefragConfig defrag = config.defrag();
-        if (!defrag.enabled()) {
-            return null;
-        }
-        return new NativeDefragOptions(
-                defrag.maxMoveBytes(),
-                defrag.maxObjects(),
-                TimeUnit.MILLISECONDS.toNanos(defrag.timeLimitMillis())
-        );
-    }
 }

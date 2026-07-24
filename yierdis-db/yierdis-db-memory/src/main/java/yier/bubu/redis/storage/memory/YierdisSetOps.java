@@ -9,13 +9,12 @@ import yier.bubu.redis.storage.api.SetWriteOps;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.WriteResult;
-import yier.bubu.redis.storage.api.result.BulkStringMetrics;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
-import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequence;
-import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequences;
+import yier.bubu.redis.storage.api.result.ByteSequenceSource;
+import yier.bubu.redis.storage.api.result.ByteSequenceSources;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
@@ -26,14 +25,12 @@ import yier.bubu.redis.storage.memory.internal.ledger.PreparedCallbackMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
+import yier.bubu.redis.storage.memory.internal.value.SemanticResultSupport;
 
 import java.util.List;
 import java.util.Objects;
 
 public final class YierdisSetOps implements SetReadOps, SetWriteOps {
-    private static final int ENTRY_RECORD_NATIVE_BYTES = 56;
-    private static final int SET_ROOT_NATIVE_BYTES = Long.BYTES;
-
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final SetRoot setRoot;
@@ -202,14 +199,19 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
     }
 
     @Override
-    public MeasuredBulkStringSequence smembers(byte[] keyBytes) {
+    public ByteSequenceSource smembers(byte[] keyBytes) {
         internals.checkThread();
         EntryRecord record = liveSetRecord(keyBytes);
         if (record == null) {
-            return sequenceOf(out -> { });
+            return ByteSequenceSources.empty();
         }
         ValueHandle handle = requireSetHandle(record);
-        return sequenceOf(out -> setRoot.membersInto(handle, out));
+        return ByteSequenceSources.of(
+                setRoot.size(handle),
+                0L,
+                out -> setRoot.membersInto(handle, SemanticResultSupport.lengthSink(out)),
+                out -> setRoot.membersInto(handle, out)
+        );
     }
 
     @Override
@@ -317,9 +319,9 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
         int next = 0;
         if (includeKeyAndEntry) {
             sizes[next++] = Math.max(1, keyBytes.length);
-            sizes[next++] = ENTRY_RECORD_NATIVE_BYTES;
+            sizes[next++] = NativeStorageLayout.ENTRY_RECORD_BYTES;
         }
-        sizes[next++] = SET_ROOT_NATIVE_BYTES;
+        sizes[next++] = NativeStorageLayout.COLLECTION_ROOT_RECORD_BYTES;
         next = appendPayloadSizes(sizes, next, existingPayloadSizes);
         next = appendValuePayloadSizes(sizes, next, members);
         if (next != sizes.length) {
@@ -345,7 +347,6 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
                 ValueType.SET,
                 setRoot.encoding(handle),
                 expireAtMillis,
-                DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE,
                 previous
         );
     }
@@ -353,7 +354,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
     private ValueHandle requireSetHandle(EntryRecord record) {
         ValueHandle handle = record.valueHandle();
         if (!setRoot.contains(handle)) {
-            throw new IllegalStateException("native set value handle is not available: " + (handle == null ? "null" : handle.raw()));
+            throw new IllegalStateException("native set value handle is not available: " + (handle == null ? "null" : handle.nativeHandle()));
         }
         return handle;
     }
@@ -492,7 +493,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
 
     private long nativePeak(long heapGrowthBytes, int... nativeAllocationSizes) {
         return MutationMemoryEstimator.peakAdditionalBytes(
-                keyLifecycle.nativeAllocator(),
+                keyLifecycle.stableMemoryBackend(),
                 0L,
                 Math.max(0L, heapGrowthBytes),
                 nativeAllocationSizes
@@ -502,7 +503,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
     private long withScopeBookkeeping(long upperBound) {
         return Math.max(
                 Math.max(0L, upperBound),
-                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(keyLifecycle.nativeAllocator(), 0)
+                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(keyLifecycle.stableMemoryBackend(), 0)
         );
     }
 
@@ -541,23 +542,6 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
             }
         }
         return next;
-    }
-
-    private static MeasuredBulkStringSequence sequenceOf(BulkEmitter emitter) {
-        Objects.requireNonNull(emitter, "emitter");
-        BulkStringMetrics metrics = new BulkStringMetrics();
-        emitter.emitTo(metrics);
-        return MeasuredBulkStringSequences.of(
-                metrics.count(),
-                metrics.encodedElementBytes(),
-                0L,
-                emitter::emitTo
-        );
-    }
-
-    @FunctionalInterface
-    private interface BulkEmitter {
-        void emitTo(BulkStringSink out);
     }
 
     private record CurrentEntry(

@@ -9,15 +9,15 @@ import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.WriteResult;
-import yier.bubu.redis.storage.api.result.BulkStringValue;
+import yier.bubu.redis.storage.api.result.ByteMapSource;
+import yier.bubu.redis.storage.api.result.ByteMapSources;
+import yier.bubu.redis.storage.api.result.ByteValue;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
-import yier.bubu.redis.storage.api.result.BulkStringMapMetrics;
-import yier.bubu.redis.storage.api.result.BulkStringMapMetricsSources;
-import yier.bubu.redis.storage.api.result.BulkStringMetrics;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
+import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
@@ -27,15 +27,13 @@ import yier.bubu.redis.storage.memory.internal.ledger.PreparedCallbackMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
+import yier.bubu.redis.storage.memory.internal.value.SemanticResultSupport;
 
 import java.util.List;
 import java.util.Objects;
 
 public final class YierdisHashOps implements HashReadOps, HashWriteOps {
     private static final long HASH_PAIR_OVERHEAD_BYTES_ESTIMATE = 256L;
-    private static final int ENTRY_RECORD_NATIVE_BYTES = 56;
-    private static final int HASH_ROOT_NATIVE_BYTES = Long.BYTES;
-
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final HashRoot hashRoot;
@@ -177,24 +175,29 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
     }
 
     @Override
-    public BulkStringValue hget(byte[] keyBytes, byte[] fieldBytes) {
+    public ByteValue hget(byte[] keyBytes, byte[] fieldBytes) {
         internals.checkThread();
         EntryRecord record = liveHashRecord(keyBytes);
         if (record == null) {
-            return BulkStringValue.nullValue();
+            return ByteValue.nullValue();
         }
         return hashRoot.hgetValue(requireHashHandle(record), fieldBytes);
     }
 
     @Override
-    public BulkStringMapMetrics hgetall(byte[] keyBytes) {
+    public ByteMapSource hgetall(byte[] keyBytes) {
         internals.checkThread();
         EntryRecord record = liveHashRecord(keyBytes);
         if (record == null) {
-            return pairsOf(out -> { });
+            return ByteMapSources.empty();
         }
         ValueHandle handle = requireHashHandle(record);
-        return pairsOf(out -> hashRoot.hgetallPairsInto(handle, out));
+        return ByteMapSources.of(
+                hashRoot.size(handle),
+                0L,
+                out -> hashRoot.hgetallPairsInto(handle, SemanticResultSupport.lengthSink(out)),
+                out -> hashRoot.hgetallPairsInto(handle, out)
+        );
     }
 
     @Override
@@ -354,10 +357,10 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
         int next = 0;
         if (includeKeyAndEntry) {
             sizes[next++] = Math.max(1, keyBytes.length);
-            sizes[next++] = ENTRY_RECORD_NATIVE_BYTES;
+            sizes[next++] = NativeStorageLayout.ENTRY_RECORD_BYTES;
         }
         if (includeRoot) {
-            sizes[next++] = HASH_ROOT_NATIVE_BYTES;
+            sizes[next++] = NativeStorageLayout.COLLECTION_ROOT_RECORD_BYTES;
         }
         if (replacementAllocationSizes != null) {
             for (int size : replacementAllocationSizes) {
@@ -384,7 +387,6 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
                 ValueType.HASH,
                 hashRoot.encoding(handle),
                 expireAtMillis,
-                DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE,
                 previous
         );
     }
@@ -392,7 +394,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
     private ValueHandle requireHashHandle(EntryRecord record) {
         ValueHandle handle = record.valueHandle();
         if (!hashRoot.contains(handle)) {
-            throw new IllegalStateException("native hash value handle is not available: " + (handle == null ? "null" : handle.raw()));
+            throw new IllegalStateException("native hash value handle is not available: " + (handle == null ? "null" : handle.nativeHandle()));
         }
         return handle;
     }
@@ -531,7 +533,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
 
     private long nativePeak(long heapGrowthBytes, int... nativeAllocationSizes) {
         return MutationMemoryEstimator.peakAdditionalBytes(
-                keyLifecycle.nativeAllocator(),
+                keyLifecycle.stableMemoryBackend(),
                 0L,
                 Math.max(0L, heapGrowthBytes),
                 nativeAllocationSizes
@@ -550,29 +552,8 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
     private long withScopeBookkeeping(long upperBound) {
         return Math.max(
                 Math.max(0L, upperBound),
-                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(keyLifecycle.nativeAllocator(), 0)
+                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(keyLifecycle.stableMemoryBackend(), 0)
         );
-    }
-
-    private static BulkStringMapMetrics pairsOf(BulkEmitter emitter) {
-        Objects.requireNonNull(emitter, "emitter");
-        BulkStringMetrics metrics = new BulkStringMetrics();
-        emitter.emitTo(metrics);
-        int elementCount = metrics.count();
-        if ((elementCount & 1) != 0) {
-            throw new IllegalStateException("HGETALL measurement produced an odd element count: " + elementCount);
-        }
-        return BulkStringMapMetricsSources.of(
-                elementCount / 2,
-                metrics.encodedElementBytes(),
-                0L,
-                emitter::emitTo
-        );
-    }
-
-    @FunctionalInterface
-    private interface BulkEmitter {
-        void emitTo(BulkStringSink out);
     }
 
     private record CurrentEntry(

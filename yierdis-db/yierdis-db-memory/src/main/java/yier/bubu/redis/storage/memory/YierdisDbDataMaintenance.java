@@ -16,6 +16,8 @@ import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 import java.util.Objects;
 
 final class YierdisDbDataMaintenance {
+    private static final long MAINTENANCE_REHASH_MAX_INSPECTED_SLOTS = 64L;
+
     private final YierdisDbRuntimeState runtimeState;
     private final YierdisDbHealth health;
     private final HashTableMaintenanceRegistry hashTableMaintenanceRegistry;
@@ -23,6 +25,7 @@ final class YierdisDbDataMaintenance {
     private final YierdisDbExpirationSupport expirationSupport;
     private final YierdisDbMaxmemorySupport maxmemorySupport;
     private final YierdisDbMemoryReporter memoryReporter;
+    private final long maintenanceTimeLimitNanos;
 
     YierdisDbDataMaintenance(
             YierdisDbRuntimeState runtimeState,
@@ -31,7 +34,8 @@ final class YierdisDbDataMaintenance {
             YierdisDbMutationExecutor mutationExecutor,
             YierdisDbExpirationSupport expirationSupport,
             YierdisDbMaxmemorySupport maxmemorySupport,
-            YierdisDbMemoryReporter memoryReporter
+            YierdisDbMemoryReporter memoryReporter,
+            long maintenanceTimeLimitNanos
     ) {
         this.runtimeState = Objects.requireNonNull(runtimeState, "runtimeState");
         this.health = Objects.requireNonNull(health, "health");
@@ -43,6 +47,21 @@ final class YierdisDbDataMaintenance {
         this.expirationSupport = Objects.requireNonNull(expirationSupport, "expirationSupport");
         this.maxmemorySupport = Objects.requireNonNull(maxmemorySupport, "maxmemorySupport");
         this.memoryReporter = Objects.requireNonNull(memoryReporter, "memoryReporter");
+        if (maintenanceTimeLimitNanos < 0L) {
+            throw new IllegalArgumentException("maintenanceTimeLimitNanos must be >= 0");
+        }
+        this.maintenanceTimeLimitNanos = maintenanceTimeLimitNanos;
+    }
+
+    void runMaintenance() {
+        runtimeState.checkThread();
+        health.requireWritable();
+        expirationSupport.cleanupExpired();
+        rehashMaintenance(HashTableWorkBudget.of(
+                MAINTENANCE_REHASH_MAX_INSPECTED_SLOTS,
+                maintenanceTimeLimitNanos
+        ));
+        enforceMaxmemory();
     }
 
     void enforceMaxmemory() {
@@ -115,7 +134,7 @@ final class YierdisDbDataMaintenance {
     private long maintenanceUpperBoundBytes(HashTableMaintenanceRegistry.Participant participant) {
         long stagedGrowth = Math.max(0L, participant.estimatedMaintenanceGrowthBytes());
         long scopeBookkeeping = MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(
-                runtimeState.nativeAllocator(),
+                runtimeState.stableMemoryBackend(),
                 0
         );
         return stagedGrowth > Long.MAX_VALUE - scopeBookkeeping

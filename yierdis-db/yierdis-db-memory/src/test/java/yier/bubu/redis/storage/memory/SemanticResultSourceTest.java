@@ -9,18 +9,17 @@ import java.util.stream.Collectors;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.SetMode;
-import yier.bubu.redis.storage.api.result.BulkStringMapMetrics;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.ByteMapSource;
+import yier.bubu.redis.storage.api.result.ByteSequenceSource;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.KeyScanWindow;
-import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequence;
 
-public class MeasuredReplySourceTest {
+public class SemanticResultSourceTest {
     @Test
-    public void collectionSourcesMeasureAndReplayBinaryLargeAndIntegerBoundaryValues() {
+    public void collectionSourcesExposeRepeatableSemanticLengthsAndReplayBytes() {
         withDb(db -> {
             byte[] binary = new byte[]{0, (byte) 0xFF, '\n'};
             byte[] large = new byte[1_024];
@@ -29,16 +28,14 @@ public class MeasuredReplySourceTest {
             }
 
             db.writes().lists().rpush(bytes("list"), List.of(binary, large));
-            assertSequence(
-                    db.reads().lists().lrange(bytes("list"), 0, -1),
-                    List.of(binary, large)
-            );
+            assertSequence(db.reads().lists().lrange(bytes("list"), 0, -1), List.of(binary, large));
             assertSequence(db.reads().lists().lrange(bytes("missing"), 0, -1), List.of());
 
             db.writes().hashes().hset(bytes("hash"), List.of(binary, large));
-            try (BulkStringMapMetrics source = db.reads().hashes().hgetall(bytes("hash"))) {
+            try (ByteMapSource source = db.reads().hashes().hgetall(bytes("hash"))) {
                 Assert.assertEquals(1, source.pairCount());
-                Assert.assertEquals(encoded(binary) + encoded(large), source.encodedElementBytes());
+                Assert.assertEquals(List.of(binary.length, large.length), pairLengths(source));
+                Assert.assertEquals(List.of(binary.length, large.length), pairLengths(source));
                 RecordingSink sink = new RecordingSink();
                 source.emitPairsTo(sink);
                 assertByteValues(List.of(binary, large), sink.values());
@@ -47,12 +44,13 @@ public class MeasuredReplySourceTest {
             byte[] min = Long.toString(Long.MIN_VALUE).getBytes(StandardCharsets.US_ASCII);
             byte[] max = Long.toString(Long.MAX_VALUE).getBytes(StandardCharsets.US_ASCII);
             db.writes().sets().sadd(bytes("set"), List.of(min, max));
-            try (MeasuredBulkStringSequence source = db.reads().sets().smembers(bytes("set"))) {
-                Assert.assertEquals(2, source.count());
-                Assert.assertEquals(encoded(min) + encoded(max), source.encodedElementBytes());
+            try (ByteSequenceSource source = db.reads().sets().smembers(bytes("set"))) {
+                Assert.assertEquals(2, source.elementCount());
+                Assert.assertEquals(Set.of(min.length, max.length), Set.copyOf(lengths(source)));
+                Assert.assertEquals(Set.of(min.length, max.length), Set.copyOf(lengths(source)));
                 RecordingSink sink = new RecordingSink();
                 source.emitTo(sink);
-                Assert.assertEquals(Set.of(encodedValue(min), encodedValue(max)), encodedValueSet(sink.values()));
+                Assert.assertEquals(Set.of(base64(min), base64(max)), base64Set(sink.values()));
             }
 
             db.writes().zsets().zadd(bytes("zset"), List.of(bytes("1"), binary, bytes("2"), large));
@@ -64,40 +62,42 @@ public class MeasuredReplySourceTest {
     }
 
     @Test
-    public void keyWindowsMeasureAndReplayOneBoundedDiscoveryWithoutResultLists() {
+    public void keyWindowsExposeSemanticLengthsWithoutMaterializedResults() {
         withDb(db -> {
             byte[] first = bytes("metric:first");
             byte[] second = bytes("metric:second");
             db.writes().strings().setString(first, bytes("v"), SetMode.NORMAL, null);
             db.writes().strings().setString(second, bytes("v"), SetMode.NORMAL, null);
-            long expectedEncoded = encoded(first) + encoded(second);
-            Set<String> expected = Set.of(encodedValue(first), encodedValue(second));
+            Set<String> expected = Set.of(base64(first), base64(second));
+            Set<Integer> expectedLengths = Set.of(first.length, second.length);
 
             try (KeyScanWindow window = db.reads().keyspace().keys(bytes("metric:*"), 16, 0L)) {
                 Assert.assertTrue(window.current());
-                Assert.assertEquals(2, window.count());
-                Assert.assertEquals(expectedEncoded, window.encodedElementBytes());
+                Assert.assertEquals(2, window.elementCount());
+                Assert.assertEquals(expectedLengths, Set.copyOf(lengths(window)));
+                Assert.assertEquals(expectedLengths, Set.copyOf(lengths(window)));
                 Assert.assertEquals(0L, window.retainedMemoryBytes());
                 RecordingSink sink = new RecordingSink();
                 window.emitTo(sink);
-                Assert.assertEquals(expected, encodedValueSet(sink.values()));
+                Assert.assertEquals(expected, base64Set(sink.values()));
             }
 
             try (KeyScanWindow window = db.reads().keyspace().scan(ScanCursorV2.start(), bytes("metric:*"), 16)) {
                 Assert.assertTrue(window.current());
-                Assert.assertEquals(2, window.count());
-                Assert.assertEquals(expectedEncoded, window.encodedElementBytes());
+                Assert.assertEquals(2, window.elementCount());
+                Assert.assertEquals(expectedLengths, Set.copyOf(lengths(window)));
                 RecordingSink sink = new RecordingSink();
                 window.emitTo(sink);
-                Assert.assertEquals(expected, encodedValueSet(sink.values()));
+                Assert.assertEquals(expected, base64Set(sink.values()));
             }
         });
     }
 
-    private static void assertSequence(MeasuredBulkStringSequence source, List<byte[]> expected) {
+    private static void assertSequence(ByteSequenceSource source, List<byte[]> expected) {
         try (source) {
-            Assert.assertEquals(expected.size(), source.count());
-            Assert.assertEquals(encodedTotal(expected), source.encodedElementBytes());
+            Assert.assertEquals(expected.size(), source.elementCount());
+            Assert.assertEquals(payloadLengths(expected), lengths(source));
+            Assert.assertEquals(payloadLengths(expected), lengths(source));
             Assert.assertEquals(0L, source.retainedMemoryBytes());
             RecordingSink sink = new RecordingSink();
             source.emitTo(sink);
@@ -105,25 +105,20 @@ public class MeasuredReplySourceTest {
         }
     }
 
-    private static long encodedTotal(List<byte[]> values) {
-        long total = 0L;
-        for (byte[] value : values) {
-            total += encoded(value);
-        }
-        return total;
+    private static List<Integer> lengths(ByteSequenceSource source) {
+        List<Integer> lengths = new ArrayList<>();
+        source.visitElementLengths(lengths::add);
+        return lengths;
     }
 
-    private static long encoded(byte[] value) {
-        return 1L + decimalDigits(value.length) + 2L + value.length + 2L;
+    private static List<Integer> pairLengths(ByteMapSource source) {
+        List<Integer> lengths = new ArrayList<>();
+        source.visitPairLengths(lengths::add);
+        return lengths;
     }
 
-    private static int decimalDigits(int value) {
-        int digits = 1;
-        while (value >= 10) {
-            value /= 10;
-            digits++;
-        }
-        return digits;
+    private static List<Integer> payloadLengths(List<byte[]> values) {
+        return values.stream().map(value -> value == null ? -1 : value.length).toList();
     }
 
     private static byte[] bytes(String value) {
@@ -137,17 +132,17 @@ public class MeasuredReplySourceTest {
         }
     }
 
-    private static Set<String> encodedValueSet(List<byte[]> values) {
-        return values.stream().map(MeasuredReplySourceTest::encodedValue).collect(Collectors.toSet());
+    private static Set<String> base64Set(List<byte[]> values) {
+        return values.stream().map(SemanticResultSourceTest::base64).collect(Collectors.toSet());
     }
 
-    private static String encodedValue(byte[] value) {
-        return Base64.getEncoder().encodeToString(value);
+    private static String base64(byte[] value) {
+        return value == null ? "null" : Base64.getEncoder().encodeToString(value);
     }
 
     private static void withDb(DbConsumer consumer) {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("measured-reply-source")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        try (TestBackend runtime = TestBackend.open("semantic-result-source")) {
+            YierdisDb db = TestDbSupport.open(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
             try {
                 db.bindToCurrentThread();
                 consumer.accept(db);
@@ -162,35 +157,36 @@ public class MeasuredReplySourceTest {
         void accept(YierdisDb db);
     }
 
-    private static final class RecordingSink implements BulkStringSink {
+    private static final class RecordingSink implements ByteValueSink {
         private final List<byte[]> values = new ArrayList<>();
 
         @Override
-        public void bulkString(byte[] data) {
+        public void value(byte[] data) {
             values.add(data == null ? null : data.clone());
         }
 
         @Override
-        public void bulkString(byte[] data, int off, int len) {
+        public void value(byte[] data, int off, int len) {
             byte[] copy = new byte[len];
             System.arraycopy(data, off, copy, 0, len);
             values.add(copy);
         }
 
         @Override
-        public void bulkString(BytesSlice slice) {
-            if (slice == null) {
-                values.add(null);
-                return;
-            }
+        public void value(BytesSlice slice) {
             byte[] copy = new byte[slice.length()];
             slice.getBytes(0, copy, 0, copy.length);
             values.add(copy);
         }
 
         @Override
-        public void bulkStringLongAscii(long value) {
+        public void longAscii(long value) {
             values.add(Long.toString(value).getBytes(StandardCharsets.US_ASCII));
+        }
+
+        @Override
+        public void nullValue() {
+            values.add(null);
         }
 
         private List<byte[]> values() {

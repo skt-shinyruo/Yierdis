@@ -266,12 +266,12 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         }
 
         Table staged = stageTableForInsert(hash);
-        long keyRawHandle = byteStore.storeRaw(keyBytes, keyKind);
-        long keyBytesSize = byteStore.allocatedBytesRaw(keyRawHandle);
+        NativeHandle keyHandle = byteStore.store(keyBytes, keyKind);
+        long keyBytesSize = byteStore.allocatedBytes(keyHandle);
         if (staged != null) {
             publishStagedTable(staged);
         }
-        insertActive(keyRawHandle, value, hash);
+        insertActive(keyHandle, value, hash);
         nativeBytes += keyBytesSize;
         contentGeneration++;
         return null;
@@ -284,20 +284,22 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         }
         validateValue(value);
         advanceRehashOnWrite();
-        long keyRawHandle = keyHandle.raw();
-        int hash = hashRaw(keyRawHandle);
-        int index = findIndex(active, keyRawHandle, hash);
+        if (keyHandle.isNull()) {
+            throw new IllegalArgumentException("keyHandle must not be null");
+        }
+        int hash = hashHandle(keyHandle);
+        int index = findIndex(active, keyHandle, hash);
         if (index >= 0) {
             V previous = valueAt(active, index);
             writeValue(active, index, value);
             contentGeneration++;
             return previous;
         }
-        index = findIndex(old, keyRawHandle, hash);
+        index = findIndex(old, keyHandle, hash);
         if (index >= 0) {
             V previous = valueAt(old, index);
             moveOldSlotToActive(index);
-            int activeIndex = findIndex(active, keyRawHandle, hash);
+            int activeIndex = findIndex(active, keyHandle, hash);
             if (activeIndex < 0) {
                 throw new IllegalStateException("migrated native byte-map key is missing from active table");
             }
@@ -310,7 +312,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         if (staged != null) {
             publishStagedTable(staged);
         }
-        insertActive(keyRawHandle, value, hash);
+        insertActive(keyHandle, value, hash);
         contentGeneration++;
         return null;
     }
@@ -322,14 +324,14 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         for (StagedPut<V> put : stagedPuts) {
             Objects.requireNonNull(put, "put");
             validateValue(put.nextValue);
-            if (ownsKeys && put.borrowedKeyRawHandle != 0L) {
+            if (ownsKeys && put.borrowedKeyHandle != null) {
                 throw new IllegalArgumentException("owning native byte-map cannot stage a borrowed key");
             }
             if (!ownsKeys) {
-                if (put.borrowedKeyRawHandle == 0L) {
+                if (put.borrowedKeyHandle == null || put.borrowedKeyHandle.isNull()) {
                     throw new IllegalArgumentException("borrowed native byte-map requires a borrowed key handle");
                 }
-                if (!byteStore.equalsBytesRaw(put.borrowedKeyRawHandle, put.keyBytes)) {
+                if (!byteStore.equalsBytes(put.borrowedKeyHandle, put.keyBytes)) {
                     throw new IllegalArgumentException("borrowed native byte-map key bytes do not match the handle");
                 }
             }
@@ -702,7 +704,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         }
 
         // shadow 只保留迁移定位信息；active 中的 value 可能已替换，旧 value 甚至已由上层释放。
-        int activeIndex = findStoredKeyIndex(active, table.keyRawHandles[index], table.hashes[index]);
+        int activeIndex = findStoredKeyIndex(active, table.keyHandles[index], table.hashes[index]);
         return activeIndex < 0
                 || consumer.accept(keyHandleAt(active, activeIndex), valueAt(active, activeIndex));
     }
@@ -738,9 +740,9 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         for (int i = 0; i < table.capacity; i++) {
             if (table.states[i] == STATE_FILLED) {
                 if (ownsKeys) {
-                    byteStore.releaseRaw(table.keyRawHandles[i]);
+                    byteStore.release(table.keyHandles[i]);
                 }
-                table.keyRawHandles[i] = 0L;
+                table.keyHandles[i] = null;
                 clearValue(table, i);
                 table.hashes[i] = 0;
                 table.states[i] = STATE_EMPTY;
@@ -781,12 +783,12 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         notifyHeapChanged();
     }
 
-    private void insertActive(long keyRawHandle, V value, int hash) {
+    private void insertActive(NativeHandle keyHandle, V value, int hash) {
         int index = findInsertionIndex(active, hash);
         if (active.states[index] == STATE_FILLED) {
             throw new IllegalStateException("native byte-map key already exists during insert");
         }
-        writeFilledRaw(active, index, keyRawHandle, value, hash);
+        writeFilled(active, index, keyHandle, value, hash);
         size++;
     }
 
@@ -794,22 +796,22 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         if (old == null || old.states[oldIndex] != STATE_FILLED) {
             return;
         }
-        long keyRawHandle = old.keyRawHandles[oldIndex];
+        NativeHandle keyHandle = old.keyHandles[oldIndex];
         int hash = old.hashes[oldIndex];
         int activeIndex = findInsertionIndex(active, hash);
         if (active.states[activeIndex] == STATE_FILLED) {
             throw new IllegalStateException("duplicate native byte-map key while rehashing");
         }
-        writeMovedSlot(old, oldIndex, active, activeIndex, keyRawHandle, hash);
+        writeMovedSlot(old, oldIndex, active, activeIndex, keyHandle, hash);
         old.states[oldIndex] = STATE_MIGRATED_SCAN_SHADOW;
         old.size--;
         old.filled--;
     }
 
-    private void writeFilledRaw(Table table, int index, long keyRawHandle, V value, int hash) {
+    private void writeFilled(Table table, int index, NativeHandle keyHandle, V value, int hash) {
         byte previous = requireWritableState(table, index);
         writeValue(table, index, value);
-        writeSlotMetadata(table, index, keyRawHandle, hash, previous);
+        writeSlotMetadata(table, index, keyHandle, hash, previous);
     }
 
     private void writeMovedSlot(
@@ -817,12 +819,12 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
             int sourceIndex,
             Table target,
             int targetIndex,
-            long keyRawHandle,
+            NativeHandle keyHandle,
             int hash
     ) {
         byte previous = requireWritableState(target, targetIndex);
         moveValue(source, sourceIndex, target, targetIndex);
-        writeSlotMetadata(target, targetIndex, keyRawHandle, hash, previous);
+        writeSlotMetadata(target, targetIndex, keyHandle, hash, previous);
     }
 
     private static byte requireWritableState(Table table, int index) {
@@ -836,7 +838,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
     private static void writeSlotMetadata(
             Table table,
             int index,
-            long keyRawHandle,
+            NativeHandle keyHandle,
             int hash,
             byte previous
     ) {
@@ -845,16 +847,16 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         } else {
             table.tombstones--;
         }
-        table.keyRawHandles[index] = keyRawHandle;
+        table.keyHandles[index] = keyHandle;
         table.hashes[index] = hash;
         table.states[index] = STATE_FILLED;
         table.size++;
     }
 
     private void removeFromActive(int index) {
-        long keyRawHandle = active.keyRawHandles[index];
+        NativeHandle keyHandle = active.keyHandles[index];
         int hash = active.hashes[index];
-        invalidateOldShadow(keyRawHandle, hash);
+        invalidateOldShadow(keyHandle, hash);
         removeFromTable(active, index);
     }
 
@@ -866,12 +868,12 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         if (table == null || table.states[index] != STATE_FILLED) {
             return;
         }
-        long keyRawHandle = table.keyRawHandles[index];
+        NativeHandle keyHandle = table.keyHandles[index];
         if (ownsKeys) {
-            nativeBytes -= byteStore.allocatedBytesRaw(keyRawHandle);
-            byteStore.releaseRaw(keyRawHandle);
+            nativeBytes -= byteStore.allocatedBytes(keyHandle);
+            byteStore.release(keyHandle);
         }
-        table.keyRawHandles[index] = 0L;
+        table.keyHandles[index] = null;
         clearValue(table, index);
         table.hashes[index] = 0;
         table.states[index] = STATE_TOMBSTONE;
@@ -919,7 +921,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         }
     }
 
-    private void invalidateOldShadow(long keyRawHandle, int hash) {
+    private void invalidateOldShadow(NativeHandle keyHandle, int hash) {
         if (old == null) {
             return;
         }
@@ -932,8 +934,8 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
             }
             if (state == STATE_MIGRATED_SCAN_SHADOW
                     && old.hashes[index] == hash
-                    && keyRawHandle == old.keyRawHandles[index]) {
-                old.keyRawHandles[index] = 0L;
+                    && keyHandle.equals(old.keyHandles[index])) {
+                old.keyHandles[index] = null;
                 clearValue(old, index);
                 old.hashes[index] = 0;
                 old.states[index] = STATE_TOMBSTONE;
@@ -959,7 +961,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
             }
             if (state == STATE_FILLED
                     && table.hashes[index] == hash
-                    && byteStore.equalsBytesRaw(table.keyRawHandles[index], keyBytes)) {
+                    && byteStore.equalsBytes(table.keyHandles[index], keyBytes)) {
                 return index;
             }
             index = (index + 1) & mask;
@@ -973,14 +975,14 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         }
         for (int index = 0; index < table.capacity; index++) {
             if (table.states[index] == STATE_FILLED
-                    && byteStore.compareLexRaw(table.keyRawHandles[index], keyHandle.raw()) == 0) {
+                    && byteStore.compareLex(table.keyHandles[index], keyHandle) == 0) {
                 return index;
             }
         }
         return -1;
     }
 
-    private int findIndex(Table table, long keyRawHandle, int hash) {
+    private int findIndex(Table table, NativeHandle keyHandle, int hash) {
         if (table == null) {
             return -1;
         }
@@ -994,7 +996,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
             }
             if (state == STATE_FILLED
                     && table.hashes[index] == hash
-                    && byteStore.compareLexRaw(table.keyRawHandles[index], keyRawHandle) == 0) {
+                    && byteStore.compareLex(table.keyHandles[index], keyHandle) == 0) {
                 return index;
             }
             index = (index + 1) & mask;
@@ -1002,8 +1004,8 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         return -1;
     }
 
-    private int findStoredKeyIndex(Table table, long keyRawHandle, int hash) {
-        if (table == null || keyRawHandle == 0L) {
+    private int findStoredKeyIndex(Table table, NativeHandle keyHandle, int hash) {
+        if (table == null || keyHandle == null || keyHandle.isNull()) {
             return -1;
         }
         int mask = table.capacity - 1;
@@ -1016,7 +1018,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
             }
             if (state == STATE_FILLED
                     && table.hashes[index] == hash
-                    && keyRawHandle == table.keyRawHandles[index]) {
+                    && keyHandle.equals(table.keyHandles[index])) {
                 return index;
             }
             index = (index + 1) & mask;
@@ -1025,17 +1027,14 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
     }
 
     private static NativeHandle keyHandleAt(Table table, int index) {
-        return NativeHandle.fromRaw(table.keyRawHandles[index]);
+        return table.keyHandles[index];
     }
 
     @SuppressWarnings("unchecked")
     private V valueAt(Table table, int index) {
         return switch (valueLayout) {
             case OBJECT_REFERENCES -> (V) ((Object[]) table.valueSlots)[index];
-            case NATIVE_HANDLES -> {
-                long rawHandle = ((long[]) table.valueSlots)[index];
-                yield rawHandle == 0L ? null : (V) NativeHandle.fromRaw(rawHandle);
-            }
+            case NATIVE_HANDLES -> (V) ((NativeHandle[]) table.valueSlots)[index];
             case CONSTANT -> constantValue;
         };
     }
@@ -1044,16 +1043,17 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         validateValue(value);
         switch (valueLayout) {
             case OBJECT_REFERENCES -> ((Object[]) table.valueSlots)[index] = value;
-            case NATIVE_HANDLES -> ((long[]) table.valueSlots)[index] =
-                    value == null ? 0L : ((NativeHandle) value).raw();
+            case NATIVE_HANDLES -> ((NativeHandle[]) table.valueSlots)[index] = (NativeHandle) value;
             case CONSTANT -> {
             }
         }
     }
 
     private void validateValue(V value) {
-        if (valueLayout == ValueLayout.NATIVE_HANDLES && value != null && !(value instanceof NativeHandle)) {
-            throw new IllegalArgumentException("native-handle value layout requires NativeHandle values");
+        if (valueLayout == ValueLayout.NATIVE_HANDLES && value != null) {
+            if (!(value instanceof NativeHandle handle) || handle.isNull()) {
+                throw new IllegalArgumentException("native-handle value layout requires live NativeHandle values");
+            }
         }
         if (valueLayout == ValueLayout.CONSTANT && value != constantValue) {
             throw new IllegalArgumentException("constant value layout requires the configured value");
@@ -1068,9 +1068,9 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
                 sourceValues[sourceIndex] = null;
             }
             case NATIVE_HANDLES -> {
-                long[] sourceValues = (long[]) source.valueSlots;
-                ((long[]) target.valueSlots)[targetIndex] = sourceValues[sourceIndex];
-                sourceValues[sourceIndex] = 0L;
+                NativeHandle[] sourceValues = (NativeHandle[]) source.valueSlots;
+                ((NativeHandle[]) target.valueSlots)[targetIndex] = sourceValues[sourceIndex];
+                sourceValues[sourceIndex] = null;
             }
             case CONSTANT -> {
             }
@@ -1080,7 +1080,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
     private void clearValue(Table table, int index) {
         switch (valueLayout) {
             case OBJECT_REFERENCES -> ((Object[]) table.valueSlots)[index] = null;
-            case NATIVE_HANDLES -> ((long[]) table.valueSlots)[index] = 0L;
+            case NATIVE_HANDLES -> ((NativeHandle[]) table.valueSlots)[index] = null;
             case CONSTANT -> {
             }
         }
@@ -1119,10 +1119,10 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
                 : hashOverride.applyAsInt(keyBytes);
     }
 
-    private int hashRaw(long keyRawHandle) {
+    private int hashHandle(NativeHandle keyHandle) {
         return hashOverride == null
-                ? byteStore.sipHashRaw(keyRawHandle, hashSeed)
-                : hashOverride.applyAsInt(byteStore.toByteArrayRaw(keyRawHandle));
+                ? byteStore.sipHash(keyHandle, hashSeed)
+                : hashOverride.applyAsInt(byteStore.toByteArray(keyHandle));
     }
 
     private void requireOwnedKeys() {
@@ -1136,7 +1136,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
     }
 
     private static long heapBytesForCapacity(int capacity, ValueLayout valueLayout) {
-        long keyArray = ARRAY_HEADER_BYTES + (long) capacity * Long.BYTES;
+        long keyArray = ARRAY_HEADER_BYTES + (long) capacity * REFERENCE_BYTES;
         long valueArray = valueLayout.arrayHeapBytes(capacity);
         long hashArray = ARRAY_HEADER_BYTES + (long) capacity * Integer.BYTES;
         long stateArray = ARRAY_HEADER_BYTES + capacity;
@@ -1180,7 +1180,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
     private Table buildReplacementTopology(
             StagedPut<V>[] puts,
             int[] hashes,
-            long[] newKeyRawHandles,
+            NativeHandle[] newKeyHandles,
             int capacity
     ) {
         Table replacement = new Table(capacity, valueLayout);
@@ -1197,10 +1197,10 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
                 continue;
             }
             int replacementIndex = findInsertionIndex(replacement, hashes[index]);
-            writeFilledRaw(
+            writeFilled(
                     replacement,
                     replacementIndex,
-                    newKeyRawHandles[index],
+                    newKeyHandles[index],
                     put.nextValue,
                     hashes[index]
             );
@@ -1217,10 +1217,10 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
                 continue;
             }
             int targetIndex = findInsertionIndex(target, source.hashes[index]);
-            writeFilledRaw(
+            writeFilled(
                     target,
                     targetIndex,
-                    source.keyRawHandles[index],
+                    source.keyHandles[index],
                     valueAt(source, index),
                     source.hashes[index]
             );
@@ -1234,7 +1234,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
     ) {
         long referenceArrayBytes = ARRAY_HEADER_BYTES + (long) putCount * REFERENCE_BYTES;
         long intArrayBytes = ARRAY_HEADER_BYTES + (long) putCount * Integer.BYTES;
-        long longArrayBytes = ARRAY_HEADER_BYTES + (long) putCount * Long.BYTES;
+        long handleArrayBytes = ARRAY_HEADER_BYTES + (long) putCount * REFERENCE_BYTES;
         long duplicateIndexBytes = ARRAY_HEADER_BYTES
                 + (long) PreparedMutation.duplicateIndexCapacity(putCount) * Integer.BYTES;
         long topologyBytes = topologyCapacity == 0
@@ -1242,7 +1242,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
                 : heapBytesForCapacity(topologyCapacity, valueLayout);
         long arrays = referenceArrayBytes * 2L
                 + intArrayBytes * 2L
-                + longArrayBytes
+                + handleArrayBytes
                 + duplicateIndexBytes;
         return addSaturating(PREPARED_MUTATION_OBJECT_BYTES, addSaturating(arrays, topologyBytes));
     }
@@ -1260,10 +1260,10 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
             byte[] keyBytes,
             V nextValue,
             boolean expectedPresent,
-            long borrowedKeyRawHandle
+            NativeHandle borrowedKeyHandle
     ) {
         StagedPut(byte[] keyBytes, V nextValue, boolean expectedPresent) {
-            this(keyBytes, nextValue, expectedPresent, 0L);
+            this(keyBytes, nextValue, expectedPresent, null);
         }
 
         static <V> StagedPut<V> borrowed(
@@ -1273,7 +1273,10 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
                 boolean expectedPresent
         ) {
             Objects.requireNonNull(keyHandle, "keyHandle");
-            return new StagedPut<>(keyBytes, nextValue, expectedPresent, keyHandle.raw());
+            if (keyHandle.isNull()) {
+                throw new IllegalArgumentException("keyHandle must not be null");
+            }
+            return new StagedPut<>(keyBytes, nextValue, expectedPresent, keyHandle);
         }
 
         StagedPut {
@@ -1288,7 +1291,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         private final StagedPut<V>[] puts;
         private final int[] hashes;
         private final int[] sourceLocations;
-        private final long[] keyRawHandles;
+        private final NativeHandle[] keyHandles;
         private final Object[] previousValues;
         private final Table sourceActive;
         private final Table sourceOld;
@@ -1308,7 +1311,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
             this.puts = Objects.requireNonNull(puts, "puts");
             this.hashes = new int[puts.length];
             this.sourceLocations = new int[puts.length];
-            this.keyRawHandles = new long[puts.length];
+            this.keyHandles = new NativeHandle[puts.length];
             this.previousValues = new Object[puts.length];
             this.sourceActive = owner.active;
             this.sourceOld = owner.old;
@@ -1326,14 +1329,14 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
                     if (sourceLocations[index] != 0) {
                         continue;
                     }
-                    long rawHandle = owner.ownsKeys
-                            ? owner.byteStore.storeRaw(puts[index].keyBytes, owner.keyKind)
-                            : puts[index].borrowedKeyRawHandle;
-                    keyRawHandles[index] = rawHandle;
+                    NativeHandle keyHandle = owner.ownsKeys
+                            ? owner.byteStore.store(puts[index].keyBytes, owner.keyKind)
+                            : puts[index].borrowedKeyHandle;
+                    keyHandles[index] = keyHandle;
                     if (owner.ownsKeys) {
                         allocatedBytes = addSaturating(
                                 allocatedBytes,
-                                owner.byteStore.allocatedBytesRaw(rawHandle)
+                                owner.byteStore.allocatedBytes(keyHandle)
                         );
                     }
                 }
@@ -1341,7 +1344,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
                     replacement = owner.buildReplacementTopology(
                             puts,
                             hashes,
-                            keyRawHandles,
+                            keyHandles,
                             topologyCapacity
                     );
                 }
@@ -1418,7 +1421,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
             }
             for (int index = 0; index < puts.length; index++) {
                 if (sourceLocations[index] == 0) {
-                    owner.insertActive(keyRawHandles[index], puts[index].nextValue, hashes[index]);
+                    owner.insertActive(keyHandles[index], puts[index].nextValue, hashes[index]);
                 }
             }
             owner.nativeBytes += stagedNativeBytes;
@@ -1449,13 +1452,13 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
                 int activeIndex = owner.findIndex(sourceActive, put.keyBytes, hash);
                 if (activeIndex >= 0) {
                     sourceLocations[index] = encodeActiveLocation(activeIndex);
-                    keyRawHandles[index] = sourceActive.keyRawHandles[activeIndex];
+                    keyHandles[index] = sourceActive.keyHandles[activeIndex];
                     previousValues[index] = owner.valueAt(sourceActive, activeIndex);
                 } else {
                     int oldIndex = owner.findIndex(sourceOld, put.keyBytes, hash);
                     if (oldIndex >= 0) {
                         sourceLocations[index] = encodeOldLocation(oldIndex);
-                        keyRawHandles[index] = sourceOld.keyRawHandles[oldIndex];
+                        keyHandles[index] = sourceOld.keyHandles[oldIndex];
                         previousValues[index] = owner.valueAt(sourceOld, oldIndex);
                     }
                 }
@@ -1510,7 +1513,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
                 if (table == null
                         || table.states[slot] != STATE_FILLED
                         || table.hashes[slot] != hashes[index]
-                        || table.keyRawHandles[slot] != keyRawHandles[index]
+                        || !Objects.equals(table.keyHandles[slot], keyHandles[index])
                         || !Objects.equals(owner.valueAt(table, slot), previousValues[index])) {
                     throw new IllegalStateException("prepared native byte-map source entry changed");
                 }
@@ -1518,18 +1521,18 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         }
 
         private void releaseUncommittedKeys(Throwable failure) {
-            for (int index = 0; index < keyRawHandles.length; index++) {
+            for (int index = 0; index < keyHandles.length; index++) {
                 if (!owner.ownsKeys
                         || sourceLocations[index] != 0
-                        || keyRawHandles[index] == 0L) {
+                        || keyHandles[index] == null) {
                     continue;
                 }
                 try {
-                    owner.byteStore.releaseRaw(keyRawHandles[index]);
+                    owner.byteStore.release(keyHandles[index]);
                 } catch (RuntimeException | Error releaseFailure) {
                     failure.addSuppressed(releaseFailure);
                 } finally {
-                    keyRawHandles[index] = 0L;
+                    keyHandles[index] = null;
                 }
             }
         }
@@ -1654,7 +1657,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         private Object allocateSlots(int capacity) {
             return switch (this) {
                 case OBJECT_REFERENCES -> new Object[capacity];
-                case NATIVE_HANDLES -> new long[capacity];
+                case NATIVE_HANDLES -> new NativeHandle[capacity];
                 case CONSTANT -> null;
             };
         }
@@ -1662,7 +1665,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         private long arrayHeapBytes(int capacity) {
             return switch (this) {
                 case OBJECT_REFERENCES -> ARRAY_HEADER_BYTES + (long) capacity * REFERENCE_BYTES;
-                case NATIVE_HANDLES -> ARRAY_HEADER_BYTES + (long) capacity * Long.BYTES;
+                case NATIVE_HANDLES -> ARRAY_HEADER_BYTES + (long) capacity * REFERENCE_BYTES;
                 case CONSTANT -> 0L;
             };
         }
@@ -1672,7 +1675,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         private final int capacity;
         private final byte[] states;
         private final int[] hashes;
-        private final long[] keyRawHandles;
+        private final NativeHandle[] keyHandles;
         private final Object valueSlots;
         private final long heapBytes;
         private int size;
@@ -1688,7 +1691,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
             this.capacity = capacity;
             this.states = new byte[capacity];
             this.hashes = new int[capacity];
-            this.keyRawHandles = new long[capacity];
+            this.keyHandles = new NativeHandle[capacity];
             this.valueSlots = valueLayout.allocateSlots(capacity);
             this.heapBytes = heapBytesForCapacity(capacity, valueLayout);
         }

@@ -2,109 +2,96 @@ package yier.bubu.redis.storage.memory.internal.value;
 
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
+import yier.bubu.redis.storage.api.result.PayloadLengthSink;
 import yier.bubu.redis.storage.api.result.PoppedValueSequence;
 
 public final class PreparedPoppedValueSequence implements PoppedValueSequence {
-    private static final PreparedPoppedValueSequence NULL_VALUE = new PreparedPoppedValueSequence(
-            null,
-            new NativeListEntryRef[0],
-            new NativeRawHandleSet(0),
-            true,
-            0L,
-            0L
-    );
-    private static final PreparedPoppedValueSequence EMPTY_VALUE = new PreparedPoppedValueSequence(
-            null,
-            new NativeListEntryRef[0],
-            new NativeRawHandleSet(0),
-            false,
-            0L,
-            0L
-    );
-
-    private final NativeAllocator allocator;
+    private final StableMemoryBackend allocator;
     private final NativeListEntryRef[] entries;
-    private final NativeRawHandleSet retainedRawHandles;
+    private final NativeHandleSet retainedHandles;
     private final int count;
     private final boolean nullValue;
-    private final long encodedElementBytes;
     private final long retainedMemoryBytes;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicBoolean handlesReleased = new AtomicBoolean();
     private volatile boolean ownsHandles;
 
     private PreparedPoppedValueSequence(
-            NativeAllocator allocator,
+            StableMemoryBackend allocator,
             NativeListEntryRef[] entries,
-            NativeRawHandleSet retainedRawHandles,
+            NativeHandleSet retainedHandles,
             boolean nullValue,
-            long encodedElementBytes,
             long retainedMemoryBytes
     ) {
         Objects.requireNonNull(entries, "entries");
-        Objects.requireNonNull(retainedRawHandles, "retainedRawHandles");
-        if (encodedElementBytes < 0L) {
-            throw new IllegalArgumentException("encodedElementBytes must be >= 0");
-        }
+        Objects.requireNonNull(retainedHandles, "retainedHandles");
         if (retainedMemoryBytes < 0L) {
             throw new IllegalArgumentException("retainedMemoryBytes must be >= 0");
         }
         this.allocator = allocator;
         this.entries = entries.clone();
-        this.retainedRawHandles = retainedRawHandles;
+        this.retainedHandles = retainedHandles;
         this.count = entries.length;
         this.nullValue = nullValue;
-        this.encodedElementBytes = encodedElementBytes;
         this.retainedMemoryBytes = retainedMemoryBytes;
     }
 
     public static PreparedPoppedValueSequence nullValue() {
-        return NULL_VALUE;
+        return new PreparedPoppedValueSequence(
+                null,
+                new NativeListEntryRef[0],
+                new NativeHandleSet(0),
+                true,
+                0L
+        );
     }
 
     public static PreparedPoppedValueSequence empty() {
-        return EMPTY_VALUE;
+        return new PreparedPoppedValueSequence(
+                null,
+                new NativeListEntryRef[0],
+                new NativeHandleSet(0),
+                false,
+                0L
+        );
     }
 
-    public static PreparedPoppedValueSequence owned(NativeAllocator allocator, NativeListEntryRef[] entries) {
+    public static PreparedPoppedValueSequence owned(StableMemoryBackend allocator, NativeListEntryRef[] entries) {
         Objects.requireNonNull(allocator, "allocator");
         Objects.requireNonNull(entries, "entries");
-        long encodedElementBytes = 0L;
         long retainedMemoryBytes = 0L;
-        NativeRawHandleSet retainedRawHandles = new NativeRawHandleSet(entries.length);
+        NativeHandleSet retainedHandles = new NativeHandleSet(entries.length);
         for (NativeListEntryRef entry : entries) {
             Objects.requireNonNull(entry, "entry");
-            encodedElementBytes = addSaturating(encodedElementBytes, entry.encodedElementBytes());
             NativeHandle handle = entry.handle();
             if (handle == null) {
                 continue;
             }
-            if (retainedRawHandles.add(handle.raw())) {
+            if (retainedHandles.add(handle)) {
                 retainedMemoryBytes = addSaturating(retainedMemoryBytes, entry.retainedBytes());
             }
         }
         return new PreparedPoppedValueSequence(
                 allocator,
                 entries,
-                retainedRawHandles,
+                retainedHandles,
                 false,
-                encodedElementBytes,
                 retainedMemoryBytes
         );
     }
 
     public NativeHandle[] retainedHandles() {
-        NativeHandle[] handles = new NativeHandle[retainedRawHandles.size()];
+        NativeHandle[] handles = new NativeHandle[retainedHandles.size()];
         int[] next = {0};
-        retainedRawHandles.forEach(rawHandle -> handles[next[0]++] = NativeHandle.fromRaw(rawHandle));
+        retainedHandles.forEach(handle -> handles[next[0]++] = handle);
         return handles;
     }
 
-    public boolean retainsRawHandle(long rawHandle) {
-        return retainedRawHandles.contains(rawHandle);
+    public boolean retainsHandle(NativeHandle handle) {
+        return retainedHandles.contains(handle);
     }
 
     public void activateOwnership() {
@@ -119,13 +106,17 @@ public final class PreparedPoppedValueSequence implements PoppedValueSequence {
     }
 
     @Override
-    public int count() {
+    public int elementCount() {
         return count;
     }
 
     @Override
-    public long encodedElementBytes() {
-        return encodedElementBytes;
+    public void visitElementLengths(PayloadLengthSink out) {
+        Objects.requireNonNull(out, "out");
+        ensureOpen();
+        for (NativeListEntryRef entry : entries) {
+            out.payloadLength(entry.handle() == null ? -1 : entry.payloadLength());
+        }
     }
 
     @Override
@@ -134,15 +125,16 @@ public final class PreparedPoppedValueSequence implements PoppedValueSequence {
     }
 
     @Override
-    public void emitTo(BulkStringSink out) {
+    public void emitTo(ByteValueSink out) {
         Objects.requireNonNull(out, "out");
+        ensureOpen();
         for (NativeListEntryRef entry : entries) {
             NativeHandle handle = entry.handle();
             if (handle == null) {
-                out.bulkStringNull();
+                out.nullValue();
                 continue;
             }
-            out.bulkString(new NativeBytesSlice(
+            out.value(new NativeBytesSlice(
                     allocator,
                     handle,
                     entry.payloadOffset(),
@@ -161,17 +153,20 @@ public final class PreparedPoppedValueSequence implements PoppedValueSequence {
         if (!ownsHandles || !closed.get() || !handlesReleased.compareAndSet(false, true)) {
             return;
         }
-        retainedRawHandles.freeAll(allocator);
+        retainedHandles.freeAll(allocator);
     }
 
     private static long addSaturating(long left, long right) {
         if (right <= 0L) {
             return left;
         }
-        if (Long.MAX_VALUE - left < right) {
-            return Long.MAX_VALUE;
+        return Long.MAX_VALUE - left < right ? Long.MAX_VALUE : left + right;
+    }
+
+    private void ensureOpen() {
+        if (closed.get()) {
+            throw new IllegalStateException("popped value sequence is closed");
         }
-        return left + right;
     }
 
 }

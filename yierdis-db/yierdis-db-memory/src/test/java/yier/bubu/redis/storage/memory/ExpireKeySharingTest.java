@@ -2,7 +2,6 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -22,7 +21,7 @@ import static yier.bubu.redis.storage.testkit.TestBytes.b;
 public class ExpireKeySharingTest {
     @Test
     public void expireStoresTtlUnderSharedAllocatorKeyHandle() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             byte[] key1 = b("k");
@@ -30,14 +29,14 @@ public class ExpireKeySharingTest {
             Assert.assertNotSame(key1, key2);
 
             db.writes().strings().setString(key1, b("v"), SetMode.NORMAL, null);
-            Assert.assertEquals(1L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.KEY_BYTES));
+            Assert.assertEquals(1L, db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.KEY_BYTES));
             Assert.assertTrue(db.writes().ttl().expire(view(key2), 60).value());
 
             KeyHandle storeHandle = db.keyLifecycle().keyHandle(key2);
             KeyHandle expireHandle = db.keyLifecycle().randomExpireKeyHandle();
             Assert.assertNotNull(storeHandle);
             Assert.assertNotNull(expireHandle);
-            Assert.assertEquals(1L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.KEY_BYTES));
+            Assert.assertEquals(1L, db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.KEY_BYTES));
             Assert.assertEquals(allocatorHandle(storeHandle), allocatorHandle(expireHandle));
         } finally {
             db.shutdown();
@@ -46,7 +45,7 @@ public class ExpireKeySharingTest {
 
     @Test
     public void repeatedExpireKeepsSingleSharedAllocatorKeyHandle() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             byte[] key1 = b("k");
@@ -54,12 +53,12 @@ public class ExpireKeySharingTest {
             Assert.assertNotSame(key1, key2);
 
             db.writes().strings().setString(key1, b("v"), SetMode.NORMAL, null);
-            Assert.assertEquals(1L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.KEY_BYTES));
+            Assert.assertEquals(1L, db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.KEY_BYTES));
             Assert.assertTrue(db.writes().ttl().expire(view(key2), 60).value());
             Assert.assertTrue(db.writes().ttl().expire(view(key1), 120).value());
 
             Assert.assertEquals(1, db.memory().memoryStats().expireCount());
-            Assert.assertEquals(1L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.KEY_BYTES));
+            Assert.assertEquals(1L, db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.KEY_BYTES));
 
             KeyHandle storeHandle = db.keyLifecycle().keyHandle(key1);
             KeyHandle expireHandle = db.keyLifecycle().randomExpireKeyHandle();

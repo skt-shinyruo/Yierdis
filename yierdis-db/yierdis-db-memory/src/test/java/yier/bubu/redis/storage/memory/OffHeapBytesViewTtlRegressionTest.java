@@ -2,7 +2,6 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -11,7 +10,7 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesView;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
 
@@ -20,8 +19,8 @@ import static yier.bubu.redis.storage.testkit.TestBytes.b;
 public class OffHeapBytesViewTtlRegressionTest {
     @Test
     public void pexpireBytesViewDoesNotTriggerLinearExpireIndexScan() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        try (TestBackend runtime = TestBackend.open("db")) {
+            YierdisDb db = TestDbSupport.open(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
             byte[] targetKey = b("k00000");
             int targetKeyLen = targetKey.length;
             try {

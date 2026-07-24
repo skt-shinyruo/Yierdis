@@ -8,13 +8,12 @@ import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.WriteResult;
 import yier.bubu.redis.storage.api.ZSetReadOps;
 import yier.bubu.redis.storage.api.ZSetWriteOps;
-import yier.bubu.redis.storage.api.result.BulkStringMetrics;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.ByteSequenceSource;
+import yier.bubu.redis.storage.api.result.ByteSequenceSources;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
-import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequence;
-import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequences;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
@@ -26,15 +25,13 @@ import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
+import yier.bubu.redis.storage.memory.internal.value.SemanticResultSupport;
 import yier.bubu.redis.storage.memory.internal.value.ZSetValue.ZAddResult;
 
 import java.util.List;
 import java.util.Objects;
 
 public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
-    private static final int ENTRY_RECORD_NATIVE_BYTES = 56;
-    private static final int ZSET_ROOT_NATIVE_BYTES = Long.BYTES;
-
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final ZSetRoot zsetRoot;
@@ -241,7 +238,7 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
 
     private long nativePeak(long heapGrowthBytes, int... nativeAllocationSizes) {
         return MutationMemoryEstimator.peakAdditionalBytes(
-                keyLifecycle.nativeAllocator(),
+                keyLifecycle.stableMemoryBackend(),
                 0L,
                 Math.max(0L, heapGrowthBytes),
                 nativeAllocationSizes
@@ -251,7 +248,7 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
     private long withScopeBookkeeping(long upperBound) {
         return Math.max(
                 Math.max(0L, upperBound),
-                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(keyLifecycle.nativeAllocator(), 0)
+                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(keyLifecycle.stableMemoryBackend(), 0)
         );
     }
 
@@ -267,10 +264,10 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
         int next = 0;
         if (includeKeyAndEntry) {
             sizes[next++] = Math.max(1, keyBytes.length);
-            sizes[next++] = ENTRY_RECORD_NATIVE_BYTES;
+            sizes[next++] = NativeStorageLayout.ENTRY_RECORD_BYTES;
         }
         if (includeRoot) {
-            sizes[next++] = ZSET_ROOT_NATIVE_BYTES;
+            sizes[next++] = NativeStorageLayout.COLLECTION_ROOT_RECORD_BYTES;
         }
         if (replacementAllocationSizes != null) {
             for (int size : replacementAllocationSizes) {
@@ -352,29 +349,43 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
     }
 
     @Override
-    public MeasuredBulkStringSequence zrange(byte[] keyBytes, long start, long stop, boolean withScores) {
+    public ByteSequenceSource zrange(byte[] keyBytes, long start, long stop, boolean withScores) {
         internals.checkThread();
         EntryRecord record = liveZSetRecord(keyBytes);
         if (record == null) {
-            return sequenceOf(out -> { });
+            return ByteSequenceSources.empty();
         }
         ValueHandle handle = requireZSetHandle(record);
-        return sequenceOf(out -> zsetRoot.zrangeWriteTo(handle, start, stop, withScores, out));
+        return ByteSequenceSources.of(
+                zsetRoot.zrangeCount(handle, start, stop, withScores),
+                0L,
+                out -> zsetRoot.zrangeWriteTo(
+                        handle, start, stop, withScores, SemanticResultSupport.lengthSink(out)
+                ),
+                out -> zsetRoot.zrangeWriteTo(handle, start, stop, withScores, out)
+        );
     }
 
     @Override
-    public MeasuredBulkStringSequence zrevrange(byte[] keyBytes, long start, long stop, boolean withScores) {
+    public ByteSequenceSource zrevrange(byte[] keyBytes, long start, long stop, boolean withScores) {
         internals.checkThread();
         EntryRecord record = liveZSetRecord(keyBytes);
         if (record == null) {
-            return sequenceOf(out -> { });
+            return ByteSequenceSources.empty();
         }
         ValueHandle handle = requireZSetHandle(record);
-        return sequenceOf(out -> zsetRoot.zrevrangeWriteTo(handle, start, stop, withScores, out));
+        return ByteSequenceSources.of(
+                zsetRoot.zrevrangeCount(handle, start, stop, withScores),
+                0L,
+                out -> zsetRoot.zrevrangeWriteTo(
+                        handle, start, stop, withScores, SemanticResultSupport.lengthSink(out)
+                ),
+                out -> zsetRoot.zrevrangeWriteTo(handle, start, stop, withScores, out)
+        );
     }
 
     @Override
-    public MeasuredBulkStringSequence zrangeByScore(
+    public ByteSequenceSource zrangeByScore(
             byte[] keyBytes,
             double min,
             boolean minExclusive,
@@ -387,24 +398,41 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
         internals.checkThread();
         EntryRecord record = liveZSetRecord(keyBytes);
         if (record == null) {
-            return sequenceOf(out -> { });
+            return ByteSequenceSources.empty();
         }
         ValueHandle handle = requireZSetHandle(record);
-        return sequenceOf(out -> zsetRoot.zrangeByScoreWriteTo(
-                handle,
-                min,
-                minExclusive,
-                max,
-                maxExclusive,
-                withScores,
-                offset,
-                count,
-                out
-        ));
+        return ByteSequenceSources.of(
+                zsetRoot.zrangeByScoreCount(
+                        handle, min, minExclusive, max, maxExclusive, withScores, offset, count
+                ),
+                0L,
+                out -> zsetRoot.zrangeByScoreWriteTo(
+                        handle,
+                        min,
+                        minExclusive,
+                        max,
+                        maxExclusive,
+                        withScores,
+                        offset,
+                        count,
+                        SemanticResultSupport.lengthSink(out)
+                ),
+                out -> zsetRoot.zrangeByScoreWriteTo(
+                        handle,
+                        min,
+                        minExclusive,
+                        max,
+                        maxExclusive,
+                        withScores,
+                        offset,
+                        count,
+                        out
+                )
+        );
     }
 
     @Override
-    public MeasuredBulkStringSequence zrevrangeByScore(
+    public ByteSequenceSource zrevrangeByScore(
             byte[] keyBytes,
             double min,
             boolean minExclusive,
@@ -417,20 +445,37 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
         internals.checkThread();
         EntryRecord record = liveZSetRecord(keyBytes);
         if (record == null) {
-            return sequenceOf(out -> { });
+            return ByteSequenceSources.empty();
         }
         ValueHandle handle = requireZSetHandle(record);
-        return sequenceOf(out -> zsetRoot.zrevrangeByScoreWriteTo(
-                handle,
-                min,
-                minExclusive,
-                max,
-                maxExclusive,
-                withScores,
-                offset,
-                count,
-                out
-        ));
+        return ByteSequenceSources.of(
+                zsetRoot.zrevrangeByScoreCount(
+                        handle, min, minExclusive, max, maxExclusive, withScores, offset, count
+                ),
+                0L,
+                out -> zsetRoot.zrevrangeByScoreWriteTo(
+                        handle,
+                        min,
+                        minExclusive,
+                        max,
+                        maxExclusive,
+                        withScores,
+                        offset,
+                        count,
+                        SemanticResultSupport.lengthSink(out)
+                ),
+                out -> zsetRoot.zrevrangeByScoreWriteTo(
+                        handle,
+                        min,
+                        minExclusive,
+                        max,
+                        maxExclusive,
+                        withScores,
+                        offset,
+                        count,
+                        out
+                )
+        );
     }
 
     @Override
@@ -669,7 +714,6 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                 ValueType.ZSET,
                 encoding,
                 expireAtMillis,
-                DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE,
                 previous
         );
     }
@@ -677,7 +721,7 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
     private ValueHandle requireZSetHandle(EntryRecord record) {
         ValueHandle handle = record.valueHandle();
         if (!zsetRoot.contains(handle)) {
-            throw new IllegalStateException("native zset value handle is not available: " + (handle == null ? "null" : handle.raw()));
+            throw new IllegalStateException("native zset value handle is not available: " + (handle == null ? "null" : handle.nativeHandle()));
         }
         return handle;
     }
@@ -690,23 +734,6 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
 
     private long estimateRecordBytes(KeyHandle keyHandle, EntryRecord record) {
         return keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
-    }
-
-    private static MeasuredBulkStringSequence sequenceOf(BulkEmitter emitter) {
-        Objects.requireNonNull(emitter, "emitter");
-        BulkStringMetrics metrics = new BulkStringMetrics();
-        emitter.emitTo(metrics);
-        return MeasuredBulkStringSequences.of(
-                metrics.count(),
-                metrics.encodedElementBytes(),
-                0L,
-                emitter::emitTo
-        );
-    }
-
-    @FunctionalInterface
-    private interface BulkEmitter {
-        void emitTo(BulkStringSink out);
     }
 
     private interface ZSetRemoval {

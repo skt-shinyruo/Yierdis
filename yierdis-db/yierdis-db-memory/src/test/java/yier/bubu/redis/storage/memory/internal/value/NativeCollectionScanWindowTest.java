@@ -7,21 +7,20 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.memory.api.NativeAccessMode;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
+import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.api.ScanCursorV2;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
 
 public class NativeCollectionScanWindowTest {
     @Test
     public void retainedBytesCoverPinnedNativeAllocationAndEmitReleasesIt() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("collection-scan-window");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 32)) {
+        try (TestBackend runtime = TestBackend.open("collection-scan-window");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES);
             NativeHandle handle = store.store(bytes("member-value"));
             int allocatedBytes = store.allocatedBytes(handle);
@@ -33,21 +32,22 @@ public class NativeCollectionScanWindowTest {
             }
 
             Assert.assertTrue(window.retainedMemoryBytes() >= allocatedBytes);
-            store.release(handle);
             RecordingSink sink = new RecordingSink(false);
 
             window.emitTo(sink);
 
             Assert.assertEquals(List.of("member-value"), sink.values);
             window.close();
+            // Heap 后端要求释放前先结束所有显式 pin；窗口 emit 已经完成这次 unpin。
+            store.release(handle);
             assertStale(allocator, handle);
         }
     }
 
     @Test
     public void emitFailureUnpinsEveryElementAndCloseRemainsIdempotent() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("collection-scan-window-failure");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 32)) {
+        try (TestBackend runtime = TestBackend.open("collection-scan-window-failure");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES);
             NativeHandle first = store.store(bytes("first"));
             NativeHandle second = store.store(bytes("second"));
@@ -58,8 +58,6 @@ public class NativeCollectionScanWindowTest {
                 builder.addNative(second, store.length(second));
                 window = builder.build(ScanCursorV2.start());
             }
-            store.release(first);
-            store.release(second);
 
             IllegalStateException failure = Assert.assertThrows(
                     IllegalStateException.class,
@@ -68,6 +66,9 @@ public class NativeCollectionScanWindowTest {
 
             Assert.assertEquals("injected sink failure", failure.getMessage());
             window.close();
+            // emit 失败也必须先收回窗口 pin，之后原 store 才能释放对象。
+            store.release(first);
+            store.release(second);
             assertStale(allocator, first);
             assertStale(allocator, second);
         }
@@ -75,8 +76,8 @@ public class NativeCollectionScanWindowTest {
 
     @Test
     public void rejectedNativeElementDoesNotLeakItsPin() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("collection-scan-window-reject");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 32)) {
+        try (TestBackend runtime = TestBackend.open("collection-scan-window-reject");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES);
             NativeHandle handle = store.store(bytes("short"));
 
@@ -97,14 +98,14 @@ public class NativeCollectionScanWindowTest {
         return value.getBytes(StandardCharsets.US_ASCII);
     }
 
-    private static void assertStale(NativeAllocator allocator, NativeHandle handle) {
+    private static void assertStale(StableMemoryBackend allocator, NativeHandle handle) {
         Assert.assertThrows(
                 StaleNativeHandleException.class,
                 () -> allocator.resolve(handle, NativeAccessMode.READ_ONLY)
         );
     }
 
-    private static final class RecordingSink implements BulkStringSink {
+    private static final class RecordingSink implements ByteValueSink {
         private final List<String> values = new ArrayList<>();
         private final boolean fail;
 
@@ -113,17 +114,17 @@ public class NativeCollectionScanWindowTest {
         }
 
         @Override
-        public void bulkString(byte[] data) {
+        public void value(byte[] data) {
             record(data);
         }
 
         @Override
-        public void bulkString(byte[] data, int off, int len) {
+        public void value(byte[] data, int off, int len) {
             record(data == null ? null : new String(data, off, len, StandardCharsets.US_ASCII));
         }
 
         @Override
-        public void bulkString(BytesSlice slice) {
+        public void value(BytesSlice slice) {
             if (fail) {
                 throw new IllegalStateException("injected sink failure");
             }
@@ -137,8 +138,13 @@ public class NativeCollectionScanWindowTest {
         }
 
         @Override
-        public void bulkStringLongAscii(long value) {
+        public void longAscii(long value) {
             record(Long.toString(value));
+        }
+
+        @Override
+        public void nullValue() {
+            value((byte[]) null);
         }
 
         private void record(byte[] data) {

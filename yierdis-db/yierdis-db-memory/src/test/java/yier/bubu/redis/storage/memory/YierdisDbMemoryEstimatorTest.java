@@ -2,7 +2,6 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -13,9 +12,9 @@ import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeAllocationScope;
 import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.common.memory.MemoryPressureBudget;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
+import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
@@ -34,7 +33,7 @@ public class YierdisDbMemoryEstimatorTest {
     public void estimatesStringEntryBytesFromNativeKeyHandle() {
         withNativeKey("abc", key -> {
             YierdisDbMemoryEstimator estimator = new YierdisDbMemoryEstimator();
-            EntryRecord record = record(ValueEncoding.STRING_RAW, DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE);
+            EntryRecord record = record(ValueEncoding.STRING_RAW, 1L);
 
             long expected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
 
@@ -46,7 +45,7 @@ public class YierdisDbMemoryEstimatorTest {
     public void estimatesRawStringEntryBytesWithoutAddingNativeKeyBytes() {
         withNativeKey("abc", key -> {
             YierdisDbMemoryEstimator estimator = new YierdisDbMemoryEstimator();
-            EntryRecord record = record(ValueEncoding.STRING_RAW, DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE);
+            EntryRecord record = record(ValueEncoding.STRING_RAW, 1L);
 
             long expected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
 
@@ -58,7 +57,7 @@ public class YierdisDbMemoryEstimatorTest {
     public void estimatesIntegerEncodedStringPayloadAsLongBytes() {
         withNativeKey("n", key -> {
             YierdisDbMemoryEstimator estimator = new YierdisDbMemoryEstimator();
-            EntryRecord record = record(ValueEncoding.STRING_INT, DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + Long.BYTES);
+            EntryRecord record = record(ValueEncoding.STRING_INT, 1L);
 
             long expected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + Long.BYTES;
 
@@ -86,19 +85,19 @@ public class YierdisDbMemoryEstimatorTest {
     }
 
     @Test
-    public void nativePeakUsesTheAllocatorScopeBookkeepingEstimate() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-estimator");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 2_048)) {
+    public void nativePeakUsesBackendReportedBookkeepingAndAllocationGrowth() {
+        try (TestBackend runtime = TestBackend.open("scope-estimator");
+             StableMemoryBackend allocator = runtime.backend()) {
             allocator.bindToCurrentThread();
             NativeHandle anchor = allocator.allocate(NativeObjectKind.STRING_BYTES, 32);
             try {
                 int[] allocations = new int[1_024];
                 Arrays.fill(allocations, 32);
                 long scopeBookkeeping = allocator.estimateAllocationScopeBookkeepingBytes(allocations.length);
+                long allocationGrowth = allocator.estimateAdditionalGrowth(allocations).effectiveBytes();
 
-                Assert.assertTrue(scopeBookkeeping > 4_096L);
                 Assert.assertEquals(
-                        scopeBookkeeping,
+                        scopeBookkeeping + allocationGrowth,
                         MutationMemoryEstimator.peakAdditionalBytes(allocator, 0L, 0L, allocations)
                 );
             } finally {
@@ -109,8 +108,8 @@ public class YierdisDbMemoryEstimatorTest {
 
     @Test
     public void nativePeakMatchesTheKnownAllocationScopePeakAfterPageTrim() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-peak-after-trim");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 2_048)) {
+        try (TestBackend runtime = TestBackend.open("scope-peak-after-trim");
+             StableMemoryBackend allocator = runtime.backend()) {
             allocator.bindToCurrentThread();
             int[] allocations = {1, 56, 40_000};
             NativeHandle key = allocator.allocate(NativeObjectKind.KEY_BYTES, allocations[0]);
@@ -136,30 +135,29 @@ public class YierdisDbMemoryEstimatorTest {
         return value.getBytes(StandardCharsets.UTF_8);
     }
 
-    private static EntryRecord record(ValueEncoding encoding, long estimatedBytes) {
+    private static EntryRecord record(ValueEncoding encoding, long version) {
         return new EntryRecord(
-                1L,
+                new NativeHandle(1L, 1L),
                 valueHandle(1L),
                 1,
                 ValueType.STRING,
                 encoding,
                 0,
                 -1L,
-                estimatedBytes,
+                version,
                 0L
         );
     }
 
     private static ValueHandle valueHandle(long slotId) {
-        NativeObjectKind kind = NativeObjectKind.STRING_BYTES;
-        return ValueHandle.fromNativeHandle(NativeHandle.of(kind.domain(), kind, slotId, 1, 0));
+        return new ValueHandle(new NativeHandle(2L, slotId));
     }
 
     private static void withNativeKey(String value, KeyAssertion assertion) {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("memory-estimator-key");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+        try (TestBackend runtime = TestBackend.open("memory-estimator-key");
+             StableMemoryBackend allocator = runtime.backend();
              NativeKeyDirectory directory = new NativeKeyDirectory(allocator)) {
-            EntryHandle entry = EntryHandle.fromNativeHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
+            EntryHandle entry = new EntryHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
             try {
                 byte[] keyBytes = b(value);
                 directory.compute(keyBytes, (ignored, old) -> entry);

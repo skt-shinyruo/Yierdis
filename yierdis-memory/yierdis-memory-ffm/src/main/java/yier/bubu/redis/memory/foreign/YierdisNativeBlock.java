@@ -2,7 +2,7 @@ package yier.bubu.redis.memory.foreign;
 
 import java.util.Objects;
 
-public final class YierdisNativeBlock implements AutoCloseable {
+final class YierdisNativeBlock implements AutoCloseable {
     private final YierdisNativePageAllocator owner;
     private final Object allocation;
     private final YierdisFfmRegion region;

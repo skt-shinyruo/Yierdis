@@ -2,17 +2,16 @@ package yier.bubu.redis.storage.memory.internal.value;
 
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.memory.api.NativeAccessMode;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
-import yier.bubu.redis.memory.testkit.FailOnAllocationNativeAllocator;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.memory.TestBackend;
+import yier.bubu.redis.memory.testkit.FailOnAllocationStableMemoryBackend;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
 
@@ -36,8 +35,8 @@ public class ZSetValueTest {
         Assert.assertEquals(YierdisEncodingThresholds.ZSET_MAX_LISTPACK_ENTRIES, plan.memberCount());
         Assert.assertTrue(plan.encodedBytes() > 8 * 1024);
 
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-packed-final-block");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("zset-packed-final-block");
+             StableMemoryBackend allocator = runtime.backend()) {
             ZSetValue zset = new ZSetValue(allocator);
             try {
                 zset.reservePackedForBuild(plan);
@@ -53,9 +52,9 @@ public class ZSetValueTest {
 
     @Test
     public void preparedNoopAddKeepsTheSourceHandleAndCommitsWithoutAllocation() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-prepared-noop");
-             FailOnAllocationNativeAllocator allocator = new FailOnAllocationNativeAllocator(
-                     new YierdisStableNativeAllocator(runtime, 4096)
+        try (TestBackend runtime = TestBackend.open("zset-prepared-noop");
+             FailOnAllocationStableMemoryBackend allocator = new FailOnAllocationStableMemoryBackend(
+                     runtime.backend()
              );
              ZSetRoot root = new ZSetRoot(allocator)) {
             allocator.bindToCurrentThread();
@@ -87,8 +86,8 @@ public class ZSetValueTest {
 
     @Test
     public void preparedAddHeapUpperBoundsCoverPackedAndSkiplistStagingTopology() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-staged-heap-bound");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("zset-staged-heap-bound");
+             StableMemoryBackend allocator = runtime.backend()) {
             ZSetValue zset = new ZSetValue(allocator);
             try {
                 Assert.assertEquals(4, zset.zaddMany(List.of(
@@ -134,9 +133,9 @@ public class ZSetValueTest {
 
     @Test
     public void skiplistDeltaReusesCanonicalMemberHandlesAndCommitDoesNotAllocate() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-skiplist-delta");
-             FailOnAllocationNativeAllocator allocator = new FailOnAllocationNativeAllocator(
-                     new YierdisStableNativeAllocator(runtime, 4096)
+        try (TestBackend runtime = TestBackend.open("zset-skiplist-delta");
+             FailOnAllocationStableMemoryBackend allocator = new FailOnAllocationStableMemoryBackend(
+                     runtime.backend()
              )) {
             allocator.bindToCurrentThread();
             ZSetValue zset = new ZSetValue(allocator);
@@ -180,8 +179,8 @@ public class ZSetValueTest {
 
     @Test
     public void abortingSkiplistDeltaReleasesOnlyTheNewCanonicalMember() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-skiplist-abort");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("zset-skiplist-abort");
+             StableMemoryBackend allocator = runtime.backend()) {
             ZSetValue zset = new ZSetValue(allocator);
             try {
                 zset.zaddMany(skiplistPairs(200));
@@ -205,8 +204,8 @@ public class ZSetValueTest {
 
     @Test
     public void packedCommitReclaimsTheOldBlockWhenHeapRefreshFails() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-packed-refresh-failure");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("zset-packed-refresh-failure");
+             StableMemoryBackend allocator = runtime.backend()) {
             ZSetValue zset = new ZSetValue(allocator);
             try {
                 zset.zaddMany(List.of(b("1"), b("member")));
@@ -234,8 +233,8 @@ public class ZSetValueTest {
 
     @Test
     public void preparedPackedAddRejectsAnUnrelatedInPlaceMutation() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-packed-stale-plan");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("zset-packed-stale-plan");
+             StableMemoryBackend allocator = runtime.backend()) {
             ZSetValue zset = new ZSetValue(allocator);
             try {
                 zset.zaddMany(List.of(b("1"), b("a"), b("2"), b("b")));
@@ -255,8 +254,8 @@ public class ZSetValueTest {
 
     @Test
     public void preparedSkiplistAddRejectsAnUnrelatedScoreMutationBeforePublishing() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-skiplist-stale-plan");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("zset-skiplist-stale-plan");
+             StableMemoryBackend allocator = runtime.backend()) {
             ZSetValue zset = new ZSetValue(allocator);
             try {
                 zset.zaddMany(skiplistPairs(200));
@@ -283,8 +282,8 @@ public class ZSetValueTest {
 
     @Test
     public void packedZSetKeepsScoreOrderingAndSupportsUpdates() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-test");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("zset-test");
+             StableMemoryBackend allocator = runtime.backend()) {
             ZSetValue zv = new ZSetValue(allocator);
             try {
                 Assert.assertEquals(ValueEncoding.ZSET_PACKED, zv.encoding());
@@ -319,9 +318,9 @@ public class ZSetValueTest {
 
     @Test
     public void packedInsertAllocationFailureLeavesScoresAndMembersAligned() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-packed-insert-failure");
-             FailOnAllocationNativeAllocator allocator = new FailOnAllocationNativeAllocator(
-                     new YierdisStableNativeAllocator(runtime, 4096)
+        try (TestBackend runtime = TestBackend.open("zset-packed-insert-failure");
+             FailOnAllocationStableMemoryBackend allocator = new FailOnAllocationStableMemoryBackend(
+                     runtime.backend()
              )) {
             allocator.bindToCurrentThread();
             ZSetValue zset = new ZSetValue(allocator);
@@ -351,9 +350,9 @@ public class ZSetValueTest {
 
     @Test
     public void failedPackedToSkiplistConversionReleasesEveryStagedMember() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-convert-failure");
-             FailOnAllocationNativeAllocator allocator = new FailOnAllocationNativeAllocator(
-                     new YierdisStableNativeAllocator(runtime, 4096)
+        try (TestBackend runtime = TestBackend.open("zset-convert-failure");
+             FailOnAllocationStableMemoryBackend allocator = new FailOnAllocationStableMemoryBackend(
+                     runtime.backend()
              )) {
             allocator.bindToCurrentThread();
             ZSetValue zset = new ZSetValue(allocator);
@@ -393,9 +392,9 @@ public class ZSetValueTest {
 
     @Test
     public void packedToSkiplistConversionPublishesCanonicalMembersWithoutCommitAllocation() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-convert-commit");
-             FailOnAllocationNativeAllocator allocator = new FailOnAllocationNativeAllocator(
-                     new YierdisStableNativeAllocator(runtime, 4096)
+        try (TestBackend runtime = TestBackend.open("zset-convert-commit");
+             FailOnAllocationStableMemoryBackend allocator = new FailOnAllocationStableMemoryBackend(
+                     runtime.backend()
              )) {
             allocator.bindToCurrentThread();
             ZSetValue zset = new ZSetValue(allocator);
@@ -445,8 +444,8 @@ public class ZSetValueTest {
 
     @Test
     public void zsetUpgradesAfterTooManyEntries() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-test");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("zset-test");
+             StableMemoryBackend allocator = runtime.backend()) {
             ZSetValue zv = new ZSetValue(allocator);
             try {
                 ArrayList<byte[]> pairs = new ArrayList<>();
@@ -465,8 +464,8 @@ public class ZSetValueTest {
 
     @Test
     public void skiplistRangeRemovalUsesMeasuredNativeMemberLookup() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-remove-skiplist");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("zset-remove-skiplist");
+             StableMemoryBackend allocator = runtime.backend()) {
             ZSetValue zv = new ZSetValue(allocator);
             try {
                 ArrayList<byte[]> pairs = new ArrayList<>();
@@ -491,8 +490,8 @@ public class ZSetValueTest {
 
     @Test
     public void preparedCopyHeapUpperBoundCoversListpackToSkiplistUpgrade() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-prepared-heap");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("zset-prepared-heap");
+             StableMemoryBackend allocator = runtime.backend()) {
             ZSetValue source = new ZSetValue(allocator);
             ZSetValue replacement = new ZSetValue(allocator);
             try {
@@ -516,8 +515,8 @@ public class ZSetValueTest {
 
     @Test
     public void packedZSetStreamsMembersThroughNativeBytesSlice() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-stream-packed");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("zset-stream-packed");
+             StableMemoryBackend allocator = runtime.backend()) {
             ZSetValue zv = new ZSetValue(allocator);
             try {
                 Assert.assertEquals(2, zv.zaddMany(List.of(b("1"), b("m1"), b("2"), b("m2"))));
@@ -535,8 +534,8 @@ public class ZSetValueTest {
 
     @Test
     public void skiplistZSetStreamsMembersThroughNativeBytesSlice() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-stream-skiplist");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("zset-stream-skiplist");
+             StableMemoryBackend allocator = runtime.backend()) {
             ZSetValue zv = new ZSetValue(allocator);
             try {
                 ArrayList<byte[]> pairs = new ArrayList<>();
@@ -580,16 +579,16 @@ public class ZSetValueTest {
 
     private static Set<Long> nativeHandles(ZSetValue zset) {
         Set<Long> handles = new HashSet<>();
-        zset.forEachNativeHandle(handle -> handles.add(handle.raw()));
+        zset.forEachNativeHandle(handle -> handles.add(handle.localRaw()));
         return handles;
     }
 
-    private static long nativeHandleFor(NativeAllocator allocator, ZSetValue zset, byte[] expected) {
+    private static long nativeHandleFor(StableMemoryBackend allocator, ZSetValue zset, byte[] expected) {
         long[] found = {0L};
         zset.forEachNativeHandle(handle -> {
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
                 if (view.size() == expected.length && view.contentEquals(0, expected, 0, expected.length)) {
-                    found[0] = handle.raw();
+                    found[0] = handle.localRaw();
                 }
             }
         });
@@ -608,9 +607,9 @@ public class ZSetValueTest {
     }
 
     private static void assertSignedZeroSemantics(ZSetValueFactory factory) {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime(factory.runtimeName);
-             FailOnAllocationNativeAllocator allocator = new FailOnAllocationNativeAllocator(
-                     new YierdisStableNativeAllocator(runtime, 4096)
+        try (TestBackend runtime = TestBackend.open(factory.runtimeName);
+             FailOnAllocationStableMemoryBackend allocator = new FailOnAllocationStableMemoryBackend(
+                     runtime.backend()
              )) {
             allocator.bindToCurrentThread();
             ZSetValue zset = new ZSetValue(allocator);
@@ -659,24 +658,24 @@ public class ZSetValueTest {
         return out;
     }
 
-    private static final class RecordingSink implements BulkStringSink {
+    private static final class RecordingSink implements ByteValueSink {
         private final ArrayList<String> values = new ArrayList<>();
         private boolean sawNativeBytesSlice;
 
         @Override
-        public void bulkString(byte[] data) {
+        public void value(byte[] data) {
             values.add(data == null ? null : new String(data, StandardCharsets.US_ASCII));
             sawNativeBytesSlice = false;
         }
 
         @Override
-        public void bulkString(byte[] data, int off, int len) {
+        public void value(byte[] data, int off, int len) {
             values.add(data == null ? null : new String(data, off, len, StandardCharsets.US_ASCII));
             sawNativeBytesSlice = false;
         }
 
         @Override
-        public void bulkString(BytesSlice slice) {
+        public void value(BytesSlice slice) {
             if (slice == null) {
                 values.add(null);
                 return;
@@ -688,9 +687,14 @@ public class ZSetValueTest {
         }
 
         @Override
-        public void bulkStringLongAscii(long value) {
+        public void longAscii(long value) {
             values.add(Long.toString(value));
             sawNativeBytesSlice = false;
+        }
+
+        @Override
+        public void nullValue() {
+            value((byte[]) null);
         }
     }
 }

@@ -1,6 +1,6 @@
 package yier.bubu.redis.memory.foreign;
 
-public enum YierdisNativeSizeClass {
+enum YierdisNativeSizeClass {
     B16(16),
     B24(24),
     B32(32),

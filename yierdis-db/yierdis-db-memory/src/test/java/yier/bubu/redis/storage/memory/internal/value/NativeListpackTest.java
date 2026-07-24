@@ -3,12 +3,11 @@ package yier.bubu.redis.storage.memory.internal.value;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.memory.TestBackend;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 
 import java.nio.charset.StandardCharsets;
 import java.lang.reflect.Field;
@@ -19,8 +18,8 @@ import java.util.List;
 public class NativeListpackTest {
     @Test
     public void storesAllEntriesInOneNativeBlockWithPrimitiveOffsetTopology() throws ReflectiveOperationException {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-listpack-topology");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-listpack-topology");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeListpack lp = new NativeListpack(
                     new NativeByteStore(allocator, NativeObjectKind.HASH_FIELD_BYTES),
                     NativeObjectKind.HASH_FIELD_BYTES
@@ -52,8 +51,8 @@ public class NativeListpackTest {
 
     @Test
     public void preservesNullVsEmptyAndSupportsIndexOf() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-listpack");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-listpack");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeListpack lp = new NativeListpack(new NativeByteStore(allocator, NativeObjectKind.LISTPACK_BYTES),
                     NativeObjectKind.LISTPACK_BYTES);
             lp.addLast(null);
@@ -84,8 +83,8 @@ public class NativeListpackTest {
 
     @Test
     public void mutatesOrderAndReleasesRemovedEntries() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-listpack-mutate");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-listpack-mutate");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeListpack lp = new NativeListpack(new NativeByteStore(allocator, NativeObjectKind.LISTPACK_BYTES),
                     NativeObjectKind.LISTPACK_BYTES);
             lp.addLast(bytes("a"));
@@ -107,8 +106,8 @@ public class NativeListpackTest {
 
     @Test
     public void growsStorageAndRetainsCapacityAfterClear() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-listpack-growth");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-listpack-growth");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeListpack lp = new NativeListpack(
                     new NativeByteStore(allocator, NativeObjectKind.LISTPACK_BYTES),
                     NativeObjectKind.LISTPACK_BYTES
@@ -132,8 +131,8 @@ public class NativeListpackTest {
 
     @Test
     public void preservesOrderWhenEditingAfterGrowth() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-listpack-growth-edit");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-listpack-growth-edit");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeListpack lp = new NativeListpack(
                     new NativeByteStore(allocator, NativeObjectKind.LISTPACK_BYTES),
                     NativeObjectKind.LISTPACK_BYTES
@@ -158,8 +157,8 @@ public class NativeListpackTest {
 
     @Test
     public void mutatesAcrossVarIntHeaderBoundaries() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-listpack-varint-boundary");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-listpack-varint-boundary");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeListpack lp = new NativeListpack(
                     new NativeByteStore(allocator, NativeObjectKind.LISTPACK_BYTES),
                     NativeObjectKind.LISTPACK_BYTES
@@ -186,9 +185,9 @@ public class NativeListpackTest {
     }
 
     @Test
-    public void closeExceptRetainsPinnedOwnershipUntilTheRetainedOwnerReleasesIt() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-listpack-retained");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+    public void closeExceptReleasesSourceAfterCallerEndsItsPin() {
+        try (TestBackend runtime = TestBackend.open("native-listpack-retained");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.LISTPACK_BYTES);
             NativeListpack source = new NativeListpack(store, NativeObjectKind.LISTPACK_BYTES);
             NativeListpack retained = new NativeListpack(store, NativeObjectKind.LISTPACK_BYTES);
@@ -198,8 +197,10 @@ public class NativeListpackTest {
             NativeHandle keep = source.entryRefAt(0).handle();
             allocator.pin(keep);
             retained.addBorrowed(source.entryRefAt(0));
-            Assert.assertNotEquals(keep.raw(), retained.entryRefAt(0).handle().raw());
+            Assert.assertNotEquals(keep.localRaw(), retained.entryRefAt(0).handle().localRaw());
 
+            // 稳定后端不允许 free pinned object；调用方必须先结束自己的 pin。
+            allocator.unpin(keep);
             source.closeExcept(retained);
             Assert.assertEquals(0, source.size());
             Assert.assertEquals(1, retained.size());
@@ -207,7 +208,6 @@ public class NativeListpackTest {
             Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LISTPACK_BYTES));
 
             retained.clear();
-            allocator.unpin(keep);
             Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LISTPACK_BYTES));
             Assert.assertEquals(0L, store.nativeBytes());
         }
@@ -215,15 +215,15 @@ public class NativeListpackTest {
 
     @Test
     public void cursorStreamsNativeSlicesAndAppendsCopies() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-listpack-cursor");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-listpack-cursor");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.LISTPACK_BYTES);
             NativeListpack src = new NativeListpack(store, NativeObjectKind.LISTPACK_BYTES);
             src.addLast(bytes("x"));
             src.addLast(null);
             src.addLast(new byte[0]);
 
-            RecordingBulkStringSink out = new RecordingBulkStringSink();
+            RecordingByteValueSink out = new RecordingByteValueSink();
             NativeListpack dst = new NativeListpack(store, NativeObjectKind.LISTPACK_BYTES);
             NativeListpack.Cursor cursor = src.cursor();
             while (cursor.next()) {
@@ -248,22 +248,22 @@ public class NativeListpackTest {
         return value.getBytes(StandardCharsets.US_ASCII);
     }
 
-    private static final class RecordingBulkStringSink implements BulkStringSink {
+    private static final class RecordingByteValueSink implements ByteValueSink {
         private final List<String> values = new ArrayList<>();
         private boolean sawBytesSlice;
 
         @Override
-        public void bulkString(byte[] data) {
+        public void value(byte[] data) {
             values.add(data == null ? null : new String(data, StandardCharsets.US_ASCII));
         }
 
         @Override
-        public void bulkString(byte[] data, int off, int len) {
+        public void value(byte[] data, int off, int len) {
             values.add(data == null ? null : new String(data, off, len, StandardCharsets.US_ASCII));
         }
 
         @Override
-        public void bulkString(BytesSlice slice) {
+        public void value(BytesSlice slice) {
             if (slice == null) {
                 values.add(null);
                 return;
@@ -275,8 +275,13 @@ public class NativeListpackTest {
         }
 
         @Override
-        public void bulkStringLongAscii(long value) {
+        public void longAscii(long value) {
             values.add(Long.toString(value));
+        }
+
+        @Override
+        public void nullValue() {
+            value((byte[]) null);
         }
     }
 }

@@ -7,7 +7,7 @@ import java.nio.ByteOrder;
 import java.util.Objects;
 import yier.bubu.redis.memory.api.StableMemoryRegion;
 
-public final class YierdisFfmRegion implements StableMemoryRegion {
+final class YierdisFfmRegion implements StableMemoryRegion {
     private static final int COMPARE_CHUNK_BYTES = 8 * 1024;
     private static final ThreadLocal<byte[]> COMPARE_BUFFER =
             ThreadLocal.withInitial(() -> new byte[COMPARE_CHUNK_BYTES]);

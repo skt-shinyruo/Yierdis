@@ -2,11 +2,12 @@ package yier.bubu.redis.storage.memory.internal.value;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.MemoryOwner;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
+import yier.bubu.redis.storage.memory.TestBackend;
+import yier.bubu.redis.memory.testkit.HeapStableMemoryBackend;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
@@ -24,22 +25,52 @@ public class NativeByteMapTest {
     private static final HashSeed FIXED_SEED = new HashSeed(0x0123456789abcdefL, 0xfedcba9876543210L);
 
     @Test
-    public void tableStoresKeysAsPrimitiveHandles() throws ClassNotFoundException {
+    public void nativeHandleValuesPreserveBothAllocatorIdsAcrossLocalRawCollisions() {
+        TestOwner leftOwner = new TestOwner();
+        TestOwner rightOwner = new TestOwner();
+        HeapStableMemoryBackend leftBackend = new HeapStableMemoryBackend("map-left", 16, leftOwner);
+        HeapStableMemoryBackend rightBackend = new HeapStableMemoryBackend("map-right", 16, rightOwner);
+        leftBackend.bindToCurrentThread();
+        rightBackend.bindToCurrentThread();
+
+        NativeHandle leftValue = leftBackend.allocate(NativeObjectKind.HASH_VALUE_BYTES, 1);
+        NativeHandle rightValue = rightBackend.allocate(NativeObjectKind.HASH_VALUE_BYTES, 1);
+        Assert.assertEquals(leftValue.localRaw(), rightValue.localRaw());
+        Assert.assertNotEquals(leftValue.allocatorId(), rightValue.allocatorId());
+
+        NativeByteStore keyStore = new NativeByteStore(leftBackend, NativeObjectKind.HASH_FIELD_BYTES);
+        try (NativeByteMap<NativeHandle> map = NativeByteMap.nativeHandleValues(
+                keyStore,
+                NativeObjectKind.HASH_FIELD_BYTES,
+                FIXED_SEED,
+                null,
+                null
+        )) {
+            map.put(bytes("left"), leftValue);
+            map.put(bytes("right"), rightValue);
+
+            Assert.assertEquals(leftValue, map.get(bytes("left")));
+            Assert.assertEquals(rightValue, map.get(bytes("right")));
+        }
+
+        leftBackend.free(leftValue);
+        rightBackend.free(rightValue);
+        leftBackend.close();
+        rightBackend.close();
+    }
+
+    @Test
+    public void tableStoresKeysAsCompleteNativeHandles() throws ReflectiveOperationException {
         Class<?> tableClass = Class.forName(NativeByteMap.class.getName() + "$Table");
 
-        long primitiveHandleArrays = java.util.Arrays.stream(tableClass.getDeclaredFields())
-                .filter(field -> field.getType() == long[].class)
-                .count();
-        Assert.assertEquals(1L, primitiveHandleArrays);
-        Assert.assertFalse(java.util.Arrays.stream(tableClass.getDeclaredFields())
-                .anyMatch(field -> field.getType() == NativeHandle[].class
-                        || field.getType() == Object[].class));
+        var keyHandles = tableClass.getDeclaredField("keyHandles");
+        Assert.assertEquals(NativeHandle[].class, keyHandles.getType());
     }
 
     @Test
     public void specializedValueLayoutsUsePrimitiveOrNoValueArray() throws ReflectiveOperationException {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-byte-map-value-layouts");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-byte-map-value-layouts");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore keyStore = new NativeByteStore(allocator, NativeObjectKind.HASH_FIELD_BYTES);
             NativeByteStore valueStore = new NativeByteStore(allocator, NativeObjectKind.HASH_VALUE_BYTES);
             Object present = new Object();
@@ -69,7 +100,7 @@ public class NativeByteMapTest {
                     Assert.assertSame(present, constants.put(bytes("constant"), present));
                     objects.put(bytes("object"), 1);
 
-                    Assert.assertTrue(activeValueSlots(handles) instanceof long[]);
+                    Assert.assertTrue(activeValueSlots(handles) instanceof NativeHandle[]);
                     Assert.assertNull(activeValueSlots(constants));
                     Assert.assertTrue(activeValueSlots(objects) instanceof Object[]);
 
@@ -86,8 +117,8 @@ public class NativeByteMapTest {
 
     @Test
     public void registryAdvancesOnlyTheMapWithRehashDebtAndUnregistersItWhenComplete() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-byte-map-registry");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-byte-map-registry");
+             StableMemoryBackend allocator = runtime.backend()) {
             HashTableMaintenanceRegistry registry = new HashTableMaintenanceRegistry();
             try (NativeByteMap<Integer> map = new NativeByteMap<>(
                     new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES),
@@ -117,8 +148,8 @@ public class NativeByteMapTest {
 
     @Test
     public void collisionKeysGrowIntoTwoTablesAndMigrateWithinBudget() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-byte-map-bounded-rehash");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+        try (TestBackend runtime = TestBackend.open("native-byte-map-bounded-rehash");
+             StableMemoryBackend allocator = runtime.backend();
              NativeByteMap<Integer> map = new NativeByteMap<>(
                      new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES),
                      NativeObjectKind.SET_MEMBER_BYTES,
@@ -141,8 +172,8 @@ public class NativeByteMapTest {
 
     @Test
     public void reusingATombstoneDoesNotStartAnUnnecessaryGrow() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-byte-map-tombstone-reuse");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+        try (TestBackend runtime = TestBackend.open("native-byte-map-tombstone-reuse");
+             StableMemoryBackend allocator = runtime.backend();
              NativeByteMap<Integer> map = new NativeByteMap<>(
                      new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES),
                      NativeObjectKind.SET_MEMBER_BYTES,
@@ -164,8 +195,8 @@ public class NativeByteMapTest {
 
     @Test
     public void everyWriteAdvancesAnActiveRehash() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-byte-map-write-rehash");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+        try (TestBackend runtime = TestBackend.open("native-byte-map-write-rehash");
+             StableMemoryBackend allocator = runtime.backend();
              NativeByteMap<Integer> map = new NativeByteMap<>(
                      new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES),
                      NativeObjectKind.SET_MEMBER_BYTES,
@@ -187,8 +218,8 @@ public class NativeByteMapTest {
 
     @Test
     public void collidingKeysCompactAndShrinkThroughBoundedMaintenance() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-byte-map-maintenance");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+        try (TestBackend runtime = TestBackend.open("native-byte-map-maintenance");
+             StableMemoryBackend allocator = runtime.backend();
              NativeByteMap<Integer> map = new NativeByteMap<>(
                      new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES),
                      NativeObjectKind.SET_MEMBER_BYTES,
@@ -242,8 +273,8 @@ public class NativeByteMapTest {
 
     @Test
     public void stagesPendingShrinkForMaintenanceBeforePublishingTheReplacementTable() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-byte-map-staged-maintenance");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+        try (TestBackend runtime = TestBackend.open("native-byte-map-staged-maintenance");
+             StableMemoryBackend allocator = runtime.backend();
              NativeByteMap<Integer> map = new NativeByteMap<>(
                      new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES),
                      NativeObjectKind.SET_MEMBER_BYTES,
@@ -274,8 +305,8 @@ public class NativeByteMapTest {
 
     @Test
     public void putGetReplaceRemoveAndClearReleaseNativeKeys() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-byte-map");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-byte-map");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.HASH_FIELD_BYTES);
             NativeByteMap<String> map = new NativeByteMap<>(store, NativeObjectKind.HASH_FIELD_BYTES);
 
@@ -302,8 +333,8 @@ public class NativeByteMapTest {
 
     @Test
     public void preparedUpdateAndAddRemainInvisibleAndAbortReleasesOnlyTheStagedKey() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-byte-map-prepared-abort");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-byte-map-prepared-abort");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.HASH_FIELD_BYTES);
             try (NativeByteMap<String> map = new NativeByteMap<>(
                     store,
@@ -337,7 +368,7 @@ public class NativeByteMapTest {
                 Assert.assertEquals("before", map.get(bytes("existing")));
                 Assert.assertNull(map.get(bytes("added")));
                 Assert.assertEquals(1, map.size());
-                Assert.assertEquals(existingHandle.raw(), keyHandle(map, store, "existing").raw());
+                Assert.assertEquals(existingHandle.localRaw(), keyHandle(map, store, "existing").localRaw());
                 Assert.assertEquals(ownedMapBytes, map.nativeBytes());
                 Assert.assertEquals(ownedStoreBytes, store.nativeBytes());
                 Assert.assertEquals(
@@ -352,8 +383,8 @@ public class NativeByteMapTest {
 
     @Test
     public void preparedCommitPreservesExistingRawHandleAcrossTopologyReplacement() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-byte-map-prepared-commit");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-byte-map-prepared-commit");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.HASH_FIELD_BYTES);
             try (NativeByteMap<String> map = new NativeByteMap<>(
                     store,
@@ -378,7 +409,7 @@ public class NativeByteMapTest {
 
                 NativeHandle committedHandle = keyHandle(map, store, "field-0");
                 Assert.assertTrue(map.metrics().capacity() > sourceCapacity);
-                Assert.assertEquals(existingHandle.raw(), committedHandle.raw());
+                Assert.assertEquals(existingHandle.localRaw(), committedHandle.localRaw());
                 Assert.assertArrayEquals(bytes("field-0"), store.toByteArray(committedHandle));
                 Assert.assertEquals("updated", map.get(bytes("field-0")));
                 Assert.assertEquals("value-12", map.get(bytes("field-12")));
@@ -395,8 +426,8 @@ public class NativeByteMapTest {
 
     @Test
     public void preparedTopologyReplacementRejectsAnUnrelatedValueChange() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-byte-map-prepared-stale");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-byte-map-prepared-stale");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.HASH_FIELD_BYTES);
             try (NativeByteMap<String> map = new NativeByteMap<>(
                     store,
@@ -426,8 +457,8 @@ public class NativeByteMapTest {
 
     @Test
     public void borrowedMapNeverReleasesExternalKeysOnRemoveClearOrClose() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-byte-map-borrowed-keys");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-byte-map-borrowed-keys");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.ZSET_MEMBER_BYTES);
             NativeHandle removedKey = store.store(bytes("removed"));
             NativeHandle clearedKey = store.store(bytes("cleared"));
@@ -474,8 +505,8 @@ public class NativeByteMapTest {
 
     @Test
     public void rehashesAndForEachExposesNativeKeyHandles() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-byte-map-rehash");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-byte-map-rehash");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES);
             NativeByteMap<Integer> map = new NativeByteMap<>(store, NativeObjectKind.SET_MEMBER_BYTES);
 
@@ -501,8 +532,8 @@ public class NativeByteMapTest {
 
     @Test
     public void scanVisitsEveryEntryAcrossBoundedWindows() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-byte-map-scan");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-byte-map-scan");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES);
             try (NativeByteMap<Integer> map = new NativeByteMap<>(
                     store,
@@ -537,8 +568,8 @@ public class NativeByteMapTest {
 
     @Test
     public void scanUsesMigratedOldSlotsAndRestartsAfterGenerationChange() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-byte-map-scan-rehash");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-byte-map-scan-rehash");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES);
             try (NativeByteMap<Integer> map = new NativeByteMap<>(
                     store,
@@ -616,8 +647,8 @@ public class NativeByteMapTest {
 
     @Test
     public void scanResolvesMigratedShadowValueFromTheActiveTable() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-byte-map-scan-shadow-value");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-byte-map-scan-shadow-value");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore keyStore = new NativeByteStore(allocator, NativeObjectKind.HASH_FIELD_BYTES);
             NativeByteStore valueStore = new NativeByteStore(allocator, NativeObjectKind.HASH_VALUE_BYTES);
             try (NativeByteMap<NativeHandle> map = NativeByteMap.nativeHandleValues(
@@ -669,8 +700,8 @@ public class NativeByteMapTest {
 
     @Test
     public void scanCanStopAfterTheFirstVisibleEntry() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-byte-map-scan-stop");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-byte-map-scan-stop");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.HASH_FIELD_BYTES);
             try (NativeByteMap<Integer> map = new NativeByteMap<>(store, NativeObjectKind.HASH_FIELD_BYTES)) {
                 map.put(bytes("one"), 1);
@@ -736,5 +767,35 @@ public class NativeByteMapTest {
                 + valueArrayBytes
                 + 16L + (long) capacity * Integer.BYTES
                 + 16L + capacity;
+    }
+
+    private static final class TestOwner implements MemoryOwner {
+        private Thread owner;
+
+        @Override
+        public void bindToCurrentThread() {
+            Thread current = Thread.currentThread();
+            if (owner == null) {
+                owner = current;
+                return;
+            }
+            if (owner != current) {
+                throw new IllegalStateException("owner is bound to another thread");
+            }
+        }
+
+        @Override
+        public void checkCurrentThread() {
+            if (owner != Thread.currentThread()) {
+                throw new IllegalStateException("access is outside the owner thread");
+            }
+        }
+
+        @Override
+        public void checkCurrentThreadForShutdown() {
+            if (owner != null && owner != Thread.currentThread()) {
+                throw new IllegalStateException("shutdown is outside the owner thread");
+            }
+        }
     }
 }

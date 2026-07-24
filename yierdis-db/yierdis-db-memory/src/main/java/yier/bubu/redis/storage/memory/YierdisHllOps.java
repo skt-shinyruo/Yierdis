@@ -9,6 +9,7 @@ import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.WriteResult;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
@@ -25,7 +26,6 @@ import java.util.List;
 import java.util.Objects;
 
 public final class YierdisHllOps implements HllReadOps, HllWriteOps {
-    private static final int ENTRY_RECORD_NATIVE_BYTES = 56;
     private static final long HLL_REGISTER_HEAP_BYTES = (long) YierdisHyperLogLog.REGISTERS * Integer.BYTES;
 
     private final YierdisDbInternals internals;
@@ -304,12 +304,12 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
         int[] sizes = includeKeyAndEntry
                 ? new int[]{
                         Math.max(1, keyBytes == null ? 0 : keyBytes.length),
-                        ENTRY_RECORD_NATIVE_BYTES,
+                        NativeStorageLayout.ENTRY_RECORD_BYTES,
                         valueLength
                 }
                 : new int[]{valueLength};
         return withScopeBookkeeping(MutationMemoryEstimator.peakAdditionalBytes(
-                keyLifecycle.nativeAllocator(),
+                keyLifecycle.stableMemoryBackend(),
                 0L,
                 addSaturating(Math.max(0L, heapGrowthBytes), stagedKeyDirectoryGrowthBytes),
                 sizes
@@ -385,7 +385,6 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                 ValueType.STRING,
                 ValueEncoding.STRING_RAW,
                 expireAtMillis,
-                DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE,
                 previous
         );
     }
@@ -393,7 +392,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
     private ValueHandle requireHllHandle(EntryRecord record) {
         ValueHandle handle = record.valueHandle();
         if (!stringRoot.contains(handle)) {
-            throw new IllegalStateException("native hll value handle is not available: " + (handle == null ? "null" : handle.raw()));
+            throw new IllegalStateException("native hll value handle is not available: " + (handle == null ? "null" : handle.nativeHandle()));
         }
         if (!YierdisHyperLogLog.isHllString(stringRoot, handle)) {
             throw new WrongTypeException();
@@ -506,7 +505,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
     private long withScopeBookkeeping(long upperBound) {
         return Math.max(
                 Math.max(0L, upperBound),
-                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(keyLifecycle.nativeAllocator(), 0)
+                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(keyLifecycle.stableMemoryBackend(), 0)
         );
     }
 

@@ -2,13 +2,12 @@ package yier.bubu.redis.storage.memory.internal.value;
 
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 
 import java.util.Arrays;
 
@@ -400,7 +399,7 @@ public final class YierdisListpack {
             return Arrays.copyOfRange(owner.data, current.dataOffset, current.dataOffset + current.len);
         }
 
-        void writeTo(BulkStringSink out) {
+        void writeTo(ByteValueSink out) {
             if (out == null) {
                 throw new IllegalArgumentException("out must not be null");
             }
@@ -408,10 +407,10 @@ public final class YierdisListpack {
                 throw new IllegalStateException("cursor not positioned");
             }
             if (current.len < 0) {
-                out.bulkStringNull();
+                out.nullValue();
                 return;
             }
-            out.bulkString(owner.data, current.dataOffset, current.len);
+            out.value(owner.data, current.dataOffset, current.len);
         }
 
         void appendTo(YierdisListpack dst) {

@@ -1,11 +1,11 @@
 package yier.bubu.redis.storage.memory.internal.value;
 
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
 import yier.bubu.redis.storage.memory.MaterializedCollectionScanWindow;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
@@ -43,16 +43,16 @@ public final class SetValue implements YierdisValue, NativeHandleOwner, HeapTrac
     private Runnable heapChangeListener = () -> {
     };
 
-    public SetValue(NativeAllocator allocator) {
+    public SetValue(StableMemoryBackend allocator) {
         this(allocator, HashSeed.random());
     }
 
-    public SetValue(NativeAllocator allocator, HashSeed hashSeed) {
+    public SetValue(StableMemoryBackend allocator, HashSeed hashSeed) {
         this(allocator, hashSeed, null);
     }
 
     public SetValue(
-            NativeAllocator allocator,
+            StableMemoryBackend allocator,
             HashSeed hashSeed,
             HashTableMaintenanceRegistry maintenanceRegistry
     ) {
@@ -226,16 +226,16 @@ public final class SetValue implements YierdisValue, NativeHandleOwner, HeapTrac
         return count;
     }
 
-    public void membersInto(BulkStringSink out) {
+    public void membersInto(ByteValueSink out) {
         Objects.requireNonNull(out, "out");
 
         if (members != null) {
-            members.forEach((memberRef, ignored) -> out.bulkString(memberStore.slice(memberRef)));
+            members.forEach((memberRef, ignored) -> out.value(memberStore.slice(memberRef)));
             return;
         }
 
         for (int i = 0; i < intsetSize; i++) {
-            out.bulkStringLongAscii(intsetLongAt(i));
+            out.longAscii(intsetLongAt(i));
         }
     }
 
@@ -248,7 +248,7 @@ public final class SetValue implements YierdisValue, NativeHandleOwner, HeapTrac
             int boundedCount = NativeCollectionScanWindow.boundedMatchCount(count);
             int[] matched = {0};
             try (NativeCollectionScanWindow.Builder builder =
-                         NativeCollectionScanWindow.builder(memberStore.allocator(), boundedCount)) {
+                         NativeCollectionScanWindow.builder(memberStore.backend(), boundedCount)) {
                 NativeByteMap.ScanResult result = members.scanWithWork(
                         current,
                         NativeCollectionScanWindow.slotBudget(boundedCount),

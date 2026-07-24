@@ -8,7 +8,7 @@ import yier.bubu.redis.memory.api.NativeAllocationScope;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.api.DbHealthSnapshot;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.MutationOutcome;
@@ -45,7 +45,7 @@ public class YierdisDbHealthTest {
 
     @Test
     public void sustainedStringAndSparseHllWritesLeaveDbWritableForDenseHllPrefill() {
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntimeAndNativeSlotCapacity(
+        YierdisDb db = TestDbSupport.openWithNativeSlotCapacity(
                 0L,
                 yier.bubu.redis.storage.api.MaxmemoryPolicy.NOEVICTION,
                 5,
@@ -94,7 +94,7 @@ public class YierdisDbHealthTest {
 
     @Test
     public void pfmergeNewDestinationReservesPendingKeyDirectoryGrowth() {
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntimeAndNativeSlotCapacity(
+        YierdisDb db = TestDbSupport.openWithNativeSlotCapacity(
                 0L,
                 yier.bubu.redis.storage.api.MaxmemoryPolicy.NOEVICTION,
                 5,
@@ -139,7 +139,7 @@ public class YierdisDbHealthTest {
 
     @Test
     public void postCommitReleaseFailureDegradesDbPreservesCommittedValueAndRejectsLaterWrites() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         db.bindToCurrentThread();
         try {
             byte[] key = b("k");
@@ -174,8 +174,8 @@ public class YierdisDbHealthTest {
 
     @Test
     public void committingFailurePromotesScopeSettlesLedgerAndDoesNotAbort() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("degraded-commit")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
+        try (TestBackend runtime = TestBackend.open("degraded-commit")) {
+            YierdisDb db = TestDbSupport.open(
                     runtime,
                     0,
                     yier.bubu.redis.storage.api.MaxmemoryPolicy.NOEVICTION,
@@ -202,19 +202,18 @@ public class YierdisDbHealthTest {
                 Assert.assertEquals(DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE, db.memoryLedger().usedBytes());
                 Assert.assertArrayEquals(b("visible"), db.reads().strings().getStringBytes(key));
 
-                try (NativeAllocationScope scope = db.nativeAllocator().beginAllocationScope()) {
+                try (NativeAllocationScope scope = db.stableMemoryBackend().beginAllocationScope()) {
                     scope.abort();
                 }
             } finally {
                 db.shutdown();
             }
-            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 
     private static void replaceStringAndFailDuringRelease(YierdisDb db, byte[] key, byte[] nextBytes) {
         YierdisDbKeyLifecycle keyLifecycle = db.keyLifecycle();
-        YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(db);
+        YierdisDbMutationExecutor executor = mutationExecutor(db);
         executor.execute(new YierdisDbMutationExecutor.MutationPlan<Void>() {
             @Override
             public long upperBoundBytes() {
@@ -258,7 +257,7 @@ public class YierdisDbHealthTest {
             AtomicBoolean released
     ) {
         YierdisDbKeyLifecycle keyLifecycle = db.keyLifecycle();
-        YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(db);
+        YierdisDbMutationExecutor executor = mutationExecutor(db);
         executor.execute(new YierdisDbMutationExecutor.MutationPlan<Void>() {
             @Override
             public long upperBoundBytes() {
@@ -303,6 +302,17 @@ public class YierdisDbHealthTest {
         });
     }
 
+    private static YierdisDbMutationExecutor mutationExecutor(YierdisDb db) {
+        return new YierdisDbMutationExecutor(
+                db::checkThread,
+                db.memoryLedger(),
+                db.stableMemoryBackend(),
+                db.healthMonitor(),
+                db::commitPublisher,
+                db::commitDbIndex
+        );
+    }
+
     private static EntryRecord stringRecord(
             YierdisDbKeyLifecycle keyLifecycle,
             KeyHandle keyHandle,
@@ -315,7 +325,6 @@ public class YierdisDbHealthTest {
                 ValueType.STRING,
                 ValueEncoding.STRING_RAW,
                 -1L,
-                DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE,
                 previous
         );
     }

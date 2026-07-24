@@ -2,7 +2,6 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -14,6 +13,7 @@ import yier.bubu.redis.storage.api.HashWriteOps;
 import yier.bubu.redis.storage.api.HllWriteOps;
 import yier.bubu.redis.storage.api.KeyspaceWriteOps;
 import yier.bubu.redis.storage.api.ListWriteOps;
+import yier.bubu.redis.storage.api.PreparedMutation;
 import yier.bubu.redis.storage.api.SetWriteOps;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.StringWriteOps;
@@ -179,10 +179,19 @@ public final class YierdisDbWrites implements DbWrites {
                 byte[] keyBytes,
                 BytesSlice value,
                 SetMode mode,
-                ExpireOption expireOption,
-                boolean returnOldValue
+                ExpireOption expireOption
         ) {
-            return invoke(() -> strings.set(keyBytes, value, mode, expireOption, returnOldValue));
+            return invoke(() -> strings.set(keyBytes, value, mode, expireOption));
+        }
+
+        @Override
+        public PreparedMutation<SetStringValue> prepareSet(
+                byte[] keyBytes,
+                BytesSlice value,
+                SetMode mode,
+                ExpireOption expireOption
+        ) {
+            return invoke(() -> strings.prepareSet(keyBytes, value, mode, expireOption));
         }
 
         @Override
@@ -241,13 +250,8 @@ public final class YierdisDbWrites implements DbWrites {
         }
 
         @Override
-        public WriteResult<PoppedValueSequence> lpop(byte[] keyBytes, int count) {
-            return invoke(() -> lists.lpop(keyBytes, count));
-        }
-
-        @Override
-        public WriteResult<PoppedValueSequence> rpop(byte[] keyBytes, int count) {
-            return invoke(() -> lists.rpop(keyBytes, count));
+        public PreparedMutation<PoppedValueSequence> preparePop(byte[] keyBytes, int count, boolean left) {
+            return invoke(() -> lists.preparePop(keyBytes, count, left));
         }
 
         @Override

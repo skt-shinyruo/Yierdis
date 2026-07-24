@@ -1,12 +1,12 @@
 package yier.bubu.redis.storage.memory.internal.value;
 
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
-import yier.bubu.redis.storage.api.result.BulkStringValue;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
+import yier.bubu.redis.storage.api.result.ByteValue;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
 import yier.bubu.redis.storage.memory.MaterializedCollectionScanWindow;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
@@ -23,7 +23,7 @@ import java.util.function.Consumer;
 
 public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTrackedValue {
     private static final long FIXED_HEAP_BYTES = 88L;
-    private final NativeAllocator allocator;
+    private final StableMemoryBackend allocator;
     private final NativeByteStore fieldStore;
     private final NativeByteStore valueStore;
     private final HashSeed hashSeed;
@@ -35,23 +35,23 @@ public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTra
     private Runnable heapChangeListener = () -> {
     };
 
-    public HashValue(NativeAllocator allocator) {
+    public HashValue(StableMemoryBackend allocator) {
         this(allocator, HashSeed.random());
     }
 
-    public HashValue(NativeAllocator allocator, HashSeed hashSeed) {
+    public HashValue(StableMemoryBackend allocator, HashSeed hashSeed) {
         this(allocator, hashSeed, null);
     }
 
     public HashValue(
-            NativeAllocator allocator,
+            StableMemoryBackend allocator,
             HashSeed hashSeed,
             HashTableMaintenanceRegistry maintenanceRegistry
     ) {
-        NativeAllocator nativeAllocator = Objects.requireNonNull(allocator, "allocator");
-        this.allocator = nativeAllocator;
-        this.fieldStore = new NativeByteStore(nativeAllocator, NativeObjectKind.HASH_FIELD_BYTES);
-        this.valueStore = new NativeByteStore(nativeAllocator, NativeObjectKind.HASH_VALUE_BYTES);
+        StableMemoryBackend stableMemoryBackend = Objects.requireNonNull(allocator, "allocator");
+        this.allocator = stableMemoryBackend;
+        this.fieldStore = new NativeByteStore(stableMemoryBackend, NativeObjectKind.HASH_FIELD_BYTES);
+        this.valueStore = new NativeByteStore(stableMemoryBackend, NativeObjectKind.HASH_VALUE_BYTES);
         this.hashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
         this.maintenanceRegistry = maintenanceRegistry;
         this.packed = new NativeListpack(fieldStore, NativeObjectKind.HASH_FIELD_BYTES);
@@ -366,19 +366,19 @@ public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTra
         return packed.get(pairIndex + 1);
     }
 
-    public BulkStringValue hgetValue(byte[] field) {
+    public ByteValue hgetValue(byte[] field) {
         Objects.requireNonNull(field, "field");
         if (map != null) {
             NativeHandle ref = map.get(field);
-            return ref == null ? BulkStringValue.nullValue() : valueStore.retainedValue(ref);
+            return ref == null ? ByteValue.nullValue() : valueStore.retainedValue(ref);
         }
         int pairIndex = indexOfFieldPair(field);
         if (pairIndex < 0) {
-            return BulkStringValue.nullValue();
+            return ByteValue.nullValue();
         }
         NativeListEntryRef ref = packed.entryRefAt(pairIndex + 1);
         return ref.handle() == null
-                ? BulkStringValue.nullValue()
+                ? ByteValue.nullValue()
                 : fieldStore.retainedValue(ref.handle(), ref.payloadOffset(), ref.payloadLength());
     }
 
@@ -490,7 +490,7 @@ public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTra
             int[] matched = {0};
             int expectedElements = boundedCount * (noValues ? 1 : 2);
             try (NativeCollectionScanWindow.Builder builder =
-                         NativeCollectionScanWindow.builder(fieldStore.allocator(), expectedElements)) {
+                         NativeCollectionScanWindow.builder(fieldStore.backend(), expectedElements)) {
                 NativeByteMap.ScanResult result = map.scanWithWork(
                         current,
                         NativeCollectionScanWindow.slotBudget(boundedCount),
@@ -534,18 +534,18 @@ public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTra
         return new MaterializedCollectionScanWindow(ScanCursorV2.start(), out);
     }
 
-    public void hgetallPairsInto(BulkStringSink out) {
+    public void hgetallPairsInto(ByteValueSink out) {
         if (out == null) {
             throw new IllegalArgumentException("out must not be null");
         }
 
         if (map != null) {
             map.forEach((fieldRef, valueRef) -> {
-                out.bulkString(fieldStore.slice(fieldRef));
+                out.value(fieldStore.slice(fieldRef));
                 if (valueRef == null) {
-                    out.bulkStringNull();
+                    out.nullValue();
                 } else {
-                    out.bulkString(valueStore.slice(valueRef));
+                    out.value(valueStore.slice(valueRef));
                 }
             });
             return;

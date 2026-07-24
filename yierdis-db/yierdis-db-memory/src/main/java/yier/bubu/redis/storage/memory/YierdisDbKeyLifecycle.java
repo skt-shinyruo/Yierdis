@@ -1,8 +1,8 @@
 package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.bytes.BytesView;
-import yier.bubu.redis.memory.api.NativeAllocator;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
@@ -17,7 +17,7 @@ import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
 import yier.bubu.redis.storage.memory.internal.expire.YierdisExpireIndex;
 import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
-import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmExpireIndex;
+import yier.bubu.redis.storage.memory.internal.expire.YierdisNativeExpireIndex;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
@@ -49,8 +49,7 @@ public final class YierdisDbKeyLifecycle {
     }
 
     private final YierdisExpireIndex expires;
-    private final NativeAllocator nativeAllocator;
-    private final YierdisFfmMemoryRuntime memoryRuntime;
+    private final StableMemoryBackend stableMemoryBackend;
     private final EntryTable entryTable;
     private final NativeKeyDirectory keyDirectory;
     private final StringRoot stringRoot;
@@ -64,8 +63,7 @@ public final class YierdisDbKeyLifecycle {
 
     YierdisDbKeyLifecycle(
             YierdisExpireIndex expires,
-            NativeAllocator nativeAllocator,
-            YierdisFfmMemoryRuntime memoryRuntime,
+            StableMemoryBackend stableMemoryBackend,
             EntryTable entryTable,
             NativeKeyDirectory keyDirectory,
             StringRoot stringRoot,
@@ -77,8 +75,7 @@ public final class YierdisDbKeyLifecycle {
             LongConsumer adjustUsedBytesCallback
     ) {
         this.expires = Objects.requireNonNull(expires, "expires");
-        this.nativeAllocator = java.util.Objects.requireNonNull(nativeAllocator, "nativeAllocator");
-        this.memoryRuntime = memoryRuntime;
+        this.stableMemoryBackend = java.util.Objects.requireNonNull(stableMemoryBackend, "stableMemoryBackend");
         this.entryTable = Objects.requireNonNull(entryTable, "entryTable");
         this.keyDirectory = Objects.requireNonNull(keyDirectory, "keyDirectory");
         this.stringRoot = Objects.requireNonNull(stringRoot, "stringRoot");
@@ -90,12 +87,8 @@ public final class YierdisDbKeyLifecycle {
         this.adjustUsedBytesCallback = Objects.requireNonNull(adjustUsedBytesCallback, "adjustUsedBytesCallback");
     }
 
-    public NativeAllocator nativeAllocator() {
-        return nativeAllocator;
-    }
-
-    public YierdisFfmMemoryRuntime memoryRuntime() {
-        return memoryRuntime;
+    public StableMemoryBackend stableMemoryBackend() {
+        return stableMemoryBackend;
     }
 
     public EntryTable entryTable() {
@@ -280,15 +273,15 @@ public final class YierdisDbKeyLifecycle {
             return 0L;
         }
         return MutationMemoryEstimator.peakAdditionalBytes(
-                nativeAllocator,
+                stableMemoryBackend,
                 0L,
                 estimateExpireSetNonNativeGrowthBytes(addingNewTtl)
         );
     }
 
     public long estimateExpireSetNonNativeGrowthBytes(boolean addingNewTtl) {
-        if (expires instanceof YierdisFfmExpireIndex ffmExpires) {
-            return ffmExpires.estimatedSetReplacementNonNativeGrowthBytes(addingNewTtl);
+        if (expires instanceof YierdisNativeExpireIndex nativeExpires) {
+            return nativeExpires.estimatedSetReplacementNonNativeGrowthBytes(addingNewTtl);
         }
         return 0L;
     }
@@ -376,13 +369,10 @@ public final class YierdisDbKeyLifecycle {
     }
 
     public long estimatedBytesForRemoval(KeyHandle keyHandle, EntryRecord record) {
-        if (record != null && record.version() > 0) {
-            return record.version();
-        }
         if (keyHandle == null || record == null) {
             return 0L;
         }
-        return DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
+        return YierdisDbMemoryEstimator.entryMetadataBytes(record);
     }
 
     public ScanCursorV2 scan(ScanCursorV2 cursor, int maxSteps, YierdisKeyspace.ScanConsumer<EntryRecord> consumer) {
@@ -534,7 +524,6 @@ public final class YierdisDbKeyLifecycle {
             ValueType type,
             ValueEncoding encoding,
             long expireAtMillis,
-            long estimatedBytes,
             EntryRecord previous
     ) {
         return new EntryRecord(
@@ -545,7 +534,7 @@ public final class YierdisDbKeyLifecycle {
                 encoding,
                 0,
                 expireAtMillis,
-                estimatedBytes,
+                nextVersion(previous),
                 accessClock(previous == null ? 0L : previous.lruOrLfu())
         );
     }
@@ -591,13 +580,13 @@ public final class YierdisDbKeyLifecycle {
                 record.encoding(),
                 clearExpiredEntryAwaitingPhysicalDeletionFlag(record.flags()),
                 expireAtMillis,
-                record.version(),
+                nextVersion(record),
                 accessClock(record.lruOrLfu())
         );
     }
 
     public void releaseValue(EntryRecord record) {
-        if (record == null || record.valueHandle() == null || record.valueHandle().raw() == 0L) {
+        if (record == null || record.valueHandle() == null || record.valueHandle().isNull()) {
             return;
         }
         switch (record.type()) {
@@ -656,7 +645,7 @@ public final class YierdisDbKeyLifecycle {
                 record.encoding(),
                 clearExpiredEntryAwaitingPhysicalDeletionFlag(record.flags()),
                 expireAtMillis,
-                record.version(),
+                nextVersion(record),
                 record.lruOrLfu()
         );
         replaceEntry(handle, record, replacement);
@@ -665,6 +654,16 @@ public final class YierdisDbKeyLifecycle {
     private long accessClock(long previous) {
         long next = lruClockSupplier.getAsLong();
         return next <= 0L ? previous : next;
+    }
+
+    private static long nextVersion(EntryRecord previous) {
+        if (previous == null) {
+            return 1L;
+        }
+        if (previous.version() == Long.MAX_VALUE) {
+            throw new IllegalStateException("entry version is exhausted");
+        }
+        return previous.version() + 1L;
     }
 
     private long expireAtMillisOrAbsent(KeyHandle keyHandle) {
@@ -718,11 +717,11 @@ public final class YierdisDbKeyLifecycle {
         }
     }
 
-    private static long keyHandleIdentity(KeyHandle keyHandle) {
+    private static NativeHandle keyHandleIdentity(KeyHandle keyHandle) {
         if (keyHandle == null) {
-            return 0L;
+            return NativeHandle.NULL;
         }
-        return KeyHandleAccess.allocatorNativeHandle(keyHandle).raw();
+        return KeyHandleAccess.allocatorNativeHandle(keyHandle);
     }
 
     private static byte[] keyBytes(KeyHandle keyHandle) {
@@ -769,7 +768,7 @@ public final class YierdisDbKeyLifecycle {
                 record.encoding(),
                 flags,
                 record.expireAtMillis(),
-                record.version(),
+                nextVersion(record),
                 record.lruOrLfu()
         );
     }

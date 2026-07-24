@@ -1,10 +1,12 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
+import java.util.Objects;
+import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 public record EntryRecord(
-        long keyHandle,
+        NativeHandle keyHandle,
         ValueHandle valueHandle,
         int keyHash,
         ValueType type,
@@ -15,14 +17,9 @@ public record EntryRecord(
         long lruOrLfu
 ) {
     public EntryRecord {
-        if (valueHandle == null) {
-            throw new NullPointerException("valueHandle");
-        }
-        if (type == null) {
-            throw new NullPointerException("type");
-        }
-        if (encoding == null) {
-            throw new NullPointerException("encoding");
-        }
+        keyHandle = Objects.requireNonNull(keyHandle, "keyHandle");
+        valueHandle = Objects.requireNonNull(valueHandle, "valueHandle");
+        type = Objects.requireNonNull(type, "type");
+        encoding = Objects.requireNonNull(encoding, "encoding");
     }
 }

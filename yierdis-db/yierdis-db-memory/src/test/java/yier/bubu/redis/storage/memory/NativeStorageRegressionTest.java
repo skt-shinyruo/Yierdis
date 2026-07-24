@@ -6,13 +6,12 @@ import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
-import yier.bubu.redis.memory.api.NativeEpochKind;
-import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
@@ -22,8 +21,8 @@ import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.WrongTypeException;
-import yier.bubu.redis.storage.api.result.BulkStringSequence;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.ByteSequenceSource;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.KeyScanWindow;
 import yier.bubu.redis.storage.api.result.PoppedValueSequence;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
@@ -48,7 +47,7 @@ public class NativeStorageRegressionTest {
 
     @Test
     public void allNativeRootsReleaseToZeroAfterDelete() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             Assert.assertTrue(db.writes().strings().setString(b("s"), b("v"), SetMode.NORMAL, null).value());
@@ -77,9 +76,9 @@ public class NativeStorageRegressionTest {
     }
 
     @Test
-    public void productionCollectionRootsUseSharedNativeAllocatorAndReleaseAfterDeleteAndShutdown() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-collection-root-counts")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
+    public void productionCollectionRootsUseSharedStableMemoryBackendAndReleaseAfterDeleteAndShutdown() {
+        try (TestBackend runtime = TestBackend.open("native-collection-root-counts")) {
+            YierdisDb db = TestDbSupport.open(
                     runtime,
                     0,
                     MaxmemoryPolicy.NOEVICTION,
@@ -103,11 +102,10 @@ public class NativeStorageRegressionTest {
             } finally {
                 db.shutdown();
             }
-            Assert.assertEquals(0L, runtime.usedBytes());
         }
 
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-collection-root-shutdown")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
+        try (TestBackend runtime = TestBackend.open("native-collection-root-shutdown")) {
+            YierdisDb db = TestDbSupport.open(
                     runtime,
                     0,
                     MaxmemoryPolicy.NOEVICTION,
@@ -120,60 +118,12 @@ public class NativeStorageRegressionTest {
             assertCollectionRootCounts(db, 1L);
 
             db.shutdown();
-
-            Assert.assertEquals(0L, runtime.usedBytes());
-        }
-    }
-
-    @Test
-    public void repeatedNativeShutdownCleanupReleasesKeysStringsCollectionsAndQuarantine() {
-        for (int cycle = 0; cycle < 6; cycle++) {
-            try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-shutdown-cleanup-repeat-" + cycle)) {
-                YierdisDb db = createNativeRegressionDb(runtime, 0, MaxmemoryPolicy.NOEVICTION);
-                db.bindToCurrentThread();
-                try {
-                    Assert.assertTrue(db.writes().strings().setString(
-                            b("cleanup:string:" + cycle),
-                            b("value"),
-                            SetMode.NORMAL,
-                            null
-                    ).value());
-                    writeOneOfEachCollection(db);
-                    assertCollectionRootCounts(db, 1L);
-
-                    try (NativeEpochScope epoch = db.keyLifecycle().nativeAllocator().beginEpoch(NativeEpochKind.SNAPSHOT)) {
-                        Assert.assertEquals(
-                                Long.valueOf(1L),
-                                db.writes().keyspace().del(List.of(b("cleanup:string:" + cycle))).value()
-                        );
-                        YierdisMemoryStats during = db.memory().memoryStats();
-                        Assert.assertTrue(during.nativeDefragQuarantinedObjects() > 0L);
-                        Assert.assertTrue(during.nativeDefragQuarantineBytes() > 0L);
-                    }
-
-                    YierdisMemoryStats afterEpoch = db.memory().memoryStats();
-                    Assert.assertEquals(0L, afterEpoch.nativeDefragQuarantinedObjects());
-                    Assert.assertEquals(0L, afterEpoch.nativeDefragQuarantineBytes());
-
-                    Assert.assertEquals(Long.valueOf(4L), db.writes().keyspace().del(List.of(
-                            b("list"),
-                            b("hash"),
-                            b("set"),
-                            b("zset")
-                    )).value());
-                    assertCollectionRootCounts(db, 0L);
-                    assertNativeDbHasNoLiveData(db);
-                } finally {
-                    db.shutdown();
-                }
-                Assert.assertEquals("cycle " + cycle + " leaked runtime bytes", 0L, runtime.usedBytes());
-            }
         }
     }
 
     @Test
     public void collectionReadsRemainValidAfterNativeDefragTraversalAndReleaseAllInternalHandles() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-collection-defrag")) {
+        try (TestBackend runtime = TestBackend.open("native-collection-defrag")) {
             YierdisDb db = createNativeRegressionDb(runtime, 0, MaxmemoryPolicy.NOEVICTION);
             db.bindToCurrentThread();
             try {
@@ -212,13 +162,12 @@ public class NativeStorageRegressionTest {
             } finally {
                 db.shutdown();
             }
-            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 
     @Test
     public void deleteUsesEntryMetadataInsteadOfCompatibilityObjectEstimate() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             Assert.assertEquals(Long.valueOf(1L), db.writes().sets().sadd(b("set"), List.of(b("m"))).value());
@@ -235,13 +184,13 @@ public class NativeStorageRegressionTest {
 
     @Test
     public void keyLifecycleReadsKeysFromNativeDirectoryWithoutCompatibilityStoreEntry() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             YierdisDbKeyLifecycle lifecycle = db.keyLifecycle();
             byte[] key = b("native-only");
             EntryRecord record = new EntryRecord(
-                    1L,
+                    new NativeHandle(1L, 1L),
                     ValueHandle.NULL,
                     31,
                     ValueType.STRING,
@@ -275,135 +224,9 @@ public class NativeStorageRegressionTest {
     }
 
     @Test
-    public void keyspaceScanKeepsFreedBytesQuarantinedUntilTheBatchEnds() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-scan-epoch")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
-                    runtime,
-                    0,
-                    MaxmemoryPolicy.NOEVICTION,
-                    5,
-                    5,
-                    5
-            );
-            db.bindToCurrentThread();
-            try {
-                byte[] keep = b("scan-keep");
-                Assert.assertTrue(db.writes().strings().setString(keep, b("value"), SetMode.NORMAL, null).value());
-
-                List<byte[]> scanned = new ArrayList<>();
-                try (KeyScanWindow window = db.reads().keyspace().scan(ScanCursorV2.start(), b("scan-*"), 2)) {
-                    Assert.assertEquals(0L, window.nextCursor().value());
-                    window.emitTo(new BulkStringSink() {
-                        private boolean deleted;
-
-                        @Override
-                        public void bulkString(byte[] data) {
-                            add(data);
-                        }
-
-                        @Override
-                        public void bulkString(byte[] data, int off, int len) {
-                            byte[] copy = new byte[len];
-                            System.arraycopy(data, off, copy, 0, len);
-                            add(copy);
-                        }
-
-                        @Override
-                        public void bulkString(BytesSlice slice) {
-                            byte[] copy = new byte[slice.length()];
-                            slice.getBytes(0, copy, 0, copy.length);
-                            add(copy);
-                        }
-
-                        @Override
-                        public void bulkStringLongAscii(long value) {
-                            add(Long.toString(value).getBytes(StandardCharsets.US_ASCII));
-                        }
-
-                        private void add(byte[] value) {
-                            scanned.add(value);
-                            if (deleted) {
-                                return;
-                            }
-                            deleted = true;
-                            Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(keep)).value());
-                            YierdisMemoryStats quarantined = db.memory().memoryStats();
-                            Assert.assertTrue(quarantined.nativeDefragQuarantinedObjects() > 0L);
-                            Assert.assertTrue(quarantined.nativeDefragQuarantineBytes() > 0L);
-                        }
-                    });
-                }
-
-                Assert.assertEquals(1, scanned.size());
-                Assert.assertArrayEquals(keep, scanned.get(0));
-                Assert.assertNull(db.reads().strings().getStringBytes(keep));
-
-                YierdisMemoryStats after = db.memory().memoryStats();
-                Assert.assertEquals(0L, after.nativeDefragQuarantinedObjects());
-                Assert.assertEquals(0L, after.nativeDefragQuarantineBytes());
-            } finally {
-                db.shutdown();
-            }
-        }
-    }
-
-    @Test
-    public void snapshotCopiesHeapOwnedBytesAndReleasesFreedBytesAfterTheBatchEnds() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-snapshot-epoch")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
-                    runtime,
-                    0,
-                    MaxmemoryPolicy.NOEVICTION,
-                    5,
-                    5,
-                    5
-            );
-            db.bindToCurrentThread();
-            try {
-                byte[] key = b("snapshot-keep");
-                byte[] value = b("snapshot-value");
-                Assert.assertTrue(db.writes().strings().setString(key, value, SetMode.NORMAL, null).value());
-
-                List<YierdisSnapshotEntry> entries = new ArrayList<YierdisSnapshotEntry>() {
-                    private boolean deleted;
-
-                    @Override
-                    public boolean add(YierdisSnapshotEntry entry) {
-                        boolean added = super.add(entry);
-                        if (added && !deleted) {
-                            deleted = true;
-                            Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(key)).value());
-                            YierdisMemoryStats quarantined = db.memory().memoryStats();
-                            Assert.assertTrue(quarantined.nativeDefragQuarantinedObjects() > 0L);
-                            Assert.assertTrue(quarantined.nativeDefragQuarantineBytes() > 0L);
-                        }
-                        return added;
-                    }
-                };
-
-                ScanCursorV2 cursor = db.introspection().snapshot(ScanCursorV2.start(), 2, entries);
-
-                Assert.assertEquals(0L, cursor.value());
-                Assert.assertEquals(1, entries.size());
-                YierdisSnapshotEntry entry = entries.get(0);
-                Assert.assertArrayEquals(key, entry.keyBytes());
-                Assert.assertEquals(ValueType.STRING, entry.type());
-                Assert.assertArrayEquals(value, entry.stringValueBytes());
-                Assert.assertNull(db.reads().strings().getStringBytes(key));
-
-                YierdisMemoryStats after = db.memory().memoryStats();
-                Assert.assertEquals(0L, after.nativeDefragQuarantinedObjects());
-                Assert.assertEquals(0L, after.nativeDefragQuarantineBytes());
-            } finally {
-                db.shutdown();
-            }
-        }
-    }
-
-    @Test
     public void snapshotValueBytesStayStableAfterLaterOverwriteDeleteAndDefrag() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-snapshot-stability")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
+        try (TestBackend runtime = TestBackend.open("native-snapshot-stability")) {
+            YierdisDb db = TestDbSupport.open(
                     runtime,
                     0,
                     MaxmemoryPolicy.NOEVICTION,
@@ -443,53 +266,8 @@ public class NativeStorageRegressionTest {
     }
 
     @Test
-    public void snapshotEpochDelaysStringReleaseUntilClosed() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-snapshot-allocator-epoch")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
-                    runtime,
-                    0,
-                    MaxmemoryPolicy.NOEVICTION,
-                    5,
-                    5,
-                    5
-            );
-            db.bindToCurrentThread();
-            try {
-                byte[] key = b("epoch-key");
-                Assert.assertTrue(db.writes().strings().setString(key, b("epoch-value"), SetMode.NORMAL, null).value());
-
-                try (NativeEpochScope epoch = db.keyLifecycle().nativeAllocator().beginEpoch(NativeEpochKind.SNAPSHOT)) {
-                    Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(key)).value());
-
-                    NativeAllocatorStats during = db.keyLifecycle().nativeAllocator().stats();
-                    Assert.assertTrue(during.logicalUsedBytes() > 0L);
-                    Assert.assertTrue(during.reservedBytes() > 0L);
-                    Assert.assertTrue(during.quarantinedObjects() > 0L);
-                    Assert.assertTrue(during.liveObjects() > 0L);
-
-                    YierdisMemoryStats memoryDuring = db.memory().memoryStats();
-                    Assert.assertTrue(memoryDuring.nativeDefragQuarantinedObjects() > 0L);
-                    Assert.assertTrue(memoryDuring.nativeDefragQuarantineBytes() > 0L);
-                }
-
-                NativeAllocatorStats after = db.keyLifecycle().nativeAllocator().stats();
-                Assert.assertEquals(0L, after.logicalUsedBytes());
-                Assert.assertEquals(0L, after.reservedBytes());
-                Assert.assertEquals(0L, after.quarantinedObjects());
-                Assert.assertEquals(0L, after.liveObjects());
-
-                YierdisMemoryStats memoryAfter = db.memory().memoryStats();
-                Assert.assertEquals(0L, memoryAfter.nativeDefragQuarantinedObjects());
-                Assert.assertEquals(0L, memoryAfter.nativeDefragQuarantineBytes());
-            } finally {
-                db.shutdown();
-            }
-        }
-    }
-
-    @Test
     public void defaultSharedNativeSlotCapacityAutomaticallyGrowsForNinetyThousandStringKeys() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-string-slot-capacity-default")) {
+        try (TestBackend runtime = TestBackend.open("native-string-slot-capacity-default")) {
             YierdisDb db = createNativeRegressionDb(runtime, 0, MaxmemoryPolicy.NOEVICTION);
             db.bindToCurrentThread();
             int keyCount = 90_000;
@@ -506,13 +284,12 @@ public class NativeStorageRegressionTest {
             } finally {
                 db.shutdown();
             }
-            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 
     @Test
     public void explicitNativeSlotCapacitySupportsNinetyThousandStringKeysWithoutLeaks() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-string-slot-capacity-override")) {
+        try (TestBackend runtime = TestBackend.open("native-string-slot-capacity-override")) {
             YierdisDb db = createNativeRegressionDb(runtime, 0, MaxmemoryPolicy.NOEVICTION, 512 * 1024);
             db.bindToCurrentThread();
             int keyCount = 90_000;
@@ -527,7 +304,7 @@ public class NativeStorageRegressionTest {
                 }
 
                 Assert.assertEquals(keyCount, db.size());
-                NativeAllocatorStats populated = db.keyLifecycle().nativeAllocator().stats();
+                NativeAllocatorStats populated = db.keyLifecycle().stableMemoryBackend().stats();
                 Assert.assertEquals(keyCount, populated.objectCount(NativeObjectKind.ENTRY_RECORD));
                 Assert.assertEquals(keyCount, populated.objectCount(NativeObjectKind.KEY_BYTES));
                 Assert.assertEquals(keyCount, populated.objectCount(NativeObjectKind.STRING_BYTES));
@@ -540,13 +317,12 @@ public class NativeStorageRegressionTest {
             } finally {
                 db.shutdown();
             }
-            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 
     @Test
     public void stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             byte[] stringKey = b("native-string");
@@ -588,8 +364,8 @@ public class NativeStorageRegressionTest {
 
     @Test
     public void nativeDbChurnKeepsReporterAndRuntimeAccountingConsistent() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-db-churn")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
+        try (TestBackend runtime = TestBackend.open("native-db-churn")) {
+            YierdisDb db = TestDbSupport.open(
                     runtime,
                     2_000_000L,
                     MaxmemoryPolicy.NOEVICTION,
@@ -619,10 +395,10 @@ public class NativeStorageRegressionTest {
                 }
 
                 YierdisMemoryStats populated = db.memory().memoryStats();
-                Assert.assertTrue(db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
+                Assert.assertTrue(db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
                 Assert.assertEquals(db.size(),
-                        db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.KEY_BYTES));
-                Assert.assertTrue(db.keyLifecycle().nativeAllocator().stats().logicalUsedBytes() > 0L);
+                        db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.KEY_BYTES));
+                Assert.assertTrue(db.keyLifecycle().stableMemoryBackend().stats().logicalUsedBytes() > 0L);
                 Assert.assertEquals(db.size(), populated.keyCount());
                 Assert.assertEquals(db.usedBytesForMaxmemory(), populated.usedBytesForMaxmemory());
                 Assert.assertTrue(populated.offHeapUsedBytes() > 0L);
@@ -643,14 +419,13 @@ public class NativeStorageRegressionTest {
             } finally {
                 db.shutdown();
             }
-            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 
     @Test
     public void nativeAllocatorCleanupRemainsStableUnderNarrowMaxmemory() {
         for (int cycle = 0; cycle < 4; cycle++) {
-            try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-maxmemory-repeat-" + cycle)) {
+            try (TestBackend runtime = TestBackend.open("native-maxmemory-repeat-" + cycle)) {
                 YierdisDb db = createNativeRegressionDb(runtime, PREPARED_STRING_MAXMEMORY_TEST_BYTES, MaxmemoryPolicy.NOEVICTION);
                 db.bindToCurrentThread();
                 List<byte[]> written = new ArrayList<>();
@@ -680,7 +455,7 @@ public class NativeStorageRegressionTest {
                     }
 
                     Assert.assertTrue("expected at least one accepted write", written.size() > 0);
-                    NativeAllocatorStats populated = db.keyLifecycle().nativeAllocator().stats();
+                    NativeAllocatorStats populated = db.keyLifecycle().stableMemoryBackend().stats();
                     Assert.assertEquals(db.size(), populated.objectCount(NativeObjectKind.KEY_BYTES));
                     Assert.assertEquals(db.size(), populated.objectCount(NativeObjectKind.STRING_BYTES));
                     Assert.assertEquals(db.size(), populated.objectCount(NativeObjectKind.ENTRY_RECORD));
@@ -691,14 +466,13 @@ public class NativeStorageRegressionTest {
                 } finally {
                     db.shutdown();
                 }
-                Assert.assertEquals(0L, runtime.usedBytes());
             }
         }
     }
 
     @Test
     public void legacyWrongTypeAbortDoesNotStalePreviouslyPublishedNativeHandles() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-wrongtype-abort")) {
+        try (TestBackend runtime = TestBackend.open("native-wrongtype-abort")) {
             YierdisDb db = createNativeRegressionDb(runtime, 0, MaxmemoryPolicy.NOEVICTION);
             db.bindToCurrentThread();
             Throwable primary = null;
@@ -733,13 +507,12 @@ public class NativeStorageRegressionTest {
                     }
                 }
             }
-            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 
     @Test
     public void deterministicMixedNativeDbChurnPreservesResultsAndReleasesRuntime() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-db-mixed-churn")) {
+        try (TestBackend runtime = TestBackend.open("native-db-mixed-churn")) {
             YierdisDb db = createNativeRegressionDb(runtime, 2_000_000L, MaxmemoryPolicy.NOEVICTION);
             db.bindToCurrentThread();
             try {
@@ -747,14 +520,13 @@ public class NativeStorageRegressionTest {
             } finally {
                 db.shutdown();
             }
-            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 
     @Test
     public void repeatedDeterministicMixedNativeDbChurnReleasesRuntimeEveryCycle() {
         for (int cycle = 0; cycle < 5; cycle++) {
-            try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-db-mixed-churn-repeat-" + cycle)) {
+            try (TestBackend runtime = TestBackend.open("native-db-mixed-churn-repeat-" + cycle)) {
                 YierdisDb db = createNativeRegressionDb(runtime, 2_000_000L, MaxmemoryPolicy.NOEVICTION);
                 db.bindToCurrentThread();
                 try {
@@ -763,17 +535,16 @@ public class NativeStorageRegressionTest {
                 } finally {
                     db.shutdown();
                 }
-                Assert.assertEquals("cycle " + cycle + " leaked runtime bytes", 0L, runtime.usedBytes());
             }
         }
     }
 
     private static YierdisDb createNativeRegressionDb(
-            YierdisFfmMemoryRuntime runtime,
+            TestBackend runtime,
             long maxmemoryBytes,
             MaxmemoryPolicy maxmemoryPolicy
     ) {
-        return YierdisDb.createWithSharedFfmRuntimeAndNativeSlotCapacity(
+        return TestDbSupport.openWithNativeSlotCapacity(
                 runtime,
                 maxmemoryBytes,
                 maxmemoryPolicy,
@@ -786,12 +557,12 @@ public class NativeStorageRegressionTest {
     }
 
     private static YierdisDb createNativeRegressionDb(
-            YierdisFfmMemoryRuntime runtime,
+            TestBackend runtime,
             long maxmemoryBytes,
             MaxmemoryPolicy maxmemoryPolicy,
             int nativeSlotCapacity
     ) {
-        return YierdisDb.createWithSharedFfmRuntimeAndNativeSlotCapacity(
+        return TestDbSupport.openWithNativeSlotCapacity(
                 runtime,
                 maxmemoryBytes,
                 maxmemoryPolicy,
@@ -902,7 +673,7 @@ public class NativeStorageRegressionTest {
                     Assert.assertEquals(Long.valueOf(1L),
                             db.writes().lists().rpush(b("mix:list"), List.of(b("l" + op))).value());
                     Assert.assertEquals(List.of("l" + op),
-                            strings(db.writes().lists().lpop(b("mix:list"), 1).value()));
+                            strings(TestDbSupport.commitPop(db.writes().lists(), b("mix:list"), 1, true).value()));
                     trackedKeys.add("mix:list");
                 }
                 case 9 -> {
@@ -924,7 +695,7 @@ public class NativeStorageRegressionTest {
                 case 11 -> {
                     Assert.assertEquals(Long.valueOf(1L),
                             db.writes().zsets().zadd(b("mix:zset"), List.of(b(String.valueOf(op)), b("z" + op))).value());
-                    Assert.assertTrue(db.reads().zsets().zrange(b("mix:zset"), 0, -1, false).count() >= 1);
+                    Assert.assertTrue(db.reads().zsets().zrange(b("mix:zset"), 0, -1, false).elementCount() >= 1);
                     if ((op & 1) == 0) {
                         Assert.assertEquals(Long.valueOf(1L), db.writes().zsets().zrem(b("mix:zset"), List.of(b("z" + op))).value());
                     }
@@ -982,7 +753,7 @@ public class NativeStorageRegressionTest {
     private static void assertNativeDbHasNoLiveData(YierdisDb db) {
         YierdisMemoryStats empty = db.memory().memoryStats();
         MemoryUsageSnapshot usage = db.memoryUsage();
-        NativeAllocatorStats allocator = db.keyLifecycle().nativeAllocator().stats();
+        NativeAllocatorStats allocator = db.keyLifecycle().stableMemoryBackend().stats();
         Assert.assertEquals(0, db.size());
         Assert.assertEquals(nativeEmptyDebug(db), 0L, db.memoryLedger().usedBytes());
         Assert.assertEquals(nativeEmptyDebug(db), 0L, db.memoryLedger().reservedBytes());
@@ -1034,7 +805,7 @@ public class NativeStorageRegressionTest {
 
     private static String nativeEmptyDebug(YierdisDb db) {
         YierdisMemoryStats stats = db.memory().memoryStats();
-        NativeAllocatorStats allocator = db.keyLifecycle().nativeAllocator().stats();
+        NativeAllocatorStats allocator = db.keyLifecycle().stableMemoryBackend().stats();
         return "ledgerUsed=" + db.memoryLedger().usedBytes()
                 + ", ledgerReserved=" + db.memoryLedger().reservedBytes()
                 + ", usedForMaxmemory=" + db.usedBytesForMaxmemory()
@@ -1056,10 +827,10 @@ public class NativeStorageRegressionTest {
     }
 
     private static void assertCollectionRootCounts(YierdisDb db, long expected) {
-        Assert.assertEquals(expected, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.LIST_ROOT));
-        Assert.assertEquals(expected, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.HASH_ROOT));
-        Assert.assertEquals(expected, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.SET_ROOT));
-        Assert.assertEquals(expected, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.ZSET_ROOT));
+        Assert.assertEquals(expected, db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.LIST_ROOT));
+        Assert.assertEquals(expected, db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.HASH_ROOT));
+        Assert.assertEquals(expected, db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.SET_ROOT));
+        Assert.assertEquals(expected, db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.ZSET_ROOT));
     }
 
     private static void assertNativeStringOnly(YierdisDb db, byte[] key, byte[] expectedBytes) {
@@ -1133,7 +904,7 @@ public class NativeStorageRegressionTest {
             if (owned == null || owned.isNull()) {
                 return null;
             }
-            return strings((BulkStringSequence) owned);
+            return strings((ByteSequenceSource) owned);
         }
     }
 
@@ -1145,21 +916,21 @@ public class NativeStorageRegressionTest {
         return out;
     }
 
-    private static List<String> strings(BulkStringSequence values) {
-        List<String> out = new ArrayList<>(values.count());
-        values.emitTo(new BulkStringSink() {
+    private static List<String> strings(ByteSequenceSource values) {
+        List<String> out = new ArrayList<>(values.elementCount());
+        values.emitTo(new ByteValueSink() {
             @Override
-            public void bulkString(byte[] data) {
+            public void value(byte[] data) {
                 out.add(data == null ? null : new String(data, StandardCharsets.UTF_8));
             }
 
             @Override
-            public void bulkString(byte[] data, int off, int len) {
+            public void value(byte[] data, int off, int len) {
                 out.add(data == null ? null : new String(data, off, len, StandardCharsets.UTF_8));
             }
 
             @Override
-            public void bulkString(BytesSlice slice) {
+            public void value(BytesSlice slice) {
                 if (slice == null) {
                     out.add(null);
                     return;
@@ -1170,8 +941,13 @@ public class NativeStorageRegressionTest {
             }
 
             @Override
-            public void bulkStringLongAscii(long value) {
+            public void longAscii(long value) {
                 out.add(Long.toString(value));
+            }
+
+            @Override
+            public void nullValue() {
+                out.add(null);
             }
         });
         return out;

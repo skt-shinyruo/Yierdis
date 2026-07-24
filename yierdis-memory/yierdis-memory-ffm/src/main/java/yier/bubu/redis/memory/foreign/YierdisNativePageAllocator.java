@@ -5,7 +5,7 @@ import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.common.memory.MemoryReclaimResult;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 
-public final class YierdisNativePageAllocator
+final class YierdisNativePageAllocator
         implements AutoCloseable, YierdisNativeObjectTable.CapacityResolver {
     public static final int PAGE_BYTES = 64 * 1024;
     private static final int MEDIUM_MAX_BYTES = 1024 * 1024;

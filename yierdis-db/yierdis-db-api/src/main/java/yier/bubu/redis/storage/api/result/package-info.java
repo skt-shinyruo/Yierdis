@@ -1,13 +1,5 @@
 /**
- * Storage result API audience classification owned by {@code yierdis-db-api}.
- *
- * <ul>
- *     <li>BulkStringSink - API. Audience: storage implementations, command reply adapters, tests.</li>
- *     <li>BulkStringSequence - API. Audience: collection read operations and command reply adapters.</li>
- *     <li>BulkStringSequences - API. Audience: convenience factories for collection read results.</li>
- *     <li>BulkStringMapPairs - API. Audience: hash read operations and command reply adapters.</li>
- *     <li>BulkStringMapPairsSupport - API. Audience: convenience factories for hash read results.</li>
- *     <li>BulkStringValue - API. Audience: string read operations and command reply adapters.</li>
- * </ul>
+ * 存储结果只描述字节值、顺序和生命周期，不携带具体网络协议的帧格式或编码字节数。
+ * 标量、序列和映射结果均由调用方负责关闭，命令层可据此构造协议无关的回复形状。
  */
 package yier.bubu.redis.storage.api.result;

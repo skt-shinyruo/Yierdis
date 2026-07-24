@@ -3,7 +3,7 @@ package yier.bubu.redis.memory.foreign;
 import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 
-public final class YierdisFfmAccess {
+final class YierdisFfmAccess {
     private YierdisFfmAccess() {
     }
 

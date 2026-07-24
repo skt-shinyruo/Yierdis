@@ -181,6 +181,55 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
+    public void ffmModuleExposesOnlyStableBackendFacade() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("unable to resolve repository root", repoRoot);
+        Path ffmSources = repoRoot.resolve(
+                "yierdis-memory/yierdis-memory-ffm/src/main/java/"
+                        + "yier/bubu/redis/memory/foreign"
+        );
+        Pattern declaration = Pattern.compile(
+                "(?s)\\bpublic\\s+(?:(?:abstract|final|sealed|non-sealed|strictfp)\\s+)*"
+                        + "(?:class|interface|@interface|enum|record)\\s+"
+                        + "([A-Za-z][A-Za-z0-9_]*)\\b"
+        );
+        List<String> publicTypes = new ArrayList<>();
+        try (Stream<Path> files = Files.walk(ffmSources)) {
+            for (Path file : files.filter(path -> path.toString().endsWith(".java")).toList()) {
+                String source = stripJavaCommentsAndLiterals(
+                        Files.readString(file, StandardCharsets.UTF_8)
+                );
+                var matcher = declaration.matcher(source);
+                while (matcher.find()) {
+                    publicTypes.add(matcher.group(1));
+                }
+            }
+        }
+        publicTypes.sort(String::compareTo);
+
+        Assert.assertEquals(List.of("YierdisFfmStableMemoryBackend"), publicTypes);
+    }
+
+    @Test
+    public void storageCompositionPomsDeclareMemoryDependenciesDirectly() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("cannot locate repository root", repoRoot);
+        Path dbMemoryPom = repoRoot.resolve("yierdis-db/yierdis-db-memory/pom.xml");
+        Path serverMainPom = repoRoot.resolve("yierdis-server/yierdis-server-main/pom.xml");
+        Path integrationPom = repoRoot.resolve("yierdis-tests/yierdis-integration-tests/pom.xml");
+        Path benchmarkPom = repoRoot.resolve("yierdis-benchmark/pom.xml");
+
+        assertDirectDependency(dbMemoryPom, "yierdis-memory-api", "compile");
+        Assert.assertNull(directDependencyScope(dbMemoryPom, "yierdis-memory-ffm"));
+        assertDirectDependency(serverMainPom, "yierdis-memory-api", "compile");
+        assertDirectDependency(serverMainPom, "yierdis-memory-ffm", "compile");
+        assertDirectDependency(integrationPom, "yierdis-memory-api", "test");
+        assertDirectDependency(integrationPom, "yierdis-memory-ffm", "test");
+        assertDirectDependency(benchmarkPom, "yierdis-memory-api", "compile");
+        assertDirectDependency(benchmarkPom, "yierdis-memory-ffm", "compile");
+    }
+
+    @Test
     public void dbOpsAndCoreCommandMustNotImportProtocolModel() throws IOException {
         List<String> offenders = new ArrayList<>();
         Path repoRoot = resolveRepoRoot();
@@ -2099,7 +2148,6 @@ public class ArchitectureBoundaryTest {
         for (String dependency : List.of(
                 "yierdis-db-api",
                 "yierdis-common-bytes",
-                "yierdis-memory-ffm",
                 "yierdis-memory-api"
         )) {
             Assert.assertTrue(
@@ -3700,14 +3748,7 @@ public class ArchitectureBoundaryTest {
 
     private static List<String> pomProductionDependencyArtifactIds(Path pom) throws IOException {
         Assert.assertTrue("缺少 pom.xml: " + pom, Files.isRegularFile(pom));
-        Document document;
-        try (InputStream in = Files.newInputStream(pom)) {
-            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-            factory.setNamespaceAware(true);
-            document = factory.newDocumentBuilder().parse(in);
-        } catch (Exception e) {
-            throw new IOException("failed to parse pom.xml: " + pom, e);
-        }
+        Document document = parsePom(pom);
 
         List<String> artifactIds = new ArrayList<>();
         for (Element dependencies : childElements(document.getDocumentElement(), "dependencies")) {
@@ -3720,6 +3761,40 @@ public class ArchitectureBoundaryTest {
             }
         }
         return artifactIds;
+    }
+
+    private static Document parsePom(Path pom) throws IOException {
+        try (InputStream in = Files.newInputStream(pom)) {
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(true);
+            return factory.newDocumentBuilder().parse(in);
+        } catch (Exception e) {
+            throw new IOException("failed to parse pom.xml: " + pom, e);
+        }
+    }
+
+    private static String directDependencyScope(Path pom, String artifactId) throws IOException {
+        Document document = parsePom(pom);
+        Element project = document.getDocumentElement();
+        Element dependencies = childElements(project, "dependencies").stream()
+                .findFirst()
+                .orElse(null);
+        if (dependencies == null) {
+            return null;
+        }
+        for (Element dependency : childElements(dependencies, "dependency")) {
+            if (artifactId.equals(directChildText(dependency, "artifactId"))) {
+                String scope = directChildText(dependency, "scope");
+                return scope == null || scope.isBlank() ? "compile" : scope;
+            }
+        }
+        return null;
+    }
+
+    private static void assertDirectDependency(Path pom, String artifactId, String scope)
+            throws IOException {
+        Assert.assertEquals(pom + " -> " + artifactId, scope,
+                directDependencyScope(pom, artifactId));
     }
 
     private static List<Element> childElements(Element parent, String localName) {
@@ -3765,6 +3840,13 @@ public class ArchitectureBoundaryTest {
 
     private static boolean isUnder(Path file, Path root) {
         return file != null && root != null && file.normalize().startsWith(root.normalize());
+    }
+
+    private static String stripJavaCommentsAndLiterals(String source) {
+        return source.replaceAll(
+                "(?s)/\\*.*?\\*/|//[^\\r\\n]*|\\\"(?:\\\\.|[^\\\"\\\\])*\\\"|'(?:\\\\.|[^'\\\\])*'",
+                " "
+        );
     }
 
     private static Path resolveRepoRoot() {

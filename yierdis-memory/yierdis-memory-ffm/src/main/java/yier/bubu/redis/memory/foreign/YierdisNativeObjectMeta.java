@@ -2,7 +2,7 @@ package yier.bubu.redis.memory.foreign;
 
 import yier.bubu.redis.memory.api.NativeHandleDomain;
 
-public record YierdisNativeObjectMeta(
+record YierdisNativeObjectMeta(
         long slotId,
         long address,
         int size,

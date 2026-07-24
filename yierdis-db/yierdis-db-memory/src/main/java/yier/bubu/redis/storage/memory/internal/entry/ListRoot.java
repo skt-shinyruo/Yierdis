@@ -1,10 +1,10 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.ValueType;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.memory.internal.value.ListValue;
 import yier.bubu.redis.storage.memory.internal.value.NativeListEntryRef;
 import yier.bubu.redis.storage.memory.internal.value.PreparedPoppedValueSequence;
@@ -18,7 +18,7 @@ public final class ListRoot implements TypeRoot {
     private final NativeCollectionRootTable<ListValue> lists;
     private boolean closed;
 
-    public ListRoot(NativeAllocator allocator) {
+    public ListRoot(StableMemoryBackend allocator) {
         this.lists = new NativeCollectionRootTable<>(
                 Objects.requireNonNull(allocator, "allocator"),
                 NativeObjectKind.LIST_ROOT,
@@ -27,7 +27,7 @@ public final class ListRoot implements TypeRoot {
         );
     }
 
-    NativeAllocator allocator() {
+    StableMemoryBackend allocator() {
         return lists.allocator();
     }
 
@@ -149,12 +149,12 @@ public final class ListRoot implements TypeRoot {
         return requireList(handle).rangeCount(start, stop);
     }
 
-    public synchronized void rangeInto(ValueHandle handle, int start, int stop, BulkStringSink out) {
+    public synchronized void rangeInto(ValueHandle handle, int start, int stop, ByteValueSink out) {
         ensureOpen();
         requireList(handle).rangeInto(start, stop, out);
     }
 
-    public synchronized void emitPopRange(ValueHandle handle, int count, boolean left, BulkStringSink out) {
+    public synchronized void emitPopRange(ValueHandle handle, int count, boolean left, ByteValueSink out) {
         ensureOpen();
         requireList(handle).emitPopRange(count, left, out);
     }
@@ -164,14 +164,9 @@ public final class ListRoot implements TypeRoot {
         return requireList(handle).popEntries(count, left);
     }
 
-    public synchronized long encodedPopElementBytes(ValueHandle handle, int count, boolean left) {
-        ensureOpen();
-        return requireList(handle).encodedPopElementBytes(count, left);
-    }
-
     public synchronized long retainedBytes(ValueHandle handle) {
         ensureOpen();
-        return Long.BYTES + requireList(handle).estimatedBytes();
+        return NativeStorageLayout.COLLECTION_ROOT_RECORD_BYTES + requireList(handle).estimatedBytes();
     }
 
     public synchronized int[] nativePayloadSizes(ValueHandle handle) {

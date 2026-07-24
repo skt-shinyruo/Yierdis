@@ -9,7 +9,7 @@ import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
 
-public final class YierdisNativeObjectTable implements AutoCloseable {
+final class YierdisNativeObjectTable implements AutoCloseable {
     static final int AUTOMATIC_MAX_SLOTS = Integer.MAX_VALUE;
 
     public static final int STATE_FREE = 0;
@@ -934,7 +934,7 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
     }
 
     @FunctionalInterface
-    public interface CapacityResolver {
+    interface CapacityResolver {
         int resolveCapacity(int pageId, int pageOffset, int pageClass);
     }
 

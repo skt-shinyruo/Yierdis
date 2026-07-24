@@ -2,14 +2,14 @@ package yier.bubu.redis.storage.api;
 
 // HashReadOps：hash 只读能力边界。
 
-import yier.bubu.redis.storage.api.result.BulkStringMapMetrics;
-import yier.bubu.redis.storage.api.result.BulkStringValue;
+import yier.bubu.redis.storage.api.result.ByteMapSource;
+import yier.bubu.redis.storage.api.result.ByteValue;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
 
 public interface HashReadOps {
-    BulkStringValue hget(byte[] keyBytes, byte[] fieldBytes);
+    ByteValue hget(byte[] keyBytes, byte[] fieldBytes);
 
-    BulkStringMapMetrics hgetall(byte[] keyBytes);
+    ByteMapSource hgetall(byte[] keyBytes);
 
     long hlen(byte[] keyBytes);
 

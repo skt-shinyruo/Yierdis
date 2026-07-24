@@ -1,11 +1,11 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
@@ -26,16 +26,16 @@ public final class ZSetRoot implements TypeRoot {
     private final HashTableMaintenanceRegistry maintenanceRegistry;
     private boolean closed;
 
-    public ZSetRoot(NativeAllocator allocator) {
+    public ZSetRoot(StableMemoryBackend allocator) {
         this(allocator, HashSeed.random());
     }
 
-    public ZSetRoot(NativeAllocator allocator, HashSeed hashSeed) {
+    public ZSetRoot(StableMemoryBackend allocator, HashSeed hashSeed) {
         this(allocator, hashSeed, null);
     }
 
     public ZSetRoot(
-            NativeAllocator allocator,
+            StableMemoryBackend allocator,
             HashSeed hashSeed,
             HashTableMaintenanceRegistry maintenanceRegistry
     ) {
@@ -49,7 +49,7 @@ public final class ZSetRoot implements TypeRoot {
         );
     }
 
-    NativeAllocator allocator() {
+    StableMemoryBackend allocator() {
         return zsets.allocator();
     }
 
@@ -319,7 +319,7 @@ public final class ZSetRoot implements TypeRoot {
         return requireZSet(handle).zrange(start, stop, withScores);
     }
 
-    public synchronized void zrangeWriteTo(ValueHandle handle, long start, long stop, boolean withScores, BulkStringSink out) {
+    public synchronized void zrangeWriteTo(ValueHandle handle, long start, long stop, boolean withScores, ByteValueSink out) {
         ensureOpen();
         requireZSet(handle).zrangeWriteTo(start, stop, withScores, out);
     }
@@ -339,7 +339,7 @@ public final class ZSetRoot implements TypeRoot {
         return requireZSet(handle).zrevrangeCount(start, stop, withScores);
     }
 
-    public synchronized void zrevrangeWriteTo(ValueHandle handle, long start, long stop, boolean withScores, BulkStringSink out) {
+    public synchronized void zrevrangeWriteTo(ValueHandle handle, long start, long stop, boolean withScores, ByteValueSink out) {
         ensureOpen();
         requireZSet(handle).zrevrangeWriteTo(start, stop, withScores, out);
     }
@@ -367,7 +367,7 @@ public final class ZSetRoot implements TypeRoot {
             boolean withScores,
             long offset,
             long count,
-            BulkStringSink out
+            ByteValueSink out
     ) {
         ensureOpen();
         requireZSet(handle).zrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
@@ -396,7 +396,7 @@ public final class ZSetRoot implements TypeRoot {
             boolean withScores,
             long offset,
             long count,
-            BulkStringSink out
+            ByteValueSink out
     ) {
         ensureOpen();
         requireZSet(handle).zrevrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, out);

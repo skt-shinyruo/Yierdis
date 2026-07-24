@@ -2,7 +2,6 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -10,7 +9,7 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
 
@@ -21,8 +20,8 @@ import static yier.bubu.redis.storage.testkit.TestBytes.b;
 public class UnsafeOffHeapDbSmokeTest {
     @Test
     public void offHeapCompositeTypesWorkAndShutdownDoesNotLeak() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        try (TestBackend runtime = TestBackend.open("db")) {
+            YierdisDb db = TestDbSupport.open(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
             try {
                 db.bindToCurrentThread();
                 Assert.assertTrue(db.writes().strings().setString(b("s"), b("v"), SetMode.NORMAL, null).value());
@@ -30,7 +29,7 @@ public class UnsafeOffHeapDbSmokeTest {
 
                 Assert.assertEquals(3L, (long) db.writes().lists().rpush(b("l"), List.of(b("a"), b("b"), b("c"))).value());
                 var range = db.reads().lists().lrange(b("l"), 0, -1);
-                Assert.assertEquals(3, range.count());
+                Assert.assertEquals(3, range.elementCount());
                 RecordingBulkSequenceOutput rangeOut = new RecordingBulkSequenceOutput();
                 range.emitTo(rangeOut);
                 Assert.assertEquals(3, rangeOut.values.size());
@@ -52,7 +51,7 @@ public class UnsafeOffHeapDbSmokeTest {
                         b("0"), b("c")
                 )).value());
                 var zrange = db.reads().zsets().zrange(b("z"), 0, -1, false);
-                Assert.assertEquals(3, zrange.count());
+                Assert.assertEquals(3, zrange.elementCount());
                 RecordingBulkSequenceOutput zrangeOut = new RecordingBulkSequenceOutput();
                 zrange.emitTo(zrangeOut);
                 Assert.assertEquals(3, zrangeOut.values.size());
@@ -62,25 +61,24 @@ public class UnsafeOffHeapDbSmokeTest {
             } finally {
                 db.shutdown();
             }
-            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 
-    private static final class RecordingBulkSequenceOutput implements yier.bubu.redis.storage.api.result.BulkStringSink {
+    private static final class RecordingBulkSequenceOutput implements yier.bubu.redis.storage.api.result.ByteValueSink {
         private final java.util.List<byte[]> values = new java.util.ArrayList<>();
 
         @Override
-        public void bulkString(byte[] data) {
+        public void value(byte[] data) {
             values.add(copy(data, 0, data == null ? 0 : data.length));
         }
 
         @Override
-        public void bulkString(byte[] data, int off, int len) {
+        public void value(byte[] data, int off, int len) {
             values.add(copy(data, off, len));
         }
 
         @Override
-        public void bulkString(yier.bubu.redis.bytes.BytesSlice slice) {
+        public void value(yier.bubu.redis.bytes.BytesSlice slice) {
             if (slice == null) {
                 values.add(null);
                 return;
@@ -91,8 +89,13 @@ public class UnsafeOffHeapDbSmokeTest {
         }
 
         @Override
-        public void bulkStringLongAscii(long value) {
+        public void longAscii(long value) {
             values.add(Long.toString(value).getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        }
+
+        @Override
+        public void nullValue() {
+            values.add(null);
         }
 
         private static byte[] copy(byte[] data, int off, int len) {

@@ -1,62 +1,27 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
-import java.lang.reflect.Modifier;
-import java.util.Arrays;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeHandle;
-import yier.bubu.redis.memory.api.NativeObjectKind;
 
 public class EntryHandleContractTest {
     @Test
-    public void entryHandleInstanceTopologyIsPrimitive() {
-        Assert.assertTrue(Arrays.stream(EntryHandle.class.getDeclaredFields())
-                .filter(field -> !Modifier.isStatic(field.getModifiers()))
-                .allMatch(field -> field.getType().isPrimitive()));
-    }
+    public void entryHandleRetainsTheCompleteNativeHandle() {
+        NativeHandle nativeHandle = new NativeHandle(11L, 7L);
 
-    @Test
-    public void entryHandleWrapsProductionNativeHandle() {
-        NativeHandle nativeHandle = NativeHandle.of(
-                NativeObjectKind.ENTRY_RECORD.domain(),
-                NativeObjectKind.ENTRY_RECORD,
-                11L,
-                7,
-                0
-        );
-        EntryHandle handle = EntryHandle.fromNativeHandle(nativeHandle);
+        EntryHandle handle = new EntryHandle(nativeHandle);
 
-        Assert.assertEquals(nativeHandle.raw(), handle.raw());
         Assert.assertEquals(nativeHandle, handle.nativeHandle());
-        Assert.assertEquals(handle, EntryHandle.fromNativeHandle(nativeHandle));
-        Assert.assertEquals(handle, EntryHandle.fromRaw(nativeHandle.raw()));
-        Assert.assertNotEquals(
-                handle,
-                EntryHandle.fromNativeHandle(NativeHandle.of(
-                        NativeObjectKind.ENTRY_RECORD.domain(),
-                        NativeObjectKind.ENTRY_RECORD,
-                        12L,
-                        7,
-                        0
-                ))
-        );
+        Assert.assertEquals(handle, new EntryHandle(nativeHandle));
     }
 
     @Test
-    public void entryHandleRejectsWrongNativeDomainOrKind() {
-        NativeHandle wrong = NativeHandle.of(
-                NativeObjectKind.STRING_BYTES.domain(),
-                NativeObjectKind.STRING_BYTES,
-                1L,
-                1,
-                0
-        );
+    public void entryHandlesDoNotAliasEqualLocalRawValuesFromDifferentBackends() {
+        EntryHandle left = new EntryHandle(new NativeHandle(11L, 1L));
+        EntryHandle right = new EntryHandle(new NativeHandle(12L, 1L));
 
-        try {
-            EntryHandle.fromNativeHandle(wrong);
-            Assert.fail("expected wrong entry handle kind rejection");
-        } catch (IllegalArgumentException expected) {
-            Assert.assertTrue(expected.getMessage().contains("ENTRY_RECORD"));
-        }
+        Assert.assertNotEquals(left, right);
+        Assert.assertEquals(left.nativeHandle().localRaw(), right.nativeHandle().localRaw());
+        Assert.assertNotEquals(left.nativeHandle().allocatorId(), right.nativeHandle().allocatorId());
     }
 }

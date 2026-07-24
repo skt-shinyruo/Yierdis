@@ -5,11 +5,10 @@ import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
+import yier.bubu.redis.storage.memory.TestBackend;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -17,8 +16,8 @@ import java.nio.charset.StandardCharsets;
 public class NativeByteStoreTest {
     @Test
     public void storesComparesStreamsAndReleasesNativeBytes() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-byte-store");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-byte-store");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.HASH_VALUE_BYTES);
             NativeHandle handle = store.store(bytes("abc"));
 
@@ -41,8 +40,8 @@ public class NativeByteStoreTest {
 
     @Test
     public void storesEmptyBytesAsNativeHandle() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-byte-store-empty");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("native-byte-store-empty");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.HASH_VALUE_BYTES);
             NativeHandle handle = store.store(new byte[0], NativeObjectKind.HASH_FIELD_BYTES);
 

@@ -1,57 +1,58 @@
 package yier.bubu.redis.storage.memory.internal.value;
 
-import java.util.function.LongConsumer;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import java.util.function.Consumer;
+import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 
-final class NativeRawHandleSet {
+final class NativeHandleSet {
     private static final int MAX_CAPACITY = 1 << 30;
 
-    private final long[] table;
+    private final NativeHandle[] table;
     private int size;
 
-    NativeRawHandleSet(int expectedHandles) {
+    NativeHandleSet(int expectedHandles) {
         if (expectedHandles < 0) {
             throw new IllegalArgumentException("expectedHandles must be >= 0");
         }
-        this.table = expectedHandles == 0 ? new long[0] : new long[capacity(expectedHandles)];
+        this.table = expectedHandles == 0 ? new NativeHandle[0] : new NativeHandle[capacity(expectedHandles)];
     }
 
-    boolean add(long rawHandle) {
-        if (rawHandle == 0L) {
-            throw new IllegalArgumentException("rawHandle must not be null");
+    boolean add(NativeHandle handle) {
+        if (handle == null || handle.isNull()) {
+            throw new IllegalArgumentException("native handle must not be null");
         }
         if (table.length == 0) {
-            throw new IllegalStateException("native raw handle set has zero capacity");
+            throw new IllegalStateException("native handle set has zero capacity");
         }
-        int slot = slot(rawHandle);
+        int slot = slot(handle);
         int mask = table.length - 1;
         for (int probes = 0; probes < table.length; probes++) {
-            long current = table[slot];
-            if (current == 0L) {
-                table[slot] = rawHandle;
+            NativeHandle current = table[slot];
+            if (current == null) {
+                table[slot] = handle;
                 size++;
                 return true;
             }
-            if (current == rawHandle) {
+            if (current.equals(handle)) {
                 return false;
             }
             slot = (slot + 1) & mask;
         }
-        throw new IllegalStateException("native raw handle set capacity exceeded");
+        throw new IllegalStateException("native handle set capacity exceeded");
     }
 
-    boolean contains(long rawHandle) {
-        if (rawHandle == 0L || table.length == 0) {
+    boolean contains(NativeHandle handle) {
+        if (handle == null || handle.isNull() || table.length == 0) {
             return false;
         }
-        int slot = slot(rawHandle);
+        int slot = slot(handle);
         int mask = table.length - 1;
         for (int probes = 0; probes < table.length; probes++) {
-            long current = table[slot];
-            if (current == 0L) {
+            NativeHandle current = table[slot];
+            if (current == null) {
                 return false;
             }
-            if (current == rawHandle) {
+            if (current.equals(handle)) {
                 return true;
             }
             slot = (slot + 1) & mask;
@@ -63,31 +64,31 @@ final class NativeRawHandleSet {
         return size;
     }
 
-    void forEach(LongConsumer consumer) {
-        for (long rawHandle : table) {
-            if (rawHandle != 0L) {
-                consumer.accept(rawHandle);
+    void forEach(Consumer<NativeHandle> consumer) {
+        for (NativeHandle handle : table) {
+            if (handle != null) {
+                consumer.accept(handle);
             }
         }
     }
 
-    void pinAll(NativeAllocator allocator) {
+    void pinAll(StableMemoryBackend allocator) {
         int tableIndex = 0;
         try {
             for (; tableIndex < table.length; tableIndex++) {
-                long rawHandle = table[tableIndex];
-                if (rawHandle != 0L) {
-                    allocator.pinRaw(rawHandle);
+                NativeHandle handle = table[tableIndex];
+                if (handle != null) {
+                    allocator.pin(handle);
                 }
             }
         } catch (RuntimeException | Error failure) {
             for (int rollbackIndex = 0; rollbackIndex < tableIndex; rollbackIndex++) {
-                long rawHandle = table[rollbackIndex];
-                if (rawHandle == 0L) {
+                NativeHandle handle = table[rollbackIndex];
+                if (handle == null) {
                     continue;
                 }
                 try {
-                    allocator.unpinRaw(rawHandle);
+                    allocator.unpin(handle);
                 } catch (RuntimeException | Error unpinFailure) {
                     failure.addSuppressed(unpinFailure);
                 }
@@ -96,14 +97,14 @@ final class NativeRawHandleSet {
         }
     }
 
-    void unpinAll(NativeAllocator allocator) {
+    void unpinAll(StableMemoryBackend allocator) {
         Throwable failure = null;
-        for (long rawHandle : table) {
-            if (rawHandle == 0L) {
+        for (NativeHandle handle : table) {
+            if (handle == null) {
                 continue;
             }
             try {
-                allocator.unpinRaw(rawHandle);
+                allocator.unpin(handle);
             } catch (RuntimeException | Error next) {
                 failure = addFailure(failure, next);
             }
@@ -111,14 +112,14 @@ final class NativeRawHandleSet {
         rethrow(failure);
     }
 
-    void freeAll(NativeAllocator allocator) {
+    void freeAll(StableMemoryBackend allocator) {
         Throwable failure = null;
-        for (long rawHandle : table) {
-            if (rawHandle == 0L) {
+        for (NativeHandle handle : table) {
+            if (handle == null) {
                 continue;
             }
             try {
-                allocator.freeRaw(rawHandle);
+                allocator.free(handle);
             } catch (RuntimeException | Error next) {
                 failure = addFailure(failure, next);
             }
@@ -126,8 +127,9 @@ final class NativeRawHandleSet {
         rethrow(failure);
     }
 
-    private int slot(long rawHandle) {
-        long mixed = rawHandle;
+    private int slot(NativeHandle handle) {
+        long mixed = handle.allocatorId();
+        mixed ^= handle.localRaw() + 0x9e3779b97f4a7c15L + (mixed << 6) + (mixed >>> 2);
         mixed ^= mixed >>> 33;
         mixed *= 0xff51afd7ed558ccdl;
         mixed ^= mixed >>> 33;

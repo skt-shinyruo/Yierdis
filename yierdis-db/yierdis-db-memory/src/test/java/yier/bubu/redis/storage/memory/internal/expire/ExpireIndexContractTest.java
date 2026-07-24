@@ -2,12 +2,11 @@ package yier.bubu.redis.storage.memory.internal.expire;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
-import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmExpireIndex;
+import yier.bubu.redis.storage.memory.TestBackend;
+import yier.bubu.redis.storage.memory.internal.expire.YierdisNativeExpireIndex;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
@@ -30,18 +29,36 @@ public class ExpireIndexContractTest {
     private static final HashSeed FIXED_SEED = new HashSeed(0x0123456789abcdefL, 0xfedcba9876543210L);
 
     @Test
+    public void expireIndexUsesOnlyStableMemoryApi() throws Exception {
+        Class<?> type = Class.forName(
+                "yier.bubu.redis.storage.memory.internal.expire.YierdisNativeExpireIndex"
+        );
+        Assert.assertThrows(
+                ClassNotFoundException.class,
+                () -> Class.forName(
+                        "yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmExpireIndex"
+                )
+        );
+        for (Field field : type.getDeclaredFields()) {
+            String fieldType = field.getType().getName();
+            Assert.assertFalse(fieldType, fieldType.contains("memory." + "foreign"));
+        Assert.assertFalse(fieldType, fieldType.contains("java.lang." + "foreign"));
+        }
+    }
+
+    @Test
     public void registryAdvancesOnlyTheExpiryIndexWithRehashDebtAndUnregistersItWhenComplete() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("ffm-expire-registry");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+        try (TestBackend runtime = TestBackend.open("ffm-expire-registry");
+             StableMemoryBackend allocator = runtime.backend();
              NativeKeyDirectory directory = new NativeKeyDirectory(allocator, FIXED_SEED)) {
             HashTableMaintenanceRegistry registry = new HashTableMaintenanceRegistry();
-            YierdisFfmExpireIndex expires = new YierdisFfmExpireIndex(runtime, allocator, FIXED_SEED, registry);
+            YierdisNativeExpireIndex expires = new YierdisNativeExpireIndex(allocator, FIXED_SEED, registry);
             List<NativeHandle> entries = new ArrayList<>();
             try {
                 for (int i = 0; i < 13; i++) {
                     byte[] key = bytes("registry-expire-" + i);
                     NativeHandle entry = allocateEntry(allocator, entries);
-                    directory.compute(key, (ignored, old) -> EntryHandle.fromNativeHandle(entry));
+                    directory.compute(key, (ignored, old) -> new EntryHandle(entry));
                     expires.setExpireAtMillis(directory.getKeyHandle(key), 10_000L + i);
                 }
 
@@ -67,21 +84,21 @@ public class ExpireIndexContractTest {
 
     @Test
     public void sparseRehashCountsEmptySlotsAgainstItsBudget() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("ffm-expire-rehash-budget");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+        try (TestBackend runtime = TestBackend.open("ffm-expire-rehash-budget");
+             StableMemoryBackend allocator = runtime.backend();
              NativeKeyDirectory directory = new NativeKeyDirectory(allocator, FIXED_SEED)) {
-            YierdisFfmExpireIndex expires = new YierdisFfmExpireIndex(runtime, allocator, FIXED_SEED);
+            YierdisNativeExpireIndex expires = new YierdisNativeExpireIndex(allocator, FIXED_SEED, null);
             List<NativeHandle> entries = new ArrayList<>();
             try {
                 for (int slot = 4; slot < 16; slot++) {
                     byte[] key = keyForInitialExpirySlot(slot);
                     NativeHandle entry = allocateEntry(allocator, entries);
-                    directory.compute(key, (ignored, old) -> EntryHandle.fromNativeHandle(entry));
+                    directory.compute(key, (ignored, old) -> new EntryHandle(entry));
                     expires.setExpireAtMillis(directory.getKeyHandle(key), 1_000L + slot);
                 }
                 byte[] growingKey = keyForInitialExpirySlot(4, 1);
                 NativeHandle entry = allocateEntry(allocator, entries);
-                directory.compute(growingKey, (ignored, old) -> EntryHandle.fromNativeHandle(entry));
+                directory.compute(growingKey, (ignored, old) -> new EntryHandle(entry));
                 expires.setExpireAtMillis(directory.getKeyHandle(growingKey), 2_000L);
 
                 Assert.assertTrue(expires.metrics().rehashing());
@@ -99,10 +116,10 @@ public class ExpireIndexContractTest {
 
     @Test
     public void expiryResizeTargetsFollowSharedCapacityPolicy() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("ffm-expire-capacity-policy");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+        try (TestBackend runtime = TestBackend.open("ffm-expire-capacity-policy");
+             StableMemoryBackend allocator = runtime.backend();
              NativeKeyDirectory directory = new NativeKeyDirectory(allocator, FIXED_SEED)) {
-            YierdisFfmExpireIndex expires = new YierdisFfmExpireIndex(runtime, allocator, FIXED_SEED);
+            YierdisNativeExpireIndex expires = new YierdisNativeExpireIndex(allocator, FIXED_SEED, null);
             List<NativeHandle> entries = new ArrayList<>();
             List<byte[]> keys = new ArrayList<>();
             try {
@@ -110,7 +127,7 @@ public class ExpireIndexContractTest {
                     byte[] key = bytes("capacity-policy-" + i);
                     keys.add(key);
                     NativeHandle entry = allocateEntry(allocator, entries);
-                    directory.compute(key, (ignored, old) -> EntryHandle.fromNativeHandle(entry));
+                    directory.compute(key, (ignored, old) -> new EntryHandle(entry));
                     expires.setExpireAtMillis(directory.getKeyHandle(key), 10_000L + i);
                 }
 
@@ -149,10 +166,10 @@ public class ExpireIndexContractTest {
 
     @Test
     public void stagesPendingShrinkForMaintenanceBeforePublishingTheReplacementTable() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("ffm-expire-staged-maintenance");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+        try (TestBackend runtime = TestBackend.open("ffm-expire-staged-maintenance");
+             StableMemoryBackend allocator = runtime.backend();
              NativeKeyDirectory directory = new NativeKeyDirectory(allocator, FIXED_SEED)) {
-            YierdisFfmExpireIndex expires = new YierdisFfmExpireIndex(runtime, allocator, FIXED_SEED);
+            YierdisNativeExpireIndex expires = new YierdisNativeExpireIndex(allocator, FIXED_SEED, null);
             List<NativeHandle> entries = new ArrayList<>();
             List<byte[]> keys = new ArrayList<>();
             try {
@@ -160,7 +177,7 @@ public class ExpireIndexContractTest {
                     byte[] key = bytes("staged-expire-" + i);
                     keys.add(key);
                     NativeHandle entry = allocateEntry(allocator, entries);
-                    directory.compute(key, (ignored, old) -> EntryHandle.fromNativeHandle(entry));
+                    directory.compute(key, (ignored, old) -> new EntryHandle(entry));
                     expires.setExpireAtMillis(directory.getKeyHandle(key), 10_000L + i);
                 }
                 drainRehash(expires);
@@ -192,12 +209,12 @@ public class ExpireIndexContractTest {
 
     @Test
     public void ffmExpireIndexRoundTripsNativeDirectoryHandlesAndByteLookup() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("ffm-expire-native-contract");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+        try (TestBackend runtime = TestBackend.open("ffm-expire-native-contract");
+             StableMemoryBackend allocator = runtime.backend();
              NativeKeyDirectory directory = new NativeKeyDirectory(allocator)) {
-            YierdisFfmExpireIndex expires = new YierdisFfmExpireIndex(runtime, allocator);
+            YierdisNativeExpireIndex expires = new YierdisNativeExpireIndex(allocator, FIXED_SEED, null);
             byte[] key = bytes("native-key");
-            EntryHandle entry = EntryHandle.fromNativeHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
+            EntryHandle entry = new EntryHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
             try {
                 directory.compute(key, (ignored, old) -> entry);
                 KeyHandle handle = directory.getKeyHandle(key);
@@ -238,12 +255,12 @@ public class ExpireIndexContractTest {
 
     @Test
     public void ffmExpireIndexDoesNotAllocateIndexOwnedKeyBytes() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("ffm-expire-native-key-sharing");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+        try (TestBackend runtime = TestBackend.open("ffm-expire-native-key-sharing");
+             StableMemoryBackend allocator = runtime.backend();
              NativeKeyDirectory directory = new NativeKeyDirectory(allocator)) {
-            YierdisFfmExpireIndex expires = new YierdisFfmExpireIndex(runtime, allocator);
+            YierdisNativeExpireIndex expires = new YierdisNativeExpireIndex(allocator, FIXED_SEED, null);
             byte[] key = bytes("shared-key");
-            EntryHandle entry = EntryHandle.fromNativeHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
+            EntryHandle entry = new EntryHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
             try {
                 directory.compute(key, (ignored, old) -> entry);
                 KeyHandle handle = directory.getKeyHandle(key);
@@ -269,35 +286,29 @@ public class ExpireIndexContractTest {
     }
 
     @Test
-    public void ffmExpireTableStoresSharedKeyIdentityInPrimitiveRawHandleArray() throws Exception {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("ffm-expire-primitive-key-handles");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+    public void expireTableStoresSharedKeyIdentityAsCompleteNativeHandles() throws Exception {
+        try (TestBackend runtime = TestBackend.open("expire-complete-key-handles");
+             StableMemoryBackend allocator = runtime.backend();
              NativeKeyDirectory directory = new NativeKeyDirectory(allocator)) {
-            YierdisFfmExpireIndex expires = new YierdisFfmExpireIndex(runtime, allocator);
-            byte[] key = bytes("primitive-key-handle");
-            EntryHandle entry = EntryHandle.fromNativeHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
+            YierdisNativeExpireIndex expires = new YierdisNativeExpireIndex(allocator, FIXED_SEED, null);
+            byte[] key = bytes("complete-key-handle");
+            EntryHandle entry = new EntryHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
             try {
                 directory.compute(key, (ignored, old) -> entry);
                 KeyHandle keyHandle = directory.getKeyHandle(key);
-                long expectedRawHandle = KeyHandleAccess.allocatorNativeHandle(keyHandle).raw();
+                NativeHandle expectedHandle = KeyHandleAccess.allocatorNativeHandle(keyHandle);
 
                 expires.setExpireAtMillis(keyHandle, 123456789L);
 
-                Field table0Field = YierdisFfmExpireIndex.class.getDeclaredField("table0");
+                Field table0Field = YierdisNativeExpireIndex.class.getDeclaredField("table0");
                 table0Field.setAccessible(true);
                 Object table = table0Field.get(expires);
-                Field rawHandlesField = table.getClass().getDeclaredField("keyRawHandles");
-                rawHandlesField.setAccessible(true);
-                Assert.assertEquals(long[].class, rawHandlesField.getType());
-                long[] rawHandles = (long[]) rawHandlesField.get(table);
+                Field handlesField = table.getClass().getDeclaredField("keyHandles");
+                handlesField.setAccessible(true);
+                Assert.assertEquals(NativeHandle[].class, handlesField.getType());
+                NativeHandle[] handles = (NativeHandle[]) handlesField.get(table);
 
-                Assert.assertTrue(Arrays.stream(rawHandles).anyMatch(raw -> raw == expectedRawHandle));
-                Assert.assertFalse(Arrays.stream(table.getClass().getDeclaredFields())
-                        .map(Field::getType)
-                        .filter(Class::isArray)
-                        .anyMatch(type -> !type.getComponentType().isPrimitive()));
-                Assert.assertFalse(Arrays.stream(YierdisFfmExpireIndex.class.getDeclaredClasses())
-                        .anyMatch(type -> type.getSimpleName().equals("AllocatorKeyRef")));
+                Assert.assertTrue(Arrays.stream(handles).anyMatch(expectedHandle::equals));
             } finally {
                 expires.clear();
                 expires.close();
@@ -331,32 +342,32 @@ public class ExpireIndexContractTest {
         return SipHash24.foldToInt(SipHash24.hash(FIXED_SEED, key));
     }
 
-    private static NativeHandle allocateEntry(NativeAllocator allocator, List<NativeHandle> entries) {
+    private static NativeHandle allocateEntry(StableMemoryBackend allocator, List<NativeHandle> entries) {
         NativeHandle entry = allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32);
         entries.add(entry);
         return entry;
     }
 
-    private static void assertResize(YierdisFfmExpireIndex expires, int capacity, int oldCapacity) {
+    private static void assertResize(YierdisNativeExpireIndex expires, int capacity, int oldCapacity) {
         HashTableMetrics metrics = expires.metrics();
         Assert.assertTrue(metrics.toString(), metrics.rehashing());
         Assert.assertEquals(metrics.toString(), capacity, metrics.capacity());
         Assert.assertEquals(metrics.toString(), oldCapacity, metrics.oldCapacity());
     }
 
-    private static void drainRehash(YierdisFfmExpireIndex expires) {
+    private static void drainRehash(YierdisNativeExpireIndex expires) {
         while (expires.metrics().rehashing()) {
             expires.advanceRehash(HashTableWorkBudget.of(64L, Long.MAX_VALUE));
         }
     }
 
-    private static void publishPendingMaintenance(YierdisFfmExpireIndex expires) {
+    private static void publishPendingMaintenance(YierdisNativeExpireIndex expires) {
         HashTableMaintenanceRegistry.MaintenancePreparation preparation = expires.prepareMaintenance();
         Assert.assertNotNull(preparation);
         preparation.commit();
     }
 
-    private static void freeEntries(NativeAllocator allocator, List<NativeHandle> entries) {
+    private static void freeEntries(StableMemoryBackend allocator, List<NativeHandle> entries) {
         for (NativeHandle entry : entries) {
             allocator.free(entry);
         }

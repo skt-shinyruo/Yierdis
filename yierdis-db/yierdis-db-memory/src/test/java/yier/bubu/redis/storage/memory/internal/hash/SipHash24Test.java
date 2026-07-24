@@ -4,12 +4,11 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.memory.api.NativeAccessMode;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
+import yier.bubu.redis.storage.memory.TestBackend;
 
 public class SipHash24Test {
     private static final HashSeed REFERENCE_SEED = new HashSeed(
@@ -57,8 +56,8 @@ public class SipHash24Test {
 
         Assert.assertEquals(expected, SipHash24.hash(REFERENCE_SEED, bytesView(input)));
 
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("siphash-test");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 64)) {
+        try (TestBackend runtime = TestBackend.open("siphash-test");
+             StableMemoryBackend allocator = runtime.backend()) {
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, input.length);
             try {
                 try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {

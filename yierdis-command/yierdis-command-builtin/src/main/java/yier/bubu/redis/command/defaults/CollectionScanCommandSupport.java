@@ -68,7 +68,7 @@ public final class CollectionScanCommandSupport {
         Objects.requireNonNull(out, "out");
         Objects.requireNonNull(window, "window");
         try {
-            byte[] nextCursor = window.nextCursor().toBulkStringAscii();
+            byte[] nextCursor = window.nextCursor().toAsciiBytes();
             ReplyPlan cursorPlan = ReplyPlans.bulkString(nextCursor.length, 0L);
             ReplyPlan elementsPlan = ReplyPlans.bulkStringArray(
                     window.count(),

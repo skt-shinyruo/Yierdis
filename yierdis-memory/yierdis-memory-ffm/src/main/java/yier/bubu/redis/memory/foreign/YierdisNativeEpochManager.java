@@ -4,7 +4,7 @@ import java.util.Objects;
 import yier.bubu.redis.memory.api.NativeEpochKind;
 import yier.bubu.redis.memory.api.NativeEpochScope;
 
-public final class YierdisNativeEpochManager {
+final class YierdisNativeEpochManager {
     private static final NativeEpochKind[] EPOCH_KINDS = NativeEpochKind.values();
 
     private final ActiveEpochs[] activeEpochs = new ActiveEpochs[EPOCH_KINDS.length];

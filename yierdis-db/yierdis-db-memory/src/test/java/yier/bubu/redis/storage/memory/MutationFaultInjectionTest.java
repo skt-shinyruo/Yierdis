@@ -6,19 +6,15 @@ import java.util.Base64;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicLong;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
-import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisFfmRegion;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
-import yier.bubu.redis.memory.testkit.FailOnAllocationNativeAllocator;
+import yier.bubu.redis.storage.memory.TestBackend;
+import yier.bubu.redis.memory.testkit.FailOnAllocationStableMemoryBackend;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
@@ -27,9 +23,9 @@ import yier.bubu.redis.storage.api.StringWriteOps;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.WriteResult;
 import yier.bubu.redis.storage.api.YierdisCommandException;
-import yier.bubu.redis.storage.api.result.BulkStringMapPairs;
-import yier.bubu.redis.storage.api.result.BulkStringSequence;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.ByteMapSource;
+import yier.bubu.redis.storage.api.result.ByteSequenceSource;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.PoppedValueSequence;
 import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
@@ -41,7 +37,8 @@ import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
-import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmExpireIndex;
+import yier.bubu.redis.storage.memory.internal.expire.YierdisNativeExpireIndex;
+import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMemoryLedger;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
@@ -71,12 +68,12 @@ public class MutationFaultInjectionTest {
                         "SET GET",
                         fixture -> fixture.stringOps.setString(PRIMARY_KEY, b("old"), SetMode.NORMAL, null),
                         fixture -> {
-                            WriteResult<StringWriteOps.SetStringValue> result = fixture.stringOps.set(
+                            WriteResult<StringWriteOps.SetStringValue> result = TestDbSupport.commitSetWithOldValue(
+                                    fixture.stringOps,
                                     PRIMARY_KEY,
                                     slice("new"),
                                     SetMode.NORMAL,
-                                    null,
-                                    true
+                                    null
                             );
                             result.value().close();
                         }
@@ -130,12 +127,12 @@ public class MutationFaultInjectionTest {
                         "existing SET with GET and TTL",
                         fixture -> fixture.stringOps.setString(PRIMARY_KEY, b("old"), SetMode.NORMAL, null),
                         fixture -> {
-                            WriteResult<StringWriteOps.SetStringValue> result = fixture.stringOps.set(
+                            WriteResult<StringWriteOps.SetStringValue> result = TestDbSupport.commitSetWithOldValue(
+                                    fixture.stringOps,
                                     PRIMARY_KEY,
                                     slice("new"),
                                     SetMode.NORMAL,
-                                    ExpireOption.px(5000),
-                                    true
+                                    ExpireOption.px(5000)
                             );
                             result.value().close();
                         }
@@ -149,13 +146,13 @@ public class MutationFaultInjectionTest {
             try (FaultFixture fixture = FaultFixture.open()) {
                 fixture.stringOps.setString(PRIMARY_KEY, b("old"), SetMode.NORMAL, null);
                 DbStateSnapshot before = fixture.snapshot();
-                fixture.regions.failOnAllocation(failAt);
+                fixture.allocator.failOnRegionAllocation(failAt);
                 try {
                     fixture.ttlOps.pexpire(view(PRIMARY_KEY), 5000L);
                     Assert.fail("expected region allocation failure at " + failAt);
                 } catch (YierdisCommandException expected) {
                     Assert.assertEquals(MaxmemoryErrors.OOM_ERR, expected.getMessage());
-                    fixture.regions.disableFailures();
+                    fixture.allocator.disableRegionFailures();
                     fixture.assertSnapshotEquals(before);
                 }
             }
@@ -165,20 +162,20 @@ public class MutationFaultInjectionTest {
             try (FaultFixture fixture = FaultFixture.open()) {
                 fixture.stringOps.setString(PRIMARY_KEY, b("old"), SetMode.NORMAL, null);
                 DbStateSnapshot before = fixture.snapshot();
-                fixture.regions.failOnAllocation(failAt);
+                fixture.allocator.failOnRegionAllocation(failAt);
                 try {
-                    WriteResult<StringWriteOps.SetStringValue> result = fixture.stringOps.set(
+                    WriteResult<StringWriteOps.SetStringValue> result = TestDbSupport.commitSetWithOldValue(
+                            fixture.stringOps,
                             PRIMARY_KEY,
                             slice("new"),
                             SetMode.NORMAL,
-                            ExpireOption.px(5000L),
-                            true
+                            ExpireOption.px(5000L)
                     );
                     result.value().close();
                     Assert.fail("expected region allocation failure at " + failAt);
                 } catch (YierdisCommandException expected) {
                     Assert.assertEquals(MaxmemoryErrors.OOM_ERR, expected.getMessage());
-                    fixture.regions.disableFailures();
+                    fixture.allocator.disableRegionFailures();
                     fixture.assertSnapshotEquals(before);
                 }
             }
@@ -208,7 +205,9 @@ public class MutationFaultInjectionTest {
                         "LPOP count",
                         fixture -> fixture.listOps.rpush(PRIMARY_KEY, Arrays.asList(b("a"), b("b"), b("c"), b("d"))),
                         fixture -> {
-                            WriteResult<PoppedValueSequence> result = fixture.listOps.lpop(PRIMARY_KEY, 2);
+                            WriteResult<PoppedValueSequence> result = TestDbSupport.commitPop(
+                                    fixture.listOps, PRIMARY_KEY, 2, true
+                            );
                             result.value().close();
                         }
                 ),
@@ -216,7 +215,9 @@ public class MutationFaultInjectionTest {
                         "RPOP count",
                         fixture -> fixture.listOps.rpush(PRIMARY_KEY, Arrays.asList(b("a"), b("b"), b("c"), b("d"))),
                         fixture -> {
-                            WriteResult<PoppedValueSequence> result = fixture.listOps.rpop(PRIMARY_KEY, 2);
+                            WriteResult<PoppedValueSequence> result = TestDbSupport.commitPop(
+                                    fixture.listOps, PRIMARY_KEY, 2, false
+                            );
                             result.value().close();
                         }
                 )
@@ -434,10 +435,9 @@ public class MutationFaultInjectionTest {
     }
 
     private static final class FaultFixture implements AutoCloseable {
-        private final YierdisFfmMemoryRuntime runtime;
-        private final FailOnRegionAllocator regions;
-        private final FailOnAllocationNativeAllocator allocator;
-        private final YierdisFfmExpireIndex expires;
+        private final TestBackend runtime;
+        private final FailOnAllocationStableMemoryBackend allocator;
+        private final YierdisNativeExpireIndex expires;
         private final EntryTable entries;
         private final NativeKeyDirectory keyDirectory;
         private final YierdisDbKeyLifecycle keyLifecycle;
@@ -457,10 +457,9 @@ public class MutationFaultInjectionTest {
         private final YierdisDbOwnedResources resources;
 
         private FaultFixture(
-                YierdisFfmMemoryRuntime runtime,
-                FailOnRegionAllocator regions,
-                FailOnAllocationNativeAllocator allocator,
-                YierdisFfmExpireIndex expires,
+                TestBackend runtime,
+                FailOnAllocationStableMemoryBackend allocator,
+                YierdisNativeExpireIndex expires,
                 EntryTable entries,
                 NativeKeyDirectory keyDirectory,
                 YierdisDbKeyLifecycle keyLifecycle,
@@ -480,7 +479,6 @@ public class MutationFaultInjectionTest {
                 YierdisDbOwnedResources resources
         ) {
             this.runtime = runtime;
-            this.regions = regions;
             this.allocator = allocator;
             this.expires = expires;
             this.entries = entries;
@@ -503,14 +501,13 @@ public class MutationFaultInjectionTest {
         }
 
         private static FaultFixture open() {
-            YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("mutation-fault");
-            FailOnRegionAllocator regions = new FailOnRegionAllocator(runtime);
-            FailOnAllocationNativeAllocator allocator = new FailOnAllocationNativeAllocator(
-                    new YierdisStableNativeAllocator(runtime, 4096)
+            TestBackend runtime = TestBackend.open("mutation-fault");
+            FailOnAllocationStableMemoryBackend allocator = new FailOnAllocationStableMemoryBackend(
+                    runtime.backend()
             );
             allocator.bindToCurrentThread();
-            YierdisFfmExpireIndex expires = new YierdisFfmExpireIndex(runtime, allocator, regions::allocateRegion);
-            EntryTable entries = new EntryTable(runtime, allocator);
+            YierdisNativeExpireIndex expires = new YierdisNativeExpireIndex(allocator, HashSeed.random(), null);
+            EntryTable entries = new EntryTable(allocator);
             NativeKeyDirectory keyDirectory = new NativeKeyDirectory(allocator);
             StringRoot stringRoot = new StringRoot(allocator);
             ListRoot listRoot = new ListRoot(allocator);
@@ -530,7 +527,6 @@ public class MutationFaultInjectionTest {
             YierdisDbKeyLifecycle keyLifecycle = new YierdisDbKeyLifecycle(
                     expires,
                     allocator,
-                    runtime,
                     entries,
                     keyDirectory,
                     stringRoot,
@@ -554,7 +550,7 @@ public class MutationFaultInjectionTest {
                     keyLifecycle,
                     ledger
             );
-            YierdisDbOwnedResources resources = new YierdisDbOwnedResources(runtime, allocator, true, true);
+            YierdisDbOwnedResources resources = new YierdisDbOwnedResources(allocator);
             YierdisStringOps stringOps = new YierdisStringOps(internals);
             YierdisListOps listOps = new YierdisListOps(internals);
             YierdisHashOps hashOps = new YierdisHashOps(internals);
@@ -564,7 +560,6 @@ public class MutationFaultInjectionTest {
             YierdisTtlOps ttlOps = new YierdisTtlOps(internals);
             return new FaultFixture(
                     runtime,
-                    regions,
                     allocator,
                     expires,
                     entries,
@@ -730,11 +725,9 @@ public class MutationFaultInjectionTest {
             YierdisDbNativeHandleGraph.visitReachable(keyLifecycle, (role, handle, record) ->
                     handles.add(role.name()
                             + "|"
-                            + handle.domain()
+                            + handle.allocatorId()
                             + "|"
-                            + handle.kindCode()
-                            + "|"
-                            + handle.raw())
+                            + handle.localRaw())
             );
             handles.sort(String::compareTo);
             return handles;
@@ -743,11 +736,11 @@ public class MutationFaultInjectionTest {
         private String entrySnapshot(KeyHandle keyHandle, EntryHandle entryHandle, EntryRecord record) {
             String keyIdentity = nativeHandleIdentity(keyHandle);
             if (record == null) {
-                return keyIdentity + "|" + entryHandle.raw() + "|null";
+                return keyIdentity + "|" + nativeHandleIdentity(entryHandle.nativeHandle()) + "|null";
             }
             return keyIdentity
                     + "|"
-                    + entryHandle.raw()
+                    + nativeHandleIdentity(entryHandle.nativeHandle())
                     + "|"
                     + record
                     + "|"
@@ -766,7 +759,13 @@ public class MutationFaultInjectionTest {
 
         private static String nativeHandleIdentity(KeyHandle keyHandle) {
             NativeHandle nativeHandle = KeyHandleAccess.allocatorNativeHandleOrNull(keyHandle);
-            return nativeHandle == null ? "null" : Long.toString(nativeHandle.raw());
+            return nativeHandleIdentity(nativeHandle);
+        }
+
+        private static String nativeHandleIdentity(NativeHandle nativeHandle) {
+            return nativeHandle == null
+                    ? "null"
+                    : nativeHandle.allocatorId() + ":" + nativeHandle.localRaw();
         }
 
         private static String bytesToBase64(byte[] bytes) {
@@ -801,39 +800,9 @@ public class MutationFaultInjectionTest {
 
         @Override
         public void close() {
-            regions.disableFailures();
             allocator.disableFailures();
+            allocator.disableRegionFailures();
             resources.releaseAll(expires, entries, keyDirectory, stringRoot, listRoot, hashRoot, setRoot, zsetRoot);
-        }
-    }
-
-    private static final class FailOnRegionAllocator {
-        private final YierdisFfmMemoryRuntime runtime;
-        private final AtomicLong attempts = new AtomicLong();
-        private volatile long failAt = -1L;
-
-        private FailOnRegionAllocator(YierdisFfmMemoryRuntime runtime) {
-            this.runtime = Objects.requireNonNull(runtime, "runtime");
-        }
-
-        private void failOnAllocation(long oneBasedIndex) {
-            if (oneBasedIndex <= 0L) {
-                throw new IllegalArgumentException("oneBasedIndex must be > 0");
-            }
-            attempts.set(0L);
-            failAt = oneBasedIndex;
-        }
-
-        private void disableFailures() {
-            failAt = -1L;
-        }
-
-        private YierdisFfmRegion allocateRegion(String owner, int bytes) {
-            long attempt = attempts.incrementAndGet();
-            if (attempt == failAt) {
-                throw new NativeCapacityExceededException("injected region allocation failure");
-            }
-            return runtime.allocateRegion(owner, bytes);
         }
     }
 
@@ -884,45 +853,50 @@ public class MutationFaultInjectionTest {
         }
     }
 
-    private static List<String> strings(BulkStringSequence sequence) {
-        RecordingBulkStringSink sink = new RecordingBulkStringSink();
+    private static List<String> strings(ByteSequenceSource sequence) {
+        RecordingByteValueSink sink = new RecordingByteValueSink();
         sequence.emitTo(sink);
         return sink.values;
     }
 
-    private static List<String> strings(BulkStringMapPairs pairs) {
-        RecordingBulkStringSink sink = new RecordingBulkStringSink();
+    private static List<String> strings(ByteMapSource pairs) {
+        RecordingByteValueSink sink = new RecordingByteValueSink();
         pairs.emitPairsTo(sink);
         return sink.values;
     }
 
-    private static final class RecordingBulkStringSink implements BulkStringSink {
+    private static final class RecordingByteValueSink implements ByteValueSink {
         private final List<String> values = new java.util.ArrayList<>();
 
         @Override
-        public void bulkString(byte[] data) {
+        public void value(byte[] data) {
             values.add(data == null ? null : new String(data, StandardCharsets.UTF_8));
         }
 
         @Override
-        public void bulkString(byte[] data, int off, int len) {
+        public void value(byte[] data, int off, int len) {
             values.add(new String(data, off, len, StandardCharsets.UTF_8));
         }
 
         @Override
-        public void bulkString(BytesSlice slice) {
+        public void value(BytesSlice slice) {
             if (slice == null) {
                 values.add(null);
                 return;
             }
             byte[] data = new byte[slice.length()];
             slice.getBytes(0, data, 0, data.length);
-            bulkString(data);
+            value(data);
         }
 
         @Override
-        public void bulkStringLongAscii(long value) {
+        public void longAscii(long value) {
             values.add(Long.toString(value));
+        }
+
+        @Override
+        public void nullValue() {
+            value((byte[]) null);
         }
     }
 

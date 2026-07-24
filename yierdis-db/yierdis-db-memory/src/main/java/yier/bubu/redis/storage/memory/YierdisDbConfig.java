@@ -2,7 +2,6 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -63,11 +62,11 @@ public final class YierdisDbConfig {
         if (maxmemorySamples <= 0) {
             throw new IllegalArgumentException("maxmemorySamples must be > 0");
         }
-        if (evictionTimeLimitMillis <= 0) {
-            throw new IllegalArgumentException("evictionTimeLimitMillis must be > 0");
+        if (evictionTimeLimitMillis < 0) {
+            throw new IllegalArgumentException("evictionTimeLimitMillis must be >= 0");
         }
-        if (expireCleanupTimeLimitMillis <= 0) {
-            throw new IllegalArgumentException("expireCleanupTimeLimitMillis must be > 0");
+        if (expireCleanupTimeLimitMillis < 0) {
+            throw new IllegalArgumentException("expireCleanupTimeLimitMillis must be >= 0");
         }
         return new YierdisDbConfig(
                 maxmemoryBytes,

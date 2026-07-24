@@ -2,7 +2,6 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -70,7 +69,7 @@ public final class YierdisDbIntrospection implements YierdisSnapshot {
             throw new IllegalArgumentException("count must be > 0");
         }
 
-        try (NativeEpochScope ignored = keyLifecycle.nativeAllocator().beginEpoch(NativeEpochKind.SNAPSHOT)) {
+        try (NativeEpochScope ignored = keyLifecycle.stableMemoryBackend().beginEpoch(NativeEpochKind.SNAPSHOT)) {
             long now = System.currentTimeMillis();
             int maxSteps = Math.max(64, count * 10);
             RemainingLimit remaining = new RemainingLimit(count);

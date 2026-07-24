@@ -2,7 +2,6 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -25,7 +24,7 @@ import static yier.bubu.redis.storage.testkit.TestBytes.b;
 public class ExpireIndexTest {
     @Test
     public void cleanupExpiredRemovesImmediatelyExpiredKeysWithoutAccess() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         db.bindToCurrentThread();
 
         byte[] key = b("k");
@@ -40,7 +39,7 @@ public class ExpireIndexTest {
 
     @Test
     public void cleanupExpiredPublishesSyntheticDeleteCommit() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         db.bindToCurrentThread();
 
         try {
@@ -62,7 +61,7 @@ public class ExpireIndexTest {
 
     @Test
     public void staleExpireIndexEntriesDoNotDeleteKeysWhenTtlIsCleared() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         db.bindToCurrentThread();
 
         byte[] key = b("k");
@@ -79,7 +78,7 @@ public class ExpireIndexTest {
 
     @Test
     public void cleanupExpiredEventuallyRemovesManyExpiredKeysWithoutAccess() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         db.bindToCurrentThread();
 
         int n = 200;
@@ -99,7 +98,7 @@ public class ExpireIndexTest {
 
     @Test
     public void cleanupExpiredDoesNotDeleteUnexpiredKeys() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         db.bindToCurrentThread();
 
         byte[] key = b("k");
@@ -115,7 +114,7 @@ public class ExpireIndexTest {
 
     @Test
     public void ttlBytesViewLazilyDeletesExpiredKeys() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         db.bindToCurrentThread();
 
         byte[] key = b("k");
@@ -135,7 +134,7 @@ public class ExpireIndexTest {
 
     @Test
     public void ttlAccountingAffectsUsedBytesForMaxmemory() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         db.bindToCurrentThread();
 
         byte[] key = b("k");
@@ -162,7 +161,7 @@ public class ExpireIndexTest {
 
     @Test
     public void cleanupExpiredNowMillisHonorsArgument() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         db.bindToCurrentThread();
 
         byte[] key = b("k");

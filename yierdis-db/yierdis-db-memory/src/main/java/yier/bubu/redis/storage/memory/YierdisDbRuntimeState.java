@@ -2,7 +2,8 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeDefragReport;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.MemoryOwner;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.storage.api.DbCommitPublisher;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
@@ -28,7 +29,8 @@ final class YierdisDbRuntimeState {
     );
 
     private final int dbIndex;
-    private final DbThreadGuard threadGuard = new DbThreadGuard();
+    private final DbThreadGuard threadGuard;
+    private final StableMemoryBackend stableMemoryBackend;
 
     private volatile MaxmemoryCoordinator maxmemoryCoordinator;
     private volatile MaxmemoryParticipant maxmemoryParticipant;
@@ -42,8 +44,14 @@ final class YierdisDbRuntimeState {
     private YierdisDbMemoryLedger ledger;
     private YierdisDbKeyLifecycle keyLifecycle;
 
-    YierdisDbRuntimeState(int dbIndex) {
+    YierdisDbRuntimeState(
+            int dbIndex,
+            DbThreadGuard threadGuard,
+            StableMemoryBackend stableMemoryBackend
+    ) {
         this.dbIndex = Math.max(0, dbIndex);
+        this.threadGuard = Objects.requireNonNull(threadGuard, "threadGuard");
+        this.stableMemoryBackend = Objects.requireNonNull(stableMemoryBackend, "stableMemoryBackend");
         this.commitDbIndex = this.dbIndex;
     }
 
@@ -60,17 +68,19 @@ final class YierdisDbRuntimeState {
         this.lruEnabled = Objects.requireNonNull(config, "config").lruEnabled;
         this.nativeDefragOptions = config.nativeDefragOptions;
         this.storage = Objects.requireNonNull(storage, "storage");
+        if (storage.stableMemoryBackend != stableMemoryBackend) {
+            throw new IllegalArgumentException("storage must use the composed stable memory backend");
+        }
         this.ledger = Objects.requireNonNull(ledger, "ledger");
         this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
     }
 
     void bindToCurrentThread() {
-        threadGuard.bindToCurrentThread();
-        keyLifecycle().nativeAllocator().bindToCurrentThread();
+        stableMemoryBackend.bindToCurrentThread();
     }
 
     void checkThread() {
-        threadGuard.checkThread();
+        threadGuard.checkDbAccess();
     }
 
     void attachMaxmemoryCoordinator(MaxmemoryCoordinator coordinator) {
@@ -140,7 +150,7 @@ final class YierdisDbRuntimeState {
         if (nativeDefragOptions == null) {
             return;
         }
-        lastNativeDefragReport = keyLifecycle().nativeAllocator().defragCycle(nativeDefragOptions);
+        lastNativeDefragReport = keyLifecycle().stableMemoryBackend().defragCycle(nativeDefragOptions);
     }
 
     NativeDefragReport lastNativeDefragReport() {
@@ -151,28 +161,54 @@ final class YierdisDbRuntimeState {
         return ledger();
     }
 
-    NativeAllocator nativeAllocator() {
-        return keyLifecycle().nativeAllocator();
+    StableMemoryBackend stableMemoryBackend() {
+        return stableMemoryBackend;
     }
 
     void shutdown() {
-        threadGuard.checkThreadForShutdown();
-        if (!threadGuard.tryMarkClosed()) {
+        if (!threadGuard.beginShutdown()) {
             return;
         }
-        // 先把实例标记为 closed，再释放 native 图；重复 shutdown 只能快速返回，避免二次 free 同一批 handle。
-        ledger().resetUsage();
-        YierdisDbStorageComponents currentStorage = storage();
-        currentStorage.resources.releaseAll(
-                currentStorage.expires,
-                currentStorage.entries,
-                currentStorage.keyDirectory,
-                currentStorage.stringRoot,
-                currentStorage.listRoot,
-                currentStorage.hashRoot,
-                currentStorage.setRoot,
-                currentStorage.zsetRoot
-        );
+        Throwable failure = null;
+        try {
+            ledger().resetUsage();
+        } catch (Throwable next) {
+            failure = next;
+        }
+        try {
+            YierdisDbStorageComponents currentStorage = storage();
+            currentStorage.resources.releaseAll(
+                    currentStorage.expires,
+                    currentStorage.entries,
+                    currentStorage.keyDirectory,
+                    currentStorage.stringRoot,
+                    currentStorage.listRoot,
+                    currentStorage.hashRoot,
+                    currentStorage.setRoot,
+                    currentStorage.zsetRoot
+            );
+        } catch (Throwable next) {
+            if (failure == null) {
+                failure = next;
+            } else {
+                failure.addSuppressed(next);
+            }
+        } finally {
+            threadGuard.finishShutdown();
+        }
+        if (failure instanceof RuntimeException runtimeFailure) {
+            throw runtimeFailure;
+        }
+        if (failure instanceof Error errorFailure) {
+            throw errorFailure;
+        }
+        if (failure != null) {
+            throw new IllegalStateException("YierdisDb shutdown failed", failure);
+        }
+    }
+
+    MemoryOwner memoryOwnerForTesting() {
+        return threadGuard;
     }
 
     FlushPreparation prepareFlushDb() {

@@ -64,20 +64,4 @@ public final class NativeListEntryRef {
         return retainedBytes;
     }
 
-    public long encodedElementBytes() {
-        if (payloadLength < 0) {
-            return 5L;
-        }
-        return 1L + decimalDigits(payloadLength) + 2L + payloadLength + 2L;
-    }
-
-    private static int decimalDigits(int value) {
-        int digits = 1;
-        int v = value;
-        while (v >= 10) {
-            v /= 10;
-            digits++;
-        }
-        return digits;
-    }
 }

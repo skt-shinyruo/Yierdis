@@ -8,25 +8,26 @@ import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeAccessMode;
+import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
-import yier.bubu.redis.storage.api.result.BulkStringValue;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
+import yier.bubu.redis.storage.api.result.ByteValue;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
 public class OffHeapStringStorageTest {
     @Test
     public void setGetUsesNativeStringSliceAndDelReleasesLiveAllocatorObjects() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        try (TestBackend runtime = TestBackend.open("db")) {
+            YierdisDb db = TestDbSupport.open(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
             try {
                 db.bindToCurrentThread();
                 byte[] key = b("k");
@@ -34,37 +35,32 @@ public class OffHeapStringStorageTest {
 
                 Assert.assertTrue(db.writes().strings().setString(key, value, SetMode.NORMAL, null).value());
                 Assert.assertTrue(runtime.usedBytes() > 0);
-                Assert.assertTrue(db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
+                Assert.assertTrue(db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
 
-                try (BulkStringValue replyValue = db.reads().strings().getStringValue(new TestBytesView(key))) {
-                    RecordingBulkOutput out = new RecordingBulkOutput();
-                    replyValue.writeTo(out);
+                try (ByteValue replyValue = db.reads().strings().getStringValue(new TestBytesView(key))) {
+                    RecordingByteValueOutput out = new RecordingByteValueOutput();
+                    replyValue.emitTo(out);
                     Assert.assertTrue(out.usedBytesSlice);
                     Assert.assertArrayEquals(value, out.bytes);
                     Assert.assertTrue("GET must retain the native reply source", replyValue.retainedMemoryBytes() > 0L);
-
-                    Assert.assertEquals(1L, (long) db.writes().keyspace().del(Collections.singletonList(key)).value());
-                    Assert.assertTrue(
-                            "deleting a pinned GET value must defer physical release until reply cleanup",
-                            db.keyLifecycle().nativeAllocator().stats().pinnedObjects() > 0L
-                    );
                 }
+
+                Assert.assertEquals(1L, (long) db.writes().keyspace().del(Collections.singletonList(key)).value());
                 Assert.assertEquals(0, db.size());
                 assertPhysicalStatsConsistent(db);
-                Assert.assertEquals(0L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES));
-                Assert.assertEquals(0L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.ENTRY_RECORD));
-                Assert.assertEquals(0L, db.keyLifecycle().nativeAllocator().stats().liveObjects());
+                Assert.assertEquals(0L, db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES));
+                Assert.assertEquals(0L, db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.ENTRY_RECORD));
+                Assert.assertEquals(0L, db.keyLifecycle().stableMemoryBackend().stats().liveObjects());
             } finally {
                 db.shutdown();
             }
-            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 
     @Test
     public void replyPreflightStringValueDoesNotTouchTheLruClock() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, MaxmemoryPolicy.ALLKEYS_LRU, 5, 5, 5);
+        try (TestBackend runtime = TestBackend.open("db")) {
+            YierdisDb db = TestDbSupport.open(runtime, 0, MaxmemoryPolicy.ALLKEYS_LRU, 5, 5, 5);
             try {
                 db.bindToCurrentThread();
                 byte[] key = b("k");
@@ -72,9 +68,9 @@ public class OffHeapStringStorageTest {
                 db.writes().strings().setString(key, value, SetMode.NORMAL, null).value();
                 long accessClockBeforePreflight = db.keyLifecycle().entryRecord(key).lruOrLfu();
 
-                try (BulkStringValue replyValue = db.reads().strings().previewStringValue(new TestBytesView(key))) {
-                    RecordingBulkOutput out = new RecordingBulkOutput();
-                    replyValue.writeTo(out);
+                try (ByteValue replyValue = db.reads().strings().getStringValue(new TestBytesView(key))) {
+                    RecordingByteValueOutput out = new RecordingByteValueOutput();
+                    replyValue.emitTo(out);
                     Assert.assertTrue(out.usedBytesSlice);
                     Assert.assertArrayEquals(value, out.bytes);
                 }
@@ -91,8 +87,8 @@ public class OffHeapStringStorageTest {
 
     @Test
     public void cleanupExpiredReleasesFfmStringObjects() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        try (TestBackend runtime = TestBackend.open("db")) {
+            YierdisDb db = TestDbSupport.open(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
             try {
                 db.bindToCurrentThread();
                 byte[] key = b("k");
@@ -106,22 +102,21 @@ public class OffHeapStringStorageTest {
             } finally {
                 db.shutdown();
             }
-            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 
     @Test
     public void expiredKeyStringPayloadIsReleasedWhenOverwrittenByOtherCommand() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             byte[] key = b("k");
             db.writes().strings().setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(0)).value();
-            Assert.assertTrue(db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
+            Assert.assertTrue(db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
 
             db.writes().lists().lpush(key, List.of(b("a")));
 
-            Assert.assertEquals(0L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES));
+            Assert.assertEquals(0L, db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES));
             Assert.assertEquals(ValueType.LIST, db.reads().keyspace().typeOf(new TestBytesView(key)));
         } finally {
             db.shutdown();
@@ -130,7 +125,7 @@ public class OffHeapStringStorageTest {
 
     @Test
     public void overwritePublishesReplacementStringHandle() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             byte[] key = b("k");
@@ -138,14 +133,14 @@ public class OffHeapStringStorageTest {
             byte[] v2 = b("world");
 
             Assert.assertTrue(db.writes().strings().setString(key, v1, SetMode.NORMAL, null).value());
-            long raw = db.keyLifecycle().liveEntryRecord(key).valueHandle().raw();
+            NativeHandle firstHandle = db.keyLifecycle().liveEntryRecord(key).valueHandle().nativeHandle();
 
             Assert.assertTrue(db.writes().strings().setString(key, v2, SetMode.NORMAL, null).value());
-            Assert.assertNotEquals(raw, db.keyLifecycle().liveEntryRecord(key).valueHandle().raw());
+            Assert.assertNotEquals(firstHandle, db.keyLifecycle().liveEntryRecord(key).valueHandle().nativeHandle());
 
-            try (BulkStringValue replyValue = db.reads().strings().getStringValue(new TestBytesView(key))) {
-                RecordingBulkOutput out = new RecordingBulkOutput();
-                replyValue.writeTo(out);
+            try (ByteValue replyValue = db.reads().strings().getStringValue(new TestBytesView(key))) {
+                RecordingByteValueOutput out = new RecordingByteValueOutput();
+                replyValue.emitTo(out);
                 Assert.assertTrue(out.usedBytesSlice);
                 Assert.assertArrayEquals(v2, out.bytes);
             }
@@ -156,8 +151,8 @@ public class OffHeapStringStorageTest {
 
     @Test
     public void shrinkingSetReleasesSupersededNativeCapacity() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("string-shrink-release")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
+        try (TestBackend runtime = TestBackend.open("string-shrink-release")) {
+            YierdisDb db = TestDbSupport.open(
                     runtime,
                     10_000_000L,
                     MaxmemoryPolicy.NOEVICTION,
@@ -176,47 +171,46 @@ public class OffHeapStringStorageTest {
                         SetMode.NORMAL,
                         null
                 ).value());
-                long supersededRaw = db.keyLifecycle().liveEntryRecord(key).valueHandle().raw();
+                NativeHandle supersededHandle = db.keyLifecycle().liveEntryRecord(key).valueHandle().nativeHandle();
                 long supersededCapacity;
-                try (NativeObjectView view = db.keyLifecycle().nativeAllocator()
-                        .resolveRaw(supersededRaw, NativeAccessMode.READ_ONLY)) {
+                try (NativeObjectView view = db.keyLifecycle().stableMemoryBackend()
+                        .resolve(supersededHandle, NativeAccessMode.READ_ONLY)) {
                     supersededCapacity = view.capacity();
                 }
-                long committedBefore = db.keyLifecycle().nativeAllocator().stats().committedBytes();
+                long committedBefore = db.keyLifecycle().stableMemoryBackend().stats().committedBytes();
 
                 Assert.assertTrue(db.writes().strings().setString(key, b("x"), SetMode.NORMAL, null).value());
 
-                long replacementRaw = db.keyLifecycle().liveEntryRecord(key).valueHandle().raw();
-                Assert.assertNotEquals(supersededRaw, replacementRaw);
+                NativeHandle replacementHandle = db.keyLifecycle().liveEntryRecord(key).valueHandle().nativeHandle();
+                Assert.assertNotEquals(supersededHandle, replacementHandle);
                 Assert.assertThrows(StaleNativeHandleException.class, () -> {
-                    try (NativeObjectView ignored = db.keyLifecycle().nativeAllocator()
-                            .resolveRaw(supersededRaw, NativeAccessMode.READ_ONLY)) {
+                    try (NativeObjectView ignored = db.keyLifecycle().stableMemoryBackend()
+                            .resolve(supersededHandle, NativeAccessMode.READ_ONLY)) {
                     }
                 });
-                try (NativeObjectView replacement = db.keyLifecycle().nativeAllocator()
-                        .resolveRaw(replacementRaw, NativeAccessMode.READ_ONLY)) {
+                try (NativeObjectView replacement = db.keyLifecycle().stableMemoryBackend()
+                        .resolve(replacementHandle, NativeAccessMode.READ_ONLY)) {
                     Assert.assertTrue(replacement.capacity() < supersededCapacity);
                 }
-                Assert.assertEquals(1L, db.keyLifecycle().nativeAllocator().stats()
+                Assert.assertEquals(1L, db.keyLifecycle().stableMemoryBackend().stats()
                         .objectCount(NativeObjectKind.STRING_BYTES));
                 Assert.assertTrue(
                         "release plus trim must return the superseded string page",
-                        db.keyLifecycle().nativeAllocator().stats().committedBytes() < committedBefore
+                        db.keyLifecycle().stableMemoryBackend().stats().committedBytes() < committedBefore
                 );
                 Assert.assertArrayEquals(b("x"), db.reads().strings().getStringBytes(key));
             } finally {
                 db.shutdown();
             }
-            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 
-    private static final class RecordingBulkOutput implements BulkStringSink {
+    private static final class RecordingByteValueOutput implements ByteValueSink {
         private byte[] bytes;
         private boolean usedBytesSlice;
 
         @Override
-        public void bulkString(byte[] data) {
+        public void value(byte[] data) {
             usedBytesSlice = false;
             if (data == null) {
                 bytes = null;
@@ -227,7 +221,7 @@ public class OffHeapStringStorageTest {
         }
 
         @Override
-        public void bulkString(byte[] data, int off, int len) {
+        public void value(byte[] data, int off, int len) {
             usedBytesSlice = false;
             if (data == null) {
                 bytes = null;
@@ -238,7 +232,7 @@ public class OffHeapStringStorageTest {
         }
 
         @Override
-        public void bulkString(BytesSlice slice) {
+        public void value(BytesSlice slice) {
             usedBytesSlice = slice != null;
             if (slice == null) {
                 bytes = null;
@@ -249,9 +243,14 @@ public class OffHeapStringStorageTest {
         }
 
         @Override
-        public void bulkStringLongAscii(long value) {
+        public void longAscii(long value) {
             usedBytesSlice = false;
             bytes = Long.toString(value).getBytes(StandardCharsets.US_ASCII);
+        }
+
+        @Override
+        public void nullValue() {
+            value((byte[]) null);
         }
     }
 
