@@ -5,10 +5,12 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.handler.codec.DecoderException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import yier.bubu.redis.execution.api.CapacityRegistration;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.executor.CommandExecutor;
+import yier.bubu.redis.execution.executor.ExecutorAdmissionAttempt;
 import yier.bubu.redis.protocol.resp.netty.InboundReadCreditHandler;
 import yier.bubu.redis.protocol.resp.netty.RespProtocolError;
 
@@ -23,7 +25,7 @@ public final class YierdisFastCommandHandler extends ChannelInboundHandlerAdapte
     private final CommandExecutor<NettyExecutionConnection> executor;
     private final RedisReplyWriterFactory replyWriterFactory;
     private final ArrayDeque<PendingSubmission> pendingSubmissions = new ArrayDeque<>();
-    private CommandExecutor.CapacityRegistration capacityRegistration = CommandExecutor.CapacityRegistration.NONE;
+    private CapacityRegistration capacityRegistration = CapacityRegistration.NONE;
 
     public YierdisFastCommandHandler(
             CommandExecutor<NettyExecutionConnection> executor,
@@ -165,26 +167,31 @@ public final class YierdisFastCommandHandler extends ChannelInboundHandlerAdapte
             NettyExecutionConnection connection,
             PendingSubmission submission
     ) {
-        CommandExecutor.SubmitRejectReason reject = executor.trySubmit(
+        ExecutorAdmissionAttempt<NettyExecutionConnection> attempt = executor.tryAcquire(
                 connection,
-                submission.request,
-                submission.slot
+                submission.request.retainedBytes()
         );
-        if (reject == null) {
+        if (attempt instanceof ExecutorAdmissionAttempt.Acquired<NettyExecutionConnection> acquired) {
+            acquired.admission().publish(submission.request, submission.slot);
             resumeExecutorInputIfDrained(ctx);
             return;
         }
-        if (isCapacityRejection(reject)) {
+        if (attempt instanceof ExecutorAdmissionAttempt.Unavailable<NettyExecutionConnection>) {
             pendingSubmissions.addFirst(submission);
             pauseExecutorInput(ctx);
             armCapacityWait(ctx);
             return;
         }
-        terminateRejectedSubmission(ctx, connection, submission, reject);
+        terminateRejectedSubmission(
+                ctx,
+                connection,
+                submission,
+                ((ExecutorAdmissionAttempt.Rejected<NettyExecutionConnection>) attempt).reason()
+        );
     }
 
     private void retryPendingSubmissions(ChannelHandlerContext ctx) {
-        capacityRegistration = CommandExecutor.CapacityRegistration.NONE;
+        capacityRegistration = CapacityRegistration.NONE;
         if (!ctx.channel().isActive()) {
             clearPendingSubmissions();
             return;
@@ -197,20 +204,25 @@ public final class YierdisFastCommandHandler extends ChannelInboundHandlerAdapte
         }
         while (!pendingSubmissions.isEmpty()) {
             PendingSubmission submission = pendingSubmissions.removeFirst();
-            CommandExecutor.SubmitRejectReason reject = executor.trySubmit(
+            ExecutorAdmissionAttempt<NettyExecutionConnection> attempt = executor.tryAcquire(
                     connection,
-                    submission.request,
-                    submission.slot
+                    submission.request.retainedBytes()
             );
-            if (reject == null) {
+            if (attempt instanceof ExecutorAdmissionAttempt.Acquired<NettyExecutionConnection> acquired) {
+                acquired.admission().publish(submission.request, submission.slot);
                 continue;
             }
-            if (isCapacityRejection(reject)) {
+            if (attempt instanceof ExecutorAdmissionAttempt.Unavailable<NettyExecutionConnection>) {
                 pendingSubmissions.addFirst(submission);
                 armCapacityWait(ctx);
                 return;
             }
-            terminateRejectedSubmission(ctx, connection, submission, reject);
+            terminateRejectedSubmission(
+                    ctx,
+                    connection,
+                    submission,
+                    ((ExecutorAdmissionAttempt.Rejected<NettyExecutionConnection>) attempt).reason()
+            );
             if (!ctx.channel().isActive() || connection.context().isClosing()) {
                 clearPendingSubmissions();
                 return;
@@ -226,8 +238,8 @@ public final class YierdisFastCommandHandler extends ChannelInboundHandlerAdapte
             resumeExecutorInputIfDrained(ctx);
             return;
         }
-        capacityRegistration = executor.onCapacityAvailable(
-                head.request,
+        capacityRegistration = executor.onAdmissionAvailable(
+                head.request.retainedBytes(),
                 () -> ctx.executor().execute(() -> retryPendingSubmissions(ctx))
         );
     }
@@ -260,8 +272,8 @@ public final class YierdisFastCommandHandler extends ChannelInboundHandlerAdapte
     }
 
     private void cancelCapacityWait() {
-        CommandExecutor.CapacityRegistration registration = capacityRegistration;
-        capacityRegistration = CommandExecutor.CapacityRegistration.NONE;
+        CapacityRegistration registration = capacityRegistration;
+        capacityRegistration = CapacityRegistration.NONE;
         registration.cancel();
     }
 
@@ -304,12 +316,6 @@ public final class YierdisFastCommandHandler extends ChannelInboundHandlerAdapte
             ctx.channel().config().setAutoRead(true);
         } catch (Throwable ignored) {
         }
-    }
-
-    private static boolean isCapacityRejection(CommandExecutor.SubmitRejectReason reject) {
-        return reject == CommandExecutor.SubmitRejectReason.QUEUE_FULL
-                || reject == CommandExecutor.SubmitRejectReason.BYTES_BUDGET
-                || reject == CommandExecutor.SubmitRejectReason.OFFER_FAILED;
     }
 
     private static void pauseExecutorInput(ChannelHandlerContext ctx) {

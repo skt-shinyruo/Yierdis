@@ -1,6 +1,7 @@
 package yier.bubu.redis.execution.executor;
 
 import yier.bubu.redis.common.command.ResultUnknownException;
+import yier.bubu.redis.execution.api.ExecutionReply;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.api.ReplyCapacityUnavailableException;
@@ -107,6 +108,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         if (task == null) {
             return;
         }
+        task.cancelCapacityRegistration();
         closeRequest(task.request);
         cancelReply(task.reply);
         if (task.connection != null) {
@@ -219,8 +221,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
     }
 
     private void releaseReservedBudget(int retainedBytes) {
-        backlogBudget.releaseQueuedBytes(retainedBytes);
-        backlogBudget.releaseSlot();
+        backlogBudget.release(retainedBytes);
     }
 
     private void maybeRecoverInput(C connection) {

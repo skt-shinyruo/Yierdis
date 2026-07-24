@@ -3,13 +3,17 @@ package yier.bubu.redis.execution.executor;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
+import yier.bubu.redis.execution.api.CapacityRegistration;
+import yier.bubu.redis.execution.api.ExecutionReply;
 import yier.bubu.redis.execution.api.ReplyCapacityUnavailableException;
 import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.ReplyReservationSink;
+import yier.bubu.redis.execution.api.ReplyReservationResult;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -31,10 +35,10 @@ public class ReplyCapacityBlockedSchedulingTest {
         BlockingReply b1Reply = new BlockingReply(true);
         BlockingReply b2Reply = new BlockingReply(true);
         try {
-            Assert.assertNull(executor.trySubmit(a, a1, blocked));
-            Assert.assertNull(executor.trySubmit(a, a2, a2Reply));
-            Assert.assertNull(executor.trySubmit(b, b1, b1Reply));
-            Assert.assertNull(executor.trySubmit(b, b2, b2Reply));
+            ExecutorCoreTestSupport.publish(executor, a, a1, blocked);
+            ExecutorCoreTestSupport.publish(executor, a, a2, a2Reply);
+            ExecutorCoreTestSupport.publish(executor, b, b1, b1Reply);
+            ExecutorCoreTestSupport.publish(executor, b, b2, b2Reply);
 
             ownerExecutor.runAll();
 
@@ -56,6 +60,7 @@ public class ReplyCapacityBlockedSchedulingTest {
             Assert.assertEquals(1, a2Reply.readyCalls());
         } finally {
             executor.close();
+            ownerExecutor.runAll();
         }
     }
 
@@ -69,8 +74,8 @@ public class ReplyCapacityBlockedSchedulingTest {
         BlockingReply blocked = new BlockingReply(false);
         BlockingReply b1Reply = new BlockingReply(true);
         try {
-            Assert.assertNull(executor.trySubmit(a, TrackingExecutionRequest.ofUtf8("A1"), blocked));
-            Assert.assertNull(executor.trySubmit(b, TrackingExecutionRequest.ofUtf8("B1"), b1Reply));
+            ExecutorCoreTestSupport.publish(executor, a, TrackingExecutionRequest.ofUtf8("A1"), blocked);
+            ExecutorCoreTestSupport.publish(executor, b, TrackingExecutionRequest.ofUtf8("B1"), b1Reply);
 
             ownerExecutor.runAll();
             Assert.assertTrue(completed.isEmpty());
@@ -81,6 +86,7 @@ public class ReplyCapacityBlockedSchedulingTest {
             Assert.assertEquals(List.of("A1", "B1"), completed);
         } finally {
             executor.close();
+            ownerExecutor.runAll();
         }
     }
 
@@ -95,12 +101,13 @@ public class ReplyCapacityBlockedSchedulingTest {
         TrackingExecutionRequest blockedRequest = TrackingExecutionRequest.ofUtf8("A1");
         BlockingReply blockedReply = new BlockingReply(false);
         try {
-            Assert.assertNull(executor.trySubmit(blockedConnection, blockedRequest, blockedReply));
-            Assert.assertNull(executor.trySubmit(
+            ExecutorCoreTestSupport.publish(executor, blockedConnection, blockedRequest, blockedReply);
+            ExecutorCoreTestSupport.publish(
+                    executor,
                     runnableConnection,
                     TrackingExecutionRequest.ofUtf8("B1"),
                     new BlockingReply(true)
-            ));
+            );
 
             ownerExecutor.runAll();
             Assert.assertEquals(List.of("B1"), completed);
@@ -114,6 +121,7 @@ public class ReplyCapacityBlockedSchedulingTest {
             Assert.assertEquals(0, executor.statsSnapshot().queuedTasks());
         } finally {
             executor.close();
+            ownerExecutor.runAll();
         }
     }
 
@@ -126,7 +134,7 @@ public class ReplyCapacityBlockedSchedulingTest {
         TrackingExecutionRequest request = TrackingExecutionRequest.ofUtf8("A1");
         BlockingReply reply = new BlockingReply(false);
         try {
-            Assert.assertNull(executor.trySubmit(connection, request, reply));
+            ExecutorCoreTestSupport.publish(executor, connection, request, reply);
             ownerExecutor.runAll();
             Assert.assertTrue(completed.isEmpty());
 
@@ -139,6 +147,7 @@ public class ReplyCapacityBlockedSchedulingTest {
             Assert.assertEquals(0, executor.statsSnapshot().queuedTasks());
         } finally {
             executor.close();
+            ownerExecutor.runAll();
         }
     }
 
@@ -179,6 +188,7 @@ public class ReplyCapacityBlockedSchedulingTest {
         private final AtomicInteger readyCalls = new AtomicInteger();
         private final AtomicInteger cancelCalls = new AtomicInteger();
         private final BlockingSink sink = new BlockingSink();
+        private final AtomicBoolean capacityWaitActive = new AtomicBoolean();
         private Runnable wakeup;
 
         private BlockingReply(boolean capacityAvailable) {
@@ -191,13 +201,22 @@ public class ReplyCapacityBlockedSchedulingTest {
         }
 
         @Override
-        public boolean awaitCapacity(Runnable callback) {
-            if (capacityAvailable.get()) {
-                callback.run();
-                return true;
-            }
-            wakeup = callback;
-            return true;
+        public ReplyReservationResult tryReserve(ReplyPlan plan) {
+            return capacityAvailable.get()
+                    ? ReplyReservationResult.RESERVED
+                    : ReplyReservationResult.WAITING;
+        }
+
+        @Override
+        public CapacityRegistration onCapacityAvailable(Runnable callback) {
+            Objects.requireNonNull(callback, "callback");
+            capacityWaitActive.set(true);
+            wakeup = () -> {
+                if (capacityWaitActive.compareAndSet(true, false)) {
+                    callback.run();
+                }
+            };
+            return () -> capacityWaitActive.set(false);
         }
 
         @Override
@@ -213,6 +232,10 @@ public class ReplyCapacityBlockedSchedulingTest {
         @Override
         public boolean hasWrittenBytes() {
             return sink.writtenBytes() > 0L;
+        }
+
+        @Override
+        public void markResultUnknown() {
         }
 
         @Override

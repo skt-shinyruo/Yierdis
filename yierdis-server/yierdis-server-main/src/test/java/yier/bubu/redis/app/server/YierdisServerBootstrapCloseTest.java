@@ -238,7 +238,7 @@ public class YierdisServerBootstrapCloseTest {
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
                     engine::execute,
-                    commandGroup.next(),
+                    new NettySerialOwnerExecutor(commandGroup.next()),
                     new RespReplyWriterFactory(),
                     new NettyExecutionIoAdapter(),
                     new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)

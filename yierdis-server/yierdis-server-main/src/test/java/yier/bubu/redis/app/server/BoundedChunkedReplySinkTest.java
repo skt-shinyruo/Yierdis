@@ -5,6 +5,7 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.execution.api.CapacityRegistration;
 import yier.bubu.redis.execution.api.ReplyCapacityUnavailableException;
 import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.ReplyTooLargeException;
@@ -111,11 +112,13 @@ public class BoundedChunkedReplySinkTest {
         try {
             ReplyPlan plan = ReplyPlan.exact(512L, 0L);
             Assert.assertThrows(ReplyCapacityUnavailableException.class, () -> sink.require(plan));
-            Assert.assertTrue(slot.awaitCapacity(wakeups::incrementAndGet));
+            CapacityRegistration registration = slot.onCapacityAvailable(wakeups::incrementAndGet);
+            Assert.assertNotSame(CapacityRegistration.NONE, registration);
 
             holder.close();
 
             Assert.assertEquals(1, wakeups.get());
+            registration.cancel();
             sink.require(plan);
             Assert.assertEquals(5_632L, slot.lease().reservedBytes());
             sink.writeBytes(new byte[512], 0, 512);

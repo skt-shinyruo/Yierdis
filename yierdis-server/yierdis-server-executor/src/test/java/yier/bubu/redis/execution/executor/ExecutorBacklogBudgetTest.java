@@ -2,6 +2,7 @@ package yier.bubu.redis.execution.executor;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.execution.api.CapacityRegistration;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -13,7 +14,7 @@ public class ExecutorBacklogBudgetTest {
         Assert.assertTrue(budget.tryReserveQueuedBytes(8));
 
         AtomicInteger wakeups = new AtomicInteger();
-        CommandExecutor.CapacityRegistration registration = budget.onCapacityAvailable(
+        CapacityRegistration registration = budget.onCapacityAvailable(
                 8,
                 wakeups::incrementAndGet
         );
@@ -34,7 +35,7 @@ public class ExecutorBacklogBudgetTest {
         Assert.assertTrue(budget.tryReserveSlot());
 
         AtomicInteger wakeups = new AtomicInteger();
-        CommandExecutor.CapacityRegistration registration = budget.onCapacityAvailable(
+        CapacityRegistration registration = budget.onCapacityAvailable(
                 0,
                 wakeups::incrementAndGet
         );

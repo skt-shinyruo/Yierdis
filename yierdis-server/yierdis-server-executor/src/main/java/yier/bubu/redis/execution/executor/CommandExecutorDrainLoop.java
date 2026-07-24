@@ -1,14 +1,15 @@
 package yier.bubu.redis.execution.executor;
 
+import yier.bubu.redis.execution.api.CapacityRegistration;
+
 import java.util.LinkedHashSet;
 import java.util.Objects;
-import java.util.concurrent.Executor;
-import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BooleanSupplier;
 
 final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
-    private final Executor ownerExecutor;
+    private final SerialOwnerExecutor ownerExecutor;
     private final ExecutorTaskQueue<C, CommandExecutorTask<C>> taskQueue;
     private final CommandExecutorExecutionSupport<C> executionSupport;
     private final int maxDrainCommands;
@@ -20,7 +21,7 @@ final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
     private final AtomicBoolean drainScheduled = new AtomicBoolean(false);
 
     CommandExecutorDrainLoop(
-            Executor ownerExecutor,
+            SerialOwnerExecutor ownerExecutor,
             ExecutorTaskQueue<C, CommandExecutorTask<C>> taskQueue,
             CommandExecutorExecutionSupport<C> executionSupport,
             int maxDrainCommands,
@@ -50,10 +51,12 @@ final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
     }
 
     void drainLeftoverCommands() {
+        ownerExecutor.requireOwnerThread();
         taskQueue.drainLeftoverTasks(executionSupport::recycleAndRelease);
     }
 
     private void drainLoop() {
+        ownerExecutor.requireOwnerThread();
         if (!running.getAsBoolean()) {
             drainScheduled.set(false);
             drainLeftoverCommands();
@@ -124,24 +127,28 @@ final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
             return;
         }
 
-        boolean waiting;
+        CapacityRegistration registration;
         try {
-            waiting = task.reply.awaitCapacity(() -> {
+            registration = task.reply.onCapacityAvailable(() -> ownerExecutor.execute(() -> {
+                ownerExecutor.requireOwnerThread();
+                task.capacityRegistrationSignalled();
                 if (taskQueue.resumeBlocked(task.connection, task)) {
                     scheduleDrain();
                 }
-            });
+            }));
         } catch (Throwable ignored) {
-            waiting = false;
+            registration = CapacityRegistration.NONE;
         }
-        if (!waiting) {
+        if (registration == CapacityRegistration.NONE) {
             if (taskQueue.cancelBlocked(task.connection, task)) {
                 executionSupport.recycleAndRelease(task);
             }
             return;
         }
+        task.ownCapacityRegistration(registration);
 
         executionSupport.onConnectionClosed(task.connection, () -> ownerExecutor.execute(() -> {
+            ownerExecutor.requireOwnerThread();
             if (taskQueue.cancelBlocked(task.connection, task)) {
                 executionSupport.recycleAndRelease(task);
             }

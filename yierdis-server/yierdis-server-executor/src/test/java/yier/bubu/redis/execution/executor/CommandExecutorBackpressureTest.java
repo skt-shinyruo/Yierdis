@@ -22,8 +22,10 @@ public class CommandExecutorBackpressureTest {
 
         TestConnection connection = ExecutorCoreTestSupport.newConnection("c-1");
 
-        Assert.assertNull(executor.trySubmit(connection, TrackingExecutionRequest.ofUtf8("PING")));
-        Assert.assertNull(executor.trySubmit(connection, TrackingExecutionRequest.ofUtf8("PING")));
+        TrackingExecutionRequest first = TrackingExecutionRequest.ofUtf8("PING");
+        TrackingExecutionRequest second = TrackingExecutionRequest.ofUtf8("PING");
+        ExecutorCoreTestSupport.publish(executor, connection, first, ExecutorCoreTestSupport.ioReply(io, connection));
+        ExecutorCoreTestSupport.publish(executor, connection, second, ExecutorCoreTestSupport.ioReply(io, connection));
 
         Assert.assertTrue(io.inputDisabled(connection));
         Assert.assertTrue(connection.context().autoReadDisabledByExecutor());
@@ -32,5 +34,8 @@ public class CommandExecutorBackpressureTest {
 
         Assert.assertTrue(io.inputEnabledAgain(connection));
         Assert.assertFalse(connection.context().autoReadDisabledByExecutor());
+
+        executor.close();
+        ownerExecutor.runAll();
     }
 }

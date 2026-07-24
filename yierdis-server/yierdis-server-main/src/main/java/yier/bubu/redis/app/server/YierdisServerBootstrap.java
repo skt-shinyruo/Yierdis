@@ -24,6 +24,7 @@ import yier.bubu.redis.execution.engine.YierdisEngine;
 import yier.bubu.redis.execution.executor.CommandExecutionEngine;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
+import yier.bubu.redis.execution.executor.SerialOwnerExecutor;
 import yier.bubu.redis.memory.api.StableMemoryBackendFactory;
 import yier.bubu.redis.memory.foreign.YierdisFfmStableMemoryBackend;
 import yier.bubu.redis.storage.api.DbDefragConfig;
@@ -266,10 +267,11 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         commandGroup = new DefaultEventExecutorGroup(1);
         RedisReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutorConfig executorConfig = CommandExecutorConfigs.from(runtimeConfig);
+        SerialOwnerExecutor commandOwner = new NettySerialOwnerExecutor(commandGroup.next());
         executor = new CommandExecutor<>(
                 runtimeAccess::bindToCurrentThread,
                 executionEngine,
-                commandGroup.next(),
+                commandOwner,
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
                 executorConfig

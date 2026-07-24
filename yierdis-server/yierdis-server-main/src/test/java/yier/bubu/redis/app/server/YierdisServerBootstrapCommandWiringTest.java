@@ -991,7 +991,7 @@ public class YierdisServerBootstrapCommandWiringTest {
             this.executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
                     engine::execute,
-                    ImmediateEventExecutor.INSTANCE,
+                    new NettySerialOwnerExecutor(ImmediateEventExecutor.INSTANCE),
                     replyWriterFactory,
                     new NettyExecutionIoAdapter(),
                     new CommandExecutorConfig(1024, 0, 256, 128, 0, 0, 1024, 10, SchedulingPolicy.FAIR)
