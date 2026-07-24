@@ -1,12 +1,11 @@
 package yier.bubu.redis.storage.memory.internal.value;
 
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.memory.TestBackend;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -15,8 +14,8 @@ import java.util.List;
 public class SetValueTest {
     @Test
     public void hashtableEncodingDoesNotAllocateValueSlots() throws ReflectiveOperationException {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("set-without-value-slots");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("set-without-value-slots");
+             StableMemoryBackend allocator = runtime.backend()) {
             SetValue set = new SetValue(allocator);
             try {
                 List<byte[]> members = List.of(b("alpha"));
@@ -35,8 +34,8 @@ public class SetValueTest {
 
     @Test
     public void nativeSetKeepsIntsetMembersAndUpgradesToNativeHashtable() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("set-test");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("set-test");
+             StableMemoryBackend allocator = runtime.backend()) {
             SetValue sv = new SetValue(allocator);
             try {
                 Assert.assertEquals(ValueEncoding.SET_INTSET, sv.encoding());
@@ -60,8 +59,8 @@ public class SetValueTest {
 
     @Test
     public void nativeSetStreamsHashtableMembersThroughNativeBytesSlice() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("set-stream-test");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("set-stream-test");
+             StableMemoryBackend allocator = runtime.backend()) {
             SetValue sv = new SetValue(allocator);
             try {
                 Assert.assertEquals(2, sv.addAll(List.of(b("alpha"), b("beta"))));
@@ -95,24 +94,24 @@ public class SetValueTest {
         return valueSlotsField.get(table);
     }
 
-    private static final class RecordingSink implements BulkStringSink {
+    private static final class RecordingSink implements ByteValueSink {
         private final ArrayList<String> values = new ArrayList<>();
         private boolean sawNativeBytesSlice;
 
         @Override
-        public void bulkString(byte[] data) {
+        public void value(byte[] data) {
             values.add(data == null ? null : new String(data, StandardCharsets.US_ASCII));
             sawNativeBytesSlice = false;
         }
 
         @Override
-        public void bulkString(byte[] data, int off, int len) {
+        public void value(byte[] data, int off, int len) {
             values.add(data == null ? null : new String(data, off, len, StandardCharsets.US_ASCII));
             sawNativeBytesSlice = false;
         }
 
         @Override
-        public void bulkString(BytesSlice slice) {
+        public void value(BytesSlice slice) {
             if (slice == null) {
                 values.add(null);
                 return;
@@ -124,9 +123,14 @@ public class SetValueTest {
         }
 
         @Override
-        public void bulkStringLongAscii(long value) {
+        public void longAscii(long value) {
             values.add(Long.toString(value));
             sawNativeBytesSlice = false;
+        }
+
+        @Override
+        public void nullValue() {
+            value((byte[]) null);
         }
     }
 }

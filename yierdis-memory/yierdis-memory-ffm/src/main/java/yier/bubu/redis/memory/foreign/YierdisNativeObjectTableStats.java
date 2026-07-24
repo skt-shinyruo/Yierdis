@@ -2,7 +2,7 @@ package yier.bubu.redis.memory.foreign;
 
 import java.util.Arrays;
 
-public final class YierdisNativeObjectTableStats {
+final class YierdisNativeObjectTableStats {
     private final long metadataCommittedBytes;
     private final int activeSegments;
     private final long liveSlots;

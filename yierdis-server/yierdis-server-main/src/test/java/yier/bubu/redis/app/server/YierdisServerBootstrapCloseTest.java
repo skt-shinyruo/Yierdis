@@ -203,12 +203,7 @@ public class YierdisServerBootstrapCloseTest {
 
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder()
                 .databases(1)
-                .engineFactory((dbIndex,
-                                maxmemoryBytes,
-                                maxmemoryPolicy,
-                                maxmemorySamples,
-                                evictionTimeLimitMillis,
-                                expireCleanupTimeLimitMillis) -> new FailingRuntimeDbEngine("db-" + dbIndex, closeOrder))
+                .engineFactory(config -> new FailingRuntimeDbEngine("db-" + config.dbIndex(), closeOrder))
                 .build());
 
         setField(bootstrap, "instance", instance);
@@ -233,12 +228,7 @@ public class YierdisServerBootstrapCloseTest {
 
         YierdisInstance instance = null;
         try {
-            DbEngineFactory factory = (dbIndex,
-                                       maxmemoryBytes,
-                                       maxmemoryPolicy,
-                                       maxmemorySamples,
-                                       evictionTimeLimitMillis,
-                                       expireCleanupTimeLimitMillis) -> new FailingRuntimeDbEngine("db-" + dbIndex, closeOrder);
+            DbEngineFactory factory = config -> new FailingRuntimeDbEngine("db-" + config.dbIndex(), closeOrder);
             instance = YierdisInstance.create(YierdisInstanceConfig.builder()
                     .databases(1)
                     .engineFactory(factory)
@@ -382,16 +372,11 @@ public class YierdisServerBootstrapCloseTest {
         }
 
         @Override
-        public MemoryUsageSnapshot memoryUsage() {
-            return MemoryUsageSnapshot.zero();
-        }
-
-        @Override
         public void bindToCurrentThread() {
         }
 
         @Override
-        public void enforceMaxmemoryMaintenance() {
+        public void runMaintenance() {
         }
 
         @Override

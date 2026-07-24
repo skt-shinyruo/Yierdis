@@ -2,7 +2,6 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
 import yier.bubu.redis.storage.memory.internal.entry.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;

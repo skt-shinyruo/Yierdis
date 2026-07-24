@@ -4,7 +4,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
 
@@ -14,8 +14,8 @@ import java.util.List;
 public class PhysicalMemoryAccountingTest {
     @Test
     public void dbSnapshotCountsAllocatorCommittedMemoryOnce() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("physical-accounting")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
+        try (TestBackend runtime = TestBackend.open("physical-accounting")) {
+            YierdisDb db = TestDbSupport.open(
                     runtime,
                     0,
                     MaxmemoryPolicy.NOEVICTION,
@@ -28,8 +28,8 @@ public class PhysicalMemoryAccountingTest {
                 db.writes().strings().setString(bytes("key"), bytes("value"), SetMode.NORMAL, null);
 
                 MemoryUsageSnapshot usage = db.memoryUsage();
-                MemoryUsageSnapshot allocatorUsage = db.nativeAllocator().memoryUsage();
-                NativeAllocatorStats allocatorStats = db.nativeAllocator().stats();
+                MemoryUsageSnapshot allocatorUsage = db.stableMemoryBackend().memoryUsage();
+                NativeAllocatorStats allocatorStats = db.stableMemoryBackend().stats();
 
                 Assert.assertEquals(
                         allocatorStats.metadataCommittedBytes(),
@@ -48,8 +48,8 @@ public class PhysicalMemoryAccountingTest {
 
     @Test
     public void dbSnapshotCountsAllocatorAndFfmExpiryRegionsExactlyOnce() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("physical-accounting-expiry")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
+        try (TestBackend runtime = TestBackend.open("physical-accounting-expiry")) {
+            YierdisDb db = TestDbSupport.open(
                     runtime,
                     0,
                     MaxmemoryPolicy.NOEVICTION,
@@ -63,7 +63,7 @@ public class PhysicalMemoryAccountingTest {
                 db.writes().ttl().pexpire(view("key"), 60_000L);
 
                 MemoryUsageSnapshot usage = db.memoryUsage();
-                NativeAllocatorStats allocator = db.nativeAllocator().stats();
+                NativeAllocatorStats allocator = db.stableMemoryBackend().stats();
                 long expiryRegionBytes = runtime.usedBytes()
                         - allocator.committedBytes()
                         - allocator.metadataCommittedBytes();
@@ -92,8 +92,8 @@ public class PhysicalMemoryAccountingTest {
 
     @Test
     public void snapshotUsesRetainedHeapCountersWithoutWalkingCollections() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("physical-accounting-counters")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
+        try (TestBackend runtime = TestBackend.open("physical-accounting-counters")) {
+            YierdisDb db = TestDbSupport.open(
                     runtime,
                     0,
                     MaxmemoryPolicy.NOEVICTION,

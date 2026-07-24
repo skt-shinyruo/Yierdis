@@ -2,7 +2,6 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -11,9 +10,10 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.ScanCursorV2;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.KeyScanWindow;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
@@ -29,7 +29,15 @@ import java.util.List;
 public class KeysBudgetTest {
     @Test
     public void keysReturnsPartialResultsWhenTimeBudgetExceeded() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.openWithNativeSlotCapacity(
+                0L,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                5L,
+                5L,
+                null,
+                16_384
+        );
         db.bindToCurrentThread();
         try {
             // 适当放大数据量：避免在 nanoTime 分辨率较粗时出现“1ns 预算仍然跑完”的偶发现象。
@@ -46,7 +54,7 @@ public class KeysBudgetTest {
             )) {
                 Assert.assertTrue(
                         "expected KEYS to return partial results under extreme time budget",
-                        window.count() < 4096
+                        window.elementCount() < 4096
                 );
             }
         } finally {
@@ -56,7 +64,7 @@ public class KeysBudgetTest {
 
     @Test
     public void keysReturnsPartialResultsWhenResultLimitExceeded() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         db.bindToCurrentThread();
         try {
             for (int i = 0; i < 4; i++) {
@@ -65,7 +73,7 @@ public class KeysBudgetTest {
             }
 
             try (KeyScanWindow window = db.reads().keyspace().keys("*".getBytes(StandardCharsets.US_ASCII), 1, 0L)) {
-                Assert.assertEquals("expected KEYS to return at most the configured maxMatches", 1, window.count());
+                Assert.assertEquals("expected KEYS to return at most the configured maxMatches", 1, window.elementCount());
             }
         } finally {
             db.shutdown();
@@ -74,7 +82,7 @@ public class KeysBudgetTest {
 
     @Test
     public void keyWindowReplaysBoundedNativeKeysWithoutRetainingResultLists() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         db.bindToCurrentThread();
         try {
             NativeKeyDirectory directory = db.keyLifecycle().keyDirectory();
@@ -102,8 +110,11 @@ public class KeysBudgetTest {
             int rehashCursorBefore = directory.metrics().rehashCursor();
 
             try (KeyScanWindow window = db.reads().keyspace().keys(bytes("match:*"), 16, 0L)) {
-                Assert.assertEquals(3, window.count());
-                Assert.assertEquals(encodedBytes(first) + encodedBytes(second) + encodedBytes(third), window.encodedElementBytes());
+                Assert.assertEquals(3, window.elementCount());
+                Assert.assertEquals(
+                        expected.stream().map(String::length).toList(),
+                        payloadLengths(window)
+                );
                 Assert.assertEquals(0L, window.nextCursor().value());
                 Assert.assertEquals(generationBefore, window.tableGeneration());
                 Assert.assertTrue(window.expiryEvaluationMillis() > 0L);
@@ -172,17 +183,10 @@ public class KeysBudgetTest {
         }
     }
 
-    private static long encodedBytes(byte[] key) {
-        return 1L + decimalDigits(key.length) + 2L + key.length + 2L;
-    }
-
-    private static int decimalDigits(int value) {
-        int digits = 1;
-        while (value >= 10) {
-            value /= 10;
-            digits++;
-        }
-        return digits;
+    private static List<Integer> payloadLengths(KeyScanWindow window) {
+        List<Integer> lengths = new ArrayList<>();
+        window.visitElementLengths(lengths::add);
+        return lengths;
     }
 
     private static byte[] bytes(String value) {
@@ -197,21 +201,21 @@ public class KeysBudgetTest {
         return new String(bytes, StandardCharsets.US_ASCII);
     }
 
-    private static final class RecordingSink implements BulkStringSink {
+    private static final class RecordingSink implements ByteValueSink {
         private final List<String> values = new ArrayList<>();
 
         @Override
-        public void bulkString(byte[] data) {
+        public void value(byte[] data) {
             values.add(data == null ? null : new String(data, StandardCharsets.US_ASCII));
         }
 
         @Override
-        public void bulkString(byte[] data, int off, int len) {
+        public void value(byte[] data, int off, int len) {
             values.add(data == null ? null : new String(data, off, len, StandardCharsets.US_ASCII));
         }
 
         @Override
-        public void bulkString(BytesSlice slice) {
+        public void value(BytesSlice slice) {
             if (slice == null) {
                 values.add(null);
                 return;
@@ -222,8 +226,13 @@ public class KeysBudgetTest {
         }
 
         @Override
-        public void bulkStringLongAscii(long value) {
+        public void longAscii(long value) {
             values.add(Long.toString(value));
+        }
+
+        @Override
+        public void nullValue() {
+            values.add(null);
         }
     }
 }

@@ -7,10 +7,8 @@ import yier.bubu.redis.storage.api.ScanCursorV2;
  *
  * <p>窗口只保留游标边界和元数据，不保留复制后的 key 数组；调用方在输出或丢弃响应后必须关闭它。</p>
  */
-public interface KeyScanWindow extends MeasuredBulkStringSequence {
+public interface KeyScanWindow extends ByteSequenceSource {
     ScanCursorV2 nextCursor();
-
-    long encodedElementBytes();
 
     long inspectedSlots();
 

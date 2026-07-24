@@ -2,7 +2,6 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -231,7 +230,7 @@ public final class YierdisDbMemoryReporter {
     }
 
     private NativeAllocatorStats safeNativeAllocatorStats() {
-        var allocator = keyLifecycle.nativeAllocator();
+        var allocator = keyLifecycle.stableMemoryBackend();
         if (allocator == null) {
             return null;
         }

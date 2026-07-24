@@ -28,6 +28,7 @@ import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeHandleOwnershipException;
 import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.memory.api.NativeObjectKindCounts;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
@@ -42,7 +43,8 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
     private final AtomicLong nextLocalRaw = new AtomicLong(1L);
     private final AtomicLong nextEpoch = new AtomicLong(1L);
     private final Map<Long, HeapObject> objects = new HashMap<>();
-    private final Set<Long> pinned = new HashSet<>();
+    private final Map<Long, Integer> pinCounts = new HashMap<>();
+    private final Set<Long> quarantined = new HashSet<>();
     private final Set<HeapView> views = Collections.newSetFromMap(new IdentityHashMap<>());
     private final Set<HeapRegion> regions = Collections.newSetFromMap(new IdentityHashMap<>());
     private final Set<HeapEpochScope> epochs = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -104,7 +106,7 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
         }
         HeapObject object = requireLive(handle);
         long localRaw = handle.localRaw();
-        if (pinned.contains(localRaw)) {
+        if (isPinned(localRaw)) {
             throw new NativeMemoryException("native object is pinned");
         }
         if (hasLiveView(localRaw)) {
@@ -121,13 +123,12 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
         checkOpen();
         requireLive(handle);
         long localRaw = handle.localRaw();
-        if (pinned.contains(localRaw)) {
-            throw new NativeMemoryException("native object is pinned");
+        if (isPinned(localRaw)) {
+            // 预览结果可以在条目已替换后继续借用 pin 读取；最后一次 unpin 才真正释放块。
+            quarantined.add(localRaw);
+        } else {
+            releaseObject(localRaw);
         }
-        if (hasLiveView(localRaw)) {
-            throw new NativeMemoryException("native object has a live view");
-        }
-        objects.remove(localRaw);
         if (activeAllocationScope != null) {
             activeAllocationScope.forget(handle);
         }
@@ -137,18 +138,26 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
     public void pin(NativeHandle handle) {
         checkOpen();
         requireLive(handle);
-        if (!pinned.add(handle.localRaw())) {
-            throw new IllegalStateException("native object is already pinned");
-        }
+        pinCounts.merge(handle.localRaw(), 1, Integer::sum);
     }
 
     @Override
     public void unpin(NativeHandle handle) {
         checkOpen();
-        requireLive(handle);
-        if (!pinned.remove(handle.localRaw())) {
+        requireRetained(handle);
+        long localRaw = handle.localRaw();
+        Integer count = pinCounts.get(localRaw);
+        if (count == null) {
             throw new IllegalStateException("native object is not pinned");
         }
+        if (count == 1) {
+            pinCounts.remove(localRaw);
+            if (quarantined.contains(localRaw)) {
+                releaseObject(localRaw);
+            }
+            return;
+        }
+        pinCounts.put(localRaw, count - 1);
     }
 
     @Override
@@ -185,7 +194,8 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
     public NativeObjectView resolve(NativeHandle handle, NativeAccessMode mode) {
         checkOpen();
         requireLive(handle);
-        HeapView view = new HeapView(handle, Objects.requireNonNull(mode, "mode"));
+        pinCounts.merge(handle.localRaw(), 1, Integer::sum);
+        HeapView view = new HeapView(handle, Objects.requireNonNull(mode, "mode"), true);
         views.add(view);
         return view;
     }
@@ -197,11 +207,11 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
         if (mode != NativeAccessMode.READ_ONLY) {
             throw new NativeMemoryException("retained native views must be read-only");
         }
-        requireLive(handle);
-        if (!pinned.contains(handle.localRaw())) {
+        requireRetained(handle);
+        if (!isPinned(handle.localRaw())) {
             throw new NativeMemoryException("native object is not pinned");
         }
-        HeapView view = new HeapView(handle, mode);
+        HeapView view = new HeapView(handle, mode, false);
         views.add(view);
         return view;
     }
@@ -226,7 +236,7 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
             throw new IllegalArgumentException("maxMoveBytes must be non-negative");
         }
         HeapObject object = requireLive(handle);
-        if (pinned.contains(handle.localRaw())) {
+        if (isPinned(handle.localRaw())) {
             return NativeDefragResult.skippedPinnedObject();
         }
         if (maxMoveBytes < object.bytes.length) {
@@ -262,13 +272,23 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
                 0L,
                 0L,
                 objects.size(),
-                pinned.size(),
+                pinCounts.size(),
+                quarantined.size(),
                 0L,
                 0L,
                 0L,
                 0L,
                 0L,
-                0L
+                0L,
+                0L,
+                0L,
+                0L,
+                0L,
+                0L,
+                0L,
+                0L,
+                objectKindCounts(),
+                yier.bubu.redis.memory.api.NativeAllocationLatencyHistogram.empty()
         );
     }
 
@@ -317,7 +337,7 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
         if (closed) {
             return;
         }
-        if (!views.isEmpty() || !pinned.isEmpty() || !epochs.isEmpty() || activeAllocationScope != null) {
+        if (!views.isEmpty() || !pinCounts.isEmpty() || !epochs.isEmpty() || activeAllocationScope != null) {
             throw new IllegalStateException("heap stable memory backend still has active derived resources");
         }
         if (!regions.isEmpty()) {
@@ -337,6 +357,14 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
     }
 
     private HeapObject requireLive(NativeHandle handle) {
+        HeapObject object = requireRetained(handle);
+        if (quarantined.contains(handle.localRaw())) {
+            throw new StaleNativeHandleException("native handle is quarantined");
+        }
+        return object;
+    }
+
+    private HeapObject requireRetained(NativeHandle handle) {
         Objects.requireNonNull(handle, "handle");
         if (handle.allocatorId() != allocatorId) {
             throw new NativeHandleOwnershipException(allocatorId, handle.allocatorId());
@@ -346,6 +374,16 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
             throw new StaleNativeHandleException("native handle is not live");
         }
         return object;
+    }
+
+    private boolean isPinned(long localRaw) {
+        return pinCounts.containsKey(localRaw);
+    }
+
+    private void releaseObject(long localRaw) {
+        objects.remove(localRaw);
+        quarantined.remove(localRaw);
+        pinCounts.remove(localRaw);
     }
 
     private boolean hasLiveView(long localRaw) {
@@ -363,6 +401,42 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
             total = addSaturating(total, object.bytes.length);
         }
         return total;
+    }
+
+    private NativeObjectKindCounts objectKindCounts() {
+        return new NativeObjectKindCounts(
+                objectCount(NativeObjectKind.GENERIC),
+                objectCount(NativeObjectKind.STRING_BYTES),
+                objectCount(NativeObjectKind.LISTPACK_BYTES),
+                objectCount(NativeObjectKind.HASH_FIELD_BYTES),
+                objectCount(NativeObjectKind.HASH_VALUE_BYTES),
+                objectCount(NativeObjectKind.SET_MEMBER_BYTES),
+                objectCount(NativeObjectKind.ZSET_MEMBER_BYTES),
+                objectCount(NativeObjectKind.SCORE_BYTES),
+                objectCount(NativeObjectKind.ENTRY_RECORD),
+                objectCount(NativeObjectKind.KEY_BYTES),
+                objectCount(NativeObjectKind.LIST_ROOT),
+                objectCount(NativeObjectKind.HASH_ROOT),
+                objectCount(NativeObjectKind.SET_ROOT),
+                objectCount(NativeObjectKind.ZSET_ROOT),
+                objectCount(NativeObjectKind.LIST_NODE),
+                objectCount(NativeObjectKind.HASH_TABLE),
+                objectCount(NativeObjectKind.SET_TABLE),
+                objectCount(NativeObjectKind.ZSET_TABLE),
+                objectCount(NativeObjectKind.ZSET_NODE),
+                objectCount(NativeObjectKind.INDEX_NODE),
+                objectCount(NativeObjectKind.METADATA_RECORD)
+        );
+    }
+
+    private long objectCount(NativeObjectKind kind) {
+        long count = 0L;
+        for (HeapObject object : objects.values()) {
+            if (object.kind == kind) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private static long requestedByteTotal(int[] requestedBytes) {
@@ -430,11 +504,13 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
     private final class HeapView implements NativeObjectView {
         private final NativeHandle handle;
         private final NativeAccessMode mode;
+        private final boolean ownsPin;
         private boolean closed;
 
-        private HeapView(NativeHandle handle, NativeAccessMode mode) {
+        private HeapView(NativeHandle handle, NativeAccessMode mode, boolean ownsPin) {
             this.handle = handle;
             this.mode = mode;
+            this.ownsPin = ownsPin;
         }
 
         @Override
@@ -493,12 +569,15 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
             if (!closed) {
                 closed = true;
                 views.remove(this);
+                if (ownsPin) {
+                    unpin(handle);
+                }
             }
         }
 
         private HeapObject object() {
             checkViewOpen();
-            return requireLive(handle);
+            return requireRetained(handle);
         }
 
         private void requireWritable() {
@@ -686,7 +765,7 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
             for (NativeHandle handle : tracked) {
                 long localRaw = handle.localRaw();
                 if (objects.containsKey(localRaw)) {
-                    if (pinned.contains(localRaw) || hasLiveView(localRaw)) {
+                    if (isPinned(localRaw) || hasLiveView(localRaw)) {
                         throw new NativeMemoryException("allocation scope has active derived object state");
                     }
                     objects.remove(localRaw);

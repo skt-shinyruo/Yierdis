@@ -1,19 +1,14 @@
-package yier.bubu.redis.storage.memory.internal.ffm;
+package yier.bubu.redis.storage.memory.internal.expire;
 
 import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeAccessMode;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectView;
-import yier.bubu.redis.memory.foreign.YierdisFfmAccess;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisFfmRegion;
-import yier.bubu.redis.memory.foreign.YierdisFfmSpan;
-import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
-import yier.bubu.redis.storage.memory.internal.expire.YierdisExpireIndex;
+import yier.bubu.redis.memory.api.StableMemoryRegion;
 import yier.bubu.redis.storage.memory.internal.hash.HashCapacityPolicy;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
@@ -24,22 +19,17 @@ import yier.bubu.redis.storage.memory.internal.hash.SipHash24;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
 
-public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoCloseable, HashTableMaintenanceRegistry.Participant {
-    @FunctionalInterface
-    public interface RegionAllocator {
-        YierdisFfmRegion allocateRegion(String owner, int bytes);
-    }
+public final class YierdisNativeExpireIndex implements YierdisExpireIndex, AutoCloseable, HashTableMaintenanceRegistry.Participant {
 
     private static final HashTableWorkBudget ACCESS_REHASH_BUDGET = HashTableWorkBudget.of(1L, Long.MAX_VALUE);
     private static final byte STATE_EMPTY = 0;
     private static final byte STATE_FILLED = 1;
     private static final byte STATE_TOMBSTONE = 2;
     private static final long ARRAY_HEADER_BYTES = 16L;
-    private static final long HANDLE_BYTES = Long.BYTES;
+    private static final long HANDLE_BYTES = Long.BYTES * 2L;
     private static final long TABLE_HEAP_BYTES_ESTIMATE = 512L;
 
-    private final NativeAllocator nativeAllocator;
-    private final RegionAllocator regionAllocator;
+    private final StableMemoryBackend stableMemoryBackend;
     private final HashSeed hashSeed;
     private final HashTableMaintenanceRegistry maintenanceRegistry;
     private final HashTableMaintenanceRegistry.Registration maintenanceRegistration;
@@ -52,55 +42,13 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
     private int maximumProbeLength;
     private boolean maintenanceDebt;
 
-    public YierdisFfmExpireIndex(YierdisFfmMemoryRuntime memoryRuntime, NativeAllocator nativeAllocator) {
-        this(memoryRuntime, nativeAllocator, HashSeed.random(), memoryRuntime::allocateRegion);
-    }
-
-    public YierdisFfmExpireIndex(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            NativeAllocator nativeAllocator,
-            HashSeed hashSeed
-    ) {
-        this(memoryRuntime, nativeAllocator, hashSeed, memoryRuntime::allocateRegion, null);
-    }
-
-    public YierdisFfmExpireIndex(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            NativeAllocator nativeAllocator,
+    public YierdisNativeExpireIndex(
+            StableMemoryBackend stableMemoryBackend,
             HashSeed hashSeed,
             HashTableMaintenanceRegistry maintenanceRegistry
     ) {
-        this(memoryRuntime, nativeAllocator, hashSeed, memoryRuntime::allocateRegion, maintenanceRegistry);
-    }
-
-    public YierdisFfmExpireIndex(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            NativeAllocator nativeAllocator,
-            RegionAllocator regionAllocator
-    ) {
-        this(memoryRuntime, nativeAllocator, HashSeed.random(), regionAllocator, null);
-    }
-
-    public YierdisFfmExpireIndex(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            NativeAllocator nativeAllocator,
-            HashSeed hashSeed,
-            RegionAllocator regionAllocator
-    ) {
-        this(memoryRuntime, nativeAllocator, hashSeed, regionAllocator, null);
-    }
-
-    public YierdisFfmExpireIndex(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            NativeAllocator nativeAllocator,
-            HashSeed hashSeed,
-            RegionAllocator regionAllocator,
-            HashTableMaintenanceRegistry maintenanceRegistry
-    ) {
-        Objects.requireNonNull(memoryRuntime, "memoryRuntime");
-        this.nativeAllocator = Objects.requireNonNull(nativeAllocator, "nativeAllocator");
+        this.stableMemoryBackend = Objects.requireNonNull(stableMemoryBackend, "stableMemoryBackend");
         this.hashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
-        this.regionAllocator = Objects.requireNonNull(regionAllocator, "regionAllocator");
         this.maintenanceRegistry = maintenanceRegistry;
         this.maintenanceRegistration = maintenanceRegistry == null ? null : maintenanceRegistry.registration(this);
     }
@@ -409,7 +357,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
     @Override
     public void setExpireAtMillis(KeyHandle keyHandle, long expireAtMillis) {
         Objects.requireNonNull(keyHandle, "keyHandle");
-        long keyRawHandle = keyRawHandle(keyHandle);
+        NativeHandle nativeHandle = nativeKeyHandle(keyHandle);
         ensureTable0();
         rehashStep();
 
@@ -428,12 +376,12 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
             }
         }
 
-        maybeStartRehashForInsert(keyRawHandle, h);
+        maybeStartRehashForInsert(nativeHandle, h);
         if (table1 != null) {
-            insertNewIntoTable1(keyRawHandle, h, expireAtMillis);
+            insertNewIntoTable1(nativeHandle, h, expireAtMillis);
             return;
         }
-        insertNewIntoTable(table0, keyRawHandle, h, expireAtMillis);
+        insertNewIntoTable(table0, nativeHandle, h, expireAtMillis);
     }
 
     @Override
@@ -469,9 +417,9 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
     @Override
     public PreparedTtlMutation prepareSetExpireAtMillis(KeyHandle keyHandle, long expireAtMillis) {
         Objects.requireNonNull(keyHandle, "keyHandle");
-        long targetRawHandle = keyRawHandle(keyHandle);
+        NativeHandle targetHandle = nativeKeyHandle(keyHandle);
         int targetHash = hash(keyHandle);
-        return prepareReplacement(targetRawHandle, targetHash, expireAtMillis);
+        return prepareReplacement(targetHandle, targetHash, expireAtMillis);
     }
 
     @Override
@@ -565,8 +513,8 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
             if (table.stateAt(i) != STATE_FILLED) {
                 continue;
             }
-            releaseKeyFromIndex(table.keyRawHandles[i]);
-            table.keyRawHandles[i] = 0L;
+            releaseKeyFromIndex(table.keyHandles[i]);
+            table.keyHandles[i] = null;
         }
         table.close();
     }
@@ -581,13 +529,13 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
         for (int i = 0; i < quickSteps; i++) {
             int idx = (start + i) & mask;
             if (table.stateAt(idx) == STATE_FILLED) {
-                return keyHandle(table.keyRawHandles[idx], table.hashAt(idx));
+                return keyHandle(table.keyHandles[idx], table.hashAt(idx));
             }
         }
         for (int i = 0; i < table.capacity; i++) {
             int idx = (start + i) & mask;
             if (table.stateAt(idx) == STATE_FILLED) {
-                return keyHandle(table.keyRawHandles[idx], table.hashAt(idx));
+                return keyHandle(table.keyHandles[idx], table.hashAt(idx));
             }
         }
         return null;
@@ -603,24 +551,24 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
         for (int i = 0; i < quickSteps; i++) {
             int idx = (start + i) & mask;
             if (table.stateAt(idx) == STATE_FILLED) {
-                return copyKey(table.keyRawHandles[idx]);
+                return copyKey(table.keyHandles[idx]);
             }
         }
         for (int i = 0; i < table.capacity; i++) {
             int idx = (start + i) & mask;
             if (table.stateAt(idx) == STATE_FILLED) {
-                return copyKey(table.keyRawHandles[idx]);
+                return copyKey(table.keyHandles[idx]);
             }
         }
         return null;
     }
 
-    private void maybeStartRehashForInsert(long keyRawHandle, int hash) {
+    private void maybeStartRehashForInsert(NativeHandle keyHandle, int hash) {
         if (table1 != null) {
             return;
         }
         Table t0 = table0;
-        int location = findOrInsertLocation(t0, keyRawHandle, hash);
+        int location = findOrInsertLocation(t0, keyHandle, hash);
         if (location >= 0) {
             throw new IllegalStateException("expire index key already exists during resize preparation");
         }
@@ -686,19 +634,23 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
         }
     }
 
-    private PreparedTtlMutation prepareReplacement(long targetRawHandle, int targetHash, Long expireAtMillis) {
-        boolean targetExists = containsRawHandle(table0, targetRawHandle, targetHash)
-                || containsRawHandle(table1, targetRawHandle, targetHash);
+    private PreparedTtlMutation prepareReplacement(
+            NativeHandle targetHandle,
+            int targetHash,
+            Long expireAtMillis
+    ) {
+        boolean targetExists = containsHandle(table0, targetHandle, targetHash)
+                || containsHandle(table1, targetHandle, targetHash);
         int currentSize = tableSize(table0) + tableSize(table1);
         int replacementSize = currentSize - (targetExists ? 1 : 0) + (expireAtMillis == null ? 0 : 1);
         Table replacement = null;
         if (replacementSize > 0) {
             int capacity = tableSizeFor(replacementSize);
             replacement = new Table(capacity);
-            copyTableExcluding(table0, replacement, targetRawHandle, targetHash);
-            copyTableExcluding(table1, replacement, targetRawHandle, targetHash);
+            copyTableExcluding(table0, replacement, targetHandle, targetHash);
+            copyTableExcluding(table1, replacement, targetHandle, targetHash);
             if (expireAtMillis != null) {
-                insertIntoTable(replacement, targetRawHandle, targetHash, expireAtMillis);
+                insertIntoTable(replacement, targetHandle, targetHash, expireAtMillis);
             }
             if (replacement.size != replacementSize) {
                 replacement.close();
@@ -714,7 +666,12 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
         return new PreparedReplacement(replacement, stagedBytes);
     }
 
-    private void copyTableExcluding(Table source, Table target, long excludedRawHandle, int excludedHash) {
+    private void copyTableExcluding(
+            Table source,
+            Table target,
+            NativeHandle excludedHandle,
+            int excludedHash
+    ) {
         if (source == null || target == null) {
             return;
         }
@@ -722,24 +679,24 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
             if (source.stateAt(i) != STATE_FILLED) {
                 continue;
             }
-            long rawHandle = source.keyRawHandles[i];
+            NativeHandle keyHandle = source.keyHandles[i];
             int hash = source.hashAt(i);
-            if (hash == excludedHash && rawHandle == excludedRawHandle) {
+            if (hash == excludedHash && keyHandle.equals(excludedHandle)) {
                 continue;
             }
-            insertIntoTable(target, rawHandle, hash, source.expireAt(i));
+            insertIntoTable(target, keyHandle, hash, source.expireAt(i));
         }
     }
 
-    private boolean containsRawHandle(Table table, long rawHandle, int hash) {
+    private boolean containsHandle(Table table, NativeHandle handle, int hash) {
         if (table == null) {
             return false;
         }
-        int index = findIndex(table, rawHandle, hash);
+        int index = findIndex(table, handle, hash);
         return index >= 0;
     }
 
-    private int findIndex(Table table, long rawHandle, int hash) {
+    private int findIndex(Table table, NativeHandle handle, int hash) {
         if (table == null) {
             return -1;
         }
@@ -751,7 +708,9 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
             if (state == STATE_EMPTY) {
                 return -1;
             }
-            if (state == STATE_FILLED && table.hashAt(idx) == hash && table.keyRawHandles[idx] == rawHandle) {
+            if (state == STATE_FILLED
+                    && table.hashAt(idx) == hash
+                    && table.keyHandles[idx].equals(handle)) {
                 return idx;
             }
             idx = (idx + 1) & mask;
@@ -814,45 +773,45 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
     }
 
     private void moveOldSlotToTable1(Table source, int sourceIndex) {
-        long rawHandle = source.keyRawHandles[sourceIndex];
+        NativeHandle keyHandle = source.keyHandles[sourceIndex];
         int hash = source.hashAt(sourceIndex);
         long expireAtMillis = source.expireAt(sourceIndex);
-        ensureTable1CapacityForInsert(rawHandle, hash);
+        ensureTable1CapacityForInsert(keyHandle, hash);
 
         source.setState(sourceIndex, STATE_TOMBSTONE);
         source.setHash(sourceIndex, 0);
         source.setExpireAt(sourceIndex, 0L);
-        source.keyRawHandles[sourceIndex] = 0L;
+        source.keyHandles[sourceIndex] = null;
         source.size--;
-        insertIntoTable(table1, rawHandle, hash, expireAtMillis);
+        insertIntoTable(table1, keyHandle, hash, expireAtMillis);
     }
 
-    private void insertNewIntoTable1(long rawHandle, int hash, long expireAtMillis) {
-        ensureTable1CapacityForInsert(rawHandle, hash);
-        insertNewIntoTable(table1, rawHandle, hash, expireAtMillis);
+    private void insertNewIntoTable1(NativeHandle keyHandle, int hash, long expireAtMillis) {
+        ensureTable1CapacityForInsert(keyHandle, hash);
+        insertNewIntoTable(table1, keyHandle, hash, expireAtMillis);
     }
 
-    private void insertNewIntoTable(Table table, long rawHandle, int hash, long expireAtMillis) {
-        retainKeyForIndex(rawHandle);
-        insertIntoTable(table, rawHandle, hash, expireAtMillis);
+    private void insertNewIntoTable(Table table, NativeHandle keyHandle, int hash, long expireAtMillis) {
+        retainKeyForIndex(keyHandle);
+        insertIntoTable(table, keyHandle, hash, expireAtMillis);
     }
 
-    private void insertIntoTable(Table table, long rawHandle, int hash, long expireAtMillis) {
-        int loc = findOrInsertLocation(table, rawHandle, hash);
+    private void insertIntoTable(Table table, NativeHandle keyHandle, int hash, long expireAtMillis) {
+        int loc = findOrInsertLocation(table, keyHandle, hash);
         int insertAt = -loc - 1;
         if (table.stateAt(insertAt) == STATE_EMPTY) {
             table.used++;
         }
         table.setState(insertAt, STATE_FILLED);
         table.setHash(insertAt, hash);
-        table.keyRawHandles[insertAt] = rawHandle;
+        table.keyHandles[insertAt] = keyHandle;
         table.setExpireAt(insertAt, expireAtMillis);
         table.size++;
     }
 
-    private void ensureTable1CapacityForInsert(long rawHandle, int hash) {
+    private void ensureTable1CapacityForInsert(NativeHandle keyHandle, int hash) {
         Table target = table1;
-        int location = findOrInsertLocation(target, rawHandle, hash);
+        int location = findOrInsertLocation(target, keyHandle, hash);
         if (location >= 0) {
             return;
         }
@@ -880,13 +839,13 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
             if (old.stateAt(i) != STATE_FILLED) {
                 continue;
             }
-            long rawHandle = old.keyRawHandles[i];
+            NativeHandle keyHandle = old.keyHandles[i];
             int hash = old.hashAt(i);
             long expireAt = old.expireAt(i);
-            int loc = -findOrInsertLocation(next, rawHandle, hash) - 1;
+            int loc = -findOrInsertLocation(next, keyHandle, hash) - 1;
             next.setState(loc, STATE_FILLED);
             next.setHash(loc, hash);
-            next.keyRawHandles[loc] = rawHandle;
+            next.keyHandles[loc] = keyHandle;
             next.setExpireAt(loc, expireAt);
             next.size++;
             next.used++;
@@ -952,7 +911,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
             if (state == STATE_EMPTY) {
                 return -1;
             }
-            if (state == STATE_FILLED && table.hashAt(idx) == hash && equalsBytes(table.keyRawHandles[idx], key)) {
+            if (state == STATE_FILLED && table.hashAt(idx) == hash && equalsBytes(table.keyHandles[idx], key)) {
                 return idx;
             }
             idx = (idx + 1) & mask;
@@ -972,7 +931,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
             if (state == STATE_EMPTY) {
                 return -1;
             }
-            if (state == STATE_FILLED && table.hashAt(idx) == hash && equalsBytes(table.keyRawHandles[idx], key)) {
+            if (state == STATE_FILLED && table.hashAt(idx) == hash && equalsBytes(table.keyHandles[idx], key)) {
                 return idx;
             }
             idx = (idx + 1) & mask;
@@ -984,7 +943,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
         if (table == null) {
             return -1;
         }
-        long handleRaw = keyRawHandleOrZero(keyHandle);
+        NativeHandle nativeHandle = nativeKeyHandleOrNull(keyHandle);
         int mask = table.capacity - 1;
         int idx = hash & mask;
         for (int probes = 1; probes <= table.capacity; probes++) {
@@ -994,11 +953,11 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
                 return -1;
             }
             if (state == STATE_FILLED && table.hashAt(idx) == hash) {
-                long storedRaw = table.keyRawHandles[idx];
-                if (handleRaw != 0L && storedRaw == handleRaw) {
+                NativeHandle storedHandle = table.keyHandles[idx];
+                if (nativeHandle != null && storedHandle.equals(nativeHandle)) {
                     return idx;
                 }
-                if (equalsBytes(storedRaw, keyHandle)) {
+                if (equalsBytes(storedHandle, keyHandle)) {
                     return idx;
                 }
             }
@@ -1007,7 +966,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
         return -1;
     }
 
-    private int findOrInsertLocation(Table table, long rawHandle, int hash) {
+    private int findOrInsertLocation(Table table, NativeHandle handle, int hash) {
         int mask = table.capacity - 1;
         int idx = hash & mask;
         int firstTombstone = -1;
@@ -1022,7 +981,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
                 if (firstTombstone < 0) {
                     firstTombstone = idx;
                 }
-            } else if (table.hashAt(idx) == hash && table.keyRawHandles[idx] == rawHandle) {
+            } else if (table.hashAt(idx) == hash && table.keyHandles[idx].equals(handle)) {
                 return idx;
             }
             idx = (idx + 1) & mask;
@@ -1033,17 +992,16 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
         throw new IllegalStateException("expire index has no insertion slot");
     }
 
-    private long keyRawHandle(KeyHandle handle) {
-        long rawHandle = keyRawHandleOrZero(handle);
-        if (rawHandle == 0L) {
+    private NativeHandle nativeKeyHandle(KeyHandle handle) {
+        NativeHandle nativeHandle = nativeKeyHandleOrNull(handle);
+        if (nativeHandle == null || nativeHandle.isNull()) {
             throw new IllegalArgumentException("unsupported KeyHandle: " + handle.getClass().getName());
         }
-        return rawHandle;
+        return nativeHandle;
     }
 
-    private static long keyRawHandleOrZero(KeyHandle handle) {
-        NativeHandle nativeHandle = KeyHandleAccess.allocatorNativeHandleOrNull(handle);
-        return nativeHandle == null ? 0L : nativeHandle.raw();
+    private static NativeHandle nativeKeyHandleOrNull(KeyHandle handle) {
+        return KeyHandleAccess.allocatorNativeHandleOrNull(handle);
     }
 
     private static int tableSizeFor(int expectedSize) {
@@ -1078,13 +1036,13 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
 
         void remove() {
             Table current = table == 0 ? table0 : table1;
-            long rawHandle = current.keyRawHandles[index];
+            NativeHandle keyHandle = current.keyHandles[index];
             current.setState(index, STATE_TOMBSTONE);
             current.setHash(index, 0);
             current.setExpireAt(index, 0L);
-            current.keyRawHandles[index] = 0L;
+            current.keyHandles[index] = null;
             current.size--;
-            releaseKeyFromIndex(rawHandle);
+            releaseKeyFromIndex(keyHandle);
             recordMaintenanceDebt();
         }
     }
@@ -1161,7 +1119,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
     private final class PreparedRemove implements PreparedTtlMutation {
         private final Table table;
         private final int index;
-        private long removedRawHandle;
+        private NativeHandle removedHandle;
         private boolean committed;
         private boolean aborted;
 
@@ -1186,11 +1144,11 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
             if (table.stateAt(index) != STATE_FILLED) {
                 throw new IllegalStateException("prepared ttl remove target is no longer filled");
             }
-            removedRawHandle = table.keyRawHandles[index];
+            removedHandle = table.keyHandles[index];
             table.setState(index, STATE_TOMBSTONE);
             table.setHash(index, 0);
             table.setExpireAt(index, 0L);
-            table.keyRawHandles[index] = 0L;
+            table.keyHandles[index] = null;
             table.size--;
             recordMaintenanceDebt();
             committed = true;
@@ -1198,9 +1156,9 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
 
         @Override
         public void releaseSuperseded() {
-            long rawHandle = removedRawHandle;
-            removedRawHandle = 0L;
-            releaseKeyFromIndex(rawHandle);
+            NativeHandle handle = removedHandle;
+            removedHandle = null;
+            releaseKeyFromIndex(handle);
         }
 
         @Override
@@ -1261,34 +1219,29 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
 
     private final class Table implements AutoCloseable {
         private final int capacity;
-        private final YierdisFfmRegion statesRegion;
-        private final YierdisFfmSpan states;
-        private final YierdisFfmRegion hashesRegion;
-        private final YierdisFfmSpan hashes;
-        private final YierdisFfmRegion expireAtRegion;
-        private final YierdisFfmSpan expireAt;
-        private final long[] keyRawHandles;
+        private final StableMemoryRegion statesRegion;
+        private final StableMemoryRegion hashesRegion;
+        private final StableMemoryRegion expireAtRegion;
+        private final NativeHandle[] keyHandles;
 
         private int size;
         private int used;
 
         private Table(int capacity) {
             this.capacity = capacity;
-            YierdisFfmRegion stagedStatesRegion = null;
-            YierdisFfmRegion stagedHashesRegion = null;
-            YierdisFfmRegion stagedExpireAtRegion = null;
-            YierdisFfmSpan stagedStates = null;
-            YierdisFfmSpan stagedHashes = null;
-            YierdisFfmSpan stagedExpireAt = null;
-            long[] stagedKeyRawHandles = null;
+            StableMemoryRegion stagedStatesRegion = null;
+            StableMemoryRegion stagedHashesRegion = null;
+            StableMemoryRegion stagedExpireAtRegion = null;
+            NativeHandle[] stagedKeyHandles = null;
             try {
-                stagedStatesRegion = regionAllocator.allocateRegion("ffm-expire-states", capacity);
-                stagedStates = stagedStatesRegion.span(0, capacity);
-                stagedHashesRegion = regionAllocator.allocateRegion("ffm-expire-hashes", capacity * Integer.BYTES);
-                stagedHashes = stagedHashesRegion.span(0, capacity * Integer.BYTES);
-                stagedExpireAtRegion = regionAllocator.allocateRegion("ffm-expire-values", capacity * Long.BYTES);
-                stagedExpireAt = stagedExpireAtRegion.span(0, capacity * Long.BYTES);
-                stagedKeyRawHandles = new long[capacity];
+                stagedStatesRegion = stableMemoryBackend.allocateRegion("expire-index-states", capacity);
+                stagedHashesRegion = stableMemoryBackend.allocateRegion(
+                        "expire-index-hashes", capacity * Integer.BYTES
+                );
+                stagedExpireAtRegion = stableMemoryBackend.allocateRegion(
+                        "expire-index-values", capacity * Long.BYTES
+                );
+                stagedKeyHandles = new NativeHandle[capacity];
             } catch (RuntimeException | Error failure) {
                 closeRegion(stagedExpireAtRegion, failure);
                 closeRegion(stagedHashesRegion, failure);
@@ -1296,44 +1249,41 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
                 throw failure;
             }
             this.statesRegion = stagedStatesRegion;
-            this.states = stagedStates;
             this.hashesRegion = stagedHashesRegion;
-            this.hashes = stagedHashes;
             this.expireAtRegion = stagedExpireAtRegion;
-            this.expireAt = stagedExpireAt;
-            this.keyRawHandles = stagedKeyRawHandles;
+            this.keyHandles = stagedKeyHandles;
         }
 
         private byte stateAt(int index) {
-            return YierdisFfmAccess.getByte(states, index);
+            return statesRegion.getByte(index);
         }
 
         private void setState(int index, byte value) {
-            YierdisFfmAccess.setByte(states, index, value);
+            statesRegion.setByte(index, value);
         }
 
         private int hashAt(int index) {
-            return YierdisFfmAccess.getInt(hashes, index * Integer.BYTES);
+            return hashesRegion.getIntLittleEndian(index * Integer.BYTES);
         }
 
         private void setHash(int index, int value) {
-            YierdisFfmAccess.setInt(hashes, index * Integer.BYTES, value);
+            hashesRegion.setIntLittleEndian(index * Integer.BYTES, value);
         }
 
         private long expireAt(int index) {
-            return YierdisFfmAccess.getLong(expireAt, index * Long.BYTES);
+            return expireAtRegion.getLongLittleEndian(index * Long.BYTES);
         }
 
         private void setExpireAt(int index, long value) {
-            YierdisFfmAccess.setLong(expireAt, index * Long.BYTES, value);
+            expireAtRegion.setLongLittleEndian(index * Long.BYTES, value);
         }
 
         @Override
         public void close() {
             Throwable failure = null;
-            failure = closeRegion(statesRegion, failure);
-            failure = closeRegion(hashesRegion, failure);
             failure = closeRegion(expireAtRegion, failure);
+            failure = closeRegion(hashesRegion, failure);
+            failure = closeRegion(statesRegion, failure);
             if (failure != null) {
                 rethrow(failure);
             }
@@ -1352,7 +1302,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
         }
     }
 
-    private static Throwable closeRegion(YierdisFfmRegion region, Throwable failure) {
+    private static Throwable closeRegion(StableMemoryRegion region, Throwable failure) {
         if (region == null) {
             return failure;
         }
@@ -1382,15 +1332,15 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
         throw new IllegalStateException(failure);
     }
 
-    private boolean equalsBytes(long rawHandle, byte[] key) {
-        try (NativeObjectView stored = nativeAllocator.resolveRaw(rawHandle, NativeAccessMode.READ_ONLY)) {
+    private boolean equalsBytes(NativeHandle handle, byte[] key) {
+        try (NativeObjectView stored = stableMemoryBackend.resolve(handle, NativeAccessMode.READ_ONLY)) {
             return stored.size() == key.length
                     && stored.contentEquals(0, key, 0, key.length);
         }
     }
 
-    private boolean equalsBytes(long rawHandle, BytesView key) {
-        try (NativeObjectView stored = nativeAllocator.resolveRaw(rawHandle, NativeAccessMode.READ_ONLY)) {
+    private boolean equalsBytes(NativeHandle handle, BytesView key) {
+        try (NativeObjectView stored = stableMemoryBackend.resolve(handle, NativeAccessMode.READ_ONLY)) {
             int length = key.length();
             if (stored.size() != length) {
                 return false;
@@ -1404,8 +1354,8 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
         }
     }
 
-    private boolean equalsBytes(long rawHandle, KeyHandle key) {
-        try (NativeObjectView stored = nativeAllocator.resolveRaw(rawHandle, NativeAccessMode.READ_ONLY)) {
+    private boolean equalsBytes(NativeHandle handle, KeyHandle key) {
+        try (NativeObjectView stored = stableMemoryBackend.resolve(handle, NativeAccessMode.READ_ONLY)) {
             int length = key.length();
             if (stored.size() != length) {
                 return false;
@@ -1419,29 +1369,29 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex, AutoClos
         }
     }
 
-    private KeyHandle keyHandle(long rawHandle, int hash) {
-        return KeyHandle.forNative(nativeAllocator, NativeHandle.fromRaw(rawHandle), hash);
+    private KeyHandle keyHandle(NativeHandle handle, int hash) {
+        return KeyHandle.forNative(stableMemoryBackend, handle, hash);
     }
 
-    private byte[] copyKey(long rawHandle) {
-        try (NativeObjectView stored = nativeAllocator.resolveRaw(rawHandle, NativeAccessMode.READ_ONLY)) {
+    private byte[] copyKey(NativeHandle handle) {
+        try (NativeObjectView stored = stableMemoryBackend.resolve(handle, NativeAccessMode.READ_ONLY)) {
             byte[] copy = new byte[stored.size()];
             stored.getBytes(0, copy, 0, copy.length);
             return copy;
         }
     }
 
-    private static void retainKeyForIndex(long rawHandle) {
-        NativeHandle.requireValidRaw(rawHandle);
-        if (rawHandle == 0L) {
+    private static void retainKeyForIndex(NativeHandle handle) {
+        Objects.requireNonNull(handle, "handle");
+        if (handle.isNull()) {
             throw new IllegalArgumentException("expire index key handle must not be null");
         }
         // KEY_BYTES 由 NativeKeyDirectory 唯一拥有；expire index 只借用 stable handle，不能用长期 pin 代替所有权协调。
     }
 
-    private static void releaseKeyFromIndex(long rawHandle) {
-        if (rawHandle != 0L) {
-            NativeHandle.requireValidRaw(rawHandle);
+    private static void releaseKeyFromIndex(NativeHandle handle) {
+        if (handle != null && handle.isNull()) {
+            throw new IllegalArgumentException("expire index key handle must not be null");
         }
     }
 }

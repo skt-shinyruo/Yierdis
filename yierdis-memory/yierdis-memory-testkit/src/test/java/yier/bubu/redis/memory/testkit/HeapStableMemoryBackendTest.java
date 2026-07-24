@@ -9,6 +9,7 @@ import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.StableMemoryRegion;
+import yier.bubu.redis.memory.api.StaleNativeHandleException;
 
 public class HeapStableMemoryBackendTest {
     @Test
@@ -53,6 +54,45 @@ public class HeapStableMemoryBackendTest {
 
         backend.unpin(handle);
         backend.free(handle);
+        backend.close();
+    }
+
+    @Test
+    public void freePinnedObjectQuarantinesUntilLastUnpin() {
+        TestOwner owner = new TestOwner();
+        HeapStableMemoryBackend backend = new HeapStableMemoryBackend("heap", 8, owner);
+        backend.bindToCurrentThread();
+        NativeHandle handle = backend.allocate(NativeObjectKind.STRING_BYTES, 1);
+        try (NativeObjectView view = backend.resolve(handle, NativeAccessMode.READ_WRITE)) {
+            view.setByte(0, (byte) 42);
+        }
+
+        backend.pin(handle);
+        backend.pin(handle);
+        backend.free(handle);
+
+        Assert.assertThrows(
+                StaleNativeHandleException.class,
+                () -> backend.resolve(handle, NativeAccessMode.READ_ONLY)
+        );
+        try (NativeObjectView view = backend.resolvePinned(handle, NativeAccessMode.READ_ONLY)) {
+            Assert.assertEquals(42, view.getByte(0));
+        }
+        Assert.assertEquals(1L, backend.stats().pinnedObjects());
+        Assert.assertEquals(1L, backend.stats().quarantinedObjects());
+
+        backend.unpin(handle);
+        Assert.assertEquals(1L, backend.stats().pinnedObjects());
+        Assert.assertEquals(1L, backend.stats().quarantinedObjects());
+
+        backend.unpin(handle);
+        Assert.assertEquals(0L, backend.stats().liveObjects());
+        Assert.assertEquals(0L, backend.stats().pinnedObjects());
+        Assert.assertEquals(0L, backend.stats().quarantinedObjects());
+        Assert.assertThrows(
+                StaleNativeHandleException.class,
+                () -> backend.resolvePinned(handle, NativeAccessMode.READ_ONLY)
+        );
         backend.close();
     }
 

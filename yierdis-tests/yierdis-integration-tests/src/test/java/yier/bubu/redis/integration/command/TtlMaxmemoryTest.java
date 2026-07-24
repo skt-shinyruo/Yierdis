@@ -5,6 +5,8 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.memory.YierdisDb;
+import yier.bubu.redis.storage.api.DbDefragConfig;
+import yier.bubu.redis.storage.api.DbEngineConfig;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
@@ -20,6 +22,7 @@ import yier.bubu.redis.testutil.ReplySimpleString;
 import java.util.List;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
+import static yier.bubu.redis.testutil.TestDbs.createFfmDb;
 
 public class TtlMaxmemoryTest {
     @Test
@@ -53,7 +56,7 @@ public class TtlMaxmemoryTest {
         byte[] value = b("v");
         long maxmemoryBytes = minMaxmemoryThatAllowsSetWithTtl(key, value) - 1L;
 
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        YierdisDb db = openFfm(maxmemoryBytes);
         db.bindToCurrentThread();
 
         YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
@@ -77,7 +80,7 @@ public class TtlMaxmemoryTest {
         byte[] value = b("v");
         long maxmemoryBytes = minMaxmemoryThatAllowsPlainSetAndTtlMutation(key, value, ttlMutation);
 
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        YierdisDb db = openFfm(maxmemoryBytes);
         db.bindToCurrentThread();
 
         YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
@@ -144,13 +147,7 @@ public class TtlMaxmemoryTest {
     }
 
     private static boolean allowsSetWithTtl(long maxmemoryBytes, byte[] key, byte[] value) {
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(
-                maxmemoryBytes,
-                MaxmemoryPolicy.NOEVICTION,
-                5,
-                5,
-                5
-        );
+        YierdisDb db = openFfm(maxmemoryBytes);
         try {
             db.bindToCurrentThread();
             return db.writes().strings().setString(key, value, SetMode.NORMAL, ExpireOption.px(60_000L)).value();
@@ -170,13 +167,7 @@ public class TtlMaxmemoryTest {
             byte[] value,
             TtlMutation ttlMutation
     ) {
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(
-                maxmemoryBytes,
-                MaxmemoryPolicy.NOEVICTION,
-                5,
-                5,
-                5
-        );
+        YierdisDb db = openFfm(maxmemoryBytes);
         try {
             db.bindToCurrentThread();
             return db.writes().strings().setString(key, value, SetMode.NORMAL, null).value()
@@ -203,6 +194,18 @@ public class TtlMaxmemoryTest {
                 return data[index];
             }
         };
+    }
+
+    private static YierdisDb openFfm(long maxmemoryBytes) {
+        return createFfmDb(new DbEngineConfig(
+                0,
+                maxmemoryBytes,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                5L,
+                5L,
+                new DbDefragConfig(false, 0L, 0L, 0L)
+        ), 0);
     }
 
     @FunctionalInterface

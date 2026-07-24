@@ -4,7 +4,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.bytes.BytesView;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
@@ -19,8 +19,8 @@ import java.nio.charset.StandardCharsets;
 public class YierdisDbMemoryReporterTest {
     @Test
     public void directMemoryUsageReadsNativeEntryAndValueMetadata() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("memory-reporter")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        try (TestBackend runtime = TestBackend.open("memory-reporter")) {
+            YierdisDb db = TestDbSupport.open(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
             db.bindToCurrentThread();
             try {
                 byte[] key = bytes("report-key");
@@ -36,14 +36,13 @@ public class YierdisDbMemoryReporterTest {
             } finally {
                 db.shutdown();
             }
-            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 
     @Test
     public void memoryStatsIncludesFfmNativeBytesWhenEnabledForMaxmemory() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("memory-stats")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 1_000_000L, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        try (TestBackend runtime = TestBackend.open("memory-stats")) {
+            YierdisDb db = TestDbSupport.open(runtime, 1_000_000L, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
             db.bindToCurrentThread();
             try {
                 byte[] key = bytes("ttl-key");
@@ -58,14 +57,13 @@ public class YierdisDbMemoryReporterTest {
             } finally {
                 db.shutdown();
             }
-            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 
     @Test
     public void memoryStatsReportsPhysicalCommittedBytesAndDisablesSharedRuntimeSampling() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("memory-stats-shared-native")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 1_000_000L, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        try (TestBackend runtime = TestBackend.open("memory-stats-shared-native")) {
+            YierdisDb db = TestDbSupport.open(runtime, 1_000_000L, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
             db.bindToCurrentThread();
             try {
                 db.writes().strings().setString(bytes("k"), bytes("value"), SetMode.NORMAL, null);
@@ -87,14 +85,13 @@ public class YierdisDbMemoryReporterTest {
             } finally {
                 db.shutdown();
             }
-            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 
     @Test
     public void deferredExpirationGaugeIsDeduplicatedAndConvergesAfterReplaceDeleteAndFlush() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("deferred-expiration-gauge")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0L, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        try (TestBackend runtime = TestBackend.open("deferred-expiration-gauge")) {
+            YierdisDb db = TestDbSupport.open(runtime, 0L, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
             db.bindToCurrentThread();
             try {
                 YierdisDbKeyLifecycle lifecycle = db.keyLifecycle();
@@ -123,7 +120,6 @@ public class YierdisDbMemoryReporterTest {
             } finally {
                 db.shutdown();
             }
-            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 

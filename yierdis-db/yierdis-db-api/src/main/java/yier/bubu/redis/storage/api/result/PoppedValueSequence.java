@@ -1,12 +1,5 @@
 package yier.bubu.redis.storage.api.result;
 
-public interface PoppedValueSequence extends BulkStringSequence, AutoCloseable {
+public interface PoppedValueSequence extends ByteSequenceSource {
     boolean isNull();
-
-    long encodedElementBytes();
-
-    long retainedMemoryBytes();
-
-    @Override
-    void close();
 }

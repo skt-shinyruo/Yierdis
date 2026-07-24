@@ -4,7 +4,8 @@ import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.storage.memory.YierdisDb;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.storage.api.DbDefragConfig;
+import yier.bubu.redis.storage.api.DbEngineConfig;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyError;
@@ -17,6 +18,7 @@ import java.util.Arrays;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestBytes.cmd;
+import static yier.bubu.redis.testutil.TestDbs.createFfmDb;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class HllCommandTest {
@@ -75,62 +77,63 @@ public class HllCommandTest {
 
     @Test
     public void denseHllSupportsInPlacePfaddAfterPfmergeUnderFfmStorage() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
-            try {
-                db.bindToCurrentThread();
-                YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-                try (FastTestClient client = new FastTestClient(processor)) {
-                    client.execute(cmd("PFADD", "src", "a", "b"));
+        YierdisDb db = openFfm(0L);
+        try {
+            db.bindToCurrentThread();
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
+                client.execute(cmd("PFADD", "src", "a", "b"));
 
-                    // PFMERGE 总是写 dense，这样后续 PFADD 会走 dense 原地更新分支。
-                    client.execute(cmd("PFMERGE", "dense", "src"));
+                // PFMERGE 总是写 dense，这样后续 PFADD 会走 dense 原地更新分支。
+                client.execute(cmd("PFMERGE", "dense", "src"));
 
-                    ReplyInteger add = (ReplyInteger) client.execute(cmd("PFADD", "dense", "c"));
-                    Assert.assertEquals(1, add.value());
+                ReplyInteger add = (ReplyInteger) client.execute(cmd("PFADD", "dense", "c"));
+                Assert.assertEquals(1, add.value());
 
-                    ReplyInteger count = (ReplyInteger) client.execute(cmd("PFCOUNT", "dense"));
-                    Assert.assertEquals(3, count.value());
-                }
-            } finally {
-                db.shutdown();
+                ReplyInteger count = (ReplyInteger) client.execute(cmd("PFCOUNT", "dense"));
+                Assert.assertEquals(3, count.value());
             }
+        } finally {
+            db.shutdown();
         }
     }
 
     @Test
     public void densePfaddNearMaxmemoryDoesNotFalseOom() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
-                    runtime,
-                    DENSE_HLL_PHYSICAL_MAXMEMORY_BYTES,
-                    MaxmemoryPolicy.NOEVICTION,
-                    5,
-                    5,
-                    5
-            );
-            db.bindToCurrentThread();
-            try {
-                YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-                try (FastTestClient client = new FastTestClient(processor)) {
-                    ReplyObject sourceAdd = client.execute(cmd("PFADD", "src", "a", "b"));
-                    Assert.assertTrue("initial PFADD reply: " + replyDescription(sourceAdd), sourceAdd instanceof ReplyInteger);
-                    ReplyObject merge = client.execute(cmd("PFMERGE", "dense", "src"));
-                    Assert.assertTrue("PFMERGE reply: " + replyDescription(merge), merge instanceof ReplySimpleString);
-                    ReplyObject delete = client.execute(cmd("DEL", "src"));
-                    Assert.assertTrue("DEL reply: " + replyDescription(delete), delete instanceof ReplyInteger);
+        YierdisDb db = openFfm(DENSE_HLL_PHYSICAL_MAXMEMORY_BYTES);
+        db.bindToCurrentThread();
+        try {
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
+                ReplyObject sourceAdd = client.execute(cmd("PFADD", "src", "a", "b"));
+                Assert.assertTrue("initial PFADD reply: " + replyDescription(sourceAdd), sourceAdd instanceof ReplyInteger);
+                ReplyObject merge = client.execute(cmd("PFMERGE", "dense", "src"));
+                Assert.assertTrue("PFMERGE reply: " + replyDescription(merge), merge instanceof ReplySimpleString);
+                ReplyObject delete = client.execute(cmd("DEL", "src"));
+                Assert.assertTrue("DEL reply: " + replyDescription(delete), delete instanceof ReplyInteger);
 
-                    ReplyObject add = client.execute(cmd("PFADD", "dense", "c"));
-                    Assert.assertTrue("PFADD reply: " + replyDescription(add), add instanceof ReplyInteger);
-                    Assert.assertEquals(1, ((ReplyInteger) add).value());
+                ReplyObject add = client.execute(cmd("PFADD", "dense", "c"));
+                Assert.assertTrue("PFADD reply: " + replyDescription(add), add instanceof ReplyInteger);
+                Assert.assertEquals(1, ((ReplyInteger) add).value());
 
-                    ReplyInteger count = (ReplyInteger) client.execute(cmd("PFCOUNT", "dense"));
-                    Assert.assertEquals(3, count.value());
-                }
-            } finally {
-                db.shutdown();
+                ReplyInteger count = (ReplyInteger) client.execute(cmd("PFCOUNT", "dense"));
+                Assert.assertEquals(3, count.value());
             }
+        } finally {
+            db.shutdown();
         }
+    }
+
+    private static YierdisDb openFfm(long maxmemoryBytes) {
+        return createFfmDb(new DbEngineConfig(
+                0,
+                maxmemoryBytes,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                5L,
+                5L,
+                new DbDefragConfig(false, 0L, 0L, 0L)
+        ), 0);
     }
 
     @Test

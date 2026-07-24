@@ -29,11 +29,6 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-memory-ffm</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-memory-api</artifactId>
         </dependency>
 

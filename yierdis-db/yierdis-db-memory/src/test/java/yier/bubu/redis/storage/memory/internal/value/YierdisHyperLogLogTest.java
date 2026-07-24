@@ -2,7 +2,7 @@ package yier.bubu.redis.storage.memory.internal.value;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 
@@ -13,8 +13,8 @@ import java.util.List;
 public class YierdisHyperLogLogTest {
     @Test
     public void sparseHllAddsElementsAndMergesIntoRegisters() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("hll-sparse");
-             StringRoot root = new StringRoot(runtime)) {
+        try (TestBackend runtime = TestBackend.open("hll-sparse");
+             StringRoot root = new StringRoot(runtime.backend())) {
             ValueHandle handle = root.store(YierdisHyperLogLog.newSparse());
 
             Assert.assertTrue(YierdisHyperLogLog.isHllString(root, handle));
@@ -33,8 +33,8 @@ public class YierdisHyperLogLogTest {
 
     @Test
     public void denseHllUpdatesInPlaceAndMergesViaBytesSlice() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("hll-dense");
-             StringRoot root = new StringRoot(runtime)) {
+        try (TestBackend runtime = TestBackend.open("hll-dense");
+             StringRoot root = new StringRoot(runtime.backend())) {
             ValueHandle handle = root.store(YierdisHyperLogLog.newDenseEmpty());
             long estimatedBytes = root.estimatedBytes(handle);
 

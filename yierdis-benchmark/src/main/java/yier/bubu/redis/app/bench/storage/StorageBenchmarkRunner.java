@@ -1,14 +1,17 @@
 package yier.bubu.redis.app.bench.storage;
 
+import yier.bubu.redis.memory.api.StableMemoryBackendFactory;
+import yier.bubu.redis.memory.foreign.YierdisFfmStableMemoryBackend;
+import yier.bubu.redis.storage.api.DbDefragConfig;
+import yier.bubu.redis.storage.api.DbEngineConfig;
+import yier.bubu.redis.storage.api.GlobalMaxmemoryDbEngine;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.RuntimeDbEngine;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.StringWriteOps;
 import yier.bubu.redis.storage.api.WriteResult;
-import yier.bubu.redis.storage.memory.YierdisDb;
+import yier.bubu.redis.storage.memory.YierdisDbBackendConfig;
 import yier.bubu.redis.storage.memory.YierdisDbEngineFactory;
-import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceResult;
-import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
 
 import java.util.Arrays;
 import java.util.Objects;
@@ -17,6 +20,8 @@ import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 public final class StorageBenchmarkRunner {
+    private static final int MAX_HASH_TABLE_STABILIZATION_TICKS = 100_000;
+
     private final Supplier<RuntimeDbEngine> engineFactory;
     private final LongSupplier nanoClock;
     private final Supplier<OptionalLong> rssReader;
@@ -116,6 +121,7 @@ public final class StorageBenchmarkRunner {
     }
 
     private StorageMemorySnapshot snapshot(RuntimeDbEngine engine) {
+        GlobalMaxmemoryDbEngine globalEngine = requirePhysicalMemoryCapability(engine);
         OptionalLong rss;
         try {
             rss = Objects.requireNonNull(rssReader.get(), "rssReader result");
@@ -123,26 +129,33 @@ public final class StorageBenchmarkRunner {
             rss = OptionalLong.empty();
         }
         return StorageMemorySnapshot.from(
-                engine.memoryUsage(),
+                globalEngine.memoryUsage(),
                 engine.memory().memoryStats(),
                 rss
         );
     }
 
-    private static void stabilizeHashTables(RuntimeDbEngine engine) {
-        if (!(engine instanceof YierdisDb db)) {
-            return;
+    static GlobalMaxmemoryDbEngine requirePhysicalMemoryCapability(RuntimeDbEngine engine) {
+        Objects.requireNonNull(engine, "engine");
+        if (engine instanceof GlobalMaxmemoryDbEngine globalEngine) {
+            return globalEngine;
         }
-        HashTableMaintenanceResult result = db.rehashMaintenance(
-                HashTableWorkBudget.of(Long.MAX_VALUE, Long.MAX_VALUE)
-        );
-        if (result.pendingTableCount() != 0
-                || result.stopReason() != HashTableMaintenanceResult.StopReason.COMPLETE) {
+        throw new IllegalStateException("storage benchmark requires GlobalMaxmemoryDbEngine");
+    }
+
+    private static void stabilizeHashTables(RuntimeDbEngine engine) {
+        int pendingTableCount = engine.memory().memoryStats().pendingHashTableCount();
+        for (int tick = 0;
+                pendingTableCount != 0 && tick < MAX_HASH_TABLE_STABILIZATION_TICKS;
+                tick++) {
+            engine.runMaintenance();
+            pendingTableCount = engine.memory().memoryStats().pendingHashTableCount();
+        }
+        if (pendingTableCount != 0) {
             throw new IllegalStateException(
                     "hash-table stabilization stopped with "
-                            + result.pendingTableCount()
-                            + " pending tables: "
-                            + result.stopReason()
+                            + pendingTableCount
+                            + " pending tables"
             );
         }
     }
@@ -182,8 +195,21 @@ public final class StorageBenchmarkRunner {
     }
 
     private static Supplier<RuntimeDbEngine> defaultEngineFactory() {
-        YierdisDbEngineFactory factory = new YierdisDbEngineFactory();
-        return () -> factory.create(0, 0L, MaxmemoryPolicy.NOEVICTION, 5, 5L, 5L);
+        StableMemoryBackendFactory backendFactory = YierdisFfmStableMemoryBackend::new;
+        YierdisDbEngineFactory factory = new YierdisDbEngineFactory(
+                backendFactory,
+                new YierdisDbBackendConfig(0)
+        );
+        DbEngineConfig engineConfig = new DbEngineConfig(
+                0,
+                0L,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                5L,
+                5L,
+                new DbDefragConfig(false, 0L, 0L, 0L)
+        );
+        return () -> factory.create(engineConfig);
     }
 
     private record EngineLease(RuntimeDbEngine engine) implements AutoCloseable {

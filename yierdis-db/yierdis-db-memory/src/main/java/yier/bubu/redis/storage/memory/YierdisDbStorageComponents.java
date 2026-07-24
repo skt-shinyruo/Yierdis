@@ -1,24 +1,21 @@
 package yier.bubu.redis.storage.memory;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
-import yier.bubu.redis.storage.memory.internal.entry.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
-import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmExpireIndex;
+import java.util.Objects;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
+import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
+import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
+import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
+import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
+import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
+import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
+import yier.bubu.redis.storage.memory.internal.expire.YierdisExpireIndex;
+import yier.bubu.redis.storage.memory.internal.expire.YierdisNativeExpireIndex;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
-import yier.bubu.redis.memory.api.NativeAllocator;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
+import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 
-public final class YierdisDbStorageComponents {
-    final YierdisFfmMemoryRuntime memoryRuntime;
-    final NativeAllocator nativeAllocator;
+final class YierdisDbStorageComponents {
+    final StableMemoryBackend stableMemoryBackend;
     final YierdisDbOwnedResources resources;
     final HashTableMaintenanceRegistry hashTableMaintenanceRegistry;
     final YierdisExpireIndex expires;
@@ -31,8 +28,7 @@ public final class YierdisDbStorageComponents {
     final ZSetRoot zsetRoot;
 
     private YierdisDbStorageComponents(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            NativeAllocator nativeAllocator,
+            StableMemoryBackend stableMemoryBackend,
             YierdisDbOwnedResources resources,
             HashTableMaintenanceRegistry hashTableMaintenanceRegistry,
             YierdisExpireIndex expires,
@@ -44,8 +40,7 @@ public final class YierdisDbStorageComponents {
             SetRoot setRoot,
             ZSetRoot zsetRoot
     ) {
-        this.memoryRuntime = memoryRuntime;
-        this.nativeAllocator = nativeAllocator;
+        this.stableMemoryBackend = stableMemoryBackend;
         this.resources = resources;
         this.hashTableMaintenanceRegistry = hashTableMaintenanceRegistry;
         this.expires = expires;
@@ -59,65 +54,28 @@ public final class YierdisDbStorageComponents {
     }
 
     static YierdisDbStorageComponents create(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            boolean ownsMemoryRuntime
-    ) {
-        return create(memoryRuntime, ownsMemoryRuntime, 0, HashSeed.random());
-    }
-
-    static YierdisDbStorageComponents create(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            boolean ownsMemoryRuntime,
-            int nativeSlotCapacity
-    ) {
-        return create(memoryRuntime, ownsMemoryRuntime, nativeSlotCapacity, HashSeed.random());
-    }
-
-    static YierdisDbStorageComponents create(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            boolean ownsMemoryRuntime,
-            int nativeSlotCapacity,
+            StableMemoryBackend stableMemoryBackend,
             HashSeed hashSeed
     ) {
-        HashSeed resolvedHashSeed = java.util.Objects.requireNonNull(hashSeed, "hashSeed");
-        YierdisFfmMemoryRuntime resolvedRuntime =
-                memoryRuntime == null ? new YierdisFfmMemoryRuntime("db") : memoryRuntime;
-        boolean resolvedOwnsRuntime = memoryRuntime == null || ownsMemoryRuntime;
-        // Entry、key bytes、string bytes 和 collection roots 共享一个 stable allocator，
-        // 使 defrag/释放时可以按统一的 native handle 域验证对象类型与存活状态。
-        NativeAllocator nativeAllocator = new YierdisStableNativeAllocator(
-                resolvedRuntime,
-                nativeSlotCapacity
-        );
-        YierdisDbOwnedResources resources = new YierdisDbOwnedResources(
-                resolvedRuntime,
-                nativeAllocator,
-                resolvedOwnsRuntime,
-                true
-        );
+        StableMemoryBackend backend = Objects.requireNonNull(stableMemoryBackend, "stableMemoryBackend");
+        HashSeed resolvedHashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
         HashTableMaintenanceRegistry hashTableMaintenanceRegistry = new HashTableMaintenanceRegistry();
-        EntryTable entries = new EntryTable(resolvedRuntime, nativeAllocator);
+        EntryTable entries = new EntryTable(backend);
         NativeKeyDirectory keyDirectory = new NativeKeyDirectory(
-                nativeAllocator,
+                backend,
                 resolvedHashSeed,
                 hashTableMaintenanceRegistry
         );
-        StringRoot stringRoot = new StringRoot(nativeAllocator);
-        ListRoot listRoot = new ListRoot(nativeAllocator);
-        HashRoot hashRoot = new HashRoot(nativeAllocator, resolvedHashSeed, hashTableMaintenanceRegistry);
-        SetRoot setRoot = new SetRoot(nativeAllocator, resolvedHashSeed, hashTableMaintenanceRegistry);
-        ZSetRoot zsetRoot = new ZSetRoot(nativeAllocator, resolvedHashSeed, hashTableMaintenanceRegistry);
+        StringRoot stringRoot = new StringRoot(backend);
+        ListRoot listRoot = new ListRoot(backend);
+        HashRoot hashRoot = new HashRoot(backend, resolvedHashSeed, hashTableMaintenanceRegistry);
+        SetRoot setRoot = new SetRoot(backend, resolvedHashSeed, hashTableMaintenanceRegistry);
+        ZSetRoot zsetRoot = new ZSetRoot(backend, resolvedHashSeed, hashTableMaintenanceRegistry);
         return new YierdisDbStorageComponents(
-                resolvedRuntime,
-                nativeAllocator,
-                resources,
+                backend,
+                new YierdisDbOwnedResources(backend),
                 hashTableMaintenanceRegistry,
-                new YierdisFfmExpireIndex(
-                        resolvedRuntime,
-                        nativeAllocator,
-                        resolvedHashSeed,
-                        hashTableMaintenanceRegistry
-                ),
+                new YierdisNativeExpireIndex(backend, resolvedHashSeed, hashTableMaintenanceRegistry),
                 entries,
                 keyDirectory,
                 stringRoot,
@@ -127,5 +85,4 @@ public final class YierdisDbStorageComponents {
                 zsetRoot
         );
     }
-
 }

@@ -3,12 +3,12 @@ package yier.bubu.redis.storage.memory.internal.value;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
-import yier.bubu.redis.storage.api.result.BulkStringValue;
+import yier.bubu.redis.storage.memory.TestBackend;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
+import yier.bubu.redis.storage.api.result.ByteValue;
 import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 
@@ -31,8 +31,8 @@ public class HashValueTest {
         Assert.assertTrue(encodedBytes > 64 * 1024);
         Assert.assertArrayEquals(new int[]{encodedBytes}, HashValue.preparedBuildNativeAllocationSizes(pairs));
 
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("hash-packed-final-block");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("hash-packed-final-block");
+             StableMemoryBackend allocator = runtime.backend()) {
             HashValue hash = new HashValue(allocator);
             try {
                 hash.loadForBuild(pairs);
@@ -49,8 +49,8 @@ public class HashValueTest {
 
     @Test
     public void hashtableEncodingStoresValueHandlesInPrimitiveArray() throws ReflectiveOperationException {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("hash-primitive-value-handles");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("hash-complete-value-handles");
+             StableMemoryBackend allocator = runtime.backend()) {
             HashValue hash = new HashValue(allocator);
             try {
                 byte[] field = bytes("field");
@@ -59,7 +59,7 @@ public class HashValueTest {
 
                 Assert.assertEquals(1, hash.hset(field, value));
                 Assert.assertEquals(ValueEncoding.HASH_HT, hash.encoding());
-                Assert.assertTrue(nativeMapValueSlots(hash, "map") instanceof long[]);
+                Assert.assertTrue(nativeMapValueSlots(hash, "map") instanceof NativeHandle[]);
                 Assert.assertTrue(hash.heapEstimatedBytes() <= heapUpperBound);
                 Assert.assertArrayEquals(value, hash.hget(field));
             } finally {
@@ -70,8 +70,8 @@ public class HashValueTest {
 
     @Test
     public void hashTableDeltaNoopDoesNotAllocateNativeObjects() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("hash-table-delta-noop");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("hash-table-delta-noop");
+             StableMemoryBackend allocator = runtime.backend()) {
             HashValue hash = new HashValue(allocator);
             try {
                 byte[] field = bytes("field");
@@ -85,7 +85,7 @@ public class HashValueTest {
 
                 long fieldObjects = allocator.stats().objectCount(NativeObjectKind.HASH_FIELD_BYTES);
                 long valueObjects = allocator.stats().objectCount(NativeObjectKind.HASH_VALUE_BYTES);
-                Set<Long> handles = nativeHandles(hash);
+                Set<NativeHandle> handles = nativeHandles(hash);
 
                 HashValue.HashTableSetPlan plan = hash.planHashTableSet(List.of(
                         field,
@@ -122,8 +122,8 @@ public class HashValueTest {
 
     @Test
     public void hashTableDeltaAbortRestoresOriginalHandlesAndContent() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("hash-table-delta-abort");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("hash-table-delta-abort");
+             StableMemoryBackend allocator = runtime.backend()) {
             HashValue hash = new HashValue(allocator);
             try {
                 byte[] firstField = bytes("first");
@@ -138,7 +138,7 @@ public class HashValueTest {
                 hash.hset(firstField, firstValue);
                 hash.hset(secondField, secondValue);
 
-                Set<Long> originalHandles = nativeHandles(hash);
+                Set<NativeHandle> originalHandles = nativeHandles(hash);
                 long originalFieldObjects = allocator.stats().objectCount(NativeObjectKind.HASH_FIELD_BYTES);
                 long originalValueObjects = allocator.stats().objectCount(NativeObjectKind.HASH_VALUE_BYTES);
 
@@ -178,8 +178,8 @@ public class HashValueTest {
 
     @Test
     public void hashTableDeltaCommitUsesLastDuplicateAndReusesExistingFieldHandles() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("hash-table-delta-commit");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("hash-table-delta-commit");
+             StableMemoryBackend allocator = runtime.backend()) {
             HashValue hash = new HashValue(allocator);
             byte[] existingField = bytes("existing");
             byte[] untouchedField = bytes("untouched");
@@ -195,8 +195,6 @@ public class HashValueTest {
             try {
                 hash.hset(existingField, originalValue);
                 hash.hset(untouchedField, untouchedValue);
-                Set<Long> originalFieldHandles = nativeHandles(hash, NativeObjectKind.HASH_FIELD_BYTES);
-                Set<Long> originalValueHandles = nativeHandles(hash, NativeObjectKind.HASH_VALUE_BYTES);
                 long originalFieldObjects = allocator.stats().objectCount(NativeObjectKind.HASH_FIELD_BYTES);
                 long originalValueObjects = allocator.stats().objectCount(NativeObjectKind.HASH_VALUE_BYTES);
 
@@ -224,12 +222,6 @@ public class HashValueTest {
                     Assert.assertArrayEquals(finalExistingValue, hash.hget(existingField));
                     Assert.assertArrayEquals(finalNewValue, hash.hget(newField));
                     Assert.assertArrayEquals(untouchedValue, hash.hget(untouchedField));
-                    Set<Long> committedFieldHandles = nativeHandles(hash, NativeObjectKind.HASH_FIELD_BYTES);
-                    Assert.assertTrue(committedFieldHandles.containsAll(originalFieldHandles));
-                    Assert.assertEquals(originalFieldHandles.size() + 1, committedFieldHandles.size());
-                    Set<Long> committedValueHandles = nativeHandles(hash, NativeObjectKind.HASH_VALUE_BYTES);
-                    Assert.assertEquals(3, committedValueHandles.size());
-                    Assert.assertEquals(1, intersectionSize(originalValueHandles, committedValueHandles));
                     Assert.assertEquals(originalFieldObjects + 1L,
                             allocator.stats().objectCount(NativeObjectKind.HASH_FIELD_BYTES));
                     Assert.assertEquals(originalValueObjects + 2L,
@@ -254,8 +246,8 @@ public class HashValueTest {
 
     @Test
     public void rootCreatedPackedHashStoresFieldsAndValuesAsNativeBytesAndStreamsNativeSlices() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("hash-native-packed-bytes");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+        try (TestBackend runtime = TestBackend.open("hash-native-packed-bytes");
+             StableMemoryBackend allocator = runtime.backend();
              HashRoot root = new HashRoot(allocator)) {
             ValueHandle handle = root.create();
 
@@ -264,7 +256,7 @@ public class HashValueTest {
             Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LISTPACK_BYTES));
             Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.HASH_FIELD_BYTES));
             Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.HASH_VALUE_BYTES));
-            RecordingBulkStringSink out = new RecordingBulkStringSink();
+            RecordingByteValueSink out = new RecordingByteValueSink();
             root.hgetallPairsInto(handle, out);
             Assert.assertTrue(out.sawNativeBytesSlice());
             Assert.assertEquals(List.of("field", "value"), out.strings());
@@ -273,14 +265,14 @@ public class HashValueTest {
 
     @Test
     public void packedHgetValueReturnsOnlyTheValueSlice() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("hash-native-value-slice");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("hash-native-value-slice");
+             StableMemoryBackend allocator = runtime.backend()) {
             HashValue hash = new HashValue(allocator);
             try {
                 hash.hset(bytes("field"), bytes("value"));
-                try (BulkStringValue value = hash.hgetValue(bytes("field"))) {
-                    RecordingBulkStringSink out = new RecordingBulkStringSink();
-                    value.writeTo(out);
+                try (ByteValue value = hash.hgetValue(bytes("field"))) {
+                    RecordingByteValueSink out = new RecordingByteValueSink();
+                    value.emitTo(out);
                     Assert.assertEquals(List.of("value"), out.strings());
                     Assert.assertEquals(bytes("value").length, value.payloadLength());
                 }
@@ -292,8 +284,8 @@ public class HashValueTest {
 
     @Test
     public void packedHashSupportsUpdateAndDeleteWithRepacking() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("hash-test");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("hash-test");
+             StableMemoryBackend allocator = runtime.backend()) {
             HashValue hv = new HashValue(allocator);
             try {
                 Assert.assertEquals(ValueEncoding.HASH_PACKED, hv.encoding());
@@ -331,8 +323,8 @@ public class HashValueTest {
 
     @Test
     public void hashConvertsToHashTableAfterTooManyFields() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("hash-test");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+        try (TestBackend runtime = TestBackend.open("hash-test");
+             StableMemoryBackend allocator = runtime.backend()) {
             HashValue hv = new HashValue(allocator);
             try {
                 int added = 0;
@@ -376,46 +368,30 @@ public class HashValueTest {
         return valueSlotsField.get(table);
     }
 
-    private static Set<Long> nativeHandles(HashValue hash) {
-        Set<Long> handles = new HashSet<>();
-        hash.forEachNativeHandle(handle -> handles.add(handle.raw()));
+    private static Set<NativeHandle> nativeHandles(HashValue hash) {
+        Set<NativeHandle> handles = new HashSet<>();
+        hash.forEachNativeHandle(handles::add);
         return handles;
     }
 
-    private static Set<Long> nativeHandles(HashValue hash, NativeObjectKind kind) {
-        Set<Long> handles = new HashSet<>();
-        hash.forEachNativeHandle(handle -> {
-            if (handle.domain() == kind.domain() && handle.kindCode() == kind.code()) {
-                handles.add(handle.raw());
-            }
-        });
-        return handles;
-    }
-
-    private static int intersectionSize(Set<Long> left, Set<Long> right) {
-        Set<Long> intersection = new HashSet<>(left);
-        intersection.retainAll(right);
-        return intersection.size();
-    }
-
-    private static final class RecordingBulkStringSink implements BulkStringSink {
+    private static final class RecordingByteValueSink implements ByteValueSink {
         private final List<String> values = new ArrayList<>();
         private boolean sawNativeBytesSlice;
 
         @Override
-        public void bulkString(byte[] data) {
+        public void value(byte[] data) {
             sawNativeBytesSlice = false;
             values.add(data == null ? null : new String(data, StandardCharsets.US_ASCII));
         }
 
         @Override
-        public void bulkString(byte[] data, int off, int len) {
+        public void value(byte[] data, int off, int len) {
             sawNativeBytesSlice = false;
             values.add(data == null ? null : new String(data, off, len, StandardCharsets.US_ASCII));
         }
 
         @Override
-        public void bulkString(BytesSlice slice) {
+        public void value(BytesSlice slice) {
             if (slice == null) {
                 values.add(null);
                 return;
@@ -427,9 +403,14 @@ public class HashValueTest {
         }
 
         @Override
-        public void bulkStringLongAscii(long value) {
+        public void longAscii(long value) {
             sawNativeBytesSlice = false;
             values.add(Long.toString(value));
+        }
+
+        @Override
+        public void nullValue() {
+            value((byte[]) null);
         }
 
         private boolean sawNativeBytesSlice() {

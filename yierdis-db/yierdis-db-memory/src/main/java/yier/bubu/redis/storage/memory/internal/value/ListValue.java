@@ -1,13 +1,12 @@
 package yier.bubu.redis.storage.memory.internal.value;
 
 import yier.bubu.redis.memory.api.NativeAccessMode;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
-import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.storage.api.ValueType;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -17,22 +16,22 @@ import java.util.function.Consumer;
 
 public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTrackedValue {
     private static final int QUICKLIST_NODE_MAX_BYTES = YierdisEncodingThresholds.LIST_MAX_LISTPACK_BYTES;
-    private static final int QUICKLIST_NODE_RECORD_BYTES = 48;
+    private static final int QUICKLIST_NODE_RECORD_BYTES = 80;
     private static final int QUICKLIST_NODE_OWNER_ROOT_OFFSET = 0;
-    private static final int QUICKLIST_NODE_PREV_OFFSET = 8;
-    private static final int QUICKLIST_NODE_NEXT_OFFSET = 16;
-    private static final int QUICKLIST_NODE_PAYLOAD_REF_OFFSET = 24;
-    private static final int QUICKLIST_NODE_ENTRY_COUNT_OFFSET = 32;
-    private static final int QUICKLIST_NODE_ENCODED_BYTES_OFFSET = 36;
-    private static final int QUICKLIST_NODE_FLAGS_OFFSET = 40;
-    private static final int QUICKLIST_NODE_RESERVED_OFFSET = 44;
+    private static final int QUICKLIST_NODE_PREV_OFFSET = 16;
+    private static final int QUICKLIST_NODE_NEXT_OFFSET = 32;
+    private static final int QUICKLIST_NODE_PAYLOAD_REF_OFFSET = 48;
+    private static final int QUICKLIST_NODE_ENTRY_COUNT_OFFSET = 64;
+    private static final int QUICKLIST_NODE_ENCODED_BYTES_OFFSET = 68;
+    private static final int QUICKLIST_NODE_FLAGS_OFFSET = 72;
+    private static final int QUICKLIST_NODE_RESERVED_OFFSET = 76;
     private static final long FIXED_HEAP_BYTES = 88L;
     private static final long ARRAY_HEADER_BYTES = 16L;
     private static final long REFERENCE_BYTES = 8L;
     private static final long ARRAY_DEQUE_HEAP_BYTES = 40L;
     private static final int INITIAL_QUICKLIST_DEQUE_CAPACITY = 16;
 
-    private final NativeAllocator nativeAllocator;
+    private final StableMemoryBackend stableMemoryBackend;
     private final NativeByteStore byteStore;
     private final NativeHandle rootHandle;
 
@@ -44,14 +43,13 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
     private Runnable heapChangeListener = () -> {
     };
 
-    public ListValue(NativeAllocator nativeAllocator, NativeHandle rootHandle) {
-        this.nativeAllocator = Objects.requireNonNull(nativeAllocator, "nativeAllocator");
+    public ListValue(StableMemoryBackend stableMemoryBackend, NativeHandle rootHandle) {
+        this.stableMemoryBackend = Objects.requireNonNull(stableMemoryBackend, "stableMemoryBackend");
         this.rootHandle = Objects.requireNonNull(rootHandle, "rootHandle");
-        if (rootHandle.domain() != NativeObjectKind.LIST_ROOT.domain()
-                || rootHandle.kindCode() != NativeObjectKind.LIST_ROOT.code()) {
-            throw new IllegalArgumentException("rootHandle must be a LIST_ROOT handle: " + rootHandle.raw());
+        if (rootHandle.isNull()) {
+            throw new IllegalArgumentException("rootHandle must not be null");
         }
-        this.byteStore = new NativeByteStore(nativeAllocator, NativeObjectKind.LISTPACK_BYTES);
+        this.byteStore = new NativeByteStore(stableMemoryBackend, NativeObjectKind.LISTPACK_BYTES);
         this.listpack = new NativeListpack(byteStore, NativeObjectKind.LISTPACK_BYTES);
     }
 
@@ -821,7 +819,7 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
         return bounds == null ? 0 : bounds.stop - bounds.start + 1;
     }
 
-    public void rangeInto(int start, int stop, BulkStringSink out) {
+    public void rangeInto(int start, int stop, ByteValueSink out) {
         if (out == null) {
             throw new IllegalArgumentException("out must not be null");
         }
@@ -861,7 +859,7 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
         }
     }
 
-    public void emitPopRange(int count, boolean left, BulkStringSink out) {
+    public void emitPopRange(int count, boolean left, ByteValueSink out) {
         if (out == null) {
             throw new IllegalArgumentException("out must not be null");
         }
@@ -906,56 +904,12 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
         }
     }
 
-    public long encodedPopElementBytes(int count, boolean left) {
-        int remaining = Math.min(Math.max(0, count), totalSize);
-        if (remaining == 0) {
-            return 0L;
-        }
-        long total = 0L;
-        if (quicklist == null) {
-            if (left) {
-                for (int i = 0; i < remaining; i++) {
-                    total = addSaturating(total, listpack.encodedElementBytesAt(i));
-                }
-            } else {
-                int start = totalSize - remaining;
-                for (int i = totalSize - 1; i >= start; i--) {
-                    total = addSaturating(total, listpack.encodedElementBytesAt(i));
-                }
-            }
-            return total;
-        }
-
-        if (left) {
-            for (ListNode node : quicklist) {
-                for (int i = 0; i < node.size() && remaining > 0; i++) {
-                    total = addSaturating(total, node.encodedElementBytesAt(i));
-                    remaining--;
-                }
-                if (remaining == 0) {
-                    return total;
-                }
-            }
-            return total;
-        }
-
-        java.util.Iterator<ListNode> iterator = quicklist.descendingIterator();
-        while (iterator.hasNext() && remaining > 0) {
-            ListNode node = iterator.next();
-            for (int i = node.size() - 1; i >= 0 && remaining > 0; i--) {
-                    total = addSaturating(total, node.encodedElementBytesAt(i));
-                remaining--;
-            }
-        }
-        return total;
-    }
-
     public void releaseExcept(PreparedPoppedValueSequence retained) {
         Objects.requireNonNull(retained, "retained");
         RuntimeException failure = null;
         if (listpack != null) {
             try {
-                listpack.closeExcept(retained::retainsRawHandle);
+                listpack.closeExcept(retained::retainsHandle);
             } catch (RuntimeException e) {
                 failure = e;
             } finally {
@@ -1241,7 +1195,7 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
     }
 
     private ListNode newListNode() {
-        return new ListNode(byteStore, nativeAllocator, rootHandle);
+        return new ListNode(byteStore, stableMemoryBackend, rootHandle);
     }
 
     private void addQuicklistFirst(ListNode node) {
@@ -1283,13 +1237,13 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
         ListNode prev = null;
         for (ListNode node : nodes) {
             if (prev != null) {
-                prev.writeMetadata(prev.prevRawDuringRefresh, node.rawHandle());
+                prev.writeMetadata(prev.prevHandleDuringRefresh, node.handle());
             }
-            node.prevRawDuringRefresh = prev == null ? 0L : prev.rawHandle();
+            node.prevHandleDuringRefresh = prev == null ? NativeHandle.NULL : prev.handle();
             prev = node;
         }
         if (prev != null) {
-            prev.writeMetadata(prev.prevRawDuringRefresh, 0L);
+            prev.writeMetadata(prev.prevHandleDuringRefresh, NativeHandle.NULL);
         }
     }
 
@@ -1299,12 +1253,15 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
         }
         java.util.Iterator<ListNode> iterator = left ? quicklist.iterator() : quicklist.descendingIterator();
         if (left) {
-            long previousRaw = 0L;
+            NativeHandle previousHandle = NativeHandle.NULL;
             ListNode current = iterator.next();
             for (int written = 0; written < nodeCount; written++) {
                 ListNode next = iterator.hasNext() ? iterator.next() : null;
-                current.writeMetadata(previousRaw, next == null ? 0L : next.rawHandle());
-                previousRaw = current.rawHandle();
+                current.writeMetadata(
+                        previousHandle,
+                        next == null ? NativeHandle.NULL : next.handle()
+                );
+                previousHandle = current.handle();
                 if (next == null) {
                     break;
                 }
@@ -1313,12 +1270,15 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
             return;
         }
 
-        long nextRaw = 0L;
+        NativeHandle nextHandle = NativeHandle.NULL;
         ListNode current = iterator.next();
         for (int written = 0; written < nodeCount; written++) {
             ListNode previous = iterator.hasNext() ? iterator.next() : null;
-            current.writeMetadata(previous == null ? 0L : previous.rawHandle(), nextRaw);
-            nextRaw = current.rawHandle();
+            current.writeMetadata(
+                    previous == null ? NativeHandle.NULL : previous.handle(),
+                    nextHandle
+            );
+            nextHandle = current.handle();
             if (previous == null) {
                 break;
             }
@@ -2020,7 +1980,7 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
             if (retained == null) {
                 packed.close();
             } else {
-                packed.closeExcept(retained::retainsRawHandle);
+                packed.closeExcept(retained::retainsHandle);
             }
         }
 
@@ -2043,16 +2003,22 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
         }
     }
 
+    private static void writeHandle(NativeObjectView view, int offset, NativeHandle handle) {
+        NativeHandle value = Objects.requireNonNull(handle, "handle");
+        view.setLongLittleEndian(offset, value.allocatorId());
+        view.setLongLittleEndian(offset + Long.BYTES, value.localRaw());
+    }
+
     private static final class ListNode implements AutoCloseable {
-        private final NativeAllocator allocator;
+        private final StableMemoryBackend allocator;
         private final NativeHandle rootHandle;
         private NativeListpack listpack;
         private NativeHandle nodeHandle;
-        private long prevRawDuringRefresh;
+        private NativeHandle prevHandleDuringRefresh = NativeHandle.NULL;
         private boolean payloadClosed;
         private boolean nodeFreed;
 
-        private ListNode(NativeByteStore byteStore, NativeAllocator allocator, NativeHandle rootHandle) {
+        private ListNode(NativeByteStore byteStore, StableMemoryBackend allocator, NativeHandle rootHandle) {
             this.allocator = Objects.requireNonNull(allocator, "allocator");
             this.rootHandle = Objects.requireNonNull(rootHandle, "rootHandle");
             NativeHandle allocated = this.allocator.allocate(
@@ -2071,7 +2037,7 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
             }
             this.nodeHandle = allocated;
             try {
-                writeMetadata(0L, 0L);
+                writeMetadata(NativeHandle.NULL, NativeHandle.NULL);
             } catch (RuntimeException | Error e) {
                 try {
                     this.listpack.close();
@@ -2132,12 +2098,8 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
             return liveListpack().size();
         }
 
-        void writeAt(int index, BulkStringSink out) {
+        void writeAt(int index, ByteValueSink out) {
             liveListpack().writeAt(index, out);
-        }
-
-        long encodedElementBytesAt(int index) {
-            return liveListpack().encodedElementBytesAt(index);
         }
 
         int encodedEntryBytesAt(int index) {
@@ -2225,7 +2187,7 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
             RuntimeException failure = null;
             if (!payloadClosed) {
                 try {
-                    listpack.closeExcept(retained::retainsRawHandle);
+                    listpack.closeExcept(retained::retainsHandle);
                     payloadClosed = true;
                 } catch (RuntimeException e) {
                     failure = e;
@@ -2249,8 +2211,11 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
             }
         }
 
-        long rawHandle() {
-            return nodeHandle == null ? 0L : nodeHandle.raw();
+        NativeHandle handle() {
+            if (nodeHandle == null) {
+                throw new IllegalStateException("quicklist node is closed");
+            }
+            return nodeHandle;
         }
 
         void forEachNativeHandle(Consumer<NativeHandle> consumer) {
@@ -2260,14 +2225,14 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
             listpack.forEachNativeHandle(consumer);
         }
 
-        void writeMetadata(long prevRaw, long nextRaw) {
+        void writeMetadata(NativeHandle previousHandle, NativeHandle nextHandle) {
             validateOwnerRoot();
             NativeListpack current = liveListpack();
             try (NativeObjectView view = allocator.resolve(nodeHandle, NativeAccessMode.READ_WRITE)) {
-                view.setLongLittleEndian(QUICKLIST_NODE_OWNER_ROOT_OFFSET, rootHandle.raw());
-                view.setLongLittleEndian(QUICKLIST_NODE_PREV_OFFSET, prevRaw);
-                view.setLongLittleEndian(QUICKLIST_NODE_NEXT_OFFSET, nextRaw);
-                view.setLongLittleEndian(QUICKLIST_NODE_PAYLOAD_REF_OFFSET, 0L);
+                writeHandle(view, QUICKLIST_NODE_OWNER_ROOT_OFFSET, rootHandle);
+                writeHandle(view, QUICKLIST_NODE_PREV_OFFSET, previousHandle);
+                writeHandle(view, QUICKLIST_NODE_NEXT_OFFSET, nextHandle);
+                writeHandle(view, QUICKLIST_NODE_PAYLOAD_REF_OFFSET, NativeHandle.NULL);
                 view.setIntLittleEndian(QUICKLIST_NODE_ENTRY_COUNT_OFFSET, current.size());
                 view.setIntLittleEndian(QUICKLIST_NODE_ENCODED_BYTES_OFFSET, current.encodedBytes());
                 view.setIntLittleEndian(QUICKLIST_NODE_FLAGS_OFFSET, 0);
@@ -2288,10 +2253,8 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
         }
 
         private void validateNodeHandleKind() {
-            if (nodeHandle != null
-                    && (nodeHandle.domain() != NativeObjectKind.LIST_NODE.domain()
-                    || nodeHandle.kindCode() != NativeObjectKind.LIST_NODE.code())) {
-                throw new NativeMemoryException("LIST_NODE handle expected: " + nodeHandle.raw());
+            if (nodeHandle == null) {
+                throw new IllegalStateException("quicklist node is closed");
             }
         }
 

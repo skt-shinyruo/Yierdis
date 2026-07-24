@@ -1,6 +1,8 @@
 package yier.bubu.redis.storage.api.result;
 
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.storage.api.ScanCursorV2;
@@ -10,8 +12,8 @@ public class KeyScanWindowTest {
     public void replayableWindowExposesTheRequiredLifecycleAndMetadata() {
         RecordingWindow window = new RecordingWindow();
 
-        Assert.assertEquals(3, window.count());
-        Assert.assertEquals(27L, window.encodedElementBytes());
+        Assert.assertEquals(3, window.elementCount());
+        Assert.assertEquals(List.of(3, -1, 5), lengths(window));
         Assert.assertEquals(8L, window.inspectedSlots());
         Assert.assertEquals(123L, window.tableGeneration());
         Assert.assertEquals(456L, window.expiryEvaluationMillis());
@@ -29,11 +31,6 @@ public class KeyScanWindowTest {
         @Override
         public ScanCursorV2 nextCursor() {
             return ScanCursorV2.of(4, 1, 2L);
-        }
-
-        @Override
-        public long encodedElementBytes() {
-            return 27L;
         }
 
         @Override
@@ -57,17 +54,35 @@ public class KeyScanWindowTest {
         }
 
         @Override
-        public int count() {
+        public int elementCount() {
             return 3;
         }
 
         @Override
-        public void emitTo(BulkStringSink out) {
+        public long retainedMemoryBytes() {
+            return 0L;
+        }
+
+        @Override
+        public void visitElementLengths(PayloadLengthSink out) {
+            out.payloadLength(3);
+            out.payloadLength(-1);
+            out.payloadLength(5);
+        }
+
+        @Override
+        public void emitTo(ByteValueSink out) {
         }
 
         @Override
         public void close() {
             closed.set(true);
         }
+    }
+
+    private static List<Integer> lengths(ByteSequenceSource source) {
+        List<Integer> lengths = new ArrayList<>();
+        source.visitElementLengths(lengths::add);
+        return lengths;
     }
 }

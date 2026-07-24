@@ -5,12 +5,10 @@ import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BiFunction;
 import yier.bubu.redis.memory.api.NativeAccessMode;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.hash.HashCapacityPolicy;
@@ -28,12 +26,11 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
     private static final byte STATE_TOMBSTONE = 2;
     private static final byte STATE_MIGRATED_SCAN_SHADOW = 3;
     private static final long ARRAY_HEADER_BYTES = 16L;
-    private static final long HANDLE_BYTES = Long.BYTES;
+    private static final long HANDLE_BYTES = Long.BYTES * 2L;
     private static final long TABLE_OBJECT_BYTES = 48L;
     private static final HashTableWorkBudget WRITE_REHASH_BUDGET = HashTableWorkBudget.of(2L, Long.MAX_VALUE);
 
-    private final NativeAllocator allocator;
-    private final boolean ownsAllocator;
+    private final StableMemoryBackend allocator;
     private final HashSeed hashSeed;
     private final HashTableMaintenanceRegistry maintenanceRegistry;
     private final HashTableMaintenanceRegistry.Registration maintenanceRegistration;
@@ -48,38 +45,20 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
     private boolean closed;
     private boolean iterationTrapForTesting;
 
-    public NativeKeyDirectory(YierdisFfmMemoryRuntime runtime) {
-        this(runtime, HashSeed.random());
+    public NativeKeyDirectory(StableMemoryBackend allocator) {
+        this(allocator, HashSeed.random(), null);
     }
 
-    public NativeKeyDirectory(YierdisFfmMemoryRuntime runtime, HashSeed hashSeed) {
-        this(new YierdisStableNativeAllocator(Objects.requireNonNull(runtime, "runtime"), 4096), true, hashSeed, null);
-    }
-
-    public NativeKeyDirectory(NativeAllocator allocator) {
-        this(allocator, false, HashSeed.random(), null);
-    }
-
-    public NativeKeyDirectory(NativeAllocator allocator, HashSeed hashSeed) {
-        this(allocator, false, hashSeed, null);
+    public NativeKeyDirectory(StableMemoryBackend allocator, HashSeed hashSeed) {
+        this(allocator, hashSeed, null);
     }
 
     public NativeKeyDirectory(
-            NativeAllocator allocator,
-            HashSeed hashSeed,
-            HashTableMaintenanceRegistry maintenanceRegistry
-    ) {
-        this(allocator, false, hashSeed, maintenanceRegistry);
-    }
-
-    private NativeKeyDirectory(
-            NativeAllocator allocator,
-            boolean ownsAllocator,
+            StableMemoryBackend allocator,
             HashSeed hashSeed,
             HashTableMaintenanceRegistry maintenanceRegistry
     ) {
         this.allocator = Objects.requireNonNull(allocator, "allocator");
-        this.ownsAllocator = ownsAllocator;
         this.hashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
         this.maintenanceRegistry = maintenanceRegistry;
         this.maintenanceRegistration = maintenanceRegistry == null ? null : maintenanceRegistry.registration(this);
@@ -380,7 +359,7 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
                 removeFromActive(activeIndex);
                 return null;
             }
-            active.entryRawHandles[activeIndex] = newHandle.raw();
+            active.entryHandles[activeIndex] = newHandle.nativeHandle();
             return newHandle;
         }
 
@@ -397,7 +376,7 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
             if (movedIndex < 0) {
                 throw new IllegalStateException("migrated native key is missing from active table");
             }
-            active.entryRawHandles[movedIndex] = newHandle.raw();
+            active.entryHandles[movedIndex] = newHandle.nativeHandle();
             return newHandle;
         }
 
@@ -425,8 +404,8 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
                 throw new IllegalStateException("native key already exists during staged insert");
             }
             Table staged = stageDirectoryForInsert(stableKeyBytes, hash);
-            long keyRawHandle = allocateKey(stableKeyBytes);
-            return new StagedInsert(stableKeyBytes, hash, keyRawHandle, staged);
+            NativeHandle keyHandle = allocateKey(stableKeyBytes);
+            return new StagedInsert(stableKeyBytes, hash, keyHandle, staged);
         }
     }
 
@@ -473,14 +452,14 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         int hash = hash(keyBytes);
         int index = findIndex(active, keyBytes, hash);
         if (index >= 0) {
-            if (expectedHandle.raw() != active.entryRawHandles[index]) {
+            if (!expectedHandle.nativeHandle().equals(active.entryHandles[index])) {
                 return false;
             }
             removeFromActive(index);
             return true;
         }
         index = findIndex(old, keyBytes, hash);
-        if (index < 0 || expectedHandle.raw() != old.entryRawHandles[index]) {
+        if (index < 0 || !expectedHandle.nativeHandle().equals(old.entryHandles[index])) {
             return false;
         }
         removeFromOld(index);
@@ -519,13 +498,6 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
             clearInternal();
         } catch (RuntimeException | Error e) {
             failure = e;
-        }
-        if (ownsAllocator) {
-            try {
-                allocator.close();
-            } catch (RuntimeException | Error e) {
-                failure = addFailure(failure, e);
-            }
         }
         closed = true;
         if (failure != null) {
@@ -571,15 +543,11 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
     }
 
     private KeyHandle keyHandleAt(Table table, int index) {
-        return KeyHandle.forNative(allocator, nativeKeyHandleAt(table, index), table.hashes[index]);
-    }
-
-    private static NativeHandle nativeKeyHandleAt(Table table, int index) {
-        return NativeHandle.fromRaw(table.keyRawHandles[index]);
+        return KeyHandle.forNative(allocator, table.keyHandles[index], table.hashes[index]);
     }
 
     private static EntryHandle entryHandleAt(Table table, int index) {
-        return EntryHandle.fromRaw(table.entryRawHandles[index]);
+        return new EntryHandle(table.entryHandles[index]);
     }
 
     private ScanCursorV2 normalizeScanCursor(ScanCursorV2 cursor) {
@@ -640,9 +608,9 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
                 continue;
             }
             try {
-                allocator.freeRaw(table.keyRawHandles[i]);
-                table.keyRawHandles[i] = 0L;
-                table.entryRawHandles[i] = 0L;
+                allocator.free(table.keyHandles[i]);
+                table.keyHandles[i] = null;
+                table.entryHandles[i] = null;
                 table.hashes[i] = 0;
                 table.states[i] = STATE_EMPTY;
             } catch (RuntimeException | Error e) {
@@ -687,13 +655,13 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         generation++;
     }
 
-    private void insertActive(long keyRawHandle, EntryHandle entryHandle, int hash, byte[] keyBytes) {
+    private void insertActive(NativeHandle keyHandle, EntryHandle entryHandle, int hash, byte[] keyBytes) {
         int index = findInsertIndex(active, keyBytes, hash);
         if (active.states[index] == STATE_FILLED) {
             throw new IllegalStateException("native key appeared during insert");
         }
         Objects.requireNonNull(entryHandle, "entryHandle");
-        writeFilledRaw(active, index, keyRawHandle, entryHandle.raw(), hash);
+        writeFilled(active, index, keyHandle, entryHandle.nativeHandle(), hash);
         size++;
     }
 
@@ -701,20 +669,26 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         if (old == null || old.states[oldIndex] != STATE_FILLED) {
             return;
         }
-        long keyRawHandle = old.keyRawHandles[oldIndex];
-        long entryRawHandle = old.entryRawHandles[oldIndex];
+        NativeHandle keyHandle = old.keyHandles[oldIndex];
+        NativeHandle entryHandle = old.entryHandles[oldIndex];
         int hash = old.hashes[oldIndex];
         int activeIndex = findInsertionIndex(active, hash);
         if (active.states[activeIndex] == STATE_FILLED) {
             throw new IllegalStateException("duplicate native key while rehashing key directory");
         }
-        writeFilledRaw(active, activeIndex, keyRawHandle, entryRawHandle, hash);
+        writeFilled(active, activeIndex, keyHandle, entryHandle, hash);
         old.states[oldIndex] = STATE_MIGRATED_SCAN_SHADOW;
         old.size--;
         old.filled--;
     }
 
-    private void writeFilledRaw(Table table, int index, long keyRawHandle, long entryRawHandle, int hash) {
+    private void writeFilled(
+            Table table,
+            int index,
+            NativeHandle keyHandle,
+            NativeHandle entryHandle,
+            int hash
+    ) {
         byte previous = table.states[index];
         if (previous == STATE_EMPTY) {
             table.filled++;
@@ -723,17 +697,17 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         } else {
             throw new IllegalStateException("attempted to overwrite a live hash-table slot");
         }
-        table.keyRawHandles[index] = keyRawHandle;
-        table.entryRawHandles[index] = entryRawHandle;
+        table.keyHandles[index] = Objects.requireNonNull(keyHandle, "keyHandle");
+        table.entryHandles[index] = Objects.requireNonNull(entryHandle, "entryHandle");
         table.hashes[index] = hash;
         table.states[index] = STATE_FILLED;
         table.size++;
     }
 
     private void removeFromActive(int index) {
-        long keyRawHandle = active.keyRawHandles[index];
+        NativeHandle keyHandle = active.keyHandles[index];
         int hash = active.hashes[index];
-        invalidateOldShadow(keyRawHandle, hash);
+        invalidateOldShadow(keyHandle, hash);
         removeFromTable(active, index);
     }
 
@@ -745,9 +719,9 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         if (table == null || table.states[index] != STATE_FILLED) {
             return;
         }
-        allocator.freeRaw(table.keyRawHandles[index]);
-        table.keyRawHandles[index] = 0L;
-        table.entryRawHandles[index] = 0L;
+        allocator.free(table.keyHandles[index]);
+        table.keyHandles[index] = null;
+        table.entryHandles[index] = null;
         table.hashes[index] = 0;
         table.states[index] = STATE_TOMBSTONE;
         table.size--;
@@ -788,7 +762,7 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         }
     }
 
-    private void invalidateOldShadow(long keyRawHandle, int hash) {
+    private void invalidateOldShadow(NativeHandle keyHandle, int hash) {
         if (old == null) {
             return;
         }
@@ -801,9 +775,9 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
             }
             if (state == STATE_MIGRATED_SCAN_SHADOW
                     && old.hashes[index] == hash
-                    && keyRawHandle == old.keyRawHandles[index]) {
-                old.keyRawHandles[index] = 0L;
-                old.entryRawHandles[index] = 0L;
+                    && keyHandle.equals(old.keyHandles[index])) {
+                old.keyHandles[index] = null;
+                old.entryHandles[index] = null;
                 old.hashes[index] = 0;
                 old.states[index] = STATE_TOMBSTONE;
                 old.filled++;
@@ -828,7 +802,7 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
             }
             if (state == STATE_FILLED
                     && table.hashes[index] == hash
-                    && equalsBytes(table.keyRawHandles[index], keyBytes)) {
+                    && equalsBytes(table.keyHandles[index], keyBytes)) {
                 return index;
             }
             index = (index + 1) & mask;
@@ -841,7 +815,8 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
             return -1;
         }
         for (int i = 0; i < table.capacity; i++) {
-            if (table.states[i] == STATE_FILLED && handle.raw() == table.entryRawHandles[i]) {
+            if (table.states[i] == STATE_FILLED
+                    && handle.nativeHandle().equals(table.entryHandles[i])) {
                 return i;
             }
         }
@@ -864,7 +839,7 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
                 }
             } else if (state == STATE_FILLED
                     && table.hashes[index] == hash
-                    && equalsBytes(table.keyRawHandles[index], keyBytes)) {
+                    && equalsBytes(table.keyHandles[index], keyBytes)) {
                 return index;
             }
             index = (index + 1) & mask;
@@ -906,24 +881,24 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         return SipHash24.foldToInt(SipHash24.hash(hashSeed, keyBytes));
     }
 
-    private long allocateKey(byte[] keyBytes) {
-        long rawHandle = allocator.allocateRaw(NativeObjectKind.KEY_BYTES, keyBytes.length);
+    private NativeHandle allocateKey(byte[] keyBytes) {
+        NativeHandle handle = allocator.allocate(NativeObjectKind.KEY_BYTES, keyBytes.length);
         boolean initialized = false;
-        try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_WRITE)) {
+        try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
             if (keyBytes.length > 0) {
                 view.setBytes(0, keyBytes, 0, keyBytes.length);
             }
             initialized = true;
-            return rawHandle;
+            return handle;
         } finally {
             if (!initialized) {
-                allocator.freeRaw(rawHandle);
+                allocator.free(handle);
             }
         }
     }
 
-    private boolean equalsBytes(long rawHandle, byte[] keyBytes) {
-        try (NativeObjectView view = allocator.resolveRaw(rawHandle, NativeAccessMode.READ_ONLY)) {
+    private boolean equalsBytes(NativeHandle handle, byte[] keyBytes) {
+        try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
             return view.size() == keyBytes.length
                     && view.contentEquals(0, keyBytes, 0, keyBytes.length);
         }
@@ -1020,39 +995,38 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         private final byte[] keyBytes;
         private final int hash;
         private final Table directory;
-        private long keyRawHandle;
+        private NativeHandle keyHandle;
         private boolean terminal;
 
-        private StagedInsert(byte[] keyBytes, int hash, long keyRawHandle, Table directory) {
+        private StagedInsert(byte[] keyBytes, int hash, NativeHandle keyHandle, Table directory) {
             this.keyBytes = keyBytes;
             this.hash = hash;
-            NativeHandle.requireValidRaw(keyRawHandle);
-            if (NativeHandle.isNull(keyRawHandle)) {
-                throw new IllegalArgumentException("keyRawHandle must not be null");
+            this.keyHandle = Objects.requireNonNull(keyHandle, "keyHandle");
+            if (keyHandle.isNull()) {
+                throw new IllegalArgumentException("keyHandle must not be null");
             }
-            this.keyRawHandle = keyRawHandle;
             this.directory = directory;
         }
 
         public KeyHandle keyHandle() {
             ensureActive();
-            return KeyHandle.forNative(allocator, NativeHandle.fromRaw(keyRawHandle), hash);
+            return KeyHandle.forNative(allocator, keyHandle, hash);
         }
 
         public long stagedHeapBytes() {
             return directory == null ? 0L : directory.heapBytes;
         }
 
-        private long publish() {
+        private NativeHandle publish() {
             ensureActive();
-            long published = keyRawHandle;
-            keyRawHandle = 0L;
+            NativeHandle published = keyHandle;
+            keyHandle = null;
             terminal = true;
             return published;
         }
 
         private void ensureActive() {
-            if (terminal || keyRawHandle == 0L) {
+            if (terminal || keyHandle == null) {
                 throw new IllegalStateException("staged native key insert is closed");
             }
         }
@@ -1063,18 +1037,18 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
                 return;
             }
             terminal = true;
-            long rawHandle = keyRawHandle;
-            keyRawHandle = 0L;
-            if (rawHandle != 0L) {
-                allocator.freeRaw(rawHandle);
+            NativeHandle handle = keyHandle;
+            keyHandle = null;
+            if (handle != null) {
+                allocator.free(handle);
             }
         }
     }
 
     private static final class Table {
         private final int capacity;
-        private final long[] keyRawHandles;
-        private final long[] entryRawHandles;
+        private final NativeHandle[] keyHandles;
+        private final NativeHandle[] entryHandles;
         private final int[] hashes;
         private final byte[] states;
         private final long heapBytes;
@@ -1089,8 +1063,8 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
                 throw new IllegalArgumentException("invalid key-directory capacity: " + capacity);
             }
             this.capacity = capacity;
-            this.keyRawHandles = new long[capacity];
-            this.entryRawHandles = new long[capacity];
+            this.keyHandles = new NativeHandle[capacity];
+            this.entryHandles = new NativeHandle[capacity];
             this.hashes = new int[capacity];
             this.states = new byte[capacity];
             this.heapBytes = heapBytesForCapacity(capacity);

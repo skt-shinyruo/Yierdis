@@ -1,15 +1,8 @@
 package yier.bubu.redis.storage.memory.internal.ledger;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
-import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmExpireIndex;
+import yier.bubu.redis.storage.memory.internal.expire.YierdisExpireIndex;
+import yier.bubu.redis.storage.memory.internal.expire.YierdisNativeExpireIndex;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeDefragReport;
@@ -57,11 +50,11 @@ public final class DbMemoryAccounting {
         int expireCap1 = 0;
         long expireOverhead = 0;
         long expireValueObjects = 0;
-        if (expires instanceof YierdisFfmExpireIndex ffm) {
-            expireRehashing = ffm.isRehashing();
-            expireCap0 = ffm.table0Capacity();
-            expireCap1 = ffm.table1Capacity();
-            expireOverhead = ffm.estimatedTableOverheadBytes();
+        if (expires instanceof YierdisNativeExpireIndex nativeExpires) {
+            expireRehashing = nativeExpires.isRehashing();
+            expireCap0 = nativeExpires.table0Capacity();
+            expireCap1 = nativeExpires.table1Capacity();
+            expireOverhead = nativeExpires.estimatedTableOverheadBytes();
         }
 
         long totalEstimatedBytes = physicalUsage.effectiveBytesForMaxmemory();

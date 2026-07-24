@@ -23,7 +23,7 @@ import yier.bubu.redis.storage.api.YierdisCommandException;
 public class CommitAwareMutationFaultInjectionTest {
     @Test
     public void changedPreparedWriteReservesBeforeCommitAndPublishesExactlyOnce() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             RecordingPublisher publisher = new RecordingPublisher();
             db.attachCommitPublisher(publisher, 7);
@@ -46,7 +46,7 @@ public class CommitAwareMutationFaultInjectionTest {
 
     @Test
     public void enabledPublisherRejectsUnscopedChangedWriteBeforeStorageVisibility() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.attachCommitPublisher(new RecordingPublisher(), 0);
             db.bindToCurrentThread();
@@ -63,7 +63,7 @@ public class CommitAwareMutationFaultInjectionTest {
 
     @Test
     public void failedContextualWriteDoesNotLeakItsMutationContext() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             db.writes().strings().setString(bytes("counter"), bytes("not-a-number"), SetMode.NORMAL, null);
@@ -92,7 +92,7 @@ public class CommitAwareMutationFaultInjectionTest {
 
     @Test
     public void independentlyBoundWriteViewsKeepTheirOwnMutationContexts() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         RecordingPublisher publisher = new RecordingPublisher();
         try {
             db.bindToCurrentThread();
@@ -121,7 +121,7 @@ public class CommitAwareMutationFaultInjectionTest {
 
     @Test
     public void independentlyBoundLifecycleViewsKeepTheirOwnMutationContexts() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         RecordingPublisher publisher = new RecordingPublisher();
         try {
             db.bindToCurrentThread();
@@ -149,7 +149,7 @@ public class CommitAwareMutationFaultInjectionTest {
 
     @Test
     public void lifecycleContextBindingRejectsNonOwnerThread() throws Exception {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             AtomicReference<Throwable> failure = new AtomicReference<>();
@@ -166,7 +166,7 @@ public class CommitAwareMutationFaultInjectionTest {
             }
 
             Assert.assertTrue(failure.get() instanceof IllegalStateException);
-            Assert.assertEquals("YierdisDb accessed from non-owner thread", failure.get().getMessage());
+            Assert.assertEquals("YierdisDb accessed from a non-owner thread", failure.get().getMessage());
         } finally {
             db.shutdown();
         }
@@ -174,7 +174,7 @@ public class CommitAwareMutationFaultInjectionTest {
 
     @Test
     public void failedPublisherRejectsBeforeAChangedOrNoopWriteCanPrepare() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             RecordingPublisher publisher = new RecordingPublisher();
             publisher.available = false;
@@ -195,7 +195,7 @@ public class CommitAwareMutationFaultInjectionTest {
 
     @Test
     public void scopedNoopDoesNotReserveOrPublishAnEvent() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             db.writes().strings().setString(bytes("key"), bytes("old"), SetMode.NORMAL, null);
@@ -216,7 +216,7 @@ public class CommitAwareMutationFaultInjectionTest {
 
     @Test
     public void delUsesOnePreparedCommitForUniqueLiveKeys() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             db.writes().strings().setString(bytes("first"), bytes("one"), SetMode.NORMAL, null);
@@ -251,7 +251,7 @@ public class CommitAwareMutationFaultInjectionTest {
 
     @Test
     public void zsetRemovalsUsePreparedCommits() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             db.writes().zsets().zadd(bytes("zset"), java.util.List.of(
@@ -293,7 +293,7 @@ public class CommitAwareMutationFaultInjectionTest {
 
     @Test
     public void flushDbUsesTheDatabaseCommitBoundary() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             db.writes().strings().setString(bytes("key"), bytes("value"), SetMode.NORMAL, null);
@@ -321,7 +321,7 @@ public class CommitAwareMutationFaultInjectionTest {
 
     @Test
     public void reservationFailureAbortsPreparedWriteBeforeStorageVisibility() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             RecordingPublisher publisher = new RecordingPublisher();
             publisher.failOnReserve = true;
@@ -345,7 +345,7 @@ public class CommitAwareMutationFaultInjectionTest {
 
     @Test
     public void publicationFailureKeepsCommittedStateAndDegradesTheDb() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             RecordingPublisher publisher = new RecordingPublisher();
             publisher.failOnPublish = true;
@@ -372,13 +372,13 @@ public class CommitAwareMutationFaultInjectionTest {
 
     @Test
     public void publicationFailureStillReleasesSupersededListBlock() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             db.writes().lists().rpush(bytes("list"), java.util.List.of(bytes("old")));
             Assert.assertEquals(
                     1L,
-                    db.nativeAllocator().stats().objectCount(NativeObjectKind.LISTPACK_BYTES)
+                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.LISTPACK_BYTES)
             );
 
             RecordingPublisher publisher = new RecordingPublisher();
@@ -396,7 +396,7 @@ public class CommitAwareMutationFaultInjectionTest {
 
             Assert.assertEquals(
                     1L,
-                    db.nativeAllocator().stats().objectCount(NativeObjectKind.LISTPACK_BYTES)
+                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.LISTPACK_BYTES)
             );
             Assert.assertEquals(1, publisher.failedAfterCommit.get());
             publisher.closeRetainedRecord();

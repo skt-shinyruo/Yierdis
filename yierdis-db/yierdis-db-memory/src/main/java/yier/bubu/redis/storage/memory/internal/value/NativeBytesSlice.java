@@ -3,7 +3,7 @@ package yier.bubu.redis.storage.memory.internal.value;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.memory.api.NativeAccessMode;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectView;
 
@@ -14,21 +14,21 @@ public final class NativeBytesSlice implements BytesSlice {
     private static final ThreadLocal<byte[]> TL_COPY_BUF =
             ThreadLocal.withInitial(() -> new byte[COPY_CHUNK_BYTES]);
 
-    private final NativeAllocator allocator;
+    private final StableMemoryBackend allocator;
     private final NativeHandle handle;
     private final int offset;
     private final int length;
     private final boolean retainedPin;
 
-    public NativeBytesSlice(NativeAllocator allocator, NativeHandle handle, int offset, int length) {
+    public NativeBytesSlice(StableMemoryBackend allocator, NativeHandle handle, int offset, int length) {
         this(allocator, handle, offset, length, false);
     }
 
-    public static NativeBytesSlice retained(NativeAllocator allocator, NativeHandle handle, int offset, int length) {
+    public static NativeBytesSlice retained(StableMemoryBackend allocator, NativeHandle handle, int offset, int length) {
         return new NativeBytesSlice(allocator, handle, offset, length, true);
     }
 
-    private NativeBytesSlice(NativeAllocator allocator, NativeHandle handle, int offset, int length, boolean retainedPin) {
+    private NativeBytesSlice(StableMemoryBackend allocator, NativeHandle handle, int offset, int length, boolean retainedPin) {
         this.allocator = Objects.requireNonNull(allocator, "allocator");
         this.handle = Objects.requireNonNull(handle, "handle");
         if (offset < 0) {

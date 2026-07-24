@@ -3,10 +3,10 @@ package yier.bubu.redis.storage.api;
 // SetReadOps：set 只读能力边界。
 
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
-import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequence;
+import yier.bubu.redis.storage.api.result.ByteSequenceSource;
 
 public interface SetReadOps {
-    MeasuredBulkStringSequence smembers(byte[] keyBytes);
+    ByteSequenceSource smembers(byte[] keyBytes);
 
     boolean sismember(byte[] keyBytes, byte[] member);
 

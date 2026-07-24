@@ -1,8 +1,14 @@
 package yier.bubu.redis.testutil;
 
 import yier.bubu.redis.storage.memory.YierdisDb;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.memory.api.StableMemoryBackendFactory;
+import yier.bubu.redis.memory.foreign.YierdisFfmStableMemoryBackend;
+import yier.bubu.redis.storage.api.DbDefragConfig;
+import yier.bubu.redis.storage.api.DbEngineConfig;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
+import yier.bubu.redis.storage.api.RuntimeDbEngine;
+import yier.bubu.redis.storage.memory.YierdisDbBackendConfig;
+import yier.bubu.redis.storage.memory.YierdisDbEngineFactory;
 
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -18,7 +24,7 @@ public final class TestDbs {
 
     public static void runDefaultFfm(Consumer<YierdisDb> test) {
         Objects.requireNonNull(test, "test");
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = createFfmDb(defaultConfig(), 0);
         try {
             db.bindToCurrentThread();
             test.accept(db);
@@ -39,21 +45,48 @@ public final class TestDbs {
             Consumer<YierdisDb> test
     ) {
         Objects.requireNonNull(test, "test");
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("test-db")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
-                    runtime,
-                    maxmemoryBytes,
-                    maxmemoryPolicy,
-                    maxmemorySamples,
-                    evictionTimeLimitMillis,
-                    5
-            );
-            try {
-                db.bindToCurrentThread();
-                test.accept(db);
-            } finally {
-                db.shutdown();
-            }
+        YierdisDb db = createFfmDb(
+                new DbEngineConfig(
+                        0,
+                        maxmemoryBytes,
+                        maxmemoryPolicy,
+                        maxmemorySamples,
+                        evictionTimeLimitMillis,
+                        5L,
+                        new DbDefragConfig(false, 0L, 0L, 0L)
+                ),
+                0
+        );
+        try {
+            db.bindToCurrentThread();
+            test.accept(db);
+        } finally {
+            db.shutdown();
         }
+    }
+
+    public static YierdisDb createFfmDb(DbEngineConfig config, int nativeSlotCapacity) {
+        StableMemoryBackendFactory backendFactory = YierdisFfmStableMemoryBackend::new;
+        RuntimeDbEngine engine = new YierdisDbEngineFactory(
+                backendFactory,
+                new YierdisDbBackendConfig(nativeSlotCapacity)
+        ).create(Objects.requireNonNull(config, "config"));
+        if (engine instanceof YierdisDb db) {
+            return db;
+        }
+        engine.shutdown();
+        throw new IllegalStateException("YierdisDbEngineFactory did not create YierdisDb");
+    }
+
+    private static DbEngineConfig defaultConfig() {
+        return new DbEngineConfig(
+                0,
+                0L,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                5L,
+                5L,
+                new DbDefragConfig(false, 0L, 0L, 0L)
+        );
     }
 }

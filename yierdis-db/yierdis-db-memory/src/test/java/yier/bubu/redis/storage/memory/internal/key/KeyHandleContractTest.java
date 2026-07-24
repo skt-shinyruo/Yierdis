@@ -3,8 +3,8 @@ package yier.bubu.redis.storage.memory.internal.key;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
+import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 
@@ -14,10 +14,10 @@ public class KeyHandleContractTest {
     @Test
     public void nativeKeyHandleIsReadOnlyBytesViewWithStableDictHash() {
         byte[] key = "hello".getBytes(StandardCharsets.US_ASCII);
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-key-handle-contract");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+        try (TestBackend runtime = TestBackend.open("native-key-handle-contract");
+             StableMemoryBackend allocator = runtime.backend();
              NativeKeyDirectory directory = new NativeKeyDirectory(allocator)) {
-            EntryHandle entry = EntryHandle.fromNativeHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
+            EntryHandle entry = new EntryHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
             try {
                 directory.compute(key, (ignored, old) -> entry);
 
@@ -38,11 +38,11 @@ public class KeyHandleContractTest {
 
     @Test
     public void keyHandleDistinguishesDifferentKeys() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-key-handle-distinct");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+        try (TestBackend runtime = TestBackend.open("native-key-handle-distinct");
+             StableMemoryBackend allocator = runtime.backend();
              NativeKeyDirectory directory = new NativeKeyDirectory(allocator)) {
-            EntryHandle aEntry = EntryHandle.fromNativeHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
-            EntryHandle bEntry = EntryHandle.fromNativeHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
+            EntryHandle aEntry = new EntryHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
+            EntryHandle bEntry = new EntryHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
             try {
                 byte[] keyA = "a".getBytes(StandardCharsets.US_ASCII);
                 byte[] keyB = "b".getBytes(StandardCharsets.US_ASCII);

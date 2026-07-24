@@ -3,6 +3,8 @@ package yier.bubu.redis.integration.command;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.storage.api.DbDefragConfig;
+import yier.bubu.redis.storage.api.DbEngineConfig;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
@@ -22,6 +24,7 @@ import java.util.List;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestBytes.cmd;
+import static yier.bubu.redis.testutil.TestDbs.createFfmDb;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 import static yier.bubu.redis.testutil.TestDbs.forEachDbWithMaxmemory;
 
@@ -57,7 +60,7 @@ public class MaxmemoryEvictionTest {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 Assert.assertTrue(client.execute(List.of(b("SET"), key, largeValue)) instanceof ReplySimpleString);
-                long usedBefore = db.estimatedUsedBytes();
+                long usedBefore = usedBytesForMaxmemory(db);
                 Assert.assertTrue(usedBefore <= maxmemoryBytes);
 
                 ReplyObject reply = client.execute(List.of(b("SET"), key, smallValue));
@@ -65,7 +68,7 @@ public class MaxmemoryEvictionTest {
                 Assert.assertTrue(reply instanceof ReplySimpleString);
                 Assert.assertArrayEquals(smallValue, ((ReplyBulkString) client.execute(List.of(b("GET"), key))).data());
                 Assert.assertTrue("shrinking command should reduce used bytes",
-                        db.estimatedUsedBytes() < usedBefore);
+                        usedBytesForMaxmemory(db) < usedBefore);
             }
         });
     }
@@ -114,9 +117,8 @@ public class MaxmemoryEvictionTest {
     }
 
     @Test
-    public void boundedFixtureUsesConfiguredMaxmemoryForLedgerAndStats() {
+    public void boundedFixtureUsesConfiguredMaxmemoryForStats() {
         try (DbFixture fixture = new DbFixture(1234)) {
-            Assert.assertEquals(1234, fixture.db.memoryLedger().limitBytes());
             Assert.assertEquals(1234, fixture.db.memory().memoryStats().maxmemoryBytes());
         }
     }
@@ -130,20 +132,20 @@ public class MaxmemoryEvictionTest {
             try (FastTestClient client = new FastTestClient(processor)) {
 
             Assert.assertTrue(client.execute(List.of(b("SET"), b("a"), value)) instanceof ReplySimpleString);
-            long usedBeforeCandidate = db.estimatedUsedBytes();
+            long usedBeforeCandidate = usedBytesForMaxmemory(db);
             ReplyObject candidateSet = client.execute(List.of(b("SET"), b("b"), value));
             Assert.assertTrue(
                     "candidate SET must succeed after eviction: reply=" + replyDescription(candidateSet)
                             + ", usedBefore=" + usedBeforeCandidate
-                            + ", usedAfter=" + db.estimatedUsedBytes()
+                            + ", usedAfter=" + usedBytesForMaxmemory(db)
                             + ", limit=" + maxmemoryBytes
-                            + ", keyCount=" + db.size(),
+                            + ", keyCount=" + db.memory().memoryStats().keyCount(),
                     candidateSet instanceof ReplySimpleString
             );
 
             ReplyInteger exists = (ReplyInteger) client.execute(cmd("EXISTS", "a", "b"));
             Assert.assertEquals(1, exists.value());
-            Assert.assertTrue("used bytes must be <= maxmemory", db.estimatedUsedBytes() <= maxmemoryBytes);
+            Assert.assertTrue("used bytes must be <= maxmemory", usedBytesForMaxmemory(db) <= maxmemoryBytes);
 
             }
         });
@@ -171,7 +173,7 @@ public class MaxmemoryEvictionTest {
                         instanceof ReplyBulkString);
 
                 // This write crosses a measured admission boundary and must evict the oldest key.
-                long usedBeforeCandidate = db.estimatedUsedBytes();
+                long usedBeforeCandidate = usedBytesForMaxmemory(db);
                 ReplyObject candidateSet = client.execute(List.of(b("SET"), boundary.candidateKey(), value));
                 Assert.assertTrue(
                         "candidate SET must succeed after eviction: reply=" + replyDescription(candidateSet)
@@ -188,7 +190,7 @@ public class MaxmemoryEvictionTest {
 
                 Assert.assertTrue(
                         "used bytes must be <= maxmemory",
-                        db.estimatedUsedBytes() <= boundary.maxmemoryBytes()
+                        usedBytesForMaxmemory(db) <= boundary.maxmemoryBytes()
                 );
             }
                 }
@@ -276,13 +278,7 @@ public class MaxmemoryEvictionTest {
             byte[] initialValue,
             byte[] overwriteValue
     ) {
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(
-                maxmemoryBytes,
-                MaxmemoryPolicy.NOEVICTION,
-                5,
-                5,
-                5
-        );
+        YierdisDb db = openFfm(maxmemoryBytes);
         try {
             db.bindToCurrentThread();
             return db.writes().strings().setString(key, initialValue, SetMode.NORMAL, null).value()
@@ -374,13 +370,7 @@ public class MaxmemoryEvictionTest {
     }
 
     private static boolean allowsSetKeys(long maxmemoryBytes, byte[] value, List<byte[]> keys) {
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(
-                maxmemoryBytes,
-                MaxmemoryPolicy.NOEVICTION,
-                5,
-                5,
-                5
-        );
+        YierdisDb db = openFfm(maxmemoryBytes);
         try {
             db.bindToCurrentThread();
             for (byte[] key : keys) {
@@ -400,13 +390,7 @@ public class MaxmemoryEvictionTest {
     }
 
     private static boolean allowsSetAfterDeletion(long maxmemoryBytes, byte[] value) {
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(
-                maxmemoryBytes,
-                MaxmemoryPolicy.NOEVICTION,
-                5,
-                5,
-                5
-        );
+        YierdisDb db = openFfm(maxmemoryBytes);
         try {
             db.bindToCurrentThread();
             if (!db.writes().strings().setString(b("a"), value, SetMode.NORMAL, null).value()) {
@@ -439,9 +423,9 @@ public class MaxmemoryEvictionTest {
         long usedAfter;
         try (DbFixture measured = new DbFixture(0)) {
             setup.apply(measured.db);
-            usedBefore = measured.db.estimatedUsedBytes();
+            usedBefore = usedBytesForMaxmemory(measured.db);
             measuredWrite.apply(measured.db);
-            usedAfter = measured.db.estimatedUsedBytes();
+            usedAfter = usedBytesForMaxmemory(measured.db);
             actualDelta = usedAfter - usedBefore;
         }
 
@@ -499,11 +483,11 @@ public class MaxmemoryEvictionTest {
                 return new AttemptResult(AttemptOutcome.SETUP_REJECTED, -1L, -1L);
             }
 
-            long usedBefore = fixture.db.estimatedUsedBytes();
+            long usedBefore = usedBytesForMaxmemory(fixture.db);
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(fixture.db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 ReplyObject reply = client.execute(commandWrite);
-                long usedAfter = fixture.db.estimatedUsedBytes();
+                long usedAfter = usedBytesForMaxmemory(fixture.db);
                 if (reply instanceof ReplyError err) {
                     Assert.assertEquals(MaxmemoryErrors.OOM_ERR, err.message());
                     return new AttemptResult(AttemptOutcome.COMMAND_REJECTED, usedBefore, usedAfter);
@@ -536,11 +520,27 @@ public class MaxmemoryEvictionTest {
     private record AttemptResult(AttemptOutcome outcome, long usedBefore, long usedAfter) {
     }
 
+    private static long usedBytesForMaxmemory(YierdisDb db) {
+        return db.memory().memoryStats().usedBytesForMaxmemory();
+    }
+
+    private static YierdisDb openFfm(long maxmemoryBytes) {
+        return createFfmDb(new DbEngineConfig(
+                0,
+                maxmemoryBytes,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                5L,
+                5L,
+                new DbDefragConfig(false, 0L, 0L, 0L)
+        ), 0);
+    }
+
     private static final class DbFixture implements AutoCloseable {
         private final YierdisDb db;
 
         private DbFixture(long maxmemoryBytes) {
-            this.db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+            this.db = openFfm(maxmemoryBytes);
             this.db.bindToCurrentThread();
         }
 

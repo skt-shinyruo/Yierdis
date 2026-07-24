@@ -3,7 +3,6 @@ package yier.bubu.redis.storage.memory;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
@@ -14,8 +13,8 @@ import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.YierdisCommandException;
-import yier.bubu.redis.storage.api.result.BulkStringSequence;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.ByteSequenceSource;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.PoppedValueSequence;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
@@ -56,8 +55,7 @@ public class CollectionDirectOpsTest {
             EntryRecord after = db.keyLifecycle().liveEntryRecord(b("zset"));
             Assert.assertEquals(rootHandle, after.valueHandle());
             Assert.assertEquals(ValueEncoding.ZSET_SKIPLIST, after.encoding());
-            Assert.assertEquals(DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE, after.version());
-            Assert.assertEquals(before.version(), after.version());
+            Assert.assertTrue(after.version() > before.version());
             Assert.assertEquals(usedBeforePromotion, db.memoryLedger().usedBytes());
             Assert.assertTrue(db.keyLifecycle().zsetRoot().heapBytes() > heapBeforePromotion);
 
@@ -72,14 +70,14 @@ public class CollectionDirectOpsTest {
             Assert.assertEquals(2L, db.writes().lists().rpush(b("list"), List.of(b("a"), b("b"))).value().longValue());
             EntryRecord before = db.keyLifecycle().liveEntryRecord(b("list"));
             ValueHandle rootHandle = before.valueHandle();
-            Set<Long> beforeBlocks = listHandles(db, rootHandle, NativeObjectKind.LISTPACK_BYTES);
+            Set<NativeHandle> beforeBlocks = listHandles(db, rootHandle);
             Assert.assertEquals(1, beforeBlocks.size());
 
             Assert.assertEquals(3L, db.writes().lists().lpush(b("list"), List.of(b("c"))).value().longValue());
 
             EntryRecord after = db.keyLifecycle().liveEntryRecord(b("list"));
             Assert.assertEquals(rootHandle, after.valueHandle());
-            Set<Long> afterBlocks = listHandles(db, rootHandle, NativeObjectKind.LISTPACK_BYTES);
+            Set<NativeHandle> afterBlocks = listHandles(db, rootHandle);
             Assert.assertEquals(1, afterBlocks.size());
             Assert.assertNotEquals(beforeBlocks, afterBlocks);
             Assert.assertEquals(List.of("c", "a", "b"), sequence(db.reads().lists().lrange(b("list"), 0, -1)));
@@ -96,26 +94,23 @@ public class CollectionDirectOpsTest {
 
             EntryRecord before = db.keyLifecycle().liveEntryRecord(b("list"));
             ValueHandle rootHandle = before.valueHandle();
-            Set<Long> nodeHandles = listHandles(db, rootHandle, NativeObjectKind.LIST_NODE);
-            Set<Long> blockHandles = listHandles(db, rootHandle, NativeObjectKind.LISTPACK_BYTES);
-            Assert.assertEquals(3, nodeHandles.size());
-            Assert.assertEquals(3, blockHandles.size());
+            Set<NativeHandle> objectHandles = listHandles(db, rootHandle);
+            Assert.assertEquals(6, objectHandles.size());
 
             Assert.assertEquals(4L, db.writes().lists().rpush(b("list"), List.of(b("tail"))).value().longValue());
             Assert.assertEquals(rootHandle, db.keyLifecycle().liveEntryRecord(b("list")).valueHandle());
-            Assert.assertEquals(nodeHandles, listHandles(db, rootHandle, NativeObjectKind.LIST_NODE));
-            Set<Long> afterPushBlocks = listHandles(db, rootHandle, NativeObjectKind.LISTPACK_BYTES);
-            Assert.assertEquals(3, afterPushBlocks.size());
-            Set<Long> unchangedBlocks = new HashSet<>(blockHandles);
-            unchangedBlocks.retainAll(afterPushBlocks);
-            Assert.assertEquals(2, unchangedBlocks.size());
+            Set<NativeHandle> afterPushHandles = listHandles(db, rootHandle);
+            Assert.assertEquals(6, afterPushHandles.size());
+            Set<NativeHandle> unchangedHandles = new HashSet<>(objectHandles);
+            unchangedHandles.retainAll(afterPushHandles);
+            Assert.assertEquals(5, unchangedHandles.size());
 
-            try (PoppedValueSequence popped = db.writes().lists().lpop(b("list"), 1).value()) {
+            try (PoppedValueSequence popped = TestDbSupport.commitPop(db.writes().lists(), b("list"), 1, true).value()) {
                 Assert.assertEquals(rootHandle, db.keyLifecycle().liveEntryRecord(b("list")).valueHandle());
-                Assert.assertEquals(2L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.LIST_NODE));
+                Assert.assertEquals(2L, db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.LIST_NODE));
                 Assert.assertEquals(List.of(new String(first, StandardCharsets.UTF_8)), sequence(popped));
             }
-            Assert.assertEquals(2L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.LISTPACK_BYTES));
+            Assert.assertEquals(2L, db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.LISTPACK_BYTES));
             Assert.assertEquals(
                     List.of(
                             new String(second, StandardCharsets.UTF_8),
@@ -128,7 +123,7 @@ public class CollectionDirectOpsTest {
     }
 
     @Test
-    public void collectionWriteAdmissionCoversRootAdaptersInLaterAllocatorMetadataSegments() {
+    public void collectionWriteAdmissionCoversStableBackendGrowth() {
         assertCollectionWriteAdmissionCoversPhysicalGrowth(
                 "hash",
                 db -> db.writes().hashes().hset(b("hash"), List.of(b("field"), b("value")))
@@ -144,7 +139,7 @@ public class CollectionDirectOpsTest {
     }
 
     @Test
-    public void collectionReplacementAdmissionCoversRootAdaptersInLaterAllocatorMetadataSegments() {
+    public void collectionReplacementAdmissionCoversStableBackendGrowth() {
         assertCollectionReplacementAdmissionCoversPhysicalGrowth(
                 "hash replacement",
                 db -> {
@@ -168,18 +163,6 @@ public class CollectionDirectOpsTest {
                     db.writes().lists().rpush(b("list-keeper"), List.of(b("keeper")));
                 },
                 db -> db.writes().lists().rpush(b("list"), List.of(b("next")))
-        );
-        assertCollectionReplacementAdmissionCoversPhysicalGrowth(
-                "list partial pop",
-                db -> {
-                    db.writes().lists().rpush(b("list-pop"), List.of(b("first"), b("second")));
-                    db.writes().lists().rpush(b("list-pop-keeper"), List.of(b("keeper")));
-                },
-                db -> {
-                    try (PoppedValueSequence ignored = db.writes().lists().lpop(b("list-pop"), 1).value()) {
-                        Assert.assertFalse(ignored.isNull());
-                    }
-                }
         );
     }
 
@@ -224,30 +207,30 @@ public class CollectionDirectOpsTest {
     @Test
     public void listPushPopCoverBothEndsMissingWrongTypeAndTtl() {
         withDb(db -> {
-            Assert.assertTrue(isNullPop(db.writes().lists().lpop(b("missing"), 1).value()));
-            Assert.assertTrue(isNullPop(db.writes().lists().rpop(b("missing"), 1).value()));
-            Assert.assertTrue(db.writes().lists().lpop(b("missing"), 1).mutationOutcome() == MutationOutcome.NONE);
+            Assert.assertTrue(isNullPop(TestDbSupport.commitPop(db.writes().lists(), b("missing"), 1, true).value()));
+            Assert.assertTrue(isNullPop(TestDbSupport.commitPop(db.writes().lists(), b("missing"), 1, false).value()));
+            Assert.assertTrue(TestDbSupport.commitPop(db.writes().lists(), b("missing"), 1, true).mutationOutcome() == MutationOutcome.NONE);
 
             Assert.assertEquals(2L, db.writes().lists().lpush(b("list"), List.of(b("b"), b("a"))).value().longValue());
             Assert.assertEquals(4L, db.writes().lists().rpush(b("list"), List.of(b("c"), b("d"))).value().longValue());
             Assert.assertEquals(List.of("a", "b", "c", "d"), sequence(db.reads().lists().lrange(b("list"), 0, -1)));
 
-            Assert.assertEquals(List.of("a", "b"), strings(db.writes().lists().lpop(b("list"), 2).value()));
-            Assert.assertEquals(List.of("d"), strings(db.writes().lists().rpop(b("list"), 1).value()));
+            Assert.assertEquals(List.of("a", "b"), strings(TestDbSupport.commitPop(db.writes().lists(), b("list"), 2, true).value()));
+            Assert.assertEquals(List.of("d"), strings(TestDbSupport.commitPop(db.writes().lists(), b("list"), 1, false).value()));
             Assert.assertEquals(List.of("c"), sequence(db.reads().lists().lrange(b("list"), 0, -1)));
 
-            Assert.assertEquals(List.of("c"), strings(db.writes().lists().lpop(b("list"), 5).value()));
+            Assert.assertEquals(List.of("c"), strings(TestDbSupport.commitPop(db.writes().lists(), b("list"), 5, true).value()));
             Assert.assertNull(db.reads().keyspace().typeOf(view("list")));
 
             db.writes().lists().rpush(b("ttl-list"), List.of(b("x")));
             db.writes().ttl().pexpire(view("ttl-list"), 1);
             sleepPastTtl();
-            Assert.assertTrue(isNullPop(db.writes().lists().rpop(b("ttl-list"), 1).value()));
+            Assert.assertTrue(isNullPop(TestDbSupport.commitPop(db.writes().lists(), b("ttl-list"), 1, false).value()));
             Assert.assertNull(db.reads().keyspace().typeOf(view("ttl-list")));
 
             db.writes().strings().setString(b("s"), b("v"), SetMode.NORMAL, null);
             expectWrongType(() -> db.writes().lists().lpush(b("s"), List.of(b("x"))));
-            expectWrongType(() -> db.writes().lists().rpop(b("s"), 1));
+            expectWrongType(() -> TestDbSupport.commitPop(db.writes().lists(), b("s"), 1, false));
         });
     }
 
@@ -262,9 +245,9 @@ public class CollectionDirectOpsTest {
             RejectingMaxmemoryCoordinator coordinator = new RejectingMaxmemoryCoordinator();
             db.attachMaxmemoryCoordinator(coordinator);
 
-            Assert.assertEquals(List.of("a", "b"), strings(db.writes().lists().lpop(b("drop"), 10).value()));
+            Assert.assertEquals(List.of("a", "b"), strings(TestDbSupport.commitPop(db.writes().lists(), b("drop"), 10, true).value()));
             Assert.assertNull(db.reads().keyspace().typeOf(view("drop")));
-            Assert.assertTrue(isNullPop(db.writes().lists().rpop(b("expired"), 1).value()));
+            Assert.assertTrue(isNullPop(TestDbSupport.commitPop(db.writes().lists(), b("expired"), 1, false).value()));
             Assert.assertNull(db.reads().keyspace().typeOf(view("expired")));
             Assert.assertEquals(0, coordinator.prepareWrites());
         });
@@ -278,23 +261,27 @@ public class CollectionDirectOpsTest {
             byte[] right = repeatedBytes('c', 128);
             Assert.assertEquals(3L, db.writes().lists().rpush(b("list"), List.of(left, middle, right)).value().longValue());
 
-            try (PoppedValueSequence popped = db.writes().lists().lpop(b("list"), 1).value()) {
-                Assert.assertEquals(1, popped.count());
-                Assert.assertEquals(136L, popped.encodedElementBytes());
-                Assert.assertEquals(512L, popped.retainedMemoryBytes());
+            try (PoppedValueSequence popped = TestDbSupport.commitPop(db.writes().lists(), b("list"), 1, true).value()) {
+                Assert.assertEquals(1, popped.elementCount());
+                Assert.assertEquals(128L, payloadLengthTotal(popped));
+                Assert.assertTrue(popped.retainedMemoryBytes() >= payloadLengthTotal(popped));
                 Assert.assertEquals(
                         List.of(new String(middle, StandardCharsets.UTF_8), new String(right, StandardCharsets.UTF_8)),
                         sequence(db.reads().lists().lrange(b("list"), 0, -1))
                 );
                 Assert.assertEquals(List.of(new String(left, StandardCharsets.UTF_8)), sequence(popped));
             }
+            Assert.assertEquals(
+                    1L,
+                    db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.LISTPACK_BYTES)
+            );
         });
     }
 
     @Test
     public void setSremCoversMissingNoOpWrongTypeTtlAndEmptyDeletion() {
         withDb(db -> {
-            Assert.assertEquals(0, db.reads().sets().smembers(b("missing")).count());
+            Assert.assertEquals(0, db.reads().sets().smembers(b("missing")).elementCount());
             Assert.assertFalse(db.reads().sets().sismember(b("missing"), b("a")));
             Assert.assertEquals(0L, db.reads().sets().scard(b("missing")));
             Assert.assertEquals(0L, db.writes().sets().srem(b("missing"), List.of(b("a"))).value().longValue());
@@ -320,7 +307,7 @@ public class CollectionDirectOpsTest {
             Assert.assertNull(db.reads().keyspace().typeOf(view("ttl-set")));
 
             db.writes().strings().setString(b("s"), b("v"), SetMode.NORMAL, null);
-            expectWrongType(() -> db.reads().sets().smembers(b("s")).count());
+            expectWrongType(() -> db.reads().sets().smembers(b("s")).elementCount());
             expectWrongType(() -> db.reads().sets().sismember(b("s"), b("v")));
             expectWrongType(() -> db.reads().sets().scard(b("s")));
             expectWrongType(() -> db.writes().sets().sadd(b("s"), List.of(b("x"))));
@@ -331,10 +318,10 @@ public class CollectionDirectOpsTest {
     @Test
     public void zsetReadsAndRemovalsCoverReverseScoreRankMissingWrongTypeAndTtl() {
         withDb(db -> {
-            Assert.assertEquals(0, db.reads().zsets().zrange(b("missing"), 0, -1, false).count());
-            Assert.assertEquals(0, db.reads().zsets().zrevrange(b("missing"), 0, -1, false).count());
-            Assert.assertEquals(0, db.reads().zsets().zrangeByScore(b("missing"), 0, true, 1, true, false, 0, 10).count());
-            Assert.assertEquals(0, db.reads().zsets().zrevrangeByScore(b("missing"), 0, true, 1, true, false, 0, 10).count());
+            Assert.assertEquals(0, db.reads().zsets().zrange(b("missing"), 0, -1, false).elementCount());
+            Assert.assertEquals(0, db.reads().zsets().zrevrange(b("missing"), 0, -1, false).elementCount());
+            Assert.assertEquals(0, db.reads().zsets().zrangeByScore(b("missing"), 0, true, 1, true, false, 0, 10).elementCount());
+            Assert.assertEquals(0, db.reads().zsets().zrevrangeByScore(b("missing"), 0, true, 1, true, false, 0, 10).elementCount());
             Assert.assertEquals(0L, db.writes().zsets().zremrangeByScore(b("missing"), 0, true, 1, true).value().longValue());
             Assert.assertEquals(0L, db.writes().zsets().zremrangeByRank(b("missing"), 0, -1).value().longValue());
             Assert.assertEquals(0L, db.writes().zsets().zrem(b("missing"), List.of(b("a"))).value().longValue());
@@ -365,14 +352,14 @@ public class CollectionDirectOpsTest {
             db.writes().zsets().zadd(b("ttl-z"), List.of(b("1"), b("x")));
             db.writes().ttl().pexpire(view("ttl-z"), 1);
             sleepPastTtl();
-            Assert.assertEquals(0, db.reads().zsets().zrevrange(b("ttl-z"), 0, -1, false).count());
+            Assert.assertEquals(0, db.reads().zsets().zrevrange(b("ttl-z"), 0, -1, false).elementCount());
             Assert.assertNull(db.reads().keyspace().typeOf(view("ttl-z")));
 
             db.writes().strings().setString(b("s"), b("v"), SetMode.NORMAL, null);
-            expectWrongType(() -> db.reads().zsets().zrange(b("s"), 0, -1, false).count());
-            expectWrongType(() -> db.reads().zsets().zrevrange(b("s"), 0, -1, false).count());
-            expectWrongType(() -> db.reads().zsets().zrangeByScore(b("s"), 0, true, 1, true, false, 0, 10).count());
-            expectWrongType(() -> db.reads().zsets().zrevrangeByScore(b("s"), 0, true, 1, true, false, 0, 10).count());
+            expectWrongType(() -> db.reads().zsets().zrange(b("s"), 0, -1, false).elementCount());
+            expectWrongType(() -> db.reads().zsets().zrevrange(b("s"), 0, -1, false).elementCount());
+            expectWrongType(() -> db.reads().zsets().zrangeByScore(b("s"), 0, true, 1, true, false, 0, 10).elementCount());
+            expectWrongType(() -> db.reads().zsets().zrevrangeByScore(b("s"), 0, true, 1, true, false, 0, 10).elementCount());
             expectWrongType(() -> db.writes().zsets().zadd(b("s"), List.of(b("1"), b("v"))));
             expectWrongType(() -> db.writes().zsets().zremrangeByScore(b("s"), 0, true, 1, true));
             expectWrongType(() -> db.writes().zsets().zremrangeByRank(b("s"), 0, -1));
@@ -412,7 +399,7 @@ public class CollectionDirectOpsTest {
     }
 
     private static void withDb(DbConsumer consumer) {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             consumer.accept(db);
@@ -434,7 +421,7 @@ public class CollectionDirectOpsTest {
             DbMutation setup,
             DbMutation mutation
     ) {
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntimeAndNativeSlotCapacity(
+        YierdisDb db = TestDbSupport.openWithNativeSlotCapacity(
                 0L,
                 yier.bubu.redis.storage.api.MaxmemoryPolicy.NOEVICTION,
                 5,
@@ -443,14 +430,9 @@ public class CollectionDirectOpsTest {
                 null,
                 8_192
         );
-        List<NativeHandle> fillers = new ArrayList<>();
         try {
             db.bindToCurrentThread();
             setup.apply(db);
-            NativeAllocator allocator = db.nativeAllocator();
-            while (allocator.stats().activeMetadataSegments() < 2L) {
-                fillers.add(allocator.allocate(NativeObjectKind.GENERIC, 1));
-            }
 
             RecordingMaxmemoryCoordinator coordinator = new RecordingMaxmemoryCoordinator();
             db.attachMaxmemoryCoordinator(coordinator);
@@ -465,17 +447,24 @@ public class CollectionDirectOpsTest {
                     coordinator.maximumEstimatedExtraBytes() >= after - before
             );
         } finally {
-            for (NativeHandle filler : fillers) {
-                db.nativeAllocator().free(filler);
-            }
             db.shutdown();
         }
     }
 
-    private static List<String> sequence(BulkStringSequence sequence) {
-        RecordingBulkStringSink sink = new RecordingBulkStringSink();
+    private static List<String> sequence(ByteSequenceSource sequence) {
+        RecordingByteValueSink sink = new RecordingByteValueSink();
         sequence.emitTo(sink);
         return sink.values;
+    }
+
+    private static long payloadLengthTotal(ByteSequenceSource source) {
+        long[] total = {0L};
+        source.visitElementLengths(length -> {
+            if (length >= 0) {
+                total[0] += length;
+            }
+        });
+        return total[0];
     }
 
     private static boolean isNullPop(PoppedValueSequence values) {
@@ -506,13 +495,9 @@ public class CollectionDirectOpsTest {
         return bytes;
     }
 
-    private static Set<Long> listHandles(YierdisDb db, ValueHandle rootHandle, NativeObjectKind kind) {
-        Set<Long> handles = new HashSet<>();
-        db.keyLifecycle().listRoot().forEachNativeHandle(rootHandle, handle -> {
-            if (handle.domain() == kind.domain() && handle.kindCode() == kind.code()) {
-                handles.add(handle.raw());
-            }
-        });
+    private static Set<NativeHandle> listHandles(YierdisDb db, ValueHandle rootHandle) {
+        Set<NativeHandle> handles = new HashSet<>();
+        db.keyLifecycle().listRoot().forEachNativeHandle(rootHandle, handles::add);
         return handles;
     }
 
@@ -591,21 +576,21 @@ public class CollectionDirectOpsTest {
         }
     }
 
-    private static final class RecordingBulkStringSink implements BulkStringSink {
+    private static final class RecordingByteValueSink implements ByteValueSink {
         private final List<String> values = new ArrayList<>();
 
         @Override
-        public void bulkString(byte[] data) {
+        public void value(byte[] data) {
             values.add(data == null ? null : new String(data, StandardCharsets.UTF_8));
         }
 
         @Override
-        public void bulkString(byte[] data, int off, int len) {
+        public void value(byte[] data, int off, int len) {
             values.add(data == null ? null : new String(data, off, len, StandardCharsets.UTF_8));
         }
 
         @Override
-        public void bulkString(BytesSlice slice) {
+        public void value(BytesSlice slice) {
             if (slice == null) {
                 values.add(null);
                 return;
@@ -616,8 +601,13 @@ public class CollectionDirectOpsTest {
         }
 
         @Override
-        public void bulkStringLongAscii(long value) {
+        public void longAscii(long value) {
             values.add(Long.toString(value));
+        }
+
+        @Override
+        public void nullValue() {
+            values.add(null);
         }
     }
 

@@ -4,12 +4,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import yier.bubu.redis.memory.api.NativeAccessMode;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.storage.api.ScanCursorV2;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
+import yier.bubu.redis.storage.api.result.PayloadLengthSink;
 
 /**
  * HT 编码集合的一次有界 scan 结果。窗口只 pin 已发现元素的 native handle，不复制 payload。
@@ -25,27 +26,24 @@ final class NativeCollectionScanWindow implements CollectionScanWindow {
 
     private final ScanCursorV2 nextCursor;
     private final int count;
-    private final long encodedElementBytes;
     private final long retainedMemoryBytes;
-    private NativeAllocator allocator;
+    private StableMemoryBackend allocator;
     private Element[] elements;
 
     private NativeCollectionScanWindow(
-            NativeAllocator allocator,
+            StableMemoryBackend allocator,
             ScanCursorV2 nextCursor,
             Element[] elements,
-            long encodedElementBytes,
             long retainedMemoryBytes
     ) {
         this.allocator = Objects.requireNonNull(allocator, "allocator");
         this.nextCursor = Objects.requireNonNull(nextCursor, "nextCursor");
         this.elements = Objects.requireNonNull(elements, "elements");
         this.count = elements.length;
-        this.encodedElementBytes = encodedElementBytes;
         this.retainedMemoryBytes = retainedMemoryBytes;
     }
 
-    static Builder builder(NativeAllocator allocator, int expectedElements) {
+    static Builder builder(StableMemoryBackend allocator, int expectedElements) {
         return new Builder(allocator, expectedElements);
     }
 
@@ -70,13 +68,17 @@ final class NativeCollectionScanWindow implements CollectionScanWindow {
     }
 
     @Override
-    public int count() {
+    public int elementCount() {
         return count;
     }
 
     @Override
-    public long encodedElementBytes() {
-        return encodedElementBytes;
+    public void visitElementLengths(PayloadLengthSink out) {
+        Objects.requireNonNull(out, "out");
+        Element[] current = requireOpen();
+        for (Element element : current) {
+            out.payloadLength(element.payloadLength());
+        }
     }
 
     @Override
@@ -85,33 +87,19 @@ final class NativeCollectionScanWindow implements CollectionScanWindow {
     }
 
     @Override
-    public void emitTo(BulkStringSink out) {
+    public void emitTo(ByteValueSink out) {
         Objects.requireNonNull(out, "out");
-        Element[] current = elements;
-        NativeAllocator currentAllocator = allocator;
-        if (current == null || currentAllocator == null) {
-            throw new IllegalStateException("collection scan window is closed");
+        Element[] current = requireOpen();
+        StableMemoryBackend currentAllocator = allocator;
+        for (Element element : current) {
+            element.emit(currentAllocator, out);
         }
-        try {
-            for (Element element : current) {
-                element.emit(currentAllocator, out);
-            }
-        } catch (RuntimeException | Error failure) {
-            try {
-                close();
-            } catch (RuntimeException | Error closeFailure) {
-                failure.addSuppressed(closeFailure);
-            }
-            throw failure;
-        }
-        // BulkStringSink 同步消费 slice；重放结束后 pin 与来源引用已经没有继续保留的理由。
-        close();
     }
 
     @Override
     public void close() {
         Element[] current = elements;
-        NativeAllocator currentAllocator = allocator;
+        StableMemoryBackend currentAllocator = allocator;
         if (current == null || currentAllocator == null) {
             return;
         }
@@ -136,8 +124,18 @@ final class NativeCollectionScanWindow implements CollectionScanWindow {
         rethrow(failure);
     }
 
+    private Element[] requireOpen() {
+        Element[] current = elements;
+        if (current == null || allocator == null) {
+            throw new IllegalStateException("collection scan window is closed");
+        }
+        return current;
+    }
+
     private sealed interface Element permits NativeElement, ByteArrayElement, LongElement, NullElement {
-        void emit(NativeAllocator allocator, BulkStringSink out);
+        int payloadLength();
+
+        void emit(StableMemoryBackend allocator, ByteValueSink out);
     }
 
     private record NativeElement(NativeHandle handle, int length) implements Element {
@@ -149,8 +147,13 @@ final class NativeCollectionScanWindow implements CollectionScanWindow {
         }
 
         @Override
-        public void emit(NativeAllocator allocator, BulkStringSink out) {
-            out.bulkString(NativeBytesSlice.retained(allocator, handle, 0, length));
+        public int payloadLength() {
+            return length;
+        }
+
+        @Override
+        public void emit(StableMemoryBackend allocator, ByteValueSink out) {
+            out.value(NativeBytesSlice.retained(allocator, handle, 0, length));
         }
     }
 
@@ -160,15 +163,25 @@ final class NativeCollectionScanWindow implements CollectionScanWindow {
         }
 
         @Override
-        public void emit(NativeAllocator allocator, BulkStringSink out) {
-            out.bulkString(bytes);
+        public int payloadLength() {
+            return bytes.length;
+        }
+
+        @Override
+        public void emit(StableMemoryBackend allocator, ByteValueSink out) {
+            out.value(bytes);
         }
     }
 
     private record LongElement(long value) implements Element {
         @Override
-        public void emit(NativeAllocator allocator, BulkStringSink out) {
-            out.bulkStringLongAscii(value);
+        public int payloadLength() {
+            return SemanticResultSupport.signedLongAsciiLength(value);
+        }
+
+        @Override
+        public void emit(StableMemoryBackend allocator, ByteValueSink out) {
+            out.longAscii(value);
         }
     }
 
@@ -176,19 +189,23 @@ final class NativeCollectionScanWindow implements CollectionScanWindow {
         INSTANCE;
 
         @Override
-        public void emit(NativeAllocator allocator, BulkStringSink out) {
-            out.bulkStringNull();
+        public int payloadLength() {
+            return -1;
+        }
+
+        @Override
+        public void emit(StableMemoryBackend allocator, ByteValueSink out) {
+            out.nullValue();
         }
     }
 
     static final class Builder implements AutoCloseable {
-        private final NativeAllocator allocator;
+        private final StableMemoryBackend allocator;
         private final List<Element> elements;
-        private long encodedElementBytes;
         private long retainedElementBytes;
         private boolean transferred;
 
-        private Builder(NativeAllocator allocator, int expectedElements) {
+        private Builder(StableMemoryBackend allocator, int expectedElements) {
             this.allocator = Objects.requireNonNull(allocator, "allocator");
             if (expectedElements < 0) {
                 throw new IllegalArgumentException("expectedElements must be >= 0");
@@ -215,10 +232,7 @@ final class NativeCollectionScanWindow implements CollectionScanWindow {
                 }
                 elements.add(new NativeElement(handle, length));
                 // pin 会让已从集合删除的 allocation 延迟回收，因此 reply 额度必须同时覆盖 native payload。
-                recordElement(
-                        encodedBulkStringBytes(length),
-                        addSaturating(ELEMENT_HEAP_BYTES, nativeRetainedBytes)
-                );
+                recordElement(addSaturating(ELEMENT_HEAP_BYTES, nativeRetainedBytes));
                 added = true;
             } finally {
                 if (!added) {
@@ -230,20 +244,17 @@ final class NativeCollectionScanWindow implements CollectionScanWindow {
         void addBytes(byte[] bytes) {
             Objects.requireNonNull(bytes, "bytes");
             elements.add(new ByteArrayElement(bytes));
-            recordElement(
-                    encodedBulkStringBytes(bytes.length),
-                    addSaturating(ELEMENT_HEAP_BYTES, alignedArrayBytes(bytes.length, 1L))
-            );
+            recordElement(addSaturating(ELEMENT_HEAP_BYTES, alignedArrayBytes(bytes.length, 1L)));
         }
 
         void addLong(long value) {
             elements.add(new LongElement(value));
-            recordElement(encodedBulkStringBytes(decimalDigits(value)), ELEMENT_HEAP_BYTES);
+            recordElement(ELEMENT_HEAP_BYTES);
         }
 
         void addNull() {
             elements.add(NullElement.INSTANCE);
-            recordElement(5L, 0L);
+            recordElement(0L);
         }
 
         CollectionScanWindow build(ScanCursorV2 nextCursor) {
@@ -259,7 +270,6 @@ final class NativeCollectionScanWindow implements CollectionScanWindow {
                     allocator,
                     nextCursor,
                     snapshot,
-                    encodedElementBytes,
                     retained
             );
             transferred = true;
@@ -291,28 +301,9 @@ final class NativeCollectionScanWindow implements CollectionScanWindow {
             rethrow(failure);
         }
 
-        private void recordElement(long encodedBytes, long retainedBytes) {
-            encodedElementBytes = addSaturating(encodedElementBytes, encodedBytes);
+        private void recordElement(long retainedBytes) {
             retainedElementBytes = addSaturating(retainedElementBytes, retainedBytes);
         }
-    }
-
-    private static long encodedBulkStringBytes(int payloadLength) {
-        long headerBytes = 1L + decimalDigits(payloadLength) + 2L;
-        return addSaturating(addSaturating(headerBytes, payloadLength), 2L);
-    }
-
-    private static int decimalDigits(long value) {
-        if (value == Long.MIN_VALUE) {
-            return 20;
-        }
-        long remaining = value < 0L ? -value : value;
-        int digits = value < 0L ? 2 : 1;
-        while (remaining >= 10L) {
-            remaining /= 10L;
-            digits++;
-        }
-        return digits;
     }
 
     private static long alignedArrayBytes(int length, long elementBytes) {

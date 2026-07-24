@@ -1,6 +1,6 @@
 package yier.bubu.redis.memory.foreign;
 
-public record YierdisNativePageAllocatorStats(
+record YierdisNativePageAllocatorStats(
         long committedBytes,
         long usedBytes,
         long freeBytes,

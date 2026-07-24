@@ -1,19 +1,19 @@
 package yier.bubu.redis.storage.memory.internal.key;
 
 import yier.bubu.redis.memory.api.NativeAccessMode;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectView;
 
 import java.util.Objects;
 
 public final class AllocatorKeyHandle implements KeyHandle {
-    private final NativeAllocator allocator;
+    private final StableMemoryBackend allocator;
     private final NativeHandle handle;
     private final int dictHash;
     private final int contentHash;
 
-    public AllocatorKeyHandle(NativeAllocator allocator, NativeHandle handle, int dictHash) {
+    public AllocatorKeyHandle(StableMemoryBackend allocator, NativeHandle handle, int dictHash) {
         this.allocator = Objects.requireNonNull(allocator, "allocator");
         this.handle = Objects.requireNonNull(handle, "handle");
         this.dictHash = dictHash;

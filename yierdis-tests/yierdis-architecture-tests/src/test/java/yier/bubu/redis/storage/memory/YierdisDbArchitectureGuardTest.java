@@ -10,15 +10,18 @@ import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.SetMode;
 
 import java.io.IOException;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import yier.bubu.redis.memory.api.StableMemoryBackendFactory;
 
 public class YierdisDbArchitectureGuardTest {
     @Test
@@ -131,7 +134,7 @@ public class YierdisDbArchitectureGuardTest {
                 "globMatches(",
                 "findGlobClassEnd(",
                 "globClassMatches(",
-                "new YierdisFfmMemoryRuntime(",
+                "new YierdisFfm" + "MemoryRuntime(",
                 "new YierdisFfm" + "BlobStore(",
                 "new YierdisFfm" + "Keyspace",
                 "new YierdisFfmExpireIndex(",
@@ -222,6 +225,53 @@ public class YierdisDbArchitectureGuardTest {
             Assert.fail("yierdis-db-memory production sources must not reference YierdisObject:\n"
                     + String.join("\n", offenders));
         }
+    }
+
+    @Test
+    public void dbMemoryMainAndTestHaveNoFfmImports() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("unable to resolve repository root", repoRoot);
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = 0;
+        for (Path root : List.of(storageMemoryMain(repoRoot), storageMemoryTest(repoRoot))) {
+            scanned += scanForForbiddenText(
+                    repoRoot,
+                    root,
+                    offenders,
+                    "yier.bubu.redis.memory." + "foreign",
+                    "java.lang." + "foreign"
+            );
+        }
+
+        Assert.assertTrue("expected DB-memory Java sources", scanned > 0);
+        Assert.assertTrue("DB-memory must not import FFM:\n" + String.join("\n", offenders),
+                offenders.isEmpty());
+    }
+
+    @Test
+    public void yierdisDbHasFactoryOnlyComposition() throws IOException {
+        Assert.assertEquals(0, YierdisDb.class.getConstructors().length);
+        Assert.assertFalse(Arrays.stream(YierdisDb.class.getDeclaredMethods())
+                .anyMatch(method -> method.getName().startsWith("createWith")));
+        Constructor<?>[] constructors = YierdisDbEngineFactory.class.getConstructors();
+        Assert.assertEquals(1, constructors.length);
+        Assert.assertArrayEquals(
+                new Class<?>[]{StableMemoryBackendFactory.class, YierdisDbBackendConfig.class},
+                constructors[0].getParameterTypes()
+        );
+        Assert.assertThrows(ClassNotFoundException.class, () -> Class.forName(
+                "yier.bubu.redis.storage.memory.internal.ffm.YierdisFfm" + "IntSet"
+        ));
+        Assert.assertThrows(ClassNotFoundException.class, () -> Class.forName(
+                "yier.bubu.redis.storage.memory.internal.value.NativeRaw" + "HandleSet"
+        ));
+
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("unable to resolve repository root", repoRoot);
+        Assert.assertFalse(Files.exists(storageMemoryTest(repoRoot).resolve(
+                "yier/bubu/redis/storage/memory/internal/entry/RawPathRecording" + "Allocator.java"
+        )));
     }
 
     @Test
@@ -317,7 +367,7 @@ public class YierdisDbArchitectureGuardTest {
 
         String productionSource = readAllJavaSources(mainRoot);
         for (String requiredText : List.of(
-                "YierdisStableNativeAllocator",
+                "StableMemoryBackend",
                 "NativeKeyDirectory",
                 "NativeBytesSlice",
                 "KeyHandle.forNative"

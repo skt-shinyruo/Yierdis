@@ -25,7 +25,7 @@ import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
 
-public final class YierdisStableNativeAllocator implements AutoCloseable {
+final class YierdisStableNativeAllocator implements AutoCloseable {
     private static final int REALLOC_COPY_CHUNK_BYTES = 64 * 1024;
     private static final long ALLOCATION_SCOPE_HEAP_BYTES = 96L;
     private static final long ARRAY_HEADER_BYTES = 16L;

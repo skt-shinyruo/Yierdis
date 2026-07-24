@@ -2,8 +2,10 @@ package yier.bubu.redis.storage.memory;
 
 import java.util.List;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
+import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 public final class YierdisDbMemoryEstimator {
     private static final long SET_MEMBER_OVERHEAD_BYTES_ESTIMATE = 32L;
@@ -16,10 +18,17 @@ public final class YierdisDbMemoryEstimator {
         if (keyHandle == null || record == null) {
             return 0;
         }
-        if (record.version() > 0) {
-            return record.version();
+        return entryMetadataBytes(record);
+    }
+
+    static long entryMetadataBytes(EntryRecord record) {
+        if (record == null) {
+            return 0L;
         }
-        return DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
+        return DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE
+                + (record.type() == ValueType.STRING && record.encoding() == ValueEncoding.STRING_INT
+                ? Long.BYTES
+                : 0L);
     }
 
     static long estimateStringWriteUpperBound(int keyLength, int valueLength) {

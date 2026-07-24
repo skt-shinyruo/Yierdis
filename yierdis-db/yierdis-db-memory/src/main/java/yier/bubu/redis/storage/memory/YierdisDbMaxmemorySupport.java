@@ -2,7 +2,6 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -59,7 +58,7 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
         if (limitBytes < 0) {
             limitBytes = 0;
         }
-        keyLifecycle.nativeAllocator().trimEmptyPages(MemoryPressureBudget.unlimited());
+        keyLifecycle.stableMemoryBackend().trimEmptyPages(MemoryPressureBudget.unlimited());
         if (usedBytesForMaxmemory() <= limitBytes) {
             return;
         }
@@ -82,17 +81,17 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
                 continue;
             }
             if (internals.reclaimExpired(victim, record, nowMillis)) {
-                keyLifecycle.nativeAllocator().trimEmptyPages(MemoryPressureBudget.unlimited());
+                keyLifecycle.stableMemoryBackend().trimEmptyPages(MemoryPressureBudget.unlimited());
                 if (usedBytesForMaxmemory() <= limitBytes) {
                     return;
                 }
                 continue;
             }
             if (internals.evict(victim, record)) {
-                keyLifecycle.nativeAllocator().trimEmptyPages(MemoryPressureBudget.unlimited());
+                keyLifecycle.stableMemoryBackend().trimEmptyPages(MemoryPressureBudget.unlimited());
             }
         }
-        keyLifecycle.nativeAllocator().trimEmptyPages(MemoryPressureBudget.unlimited());
+        keyLifecycle.stableMemoryBackend().trimEmptyPages(MemoryPressureBudget.unlimited());
         if (usedBytesForMaxmemory() <= limitBytes) {
             return;
         }

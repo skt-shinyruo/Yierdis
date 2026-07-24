@@ -10,7 +10,7 @@ import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeAllocationGrowth;
 import yier.bubu.redis.memory.api.NativeAllocationScope;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.storage.api.DbCommitKind;
@@ -21,28 +21,16 @@ import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.PostCommitMutationException;
 import yier.bubu.redis.storage.api.YierdisCommandException;
-import yier.bubu.redis.storage.memory.YierdisDb;
 import yier.bubu.redis.storage.memory.YierdisDbHealth;
 
 public final class YierdisDbMutationExecutor {
     private final Runnable threadChecker;
     private final MemoryLedger ledger;
-    private final NativeAllocator nativeAllocator;
+    private final StableMemoryBackend stableMemoryBackend;
     private final YierdisDbHealth health;
     private final Supplier<DbCommitPublisher> commitPublisherSupplier;
     private final IntSupplier commitDbIndexSupplier;
     private final LongSupplier clockMillis;
-
-    public YierdisDbMutationExecutor(YierdisDb db) {
-        this(
-                Objects.requireNonNull(db, "db")::checkThread,
-                db.memoryLedger(),
-                db.nativeAllocator(),
-                db.healthMonitor(),
-                db::commitPublisher,
-                db::commitDbIndex
-        );
-    }
 
     public YierdisDbMutationExecutor(Runnable threadChecker, MemoryLedger ledger) {
         this(threadChecker, ledger, null);
@@ -51,12 +39,12 @@ public final class YierdisDbMutationExecutor {
     public YierdisDbMutationExecutor(
             Runnable threadChecker,
             MemoryLedger ledger,
-            NativeAllocator nativeAllocator
+            StableMemoryBackend stableMemoryBackend
     ) {
         this(
                 threadChecker,
                 ledger,
-                nativeAllocator,
+                stableMemoryBackend,
                 new YierdisDbHealth(Objects.requireNonNull(threadChecker, "threadChecker"))
         );
     }
@@ -64,13 +52,13 @@ public final class YierdisDbMutationExecutor {
     public YierdisDbMutationExecutor(
             Runnable threadChecker,
             MemoryLedger ledger,
-            NativeAllocator nativeAllocator,
+            StableMemoryBackend stableMemoryBackend,
             YierdisDbHealth health
     ) {
         this(
                 threadChecker,
                 ledger,
-                nativeAllocator,
+                stableMemoryBackend,
                 health,
                 () -> DbCommitPublisher.NOOP,
                 () -> 0
@@ -80,7 +68,7 @@ public final class YierdisDbMutationExecutor {
     public YierdisDbMutationExecutor(
             Runnable threadChecker,
             MemoryLedger ledger,
-            NativeAllocator nativeAllocator,
+            StableMemoryBackend stableMemoryBackend,
             YierdisDbHealth health,
             Supplier<DbCommitPublisher> commitPublisherSupplier,
             IntSupplier commitDbIndexSupplier
@@ -88,7 +76,7 @@ public final class YierdisDbMutationExecutor {
         this(
                 threadChecker,
                 ledger,
-                nativeAllocator,
+                stableMemoryBackend,
                 health,
                 commitPublisherSupplier,
                 commitDbIndexSupplier,
@@ -99,7 +87,7 @@ public final class YierdisDbMutationExecutor {
     YierdisDbMutationExecutor(
             Runnable threadChecker,
             MemoryLedger ledger,
-            NativeAllocator nativeAllocator,
+            StableMemoryBackend stableMemoryBackend,
             YierdisDbHealth health,
             Supplier<DbCommitPublisher> commitPublisherSupplier,
             IntSupplier commitDbIndexSupplier,
@@ -107,7 +95,7 @@ public final class YierdisDbMutationExecutor {
     ) {
         this.threadChecker = Objects.requireNonNull(threadChecker, "threadChecker");
         this.ledger = Objects.requireNonNull(ledger, "ledger");
-        this.nativeAllocator = nativeAllocator;
+        this.stableMemoryBackend = stableMemoryBackend;
         this.health = Objects.requireNonNull(health, "health");
         this.commitPublisherSupplier = Objects.requireNonNull(commitPublisherSupplier, "commitPublisherSupplier");
         this.commitDbIndexSupplier = Objects.requireNonNull(commitDbIndexSupplier, "commitDbIndexSupplier");
@@ -131,7 +119,7 @@ public final class YierdisDbMutationExecutor {
             }
             return executeLegacy(castLegacy(legacy));
         }
-        if (nativeAllocator == null) {
+        if (stableMemoryBackend == null) {
             throw new IllegalStateException("prepared mutations require a native allocator");
         }
         return executePrepared(mutationContext, plan, publisher);
@@ -155,7 +143,7 @@ public final class YierdisDbMutationExecutor {
         try {
             boolean reclamation = plan.admissionMode() == MutationPlan.AdmissionMode.RECLAMATION;
             reservation = reclamation ? ledger.beginReclamation() : reserveNormalPlan(plan);
-            allocations = nativeAllocator.beginAllocationScope();
+            allocations = stableMemoryBackend.beginAllocationScope();
             prepared = Objects.requireNonNull(plan.prepare(), "prepared mutation");
             NativeAllocationGrowth nativeGrowth = allocations.growth();
             long preparedPeakBytes = MemoryUsageSnapshot.addSaturating(
@@ -200,7 +188,7 @@ public final class YierdisDbMutationExecutor {
             prepared.releaseSuperseded();
             if (ledger.maxmemoryEnabled() && prepared.shouldTrimNativePagesAfterCommit()) {
                 nativePageTrimAttempted = true;
-                nativeAllocator.trimEmptyPages(MemoryPressureBudget.unlimited());
+                stableMemoryBackend.trimEmptyPages(MemoryPressureBudget.unlimited());
             }
             return result;
         } catch (MemoryLedgerOutOfMemoryException | NativeCapacityExceededException expected) {
@@ -429,7 +417,7 @@ public final class YierdisDbMutationExecutor {
                     && ledger.maxmemoryEnabled()
                     && prepared.shouldTrimNativePagesAfterCommit()) {
                 try {
-                    nativeAllocator.trimEmptyPages(MemoryPressureBudget.unlimited());
+                    stableMemoryBackend.trimEmptyPages(MemoryPressureBudget.unlimited());
                 } catch (RuntimeException | Error trimFailure) {
                     failure.addSuppressed(trimFailure);
                 }

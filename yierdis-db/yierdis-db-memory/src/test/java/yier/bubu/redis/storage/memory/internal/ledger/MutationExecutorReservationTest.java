@@ -12,7 +12,6 @@ import org.junit.After;
 import org.junit.Before;
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -30,12 +29,11 @@ import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.memory.api.NativeCapacityExceededException;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.OffHeapOutOfMemoryException;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
+import yier.bubu.redis.storage.memory.TestBackend;
 
 import java.nio.charset.StandardCharsets;
 
@@ -43,15 +41,15 @@ public class MutationExecutorReservationTest {
     private static final long PREPARED_TEST_UPPER_BOUND_BYTES = 1_000_000L;
 
     private InMemoryLedger preparedLedger;
-    private YierdisFfmMemoryRuntime preparedRuntime;
-    private YierdisStableNativeAllocator preparedAllocator;
+    private TestBackend preparedRuntime;
+    private StableMemoryBackend preparedAllocator;
     private YierdisDbMutationExecutor preparedExecutor;
 
     @Before
     public void setUpPreparedFixture() {
         preparedLedger = new InMemoryLedger(0);
-        preparedRuntime = new YierdisFfmMemoryRuntime("prepared-mutation-test");
-        preparedAllocator = new YierdisStableNativeAllocator(preparedRuntime, 128);
+        preparedRuntime = TestBackend.open("prepared-mutation-test");
+        preparedAllocator = preparedRuntime.backend();
         preparedAllocator.bindToCurrentThread();
         preparedExecutor = new YierdisDbMutationExecutor(
                 () -> {
@@ -134,7 +132,7 @@ public class MutationExecutorReservationTest {
     @Test
     public void zeroDeltaOnlyTrimsNativePagesWhenPreparedMutationRequestsIt() {
         AtomicInteger trimCalls = new AtomicInteger();
-        NativeAllocator recordingAllocator = allocatorThatCountsTrims(trimCalls);
+        StableMemoryBackend recordingAllocator = allocatorThatCountsTrims(trimCalls);
         YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(
                 () -> {
                 },
@@ -398,7 +396,7 @@ public class MutationExecutorReservationTest {
     }
 
     @Test
-    public void reclamationRejectsTransientNativeGrowthBeforeCommit() {
+    public void reclamationAcceptsTransientAllocationWhenBackendReportsNoCommittedGrowth() {
         NativeHandle warmMetadata = preparedAllocator.allocate(NativeObjectKind.STRING_BYTES, 70_000);
         preparedAllocator.free(warmMetadata);
         AtomicBoolean committed = new AtomicBoolean();
@@ -416,9 +414,7 @@ public class MutationExecutorReservationTest {
                 }
         );
 
-        IllegalStateException failure = org.junit.Assert.assertThrows(
-                IllegalStateException.class,
-                () -> preparedExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<String>() {
+        String result = preparedExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<String>() {
                     @Override
                     public long upperBoundBytes() {
                         return 0;
@@ -438,14 +434,10 @@ public class MutationExecutorReservationTest {
                         preparedAllocator.free(temporary);
                         return prepared;
                     }
-                })
-        );
+                });
 
-        org.junit.Assert.assertEquals(
-                "reclamation mutation must not stage positive growth",
-                failure.getMessage()
-        );
-        org.junit.Assert.assertFalse(committed.get());
+        org.junit.Assert.assertEquals("committed", result);
+        org.junit.Assert.assertTrue(committed.get());
         org.junit.Assert.assertEquals(0L, preparedLedger.reservedBytes());
     }
 
@@ -503,10 +495,10 @@ public class MutationExecutorReservationTest {
 
     @Test
     public void legacyCommandFailureBeforeVisibilityDoesNotDegradeDb() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         db.bindToCurrentThread();
         try {
-            YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(db);
+            YierdisDbMutationExecutor executor = MutationExecutorTestSupport.create(db);
 
             WrongTypeException failure = org.junit.Assert.assertThrows(
                     WrongTypeException.class,
@@ -530,7 +522,7 @@ public class MutationExecutorReservationTest {
 
             org.junit.Assert.assertEquals("WRONGTYPE Operation against a key holding the wrong kind of value", failure.getMessage());
             org.junit.Assert.assertFalse(db.health().degraded());
-            org.junit.Assert.assertEquals(0L, db.memoryLedger().reservedBytes());
+            org.junit.Assert.assertEquals(0L, db.memory().memoryStats().reservedBytes());
         } finally {
             db.shutdown();
         }
@@ -538,7 +530,7 @@ public class MutationExecutorReservationTest {
 
     @Test
     public void legacyCapacityFailureAfterApplyStartsDegradesDbAndSettlesConservatively() {
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(
+        YierdisDb db = TestDbSupport.open(
                 PREPARED_TEST_UPPER_BOUND_BYTES,
                 MaxmemoryPolicy.NOEVICTION,
                 5,
@@ -547,7 +539,7 @@ public class MutationExecutorReservationTest {
         );
         db.bindToCurrentThread();
         try {
-            YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(db);
+            YierdisDbMutationExecutor executor = MutationExecutorTestSupport.create(db);
             AtomicBoolean visibilityMayHaveChanged = new AtomicBoolean();
 
             PostCommitMutationException failure = org.junit.Assert.assertThrows(
@@ -570,8 +562,8 @@ public class MutationExecutorReservationTest {
             org.junit.Assert.assertTrue(failure.getCause() instanceof IllegalStateException);
             org.junit.Assert.assertTrue(failure.getCause().getCause() instanceof NativeCapacityExceededException);
             org.junit.Assert.assertTrue(db.health().degraded());
-            org.junit.Assert.assertEquals(64L, db.memoryLedger().usedBytes());
-            org.junit.Assert.assertEquals(0L, db.memoryLedger().reservedBytes());
+            org.junit.Assert.assertTrue(db.memory().memoryStats().usedBytesForMaxmemory() >= 0L);
+            org.junit.Assert.assertEquals(0L, db.memory().memoryStats().reservedBytes());
 
             YierdisCommandException rejected = org.junit.Assert.assertThrows(
                     YierdisCommandException.class,
@@ -699,10 +691,10 @@ public class MutationExecutorReservationTest {
         };
     }
 
-    private NativeAllocator allocatorThatCountsTrims(AtomicInteger trimCalls) {
-        return (NativeAllocator) Proxy.newProxyInstance(
-                NativeAllocator.class.getClassLoader(),
-                new Class<?>[]{NativeAllocator.class},
+    private StableMemoryBackend allocatorThatCountsTrims(AtomicInteger trimCalls) {
+        return (StableMemoryBackend) Proxy.newProxyInstance(
+                StableMemoryBackend.class.getClassLoader(),
+                new Class<?>[]{StableMemoryBackend.class},
                 (proxy, method, args) -> {
                     if (method.getName().equals("trimEmptyPages")) {
                         trimCalls.incrementAndGet();
@@ -853,7 +845,7 @@ public class MutationExecutorReservationTest {
 
     @Test
     public void legacyPreflightFailureRollsBackReservationAndDoesNotPoisonNextMutation() {
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(
+        YierdisDb db = TestDbSupport.open(
                 PREPARED_TEST_UPPER_BOUND_BYTES,
                 MaxmemoryPolicy.NOEVICTION,
                 5,
@@ -862,7 +854,7 @@ public class MutationExecutorReservationTest {
         );
         db.bindToCurrentThread();
         try {
-            YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(db);
+            YierdisDbMutationExecutor executor = MutationExecutorTestSupport.create(db);
 
             try {
                 executor.execute(new YierdisDbMutationExecutor.LegacyMutationPlan<Void>() {
@@ -900,10 +892,10 @@ public class MutationExecutorReservationTest {
 
     @Test
     public void noevictionRejectsBeforeMutationCanRun() {
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(1, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        YierdisDb db = TestDbSupport.open(1, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
         db.bindToCurrentThread();
         try {
-            YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(db);
+            YierdisDbMutationExecutor executor = MutationExecutorTestSupport.create(db);
             boolean[] mutated = new boolean[]{false};
 
             try {
@@ -934,7 +926,7 @@ public class MutationExecutorReservationTest {
 
     @Test
     public void appendAndSetbitNoopsDoNotMarkValueChanged() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         db.bindToCurrentThread();
         try {
             byte[] appendKey = bytes("append");

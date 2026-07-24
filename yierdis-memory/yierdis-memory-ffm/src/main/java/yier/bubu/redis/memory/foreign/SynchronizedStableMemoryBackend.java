@@ -21,7 +21,7 @@ import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.StableMemoryRegion;
 
-public final class SynchronizedStableMemoryBackend implements StableMemoryBackend {
+final class SynchronizedStableMemoryBackend implements StableMemoryBackend {
     private final Object lock = new Object();
     private final StableMemoryBackend delegate;
     private Thread allocationScopeOwner;

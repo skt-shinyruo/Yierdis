@@ -1,11 +1,11 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
@@ -22,16 +22,16 @@ public final class SetRoot implements TypeRoot {
     private final HashTableMaintenanceRegistry maintenanceRegistry;
     private boolean closed;
 
-    public SetRoot(NativeAllocator allocator) {
+    public SetRoot(StableMemoryBackend allocator) {
         this(allocator, HashSeed.random());
     }
 
-    public SetRoot(NativeAllocator allocator, HashSeed hashSeed) {
+    public SetRoot(StableMemoryBackend allocator, HashSeed hashSeed) {
         this(allocator, hashSeed, null);
     }
 
     public SetRoot(
-            NativeAllocator allocator,
+            StableMemoryBackend allocator,
             HashSeed hashSeed,
             HashTableMaintenanceRegistry maintenanceRegistry
     ) {
@@ -45,7 +45,7 @@ public final class SetRoot implements TypeRoot {
         );
     }
 
-    NativeAllocator allocator() {
+    StableMemoryBackend allocator() {
         return sets.allocator();
     }
 
@@ -162,7 +162,7 @@ public final class SetRoot implements TypeRoot {
         return positiveDelta(retainedHeapBytes(), before);
     }
 
-    public synchronized void membersInto(ValueHandle handle, BulkStringSink out) {
+    public synchronized void membersInto(ValueHandle handle, ByteValueSink out) {
         ensureOpen();
         requireSet(handle).membersInto(out);
     }

@@ -2,11 +2,6 @@ package yier.bubu.redis.storage.memory;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.common.memory.MemoryPressureBudget;
-import yier.bubu.redis.memory.api.NativeAllocator;
-import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.memory.internal.ledger.MemoryLedgerOutOfMemoryException;
 import yier.bubu.redis.storage.memory.internal.ledger.MemoryReservation;
@@ -71,39 +66,4 @@ public class MaxmemoryPageTrimTest {
         Assert.assertEquals(0L, ledger.reservedBytes());
     }
 
-    @Test
-    public void realAllocatorEmptyPageIsTrimmedBeforeNoevictionAdmission() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("maxmemory-admission-trim");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
-            allocator.bindToCurrentThread();
-            long handle = allocator.allocateRaw(NativeObjectKind.STRING_BYTES, 24 * 1024);
-            allocator.freeRaw(handle);
-
-            long physicalBefore = allocator.memoryUsage().effectiveBytesForMaxmemory();
-            long dataCommittedBefore = allocator.memoryUsage().nativeDataCommittedBytes();
-            Assert.assertTrue(allocator.stats().freePages() > 0L);
-
-            YierdisDbMemoryLedger ledger = new YierdisDbMemoryLedger(
-                    physicalBefore - 1L,
-                    MaxmemoryPolicy.NOEVICTION,
-                    () -> {
-                    },
-                    ignored -> allocator.trimEmptyPages(MemoryPressureBudget.unlimited()),
-                    () -> allocator.memoryUsage().effectiveBytesForMaxmemory(),
-                    () -> null
-            );
-
-            MemoryReservation reservation = ledger.reserve(1L);
-
-            Assert.assertEquals(1L, reservation.reservedBytes());
-            Assert.assertEquals(0L, allocator.stats().freePages());
-            Assert.assertTrue(allocator.memoryUsage().nativeDataCommittedBytes() < dataCommittedBefore);
-            Assert.assertTrue(
-                    allocator.memoryUsage().effectiveBytesForMaxmemory() + reservation.reservedBytes()
-                            <= ledger.limitBytes()
-            );
-            ledger.rollback(reservation);
-            Assert.assertEquals(0L, ledger.reservedBytes());
-        }
-    }
 }

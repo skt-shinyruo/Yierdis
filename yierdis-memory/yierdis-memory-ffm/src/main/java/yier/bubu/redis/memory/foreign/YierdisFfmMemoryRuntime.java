@@ -6,7 +6,7 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
 import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 
-public final class YierdisFfmMemoryRuntime implements AutoCloseable {
+final class YierdisFfmMemoryRuntime implements AutoCloseable {
     private final String name;
     private final AtomicLong usedBytes = new AtomicLong();
     private final AtomicLong liveRegionCount = new AtomicLong();

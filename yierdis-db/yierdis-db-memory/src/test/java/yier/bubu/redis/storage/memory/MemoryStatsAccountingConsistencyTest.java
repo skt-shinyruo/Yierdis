@@ -2,7 +2,6 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -18,7 +17,7 @@ import static yier.bubu.redis.storage.testkit.TestBytes.b;
 public class MemoryStatsAccountingConsistencyTest {
     @Test
     public void memoryStatsUsedBytesForMaxmemoryMatchesEnforcementIncludingTtlEstimate() {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             db.writes().strings().setString(b("k"), b("v"), SetMode.NORMAL, null);

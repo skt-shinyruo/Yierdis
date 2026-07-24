@@ -15,8 +15,8 @@ import yier.bubu.redis.storage.api.StringWriteOps;
 import yier.bubu.redis.storage.api.WriteResult;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.YierdisCommandException;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
-import yier.bubu.redis.storage.api.result.BulkStringValue;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
+import yier.bubu.redis.storage.api.result.ByteValue;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
@@ -62,8 +62,9 @@ public class StringDirectOpsTest {
             Assert.assertTrue(db.writes().strings().setString(b("slice"), slice("sliced"), SetMode.NORMAL, null).value());
             Assert.assertArrayEquals(b("sliced"), db.reads().strings().getStringBytes(b("slice")));
 
-            WriteResult<StringWriteOps.SetStringValue> nxExisting = db.writes().strings()
-                    .set(b("k"), slice("two"), SetMode.NX, null, true);
+            WriteResult<StringWriteOps.SetStringValue> nxExisting = TestDbSupport.commitSetWithOldValue(
+                    db.writes().strings(), b("k"), slice("two"), SetMode.NX, null
+            );
             try (StringWriteOps.SetStringValue value = nxExisting.value()) {
                 Assert.assertFalse(value.applied());
                 Assert.assertTrue(value.oldValue().isNull());
@@ -71,27 +72,30 @@ public class StringDirectOpsTest {
             Assert.assertSame(MutationOutcome.NONE, nxExisting.mutationOutcome());
             Assert.assertArrayEquals(b("one"), db.reads().strings().getStringBytes(b("k")));
 
-            WriteResult<StringWriteOps.SetStringValue> nxMissing = db.writes().strings()
-                    .set(b("new"), slice("created"), SetMode.NX, null, true);
+            WriteResult<StringWriteOps.SetStringValue> nxMissing = TestDbSupport.commitSetWithOldValue(
+                    db.writes().strings(), b("new"), slice("created"), SetMode.NX, null
+            );
             try (StringWriteOps.SetStringValue value = nxMissing.value()) {
                 Assert.assertTrue(value.applied());
                 Assert.assertTrue(value.oldValue().isNull());
             }
             Assert.assertArrayEquals(b("created"), db.reads().strings().getStringBytes(b("new")));
 
-            WriteResult<StringWriteOps.SetStringValue> xxMissing = db.writes().strings()
-                    .set(b("absent"), slice("ignored"), SetMode.XX, null, true);
+            WriteResult<StringWriteOps.SetStringValue> xxMissing = TestDbSupport.commitSetWithOldValue(
+                    db.writes().strings(), b("absent"), slice("ignored"), SetMode.XX, null
+            );
             try (StringWriteOps.SetStringValue value = xxMissing.value()) {
                 Assert.assertFalse(value.applied());
                 Assert.assertTrue(value.oldValue().isNull());
             }
             Assert.assertSame(MutationOutcome.NONE, xxMissing.mutationOutcome());
 
-            WriteResult<StringWriteOps.SetStringValue> xxExisting = db.writes().strings()
-                    .set(b("k"), slice("three"), SetMode.XX, ExpireOption.px(5000), true);
+            WriteResult<StringWriteOps.SetStringValue> xxExisting = TestDbSupport.commitSetWithOldValue(
+                    db.writes().strings(), b("k"), slice("three"), SetMode.XX, ExpireOption.px(5000)
+            );
             try (StringWriteOps.SetStringValue value = xxExisting.value()) {
                 Assert.assertTrue(value.applied());
-                Assert.assertArrayEquals(b("one"), bulkStringBytes(value.oldValue()));
+                Assert.assertArrayEquals(b("one"), byteValueBytes(value.oldValue()));
             }
             Assert.assertTrue(xxExisting.mutationOutcome().valueChanged());
             Assert.assertTrue(xxExisting.mutationOutcome().ttlChanged());
@@ -105,7 +109,7 @@ public class StringDirectOpsTest {
             Assert.assertEquals(-1L, db.reads().ttl().ttlMillis(view("k")));
         });
 
-        YierdisDb small = YierdisDb.createWithOwnedFfmRuntime(4, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        YierdisDb small = TestDbSupport.open(4, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
         try {
             small.bindToCurrentThread();
             try {
@@ -127,7 +131,7 @@ public class StringDirectOpsTest {
         byte[] smallValue = b("x");
         long maxmemoryBytes = maxmemoryThatAllowsSetAndOverwrite(key, largeValue, smallValue);
 
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        YierdisDb db = TestDbSupport.open(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
         try {
             db.bindToCurrentThread();
 
@@ -153,7 +157,7 @@ public class StringDirectOpsTest {
         largerValue = rejectionCase.overwriteValue();
         long maxmemoryBytes = rejectionCase.maxmemoryBytes();
 
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        YierdisDb db = TestDbSupport.open(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
         try {
             db.bindToCurrentThread();
 
@@ -178,7 +182,7 @@ public class StringDirectOpsTest {
     public void allkeysLruEvictsOldStringDuringSetWithoutInternalFailure() {
         byte[] value = repeat((byte) 'x', 64 * 1024);
         long maxmemoryBytes = maxmemoryThatFitsOneLocalStringButNotTwo(value);
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, MaxmemoryPolicy.ALLKEYS_LRU, 1000, 5, 5);
+        YierdisDb db = TestDbSupport.open(maxmemoryBytes, MaxmemoryPolicy.ALLKEYS_LRU, 1000, 5, 5);
         try {
             db.bindToCurrentThread();
 
@@ -212,7 +216,7 @@ public class StringDirectOpsTest {
         withDb(db -> {
             Assert.assertEquals(Long.valueOf(1L), db.writes().strings().incrBy(b("number"), 1L).value());
             EntryRecord integerBefore = db.keyLifecycle().liveEntryRecord(b("number"));
-            long stringObjectsBefore = db.nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES);
+            long stringObjectsBefore = db.stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES);
 
             WriteResult<Long> append = db.writes().strings().append(b("number"), slice(""));
 
@@ -224,7 +228,7 @@ public class StringDirectOpsTest {
             Assert.assertEquals(integerBefore.version(), integerAfter.version());
             Assert.assertEquals(
                     stringObjectsBefore,
-                    db.nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES)
+                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES)
             );
 
             Assert.assertTrue(db.writes().strings().setString(
@@ -234,7 +238,7 @@ public class StringDirectOpsTest {
                     null
             ).value());
             EntryRecord bitsBefore = db.keyLifecycle().liveEntryRecord(b("bits"));
-            stringObjectsBefore = db.nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES);
+            stringObjectsBefore = db.stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES);
 
             WriteResult<Integer> setbit = db.writes().strings().setBit(b("bits"), 0L, 1);
 
@@ -244,7 +248,7 @@ public class StringDirectOpsTest {
             Assert.assertEquals(bitsBefore.valueHandle(), bitsAfter.valueHandle());
             Assert.assertEquals(
                     stringObjectsBefore,
-                    db.nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES)
+                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES)
             );
         });
     }
@@ -254,22 +258,22 @@ public class StringDirectOpsTest {
         withDb(db -> {
             byte[] key = b("k");
             Assert.assertTrue(db.writes().strings().setString(key, b("old"), SetMode.NORMAL, null).value());
-            long liveObjectsBeforeSetGet = db.nativeAllocator().stats().liveObjects();
+            long liveObjectsBeforeSetGet = db.stableMemoryBackend().stats().liveObjects();
 
-            StringWriteOps.SetStringValue result = db.writes().strings()
-                    .set(key, slice("new"), SetMode.NORMAL, null, true)
-                    .value();
+            StringWriteOps.SetStringValue result = TestDbSupport.commitSetWithOldValue(
+                    db.writes().strings(), key, slice("new"), SetMode.NORMAL, null
+            ).value();
             Assert.assertTrue(result.applied());
-            Assert.assertArrayEquals(b("old"), bulkStringBytes(result.oldValue()));
+            Assert.assertArrayEquals(b("old"), byteValueBytes(result.oldValue()));
             Assert.assertArrayEquals(b("new"), db.reads().strings().getStringBytes(key));
             Assert.assertTrue("SET GET old value should retain the superseded native allocation",
                     result.oldValue().retainedMemoryBytes() > 0L);
             Assert.assertTrue("old and replacement values should both remain live until the result closes",
-                    db.nativeAllocator().stats().liveObjects() > liveObjectsBeforeSetGet);
+                    db.stableMemoryBackend().stats().liveObjects() > liveObjectsBeforeSetGet);
 
             result.close();
             result.close();
-            Assert.assertEquals(liveObjectsBeforeSetGet, db.nativeAllocator().stats().liveObjects());
+            Assert.assertEquals(liveObjectsBeforeSetGet, db.stableMemoryBackend().stats().liveObjects());
         });
     }
 
@@ -337,7 +341,7 @@ public class StringDirectOpsTest {
     }
 
     private static boolean allowsSet(long limit, byte[] key, byte[] value) {
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(limit, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        YierdisDb db = TestDbSupport.open(limit, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
         try {
             db.bindToCurrentThread();
             db.writes().strings().setString(key, value, SetMode.NORMAL, null);
@@ -353,7 +357,7 @@ public class StringDirectOpsTest {
     }
 
     private static boolean allowsInitialSetAndOverwrite(long limit, byte[] key, byte[] initialValue, byte[] overwriteValue) {
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(limit, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        YierdisDb db = TestDbSupport.open(limit, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
         try {
             db.bindToCurrentThread();
             db.writes().strings().setString(key, initialValue, SetMode.NORMAL, null);
@@ -370,7 +374,7 @@ public class StringDirectOpsTest {
     }
 
     private static boolean allowsInitialSetAndRejectsOverwrite(long limit, byte[] key, byte[] initialValue, byte[] overwriteValue) {
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(limit, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        YierdisDb db = TestDbSupport.open(limit, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
         try {
             db.bindToCurrentThread();
             db.writes().strings().setString(key, initialValue, SetMode.NORMAL, null);
@@ -398,7 +402,7 @@ public class StringDirectOpsTest {
     }
 
     private static long probeLocalStringUsedBytes(byte[] value, int keyCount) {
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(100_000_000L, MaxmemoryPolicy.ALLKEYS_LRU, 1000, 5, 5);
+        YierdisDb db = TestDbSupport.open(100_000_000L, MaxmemoryPolicy.ALLKEYS_LRU, 1000, 5, 5);
         try {
             db.bindToCurrentThread();
             if (keyCount >= 1) {
@@ -414,7 +418,7 @@ public class StringDirectOpsTest {
     }
 
     private static void withDb(DbConsumer consumer) {
-        YierdisDb db = new YierdisDb();
+        YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
             consumer.accept(db);
@@ -455,29 +459,34 @@ public class StringDirectOpsTest {
         }
     }
 
-    private static byte[] bulkStringBytes(BulkStringValue value) {
+    private static byte[] byteValueBytes(ByteValue value) {
         final byte[][] captured = new byte[1][];
-        value.writeTo(new BulkStringSink() {
+        value.emitTo(new ByteValueSink() {
             @Override
-            public void bulkString(byte[] data) {
+            public void value(byte[] data) {
                 captured[0] = data == null ? null : java.util.Arrays.copyOf(data, data.length);
             }
 
             @Override
-            public void bulkString(byte[] data, int off, int len) {
+            public void value(byte[] data, int off, int len) {
                 captured[0] = java.util.Arrays.copyOfRange(data, off, off + len);
             }
 
             @Override
-            public void bulkString(BytesSlice slice) {
+            public void value(BytesSlice slice) {
                 byte[] data = new byte[slice.length()];
                 slice.getBytes(0, data, 0, data.length);
                 captured[0] = data;
             }
 
             @Override
-            public void bulkStringLongAscii(long value) {
+            public void longAscii(long value) {
                 captured[0] = Long.toString(value).getBytes(StandardCharsets.US_ASCII);
+            }
+
+            @Override
+            public void nullValue() {
+                captured[0] = null;
             }
         });
         return captured[0];

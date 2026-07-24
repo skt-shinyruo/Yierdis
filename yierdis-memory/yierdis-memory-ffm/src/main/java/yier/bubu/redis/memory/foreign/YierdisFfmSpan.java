@@ -3,7 +3,7 @@ package yier.bubu.redis.memory.foreign;
 import java.lang.foreign.MemorySegment;
 import java.util.Objects;
 
-public record YierdisFfmSpan(MemorySegment segment) {
+record YierdisFfmSpan(MemorySegment segment) {
     public YierdisFfmSpan {
         Objects.requireNonNull(segment, "segment");
     }

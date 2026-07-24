@@ -4,22 +4,21 @@ import java.lang.reflect.Proxy;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
-import yier.bubu.redis.memory.api.NativeObjectKind;
 
 public class PinnedPoppedValueSequenceTest {
     @Test
-    public void emptyRawHandleSetHasExplicitCapacityBoundary() {
-        NativeRawHandleSet handles = new NativeRawHandleSet(0);
+    public void emptyHandleSetHasExplicitCapacityBoundary() {
+        NativeHandleSet handles = new NativeHandleSet(0);
 
         Assert.assertEquals(0, handles.size());
-        Assert.assertFalse(handles.contains(handle(1).raw()));
+        Assert.assertFalse(handles.contains(handle(1)));
         IllegalStateException failure = Assert.assertThrows(
                 IllegalStateException.class,
-                () -> handles.add(handle(1).raw())
+                () -> handles.add(handle(1))
         );
-        Assert.assertEquals("native raw handle set has zero capacity", failure.getMessage());
+        Assert.assertEquals("native handle set has zero capacity", failure.getMessage());
     }
 
     @Test
@@ -35,14 +34,14 @@ public class PinnedPoppedValueSequenceTest {
         AtomicInteger pinAttempts = new AtomicInteger();
         AtomicInteger unpinAttempts = new AtomicInteger();
         AtomicInteger freeAttempts = new AtomicInteger();
-        NativeAllocator allocator = (NativeAllocator) Proxy.newProxyInstance(
-                NativeAllocator.class.getClassLoader(),
-                new Class<?>[] {NativeAllocator.class},
+        StableMemoryBackend allocator = (StableMemoryBackend) Proxy.newProxyInstance(
+                StableMemoryBackend.class.getClassLoader(),
+                new Class<?>[] {StableMemoryBackend.class},
                 (proxy, method, args) -> {
                     switch (method.getName()) {
-                        case "pinRaw" -> pinAttempts.incrementAndGet();
-                        case "unpinRaw" -> unpinAttempts.incrementAndGet();
-                        case "freeRaw" -> freeAttempts.incrementAndGet();
+                        case "pin" -> pinAttempts.incrementAndGet();
+                        case "unpin" -> unpinAttempts.incrementAndGet();
+                        case "free" -> freeAttempts.incrementAndGet();
                         default -> {
                         }
                     }
@@ -68,14 +67,14 @@ public class PinnedPoppedValueSequenceTest {
     public void sharedBlockIsPinnedAndAccountedOnce() {
         AtomicInteger pinAttempts = new AtomicInteger();
         AtomicInteger unpinAttempts = new AtomicInteger();
-        NativeAllocator allocator = (NativeAllocator) Proxy.newProxyInstance(
-                NativeAllocator.class.getClassLoader(),
-                new Class<?>[] {NativeAllocator.class},
+        StableMemoryBackend allocator = (StableMemoryBackend) Proxy.newProxyInstance(
+                StableMemoryBackend.class.getClassLoader(),
+                new Class<?>[] {StableMemoryBackend.class},
                 (proxy, method, args) -> {
-                    if ("pin".equals(method.getName()) || "pinRaw".equals(method.getName())) {
+                    if ("pin".equals(method.getName())) {
                         pinAttempts.incrementAndGet();
                     }
-                    if ("unpin".equals(method.getName()) || "unpinRaw".equals(method.getName())) {
+                    if ("unpin".equals(method.getName())) {
                         unpinAttempts.incrementAndGet();
                     }
                     return null;
@@ -99,11 +98,11 @@ public class PinnedPoppedValueSequenceTest {
     @Test
     public void preparedOwnershipFreesSharedBlockOnce() {
         AtomicInteger freeAttempts = new AtomicInteger();
-        NativeAllocator allocator = (NativeAllocator) Proxy.newProxyInstance(
-                NativeAllocator.class.getClassLoader(),
-                new Class<?>[] {NativeAllocator.class},
+        StableMemoryBackend allocator = (StableMemoryBackend) Proxy.newProxyInstance(
+                StableMemoryBackend.class.getClassLoader(),
+                new Class<?>[] {StableMemoryBackend.class},
                 (proxy, method, args) -> {
-                    if ("free".equals(method.getName()) || "freeRaw".equals(method.getName())) {
+                    if ("free".equals(method.getName())) {
                         freeAttempts.incrementAndGet();
                     }
                     return null;
@@ -128,11 +127,11 @@ public class PinnedPoppedValueSequenceTest {
     @Test
     public void closeContinuesAfterAnUnpinErrorAndReportsAllFailures() {
         AtomicInteger unpinAttempts = new AtomicInteger();
-        NativeAllocator allocator = (NativeAllocator) Proxy.newProxyInstance(
-                NativeAllocator.class.getClassLoader(),
-                new Class<?>[] {NativeAllocator.class},
+        StableMemoryBackend allocator = (StableMemoryBackend) Proxy.newProxyInstance(
+                StableMemoryBackend.class.getClassLoader(),
+                new Class<?>[] {StableMemoryBackend.class},
                 (proxy, method, args) -> {
-                    if ("unpin".equals(method.getName()) || "unpinRaw".equals(method.getName())) {
+                    if ("unpin".equals(method.getName())) {
                         throw new AssertionError("unpin failure " + unpinAttempts.incrementAndGet());
                     }
                     return null;
@@ -155,12 +154,6 @@ public class PinnedPoppedValueSequenceTest {
     }
 
     private static NativeHandle handle(long slotId) {
-        return NativeHandle.of(
-                NativeObjectKind.STRING_BYTES.domain(),
-                NativeObjectKind.STRING_BYTES,
-                slotId,
-                1,
-                0
-        );
+        return new NativeHandle(1L, slotId);
     }
 }

@@ -2,6 +2,7 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.ScanCursorV2;
+import yier.bubu.redis.testutil.TestDbs;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
@@ -20,10 +21,7 @@ import static yier.bubu.redis.testutil.TestBytes.cmd;
 public class YierdisSnapshotTest {
     @Test
     public void snapshotReturnsKeysValuesAndExpireAtForStrings() {
-        YierdisDb db = new YierdisDb();
-        db.bindToCurrentThread();
-
-        try {
+        TestDbs.runDefaultFfm(db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 Assert.assertTrue(client.execute(cmd("SET", "a", "1")) instanceof ReplySimpleString);
@@ -59,8 +57,6 @@ public class YierdisSnapshotTest {
             Assert.assertEquals(ValueType.STRING, b.type());
             Assert.assertArrayEquals("2".getBytes(StandardCharsets.US_ASCII), b.stringValueBytes());
             Assert.assertNull(b.expireAtMillis());
-        } finally {
-            db.shutdown();
-        }
+        });
     }
 }

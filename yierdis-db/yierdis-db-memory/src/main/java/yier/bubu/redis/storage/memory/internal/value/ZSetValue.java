@@ -1,12 +1,12 @@
 package yier.bubu.redis.storage.memory.internal.value;
 
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisCommandException;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
 import yier.bubu.redis.storage.memory.MaterializedCollectionScanWindow;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
@@ -47,21 +47,21 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTra
     private Runnable heapChangeListener = () -> {
     };
 
-    public ZSetValue(NativeAllocator allocator) {
+    public ZSetValue(StableMemoryBackend allocator) {
         this(allocator, HashSeed.random());
     }
 
-    public ZSetValue(NativeAllocator allocator, HashSeed hashSeed) {
+    public ZSetValue(StableMemoryBackend allocator, HashSeed hashSeed) {
         this(allocator, hashSeed, null);
     }
 
     public ZSetValue(
-            NativeAllocator allocator,
+            StableMemoryBackend allocator,
             HashSeed hashSeed,
             HashTableMaintenanceRegistry maintenanceRegistry
     ) {
-        NativeAllocator nativeAllocator = Objects.requireNonNull(allocator, "allocator");
-        this.memberStore = new NativeByteStore(nativeAllocator, NativeObjectKind.ZSET_MEMBER_BYTES);
+        StableMemoryBackend stableMemoryBackend = Objects.requireNonNull(allocator, "allocator");
+        this.memberStore = new NativeByteStore(stableMemoryBackend, NativeObjectKind.ZSET_MEMBER_BYTES);
         this.hashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
         this.maintenanceRegistry = maintenanceRegistry;
         this.listpack = new NativePackedZSet(memberStore);
@@ -587,7 +587,7 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTra
             int boundedCount = NativeCollectionScanWindow.boundedMatchCount(count);
             int[] matched = {0};
             try (NativeCollectionScanWindow.Builder builder =
-                         NativeCollectionScanWindow.builder(memberStore.allocator(), boundedCount * 2)) {
+                         NativeCollectionScanWindow.builder(memberStore.backend(), boundedCount * 2)) {
                 NativeByteMap.ScanResult result = byMember.scanWithWork(
                         current,
                         NativeCollectionScanWindow.slotBudget(boundedCount),
@@ -631,7 +631,7 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTra
         return rangeByIndexCount(start, stop, withScores, false);
     }
 
-    public void zrangeWriteTo(long start, long stop, boolean withScores, BulkStringSink out) {
+    public void zrangeWriteTo(long start, long stop, boolean withScores, ByteValueSink out) {
         rangeByIndexWriteTo(start, stop, withScores, false, out);
     }
 
@@ -639,7 +639,7 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTra
         return rangeByIndexCount(start, stop, withScores, true);
     }
 
-    public void zrevrangeWriteTo(long start, long stop, boolean withScores, BulkStringSink out) {
+    public void zrevrangeWriteTo(long start, long stop, boolean withScores, ByteValueSink out) {
         rangeByIndexWriteTo(start, stop, withScores, true, out);
     }
 
@@ -653,7 +653,7 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTra
         return zrangeByScoreCountSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count);
     }
 
-    public void zrangeByScoreWriteTo(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, BulkStringSink out) {
+    public void zrangeByScoreWriteTo(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, ByteValueSink out) {
         if (out == null) {
             throw new IllegalArgumentException("out must not be null");
         }
@@ -677,7 +677,7 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTra
         return zrevrangeByScoreCountSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count);
     }
 
-    public void zrevrangeByScoreWriteTo(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, BulkStringSink out) {
+    public void zrevrangeByScoreWriteTo(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, ByteValueSink out) {
         if (out == null) {
             throw new IllegalArgumentException("out must not be null");
         }
@@ -787,7 +787,7 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTra
         return (int) elementCount;
     }
 
-    private void rangeByIndexWriteTo(long start, long stop, boolean withScores, boolean reverse, BulkStringSink out) {
+    private void rangeByIndexWriteTo(long start, long stop, boolean withScores, boolean reverse, ByteValueSink out) {
         if (out == null) {
             throw new IllegalArgumentException("out must not be null");
         }
@@ -799,7 +799,7 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTra
         rangeByIndexWriteToSkipList(start, stop, withScores, reverse, out);
     }
 
-    private void rangeByIndexWriteToListpack(long start, long stop, boolean withScores, boolean reverse, BulkStringSink out) {
+    private void rangeByIndexWriteToListpack(long start, long stop, boolean withScores, boolean reverse, ByteValueSink out) {
         int size = listpack.size();
         if (size == 0) {
             return;
@@ -830,7 +830,7 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTra
         }
     }
 
-    private void rangeByIndexWriteToSkipList(long start, long stop, boolean withScores, boolean reverse, BulkStringSink out) {
+    private void rangeByIndexWriteToSkipList(long start, long stop, boolean withScores, boolean reverse, ByteValueSink out) {
         int size = byMember.size();
         if (size == 0) {
             return;
@@ -860,9 +860,9 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTra
 
         for (int i = 0; i < remaining && node != null; i++) {
             if (node.member == null) {
-                out.bulkStringNull();
+                out.nullValue();
             } else {
-                out.bulkString(memberStore.slice(node.member));
+                out.value(memberStore.slice(node.member));
             }
             if (withScores) {
                 writeScoreTo(out, node.score);
@@ -963,7 +963,7 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTra
         return outCount;
     }
 
-    private void zrangeByScoreWriteToListpack(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, BulkStringSink out) {
+    private void zrangeByScoreWriteToListpack(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, ByteValueSink out) {
         int size = listpack.size();
         if (size == 0) {
             return;
@@ -1067,7 +1067,7 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTra
         return outCount;
     }
 
-    private void zrevrangeByScoreWriteToListpack(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, BulkStringSink out) {
+    private void zrevrangeByScoreWriteToListpack(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, ByteValueSink out) {
         int size = listpack.size();
         if (size == 0) {
             return;
@@ -1196,7 +1196,7 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTra
         return outCount;
     }
 
-    private void zrangeByScoreWriteToSkipList(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, BulkStringSink out) {
+    private void zrangeByScoreWriteToSkipList(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, ByteValueSink out) {
         ZSkipList.Node node = firstNodeForMin(min, minExclusive);
         if (node == null) {
             return;
@@ -1216,9 +1216,9 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTra
             }
 
             if (node.member == null) {
-                out.bulkStringNull();
+                out.nullValue();
             } else {
-                out.bulkString(memberStore.slice(node.member));
+                out.value(memberStore.slice(node.member));
             }
             if (withScores) {
                 writeScoreTo(out, s);
@@ -1301,7 +1301,7 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTra
         return outCount;
     }
 
-    private void zrevrangeByScoreWriteToSkipList(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, BulkStringSink out) {
+    private void zrevrangeByScoreWriteToSkipList(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, ByteValueSink out) {
         ZSkipList.Node node = lastNodeForMax(max, maxExclusive);
         if (node == null) {
             return;
@@ -1321,9 +1321,9 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTra
             }
 
             if (node.member == null) {
-                out.bulkStringNull();
+                out.nullValue();
             } else {
-                out.bulkString(memberStore.slice(node.member));
+                out.value(memberStore.slice(node.member));
             }
             if (withScores) {
                 writeScoreTo(out, s);
@@ -1526,13 +1526,13 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTra
         builder.addBytes(Double.toString(score).getBytes(StandardCharsets.US_ASCII));
     }
 
-    private static void writeScoreTo(BulkStringSink out, double score) {
+    private static void writeScoreTo(ByteValueSink out, double score) {
         if (score == Math.rint(score) && score >= Long.MIN_VALUE && score <= Long.MAX_VALUE) {
-            out.bulkStringLongAscii((long) score);
+            out.longAscii((long) score);
             return;
         }
         byte[] encoded = Double.toString(score).getBytes(StandardCharsets.US_ASCII);
-        out.bulkString(encoded, 0, encoded.length);
+        out.value(encoded, 0, encoded.length);
     }
 
     private ArrayList<ScoreMemberInput> canonicalScoreMemberInputs(List<byte[]> scoreMemberPairs) {
@@ -2079,7 +2079,7 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTra
             return members.get(index);
         }
 
-        void memberWriteTo(int index, BulkStringSink out) {
+        void memberWriteTo(int index, ByteValueSink out) {
             checkIndex(index);
             members.writeAt(index, out);
         }
@@ -2730,16 +2730,16 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTra
             return Arrays.copyOfRange(data, e.dataOffset, e.dataOffset + e.len);
         }
 
-        void memberWriteTo(int index, BulkStringSink out) {
+        void memberWriteTo(int index, ByteValueSink out) {
             if (out == null) {
                 throw new IllegalArgumentException("out must not be null");
             }
             Entry e = readEntry(offsetOfIndex(index));
             if (e.len < 0) {
-                out.bulkStringNull();
+                out.nullValue();
                 return;
             }
-            out.bulkString(data, e.dataOffset, e.len);
+            out.value(data, e.dataOffset, e.len);
         }
 
         int indexOfMember(byte[] memberBytes) {

@@ -1,12 +1,12 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
-import yier.bubu.redis.storage.api.result.BulkStringValue;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
+import yier.bubu.redis.storage.api.result.ByteValue;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
@@ -26,16 +26,16 @@ public final class HashRoot implements TypeRoot {
     private final HashTableMaintenanceRegistry maintenanceRegistry;
     private boolean closed;
 
-    public HashRoot(NativeAllocator allocator) {
+    public HashRoot(StableMemoryBackend allocator) {
         this(allocator, HashSeed.random());
     }
 
-    public HashRoot(NativeAllocator allocator, HashSeed hashSeed) {
+    public HashRoot(StableMemoryBackend allocator, HashSeed hashSeed) {
         this(allocator, hashSeed, null);
     }
 
     public HashRoot(
-            NativeAllocator allocator,
+            StableMemoryBackend allocator,
             HashSeed hashSeed,
             HashTableMaintenanceRegistry maintenanceRegistry
     ) {
@@ -49,7 +49,7 @@ public final class HashRoot implements TypeRoot {
         );
     }
 
-    NativeAllocator allocator() {
+    StableMemoryBackend allocator() {
         return hashes.allocator();
     }
 
@@ -213,7 +213,7 @@ public final class HashRoot implements TypeRoot {
         return requireHash(handle).hget(field);
     }
 
-    public synchronized BulkStringValue hgetValue(ValueHandle handle, byte[] field) {
+    public synchronized ByteValue hgetValue(ValueHandle handle, byte[] field) {
         ensureOpen();
         return requireHash(handle).hgetValue(field);
     }
@@ -243,7 +243,7 @@ public final class HashRoot implements TypeRoot {
         return requireHash(handle).hgetallPairs();
     }
 
-    public synchronized void hgetallPairsInto(ValueHandle handle, BulkStringSink out) {
+    public synchronized void hgetallPairsInto(ValueHandle handle, ByteValueSink out) {
         ensureOpen();
         requireHash(handle).hgetallPairsInto(out);
     }

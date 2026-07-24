@@ -1,37 +1,16 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
+import java.util.Objects;
 import yier.bubu.redis.memory.api.NativeHandle;
-import yier.bubu.redis.memory.api.NativeHandleDomain;
 
-public record ValueHandle(long raw) {
-    public static final ValueHandle NULL = new ValueHandle(0L);
+public record ValueHandle(NativeHandle nativeHandle) {
+    public static final ValueHandle NULL = new ValueHandle(NativeHandle.NULL);
 
     public ValueHandle {
-        NativeHandle.requireValidRaw(raw);
-    }
-
-    public static ValueHandle fromNativeHandle(NativeHandle handle) {
-        if (handle == null) {
-            throw new NullPointerException("handle");
-        }
-        return new ValueHandle(handle.raw());
-    }
-
-    public static ValueHandle fromRaw(long raw) {
-        return new ValueHandle(raw);
-    }
-
-    public NativeHandle nativeHandle() {
-        return NativeHandle.fromRaw(raw);
+        Objects.requireNonNull(nativeHandle, "nativeHandle");
     }
 
     public boolean isNull() {
-        return raw == 0L;
-    }
-
-    public void requireDomain(NativeHandleDomain domain) {
-        if (domain == null || NativeHandle.domainCode(raw) != domain.code()) {
-            throw new IllegalArgumentException("value handle domain mismatch: expected " + domain);
-        }
+        return nativeHandle.isNull();
     }
 }

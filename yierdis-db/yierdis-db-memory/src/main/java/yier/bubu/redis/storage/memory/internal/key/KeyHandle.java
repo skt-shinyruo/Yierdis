@@ -1,6 +1,6 @@
 package yier.bubu.redis.storage.memory.internal.key;
 
-import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 
 import java.util.Objects;
@@ -30,7 +30,7 @@ public interface KeyHandle extends yier.bubu.redis.storage.api.KeyHandle {
      */
     int dictHash();
 
-    public static KeyHandle forNative(NativeAllocator allocator, NativeHandle handle, int dictHash) {
+    public static KeyHandle forNative(StableMemoryBackend allocator, NativeHandle handle, int dictHash) {
         Objects.requireNonNull(allocator, "allocator");
         Objects.requireNonNull(handle, "handle");
         return new AllocatorKeyHandle(allocator, handle, dictHash);

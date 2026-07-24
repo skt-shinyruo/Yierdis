@@ -83,7 +83,7 @@ public final class ScanCursorV2 {
         return (int) ((value >>> GENERATION_SHIFT) & GENERATION_MASK);
     }
 
-    public byte[] toBulkStringAscii() {
+    public byte[] toAsciiBytes() {
         if (value == 0L) {
             return ZERO_ASCII;
         }

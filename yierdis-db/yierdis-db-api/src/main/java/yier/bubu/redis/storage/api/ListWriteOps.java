@@ -10,7 +10,5 @@ public interface ListWriteOps {
 
     WriteResult<Long> rpush(byte[] keyBytes, List<byte[]> values);
 
-    WriteResult<PoppedValueSequence> lpop(byte[] keyBytes, int count);
-
-    WriteResult<PoppedValueSequence> rpop(byte[] keyBytes, int count);
+    PreparedMutation<PoppedValueSequence> preparePop(byte[] keyBytes, int count, boolean left);
 }

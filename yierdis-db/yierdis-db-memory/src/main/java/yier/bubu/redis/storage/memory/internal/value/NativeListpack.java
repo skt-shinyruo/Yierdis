@@ -5,13 +5,13 @@ import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.NativeReallocPolicy;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
-import java.util.function.LongPredicate;
+import java.util.function.Predicate;
 
 public final class NativeListpack implements AutoCloseable {
     private static final long ARRAY_HEADER_BYTES = 16L;
@@ -21,7 +21,7 @@ public final class NativeListpack implements AutoCloseable {
 
     private final NativeByteStore byteStore;
     private int[] entryOffsets = new int[0];
-    private long blockRawHandle;
+    private NativeHandle blockHandle = NativeHandle.NULL;
     private int size;
     private int encodedBytes;
     private int storageBytes;
@@ -99,8 +99,8 @@ public final class NativeListpack implements AutoCloseable {
     }
 
     public void clear() {
-        if (blockRawHandle != 0L) {
-            byteStore.releaseRaw(blockRawHandle);
+        if (!blockHandle.isNull()) {
+            byteStore.release(blockHandle);
         }
         resetState();
     }
@@ -120,7 +120,7 @@ public final class NativeListpack implements AutoCloseable {
             addLast(null);
             return;
         }
-        addLast(byteStore.toByteArrayRaw(handle.raw(), entry.payloadOffset(), entry.payloadLength()));
+        addLast(byteStore.toByteArray(handle, entry.payloadOffset(), entry.payloadLength()));
     }
 
     public void addFirst(byte[] value) {
@@ -147,7 +147,7 @@ public final class NativeListpack implements AutoCloseable {
         ensureNativeStorage(nextEncodedBytes);
 
         int insertOffset = index == size ? encodedBytes : entryOffsets[index];
-        try (NativeObjectView view = byteStore.allocator().resolveRaw(blockRawHandle, NativeAccessMode.READ_WRITE)) {
+        try (NativeObjectView view = byteStore.backend().resolve(blockHandle, NativeAccessMode.READ_WRITE)) {
             int tailBytes = encodedBytes - insertOffset;
             if (tailBytes > 0) {
                 view.copyBytes(insertOffset, insertOffset + entryBytes, tailBytes);
@@ -192,7 +192,7 @@ public final class NativeListpack implements AutoCloseable {
             return NativeListEntryRef.nullValue();
         }
         return NativeListEntryRef.handle(
-                NativeHandle.fromRaw(blockRawHandle),
+                blockHandle,
                 sliceOffset(slice),
                 payloadLength,
                 allocatedBytes
@@ -203,14 +203,9 @@ public final class NativeListpack implements AutoCloseable {
         return toByteArray(entrySliceAt(index));
     }
 
-    public void writeAt(int index, BulkStringSink out) {
+    public void writeAt(int index, ByteValueSink out) {
         Objects.requireNonNull(out, "out");
         writeSlice(entrySliceAt(index), out);
-    }
-
-    public long encodedElementBytesAt(int index) {
-        int payloadLength = sliceLength(entrySliceAt(index));
-        return payloadLength < 0 ? 5L : bulkStringEncodedBytes(payloadLength);
     }
 
     int encodedEntryBytesAt(int index) {
@@ -249,11 +244,11 @@ public final class NativeListpack implements AutoCloseable {
         int sourceOffset = source.entryOffsets[fromIndex];
         byte[] transfer = new byte[Math.min(copiedBytes, COPY_BUFFER_BYTES)];
         int copiedRawBytes = 0;
-        try (NativeObjectView sourceView = byteStore.allocator().resolveRaw(
-                source.blockRawHandle,
+        try (NativeObjectView sourceView = source.byteStore.backend().resolve(
+                source.blockHandle,
                 NativeAccessMode.READ_ONLY
-        ); NativeObjectView targetView = byteStore.allocator().resolveRaw(
-                blockRawHandle,
+        ); NativeObjectView targetView = byteStore.backend().resolve(
+                blockHandle,
                 NativeAccessMode.READ_WRITE
         )) {
             int transferredBytes = 0;
@@ -285,12 +280,12 @@ public final class NativeListpack implements AutoCloseable {
     }
 
     public int nativePayloadCount() {
-        return blockRawHandle == 0L ? 0 : 1;
+        return blockHandle.isNull() ? 0 : 1;
     }
 
     public int copyNativePayloadSizes(int[] target, int offset) {
         Objects.requireNonNull(target, "target");
-        if (blockRawHandle == 0L) {
+        if (blockHandle.isNull()) {
             return offset;
         }
         target[offset] = Math.max(1, allocatedBytes);
@@ -320,7 +315,7 @@ public final class NativeListpack implements AutoCloseable {
         int nextEncodedBytes = addExact(encodedBytes, delta);
         ensureNativeStorage(nextEncodedBytes);
 
-        try (NativeObjectView view = byteStore.allocator().resolveRaw(blockRawHandle, NativeAccessMode.READ_WRITE)) {
+        try (NativeObjectView view = byteStore.backend().resolve(blockHandle, NativeAccessMode.READ_WRITE)) {
             int tailBytes = encodedBytes - oldEntryEnd;
             if (tailBytes > 0 && delta != 0) {
                 view.copyBytes(oldEntryEnd, oldEntryEnd + delta, tailBytes);
@@ -359,42 +354,42 @@ public final class NativeListpack implements AutoCloseable {
 
     public void forEachNativeHandle(Consumer<NativeHandle> consumer) {
         Objects.requireNonNull(consumer, "consumer");
-        if (blockRawHandle != 0L) {
-            consumer.accept(NativeHandle.fromRaw(blockRawHandle));
+        if (!blockHandle.isNull()) {
+            consumer.accept(blockHandle);
         }
     }
 
     public void closeExcept(NativeHandle[] retained) {
-        closeExcept(rawHandle -> isRetained(rawHandle, retained));
+        closeExcept(handle -> isRetained(handle, retained));
     }
 
-    void closeExcept(LongPredicate retained) {
+    void closeExcept(Predicate<NativeHandle> retained) {
         Objects.requireNonNull(retained, "retained");
-        if (blockRawHandle == 0L) {
+        if (blockHandle.isNull()) {
             resetState();
             return;
         }
-        long rawHandle = blockRawHandle;
-        if (retained.test(rawHandle)) {
+        NativeHandle handle = blockHandle;
+        if (retained.test(handle)) {
             // pop 响应接管整块 ownership 后，原 listpack 只移除自己的计量，不能提前 free。
-            byteStore.forgetRaw(rawHandle);
+            byteStore.forget(handle);
         } else {
-            byteStore.releaseRaw(rawHandle);
+            byteStore.release(handle);
         }
         resetState();
     }
 
     void closeExcept(NativeListpack retained) {
         Objects.requireNonNull(retained, "retained");
-        if (blockRawHandle == 0L) {
+        if (blockHandle.isNull()) {
             resetState();
             return;
         }
-        long rawHandle = blockRawHandle;
-        if (rawHandle == retained.blockRawHandle) {
-            byteStore.forgetRaw(rawHandle);
+        NativeHandle handle = blockHandle;
+        if (handle.equals(retained.blockHandle)) {
+            byteStore.forget(handle);
         } else {
-            byteStore.releaseRaw(rawHandle);
+            byteStore.release(handle);
         }
         resetState();
     }
@@ -412,7 +407,7 @@ public final class NativeListpack implements AutoCloseable {
         byte[] removed;
         int payloadLength;
 
-        try (NativeObjectView view = byteStore.allocator().resolveRaw(blockRawHandle, NativeAccessMode.READ_WRITE)) {
+        try (NativeObjectView view = byteStore.backend().resolve(blockHandle, NativeAccessMode.READ_WRITE)) {
             long decoded = decodeHeader(view, entryOffset);
             payloadLength = decodedPayloadLength(decoded);
             int payloadOffset = entryOffset + decodedHeaderBytes(decoded);
@@ -468,25 +463,25 @@ public final class NativeListpack implements AutoCloseable {
         if (requiredBytes <= 0) {
             throw new IllegalArgumentException("requiredBytes must be > 0");
         }
-        if (blockRawHandle == 0L) {
-            blockRawHandle = byteStore.allocateRawBlock(NativeObjectKind.LISTPACK_BYTES, requiredBytes);
+        if (blockHandle.isNull()) {
+            blockHandle = byteStore.allocateBlock(NativeObjectKind.LISTPACK_BYTES, requiredBytes);
             storageBytes = requiredBytes;
-            allocatedBytes = byteStore.allocatedBytesRaw(blockRawHandle);
+            allocatedBytes = byteStore.allocatedBytes(blockHandle);
             return;
         }
         if (requiredBytes <= storageBytes) {
             return;
         }
-        byteStore.reallocRawBlock(blockRawHandle, requiredBytes, NativeReallocPolicy.PRESERVE_PREFIX);
+        blockHandle = byteStore.reallocateBlock(blockHandle, requiredBytes, NativeReallocPolicy.PRESERVE_PREFIX);
         storageBytes = requiredBytes;
-        allocatedBytes = byteStore.allocatedBytesRaw(blockRawHandle);
+        allocatedBytes = byteStore.allocatedBytes(blockHandle);
     }
 
     private long entrySliceAt(int index) {
         checkIndex(index);
         int entryOffset = entryOffsets[index];
         int entryEnd = index + 1 < size ? entryOffsets[index + 1] : encodedBytes;
-        try (NativeObjectView view = byteStore.allocator().resolveRaw(blockRawHandle, NativeAccessMode.READ_ONLY)) {
+        try (NativeObjectView view = byteStore.backend().resolve(blockHandle, NativeAccessMode.READ_ONLY)) {
             long decoded = decodeHeader(view, entryOffset);
             int payloadLength = decodedPayloadLength(decoded);
             int payloadOffset = entryOffset + decodedHeaderBytes(decoded);
@@ -500,7 +495,7 @@ public final class NativeListpack implements AutoCloseable {
         if (payloadLength < 0) {
             return null;
         }
-        return byteStore.toByteArrayRaw(blockRawHandle, sliceOffset(slice), payloadLength);
+        return byteStore.toByteArray(blockHandle, sliceOffset(slice), payloadLength);
     }
 
     private boolean equalsSlice(long slice, byte[] other) {
@@ -511,22 +506,22 @@ public final class NativeListpack implements AutoCloseable {
         if (other == null || other.length != payloadLength) {
             return false;
         }
-        try (NativeObjectView view = byteStore.allocator().resolveRaw(blockRawHandle, NativeAccessMode.READ_ONLY)) {
+        try (NativeObjectView view = byteStore.backend().resolve(blockHandle, NativeAccessMode.READ_ONLY)) {
             return view.contentEquals(sliceOffset(slice), other, 0, payloadLength);
         }
     }
 
-    private void writeSlice(long slice, BulkStringSink out) {
+    private void writeSlice(long slice, ByteValueSink out) {
         int payloadLength = sliceLength(slice);
         if (payloadLength < 0) {
-            out.bulkStringNull();
+            out.nullValue();
             return;
         }
-        out.bulkString(byteStore.sliceRaw(blockRawHandle, sliceOffset(slice), payloadLength));
+        out.value(byteStore.slice(blockHandle, sliceOffset(slice), payloadLength));
     }
 
     private void resetState() {
-        blockRawHandle = 0L;
+        blockHandle = NativeHandle.NULL;
         size = 0;
         encodedBytes = 0;
         storageBytes = 0;
@@ -609,12 +604,12 @@ public final class NativeListpack implements AutoCloseable {
         return (int) slice - 1;
     }
 
-    private static boolean isRetained(long rawHandle, NativeHandle[] retained) {
+    private static boolean isRetained(NativeHandle handle, NativeHandle[] retained) {
         if (retained == null || retained.length == 0) {
             return false;
         }
         for (NativeHandle candidate : retained) {
-            if (candidate != null && candidate.raw() == rawHandle) {
+            if (candidate != null && candidate.equals(handle)) {
                 return true;
             }
         }
@@ -639,20 +634,6 @@ public final class NativeListpack implements AutoCloseable {
             total = addExact(total, entryEncodedBytes(value));
         }
         return total;
-    }
-
-    private static long bulkStringEncodedBytes(int len) {
-        return 1L + decimalDigits(len) + 2L + len + 2L;
-    }
-
-    private static int decimalDigits(int value) {
-        int digits = 1;
-        int v = value;
-        while (v >= 10) {
-            v /= 10;
-            digits++;
-        }
-        return digits;
     }
 
     private static int varIntSize(int value) {
@@ -725,7 +706,7 @@ public final class NativeListpack implements AutoCloseable {
             return owner.toByteArray(slice);
         }
 
-        public void writeTo(BulkStringSink out) {
+        public void writeTo(ByteValueSink out) {
             if (out == null) {
                 throw new IllegalArgumentException("out must not be null");
             }
