@@ -21,6 +21,14 @@ public interface ReplyReservationSink extends BytesSink {
         require(ReplyPlan.maximum());
     }
 
+    /**
+     * 将尚未写出的业务回复切换为槽位已有的控制回复额度。
+     *
+     * <p>调用方只能在本回复尚未写出任何字节时调用；不具备控制额度的实现可保留默认行为。</p>
+     */
+    default void useControlReservation() {
+    }
+
     long writtenBytes();
 
     /**

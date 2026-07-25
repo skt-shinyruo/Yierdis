@@ -51,10 +51,10 @@ public class MaxmemoryEvictionTest {
             try (ExecutionRequest request = ByteArrayExecutionRequest.copyOf(List.of(b("SET"), b("b"), value));
                  PreparedCommand prepared = processor.prepare(request, new CommandPreparationContext(session))) {
                 ReplyPlan plan = new RespReplySizer().plan(session, prepared.replyShape());
-                ReplyPlan oom = new RespReplySizer().plan(session, ReplyShapes.error(MaxmemoryErrors.OOM_ERR));
-                Assert.assertTrue(
-                        "SET must reserve enough reply capacity for a commit-time OOM",
-                        plan.encodedUpperBoundBytes() >= oom.encodedUpperBoundBytes()
+                Assert.assertEquals(
+                        "SET successful reply must keep its exact preflight charge",
+                        new RespReplySizer().plan(session, ReplyShapes.simpleString("OK")),
+                        plan
                 );
             }
 

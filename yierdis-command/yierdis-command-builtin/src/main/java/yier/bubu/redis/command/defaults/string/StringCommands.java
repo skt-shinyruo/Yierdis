@@ -255,7 +255,7 @@ public final class StringCommands implements CommandModule {
 
         @Override
         public ReplyShape replyShape() {
-            return ReplyShapes.withCommandErrorFallback(shape);
+            return shape;
         }
 
         @Override

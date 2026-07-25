@@ -153,11 +153,10 @@ public final class CommandSupport {
     ) {
         Objects.requireNonNull(shape, "shape");
         Objects.requireNonNull(execution, "execution");
-        ReplyShape plannedShape = ReplyShapes.withCommandErrorFallback(shape);
         return new PreparedCommand() {
             @Override
             public ReplyShape replyShape() {
-                return plannedShape;
+                return shape;
             }
 
             @Override
@@ -232,13 +231,12 @@ public final class CommandSupport {
         Objects.requireNonNull(resource, "resource");
         Objects.requireNonNull(validation, "validation");
         Objects.requireNonNull(execution, "execution");
-        ReplyShape plannedShape = ReplyShapes.withCommandErrorFallback(shape);
         return new PreparedCommand() {
             private boolean closed;
 
             @Override
             public ReplyShape replyShape() {
-                return plannedShape;
+                return shape;
             }
 
             @Override
@@ -275,9 +273,9 @@ public final class CommandSupport {
         try {
             execution.accept(context);
         } catch (WrongTypeException | YierdisCommandException failure) {
-            context.reply().error(failure.getMessage());
+            context.reply().controlError(failure.getMessage());
         } catch (IllegalArgumentException failure) {
-            context.reply().error("ERR " + failure.getMessage());
+            context.reply().controlError("ERR " + failure.getMessage());
         }
     }
 

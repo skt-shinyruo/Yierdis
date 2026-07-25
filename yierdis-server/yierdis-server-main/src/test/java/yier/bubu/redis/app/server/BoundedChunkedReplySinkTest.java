@@ -74,6 +74,27 @@ public class BoundedChunkedReplySinkTest {
     }
 
     @Test
+    public void controlFallbackReplacesAnUnwrittenExactPlanWithinTheControlReservation() {
+        Fixture fixture = new Fixture(8_192L, 256, 2_048L);
+        try {
+            BoundedChunkedReplySink sink = fixture.sink(Unpooled::buffer);
+            sink.require(ReplyPlan.exact(7L, 0L));
+
+            sink.useControlReservation();
+            sink.writeBytes(new byte[515], 0, 515);
+            sink.finish();
+            fixture.slot.markReady(false);
+            fixture.drain();
+
+            Assert.assertEquals(List.of(1_024), fixture.outboundCapacities());
+            Assert.assertEquals(0L, fixture.budget.stats().reservedBytes());
+            Assert.assertEquals(0L, fixture.budget.stats().allocatedBytes());
+        } finally {
+            fixture.close();
+        }
+    }
+
+    @Test
     public void transferredSourceRemainsOwnedUntilTheReplySlotFinishes() {
         Fixture fixture = new Fixture(16 * 1024L);
         AtomicInteger closes = new AtomicInteger();
@@ -259,18 +280,34 @@ public class BoundedChunkedReplySinkTest {
         private final ConnectionReplySequencer sequencer;
         private final ReplySlot slot;
         private final long singleReplyLimitBytes;
+        private final int chunkPayloadBytes;
+        private final long controlReservationBytes;
 
         private Fixture(long singleReplyLimitBytes) {
+            this(singleReplyLimitBytes, 64 * 1024, 4_096L);
+        }
+
+        private Fixture(long singleReplyLimitBytes, int chunkPayloadBytes, long controlReservationBytes) {
             this.singleReplyLimitBytes = singleReplyLimitBytes;
+            this.chunkPayloadBytes = chunkPayloadBytes;
+            this.controlReservationBytes = controlReservationBytes;
             budget = new OutboundMemoryBudget(singleReplyLimitBytes);
             OutboundConnectionMemory connection = budget.openConnection(singleReplyLimitBytes);
             channel = new EmbeddedChannel();
             sequencer = new ConnectionReplySequencer(channel, connection, () -> { });
-            slot = sequencer.register(connection.reserve(4_096L, singleReplyLimitBytes).orElseThrow()).orElseThrow();
+            slot = sequencer.register(
+                    connection.reserve(controlReservationBytes, singleReplyLimitBytes).orElseThrow()
+            ).orElseThrow();
         }
 
         private BoundedChunkedReplySink sink(BoundedChunkedReplySink.ChunkAllocator allocator) {
-            return new BoundedChunkedReplySink(slot, allocator, 64 * 1024, 4_096L, singleReplyLimitBytes);
+            return new BoundedChunkedReplySink(
+                    slot,
+                    allocator,
+                    chunkPayloadBytes,
+                    controlReservationBytes,
+                    singleReplyLimitBytes
+            );
         }
 
         private void drain() {

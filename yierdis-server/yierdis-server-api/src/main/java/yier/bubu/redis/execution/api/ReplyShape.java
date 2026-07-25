@@ -19,7 +19,6 @@ public sealed interface ReplyShape permits
         ReplyShape.NullValue,
         ReplyShape.NullArray,
         ReplyShape.Aggregate,
-        ReplyShape.Alternatives,
         ReplyShape.ByteSequence,
         ReplyShape.ByteMap,
         ReplyShape.Maximum {
@@ -146,24 +145,6 @@ public sealed interface ReplyShape permits
             Objects.requireNonNull(kind, "kind");
             elements = List.copyOf(Objects.requireNonNull(elements, "elements"));
             requireNonNegative(retainedSourceBytes, "retainedSourceBytes");
-        }
-    }
-
-    record Alternatives(List<ReplyShape> alternatives) implements ReplyShape {
-        public Alternatives {
-            alternatives = List.copyOf(Objects.requireNonNull(alternatives, "alternatives"));
-            if (alternatives.isEmpty()) {
-                throw new IllegalArgumentException("alternatives must not be empty");
-            }
-        }
-
-        @Override
-        public long retainedSourceBytes() {
-            long retained = 0L;
-            for (ReplyShape alternative : alternatives) {
-                retained = Math.max(retained, alternative.retainedSourceBytes());
-            }
-            return retained;
         }
     }
 

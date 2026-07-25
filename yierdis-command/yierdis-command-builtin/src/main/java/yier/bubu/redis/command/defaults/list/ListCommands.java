@@ -132,7 +132,7 @@ public final class ListCommands implements CommandModule {
 
         @Override
         public ReplyShape replyShape() {
-            return ReplyShapes.withCommandErrorFallback(shape);
+            return shape;
         }
 
         @Override

@@ -169,11 +169,9 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
                 return ExecutionAttempt.CONNECTION_CLOSED;
             }
             if (reservation == ReplyReservationResult.TOO_LARGE) {
-                RedisReplyWriter writer = replyWriterFactory.newWriter(connection.session(), task.reply.sink());
-                writer.error("ERR reply exceeds configured maximum");
-                task.reply.markReady(writer.closeAfterReplyRequested());
+                closeOversizedReply(connection, context, task.reply);
                 terminal = true;
-                return ExecutionAttempt.COMPLETED;
+                return ExecutionAttempt.CONNECTION_CLOSED;
             }
 
             task.cancelCapacityRegistration();

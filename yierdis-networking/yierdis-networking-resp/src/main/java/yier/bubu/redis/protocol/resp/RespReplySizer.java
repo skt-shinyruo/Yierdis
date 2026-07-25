@@ -44,7 +44,6 @@ public final class RespReplySizer implements ReplySizer {
             case ReplyShape.NullValue ignored -> nullValueBytes(version);
             case ReplyShape.NullArray ignored -> nullArrayBytes(version);
             case ReplyShape.Aggregate value -> aggregateBytes(value, version);
-            case ReplyShape.Alternatives value -> alternativesBytes(value, version);
             case ReplyShape.ByteSequence value -> byteSequenceBytes(value, version);
             case ReplyShape.ByteMap value -> byteMapBytes(value, version);
             case ReplyShape.Maximum ignored -> throw new AssertionError("maximum was handled before sizing");
@@ -54,18 +53,8 @@ public final class RespReplySizer implements ReplySizer {
     private static boolean requiresMaximumReservation(ReplyShape shape) {
         return switch (shape) {
             case ReplyShape.Maximum ignored -> true;
-            case ReplyShape.Alternatives value -> value.alternatives().stream()
-                    .anyMatch(RespReplySizer::requiresMaximumReservation);
             default -> false;
         };
-    }
-
-    private static long alternativesBytes(ReplyShape.Alternatives alternatives, RespProtocolVersion version) {
-        long maximum = 0L;
-        for (ReplyShape alternative : alternatives.alternatives()) {
-            maximum = Math.max(maximum, encodedBytes(alternative, version));
-        }
-        return maximum;
     }
 
     private static long doubleBytes(double value, RespProtocolVersion version) {

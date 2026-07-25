@@ -95,19 +95,6 @@ public class RespReplySizerTest {
                 .retainedSourceBytes());
     }
 
-    @Test
-    public void alternativesReserveTheLargestWireRepresentation() {
-        ReplyShape alternatives = ReplyShapes.oneOf(List.of(
-                ReplyShapes.bulkString(3, 17L),
-                ReplyShapes.error("wrong")
-        ));
-
-        ReplyPlan plan = new RespReplySizer().plan(new TestCommandSession(), alternatives);
-
-        Assert.assertEquals(12L, plan.encodedUpperBoundBytes());
-        Assert.assertEquals(17L, plan.retainedSourceBytes());
-    }
-
     private static void assertEncodedBytes(int version, ReplyShape shape, long expected) {
         TestCommandSession session = new TestCommandSession();
         session.setRespVersion(version);
