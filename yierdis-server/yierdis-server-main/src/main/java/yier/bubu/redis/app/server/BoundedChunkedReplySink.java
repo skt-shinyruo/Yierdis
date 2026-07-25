@@ -162,6 +162,11 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
         slot.runProducerAction(() -> requireEnvelopeLocked(requestedPlan));
     }
 
+    @Override
+    public void useControlReservation() {
+        slot.runProducerAction(this::useControlReservationLocked);
+    }
+
     private void requireEnvelopeLocked(ReplyPlan requestedPlan) {
         Objects.requireNonNull(requestedPlan, "requestedPlan");
         ensureOpen();
@@ -180,6 +185,24 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
         envelopePendingEncodedBytes = 0L;
         envelopeLastRequireWrittenBytes = writtenBytes;
         envelopeRetainedSourceBytes = 0L;
+    }
+
+    private void useControlReservationLocked() {
+        ensureOpen();
+        if (writtenBytes != 0L || current != null) {
+            throw new IllegalStateException("cannot replace a reply after bytes were written");
+        }
+
+        // 成功路径预留仍由当前 lease 持有直到槽位终止；这里只解除其字节上界，
+        // 让已在注册阶段保留的控制额度承载确定的错误回复。
+        plan = null;
+        envelopePlan = null;
+        envelopePendingEncodedBytes = 0L;
+        envelopeLastRequireWrittenBytes = 0L;
+        envelopeRetainedSourceBytes = 0L;
+        maximumRetainedSourceBytes = 0L;
+        maximumNestedPendingEncodedBytes = 0L;
+        slot.cancelCapacityWait();
     }
 
     @Override
@@ -316,7 +339,7 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
         if (payloadCapacity <= 0L) {
             return 0;
         }
-        return (int) Math.min(chunkPayloadBytes, payloadCapacity);
+        return (int) Math.min(Integer.MAX_VALUE, payloadCapacity);
     }
 
     private ReplyTooLargeException tooLarge(String message) {

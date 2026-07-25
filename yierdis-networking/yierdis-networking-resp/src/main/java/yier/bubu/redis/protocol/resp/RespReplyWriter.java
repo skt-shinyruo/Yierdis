@@ -3,6 +3,7 @@ package yier.bubu.redis.protocol.resp;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.ReplyReservationSink;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
@@ -46,14 +47,22 @@ public final class RespReplyWriter implements RedisReplyWriter {
     }
 
     @Override
+    public void controlError(String message) {
+        if (out instanceof ReplyReservationSink reservationSink) {
+            reservationSink.useControlReservation();
+        }
+        error(message);
+    }
+
+    @Override
     public void protocolError(String message) {
-        error(message == null ? "ERR Protocol error" : message);
+        controlError(message == null ? "ERR Protocol error" : message);
         requestCloseAfterReply();
     }
 
     @Override
     public void internalError(String message) {
-        error(message == null ? "ERR internal error" : message);
+        controlError(message == null ? "ERR internal error" : message);
     }
 
     @Override

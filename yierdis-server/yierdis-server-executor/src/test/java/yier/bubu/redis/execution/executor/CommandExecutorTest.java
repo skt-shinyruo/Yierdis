@@ -498,12 +498,13 @@ public class CommandExecutorTest {
     }
 
     @Test
-    public void oversizedReplyWritesAnErrorBeforeAnyMutation() {
+    public void oversizedReplyClosesBeforeAnyMutationWithoutAReplacementReply() {
         RecordingIoAdapter io = new RecordingIoAdapter();
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+        AtomicBoolean executed = new AtomicBoolean();
         CommandExecutionEngine engine = (session, request) -> ExecutorCoreTestSupport.fixed(
                 ReplyShapes.bulkString(4096, 0L),
-                context -> context.reply().bulkString(new byte[4096])
+                context -> executed.set(true)
         );
         CommandExecutor<TestConnection> executor = new CommandExecutor<>(
                 () -> { },
@@ -524,12 +525,13 @@ public class CommandExecutorTest {
 
             ownerExecutor.runAll();
 
-            Assert.assertFalse(connection.context().statsSnapshot().closing());
+            Assert.assertTrue(connection.context().statsSnapshot().closing());
             Assert.assertEquals(1, request.closeCalls());
-            Assert.assertEquals(0, reply.cancelCalls());
-            Assert.assertEquals(1, reply.readyCalls());
-            Assert.assertTrue(reply.writtenBytes() > 0);
-            Assert.assertEquals(0, io.closeCalls(connection));
+            Assert.assertFalse(executed.get());
+            Assert.assertEquals(1, reply.cancelCalls());
+            Assert.assertEquals(0, reply.readyCalls());
+            Assert.assertEquals(0, reply.writtenBytes());
+            Assert.assertEquals(1, io.closeCalls(connection));
         } finally {
             executor.close();
             ownerExecutor.runAll();

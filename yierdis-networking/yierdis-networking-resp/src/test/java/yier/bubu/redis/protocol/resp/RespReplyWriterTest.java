@@ -4,6 +4,8 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.execution.api.ReplyPlan;
+import yier.bubu.redis.execution.api.ReplyReservationSink;
 
 import java.nio.charset.StandardCharsets;
 
@@ -55,6 +57,20 @@ public class RespReplyWriterTest {
 
         Assert.assertEquals("-ERR internal error\r\n", sink.utf8());
         Assert.assertFalse(writer.closeAfterReplyRequested());
+    }
+
+    @Test
+    public void controlErrorUsesTheReservationSinkControlPathBeforeEncoding() {
+        ControlTrackingSink sink = new ControlTrackingSink();
+        RespReplyWriter writer = new RespReplyWriter(sink, RespProtocolVersion.RESP2);
+
+        writer.controlError("OOM command not allowed when used memory > 'maxmemory'.");
+
+        Assert.assertTrue(sink.controlReservationUsed);
+        Assert.assertEquals(
+                "-OOM command not allowed when used memory > 'maxmemory'.\r\n",
+                sink.utf8()
+        );
     }
 
     @Test
@@ -131,7 +147,7 @@ public class RespReplyWriterTest {
         void write(RespReplyWriter writer);
     }
 
-    private static final class ByteArraySink implements BytesSink {
+    private static class ByteArraySink implements BytesSink {
         private final java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
 
         @Override
@@ -141,6 +157,24 @@ public class RespReplyWriterTest {
 
         String utf8() {
             return out.toString(StandardCharsets.UTF_8);
+        }
+    }
+
+    private static final class ControlTrackingSink extends ByteArraySink implements ReplyReservationSink {
+        private boolean controlReservationUsed;
+
+        @Override
+        public void require(ReplyPlan plan) {
+        }
+
+        @Override
+        public void useControlReservation() {
+            controlReservationUsed = true;
+        }
+
+        @Override
+        public long writtenBytes() {
+            return 0L;
         }
     }
 

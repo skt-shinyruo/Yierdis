@@ -14,6 +14,15 @@ public interface RedisReplyWriter extends ReplySink {
     boolean closeAfterReplyRequested();
 
     /**
+     * 用当前槽位的控制额度替换尚未写出的预检成功回复，并输出错误。
+     *
+     * <p>仅用于执行期失败；已经写出业务回复后调用方必须关闭连接，不能替换客户端可见结果。</p>
+     */
+    default void controlError(String message) {
+        error(message);
+    }
+
+    /**
      * Marks the current reply as a protocol-level error.
      * <p>
      * This is distinct from command-layer {@link #error(String)} values, which are part of the command semantics and
