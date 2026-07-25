@@ -214,6 +214,39 @@ public class NativeListpackTest {
     }
 
     @Test
+    public void closeExceptDoesNotAliasSameLocalRawBlocksFromDifferentBackends() {
+        try (TestBackend leftRuntime = TestBackend.open("listpack-left-collision");
+             TestBackend rightRuntime = TestBackend.open("listpack-right-collision")) {
+            StableMemoryBackend leftBackend = leftRuntime.backend();
+            StableMemoryBackend rightBackend = rightRuntime.backend();
+            NativeListpack source = new NativeListpack(
+                    new NativeByteStore(leftBackend, NativeObjectKind.LISTPACK_BYTES),
+                    NativeObjectKind.LISTPACK_BYTES
+            );
+            NativeListpack retained = new NativeListpack(
+                    new NativeByteStore(rightBackend, NativeObjectKind.LISTPACK_BYTES),
+                    NativeObjectKind.LISTPACK_BYTES
+            );
+            source.addLast(bytes("source"));
+            retained.addLast(bytes("retained"));
+            NativeHandle sourceHandle = source.entryRefAt(0).handle();
+            NativeHandle retainedHandle = retained.entryRefAt(0).handle();
+            try {
+                Assert.assertEquals(sourceHandle.localRaw(), retainedHandle.localRaw());
+                Assert.assertNotEquals(sourceHandle.allocatorId(), retainedHandle.allocatorId());
+
+                source.closeExcept(retained);
+
+                Assert.assertEquals(0L, leftBackend.stats().objectCount(NativeObjectKind.LISTPACK_BYTES));
+                Assert.assertArrayEquals(bytes("retained"), retained.get(0));
+            } finally {
+                source.close();
+                retained.close();
+            }
+        }
+    }
+
+    @Test
     public void cursorStreamsNativeSlicesAndAppendsCopies() {
         try (TestBackend runtime = TestBackend.open("native-listpack-cursor");
              StableMemoryBackend allocator = runtime.backend()) {

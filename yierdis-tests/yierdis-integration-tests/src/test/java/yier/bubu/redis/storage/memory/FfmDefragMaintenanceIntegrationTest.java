@@ -12,8 +12,9 @@ import yier.bubu.redis.storage.api.DbEngineConfig;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
-import yier.bubu.redis.storage.api.result.BulkStringValue;
+import yier.bubu.redis.storage.api.result.ByteSequenceSource;
+import yier.bubu.redis.storage.api.result.ByteValue;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.testutil.TestDbs;
 
@@ -34,10 +35,14 @@ public class FfmDefragMaintenanceIntegrationTest {
             db.defragMaintenance();
 
             Assert.assertArrayEquals(b("hello"), db.reads().strings().getStringBytes(b("string")));
-            Assert.assertEquals(1, db.reads().lists().lrange(b("list"), 0, -1).count());
+            try (ByteSequenceSource values = db.reads().lists().lrange(b("list"), 0, -1)) {
+                Assert.assertEquals(1, values.elementCount());
+            }
             Assert.assertArrayEquals(b("v"), copy(db.reads().hashes().hget(b("hash"), b("f"))));
             Assert.assertTrue(db.reads().sets().sismember(b("set"), b("m")));
-            Assert.assertEquals(1, db.reads().zsets().zrange(b("zset"), 0, -1, false).count());
+            try (ByteSequenceSource values = db.reads().zsets().zrange(b("zset"), 0, -1, false)) {
+                Assert.assertEquals(1, values.elementCount());
+            }
 
             YierdisMemoryStats stats = db.memory().memoryStats();
             NativeAllocatorStats after = db.stableMemoryBackend().stats();
@@ -143,32 +148,37 @@ public class FfmDefragMaintenanceIntegrationTest {
         Assert.assertEquals(Long.valueOf(1L), db.writes().zsets().zadd(b("stable:zset"), List.of(b("1"), b("m"))).value());
     }
 
-    private static byte[] copy(BulkStringValue value) {
+    private static byte[] copy(ByteValue value) {
         try (value) {
             byte[][] captured = new byte[1][];
-            value.writeTo(new BulkStringSink() {
+            value.emitTo(new ByteValueSink() {
                 @Override
-                public void bulkString(byte[] data) {
+                public void value(byte[] data) {
                     captured[0] = data == null ? null : data.clone();
                 }
 
                 @Override
-                public void bulkString(byte[] data, int off, int len) {
+                public void value(byte[] data, int off, int len) {
                     byte[] copy = new byte[len];
                     System.arraycopy(data, off, copy, 0, len);
                     captured[0] = copy;
                 }
 
                 @Override
-                public void bulkString(BytesSlice slice) {
+                public void value(BytesSlice slice) {
                     byte[] copy = new byte[slice.length()];
                     slice.getBytes(0, copy, 0, copy.length);
                     captured[0] = copy;
                 }
 
                 @Override
-                public void bulkStringLongAscii(long value) {
+                public void longAscii(long value) {
                     captured[0] = Long.toString(value).getBytes(StandardCharsets.US_ASCII);
+                }
+
+                @Override
+                public void nullValue() {
+                    captured[0] = null;
                 }
             });
             return captured[0];

@@ -105,35 +105,7 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
             return new ReservationToken(this, estimatedExtraBytes);
         }
 
-        if (limitBytes > 0) {
-            // 拒写前先跑一轮过期清理，让 lazy expire 释放出的空间参与同一次预算判定。
-            cleanupExpired.run();
-
-            if (estimatedExtraBytes > 0 && estimatedExtraBytes > limitBytes) {
-                throw new MemoryLedgerOutOfMemoryException();
-            }
-
-            long limit = limitBytes - estimatedExtraBytes;
-            if (limit < 0) {
-                limit = 0;
-            }
-            if (usedBytesForMaxmemory.getAsLong() > limit) {
-                // 回调会先做物理 trim；NOEVICTION 策略下不会选择 victim，但仍允许空页释放避免误 OOM。
-                evictUntilUnder.accept(limit);
-                if (usedBytesForMaxmemory.getAsLong() > limit) {
-                    if (maxmemoryPolicy == MaxmemoryPolicy.NOEVICTION) {
-                        if (estimatedExtraBytes > 0) {
-                            throw new MemoryLedgerOutOfMemoryException();
-                        }
-                        return NoopReservation.INSTANCE;
-                    }
-                    if (estimatedExtraBytes > 0) {
-                        throw new MemoryLedgerOutOfMemoryException();
-                    }
-                    return NoopReservation.INSTANCE;
-                }
-            }
-        }
+        enforceLocalLimit(estimatedExtraBytes, true);
 
         if (estimatedExtraBytes == 0) {
             return NoopReservation.INSTANCE;
@@ -196,6 +168,38 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
     public void resetUsage() {
         usedBytes = 0;
         reservedBytes = 0;
+    }
+
+    public void enforceLocalMaintenance() {
+        enforceLocalLimit(0L, false);
+    }
+
+    private void enforceLocalLimit(long estimatedExtraBytes, boolean cleanupBeforeAdmission) {
+        if (limitBytes <= 0L) {
+            return;
+        }
+        if (cleanupBeforeAdmission) {
+            cleanupExpired.run();
+        }
+        if (estimatedExtraBytes > 0L && estimatedExtraBytes > limitBytes) {
+            throw new MemoryLedgerOutOfMemoryException();
+        }
+
+        long limit = limitBytes - estimatedExtraBytes;
+        if (limit < 0L) {
+            limit = 0L;
+        }
+        if (usedBytesForMaxmemory.getAsLong() <= limit) {
+            return;
+        }
+
+        evictUntilUnder.accept(limit);
+        if (usedBytesForMaxmemory.getAsLong() <= limit) {
+            return;
+        }
+        if (estimatedExtraBytes > 0L) {
+            throw new MemoryLedgerOutOfMemoryException();
+        }
     }
 
     private static long checkedReservationTotal(long current, long increment) {

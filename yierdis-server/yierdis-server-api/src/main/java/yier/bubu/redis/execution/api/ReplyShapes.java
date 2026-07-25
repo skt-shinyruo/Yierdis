@@ -80,6 +80,18 @@ public final class ReplyShapes {
         return aggregate(ReplyShape.AggregateKind.ATTRIBUTE, fieldValues);
     }
 
+    public static ReplyShape oneOf(List<? extends ReplyShape> alternatives) {
+        Objects.requireNonNull(alternatives, "alternatives");
+        return new ReplyShape.Alternatives(alternatives.stream().map(ReplyShape.class::cast).toList());
+    }
+
+    public static ReplyShape withCommandErrorFallback(ReplyShape success) {
+        return oneOf(List.of(
+                Objects.requireNonNull(success, "success"),
+                new ReplyShape.Error(512)
+        ));
+    }
+
     public static ReplyShape sequence(
             int count,
             long retainedSourceBytes,

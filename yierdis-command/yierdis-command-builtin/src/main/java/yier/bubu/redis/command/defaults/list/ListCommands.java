@@ -132,7 +132,7 @@ public final class ListCommands implements CommandModule {
 
         @Override
         public ReplyShape replyShape() {
-            return shape;
+            return ReplyShapes.withCommandErrorFallback(shape);
         }
 
         @Override
@@ -142,6 +142,10 @@ public final class ListCommands implements CommandModule {
 
         @Override
         public void execute(CommandExecutionContext context) {
+            CommandSupport.executeWithCommandErrorTranslation(context, this::executeCommitted);
+        }
+
+        private void executeCommitted(CommandExecutionContext context) {
             mutation.commit(context.mutationContext());
             if (preview == null || preview.isNull()) {
                 if (hasCount) {

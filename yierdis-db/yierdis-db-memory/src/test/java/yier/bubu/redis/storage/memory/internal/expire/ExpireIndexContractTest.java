@@ -20,6 +20,7 @@ import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -286,6 +287,62 @@ public class ExpireIndexContractTest {
     }
 
     @Test
+    public void removingLastExpiryEntryReleasesEmptyTableRegions() {
+        try (TestBackend runtime = TestBackend.open("expire-empty-table-remove");
+             StableMemoryBackend allocator = runtime.backend();
+             NativeKeyDirectory directory = new NativeKeyDirectory(allocator)) {
+            YierdisNativeExpireIndex expires = new YierdisNativeExpireIndex(allocator, FIXED_SEED, null);
+            byte[] key = bytes("last-expiry-entry");
+            EntryHandle entry = new EntryHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
+            try {
+                directory.compute(key, (ignored, old) -> entry);
+                KeyHandle keyHandle = directory.getKeyHandle(key);
+                long baselineLiveRegions = allocator.liveRegionCount();
+
+                expires.setExpireAtMillis(keyHandle, 123456789L);
+                Assert.assertEquals(baselineLiveRegions + 3L, allocator.liveRegionCount());
+
+                expires.removeExpire(keyHandle);
+
+                Assert.assertEquals(0, expires.table0Capacity());
+                Assert.assertEquals(0, expires.table1Capacity());
+                Assert.assertEquals(baselineLiveRegions, allocator.liveRegionCount());
+            } finally {
+                expires.close();
+                allocator.free(entry.nativeHandle());
+            }
+        }
+    }
+
+    @Test
+    public void releasingLastPreparedExpiryRemovalReleasesEmptyTableRegions() {
+        try (TestBackend runtime = TestBackend.open("expire-empty-table-prepared-remove");
+             StableMemoryBackend allocator = runtime.backend();
+             NativeKeyDirectory directory = new NativeKeyDirectory(allocator)) {
+            YierdisNativeExpireIndex expires = new YierdisNativeExpireIndex(allocator, FIXED_SEED, null);
+            byte[] key = bytes("last-prepared-expiry-entry");
+            EntryHandle entry = new EntryHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
+            try {
+                directory.compute(key, (ignored, old) -> entry);
+                KeyHandle keyHandle = directory.getKeyHandle(key);
+                long baselineLiveRegions = allocator.liveRegionCount();
+
+                expires.setExpireAtMillis(keyHandle, 123456789L);
+                var removal = expires.prepareRemoveExpire(keyHandle);
+                removal.commit();
+                removal.releaseSuperseded();
+
+                Assert.assertEquals(0, expires.table0Capacity());
+                Assert.assertEquals(0, expires.table1Capacity());
+                Assert.assertEquals(baselineLiveRegions, allocator.liveRegionCount());
+            } finally {
+                expires.close();
+                allocator.free(entry.nativeHandle());
+            }
+        }
+    }
+
+    @Test
     public void expireTableStoresSharedKeyIdentityAsCompleteNativeHandles() throws Exception {
         try (TestBackend runtime = TestBackend.open("expire-complete-key-handles");
              StableMemoryBackend allocator = runtime.backend();
@@ -313,6 +370,54 @@ public class ExpireIndexContractTest {
                 expires.clear();
                 expires.close();
                 allocator.free(entry.nativeHandle());
+            }
+        }
+    }
+
+    @Test
+    public void expireTableDoesNotMergeEqualLocalRawHandlesFromDifferentBackends() throws Exception {
+        try (TestBackend indexRuntime = TestBackend.open("expire-index-collision");
+             TestBackend leftRuntime = TestBackend.open("expire-left-collision");
+             TestBackend rightRuntime = TestBackend.open("expire-right-collision")) {
+            StableMemoryBackend indexBackend = indexRuntime.backend();
+            StableMemoryBackend leftBackend = leftRuntime.backend();
+            StableMemoryBackend rightBackend = rightRuntime.backend();
+            NativeHandle left = leftBackend.allocate(NativeObjectKind.KEY_BYTES, 1);
+            NativeHandle right = rightBackend.allocate(NativeObjectKind.KEY_BYTES, 1);
+            YierdisNativeExpireIndex expires = new YierdisNativeExpireIndex(indexBackend, FIXED_SEED, null);
+            try {
+                Assert.assertEquals(left.localRaw(), right.localRaw());
+                Assert.assertNotEquals(left.allocatorId(), right.allocatorId());
+
+                Method ensureTable0 = YierdisNativeExpireIndex.class.getDeclaredMethod("ensureTable0");
+                ensureTable0.setAccessible(true);
+                ensureTable0.invoke(expires);
+
+                Field table0Field = YierdisNativeExpireIndex.class.getDeclaredField("table0");
+                table0Field.setAccessible(true);
+                Object table = table0Field.get(expires);
+                Method insert = YierdisNativeExpireIndex.class.getDeclaredMethod(
+                        "insertIntoTable",
+                        table.getClass(),
+                        NativeHandle.class,
+                        int.class,
+                        long.class
+                );
+                insert.setAccessible(true);
+                insert.invoke(expires, table, left, 7, 100L);
+                insert.invoke(expires, table, right, 7, 200L);
+
+                Field handlesField = table.getClass().getDeclaredField("keyHandles");
+                handlesField.setAccessible(true);
+                NativeHandle[] handles = (NativeHandle[]) handlesField.get(table);
+
+                Assert.assertEquals(2, expires.size());
+                Assert.assertTrue(Arrays.asList(handles).contains(left));
+                Assert.assertTrue(Arrays.asList(handles).contains(right));
+            } finally {
+                expires.close();
+                leftBackend.free(left);
+                rightBackend.free(right);
             }
         }
     }

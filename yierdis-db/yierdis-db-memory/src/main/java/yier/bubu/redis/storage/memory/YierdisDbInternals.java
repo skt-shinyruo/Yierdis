@@ -12,6 +12,7 @@ import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import java.util.function.Supplier;
 import yier.bubu.redis.common.command.MutationContext;
+import yier.bubu.redis.common.memory.MemoryPressureBudget;
 
 public interface YierdisDbInternals {
     void checkThread();
@@ -31,4 +32,10 @@ public interface YierdisDbInternals {
     YierdisDbKeyLifecycle keyLifecycle();
 
     MemoryLedger ledger();
+
+    default void trimEmptyNativePagesAfterPreparedPreviewClose() {
+        if (ledger().maxmemoryEnabled()) {
+            keyLifecycle().stableMemoryBackend().trimEmptyPages(MemoryPressureBudget.unlimited());
+        }
+    }
 }

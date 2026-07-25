@@ -18,7 +18,7 @@ import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
-import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.KeyScanWindow;
 import yier.bubu.redis.testutil.TestDbs;
 
@@ -174,7 +174,7 @@ public class FfmDbEpochLifecycleIntegrationTest {
         Assert.assertEquals(0L, after.nativeDefragQuarantineBytes());
     }
 
-    private static final class CapturingSink implements BulkStringSink {
+    private static final class CapturingSink implements ByteValueSink {
         private final List<byte[]> captured;
         private final Runnable firstValueAction;
         private boolean actionRun;
@@ -185,27 +185,32 @@ public class FfmDbEpochLifecycleIntegrationTest {
         }
 
         @Override
-        public void bulkString(byte[] data) {
+        public void value(byte[] data) {
             capture(data == null ? null : data.clone());
         }
 
         @Override
-        public void bulkString(byte[] data, int off, int len) {
+        public void value(byte[] data, int off, int len) {
             byte[] copy = new byte[len];
             System.arraycopy(data, off, copy, 0, len);
             capture(copy);
         }
 
         @Override
-        public void bulkString(BytesSlice slice) {
+        public void value(BytesSlice slice) {
             byte[] copy = new byte[slice.length()];
             slice.getBytes(0, copy, 0, copy.length);
             capture(copy);
         }
 
         @Override
-        public void bulkStringLongAscii(long value) {
+        public void longAscii(long value) {
             capture(Long.toString(value).getBytes(StandardCharsets.US_ASCII));
+        }
+
+        @Override
+        public void nullValue() {
+            capture(null);
         }
 
         private void capture(byte[] value) {

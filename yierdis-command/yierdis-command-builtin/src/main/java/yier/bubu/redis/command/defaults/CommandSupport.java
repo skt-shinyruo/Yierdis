@@ -153,10 +153,11 @@ public final class CommandSupport {
     ) {
         Objects.requireNonNull(shape, "shape");
         Objects.requireNonNull(execution, "execution");
+        ReplyShape plannedShape = ReplyShapes.withCommandErrorFallback(shape);
         return new PreparedCommand() {
             @Override
             public ReplyShape replyShape() {
-                return shape;
+                return plannedShape;
             }
 
             @Override
@@ -231,12 +232,13 @@ public final class CommandSupport {
         Objects.requireNonNull(resource, "resource");
         Objects.requireNonNull(validation, "validation");
         Objects.requireNonNull(execution, "execution");
+        ReplyShape plannedShape = ReplyShapes.withCommandErrorFallback(shape);
         return new PreparedCommand() {
             private boolean closed;
 
             @Override
             public ReplyShape replyShape() {
-                return shape;
+                return plannedShape;
             }
 
             @Override
@@ -266,7 +268,7 @@ public final class CommandSupport {
         };
     }
 
-    private static void executeWithCommandErrorTranslation(
+    public static void executeWithCommandErrorTranslation(
             CommandExecutionContext context,
             Consumer<CommandExecutionContext> execution
     ) {

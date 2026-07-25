@@ -109,9 +109,10 @@ public class ClosingSkipSideEffectsIntegrationTest {
                     awaitOutbound(ch, 1000)
             );
             Assert.assertTrue("expected protocol error handler to mark connection closing", context.statsSnapshot().closing());
-            ch.runPendingTasks();
-            ch.runScheduledPendingTasks();
-            Assert.assertFalse("protocol error handler should close after replying", ch.isOpen());
+            Assert.assertTrue(
+                    "protocol error handler should close after replying",
+                    awaitChannelClosed(ch, 1000)
+            );
 
             Assert.assertEquals(0L, context.statsSnapshot().commandsExecuted());
             Assert.assertNull("no command reply should be produced after protocol close begins", readOutbound(ch));
@@ -300,7 +301,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
             Assert.assertTrue("expected runtime closing flag to be set", context.statsSnapshot().closing());
 
             awaitCounter(context, c -> c.statsSnapshot().commandsSkippedClosing(), 1L, 1000);
-            Assert.assertEquals(1L, context.statsSnapshot().commandsExecuted());
+            Assert.assertEquals(0L, context.statsSnapshot().commandsExecuted());
             Assert.assertNull("no command reply should be produced after internal error closing is requested", readOutbound(ch));
         } finally {
             unblock.countDown();
@@ -387,6 +388,16 @@ public class ClosingSkipSideEffectsIntegrationTest {
             }
             Thread.sleep(5);
         }
+    }
+
+    private static boolean awaitChannelClosed(EmbeddedChannel ch, long timeoutMillis) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        while (ch.isOpen() && System.nanoTime() < deadline) {
+            ch.runPendingTasks();
+            ch.runScheduledPendingTasks();
+            Thread.sleep(5);
+        }
+        return !ch.isOpen();
     }
 
     private static byte[] readOutbound(EmbeddedChannel ch) {

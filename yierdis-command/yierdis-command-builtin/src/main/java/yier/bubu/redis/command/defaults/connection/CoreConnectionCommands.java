@@ -137,8 +137,11 @@ public final class CoreConnectionCommands {
 
     private static PreparedCommand retainedArgument(ExecutionRequest request, int index) {
         ExecutionRequest retained = request.retain();
+        ReplyShape shape = request.isNull(index)
+                ? ReplyShapes.nullValue()
+                : ReplyShapes.bulkString(request.len(index), retained.admittedMemoryBytes());
         return CommandSupport.owned(
-                ReplyShapes.bulkString(request.len(index), retained.admittedMemoryBytes()),
+                shape,
                 retained,
                 execution -> execution.reply().bulkString(request.readOnlyByteArray(index))
         );

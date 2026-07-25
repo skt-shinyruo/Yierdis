@@ -6,11 +6,8 @@ import yier.bubu.redis.memory.api.MemoryOwner;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.storage.api.DbCommitPublisher;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
-import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MutationOutcome;
-import yier.bubu.redis.storage.api.YierdisCommandException;
-import yier.bubu.redis.storage.memory.internal.ledger.MemoryLedgerOutOfMemoryException;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMemoryLedger;
 
 import java.util.Objects;
@@ -137,12 +134,7 @@ final class YierdisDbRuntimeState {
 
     void enforceMaxmemory() {
         checkThread();
-        try {
-            // reserve(0) 复用 ledger 的过期清理、淘汰和 OOM 映射路径，避免另起一套预算判定口径。
-            ledger().reserve(0);
-        } catch (MemoryLedgerOutOfMemoryException e) {
-            throw new YierdisCommandException(MaxmemoryErrors.OOM_ERR);
-        }
+        ledger().enforceLocalMaintenance();
     }
 
     void defragMaintenance() {

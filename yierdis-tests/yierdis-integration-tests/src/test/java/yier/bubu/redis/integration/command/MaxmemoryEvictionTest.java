@@ -3,6 +3,14 @@ package yier.bubu.redis.integration.command;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
+import yier.bubu.redis.execution.api.CommandPreparationContext;
+import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.ReplyPlan;
+import yier.bubu.redis.execution.api.ReplyShapes;
+import yier.bubu.redis.execution.engine.EngineSession;
+import yier.bubu.redis.protocol.resp.RespReplySizer;
 import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.DbEngineConfig;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
@@ -39,6 +47,17 @@ public class MaxmemoryEvictionTest {
 
             Assert.assertTrue(client.execute(List.of(b("SET"), b("a"), value)) instanceof ReplySimpleString);
 
+            EngineSession session = new EngineSession(16, 16 * 1024L);
+            try (ExecutionRequest request = ByteArrayExecutionRequest.copyOf(List.of(b("SET"), b("b"), value));
+                 PreparedCommand prepared = processor.prepare(request, new CommandPreparationContext(session))) {
+                ReplyPlan plan = new RespReplySizer().plan(session, prepared.replyShape());
+                ReplyPlan oom = new RespReplySizer().plan(session, ReplyShapes.error(MaxmemoryErrors.OOM_ERR));
+                Assert.assertTrue(
+                        "SET must reserve enough reply capacity for a commit-time OOM",
+                        plan.encodedUpperBoundBytes() >= oom.encodedUpperBoundBytes()
+                );
+            }
+
             ReplyObject err = client.execute(List.of(b("SET"), b("b"), value));
             Assert.assertTrue(err instanceof ReplyError);
             Assert.assertEquals("OOM command not allowed when used memory > 'maxmemory'.", ((ReplyError) err).message());
@@ -67,8 +86,41 @@ public class MaxmemoryEvictionTest {
 
                 Assert.assertTrue(reply instanceof ReplySimpleString);
                 Assert.assertArrayEquals(smallValue, ((ReplyBulkString) client.execute(List.of(b("GET"), key))).data());
-                Assert.assertTrue("shrinking command should reduce used bytes",
-                        usedBytesForMaxmemory(db) < usedBefore);
+                var after = db.memory().memoryStats();
+                Assert.assertTrue(
+                        "shrinking command should reduce used bytes: before=" + usedBefore
+                                + ", after=" + after.usedBytesForMaxmemory()
+                                + ", nativeCommitted=" + after.nativeDataCommittedBytes()
+                                + ", nativeLive=" + after.nativeDataLiveBytes()
+                                + ", reclaimable=" + after.nativeReclaimableBytes(),
+                        after.usedBytesForMaxmemory() < usedBefore
+                );
+            }
+        });
+    }
+
+    @Test
+    public void noevictionSetGetCommandReclaimsPagesAfterReleasingItsOldValuePreview() {
+        byte[] key = b("k");
+        byte[] largeValue = repeat((byte) 'x', 1600);
+        byte[] smallValue = b("x");
+        long maxmemoryBytes = maxmemoryThatAllowsSetAndOverwrite(key, largeValue, smallValue);
+
+        forEachDbWithMaxmemory(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, db -> {
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
+                Assert.assertTrue(client.execute(List.of(b("SET"), key, largeValue)) instanceof ReplySimpleString);
+                long usedBefore = usedBytesForMaxmemory(db);
+
+                ReplyObject reply = client.execute(List.of(b("SET"), key, smallValue, b("GET")));
+
+                Assert.assertTrue(reply instanceof ReplyBulkString);
+                Assert.assertArrayEquals(largeValue, ((ReplyBulkString) reply).data());
+                Assert.assertArrayEquals(smallValue, ((ReplyBulkString) client.execute(List.of(b("GET"), key))).data());
+                Assert.assertTrue(
+                        "SET GET should reclaim pages after its retained old value closes",
+                        db.memory().memoryStats().usedBytesForMaxmemory() < usedBefore
+                );
             }
         });
     }

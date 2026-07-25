@@ -62,4 +62,17 @@ public class ReplyShapeTest {
 
         Assert.assertEquals(9, error.payloadLength());
     }
+
+    @Test
+    public void alternativesRetainOnlyTheLargestMutuallyExclusiveSource() {
+        ReplyShape.Alternatives alternatives = (ReplyShape.Alternatives) ReplyShapes.oneOf(List.of(
+                ReplyShapes.bulkString(3, 11L),
+                ReplyShapes.bulkString(5, 17L)
+        ));
+
+        Assert.assertEquals(2, alternatives.alternatives().size());
+        Assert.assertEquals(17L, alternatives.retainedSourceBytes());
+        Assert.assertThrows(IllegalArgumentException.class,
+                () -> new ReplyShape.Alternatives(List.of()));
+    }
 }
