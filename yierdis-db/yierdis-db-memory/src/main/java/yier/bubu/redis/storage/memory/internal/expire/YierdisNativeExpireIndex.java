@@ -519,6 +519,25 @@ public final class YierdisNativeExpireIndex implements YierdisExpireIndex, AutoC
         table.close();
     }
 
+    private void releaseEmptyTables() {
+        if (size() != 0) {
+            return;
+        }
+        Table oldTable0 = table0;
+        Table oldTable1 = table1;
+        table0 = null;
+        table1 = null;
+        rehashIndex = -1;
+        maintenanceDebt = false;
+        refreshMaintenanceRegistration();
+
+        Throwable failure = closeTable(oldTable0, null);
+        failure = closeTable(oldTable1, failure);
+        if (failure != null) {
+            rethrow(failure);
+        }
+    }
+
     private KeyHandle randomKeyHandleFromTable(Table table) {
         if (table == null || table.capacity == 0) {
             return null;
@@ -1044,6 +1063,7 @@ public final class YierdisNativeExpireIndex implements YierdisExpireIndex, AutoC
             current.size--;
             releaseKeyFromIndex(keyHandle);
             recordMaintenanceDebt();
+            releaseEmptyTables();
         }
     }
 
@@ -1159,6 +1179,7 @@ public final class YierdisNativeExpireIndex implements YierdisExpireIndex, AutoC
             NativeHandle handle = removedHandle;
             removedHandle = null;
             releaseKeyFromIndex(handle);
+            releaseEmptyTables();
         }
 
         @Override

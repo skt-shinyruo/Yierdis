@@ -1175,6 +1175,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         private final SetStringValue preview;
         private boolean closed;
         private boolean committed;
+        private boolean trimNativePagesAfterClose;
 
         private PreparedSetMutation(
                 byte[] keyBytes,
@@ -1216,7 +1217,9 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     () -> set(keyBytes, sliceOf(valueBytes), mode, expireOption)
             );
             committed = true;
-            return result.mutationOutcome();
+            MutationOutcome outcome = result.mutationOutcome();
+            trimNativePagesAfterClose = outcome.changedAny() && expectedState.liveRecord() != null;
+            return outcome;
         }
 
         @Override
@@ -1226,6 +1229,9 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
             }
             closed = true;
             preview.close();
+            if (trimNativePagesAfterClose) {
+                internals.trimEmptyNativePagesAfterPreparedPreviewClose();
+            }
         }
 
         private void requireCommittable() {

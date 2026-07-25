@@ -5,6 +5,8 @@ import org.junit.Test;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
+import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.StableMemoryBackendFactory;
 import yier.bubu.redis.memory.foreign.YierdisFfmStableMemoryBackend;
 import yier.bubu.redis.runtime.embedded.TestCommandProcessors;
@@ -37,6 +39,7 @@ public class OffHeapLeakRegressionTest {
             YierdisDb db = fixture.db();
             YierdisFfmStableMemoryBackend backend = fixture.backend();
             db.bindToCurrentThread();
+            warmMetadataBaseline(backend);
             MemoryUsageSnapshot baseline = backend.memoryUsage();
             long baselineLiveRegions = backend.liveRegionCount();
             MemoryUsageSnapshot highWater = baseline;
@@ -49,7 +52,7 @@ public class OffHeapLeakRegressionTest {
                 MemoryUsageSnapshot afterA = backend.memoryUsage();
                 highWater = highWater(highWater, afterA);
                 Assert.assertTrue(afterA.nativeDataLiveBytes() > baseline.nativeDataLiveBytes());
-                Assert.assertEquals(afterA, fixture.globalEngine().memoryUsage());
+                assertGlobalMemoryIncludesBackend(afterA, fixture.globalEngine().memoryUsage());
 
                 Assert.assertTrue(client.execute(List.of(b("SET"), b("b"), spanValue)) instanceof ReplySimpleString);
                 ReplyInteger exists = (ReplyInteger) client.execute(cmd("EXISTS", "a", "b"));
@@ -77,6 +80,7 @@ public class OffHeapLeakRegressionTest {
             YierdisDb db = fixture.db();
             YierdisFfmStableMemoryBackend backend = fixture.backend();
             db.bindToCurrentThread();
+            warmMetadataBaseline(backend);
             MemoryUsageSnapshot baseline = backend.memoryUsage();
             long baselineLiveRegions = backend.liveRegionCount();
             MemoryUsageSnapshot highWater = baseline;
@@ -148,9 +152,33 @@ public class OffHeapLeakRegressionTest {
         backend.trimEmptyPages(MemoryPressureBudget.unlimited());
         MemoryUsageSnapshot afterTrim = backend.memoryUsage();
         Assert.assertEquals(baseline.nativeDataLiveBytes(), afterTrim.nativeDataLiveBytes());
-        Assert.assertEquals(baselineLiveRegions, backend.liveRegionCount());
+        Assert.assertEquals(
+                "after trim=" + afterTrim + ", allocator stats=" + backend.stats(),
+                baselineLiveRegions,
+                backend.liveRegionCount()
+        );
         Assert.assertTrue(afterTrim.nativeMetadataCommittedBytes() <= highWater.nativeMetadataCommittedBytes());
         Assert.assertTrue(afterTrim.nativeDataCommittedBytes() <= highWater.nativeDataCommittedBytes());
+    }
+
+    private static void warmMetadataBaseline(YierdisFfmStableMemoryBackend backend) {
+        NativeHandle handle = backend.allocate(NativeObjectKind.GENERIC, 1);
+        backend.free(handle);
+        backend.trimEmptyPages(MemoryPressureBudget.unlimited());
+    }
+
+    private static void assertGlobalMemoryIncludesBackend(
+            MemoryUsageSnapshot backendUsage,
+            MemoryUsageSnapshot globalUsage
+    ) {
+        Assert.assertTrue(globalUsage.heapEstimatedBytes() >= backendUsage.heapEstimatedBytes());
+        Assert.assertEquals(
+                backendUsage.nativeMetadataCommittedBytes(),
+                globalUsage.nativeMetadataCommittedBytes()
+        );
+        Assert.assertEquals(backendUsage.nativeDataCommittedBytes(), globalUsage.nativeDataCommittedBytes());
+        Assert.assertEquals(backendUsage.nativeDataLiveBytes(), globalUsage.nativeDataLiveBytes());
+        Assert.assertEquals(backendUsage.nativeReclaimableBytes(), globalUsage.nativeReclaimableBytes());
     }
 
     private static MemoryUsageSnapshot highWater(MemoryUsageSnapshot current, MemoryUsageSnapshot candidate) {

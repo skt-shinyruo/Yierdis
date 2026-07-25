@@ -1,5 +1,6 @@
 package yier.bubu.redis.storage.memory.internal.value;
 
+import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -92,6 +93,70 @@ public class NativeCollectionScanWindowTest {
             store.release(handle);
             assertStale(allocator, handle);
         }
+    }
+
+    @Test
+    public void scanWindowKeepsEqualLocalRawElementsFromDifferentBackendsDistinct() {
+        try (TestBackend leftRuntime = TestBackend.open("scan-left-collision");
+             TestBackend rightRuntime = TestBackend.open("scan-right-collision")) {
+            StableMemoryBackend leftBackend = leftRuntime.backend();
+            StableMemoryBackend rightBackend = rightRuntime.backend();
+            NativeByteStore leftStore = new NativeByteStore(leftBackend, NativeObjectKind.SET_MEMBER_BYTES);
+            NativeByteStore rightStore = new NativeByteStore(rightBackend, NativeObjectKind.SET_MEMBER_BYTES);
+            NativeHandle left = leftStore.store(bytes("left"));
+            NativeHandle right = rightStore.store(bytes("right"));
+            try {
+                Assert.assertEquals(left.localRaw(), right.localRaw());
+                Assert.assertNotEquals(left.allocatorId(), right.allocatorId());
+
+                CollectionScanWindow window;
+                try (NativeCollectionScanWindow.Builder builder = NativeCollectionScanWindow.builder(
+                        routingBackend(leftBackend, rightBackend),
+                        2
+                )) {
+                    builder.addNative(left, leftStore.length(left));
+                    builder.addNative(right, rightStore.length(right));
+                    window = builder.build(ScanCursorV2.start());
+                }
+                try {
+                    RecordingSink sink = new RecordingSink(false);
+                    window.emitTo(sink);
+                    Assert.assertEquals(List.of("left", "right"), sink.values);
+                } finally {
+                    window.close();
+                }
+            } finally {
+                leftStore.release(left);
+                rightStore.release(right);
+            }
+        }
+    }
+
+    private static StableMemoryBackend routingBackend(
+            StableMemoryBackend left,
+            StableMemoryBackend right
+    ) {
+        return (StableMemoryBackend) Proxy.newProxyInstance(
+                StableMemoryBackend.class.getClassLoader(),
+                new Class<?>[]{StableMemoryBackend.class},
+                (proxy, method, arguments) -> {
+                    NativeHandle handle = (NativeHandle) arguments[0];
+                    StableMemoryBackend backend = handle.allocatorId() == left.allocatorId() ? left : right;
+                    return switch (method.getName()) {
+                        case "pin" -> {
+                            backend.pin(handle);
+                            yield null;
+                        }
+                        case "unpin" -> {
+                            backend.unpin(handle);
+                            yield null;
+                        }
+                        case "resolve" -> backend.resolve(handle, (NativeAccessMode) arguments[1]);
+                        case "resolvePinned" -> backend.resolvePinned(handle, (NativeAccessMode) arguments[1]);
+                        default -> throw new UnsupportedOperationException(method.getName());
+                    };
+                }
+        );
     }
 
     private static byte[] bytes(String value) {

@@ -1,6 +1,10 @@
 package yier.bubu.redis.storage.memory.internal.value;
 
 import java.lang.reflect.Proxy;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Assert;
 import org.junit.Test;
@@ -93,6 +97,52 @@ public class PinnedPoppedValueSequenceTest {
         Assert.assertEquals(64L, sequence.retainedMemoryBytes());
         sequence.close();
         Assert.assertEquals(1, unpinAttempts.get());
+    }
+
+    @Test
+    public void poppedLayoutsKeepEqualLocalRawHandlesFromDifferentBackendsDistinct() {
+        NativeHandle left = new NativeHandle(11L, 1L);
+        NativeHandle right = new NativeHandle(12L, 1L);
+        Assert.assertEquals(left.localRaw(), right.localRaw());
+        Assert.assertNotEquals(left.allocatorId(), right.allocatorId());
+
+        List<NativeHandle> pinned = new ArrayList<>();
+        List<NativeHandle> unpinned = new ArrayList<>();
+        List<NativeHandle> freed = new ArrayList<>();
+        StableMemoryBackend allocator = (StableMemoryBackend) Proxy.newProxyInstance(
+                StableMemoryBackend.class.getClassLoader(),
+                new Class<?>[]{StableMemoryBackend.class},
+                (proxy, method, args) -> {
+                    NativeHandle handle = (NativeHandle) args[0];
+                    switch (method.getName()) {
+                        case "pin" -> pinned.add(handle);
+                        case "unpin" -> unpinned.add(handle);
+                        case "free" -> freed.add(handle);
+                        default -> {
+                        }
+                    }
+                    return null;
+                }
+        );
+        NativeListEntryRef[] entries = {
+                NativeListEntryRef.handle(left, 1, 32),
+                NativeListEntryRef.handle(right, 1, 32)
+        };
+
+        PinnedPoppedValueSequence pinnedSequence = PinnedPoppedValueSequence.capture(allocator, entries);
+        Assert.assertEquals(64L, pinnedSequence.retainedMemoryBytes());
+        Assert.assertEquals(Set.of(left, right), new HashSet<>(pinned));
+        pinnedSequence.close();
+        Assert.assertEquals(Set.of(left, right), new HashSet<>(unpinned));
+
+        PreparedPoppedValueSequence prepared = PreparedPoppedValueSequence.owned(allocator, entries);
+        Assert.assertEquals(2, prepared.retainedHandles().length);
+        Assert.assertTrue(prepared.retainsHandle(left));
+        Assert.assertTrue(prepared.retainsHandle(right));
+        Assert.assertEquals(64L, prepared.retainedMemoryBytes());
+        prepared.activateOwnership();
+        prepared.close();
+        Assert.assertEquals(Set.of(left, right), new HashSet<>(freed));
     }
 
     @Test

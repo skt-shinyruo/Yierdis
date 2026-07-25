@@ -113,8 +113,15 @@ public class YierdisInstanceTest {
                 Assert.assertFalse("shrinking overwrite must not be rejected by global noeviction", reply instanceof ReplyError);
                 Assert.assertEquals("OK", ((ReplySimpleString) reply).value());
                 Assert.assertArrayEquals(smallValue, ((ReplyBulkString) client.execute(Arrays.asList(b("GET"), key))).data());
-                Assert.assertTrue("global used bytes should shrink",
-                        instance.observability().memoryStats().usedBytesForMaxmemory() < usedBefore);
+                var after = instance.observability().memoryStats();
+                Assert.assertTrue(
+                        "global used bytes should shrink: before=" + usedBefore
+                                + ", after=" + after.usedBytesForMaxmemory()
+                                + ", nativeCommitted=" + after.nativeDataCommittedBytes()
+                                + ", nativeLive=" + after.nativeDataLiveBytes()
+                                + ", reclaimable=" + after.nativeReclaimableBytes(),
+                        after.usedBytesForMaxmemory() < usedBefore
+                );
             }
         }
     }

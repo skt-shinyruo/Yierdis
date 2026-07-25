@@ -88,17 +88,21 @@ final class YierdisDbOwnedResources implements AutoCloseable {
             ZSetRoot zsetRoot
     ) {
         Throwable failure = null;
-        try {
-            clearData(expires, entries, keyDirectory, stringRoot, listRoot, hashRoot, setRoot, zsetRoot);
-        } catch (Throwable next) {
-            failure = recordFailure(failure, next);
-        }
+        YierdisExpireIndex expiresToClear = expires;
         if (expires instanceof YierdisNativeExpireIndex nativeExpires) {
+            expiresToClear = null;
             try {
+                // shutdown 不复用 clear()：它会重建最小表。先屏蔽 clear 回退，保证 close() 失败时也不重新分配；
+                // 正常 close() 会先释放索引持有的 key pin，随后才能清理 key directory。
                 nativeExpires.close();
             } catch (Throwable next) {
                 failure = recordFailure(failure, next);
             }
+        }
+        try {
+            clearData(expiresToClear, entries, keyDirectory, stringRoot, listRoot, hashRoot, setRoot, zsetRoot);
+        } catch (Throwable next) {
+            failure = recordFailure(failure, next);
         }
         failure = closeResource(entries, failure);
         failure = closeResource(keyDirectory, failure);

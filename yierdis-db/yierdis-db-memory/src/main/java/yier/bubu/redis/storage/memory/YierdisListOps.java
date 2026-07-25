@@ -786,6 +786,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
         private final PoppedValueSequence preview;
         private boolean closed;
         private boolean committed;
+        private boolean trimNativePagesAfterClose;
 
         private PreparedPopMutation(
                 byte[] keyBytes,
@@ -825,6 +826,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                     () -> popInternal(keyBytes, count, left)
             );
             committed = true;
+            trimNativePagesAfterClose = result.mutationOutcome().changedAny();
             try {
                 return result.mutationOutcome();
             } finally {
@@ -839,6 +841,9 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
             }
             closed = true;
             preview.close();
+            if (trimNativePagesAfterClose) {
+                internals.trimEmptyNativePagesAfterPreparedPreviewClose();
+            }
         }
 
         private void requireCommittable() {
