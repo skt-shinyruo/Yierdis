@@ -1,11 +1,10 @@
 package yier.bubu.redis.execution.engine;
 
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
-import yier.bubu.redis.common.command.MutationContext;
-import yier.bubu.redis.execution.api.CommandContext;
+import yier.bubu.redis.execution.api.CommandPreparationContext;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.PreparedCommand;
 
 import java.util.Objects;
 
@@ -25,15 +24,8 @@ public final class DefaultYierdisEngine implements YierdisEngine {
     }
 
     @Override
-    public void execute(CommandSession session, ExecutionRequest request, RedisReplyWriter reply) {
-        commandProcessor.execute(
-                request,
-                new CommandContext(
-                        session,
-                        reply,
-                        MutationContext.of(request)
-                )
-        );
+    public PreparedCommand prepare(CommandSession session, ExecutionRequest request) {
+        return commandProcessor.prepare(request, new CommandPreparationContext(session));
     }
 
     @Override

@@ -1,35 +1,25 @@
 package yier.bubu.redis.command.defaults.connection;
 
-import yier.bubu.redis.command.api.ArgReader;
-import yier.bubu.redis.command.api.CommandArity;
-import yier.bubu.redis.command.api.CommandKeySpec;
-import yier.bubu.redis.command.api.CommandModule;
-import yier.bubu.redis.command.api.CommandParseError;
-import yier.bubu.redis.command.api.CommandParseResult;
-import yier.bubu.redis.command.api.CommandParsers;
-import yier.bubu.redis.command.api.CommandSpec;
-import yier.bubu.redis.command.api.CommandSyntax;
-import yier.bubu.redis.command.api.ServerInfoProvider;
-import yier.bubu.redis.command.api.SlowCommandGovernor;
-import yier.bubu.redis.command.api.TransactionPolicy;
-import yier.bubu.redis.command.defaults.BulkStringReplyAdapter;
-import yier.bubu.redis.command.defaults.CommandSupport;
-
-import yier.bubu.redis.execution.api.CommandContext;
-import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyPlan;
-import yier.bubu.redis.execution.api.ReplyPlans;
-import yier.bubu.redis.execution.api.RedisReplyWriter;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandDefinition;
+import yier.bubu.redis.command.api.CommandKeySpec;
+import yier.bubu.redis.command.api.CommandModule;
+import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandSyntax;
+import yier.bubu.redis.command.api.TransactionPolicy;
+import yier.bubu.redis.command.defaults.CommandSupport;
+import yier.bubu.redis.execution.api.CommandPreparationContext;
+import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.ReplyShape;
+import yier.bubu.redis.execution.api.ReplyShapes;
 
-/**
- * Transport-agnostic connection and DB-lifecycle commands.
- * <p>
- * These commands remain in core because they do not depend on protocol-model
- * metadata or server runtime observability assembly.
- */
+/** Transport-neutral connection and DB lifecycle commands. */
 public final class CoreConnectionCommands {
     private final CommandSupport support;
 
@@ -39,242 +29,167 @@ public final class CoreConnectionCommands {
 
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register(CommandSpec.of(
-                syntax("PING", CommandArity.oneOf(1, 2)),
-                CommandParsers.request(),
-                this::ping
-        ));
-        registration.register(CommandSpec.of(
-                syntax("ECHO", CommandArity.exact(2)),
-                CommandParsers.request(),
-                this::echo
-        ));
-        registration.register(CommandSpec.of(
-                syntax("COMMAND", CommandArity.min(1)),
-                CommandParsers.request(),
-                (cmd, ctx) -> command(cmd, ctx.out(), registration)
-        ));
-        registration.register(CommandSpec.of(
-                syntax("SELECT", CommandArity.exact(2)),
-                CommandParsers.request(),
-                this::select
-        ));
-        registration.register(CommandSpec.of(
-                syntax("QUIT", CommandArity.exact(1)),
-                CommandParsers.request(),
-                this::quit
-        ));
-        registration.register(CommandSpec.of(
-                syntax("CLIENT", CommandArity.min(2)),
-                CommandParsers.request(),
-                this::client
-        ));
-        registration.register(CommandSpec.of(
-                syntax("AUTH", CommandArity.min(2)),
-                CommandParsers.request(),
-                this::auth
-        ));
-        registration.register(CommandSpec.of(
-                syntax("FLUSHDB", CommandArity.oneOf(1, 2)),
-                CommandParsers.request(),
-                this::flushdb
-        ));
+        registration.register(new CommandDefinition<>(syntax("PING", CommandArity.oneOf(1, 2)),
+                CommandParsers.request(), this::ping));
+        registration.register(new CommandDefinition<>(syntax("ECHO", CommandArity.exact(2)),
+                CommandParsers.request(), this::echo));
+        registration.register(new CommandDefinition<>(syntax("COMMAND", CommandArity.min(1)),
+                CommandParsers.request(), (request, context) -> command(request, registration)));
+        registration.register(new CommandDefinition<>(syntax("SELECT", CommandArity.exact(2)),
+                CommandParsers.request(), this::select));
+        registration.register(new CommandDefinition<>(syntax("QUIT", CommandArity.exact(1)),
+                CommandParsers.request(), this::quit));
+        registration.register(new CommandDefinition<>(syntax("CLIENT", CommandArity.min(2)),
+                CommandParsers.request(), this::client));
+        registration.register(new CommandDefinition<>(syntax("AUTH", CommandArity.min(2)),
+                CommandParsers.request(), this::auth));
+        registration.register(new CommandDefinition<>(syntax("FLUSHDB", CommandArity.oneOf(1, 2)),
+                CommandParsers.request(), this::flushdb));
     }
 
     private static CommandSyntax syntax(String nameUpper, CommandArity arity) {
-        return new CommandSyntax(
-                nameUpper, arity, CommandKeySpec.NONE, TransactionPolicy.QUEUEABLE
-        );
+        return new CommandSyntax(nameUpper, arity, CommandKeySpec.NONE, TransactionPolicy.QUEUEABLE);
     }
 
-    private void ping(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
-        if (request.argc() == 1) {
-            out.simpleString("PONG");
-            return;
-        }
-        if (request.argc() == 2) {
-            writeRetainedArgument(request, 1, out);
-            return;
-        }
+    private PreparedCommand ping(ExecutionRequest request, CommandPreparationContext context) {
+        return request.argc() == 1
+                ? CommandSupport.fixed(ReplyShapes.simpleString("PONG"), reply -> reply.reply().simpleString("PONG"))
+                : retainedArgument(request, 1);
     }
 
-    private void echo(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
-        writeRetainedArgument(request, 1, out);
+    private PreparedCommand echo(ExecutionRequest request, CommandPreparationContext context) {
+        return retainedArgument(request, 1);
     }
 
-    private void select(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
-        long idx;
+    private PreparedCommand select(ExecutionRequest request, CommandPreparationContext context) {
+        final long parsed;
         try {
-            idx = CommandSupport.parseLong(request, 1, "index");
-        } catch (IllegalArgumentException e) {
-            out.error("ERR value is not an integer or out of range");
-            return;
+            parsed = CommandSupport.parseLong(request, 1, "index");
+        } catch (IllegalArgumentException ignored) {
+            return CommandSupport.error("ERR value is not an integer or out of range");
         }
-        int dbIndex;
-        if (idx < Integer.MIN_VALUE) {
-            dbIndex = Integer.MIN_VALUE;
-        } else if (idx > Integer.MAX_VALUE) {
-            dbIndex = Integer.MAX_VALUE;
-        } else {
-            dbIndex = (int) idx;
+        int dbIndex = parsed < Integer.MIN_VALUE ? Integer.MIN_VALUE
+                : parsed > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) parsed;
+        if (dbIndex < 0 || dbIndex >= support.databases()) {
+            return CommandSupport.error("ERR DB index is out of range");
         }
-
-        int databases = support.databases();
-        if (dbIndex < 0 || dbIndex >= databases) {
-            out.error("ERR DB index is out of range");
-            return;
-        }
-
-        ctx.dbIndexSession().setDbIndex(dbIndex);
-        out.simpleString("OK");
+        return CommandSupport.fixed(ReplyShapes.simpleString("OK"), execution -> {
+            execution.session().setDbIndex(dbIndex);
+            execution.reply().simpleString("OK");
+        });
     }
 
-    private void quit(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
-        out.simpleString("OK");
-        out.requestCloseAfterReply();
+    private PreparedCommand quit(ExecutionRequest request, CommandPreparationContext context) {
+        return CommandSupport.fixed(ReplyShapes.simpleString("OK"), execution -> {
+            execution.reply().simpleString("OK");
+            execution.reply().requestCloseAfterReply();
+        });
     }
 
-    private void client(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
+    private PreparedCommand client(ExecutionRequest request, CommandPreparationContext context) {
         if (CommandSupport.asciiEqualsIgnoreCase(request, 1, "SETINFO")) {
-            out.simpleString("OK");
-            return;
+            return CommandSupport.fixed(ReplyShapes.simpleString("OK"), execution -> execution.reply().simpleString("OK"));
         }
         if (CommandSupport.asciiEqualsIgnoreCase(request, 1, "SETNAME")) {
             if (request.argc() != 3) {
-                CommandSupport.wrongArity(out, "client|setname");
-                return;
+                return CommandSupport.error("ERR wrong number of arguments for 'client|setname' command");
             }
-            ctx.clientMetadataSession().setClientName(CommandSupport.utf8(request, 2));
-            out.simpleString("OK");
-            return;
+            String name = CommandSupport.utf8(request, 2);
+            return CommandSupport.fixed(ReplyShapes.simpleString("OK"), execution -> {
+                execution.session().setClientName(name);
+                execution.reply().simpleString("OK");
+            });
         }
         if (CommandSupport.asciiEqualsIgnoreCase(request, 1, "GETNAME")) {
             if (request.argc() != 2) {
-                CommandSupport.wrongArity(out, "client|getname");
-                return;
+                return CommandSupport.error("ERR wrong number of arguments for 'client|getname' command");
             }
-            String name = ctx.clientMetadataSession().clientName();
+            String name = context.session().clientName();
             if (name == null) {
-                out.nullValue();
-            } else {
-                byte[] nameBytes = name.getBytes(StandardCharsets.UTF_8);
-                out.requireReply(ReplyPlans.bulkString(nameBytes.length, 0L));
-                out.bulkString(nameBytes);
+                return CommandSupport.fixed(ReplyShapes.nullValue(), execution -> execution.reply().nullValue());
             }
-            return;
+            byte[] bytes = name.getBytes(StandardCharsets.UTF_8);
+            return CommandSupport.fixed(ReplyShapes.bulkString(bytes.length, 0L),
+                    execution -> execution.reply().bulkString(bytes));
         }
-        out.error("ERR unknown subcommand '" + CommandSupport.utf8(request, 1) + "'. Try CLIENT HELP.");
+        return CommandSupport.error("ERR unknown subcommand '" + CommandSupport.utf8(request, 1)
+                + "'. Try CLIENT HELP.");
     }
 
-    private void auth(ExecutionRequest request, CommandContext ctx) {
-        ctx.out().error("ERR AUTH <password> called without any password configured for the default user. Are you sure your configuration is correct?");
+    private PreparedCommand auth(ExecutionRequest request, CommandPreparationContext context) {
+        return CommandSupport.error(
+                "ERR AUTH <password> called without any password configured for the default user. "
+                        + "Are you sure your configuration is correct?"
+        );
     }
 
-    private void flushdb(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
-        if (request.argc() == 2) {
-            if (!CommandSupport.asciiEqualsIgnoreCase(request, 1, "SYNC")
-                    && !CommandSupport.asciiEqualsIgnoreCase(request, 1, "ASYNC")) {
-                out.error("ERR syntax error");
-                return;
-            }
+    private PreparedCommand flushdb(ExecutionRequest request, CommandPreparationContext context) {
+        if (request.argc() == 2
+                && !CommandSupport.asciiEqualsIgnoreCase(request, 1, "SYNC")
+                && !CommandSupport.asciiEqualsIgnoreCase(request, 1, "ASYNC")) {
+            return CommandSupport.error("ERR syntax error");
         }
-        support.commandDb(ctx).lifecycle().flushDb();
-        out.simpleString("OK");
+        return CommandSupport.fixed(ReplyShapes.simpleString("OK"), execution -> {
+            support.commandDb(execution).lifecycle().flushDb();
+            execution.reply().simpleString("OK");
+        });
     }
 
-    private static void writeRetainedArgument(ExecutionRequest request, int index, RedisReplyWriter out) {
+    private static PreparedCommand retainedArgument(ExecutionRequest request, int index) {
         ExecutionRequest retained = request.retain();
-        boolean ownershipTransferred = false;
-        try {
-            out.requireReply(ReplyPlans.bulkString(request.len(index), retained.admittedMemoryBytes()));
-            out.bulkString(request.readOnlyByteArray(index));
-            out.transferReplyOwnership(retained);
-            ownershipTransferred = true;
-        } finally {
-            if (!ownershipTransferred) {
-                retained.close();
-            }
-        }
+        return CommandSupport.owned(
+                ReplyShapes.bulkString(request.len(index), retained.admittedMemoryBytes()),
+                retained,
+                execution -> execution.reply().bulkString(request.readOnlyByteArray(index))
+        );
     }
 
-    private static void command(ExecutionRequest request, RedisReplyWriter out, CommandModule.Registration registration) {
+    private static PreparedCommand command(ExecutionRequest request, CommandModule.Registration registration) {
         if (request.argc() == 1) {
-            String[] names = registration.upperNamesSorted();
-            out.requireReply(commandListReplyPlan(names, registration));
-            out.arrayHeader(names.length);
-            for (String upper : names) {
-                CommandSpec<?> spec = registration.specByUpperName(upper);
-                if (spec == null) {
-                    out.nullArray();
-                    continue;
-                }
-                writeCommandInfo(out, spec.syntax());
+            ArrayList<CommandInfo> infos = new ArrayList<>();
+            for (String name : registration.upperNamesSorted()) {
+                yier.bubu.redis.command.api.CommandDefinition<?> definition = registration.definitionByUpperName(name);
+                infos.add(definition == null ? null : CommandInfo.of(definition.syntax()));
             }
-            return;
+            return commandInfos(infos);
         }
-
         if (request.argc() == 2 && CommandSupport.asciiEqualsIgnoreCase(request, 1, "COUNT")) {
-            out.integer(registration.commandCount());
-            return;
+            int count = registration.commandCount();
+            return CommandSupport.fixed(ReplyShapes.integer(count), execution -> execution.reply().integer(count));
         }
-
         if (request.argc() >= 2 && CommandSupport.asciiEqualsIgnoreCase(request, 1, "INFO")) {
             if (request.argc() == 2) {
-                CommandSupport.wrongArity(out, "command");
-                return;
+                return CommandSupport.error("ERR wrong number of arguments for 'command' command");
             }
-            int n = request.argc() - 2;
-            out.requireReply(commandInfoReplyPlan(request, registration));
-            out.arrayHeader(n);
-            for (int i = 2; i < request.argc(); i++) {
-                String upper = commandInfoName(request, i);
-                if (upper == null) {
-                    out.nullArray();
-                    continue;
-                }
-                CommandSpec<?> spec = registration.specByUpperName(upper);
-                if (spec == null) {
-                    out.nullArray();
-                    continue;
-                }
-                writeCommandInfo(out, spec.syntax());
+            ArrayList<CommandInfo> infos = new ArrayList<>(request.argc() - 2);
+            for (int index = 2; index < request.argc(); index++) {
+                String upper = commandInfoName(request, index);
+                yier.bubu.redis.command.api.CommandDefinition<?> definition = upper == null
+                        ? null
+                        : registration.definitionByUpperName(upper);
+                infos.add(definition == null ? null : CommandInfo.of(definition.syntax()));
             }
-            return;
+            return commandInfos(infos);
         }
-
-        out.error("ERR syntax error");
+        return CommandSupport.error("ERR syntax error");
     }
 
-    private static ReplyPlan commandListReplyPlan(String[] names, CommandModule.Registration registration) {
-        long encodedElementBytes = 0L;
-        for (String upper : names) {
-            CommandSpec<?> spec = registration.specByUpperName(upper);
-            encodedElementBytes = saturatingAdd(
-                    encodedElementBytes,
-                    spec == null ? 5L : commandInfoEncodedBytes(spec.syntax())
-            );
+    private static PreparedCommand commandInfos(List<CommandInfo> infos) {
+        ArrayList<ReplyShape> shapes = new ArrayList<>(infos.size());
+        for (CommandInfo info : infos) {
+            shapes.add(info == null ? ReplyShapes.nullArray() : info.shape());
         }
-        return ReplyPlans.bulkStringArray(names.length, encodedElementBytes, 0L);
-    }
-
-    private static ReplyPlan commandInfoReplyPlan(ExecutionRequest request, CommandModule.Registration registration) {
-        int count = request.argc() - 2;
-        long encodedElementBytes = 0L;
-        for (int index = 2; index < request.argc(); index++) {
-            String upper = commandInfoName(request, index);
-            CommandSpec<?> spec = upper == null ? null : registration.specByUpperName(upper);
-            encodedElementBytes = saturatingAdd(
-                    encodedElementBytes,
-                    spec == null ? 5L : commandInfoEncodedBytes(spec.syntax())
-            );
-        }
-        return ReplyPlans.bulkStringArray(count, encodedElementBytes, 0L);
+        ReplyShape shape = ReplyShapes.array(shapes);
+        return CommandSupport.fixed(shape, execution -> {
+            execution.reply().arrayHeader(infos.size());
+            for (CommandInfo info : infos) {
+                if (info == null) {
+                    execution.reply().nullArray();
+                } else {
+                    info.write(execution);
+                }
+            }
+        });
     }
 
     private static String commandInfoName(ExecutionRequest request, int index) {
@@ -282,45 +197,45 @@ public final class CoreConnectionCommands {
             return null;
         }
         String upper = CommandSupport.utf8(request, index);
-        if (upper == null || upper.isBlank()) {
-            return null;
+        return upper == null || upper.isBlank() ? null : upper.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private record CommandInfo(
+            byte[] name,
+            long arity,
+            int firstKey,
+            int lastKey,
+            int keyStep,
+            ReplyShape shape
+    ) {
+        private static CommandInfo of(CommandSyntax syntax) {
+            byte[] name = syntax.nameLower().getBytes(StandardCharsets.US_ASCII);
+            ReplyShape shape = ReplyShapes.array(List.of(
+                    ReplyShapes.bulkString(name.length, 0L),
+                    ReplyShapes.integer(syntax.arity().redisMetadataArity()),
+                    ReplyShapes.array(List.of()),
+                    ReplyShapes.integer(syntax.keys().firstKeyIndex()),
+                    ReplyShapes.integer(syntax.keys().lastKeyIndex()),
+                    ReplyShapes.integer(syntax.keys().keyStep())
+            ));
+            return new CommandInfo(
+                    name,
+                    syntax.arity().redisMetadataArity(),
+                    syntax.keys().firstKeyIndex(),
+                    syntax.keys().lastKeyIndex(),
+                    syntax.keys().keyStep(),
+                    shape
+            );
         }
-        return upper.trim().toUpperCase(Locale.ROOT);
-    }
 
-    private static long commandInfoEncodedBytes(CommandSyntax syntax) {
-        byte[] name = syntax.nameLower().getBytes(StandardCharsets.US_ASCII);
-        long encodedElementBytes = ReplyPlans.bulkString(name.length, 0L).encodedUpperBoundBytes();
-        encodedElementBytes = saturatingAdd(encodedElementBytes, integerEncodedBytes(syntax.arity().redisMetadataArity()));
-        encodedElementBytes = saturatingAdd(
-                encodedElementBytes,
-                ReplyPlans.bulkStringArray(0, 0L, 0L).encodedUpperBoundBytes()
-        );
-        encodedElementBytes = saturatingAdd(encodedElementBytes, integerEncodedBytes(syntax.keys().firstKeyIndex()));
-        encodedElementBytes = saturatingAdd(encodedElementBytes, integerEncodedBytes(syntax.keys().lastKeyIndex()));
-        encodedElementBytes = saturatingAdd(encodedElementBytes, integerEncodedBytes(syntax.keys().keyStep()));
-        return ReplyPlans.bulkStringArray(6, encodedElementBytes, 0L).encodedUpperBoundBytes();
-    }
-
-    private static long integerEncodedBytes(long value) {
-        return 3L + Long.toString(value).length();
-    }
-
-    private static long saturatingAdd(long left, long right) {
-        if (left < 0L || right < 0L || left > Long.MAX_VALUE - right) {
-            return Long.MAX_VALUE;
+        private void write(yier.bubu.redis.execution.api.CommandExecutionContext context) {
+            context.reply().arrayHeader(6);
+            context.reply().bulkString(name);
+            context.reply().integer(arity);
+            context.reply().emptyArray();
+            context.reply().integer(firstKey);
+            context.reply().integer(lastKey);
+            context.reply().integer(keyStep);
         }
-        return left + right;
-    }
-
-    private static void writeCommandInfo(RedisReplyWriter out, CommandSyntax syntax) {
-        Objects.requireNonNull(syntax, "syntax");
-        out.arrayHeader(6);
-        out.bulkString(syntax.nameLower().getBytes(StandardCharsets.US_ASCII));
-        out.integer(syntax.arity().redisMetadataArity());
-        out.arrayHeader(0);
-        out.integer(syntax.keys().firstKeyIndex());
-        out.integer(syntax.keys().lastKeyIndex());
-        out.integer(syntax.keys().keyStep());
     }
 }

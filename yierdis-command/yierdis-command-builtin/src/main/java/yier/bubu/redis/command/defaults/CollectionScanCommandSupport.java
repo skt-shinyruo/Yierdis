@@ -4,11 +4,12 @@ import java.util.Objects;
 import yier.bubu.redis.command.api.ArgReader;
 import yier.bubu.redis.command.api.CommandParseError;
 import yier.bubu.redis.command.api.CommandParseResult;
-import yier.bubu.redis.execution.api.ReplyPlan;
-import yier.bubu.redis.execution.api.ReplyPlans;
-import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.ReplyShape;
+import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
+import java.util.List;
 
 /** HSCAN、SSCAN 与 ZSCAN 共用的参数和嵌套回复处理。 */
 public final class CollectionScanCommandSupport {
@@ -64,36 +65,24 @@ public final class CollectionScanCommandSupport {
         return CommandParseResult.ok(new Arguments(args.bytes(1), cursor, match, count, noValues));
     }
 
-    public static void writeReply(RedisReplyWriter out, CollectionScanWindow window) {
-        Objects.requireNonNull(out, "out");
+    public static PreparedCommand prepareReply(CollectionScanWindow window) {
         Objects.requireNonNull(window, "window");
-        try {
-            byte[] nextCursor = window.nextCursor().toAsciiBytes();
-            ReplyPlan cursorPlan = ReplyPlans.bulkString(nextCursor.length, 0L);
-            ReplyPlan elementsPlan = ReplyPlans.bulkStringArray(
-                    window.count(),
-                    window.encodedElementBytes(),
-                    window.retainedMemoryBytes()
-            );
-            out.requireReply(ReplyPlans.array(
-                    2,
-                    addSaturating(cursorPlan.encodedUpperBoundBytes(), elementsPlan.encodedUpperBoundBytes()),
-                    window.retainedMemoryBytes()
-            ));
-            out.arrayHeader(2);
-            out.bulkString(nextCursor);
-            out.arrayHeader(window.count());
-            window.emitTo(new BulkStringReplyAdapter(out));
-        } finally {
-            // BulkStringSink 要求同步消费输入；写入完成后立即释放 scan pin，不能让 reply slot 长期保留 DB 来源。
-            window.close();
-        }
-    }
-
-    private static long addSaturating(long left, long right) {
-        return left < 0L || right < 0L || left > Long.MAX_VALUE - right
-                ? Long.MAX_VALUE
-                : left + right;
+        byte[] nextCursor = window.nextCursor().toAsciiBytes();
+        ReplyShape elements = ReplyShapes.sequence(
+                window.elementCount(),
+                window.retainedMemoryBytes(),
+                consumer -> window.visitElementLengths(consumer::accept)
+        );
+        ReplyShape shape = ReplyShapes.array(List.of(
+                ReplyShapes.bulkString(nextCursor.length, 0L),
+                elements
+        ));
+        return CommandSupport.owned(shape, window, context -> {
+            context.reply().arrayHeader(2);
+            context.reply().bulkString(nextCursor);
+            context.reply().arrayHeader(window.elementCount());
+            window.emitTo(new BulkStringReplyAdapter(context.reply()));
+        });
     }
 
     public record Arguments(

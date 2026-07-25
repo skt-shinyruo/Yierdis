@@ -16,6 +16,7 @@ public class CommandExecutorFairSchedulingTest {
                 () -> {},
                 engine,
                 ownerExecutor,
+                ExecutorCoreTestSupport.simpleReplySizer(),
                 ExecutorCoreTestSupport.simpleReplyWriterFactory(),
                 io,
                 new CommandExecutorConfig(16, 0, 8, 4, 0, 0, 2, 1000, SchedulingPolicy.FAIR)

@@ -496,7 +496,7 @@ public class ArchitectureBoundaryTest {
         scanMethodForForbiddenText(
                 repoRoot,
                 commandDefaultsFile(repoRoot, "StringCommands.java"),
-                "set(SetArgs args, CommandContext ctx)",
+                "set(SetArgs args, CommandPreparationContext context)",
                 offenders,
                 "out.error(\"ERR syntax error\")"
         );
@@ -510,7 +510,7 @@ public class ArchitectureBoundaryTest {
         scanMethodForForbiddenText(
                 repoRoot,
                 commandDefaultsFile(repoRoot, "KeyCommands.java"),
-                "scan(ScanArgs args, CommandContext ctx)",
+                "scan(ScanArgs args, CommandPreparationContext context)",
                 offenders,
                 "out.error(\"ERR syntax error\")"
         );
@@ -603,7 +603,7 @@ public class ArchitectureBoundaryTest {
         );
         scanFileForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java").normalize(),
+                repoRoot.resolve("yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionRequestIngress.java").normalize(),
                 offenders,
                 "SimpleChannelInboundHandler<Command>"
         );
@@ -617,7 +617,7 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
-    public void productionCommandsMustRegisterTypedCommandSpecs() throws IOException {
+    public void productionCommandsMustRegisterTypedCommandDefinitions() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
 
@@ -625,6 +625,9 @@ public class ArchitectureBoundaryTest {
         Path deletedDescriptorFile = commandApiMain(repoRoot)
                 .resolve("yier/bubu/redis/command/api/" + deletedDescriptor + ".java");
         Assert.assertFalse("retired command metadata contract must stay deleted", Files.exists(deletedDescriptorFile));
+        Path definitionFile = commandApiMain(repoRoot)
+                .resolve("yier/bubu/redis/command/api/CommandDefinition.java");
+        Assert.assertTrue("command registration must use CommandDefinition", Files.isRegularFile(definitionFile));
         String[] retiredCommandApis = {
                 deletedDescriptor,
                 "registerDisallowed" + "InMulti",
@@ -636,7 +639,7 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 offenders,
                 "CommandModule.Handler",
-                "new CommandSpec(",
+                "new Command" + "Spec(",
                 "register(String name, Handler"
         );
         scanCommandMainForForbiddenText(repoRoot, offenders, retiredCommandApis);
@@ -669,7 +672,7 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
-    public void knownCommandHandlersMustNotRestoreDuplicateTopLevelArityChecks() throws IOException {
+    public void knownCommandsMustNotRestoreDuplicateTopLevelArityChecks() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
 
@@ -711,7 +714,7 @@ public class ArchitectureBoundaryTest {
         scanMethodForForbiddenText(
                 repoRoot,
                 commandDefaultsFile(repoRoot, "KeyCommands.java"),
-                "private void memory(",
+                "private PreparedCommand memory(",
                 knownDuplicates,
                 "if (request.argc() < 2)"
         );
@@ -796,8 +799,25 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 offenders,
                 "import yier.bubu.redis.execution.api.Command;",
-                "instanceof yier.bubu.redis.execution.api.Command",
-                "execute(Command"
+                "instanceof yier.bubu.redis.execution.api.Command"
+        );
+        scanFilesMatchingRegex(
+                repoRoot,
+                commandApiMain(repoRoot),
+                offenders,
+                "execute\\(\\s*(?:final\\s+)?Command\\b"
+        );
+        scanFilesMatchingRegex(
+                repoRoot,
+                commandKernelMain(repoRoot),
+                offenders,
+                "execute\\(\\s*(?:final\\s+)?Command\\b"
+        );
+        scanFilesMatchingRegex(
+                repoRoot,
+                commandDefaultsMain(repoRoot),
+                offenders,
+                "execute\\(\\s*(?:final\\s+)?Command\\b"
         );
         scanForForbiddenText(
                 repoRoot,
@@ -850,17 +870,27 @@ public class ArchitectureBoundaryTest {
         );
         Assert.assertTrue("缺少 YierdisEngine.java，无法约束 engine 执行边界", Files.isRegularFile(engineFile));
         String engineSource = Files.readString(engineFile, StandardCharsets.UTF_8);
+        String retiredExecutionContext = "Command" + "Context";
+        String preparedBoundary = "PreparedCommand prepare(CommandSession session, ExecutionRequest request);";
         Assert.assertTrue(
-                "YierdisEngine public execution boundary must expose CommandSession + ExecutionRequest + RedisReplyWriter",
-                engineSource.contains("void execute(CommandSession session, ExecutionRequest request, RedisReplyWriter")
+                "YierdisEngine public execution boundary must prepare work from CommandSession and ExecutionRequest",
+                engineSource.contains(preparedBoundary)
         );
         Assert.assertFalse(
                 "YierdisEngine must not import or reference the deleted marker session",
                 engineSource.contains("execution.api." + "Session")
         );
         Assert.assertFalse(
-                "YierdisEngine public API must not expose CommandContext compatibility overloads",
-                engineSource.contains("CommandContext")
+                "YierdisEngine public API must not expose the retired execution context",
+                engineSource.contains(retiredExecutionContext)
+        );
+        Assert.assertFalse(
+                "YierdisEngine public API must not render replies directly",
+                engineSource.contains("RedisReplyWriter")
+        );
+        Assert.assertFalse(
+                "YierdisEngine public API must not retain the old execution entry point",
+                engineSource.contains("void " + "execute(")
         );
 
         Path executorEngineFile = repoRoot.resolve(
@@ -869,16 +899,24 @@ public class ArchitectureBoundaryTest {
         Assert.assertTrue("缺少 CommandExecutionEngine.java，无法约束 executor 执行边界", Files.isRegularFile(executorEngineFile));
         String executorEngineSource = Files.readString(executorEngineFile, StandardCharsets.UTF_8);
         Assert.assertTrue(
-                "CommandExecutionEngine must accept CommandSession + ExecutionRequest + RedisReplyWriter",
-                executorEngineSource.contains("void execute(CommandSession session, ExecutionRequest request, RedisReplyWriter")
+                "CommandExecutionEngine must prepare work from CommandSession and ExecutionRequest",
+                executorEngineSource.contains(preparedBoundary)
         );
         Assert.assertFalse(
                 "CommandExecutionEngine must not import or reference the deleted marker session",
                 executorEngineSource.contains("execution.api." + "Session")
         );
         Assert.assertFalse(
-                "executor-core execution seam must not expose CommandContext",
-                executorEngineSource.contains("CommandContext")
+                "executor-core execution seam must not expose the retired execution context",
+                executorEngineSource.contains(retiredExecutionContext)
+        );
+        Assert.assertFalse(
+                "executor-core execution seam must not render replies directly",
+                executorEngineSource.contains("RedisReplyWriter")
+        );
+        Assert.assertFalse(
+                "executor-core execution seam must not retain the old execution entry point",
+                executorEngineSource.contains("void " + "execute(")
         );
     }
 
@@ -892,8 +930,8 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 repoRoot.resolve("yierdis-server/yierdis-server-executor/src/main/java").normalize(),
                 offenders,
-                "import yier.bubu.redis.execution.api.CommandContext;",
-                "new CommandContext(",
+                "import yier.bubu.redis.execution.api.Command" + "Context;",
+                "new Command" + "Context(",
                 "import yier.bubu.redis.execution.api.ServerSession;",
                 "import yier.bubu.redis.execution.api.TransactionState;",
                 "DefaultExecutionSession",
@@ -930,7 +968,7 @@ public class ArchitectureBoundaryTest {
                 offenders,
                 allowedServerFiles,
                 "import yier.bubu.redis.command.api.CommandParsers;",
-                "import yier.bubu.redis.command.api.CommandSpec;",
+                "import yier.bubu.redis.command.api.Command" + "Spec;",
                 "import yier.bubu.redis.command.api.ArgReader;",
                 "CommandParseResult",
                 "wrong number of arguments for"
@@ -948,7 +986,7 @@ public class ArchitectureBoundaryTest {
                 runtimeEmbeddedMain(repoRoot),
                 offenders,
                 "import yier.bubu.redis.command.api.CommandParsers;",
-                "import yier.bubu.redis.command.api.CommandSpec;",
+                "import yier.bubu.redis.command.api.Command" + "Spec;",
                 "import yier.bubu.redis.command.api.ArgReader;",
                 "CommandParseResult",
                 "wrong number of arguments for"
@@ -1560,15 +1598,11 @@ public class ArchitectureBoundaryTest {
                 )
         );
 
-        Path commandContextFile = apiPackage.resolve("CommandContext.java");
-        String commandContext = Files.readString(commandContextFile, StandardCharsets.UTF_8);
+        String retiredExecutionContext = "Command" + "Context";
+        Path retiredExecutionContextFile = apiPackage.resolve(retiredExecutionContext + ".java");
         Assert.assertFalse(
-                "CommandContext must not keep ServerSession constructors",
-                commandContext.contains("CommandContext(ServerSession")
-        );
-        Assert.assertFalse(
-                "CommandContext must not keep ServerSession reset overloads",
-                commandContext.contains("reset(ServerSession")
+                "the retired execution context must remain deleted",
+                Files.exists(retiredExecutionContextFile)
         );
 
         Path engineSessionFile = repoRoot.resolve(
@@ -1620,7 +1654,7 @@ public class ArchitectureBoundaryTest {
                     "import yier.bubu.redis.execution.api.ServerSession;",
                     "implements ServerSession",
                     "from(ServerSession",
-                    "CommandContext(ServerSession",
+                    retiredExecutionContext + "(ServerSession",
                     "reset(ServerSession"
             );
         }
@@ -3029,14 +3063,15 @@ public class ArchitectureBoundaryTest {
                 bootstrapFile,
                 offenders,
                 "new YierdisFastCommandProcessor(",
-                "processor::execute",
+                "processor::" + "execute",
                 "maintenance.maintenanceTick()"
         );
         assertFileContainsAllText(
                 repoRoot,
                 bootstrapFile,
                 offenders,
-                "ServerCommandComposition.createProcessor("
+                "ServerCommandComposition.createProcessor(",
+                "commandEngine::prepare"
         );
 
         if (!offenders.isEmpty()) {
@@ -3062,8 +3097,8 @@ public class ArchitectureBoundaryTest {
                         serverMainRoot.resolve("yier/bubu/redis/app/server/ServerCommandComposition.java").normalize()
                 ),
                 "new YierdisFastCommandProcessor(",
-                "new CommandContext(",
-                ".execute(request, new CommandContext"
+                "new Command" + "Context(",
+                "." + "execute(request, new Command" + "Context"
         );
         Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server-main Java 文件", scanned > 0);
 

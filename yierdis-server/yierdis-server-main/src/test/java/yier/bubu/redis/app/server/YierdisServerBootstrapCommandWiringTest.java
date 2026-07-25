@@ -8,17 +8,21 @@ import org.junit.Test;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
+import yier.bubu.redis.execution.api.CommandExecutionContext;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.TransactionState;
+import yier.bubu.redis.execution.api.ValidationResult;
 import yier.bubu.redis.execution.engine.DefaultYierdisEngine;
 import yier.bubu.redis.execution.engine.YierdisEngine;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
+import yier.bubu.redis.protocol.resp.RespReplySizer;
 import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
 import yier.bubu.redis.protocol.resp.netty.InboundByteAccountingHandler;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
@@ -149,43 +153,23 @@ public class YierdisServerBootstrapCommandWiringTest {
             EngineSession session = new EngineSession();
 
             CapturingReplyWriter pingReply = new CapturingReplyWriter();
-            engine.execute(
-                    session,
-                    ByteArrayExecutionRequest.fromUtf8("PING", List.of()),
-                    pingReply
-            );
+            execute(engine, session, ByteArrayExecutionRequest.fromUtf8("PING", List.of()), pingReply);
             Assert.assertEquals("PONG", pingReply.simpleStringValue);
 
             CapturingReplyWriter helloReply = new CapturingReplyWriter();
-            engine.execute(
-                    session,
-                    ByteArrayExecutionRequest.fromUtf8("HELLO", List.of()),
-                    helloReply
-            );
+            execute(engine, session, ByteArrayExecutionRequest.fromUtf8("HELLO", List.of()), helloReply);
             Assert.assertTrue(helloReply.mapHeaderCount != null && helloReply.mapHeaderCount > 0);
 
             CapturingReplyWriter multiReply = new CapturingReplyWriter();
-            engine.execute(
-                    session,
-                    ByteArrayExecutionRequest.fromUtf8("MULTI", List.of()),
-                    multiReply
-            );
+            execute(engine, session, ByteArrayExecutionRequest.fromUtf8("MULTI", List.of()), multiReply);
             Assert.assertEquals("OK", multiReply.simpleStringValue);
 
             CapturingReplyWriter queuedSetReply = new CapturingReplyWriter();
-            engine.execute(
-                    session,
-                    ByteArrayExecutionRequest.fromUtf8("SET", List.of("tx-key", "tx-value")),
-                    queuedSetReply
-            );
+            execute(engine, session, ByteArrayExecutionRequest.fromUtf8("SET", List.of("tx-key", "tx-value")), queuedSetReply);
             Assert.assertEquals("QUEUED", queuedSetReply.simpleStringValue);
 
             CapturingReplyWriter execReply = new CapturingReplyWriter();
-            engine.execute(
-                    session,
-                    ByteArrayExecutionRequest.fromUtf8("EXEC", List.of()),
-                    execReply
-            );
+            execute(engine, session, ByteArrayExecutionRequest.fromUtf8("EXEC", List.of()), execReply);
             Assert.assertEquals(List.of("OK"), execReply.arrayValues);
         }
     }
@@ -392,7 +376,7 @@ public class YierdisServerBootstrapCommandWiringTest {
                 int readCreditIndex = pipelineNames.indexOf("inboundReadCredit");
                 int byteAccountingIndex = pipelineNames.indexOf("inboundByteAccounting");
                 int decoderIndex = pipelineNames.indexOf("respRequestDecoder");
-                int commandHandlerIndex = pipelineNames.indexOf("commandHandler");
+                int ingressIndex = pipelineNames.indexOf("executionRequestIngress");
                 Assert.assertNotNull(backpressureHandler);
                 Assert.assertTrue(backpressureIndex >= 0);
                 Assert.assertTrue(idleTimeoutIndex > backpressureIndex);
@@ -402,7 +386,7 @@ public class YierdisServerBootstrapCommandWiringTest {
                 Assert.assertTrue(readCreditIndex > idleTimeoutCloserIndex);
                 Assert.assertTrue(byteAccountingIndex > readCreditIndex);
                 Assert.assertTrue(decoderIndex > byteAccountingIndex);
-                Assert.assertTrue(commandHandlerIndex > decoderIndex);
+                Assert.assertTrue(ingressIndex > decoderIndex);
                 Assert.assertEquals(3, intField(decoder, "maxBulkBytes"));
                 Assert.assertEquals(2, intField(decoder, "maxArgs"));
                 Assert.assertEquals(4, intField(decoder, "maxInlineBytes"));
@@ -434,7 +418,7 @@ public class YierdisServerBootstrapCommandWiringTest {
                 ).initChannel(accepted);
 
                 Assert.assertEquals(1, acceptingRegistry.activeChannelCount());
-                Assert.assertNotNull(accepted.pipeline().get("commandHandler"));
+                Assert.assertNotNull(accepted.pipeline().get("executionRequestIngress"));
             } finally {
                 accepted.unsafe().closeForcibly();
             }
@@ -453,7 +437,7 @@ public class YierdisServerBootstrapCommandWiringTest {
                 ).initChannel(rejected);
 
                 Assert.assertNull(NettyExecutionConnection.get(rejected));
-                Assert.assertNull(rejected.pipeline().get("commandHandler"));
+                Assert.assertNull(rejected.pipeline().get("executionRequestIngress"));
                 Assert.assertEquals(0, closingRegistry.activeChannelCount());
             } finally {
                 rejected.unsafe().closeForcibly();
@@ -650,6 +634,20 @@ public class YierdisServerBootstrapCommandWiringTest {
 
     private static ByteArrayExecutionRequest request(String... values) {
         return ByteArrayExecutionRequest.fromUtf8(values[0], Arrays.asList(Arrays.copyOfRange(values, 1, values.length)));
+    }
+
+    private static void execute(
+            YierdisEngine engine,
+            CommandSession session,
+            ExecutionRequest request,
+            RedisReplyWriter reply
+    ) {
+        try (PreparedCommand prepared = engine.prepare(session, request)) {
+            Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
+            try (CommandExecutionContext context = CommandExecutionContext.forRequest(session, reply, request)) {
+                prepared.execute(context);
+            }
+        }
     }
 
     private static int intField(Object target, String fieldName) throws Exception {
@@ -990,8 +988,9 @@ public class YierdisServerBootstrapCommandWiringTest {
             this.replyWriterFactory = new RespReplyWriterFactory();
             this.executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
-                    engine::execute,
+                    engine::prepare,
                     new NettySerialOwnerExecutor(ImmediateEventExecutor.INSTANCE),
+                    new RespReplySizer(),
                     replyWriterFactory,
                     new NettyExecutionIoAdapter(),
                     new CommandExecutorConfig(1024, 0, 256, 128, 0, 0, 1024, 10, SchedulingPolicy.FAIR)

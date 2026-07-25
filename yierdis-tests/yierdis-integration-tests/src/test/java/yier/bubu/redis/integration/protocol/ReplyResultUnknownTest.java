@@ -2,6 +2,10 @@ package yier.bubu.redis.app.server;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.execution.api.CommandExecutionContext;
+import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.ReplyShape;
+import yier.bubu.redis.execution.api.ValidationResult;
 import yier.bubu.redis.integration.protocol.RespTcpTestSupport;
 import yier.bubu.redis.storage.api.PostCommitMutationException;
 
@@ -14,14 +18,35 @@ public class ReplyResultUnknownTest {
     public void postCommitFailureClosesWithoutReplacementReplyAndLeavesTheCommittedValueVisible() throws Exception {
         AtomicBoolean failAfterFirstCommand = new AtomicBoolean(true);
         YierdisServerBootstrap server = YierdisServerBootstrap.startForTests(
-                delegate -> (session, request, out) -> {
-                    delegate.execute(session, request, out);
-                    if (failAfterFirstCommand.compareAndSet(true, false)) {
-                        throw new PostCommitMutationException(
-                                "injected post-commit failure",
-                                new IllegalStateException("injected cause")
-                        );
-                    }
+                delegate -> (session, request) -> {
+                    PreparedCommand prepared = delegate.prepare(session, request);
+                    return new PreparedCommand() {
+                        @Override
+                        public ReplyShape replyShape() {
+                            return prepared.replyShape();
+                        }
+
+                        @Override
+                        public ValidationResult validateBeforeExecute() {
+                            return prepared.validateBeforeExecute();
+                        }
+
+                        @Override
+                        public void execute(CommandExecutionContext context) {
+                            prepared.execute(context);
+                            if (failAfterFirstCommand.compareAndSet(true, false)) {
+                                throw new PostCommitMutationException(
+                                        "injected post-commit failure",
+                                        new IllegalStateException("injected cause")
+                                );
+                            }
+                        }
+
+                        @Override
+                        public void close() {
+                            prepared.close();
+                        }
+                    };
                 },
                 "--port", "0",
                 "--maxmemoryBytes", "0",

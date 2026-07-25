@@ -17,7 +17,7 @@ public final class EmbeddedCommandComposition {
     public static YierdisFastCommandProcessor createProcessor(YierdisInstance instance) {
         CommandRegistry registry = new CommandRegistry();
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
-        CommandRegistries.registerTransactionSupport(registry, processor::execute);
+        CommandRegistries.registerTransactionSupport(registry, processor);
         CommandRegistries.registerInto(
                 registry,
                 DefaultCommandModules.create(TestDbRouters.forInstance(instance), null)
@@ -28,7 +28,7 @@ public final class EmbeddedCommandComposition {
     public static YierdisFastCommandProcessor createProcessor(DbEngine db, CommandModule... extraModules) {
         CommandRegistry registry = new CommandRegistry();
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
-        CommandRegistries.registerTransactionSupport(registry, processor::execute);
+        CommandRegistries.registerTransactionSupport(registry, processor);
         List<CommandModule> modules = new ArrayList<>();
         modules.add(DefaultCommandModules.create(db));
         if (extraModules != null) {

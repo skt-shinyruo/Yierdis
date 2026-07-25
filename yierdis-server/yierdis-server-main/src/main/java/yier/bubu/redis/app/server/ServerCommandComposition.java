@@ -19,7 +19,7 @@ public final class ServerCommandComposition {
     ) {
         CommandRegistry registry = new CommandRegistry();
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
-        CommandRegistries.registerTransactionSupport(registry, processor::execute);
+        CommandRegistries.registerTransactionSupport(registry, processor);
         CommandRegistries.registerInto(
                 registry,
                 DefaultCommandModules.create(dbRouter, infoProvider, slowGovernor),

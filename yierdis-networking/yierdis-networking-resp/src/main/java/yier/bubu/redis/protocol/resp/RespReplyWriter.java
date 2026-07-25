@@ -2,8 +2,6 @@ package yier.bubu.redis.protocol.resp;
 
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.execution.api.ReplyPlan;
-import yier.bubu.redis.execution.api.ReplyReservationSink;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 
 import java.nio.charset.StandardCharsets;
@@ -35,31 +33,6 @@ public final class RespReplyWriter implements RedisReplyWriter {
     @Override
     public boolean closeAfterReplyRequested() {
         return closeAfterReplyRequested;
-    }
-
-    @Override
-    public void requireReply(ReplyPlan plan) {
-        Objects.requireNonNull(plan, "plan");
-        if (out instanceof ReplyReservationSink reservationSink) {
-            reservationSink.require(plan);
-        }
-    }
-
-    @Override
-    public void requireReplyEnvelope(ReplyPlan plan) {
-        Objects.requireNonNull(plan, "plan");
-        if (out instanceof ReplyReservationSink reservationSink) {
-            reservationSink.requireEnvelope(plan);
-        }
-    }
-
-    @Override
-    public void transferReplyOwnership(AutoCloseable resource) {
-        Objects.requireNonNull(resource, "resource");
-        if (out instanceof ReplyReservationSink reservationSink && reservationSink.transferOwnership(resource)) {
-            return;
-        }
-        RedisReplyWriter.super.transferReplyOwnership(resource);
     }
 
     @Override

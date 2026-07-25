@@ -1,65 +1,70 @@
 package yier.bubu.redis.command.kernel;
 
 import yier.bubu.redis.command.api.CommandParseResult;
-import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.TransactionPolicy;
-import yier.bubu.redis.execution.api.CommandContext;
+import yier.bubu.redis.execution.api.CommandPreparationContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.execution.api.TransactionState;
 
 import java.util.Objects;
 
 final class TransactionQueuePolicy {
-    void markActiveTransactionAborted(CommandContext ctx) {
+    void markActiveTransactionAborted(CommandPreparationContext ctx) {
         Objects.requireNonNull(ctx, "ctx");
 
-        TransactionState tx = ctx.transactionSession().transaction();
+        TransactionState tx = ctx.session().transaction();
         if (tx.active()) {
             tx.markAborted();
         }
     }
 
-    boolean queueIfNeeded(ExecutionRequest request, CommandContext ctx, CommandRegistry registry) {
+    PreparedCommand queueIfNeeded(
+            ExecutionRequest request,
+            CommandPreparationContext ctx,
+            CommandRegistry registry
+    ) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(ctx, "ctx");
         Objects.requireNonNull(registry, "registry");
 
-        TransactionState tx = ctx.transactionSession().transaction();
+        TransactionState tx = ctx.session().transaction();
         if (!tx.active()) {
-            return false;
+            return null;
         }
 
-        RedisReplyWriter out = ctx.out();
-        CommandSpec<?> spec = registry.spec(request);
-        if (spec == null) {
-            tx.markAborted();
-            out.error(CommandRequestSupport.unknownCommandMessage(request));
-            return true;
+        CommandDefinition<?> definition = registry.definition(request);
+        if (definition == null) {
+            return PreparedCommands.error(
+                    CommandRequestSupport.unknownCommandMessage(request),
+                    tx::markAborted
+            );
         }
 
-        if (spec.syntax().transactionPolicy() == TransactionPolicy.TRANSACTION_CONTROL) {
-            return false;
+        if (definition.syntax().transactionPolicy() == TransactionPolicy.TRANSACTION_CONTROL) {
+            return null;
         }
-        if (spec.syntax().transactionPolicy() == TransactionPolicy.DISALLOWED_IN_MULTI) {
-            tx.markAborted();
-            out.error("ERR " + spec.syntax().nameUpper() + " is not allowed in MULTI");
-            return true;
+        if (definition.syntax().transactionPolicy() == TransactionPolicy.DISALLOWED_IN_MULTI) {
+            return PreparedCommands.error(
+                    "ERR " + definition.syntax().nameUpper() + " is not allowed in MULTI",
+                    tx::markAborted
+            );
         }
 
-        CommandParseResult<?> parsed = spec.parse(request);
+        CommandParseResult<?> parsed = definition.parse(request);
         if (!parsed.ok()) {
-            tx.markAborted();
-            out.error(parsed.error().toReplyMessage());
-            return true;
+            return PreparedCommands.error(parsed.error().toReplyMessage(), tx::markAborted);
         }
 
-        String enqueueError = tx.tryEnqueue(request);
-        if (enqueueError != null) {
-            out.error(enqueueError);
-            return true;
-        }
-        out.simpleString("QUEUED");
-        return true;
+        return PreparedCommands.fixed(ReplyShapes.maximum(), execution -> {
+            String enqueueError = tx.tryEnqueue(request);
+            if (enqueueError == null) {
+                execution.reply().simpleString("QUEUED");
+            } else {
+                execution.reply().error(enqueueError);
+            }
+        });
     }
 }

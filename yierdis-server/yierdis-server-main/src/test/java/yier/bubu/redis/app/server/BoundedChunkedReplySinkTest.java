@@ -137,7 +137,7 @@ public class BoundedChunkedReplySinkTest {
     }
 
     @Test
-    public void maximumReservationRemainsAuthoritativeAcrossNestedReplyPlans() {
+    public void maximumReservationRemainsAuthoritativeAcrossNestedReservations() {
         Fixture fixture = new Fixture(32 * 1024L);
         try {
             BoundedChunkedReplySink sink = fixture.sink(Unpooled::buffer);
@@ -201,7 +201,7 @@ public class BoundedChunkedReplySinkTest {
     }
 
     @Test
-    public void exactEnvelopeRemainsAuthoritativeAcrossNestedReplyPlans() {
+    public void exactEnvelopeRemainsAuthoritativeAcrossNestedReservations() {
         Fixture fixture = new Fixture(32 * 1024L);
         try {
             BoundedChunkedReplySink sink = fixture.sink(Unpooled::buffer);

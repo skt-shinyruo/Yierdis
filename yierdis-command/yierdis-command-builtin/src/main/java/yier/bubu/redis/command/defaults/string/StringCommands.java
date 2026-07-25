@@ -1,30 +1,30 @@
 package yier.bubu.redis.command.defaults.string;
 
+import java.util.Objects;
 import yier.bubu.redis.command.api.ArgReader;
 import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParseError;
 import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandParsers;
-import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
-import yier.bubu.redis.command.api.ServerInfoProvider;
-import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.defaults.BulkStringReplyAdapter;
 import yier.bubu.redis.command.defaults.CommandSupport;
-
+import yier.bubu.redis.execution.api.CommandExecutionContext;
+import yier.bubu.redis.execution.api.CommandPreparationContext;
+import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.ReplyShape;
+import yier.bubu.redis.execution.api.ReplyShapes;
+import yier.bubu.redis.execution.api.ValidationResult;
 import yier.bubu.redis.storage.api.ExpireOption;
+import yier.bubu.redis.storage.api.PreparedMutation;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.StringWriteOps;
-import yier.bubu.redis.storage.api.result.BulkStringValue;
-import yier.bubu.redis.execution.api.CommandContext;
-import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyPlans;
-import yier.bubu.redis.execution.api.RedisReplyWriter;
-
-import java.util.Objects;
+import yier.bubu.redis.storage.api.result.ByteValue;
 
 public final class StringCommands implements CommandModule {
     private static final long MAX_STRING_BYTES = 512L * 1024 * 1024;
@@ -40,22 +40,32 @@ public final class StringCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register(CommandSpec.of(syntax("SET", CommandArity.min(3)), this::parseSet, this::set));
-        registration.register(CommandSpec.of(syntax("GET", CommandArity.exact(2)), CommandParsers.args(), this::get));
-        registration.register(CommandSpec.of(syntax("STRLEN", CommandArity.exact(2)), CommandParsers.args(), this::strlen));
-        registration.register(CommandSpec.of(syntax("APPEND", CommandArity.exact(3)), CommandParsers.args(), this::append));
-        registration.register(CommandSpec.of(syntax("SETBIT", CommandArity.exact(4)), CommandParsers.args(), this::setbit));
-        registration.register(CommandSpec.of(syntax("GETBIT", CommandArity.exact(3)), CommandParsers.args(), this::getbit));
-        registration.register(CommandSpec.of(syntax("BITCOUNT", CommandArity.oneOf(2, 4)), CommandParsers.request(), this::bitcount));
-        registration.register(CommandSpec.of(syntax("INCR", CommandArity.exact(2)), CommandParsers.args(), this::incr));
-        registration.register(CommandSpec.of(syntax("DECR", CommandArity.exact(2)), CommandParsers.args(), this::decr));
+        registration.register(new CommandDefinition<>(syntax("SET", CommandArity.min(3)), this::parseSet, this::set));
+        registration.register(new CommandDefinition<>(syntax("GET", CommandArity.exact(2)), CommandParsers.args(), this::get));
+        registration.register(new CommandDefinition<>(syntax("STRLEN", CommandArity.exact(2)), CommandParsers.args(), this::strlen));
+        registration.register(new CommandDefinition<>(syntax("APPEND", CommandArity.exact(3)), CommandParsers.args(), this::append));
+        registration.register(new CommandDefinition<>(syntax("SETBIT", CommandArity.exact(4)), CommandParsers.args(), this::setbit));
+        registration.register(new CommandDefinition<>(syntax("GETBIT", CommandArity.exact(3)), CommandParsers.args(), this::getbit));
+        registration.register(new CommandDefinition<>(syntax("BITCOUNT", CommandArity.oneOf(2, 4)),
+                CommandParsers.request(), this::bitcount));
+        registration.register(new CommandDefinition<>(syntax("INCR", CommandArity.exact(2)), CommandParsers.args(),
+                (args, context) -> incrBy(args, 1L)));
+        registration.register(new CommandDefinition<>(syntax("DECR", CommandArity.exact(2)), CommandParsers.args(),
+                (args, context) -> incrBy(args, -1L)));
     }
 
     private static CommandSyntax syntax(String nameUpper, CommandArity arity) {
         return new CommandSyntax(nameUpper, arity, KEY, TransactionPolicy.QUEUEABLE);
     }
 
-    private record SetArgs(ExecutionRequest request, byte[] key, int valueIndex, SetMode mode, ExpireOption expire, boolean getOld) {
+    private record SetArgs(
+            ExecutionRequest request,
+            byte[] key,
+            int valueIndex,
+            SetMode mode,
+            ExpireOption expire,
+            boolean getOld
+    ) {
     }
 
     private CommandParseResult<SetArgs> parseSet(ArgReader args) {
@@ -63,199 +73,216 @@ public final class StringCommands implements CommandModule {
         SetMode mode = SetMode.NORMAL;
         ExpireOption expire = null;
         boolean getOld = false;
-
-        for (int i = 3; i < args.argc(); i++) {
-            if (args.is(i, "NX")) {
+        for (int index = 3; index < args.argc(); index++) {
+            if (args.is(index, "NX")) {
                 if (mode != SetMode.NORMAL) {
                     return CommandParseResult.error(CommandParseError.syntax());
                 }
                 mode = SetMode.NX;
                 continue;
             }
-            if (args.is(i, "XX")) {
+            if (args.is(index, "XX")) {
                 if (mode != SetMode.NORMAL) {
                     return CommandParseResult.error(CommandParseError.syntax());
                 }
                 mode = SetMode.XX;
                 continue;
             }
-            if (args.is(i, "GET")) {
+            if (args.is(index, "GET")) {
                 if (getOld) {
                     return CommandParseResult.error(CommandParseError.syntax());
                 }
                 getOld = true;
                 continue;
             }
-            if (args.is(i, "KEEPTTL")) {
+            if (args.is(index, "KEEPTTL")) {
                 if (expire != null) {
                     return CommandParseResult.error(CommandParseError.syntax());
                 }
                 expire = ExpireOption.keepTtl();
                 continue;
             }
-            if (args.is(i, "EX") || args.is(i, "PX") || args.is(i, "EXAT") || args.is(i, "PXAT")) {
-                if (expire != null || i + 1 >= args.argc()) {
-                    return CommandParseResult.error(CommandParseError.syntax());
-                }
-                String option = CommandSupport.utf8(args.bytes(i));
-                long value;
+            if (!args.is(index, "EX") && !args.is(index, "PX")
+                    && !args.is(index, "EXAT") && !args.is(index, "PXAT")) {
+                return CommandParseResult.error(CommandParseError.syntax());
+            }
+            if (expire != null || index + 1 >= args.argc()) {
+                return CommandParseResult.error(CommandParseError.syntax());
+            }
+            String option = CommandSupport.utf8(args.bytes(index));
+            long value;
+            try {
+                value = args.longAt(++index);
+            } catch (IllegalArgumentException failure) {
+                return CommandParseResult.error(CommandParseError.integerOutOfRange());
+            }
+            if (value <= 0L) {
+                return CommandParseResult.error(CommandParseError.custom(INVALID_SET_EXPIRE));
+            }
+            if ("EX".equalsIgnoreCase(option)) {
+                expire = ExpireOption.ex(value);
+            } else if ("PX".equalsIgnoreCase(option)) {
+                expire = ExpireOption.px(value);
+            } else if ("EXAT".equalsIgnoreCase(option)) {
+                long expireAtMillis;
                 try {
-                    value = args.longAt(++i);
-                } catch (IllegalArgumentException e) {
-                    return CommandParseResult.error(CommandParseError.integerOutOfRange());
+                    expireAtMillis = Math.multiplyExact(value, 1000L);
+                } catch (ArithmeticException ignored) {
+                    expireAtMillis = Long.MAX_VALUE;
                 }
-                if (value <= 0) {
+                if (expireAtMillis <= System.currentTimeMillis()) {
                     return CommandParseResult.error(CommandParseError.custom(INVALID_SET_EXPIRE));
                 }
-                if ("EX".equalsIgnoreCase(option)) {
-                    expire = ExpireOption.ex(value);
-                    continue;
-                }
-                if ("PX".equalsIgnoreCase(option)) {
-                    expire = ExpireOption.px(value);
-                    continue;
-                }
-                if ("EXAT".equalsIgnoreCase(option)) {
-                    long expireAtMillis;
-                    try {
-                        expireAtMillis = Math.multiplyExact(value, 1000L);
-                    } catch (ArithmeticException e) {
-                        expireAtMillis = Long.MAX_VALUE;
-                    }
-                    if (expireAtMillis <= System.currentTimeMillis()) {
-                        return CommandParseResult.error(CommandParseError.custom(INVALID_SET_EXPIRE));
-                    }
-                    expire = ExpireOption.exAt(value);
-                    continue;
-                }
+                expire = ExpireOption.exAt(value);
+            } else {
                 if (value <= System.currentTimeMillis()) {
                     return CommandParseResult.error(CommandParseError.custom(INVALID_SET_EXPIRE));
                 }
                 expire = ExpireOption.pxAt(value);
-                continue;
             }
-            return CommandParseResult.error(CommandParseError.syntax());
         }
         return CommandParseResult.ok(new SetArgs(args.request(), key, 2, mode, expire, getOld));
     }
 
-    private void set(SetArgs args, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
-        if (args.getOld()) {
-            preflightSetGet(args, ctx, out);
-        }
-        StringWriteOps.SetStringValue result = support.commandDb(ctx).writes().strings().set(
-                args.key(),
-                support.argSlice(args.request(), args.valueIndex()),
-                args.mode(),
-                args.expire(),
-                args.getOld()
-        ).value();
-        boolean ownershipTransferred = false;
-        try {
-            if (!result.applied()) {
-                out.bulkString((byte[]) null);
-                return;
-            }
-            if (args.getOld()) {
-                CommandSupport.writeOwnedBulkString(out, result.oldValue());
-                ownershipTransferred = true;
-                return;
-            }
-            out.simpleString("OK");
-        } finally {
-            if (!ownershipTransferred) {
-                result.close();
-            }
-        }
+    private PreparedCommand set(SetArgs args, CommandPreparationContext context) {
+        PreparedMutation<StringWriteOps.SetStringValue> mutation = support.commandDb(context).writes().strings()
+                .prepareSet(
+                        args.key(),
+                        support.argSlice(args.request(), args.valueIndex()),
+                        args.mode(),
+                        args.expire()
+                );
+        StringWriteOps.SetStringValue preview = mutation.preview();
+        return new PreparedSet(mutation, preview, args.getOld(), setShape(preview, args.getOld()));
     }
 
-    private void preflightSetGet(SetArgs args, CommandContext ctx, RedisReplyWriter out) {
-        if (args.mode() == SetMode.NX) {
-            out.requireReply(ReplyPlans.bulkString(-1, 0L));
-            return;
+    private static ReplyShape setShape(StringWriteOps.SetStringValue preview, boolean getOld) {
+        if (!preview.applied()) {
+            return ReplyShapes.nullValue();
         }
-        try (BulkStringValue oldValue = support.commandDb(ctx).reads().strings()
-                .previewStringValue(support.argView(args.request(), 1))) {
-            out.requireReply(ReplyPlans.bulkString(oldValue.payloadLength(), oldValue.retainedMemoryBytes()));
+        if (!getOld) {
+            return ReplyShapes.simpleString("OK");
         }
+        ByteValue value = preview.oldValue();
+        return value.isNull()
+                ? ReplyShapes.nullValue()
+                : ReplyShapes.bulkString(value.payloadLength(), value.retainedMemoryBytes());
     }
 
-    private void get(ArgReader args, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
+    private PreparedCommand get(ArgReader args, CommandPreparationContext context) {
         ExecutionRequest request = args.request();
-        BulkStringValue value = support.commandDb(ctx).reads().strings().getStringValue(support.argView(request, 1));
-        CommandSupport.writeOwnedBulkString(out, value);
+        return CommandSupport.byteValue(support.commandDb(context).reads().strings()
+                .getStringValue(support.argView(request, 1)));
     }
 
-    private void strlen(ArgReader args, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
+    private PreparedCommand strlen(ArgReader args, CommandPreparationContext context) {
         ExecutionRequest request = args.request();
-        out.integer(support.commandDb(ctx).reads().strings().strlen(support.argView(request, 1)));
+        long length = support.commandDb(context).reads().strings().strlen(support.argView(request, 1));
+        return CommandSupport.fixed(ReplyShapes.integer(length), execution -> execution.reply().integer(length));
     }
 
-    private void append(ArgReader args, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
+    private PreparedCommand append(ArgReader args, CommandPreparationContext context) {
         ExecutionRequest request = args.request();
-        long length = support.commandDb(ctx).writes().strings()
-                .append(request.readOnlyByteArray(1), support.argSlice(request, 2))
-                .value();
-        out.integer(length);
+        return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
+            long length = support.commandDb(execution).writes().strings()
+                    .append(request.readOnlyByteArray(1), support.argSlice(request, 2)).value();
+            execution.reply().integer(length);
+        });
     }
 
-    private void setbit(ArgReader args, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
+    private PreparedCommand setbit(ArgReader args, CommandPreparationContext context) {
         ExecutionRequest request = args.request();
         long offset = CommandSupport.parseNonNegativeLong(request, 2, "offset");
-        long v = CommandSupport.parseLong(request, 3, "value");
-        if (v != 0 && v != 1) {
-            out.error("ERR bit is not an integer or out of range");
-            return;
+        long value = CommandSupport.parseLong(request, 3, "value");
+        if (value != 0L && value != 1L) {
+            return CommandSupport.error("ERR bit is not an integer or out of range");
         }
-
-        long requiredBytes = (offset >>> 3) + 1;
-        if (requiredBytes > MAX_STRING_BYTES) {
-            out.error("ERR string exceeds maximum allowed size");
-            return;
+        if ((offset >>> 3) + 1L > MAX_STRING_BYTES) {
+            return CommandSupport.error("ERR string exceeds maximum allowed size");
         }
-        int previousBit = support.commandDb(ctx).writes().strings()
-                .setBit(request.readOnlyByteArray(1), offset, (int) v)
-                .value();
-        out.integer(previousBit);
+        return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
+            int previous = support.commandDb(execution).writes().strings()
+                    .setBit(request.readOnlyByteArray(1), offset, (int) value).value();
+            execution.reply().integer(previous);
+        });
     }
 
-    private void getbit(ArgReader args, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
+    private PreparedCommand getbit(ArgReader args, CommandPreparationContext context) {
         ExecutionRequest request = args.request();
         long offset = CommandSupport.parseNonNegativeLong(request, 2, "offset");
-        out.integer(support.commandDb(ctx).reads().strings().getBit(support.argView(request, 1), offset));
+        long value = support.commandDb(context).reads().strings().getBit(support.argView(request, 1), offset);
+        return CommandSupport.fixed(ReplyShapes.integer(value), execution -> execution.reply().integer(value));
     }
 
-    private void bitcount(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
-        if (request.argc() == 2) {
-            out.integer(support.commandDb(ctx).reads().strings().bitcount(support.argView(request, 1)));
-            return;
-        }
-        long start = CommandSupport.parseLong(request, 2, "start");
-        long end = CommandSupport.parseLong(request, 3, "end");
-        out.integer(support.commandDb(ctx).reads().strings().bitcount(support.argView(request, 1), start, end));
+    private PreparedCommand bitcount(ExecutionRequest request, CommandPreparationContext context) {
+        long count = request.argc() == 2
+                ? support.commandDb(context).reads().strings().bitcount(support.argView(request, 1))
+                : support.commandDb(context).reads().strings().bitcount(
+                        support.argView(request, 1),
+                        CommandSupport.parseLong(request, 2, "start"),
+                        CommandSupport.parseLong(request, 3, "end")
+                );
+        return CommandSupport.fixed(ReplyShapes.integer(count), execution -> execution.reply().integer(count));
     }
 
-    private void incr(ArgReader args, CommandContext ctx) {
-        incrBy(args, ctx, 1);
-    }
-
-    private void decr(ArgReader args, CommandContext ctx) {
-        incrBy(args, ctx, -1);
-    }
-
-    private void incrBy(ArgReader args, CommandContext ctx, long delta) {
-        RedisReplyWriter out = ctx.out();
+    private PreparedCommand incrBy(ArgReader args, long delta) {
         ExecutionRequest request = args.request();
-        long value = support.commandDb(ctx).writes().strings()
-                .incrBy(request.readOnlyByteArray(1), delta)
-                .value();
-        out.integer(value);
+        return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
+            long value = support.commandDb(execution).writes().strings()
+                    .incrBy(request.readOnlyByteArray(1), delta).value();
+            execution.reply().integer(value);
+        });
+    }
+
+    private static final class PreparedSet implements PreparedCommand {
+        private final PreparedMutation<StringWriteOps.SetStringValue> mutation;
+        private final StringWriteOps.SetStringValue preview;
+        private final boolean getOld;
+        private final ReplyShape shape;
+        private boolean closed;
+
+        private PreparedSet(
+                PreparedMutation<StringWriteOps.SetStringValue> mutation,
+                StringWriteOps.SetStringValue preview,
+                boolean getOld,
+                ReplyShape shape
+        ) {
+            this.mutation = Objects.requireNonNull(mutation, "mutation");
+            this.preview = Objects.requireNonNull(preview, "preview");
+            this.getOld = getOld;
+            this.shape = Objects.requireNonNull(shape, "shape");
+        }
+
+        @Override
+        public ReplyShape replyShape() {
+            return shape;
+        }
+
+        @Override
+        public ValidationResult validateBeforeExecute() {
+            return mutation.isCurrent() ? ValidationResult.VALID : ValidationResult.STALE;
+        }
+
+        @Override
+        public void execute(CommandExecutionContext context) {
+            mutation.commit(context.mutationContext());
+            if (!preview.applied()) {
+                context.reply().nullValue();
+                return;
+            }
+            if (!getOld) {
+                context.reply().simpleString("OK");
+                return;
+            }
+            preview.oldValue().emitTo(new BulkStringReplyAdapter(context.reply()));
+        }
+
+        @Override
+        public void close() {
+            if (!closed) {
+                closed = true;
+                mutation.close();
+            }
+        }
     }
 }

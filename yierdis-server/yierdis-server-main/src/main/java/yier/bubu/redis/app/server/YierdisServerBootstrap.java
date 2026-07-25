@@ -17,7 +17,7 @@ import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.api.YierdisDbRouter;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
-import yier.bubu.redis.execution.api.CommandContext;
+import yier.bubu.redis.execution.api.CommandPreparationContext;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.engine.DefaultYierdisEngine;
 import yier.bubu.redis.execution.engine.YierdisEngine;
@@ -31,6 +31,7 @@ import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.DbEngine;
 import yier.bubu.redis.storage.api.DbEngineFactory;
 import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
+import yier.bubu.redis.protocol.resp.RespReplySizer;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
 import yier.bubu.redis.storage.memory.YierdisDbEngineFactory;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
@@ -241,12 +242,12 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                     : TimeUnit.MILLISECONDS.toNanos(runtimeConfig.keysTimeBudgetMillis());
 
             @Override
-            public long keysTimeBudgetNanos(CommandContext ctx) {
+            public long keysTimeBudgetNanos(CommandPreparationContext context) {
                 return timeBudgetNanos;
             }
 
             @Override
-            public int keysMaxResults(CommandContext ctx) {
+            public int keysMaxResults(CommandPreparationContext context) {
                 return runtimeConfig.keysMaxResults();
             }
         };
@@ -261,7 +262,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         );
         engine = commandEngine;
         CommandExecutionEngine executionEngine = Objects.requireNonNull(
-                commandEngineDecorator.apply(commandEngine::execute),
+                commandEngineDecorator.apply(commandEngine::prepare),
                 "commandEngineDecorator result"
         );
         commandGroup = new DefaultEventExecutorGroup(1);
@@ -272,6 +273,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 runtimeAccess::bindToCurrentThread,
                 executionEngine,
                 commandOwner,
+                new RespReplySizer(),
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
                 executorConfig

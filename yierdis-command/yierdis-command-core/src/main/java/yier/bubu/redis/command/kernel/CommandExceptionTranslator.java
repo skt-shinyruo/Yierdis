@@ -1,23 +1,22 @@
 package yier.bubu.redis.command.kernel;
 
-import yier.bubu.redis.execution.api.RedisReplyWriter;
+import java.util.Objects;
+import java.util.function.Supplier;
+import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 
-import java.util.Objects;
-
 final class CommandExceptionTranslator {
-    void run(RedisReplyWriter out, Runnable action) {
-        Objects.requireNonNull(out, "out");
+    PreparedCommand prepare(Supplier<? extends PreparedCommand> action) {
         Objects.requireNonNull(action, "action");
         try {
-            action.run();
+            return Objects.requireNonNull(action.get(), "command preparer returned null");
         } catch (WrongTypeException e) {
-            out.error(e.getMessage());
+            return PreparedCommands.error(e.getMessage());
         } catch (YierdisCommandException e) {
-            out.error(e.getMessage());
+            return PreparedCommands.error(e.getMessage());
         } catch (IllegalArgumentException e) {
-            out.error("ERR " + e.getMessage());
+            return PreparedCommands.error("ERR " + e.getMessage());
         }
     }
 }

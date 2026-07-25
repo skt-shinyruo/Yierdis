@@ -87,6 +87,8 @@ final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
             ExecutionAttempt attempt = executionSupport.execute(task, touchedConnections);
             if (attempt == ExecutionAttempt.REPLY_CAPACITY_BLOCKED) {
                 registerBlockedReplyTask(task);
+            } else if (attempt == ExecutionAttempt.REPREPARE) {
+                requeueStaleTask(task);
             }
         }
 
@@ -111,6 +113,12 @@ final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
         }
     }
 
+    private void requeueStaleTask(CommandExecutorTask<C> task) {
+        if (task == null || task.connection == null || !taskQueue.retryAtHead(task.connection, task)) {
+            executionSupport.recycleAndRelease(task);
+        }
+    }
+
     private void submitDrainTask() {
         try {
             ownerExecutor.execute(this::drainLoop);
@@ -131,7 +139,6 @@ final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
         try {
             registration = task.reply.onCapacityAvailable(() -> ownerExecutor.execute(() -> {
                 ownerExecutor.requireOwnerThread();
-                task.capacityRegistrationSignalled();
                 if (taskQueue.resumeBlocked(task.connection, task)) {
                     scheduleDrain();
                 }

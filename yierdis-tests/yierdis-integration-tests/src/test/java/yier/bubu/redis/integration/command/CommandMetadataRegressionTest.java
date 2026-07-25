@@ -2,9 +2,9 @@ package yier.bubu.redis.integration.command;
 
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandParsers;
-import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
@@ -15,6 +15,7 @@ import yier.bubu.redis.testutil.ReplyArray;
 import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplyObject;
+import yier.bubu.redis.testutil.TestPreparedCommands;
 
 import java.util.Arrays;
 
@@ -23,29 +24,19 @@ import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class CommandMetadataRegressionTest {
     @Test
-    public void registrationInterfaceExposesNameFreeCommandSpecRegistration() throws Exception {
-        Class<?> specType;
-        try {
-            specType = Class.forName("yier.bubu.redis.command.api.CommandSpec");
-        } catch (ClassNotFoundException e) {
-            Assert.fail("CommandSpec should exist as the unified registration contract");
-            return;
-        }
-
-        try {
-            Assert.assertNotNull(CommandModule.Registration.class.getMethod("register", specType));
-        } catch (NoSuchMethodException e) {
-            Assert.fail("CommandModule.Registration should expose register(CommandSpec)");
-        }
-
-        Class<?> parserType = Class.forName("yier.bubu.redis.command.api.CommandParser");
-        Class<?> handlerType = Class.forName("yier.bubu.redis.command.api.CommandHandler");
-        Assert.assertNotNull(CommandSpec.class.getMethod(
-                "of",
-                CommandSyntax.class,
-                parserType,
-                handlerType
-        ));
+    public void registrationInterfaceExposesNameFreeCommandDefinitionRegistration() throws Exception {
+        Assert.assertNotNull(CommandModule.Registration.class.getMethod("register", CommandDefinition.class));
+        Assert.assertTrue(CommandDefinition.class.isRecord());
+        Assert.assertArrayEquals(
+                new Class<?>[]{
+                        CommandSyntax.class,
+                        Class.forName("yier.bubu.redis.command.api.CommandParser"),
+                        Class.forName("yier.bubu.redis.command.api.CommandPreparer")
+                },
+                java.util.Arrays.stream(CommandDefinition.class.getRecordComponents())
+                        .map(java.lang.reflect.RecordComponent::getType)
+                        .toArray(Class<?>[]::new)
+        );
     }
 
     @Test
@@ -53,11 +44,11 @@ public class CommandMetadataRegressionTest {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(
                     db,
-                    registration -> registration.register(CommandSpec.of(
+                    registration -> registration.register(new CommandDefinition<>(
                             new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
                                     TransactionPolicy.QUEUEABLE),
                             CommandParsers.request(),
-                            (cmd, ctx) -> ctx.out().simpleString("OK")
+                            (cmd, context) -> TestPreparedCommands.simpleString("OK")
                     ))
             );
             try (FastTestClient client = new FastTestClient(processor)) {

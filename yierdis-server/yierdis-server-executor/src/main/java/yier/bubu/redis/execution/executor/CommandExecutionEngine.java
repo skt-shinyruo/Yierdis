@@ -2,7 +2,7 @@ package yier.bubu.redis.execution.executor;
 
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.PreparedCommand;
 
 /**
  * Transport-neutral command execution boundary used by executor-core.
@@ -11,5 +11,5 @@ import yier.bubu.redis.execution.api.RedisReplyWriter;
  */
 @FunctionalInterface
 public interface CommandExecutionEngine {
-    void execute(CommandSession session, ExecutionRequest request, RedisReplyWriter reply);
+    PreparedCommand prepare(CommandSession session, ExecutionRequest request);
 }

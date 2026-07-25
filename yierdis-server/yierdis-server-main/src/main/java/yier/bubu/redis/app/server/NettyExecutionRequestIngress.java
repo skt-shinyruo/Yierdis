@@ -18,8 +18,8 @@ import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.Objects;
 
-public final class YierdisFastCommandHandler extends ChannelInboundHandlerAdapter {
-    private static final Logger log = LoggerFactory.getLogger(YierdisFastCommandHandler.class);
+public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAdapter {
+    private static final Logger log = LoggerFactory.getLogger(NettyExecutionRequestIngress.class);
     private static final String DEFERRED_BUSY_ERROR = "ERR busy queue_full";
 
     private final CommandExecutor<NettyExecutionConnection> executor;
@@ -27,7 +27,7 @@ public final class YierdisFastCommandHandler extends ChannelInboundHandlerAdapte
     private final ArrayDeque<PendingSubmission> pendingSubmissions = new ArrayDeque<>();
     private CapacityRegistration capacityRegistration = CapacityRegistration.NONE;
 
-    public YierdisFastCommandHandler(
+    public NettyExecutionRequestIngress(
             CommandExecutor<NettyExecutionConnection> executor,
             RedisReplyWriterFactory replyWriterFactory
     ) {

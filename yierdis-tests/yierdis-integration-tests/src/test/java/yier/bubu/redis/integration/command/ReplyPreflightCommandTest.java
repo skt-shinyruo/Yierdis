@@ -1,20 +1,23 @@
 package yier.bubu.redis.integration.command;
 
-import java.util.ArrayList;
 import java.util.List;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
-import yier.bubu.redis.execution.api.CommandContext;
+import yier.bubu.redis.execution.api.CommandExecutionContext;
+import yier.bubu.redis.execution.api.CommandPreparationContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.ReplyCapacityUnavailableException;
 import yier.bubu.redis.execution.api.ReplyPlan;
-import yier.bubu.redis.execution.api.ReplyPlans;
+import yier.bubu.redis.execution.api.ReplyShapes;
+import yier.bubu.redis.execution.api.ValidationResult;
 import yier.bubu.redis.execution.engine.EngineSession;
-import yier.bubu.redis.storage.memory.YierdisDb;
+import yier.bubu.redis.protocol.resp.RespReplySizer;
+import yier.bubu.redis.storage.api.result.ByteSequenceSource;
 import yier.bubu.redis.testutil.FastTestClient;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
@@ -22,6 +25,8 @@ import static yier.bubu.redis.testutil.TestBytes.cmd;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class ReplyPreflightCommandTest {
+    private static final RespReplySizer REPLY_SIZER = new RespReplySizer();
+
     @Test
     public void setGetCapacityRejectionLeavesTheExistingValueUntouched() {
         forEachDb(db -> {
@@ -29,14 +34,22 @@ public class ReplyPreflightCommandTest {
             try (FastTestClient client = new FastTestClient(processor)) {
                 client.execute(cmd("SET", "key", "old"));
 
-                TrackingReplyWriter writer = TrackingReplyWriter.rejecting();
+                EngineSession session = new EngineSession(16, 16 * 1024L);
+                ReplyPlan expectedOldValuePlan = execute(
+                        processor,
+                        session,
+                        new TrackingReplyWriter(),
+                        cmd("GET", "key")
+                );
+                TrackingReplyWriter writer = new TrackingReplyWriter();
+                CapacityGate capacity = CapacityGate.rejecting();
                 Assert.assertThrows(
                         ReplyCapacityUnavailableException.class,
-                        () -> execute(processor, new EngineSession(16, 16 * 1024L), writer, cmd("SET", "key", "new", "GET"))
+                        () -> execute(processor, session, capacity, writer, cmd("SET", "key", "new", "GET"))
                 );
 
                 Assert.assertArrayEquals(b("old"), db.reads().strings().getStringBytes(b("key")));
-                Assert.assertEquals(ReplyPlans.bulkString(3, 0L).encodedUpperBoundBytes(), writer.requiredPlan().encodedUpperBoundBytes());
+                Assert.assertEquals(expectedOldValuePlan, capacity.reservedPlan());
             }
         });
     }
@@ -48,14 +61,18 @@ public class ReplyPreflightCommandTest {
             try (FastTestClient client = new FastTestClient(processor)) {
                 client.execute(cmd("RPUSH", "list", "a", "bb"));
 
-                TrackingReplyWriter writer = TrackingReplyWriter.rejecting();
+                EngineSession session = new EngineSession(16, 16 * 1024L);
+                TrackingReplyWriter writer = new TrackingReplyWriter();
+                CapacityGate capacity = CapacityGate.rejecting();
                 Assert.assertThrows(
                         ReplyCapacityUnavailableException.class,
-                        () -> execute(processor, new EngineSession(16, 16 * 1024L), writer, cmd("LPOP", "list", "2"))
+                        () -> execute(processor, session, capacity, writer, cmd("LPOP", "list", "2"))
                 );
 
-                Assert.assertEquals(2, db.reads().lists().lrange(b("list"), 0, -1).count());
-                Assert.assertEquals(19L, writer.requiredPlan().encodedUpperBoundBytes());
+                try (ByteSequenceSource values = db.reads().lists().lrange(b("list"), 0, -1)) {
+                    Assert.assertEquals(2, values.elementCount());
+                }
+                Assert.assertEquals(19L, capacity.reservedPlan().encodedUpperBoundBytes());
             }
         });
     }
@@ -67,20 +84,25 @@ public class ReplyPreflightCommandTest {
             try (FastTestClient client = new FastTestClient(processor)) {
                 client.execute(cmd("RPUSH", "list", "value"));
 
-                TrackingReplyWriter writer = TrackingReplyWriter.rejecting();
+                EngineSession session = new EngineSession(16, 16 * 1024L);
+                TrackingReplyWriter writer = new TrackingReplyWriter();
+                CapacityGate capacity = CapacityGate.rejecting();
                 Assert.assertThrows(
                         ReplyCapacityUnavailableException.class,
-                        () -> execute(processor, new EngineSession(16, 16 * 1024L), writer, cmd("LPOP", "list"))
+                        () -> execute(processor, session, capacity, writer, cmd("LPOP", "list"))
                 );
 
-                Assert.assertEquals(1, db.reads().lists().lrange(b("list"), 0, -1).count());
-                Assert.assertEquals(ReplyPlans.bulkString(5, 0L).encodedUpperBoundBytes(), writer.requiredPlan().encodedUpperBoundBytes());
+                try (ByteSequenceSource values = db.reads().lists().lrange(b("list"), 0, -1)) {
+                    Assert.assertEquals(1, values.elementCount());
+                }
+                Assert.assertEquals(11L, capacity.reservedPlan().encodedUpperBoundBytes());
+                Assert.assertTrue(capacity.reservedPlan().retainedSourceBytes() > 0L);
             }
         });
     }
 
     @Test
-    public void getHgetAndEchoPreflightAndTransferTheirReplySources() {
+    public void getHgetAndEchoPrepareTheirSemanticReplySources() {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
@@ -91,15 +113,14 @@ public class ReplyPreflightCommandTest {
                 assertScalarReplySource(processor, cmd("HGET", "hash", "field"), 5);
 
                 ExecutionRequest echo = ByteArrayExecutionRequest.fromUtf8("ECHO", List.of("message"));
-                TrackingReplyWriter echoWriter = TrackingReplyWriter.accepting();
-                try {
-                    execute(processor, new EngineSession(16, 16 * 1024L), echoWriter, echo);
-                    Assert.assertEquals(ReplyPlans.bulkString(7, echo.admittedMemoryBytes()), echoWriter.requiredPlan());
-                    Assert.assertEquals(1, echoWriter.transferredResources().size());
-                    Assert.assertTrue(echoWriter.transferredResources().get(0) instanceof ExecutionRequest);
-                } finally {
-                    echoWriter.closeTransferredResources();
-                }
+                TrackingReplyWriter echoWriter = new TrackingReplyWriter();
+                EngineSession session = new EngineSession(16, 16 * 1024L);
+                long retainedBytes = echo.admittedMemoryBytes();
+                ReplyPlan plan = execute(processor, session, echoWriter, echo);
+                Assert.assertEquals(
+                        REPLY_SIZER.plan(session, ReplyShapes.bulkString(7, retainedBytes)),
+                        plan
+                );
             }
         });
     }
@@ -126,12 +147,13 @@ public class ReplyPreflightCommandTest {
     public void memoryStatsPreflightMatchesItsResp2WireShape() {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            TrackingReplyWriter writer = TrackingReplyWriter.accepting();
+            TrackingReplyWriter writer = new TrackingReplyWriter();
+            EngineSession session = new EngineSession(16, 16 * 1024L);
 
-            execute(processor, new EngineSession(16, 16 * 1024L), writer, cmd("MEMORY", "STATS"));
+            ReplyPlan plan = execute(processor, session, writer, cmd("MEMORY", "STATS"));
 
-            Assert.assertEquals(writer.emittedResp2Bytes(), writer.requiredPlan().encodedUpperBoundBytes());
-            Assert.assertEquals(0L, writer.requiredPlan().retainedSourceBytes());
+            Assert.assertEquals(writer.emittedResp2Bytes(), plan.encodedUpperBoundBytes());
+            Assert.assertEquals(0L, plan.retainedSourceBytes());
         });
     }
 
@@ -155,13 +177,15 @@ public class ReplyPreflightCommandTest {
             try (FastTestClient client = new FastTestClient(processor)) {
                 client.execute(cmd("HSET", "hash", "field", "value"));
 
-                TrackingReplyWriter writer = TrackingReplyWriter.rejecting();
+                EngineSession session = new EngineSession(16, 16 * 1024L);
+                TrackingReplyWriter writer = new TrackingReplyWriter();
+                CapacityGate capacity = CapacityGate.rejecting();
                 Assert.assertThrows(
                         ReplyCapacityUnavailableException.class,
-                        () -> execute(processor, new EngineSession(16, 16 * 1024L), writer, cmd("HSCAN", "hash", "0"))
+                        () -> execute(processor, session, capacity, writer, cmd("HSCAN", "hash", "0"))
                 );
-                Assert.assertEquals(37L, writer.requiredPlan().encodedUpperBoundBytes());
-                Assert.assertTrue(writer.requiredPlan().retainedSourceBytes() > 0L);
+                Assert.assertEquals(37L, capacity.reservedPlan().encodedUpperBoundBytes());
+                Assert.assertTrue(capacity.reservedPlan().retainedSourceBytes() > 0L);
             }
         });
     }
@@ -174,19 +198,22 @@ public class ReplyPreflightCommandTest {
                 String largeMember = "x".repeat(256 * 1024);
                 client.execute(cmd("SADD", "large-set", largeMember));
 
-                TrackingReplyWriter writer = TrackingReplyWriter.rejecting();
+                EngineSession session = new EngineSession(16, 16 * 1024L);
+                TrackingReplyWriter writer = new TrackingReplyWriter();
+                CapacityGate capacity = CapacityGate.rejecting();
                 Assert.assertThrows(
                         ReplyCapacityUnavailableException.class,
                         () -> execute(
                                 processor,
-                                new EngineSession(16, 16 * 1024L),
+                                session,
+                                capacity,
                                 writer,
                                 cmd("SSCAN", "large-set", "0", "COUNT", Integer.toString(Integer.MAX_VALUE))
                         )
                 );
 
-                Assert.assertTrue(writer.requiredPlan().encodedUpperBoundBytes() > largeMember.length());
-                Assert.assertTrue(writer.requiredPlan().retainedSourceBytes() >= largeMember.length());
+                Assert.assertTrue(capacity.reservedPlan().encodedUpperBoundBytes() > largeMember.length());
+                Assert.assertTrue(capacity.reservedPlan().retainedSourceBytes() >= largeMember.length());
                 Assert.assertEquals(0, writer.arrayHeaderCalls());
             }
         });
@@ -197,23 +224,54 @@ public class ReplyPreflightCommandTest {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             EngineSession session = new EngineSession(16, 16 * 1024L);
-            TrackingReplyWriter accepting = TrackingReplyWriter.accepting();
+            TrackingReplyWriter accepting = new TrackingReplyWriter();
 
             execute(processor, session, accepting, cmd("MULTI"));
             execute(processor, session, accepting, cmd("SET", "queued", "value"));
             Assert.assertTrue(session.transaction().active());
             Assert.assertEquals(1, session.transaction().size());
 
-            TrackingReplyWriter rejecting = TrackingReplyWriter.rejecting();
+            TrackingReplyWriter rejecting = new TrackingReplyWriter();
+            CapacityGate capacity = CapacityGate.rejecting();
             Assert.assertThrows(
                     ReplyCapacityUnavailableException.class,
-                    () -> execute(processor, session, rejecting, cmd("EXEC"))
+                    () -> execute(processor, session, capacity, rejecting, cmd("EXEC"))
             );
 
             Assert.assertTrue(session.transaction().active());
             Assert.assertEquals(1, session.transaction().size());
             Assert.assertNull(db.reads().strings().getStringBytes(b("queued")));
-            Assert.assertEquals(ReplyPlan.maximum(), rejecting.requiredPlan());
+            Assert.assertEquals(
+                    REPLY_SIZER.plan(session, ReplyShapes.array(List.of(ReplyShapes.simpleString("OK")))),
+                    capacity.reservedPlan()
+            );
+            session.discardTransaction();
+        });
+    }
+
+    @Test
+    public void execWithStateDependentQueuedReadReservesMaximumBeforeMutating() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
+            EngineSession session = new EngineSession(16, 16 * 1024L);
+            TrackingReplyWriter accepting = new TrackingReplyWriter();
+
+            execute(processor, session, accepting, cmd("MULTI"));
+            execute(processor, session, accepting, cmd("SET", "queued", "value"));
+            execute(processor, session, accepting, cmd("GET", "queued"));
+            Assert.assertEquals(2, session.transaction().size());
+
+            TrackingReplyWriter rejecting = new TrackingReplyWriter();
+            CapacityGate capacity = CapacityGate.rejecting();
+            Assert.assertThrows(
+                    ReplyCapacityUnavailableException.class,
+                    () -> execute(processor, session, capacity, rejecting, cmd("EXEC"))
+            );
+
+            Assert.assertEquals(ReplyPlan.maximum(), capacity.reservedPlan());
+            Assert.assertEquals(2, session.transaction().size());
+            Assert.assertNull(db.reads().strings().getStringBytes(b("queued")));
+            Assert.assertEquals(0, rejecting.arrayHeaderCalls());
             session.discardTransaction();
         });
     }
@@ -223,15 +281,12 @@ public class ReplyPreflightCommandTest {
             List<byte[]> command,
             int payloadLength
     ) {
-        TrackingReplyWriter writer = TrackingReplyWriter.accepting();
-        try {
-            execute(processor, new EngineSession(16, 16 * 1024L), writer, command);
-            Assert.assertEquals(ReplyPlans.bulkString(payloadLength, writer.requiredPlan().retainedSourceBytes()).encodedUpperBoundBytes(),
-                    writer.requiredPlan().encodedUpperBoundBytes());
-            Assert.assertEquals(1, writer.transferredResources().size());
-        } finally {
-            writer.closeTransferredResources();
-        }
+        EngineSession session = new EngineSession(16, 16 * 1024L);
+        ReplyPlan plan = execute(processor, session, new TrackingReplyWriter(), command);
+        Assert.assertEquals(
+                REPLY_SIZER.plan(session, ReplyShapes.bulkString(payloadLength, plan.retainedSourceBytes())),
+                plan
+        );
     }
 
     private static void assertAggregatePreflight(
@@ -239,65 +294,103 @@ public class ReplyPreflightCommandTest {
             List<byte[]> command,
             long expectedEncodedBytes
     ) {
-        TrackingReplyWriter writer = TrackingReplyWriter.rejecting();
+        EngineSession session = new EngineSession(16, 16 * 1024L);
+        CapacityGate capacity = CapacityGate.rejecting();
         Assert.assertThrows(
                 ReplyCapacityUnavailableException.class,
-                () -> execute(processor, new EngineSession(16, 16 * 1024L), writer, command)
+                () -> execute(processor, session, capacity, new TrackingReplyWriter(), command)
         );
-        Assert.assertEquals(expectedEncodedBytes, writer.requiredPlan().encodedUpperBoundBytes());
-        Assert.assertEquals(0L, writer.requiredPlan().retainedSourceBytes());
+        Assert.assertEquals(expectedEncodedBytes, capacity.reservedPlan().encodedUpperBoundBytes());
+        Assert.assertEquals(0L, capacity.reservedPlan().retainedSourceBytes());
     }
 
-    private static void execute(
+    private static ReplyPlan execute(
             YierdisFastCommandProcessor processor,
             EngineSession session,
             RedisReplyWriter writer,
             List<byte[]> command
     ) {
-        execute(processor, session, writer, ByteArrayExecutionRequest.copyOf(command));
+        return execute(processor, session, CapacityGate.accepting(), writer, ByteArrayExecutionRequest.copyOf(command));
     }
 
-    private static void execute(
+    private static ReplyPlan execute(
             YierdisFastCommandProcessor processor,
             EngineSession session,
             RedisReplyWriter writer,
             ExecutionRequest request
     ) {
+        return execute(processor, session, CapacityGate.accepting(), writer, request);
+    }
+
+    private static ReplyPlan execute(
+            YierdisFastCommandProcessor processor,
+            EngineSession session,
+            CapacityGate capacity,
+            RedisReplyWriter writer,
+            List<byte[]> command
+    ) {
+        return execute(processor, session, capacity, writer, ByteArrayExecutionRequest.copyOf(command));
+    }
+
+    private static ReplyPlan execute(
+            YierdisFastCommandProcessor processor,
+            EngineSession session,
+            CapacityGate capacity,
+            RedisReplyWriter writer,
+            ExecutionRequest request
+    ) {
         try {
-            processor.execute(request, new CommandContext(session, writer));
+            try (PreparedCommand prepared = processor.prepare(
+                    request,
+                    new CommandPreparationContext(session)
+            )) {
+                Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
+                ReplyPlan plan = REPLY_SIZER.plan(session, prepared.replyShape());
+                capacity.reserve(plan);
+                try (CommandExecutionContext execution = CommandExecutionContext.forRequest(session, writer, request)) {
+                    prepared.execute(execution);
+                }
+                return plan;
+            }
         } finally {
             request.close();
         }
     }
 
+    private static final class CapacityGate {
+        private final boolean reject;
+        private ReplyPlan reservedPlan;
+
+        private CapacityGate(boolean reject) {
+            this.reject = reject;
+        }
+
+        static CapacityGate accepting() {
+            return new CapacityGate(false);
+        }
+
+        static CapacityGate rejecting() {
+            return new CapacityGate(true);
+        }
+
+        void reserve(ReplyPlan plan) {
+            Assert.assertNull("expected one reply reservation", reservedPlan);
+            reservedPlan = plan;
+            if (reject) {
+                throw new ReplyCapacityUnavailableException("injected reply capacity rejection");
+            }
+        }
+
+        ReplyPlan reservedPlan() {
+            Assert.assertNotNull("expected reply reservation", reservedPlan);
+            return reservedPlan;
+        }
+    }
+
     private static final class TrackingReplyWriter implements RedisReplyWriter {
-        private final boolean rejectCapacity;
-        private final List<ReplyPlan> requiredPlans = new ArrayList<>();
-        private final List<AutoCloseable> transferredResources = new ArrayList<>();
         private boolean closeAfterReply;
         private int arrayHeaderCalls;
         private long emittedResp2Bytes;
-
-        private TrackingReplyWriter(boolean rejectCapacity) {
-            this.rejectCapacity = rejectCapacity;
-        }
-
-        static TrackingReplyWriter accepting() {
-            return new TrackingReplyWriter(false);
-        }
-
-        static TrackingReplyWriter rejecting() {
-            return new TrackingReplyWriter(true);
-        }
-
-        ReplyPlan requiredPlan() {
-            Assert.assertEquals("expected exactly one reply preflight", 1, requiredPlans.size());
-            return requiredPlans.get(0);
-        }
-
-        List<AutoCloseable> transferredResources() {
-            return transferredResources;
-        }
 
         int arrayHeaderCalls() {
             return arrayHeaderCalls;
@@ -305,30 +398,6 @@ public class ReplyPreflightCommandTest {
 
         long emittedResp2Bytes() {
             return emittedResp2Bytes;
-        }
-
-        void closeTransferredResources() {
-            for (AutoCloseable resource : transferredResources) {
-                try {
-                    resource.close();
-                } catch (Exception failure) {
-                    throw new AssertionError("reply source close failed", failure);
-                }
-            }
-            transferredResources.clear();
-        }
-
-        @Override
-        public void requireReply(ReplyPlan plan) {
-            requiredPlans.add(plan);
-            if (rejectCapacity) {
-                throw new ReplyCapacityUnavailableException("injected reply capacity rejection");
-            }
-        }
-
-        @Override
-        public void transferReplyOwnership(AutoCloseable resource) {
-            transferredResources.add(resource);
         }
 
         @Override

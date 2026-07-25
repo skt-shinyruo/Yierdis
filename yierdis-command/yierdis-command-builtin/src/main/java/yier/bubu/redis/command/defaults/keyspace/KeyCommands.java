@@ -1,33 +1,34 @@
 package yier.bubu.redis.command.defaults.keyspace;
 
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.function.ToLongFunction;
 import yier.bubu.redis.command.api.ArgReader;
 import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParseError;
 import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandParsers;
-import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.defaults.CommandSupport;
-
+import yier.bubu.redis.execution.api.CommandPreparationContext;
+import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.ReplyShape;
+import yier.bubu.redis.execution.api.ReplyShapes;
+import yier.bubu.redis.execution.api.ValidationResult;
+import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
-import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.result.KeyScanWindow;
-import yier.bubu.redis.execution.api.CommandContext;
-import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyPlan;
-import yier.bubu.redis.execution.api.ReplyPlans;
-import yier.bubu.redis.execution.api.RedisReplyWriter;
-
-import java.nio.charset.StandardCharsets;
-import java.util.Locale;
-import java.util.Objects;
-import java.util.function.ToLongFunction;
 
 public final class KeyCommands implements CommandModule {
     private static final int KEY_WINDOW_DISCOVERY_ATTEMPTS = 2;
@@ -69,85 +70,89 @@ public final class KeyCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register(CommandSpec.of(syntax("TYPE", CommandArity.exact(2), KEY), CommandParsers.request(), this::type));
-        registration.register(CommandSpec.of(syntax("MEMORY", CommandArity.min(2), CommandKeySpec.NONE), CommandParsers.request(), this::memory));
-        registration.register(CommandSpec.of(syntax("OBJECT", CommandArity.min(2), CommandKeySpec.NONE), CommandParsers.request(), this::object));
-        registration.register(CommandSpec.of(syntax("KEYS", CommandArity.exact(2), CommandKeySpec.NONE), CommandParsers.request(), this::keys));
-        registration.register(CommandSpec.of(syntax("SCAN", CommandArity.min(2), CommandKeySpec.NONE), this::parseScan, this::scan));
-        registration.register(CommandSpec.of(syntax("DEL", CommandArity.min(2), MULTI_KEYS), CommandParsers.request(), this::del));
-        registration.register(CommandSpec.of(syntax("EXISTS", CommandArity.min(2), MULTI_KEYS), CommandParsers.request(), this::exists));
-        registration.register(CommandSpec.of(syntax("EXPIRE", CommandArity.exact(3), KEY), CommandParsers.request(), this::expire));
-        registration.register(CommandSpec.of(syntax("PEXPIRE", CommandArity.exact(3), KEY), CommandParsers.request(), this::pexpire));
-        registration.register(CommandSpec.of(syntax("EXPIREAT", CommandArity.exact(3), KEY), CommandParsers.request(), this::expireat));
-        registration.register(CommandSpec.of(syntax("PEXPIREAT", CommandArity.exact(3), KEY), CommandParsers.request(), this::pexpireat));
-        registration.register(CommandSpec.of(syntax("PERSIST", CommandArity.exact(2), KEY), CommandParsers.request(), this::persist));
-        registration.register(CommandSpec.of(syntax("TTL", CommandArity.exact(2), KEY), CommandParsers.request(), this::ttl));
-        registration.register(CommandSpec.of(syntax("PTTL", CommandArity.exact(2), KEY), CommandParsers.request(), this::pttl));
+        registration.register(new CommandDefinition<>(syntax("TYPE", CommandArity.exact(2), KEY),
+                CommandParsers.request(), this::type));
+        registration.register(new CommandDefinition<>(syntax("MEMORY", CommandArity.min(2), CommandKeySpec.NONE),
+                CommandParsers.request(), this::memory));
+        registration.register(new CommandDefinition<>(syntax("OBJECT", CommandArity.min(2), CommandKeySpec.NONE),
+                CommandParsers.request(), this::object));
+        registration.register(new CommandDefinition<>(syntax("KEYS", CommandArity.exact(2), CommandKeySpec.NONE),
+                CommandParsers.request(), this::keys));
+        registration.register(new CommandDefinition<>(syntax("SCAN", CommandArity.min(2), CommandKeySpec.NONE),
+                this::parseScan, this::scan));
+        registration.register(new CommandDefinition<>(syntax("DEL", CommandArity.min(2), MULTI_KEYS),
+                CommandParsers.request(), this::del));
+        registration.register(new CommandDefinition<>(syntax("EXISTS", CommandArity.min(2), MULTI_KEYS),
+                CommandParsers.request(), this::exists));
+        registration.register(new CommandDefinition<>(syntax("EXPIRE", CommandArity.exact(3), KEY),
+                CommandParsers.request(), this::expire));
+        registration.register(new CommandDefinition<>(syntax("PEXPIRE", CommandArity.exact(3), KEY),
+                CommandParsers.request(), this::pexpire));
+        registration.register(new CommandDefinition<>(syntax("EXPIREAT", CommandArity.exact(3), KEY),
+                CommandParsers.request(), this::expireat));
+        registration.register(new CommandDefinition<>(syntax("PEXPIREAT", CommandArity.exact(3), KEY),
+                CommandParsers.request(), this::pexpireat));
+        registration.register(new CommandDefinition<>(syntax("PERSIST", CommandArity.exact(2), KEY),
+                CommandParsers.request(), this::persist));
+        registration.register(new CommandDefinition<>(syntax("TTL", CommandArity.exact(2), KEY),
+                CommandParsers.request(), this::ttl));
+        registration.register(new CommandDefinition<>(syntax("PTTL", CommandArity.exact(2), KEY),
+                CommandParsers.request(), this::pttl));
     }
 
     private static CommandSyntax syntax(String nameUpper, CommandArity arity, CommandKeySpec keys) {
         return new CommandSyntax(nameUpper, arity, keys, TransactionPolicy.QUEUEABLE);
     }
 
-    private void type(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
-        ValueType t = support.commandDb(ctx).reads().keyspace().typeOf(support.argView(request, 1));
-        if (t == null) {
-            out.simpleString("none");
-            return;
-        }
-        out.simpleString(t.name().toLowerCase(Locale.ROOT));
+    private PreparedCommand type(ExecutionRequest request, CommandPreparationContext context) {
+        ValueType valueType = support.commandDb(context).reads().keyspace().typeOf(support.argView(request, 1));
+        String value = valueType == null ? "none" : valueType.name().toLowerCase(Locale.ROOT);
+        return CommandSupport.fixed(ReplyShapes.simpleString(value), execution -> execution.reply().simpleString(value));
     }
 
-    private void memory(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
+    private PreparedCommand memory(ExecutionRequest request, CommandPreparationContext context) {
         if (CommandSupport.asciiEqualsIgnoreCase(request, 1, "USAGE")) {
             if (request.argc() != 3) {
-                CommandSupport.wrongArity(out, "memory");
-                return;
+                return CommandSupport.error("ERR wrong number of arguments for 'memory' command");
             }
-            long bytes = support.commandDb(ctx).memory().memoryUsage(support.argView(request, 2));
-            if (bytes < 0) {
-                out.bulkString((byte[]) null);
-                return;
-            }
-            out.integer(bytes);
-            return;
+            long bytes = support.commandDb(context).memory().memoryUsage(support.argView(request, 2));
+            return bytes < 0L
+                    ? CommandSupport.fixed(ReplyShapes.nullValue(), execution -> execution.reply().nullValue())
+                    : CommandSupport.fixed(ReplyShapes.integer(bytes), execution -> execution.reply().integer(bytes));
         }
 
         if (CommandSupport.asciiEqualsIgnoreCase(request, 1, "STATS")) {
             if (request.argc() != 2) {
-                CommandSupport.wrongArity(out, "memory");
-                return;
+                return CommandSupport.error("ERR wrong number of arguments for 'memory' command");
             }
-
-            YierdisMemoryStats s = null;
             ServerInfoProvider infoProvider = support.infoProvider();
-            if (infoProvider != null) {
-                s = infoProvider.memoryStats(ctx);
+            YierdisMemoryStats stats = infoProvider == null ? null : infoProvider.memoryStats(context);
+            if (stats == null) {
+                stats = support.commandDb(context).memory().memoryStats();
             }
-            if (s == null) {
-                s = support.commandDb(ctx).memory().memoryStats();
-            }
-            // Flat key/value pairs map naturally to RESP3 maps and RESP2 key/value arrays.
-            out.requireReply(memoryStatsReplyPlan(s));
-            out.mapHeader(MEMORY_STATS_FIELDS.length);
-            for (MemoryStatField field : MEMORY_STATS_FIELDS) {
-                out.bulkString(field.key());
-                out.integer(field.value(s));
-            }
-            return;
+            return memoryStats(stats);
         }
 
-        out.error("ERR syntax error");
+        return CommandSupport.error("ERR syntax error");
     }
 
-    private static ReplyPlan memoryStatsReplyPlan(YierdisMemoryStats stats) {
-        long encodedElementBytes = 0L;
+    private static PreparedCommand memoryStats(YierdisMemoryStats stats) {
+        ArrayList<MemoryStatValue> values = new ArrayList<>(MEMORY_STATS_FIELDS.length);
+        ArrayList<ReplyShape> shapes = new ArrayList<>(MEMORY_STATS_FIELDS.length * 2);
         for (MemoryStatField field : MEMORY_STATS_FIELDS) {
-            encodedElementBytes = addMemoryStatsPair(encodedElementBytes, field.key(), field.value(stats));
+            long value = field.value(stats);
+            values.add(new MemoryStatValue(field.key(), value));
+            shapes.add(ReplyShapes.bulkString(field.key().length, 0L));
+            shapes.add(ReplyShapes.integer(value));
         }
-        return ReplyPlans.bulkStringArray(MEMORY_STATS_FIELDS.length * 2, encodedElementBytes, 0L);
+        ReplyShape shape = ReplyShapes.map(shapes);
+        return CommandSupport.fixed(shape, execution -> {
+            execution.reply().mapHeader(values.size());
+            for (MemoryStatValue value : values) {
+                execution.reply().bulkString(value.key());
+                execution.reply().integer(value.value());
+            }
+        });
     }
 
     private static MemoryStatField memoryStat(
@@ -155,19 +160,6 @@ public final class KeyCommands implements CommandModule {
             ToLongFunction<YierdisMemoryStats> valueExtractor
     ) {
         return new MemoryStatField(key.getBytes(StandardCharsets.US_ASCII), valueExtractor);
-    }
-
-    private static long addMemoryStatsPair(long current, byte[] key, long value) {
-        long keyBytes = ReplyPlans.bulkString(key.length, 0L).encodedUpperBoundBytes();
-        long valueBytes = 3L + Long.toString(value).length();
-        return saturatingAdd(current, saturatingAdd(keyBytes, valueBytes));
-    }
-
-    private static long saturatingAdd(long left, long right) {
-        if (left < 0L || right < 0L || left > Long.MAX_VALUE - right) {
-            return Long.MAX_VALUE;
-        }
-        return left + right;
     }
 
     private record MemoryStatField(
@@ -179,54 +171,46 @@ public final class KeyCommands implements CommandModule {
         }
     }
 
-    private void object(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
-        if (request.argc() != 3) {
-            CommandSupport.wrongArity(out, "object");
-            return;
-        }
-        if (!CommandSupport.asciiEqualsIgnoreCase(request, 1, "ENCODING")) {
-            out.error("ERR syntax error");
-            return;
-        }
-        String enc = support.commandDb(ctx).memory().objectEncoding(support.argView(request, 2));
-        if (enc == null) {
-            out.bulkString((byte[]) null);
-            return;
-        }
-        out.bulkString(enc.getBytes(StandardCharsets.US_ASCII));
+    private record MemoryStatValue(byte[] key, long value) {
     }
 
-    private void keys(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
+    private PreparedCommand object(ExecutionRequest request, CommandPreparationContext context) {
+        if (request.argc() != 3) {
+            return CommandSupport.error("ERR wrong number of arguments for 'object' command");
+        }
+        if (!CommandSupport.asciiEqualsIgnoreCase(request, 1, "ENCODING")) {
+            return CommandSupport.error("ERR syntax error");
+        }
+        String encoding = support.commandDb(context).memory().objectEncoding(support.argView(request, 2));
+        if (encoding == null) {
+            return CommandSupport.fixed(ReplyShapes.nullValue(), execution -> execution.reply().nullValue());
+        }
+        byte[] value = encoding.getBytes(StandardCharsets.US_ASCII);
+        return CommandSupport.fixed(ReplyShapes.bulkString(value.length, 0L),
+                execution -> execution.reply().bulkString(value));
+    }
+
+    private PreparedCommand keys(ExecutionRequest request, CommandPreparationContext context) {
         SlowCommandGovernor governor = support.slowGovernor();
-        long timeBudgetNanos = governor.keysTimeBudgetNanos(ctx);
+        long timeBudgetNanos = governor.keysTimeBudgetNanos(context);
         long deadlineNanos = deadlineNanos(timeBudgetNanos);
         for (int attempt = 0; attempt < KEY_WINDOW_DISCOVERY_ATTEMPTS; attempt++) {
             if (attempt > 0 && deadlineExpired(deadlineNanos)) {
                 break;
             }
             long remainingBudgetNanos = remainingBudgetNanos(timeBudgetNanos, deadlineNanos);
-            KeyScanWindow window = support.commandDb(ctx).reads().keyspace().keys(
+            KeyScanWindow window = support.commandDb(context).reads().keyspace().keys(
                     request.readOnlyByteArray(1),
-                    governor.keysMaxResults(ctx),
+                    governor.keysMaxResults(context),
                     remainingBudgetNanos
             );
-            boolean ownershipTransferred = false;
-            try {
-                if (!window.current()) {
-                    continue;
-                }
-                CommandSupport.writeMeasuredBulkStringArray(out, window);
-                ownershipTransferred = true;
-                return;
-            } finally {
-                if (!ownershipTransferred) {
-                    window.close();
-                }
+            if (!window.current()) {
+                window.close();
+                continue;
             }
+            return keyWindowReply(window);
         }
-        throw new IllegalStateException("key discovery window changed before reply preflight");
+        return CommandSupport.error("ERR key discovery window changed before reply preflight");
     }
 
     private record ScanArgs(long cursor, byte[] match, int count) {
@@ -253,16 +237,16 @@ public final class KeyCommands implements CommandModule {
                 if (i + 1 >= args.argc()) {
                     return CommandParseResult.error(CommandParseError.syntax());
                 }
-                long v;
+                long value;
                 try {
-                    v = args.nonNegativeLongAt(++i);
+                    value = args.nonNegativeLongAt(++i);
                 } catch (IllegalArgumentException e) {
                     return CommandParseResult.error(CommandParseError.integerOutOfRange());
                 }
-                if (v <= 0 || v > Integer.MAX_VALUE) {
+                if (value <= 0L || value > Integer.MAX_VALUE) {
                     return CommandParseResult.error(CommandParseError.integerOutOfRange());
                 }
-                count = (int) v;
+                count = (int) value;
                 continue;
             }
             return CommandParseResult.error(CommandParseError.syntax());
@@ -270,52 +254,65 @@ public final class KeyCommands implements CommandModule {
         return CommandParseResult.ok(new ScanArgs(cursor, match, count));
     }
 
-    private void scan(ScanArgs args, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
+    private PreparedCommand scan(ScanArgs args, CommandPreparationContext context) {
         for (int attempt = 0; attempt < KEY_WINDOW_DISCOVERY_ATTEMPTS; attempt++) {
-            KeyScanWindow window = support.commandDb(ctx).reads().keyspace().scan(
+            KeyScanWindow window = support.commandDb(context).reads().keyspace().scan(
                     ScanCursorV2.of(args.cursor()),
                     args.match(),
                     args.count()
             );
-            boolean ownershipTransferred = false;
-            try {
-                if (!window.current()) {
-                    continue;
-                }
-                byte[] nextCursor = window.nextCursor().toAsciiBytes();
-                out.requireReply(scanReplyPlan(window, nextCursor));
-                out.arrayHeader(2);
-                out.bulkString(nextCursor);
-                out.arrayHeader(window.count());
-                window.emitTo(new yier.bubu.redis.command.defaults.BulkStringReplyAdapter(out));
-                out.transferReplyOwnership(window);
-                ownershipTransferred = true;
-                return;
-            } finally {
-                if (!ownershipTransferred) {
-                    window.close();
-                }
+            if (!window.current()) {
+                window.close();
+                continue;
             }
+            return scanWindowReply(window);
         }
-        throw new IllegalStateException("scan discovery window changed before reply preflight");
+        return CommandSupport.error("ERR scan window changed before reply preflight");
     }
 
-    private static ReplyPlan scanReplyPlan(KeyScanWindow window, byte[] nextCursor) {
-        ReplyPlan cursor = ReplyPlans.bulkString(nextCursor.length, 0L);
-        ReplyPlan keys = ReplyPlans.bulkStringArray(window.count(), window.encodedElementBytes(), 0L);
-        return ReplyPlans.bulkStringArray(
-                2,
-                saturatedAdd(cursor.encodedUpperBoundBytes(), keys.encodedUpperBoundBytes()),
-                window.retainedMemoryBytes()
+    private static PreparedCommand keyWindowReply(KeyScanWindow window) {
+        ReplyShape shape = ReplyShapes.sequence(
+                window.elementCount(),
+                window.retainedMemoryBytes(),
+                consumer -> window.visitElementLengths(consumer::accept)
+        );
+        return CommandSupport.owned(
+                shape,
+                window,
+                () -> window.current() ? ValidationResult.VALID : ValidationResult.STALE,
+                execution -> {
+                    execution.reply().arrayHeader(window.elementCount());
+                    window.emitTo(new yier.bubu.redis.command.defaults.BulkStringReplyAdapter(execution.reply()));
+                }
+        );
+    }
+
+    private static PreparedCommand scanWindowReply(KeyScanWindow window) {
+        byte[] nextCursor = window.nextCursor().toAsciiBytes();
+        ReplyShape elements = ReplyShapes.sequence(
+                window.elementCount(),
+                window.retainedMemoryBytes(),
+                consumer -> window.visitElementLengths(consumer::accept)
+        );
+        ReplyShape shape = ReplyShapes.array(List.of(
+                ReplyShapes.bulkString(nextCursor.length, 0L),
+                elements
+        ));
+        return CommandSupport.owned(
+                shape,
+                window,
+                () -> window.current() ? ValidationResult.VALID : ValidationResult.STALE,
+                execution -> {
+                    execution.reply().arrayHeader(2);
+                    execution.reply().bulkString(nextCursor);
+                    execution.reply().arrayHeader(window.elementCount());
+                    window.emitTo(new yier.bubu.redis.command.defaults.BulkStringReplyAdapter(execution.reply()));
+                }
         );
     }
 
     private static long deadlineNanos(long budgetNanos) {
-        if (budgetNanos <= 0L) {
-            return Long.MAX_VALUE;
-        }
-        if (budgetNanos >= Long.MAX_VALUE - System.nanoTime()) {
+        if (budgetNanos <= 0L || budgetNanos >= Long.MAX_VALUE - System.nanoTime()) {
             return Long.MAX_VALUE;
         }
         return System.nanoTime() + budgetNanos;
@@ -332,87 +329,106 @@ public final class KeyCommands implements CommandModule {
         return Math.max(1L, deadlineNanos - System.nanoTime());
     }
 
-    private static long saturatedAdd(long left, long right) {
-        if (left < 0L || right < 0L || Long.MAX_VALUE - left < right) {
-            return Long.MAX_VALUE;
-        }
-        return left + right;
+    private PreparedCommand del(ExecutionRequest request, CommandPreparationContext context) {
+        return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
+            int len = request.argc() - 1;
+            support.sliceResetFromRequest(request, 1, len);
+            try {
+                long deleted = support.commandDb(execution).writes().keyspace().del(support.slice()).value();
+                execution.reply().integer(deleted);
+            } finally {
+                support.clearScratch(len);
+            }
+        });
     }
 
-    private void del(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
-        int len = request.argc() - 1;
-        support.sliceResetFromRequest(request, 1, len);
-        try {
-            long deleted = support.commandDb(ctx).writes().keyspace().del(support.slice()).value();
-            out.integer(deleted);
-        } finally {
-            support.clearScratch(len);
-        }
-    }
-
-    private void exists(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
-        long count = 0;
+    private PreparedCommand exists(ExecutionRequest request, CommandPreparationContext context) {
+        long count = 0L;
         for (int i = 1; i < request.argc(); i++) {
-            if (support.commandDb(ctx).reads().keyspace().existsKey(support.argView(request, i))) {
+            if (support.commandDb(context).reads().keyspace().existsKey(support.argView(request, i))) {
                 count++;
             }
         }
-        out.integer(count);
+        long value = count;
+        return CommandSupport.fixed(ReplyShapes.integer(value), execution -> execution.reply().integer(value));
     }
 
-    private void expire(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
-        long seconds = CommandSupport.parseLong(request, 2, "seconds");
-        boolean applied = support.commandDb(ctx).writes().ttl()
-                .expire(support.argView(request, 1), seconds)
-                .value();
-        out.integer(applied ? 1 : 0);
+    private PreparedCommand expire(ExecutionRequest request, CommandPreparationContext context) {
+        final long seconds;
+        try {
+            seconds = CommandSupport.parseLong(request, 2, "seconds");
+        } catch (IllegalArgumentException e) {
+            return CommandSupport.error("ERR value is not an integer or out of range");
+        }
+        return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
+            boolean applied = support.commandDb(execution).writes().ttl()
+                    .expire(support.argView(request, 1), seconds)
+                    .value();
+            execution.reply().integer(applied ? 1L : 0L);
+        });
     }
 
-    private void pexpire(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
-        long millis = CommandSupport.parseLong(request, 2, "milliseconds");
-        boolean applied = support.commandDb(ctx).writes().ttl()
-                .pexpire(support.argView(request, 1), millis)
-                .value();
-        out.integer(applied ? 1 : 0);
+    private PreparedCommand pexpire(ExecutionRequest request, CommandPreparationContext context) {
+        final long millis;
+        try {
+            millis = CommandSupport.parseLong(request, 2, "milliseconds");
+        } catch (IllegalArgumentException e) {
+            return CommandSupport.error("ERR value is not an integer or out of range");
+        }
+        return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
+            boolean applied = support.commandDb(execution).writes().ttl()
+                    .pexpire(support.argView(request, 1), millis)
+                    .value();
+            execution.reply().integer(applied ? 1L : 0L);
+        });
     }
 
-    private void expireat(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
-        long seconds = CommandSupport.parseLong(request, 2, "seconds");
-        boolean applied = support.commandDb(ctx).writes().ttl()
-                .expireAtSeconds(support.argView(request, 1), seconds)
-                .value();
-        out.integer(applied ? 1 : 0);
+    private PreparedCommand expireat(ExecutionRequest request, CommandPreparationContext context) {
+        final long seconds;
+        try {
+            seconds = CommandSupport.parseLong(request, 2, "seconds");
+        } catch (IllegalArgumentException e) {
+            return CommandSupport.error("ERR value is not an integer or out of range");
+        }
+        return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
+            boolean applied = support.commandDb(execution).writes().ttl()
+                    .expireAtSeconds(support.argView(request, 1), seconds)
+                    .value();
+            execution.reply().integer(applied ? 1L : 0L);
+        });
     }
 
-    private void pexpireat(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
-        long millis = CommandSupport.parseLong(request, 2, "milliseconds");
-        boolean applied = support.commandDb(ctx).writes().ttl()
-                .expireAtMillis(support.argView(request, 1), millis)
-                .value();
-        out.integer(applied ? 1 : 0);
+    private PreparedCommand pexpireat(ExecutionRequest request, CommandPreparationContext context) {
+        final long millis;
+        try {
+            millis = CommandSupport.parseLong(request, 2, "milliseconds");
+        } catch (IllegalArgumentException e) {
+            return CommandSupport.error("ERR value is not an integer or out of range");
+        }
+        return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
+            boolean applied = support.commandDb(execution).writes().ttl()
+                    .expireAtMillis(support.argView(request, 1), millis)
+                    .value();
+            execution.reply().integer(applied ? 1L : 0L);
+        });
     }
 
-    private void persist(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
-        boolean applied = support.commandDb(ctx).writes().ttl()
-                .persist(support.argView(request, 1))
-                .value();
-        out.integer(applied ? 1 : 0);
+    private PreparedCommand persist(ExecutionRequest request, CommandPreparationContext context) {
+        return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
+            boolean applied = support.commandDb(execution).writes().ttl()
+                    .persist(support.argView(request, 1))
+                    .value();
+            execution.reply().integer(applied ? 1L : 0L);
+        });
     }
 
-    private void ttl(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
-        out.integer(support.commandDb(ctx).reads().ttl().ttlSeconds(support.argView(request, 1)));
+    private PreparedCommand ttl(ExecutionRequest request, CommandPreparationContext context) {
+        long value = support.commandDb(context).reads().ttl().ttlSeconds(support.argView(request, 1));
+        return CommandSupport.fixed(ReplyShapes.integer(value), execution -> execution.reply().integer(value));
     }
 
-    private void pttl(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
-        out.integer(support.commandDb(ctx).reads().ttl().ttlMillis(support.argView(request, 1)));
+    private PreparedCommand pttl(ExecutionRequest request, CommandPreparationContext context) {
+        long value = support.commandDb(context).reads().ttl().ttlMillis(support.argView(request, 1));
+        return CommandSupport.fixed(ReplyShapes.integer(value), execution -> execution.reply().integer(value));
     }
 }

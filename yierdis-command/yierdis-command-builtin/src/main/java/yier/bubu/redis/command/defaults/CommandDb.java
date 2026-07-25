@@ -5,6 +5,7 @@ import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbReads;
 import yier.bubu.redis.storage.api.DbWrites;
 import yier.bubu.redis.storage.api.MemoryOps;
+import yier.bubu.redis.common.command.MutationContext;
 
 import java.util.Objects;
 
@@ -12,20 +13,12 @@ import java.util.Objects;
  * Command-facing view of the selected DB capabilities used by built-in command handlers.
  */
 public final class CommandDb {
-    private DbEngine engine;
-    private DbWrites writes;
-    private DbLifecycleOps lifecycle;
+    private final DbEngine engine;
+    private final MutationContext mutationContext;
 
-    CommandDb() {
-    }
-
-    CommandDb reset(DbEngine engine, yier.bubu.redis.common.command.MutationContext mutationContext) {
+    CommandDb(DbEngine engine, MutationContext mutationContext) {
         this.engine = Objects.requireNonNull(engine, "engine");
-        this.writes = engine.writes().withMutationContext(
-                Objects.requireNonNull(mutationContext, "mutationContext")
-        );
-        this.lifecycle = engine.lifecycle().withMutationContext(mutationContext);
-        return this;
+        this.mutationContext = mutationContext;
     }
 
     public DbReads reads() {
@@ -33,7 +26,8 @@ public final class CommandDb {
     }
 
     public DbWrites writes() {
-        return writes;
+        DbWrites writes = engine.writes();
+        return mutationContext == null ? writes : writes.withMutationContext(mutationContext);
     }
 
     public MemoryOps memory() {
@@ -41,6 +35,7 @@ public final class CommandDb {
     }
 
     public DbLifecycleOps lifecycle() {
-        return lifecycle;
+        DbLifecycleOps lifecycle = engine.lifecycle();
+        return mutationContext == null ? lifecycle : lifecycle.withMutationContext(mutationContext);
     }
 }

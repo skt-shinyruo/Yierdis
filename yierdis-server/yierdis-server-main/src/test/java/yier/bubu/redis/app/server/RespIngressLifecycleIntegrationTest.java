@@ -7,12 +7,18 @@ import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.execution.api.CommandExecutionContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.ReferenceCountedRequestMemoryLease;
+import yier.bubu.redis.execution.api.ReplyShape;
+import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.execution.api.RequestMemoryLease;
+import yier.bubu.redis.execution.api.ValidationResult;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
+import yier.bubu.redis.protocol.resp.RespReplySizer;
 import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
 import yier.bubu.redis.protocol.resp.netty.InboundByteAccountingHandler;
 import yier.bubu.redis.protocol.resp.netty.InboundConnectionMemory;
@@ -309,11 +315,9 @@ public class RespIngressLifecycleIntegrationTest {
         private ExecutorFixture(int queueCapacity, AtomicInteger executions) {
             executor = new CommandExecutor<>(
                     () -> { },
-                    (session, request, out) -> {
-                        executions.incrementAndGet();
-                        out.simpleString("OK");
-                    },
+                    (session, request) -> okPrepared(executions),
                     new NettySerialOwnerExecutor(owner),
+                    new RespReplySizer(),
                     new RespReplyWriterFactory(),
                     new NettyExecutionIoAdapter(),
                     new CommandExecutorConfig(queueCapacity, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -375,11 +379,9 @@ public class RespIngressLifecycleIntegrationTest {
             RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
             executor = new CommandExecutor<>(
                     () -> { },
-                    (session, request, out) -> {
-                        executions.incrementAndGet();
-                        out.simpleString("OK");
-                    },
+                    (session, request) -> okPrepared(executions),
                     new NettySerialOwnerExecutor(owner),
+                    new RespReplySizer(),
                     replyWriterFactory,
                     new NettyExecutionIoAdapter(),
                     new CommandExecutorConfig(queueCapacity, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -428,7 +430,7 @@ public class RespIngressLifecycleIntegrationTest {
                     .addLast("inboundReadCredit", readCredits)
                     .addLast("inboundByteAccounting", new InboundByteAccountingHandler(readCredits))
                     .addLast("respRequestDecoder", decoder)
-                    .addLast("commandHandler", new YierdisFastCommandHandler(executor, replyWriterFactory));
+                    .addLast("executionRequestIngress", new NettyExecutionRequestIngress(executor, replyWriterFactory));
         }
 
         private void blockOwner(CountDownLatch started, CountDownLatch unblock) {
@@ -454,6 +456,30 @@ public class RespIngressLifecycleIntegrationTest {
             inboundBudget.close();
             outboundBudget.close();
         }
+    }
+
+    private static PreparedCommand okPrepared(AtomicInteger executions) {
+        return new PreparedCommand() {
+            @Override
+            public ReplyShape replyShape() {
+                return ReplyShapes.simpleString("OK");
+            }
+
+            @Override
+            public ValidationResult validateBeforeExecute() {
+                return ValidationResult.VALID;
+            }
+
+            @Override
+            public void execute(CommandExecutionContext context) {
+                executions.incrementAndGet();
+                context.reply().simpleString("OK");
+            }
+
+            @Override
+            public void close() {
+            }
+        };
     }
 
     private static final class LeaseState {

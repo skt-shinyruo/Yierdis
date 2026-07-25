@@ -3,14 +3,17 @@ package yier.bubu.redis.app.server;
 // INFO/STATS 提供器：基于 transport-neutral executor 统计与连接态输出可观测性摘要，避免在热路径做额外分配。
 
 import yier.bubu.redis.command.api.ServerInfoProvider;
-import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
-import yier.bubu.redis.execution.api.CommandContext;
+import yier.bubu.redis.execution.api.CommandExecutionContext;
+import yier.bubu.redis.execution.api.CommandPreparationContext;
+import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
-import yier.bubu.redis.execution.api.ReplyPlan;
-import yier.bubu.redis.execution.api.ReplyPlans;
+import yier.bubu.redis.execution.api.ReplyShape;
+import yier.bubu.redis.execution.api.ReplyShapes;
+import yier.bubu.redis.execution.api.ValidationResult;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
@@ -179,9 +182,14 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     }
 
     @Override
-    public void info(ExecutionRequest request, CommandContext ctx) {
-        Objects.requireNonNull(ctx, "ctx");
-        RedisReplyWriter out = Objects.requireNonNull(ctx.out(), "out");
+    public PreparedCommand prepareInfo(ExecutionRequest request, CommandPreparationContext context) {
+        Objects.requireNonNull(context, "context");
+        return maximumReply(execution -> writeInfo(request, execution.session(), execution.reply()));
+    }
+
+    private void writeInfo(ExecutionRequest request, CommandSession session, RedisReplyWriter out) {
+        Objects.requireNonNull(session, "session");
+        Objects.requireNonNull(out, "out");
         CommandExecutor<NettyExecutionConnection> ex = executor;
         if (ex == null) {
             out.error("ERR INFO not ready");
@@ -202,20 +210,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             ReplyEgressStats.Snapshot egressStats = replyEgressStats();
             int liveChildChannels = liveChildChannels();
             HealthView health = healthView();
-            requireMeasuredReply(
-                    out,
-                    writer -> writeYierdisStructuredInfo(
-                            writer,
-                            stats,
-                            uptimeMillis,
-                            inboundStats,
-                            streamStats,
-                            outboundStats,
-                            egressStats,
-                            liveChildChannels,
-                            health
-                    )
-            );
             writeYierdisStructuredInfo(
                     out,
                     stats,
@@ -231,14 +225,18 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
 
         byte[] response = buildRedisInfo(section, ex).getBytes(StandardCharsets.UTF_8);
-        out.requireReply(ReplyPlans.bulkString(response.length, 0L));
         out.bulkString(response);
     }
 
     @Override
-    public void stats(ExecutionRequest request, CommandContext ctx) {
-        Objects.requireNonNull(ctx, "ctx");
-        RedisReplyWriter out = Objects.requireNonNull(ctx.out(), "out");
+    public PreparedCommand prepareStats(ExecutionRequest request, CommandPreparationContext context) {
+        Objects.requireNonNull(context, "context");
+        return maximumReply(execution -> writeStats(request, execution.session(), execution.reply()));
+    }
+
+    private void writeStats(ExecutionRequest request, CommandSession session, RedisReplyWriter out) {
+        Objects.requireNonNull(session, "session");
+        Objects.requireNonNull(out, "out");
         CommandExecutor<NettyExecutionConnection> ex = executor;
         if (ex == null) {
             out.error("ERR STATS not ready");
@@ -246,27 +244,13 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
 
         CommandExecutor.StatsSnapshot s = ex.statsSnapshot();
-        ConnectionStatsView stats = connectionStats(ctx);
+        ConnectionStatsView stats = connectionStats(session);
         InboundMemoryBudgetStats inboundStats = inboundStats();
         CommitStreamStats streamStats = commitStreamStats();
         OutboundMemoryBudgetStats outboundStats = outboundStats();
         ReplyEgressStats.Snapshot egressStats = replyEgressStats();
         int liveChildChannels = liveChildChannels();
         HealthView health = healthView();
-        requireMeasuredReply(
-                out,
-                writer -> writeStats(
-                        writer,
-                        s,
-                        stats,
-                        inboundStats,
-                        streamStats,
-                        outboundStats,
-                        egressStats,
-                        liveChildChannels,
-                        health
-                )
-        );
         writeStats(
                 out,
                 s,
@@ -281,11 +265,35 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     }
 
     @Override
-    public YierdisMemoryStats memoryStats(CommandContext ctx) {
+    public YierdisMemoryStats memoryStats(CommandPreparationContext context) {
         if (config.maxmemoryScope() != YierdisServerRuntimeConfig.MaxmemoryScope.GLOBAL) {
             return null;
         }
         return aggregatedMemoryStats();
+    }
+
+    private static PreparedCommand maximumReply(Consumer<CommandExecutionContext> execution) {
+        Objects.requireNonNull(execution, "execution");
+        return new PreparedCommand() {
+            @Override
+            public ReplyShape replyShape() {
+                return ReplyShapes.maximum();
+            }
+
+            @Override
+            public ValidationResult validateBeforeExecute() {
+                return ValidationResult.VALID;
+            }
+
+            @Override
+            public void execute(CommandExecutionContext context) {
+                execution.accept(context);
+            }
+
+            @Override
+            public void close() {
+            }
+        };
     }
 
     private void writeStats(
@@ -600,11 +608,8 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         );
     }
 
-    private static ConnectionStatsView connectionStats(CommandContext ctx) {
-        if (ctx == null) {
-            return null;
-        }
-        return ctx.connectionStatsSession().connectionStats();
+    private static ConnectionStatsView connectionStats(CommandSession session) {
+        return session == null ? null : session.connectionStats();
     }
 
     private InboundMemoryBudgetStats inboundStats() {
@@ -826,202 +831,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         writePair(out, KEY_COMMIT_STREAM_SHUTDOWN_TIMED_OUT, stats.shutdownTimedOut() ? 1L : 0L);
         writePair(out, KEY_COMMIT_STREAM_FIRST_FAILURE_TYPE, ascii(stats.firstFailureType()));
         writePair(out, KEY_COMMIT_STREAM_FIRST_FAILURE_MESSAGE, ascii(stats.firstFailureMessage()));
-    }
-
-    private static void requireMeasuredReply(RedisReplyWriter out, Consumer<RedisReplyWriter> responseWriter) {
-        ReplyPlanMeasurer measurer = new ReplyPlanMeasurer();
-        responseWriter.accept(measurer);
-        out.requireReply(measurer.toReplyPlan());
-    }
-
-    private static final class ReplyPlanMeasurer implements RedisReplyWriter {
-        private long encodedBytes;
-        private boolean closeAfterReply;
-
-        private ReplyPlan toReplyPlan() {
-            return ReplyPlans.raw(encodedBytes, 0L);
-        }
-
-        @Override
-        public void requireReply(ReplyPlan plan) {
-        }
-
-        @Override
-        public void transferReplyOwnership(AutoCloseable resource) {
-        }
-
-        @Override
-        public void requestCloseAfterReply() {
-            closeAfterReply = true;
-        }
-
-        @Override
-        public boolean closeAfterReplyRequested() {
-            return closeAfterReply;
-        }
-
-        @Override
-        public void simpleString(String value) {
-            add(3L + asciiLength(value == null ? "" : value.replace('\r', ' ').replace('\n', ' ')));
-        }
-
-        @Override
-        public void error(String message) {
-            long messageBytes = utf8Length(message == null ? "ERR error" : message);
-            add(3L + Math.min(512L, saturatedAdd(4L, messageBytes)));
-        }
-
-        @Override
-        public void integer(long value) {
-            add(3L + Long.toString(value).length());
-        }
-
-        @Override
-        public void booleanValue(boolean value) {
-            add(4L);
-        }
-
-        @Override
-        public void doubleValue(double value) {
-            long textBytes = asciiLength(Double.toString(value));
-            add(Math.max(3L + textBytes, bulkStringEncodedBytes(textBytes)));
-        }
-
-        @Override
-        public void bigNumberAscii(String value) {
-            long textBytes = asciiLength(value == null ? "" : value);
-            add(Math.max(3L + textBytes, bulkStringEncodedBytes(textBytes)));
-        }
-
-        @Override
-        public void verbatimString(String format, byte[] data) {
-            long dataBytes = data == null ? 0L : data.length;
-            long bodyBytes = saturatedAdd(4L, dataBytes);
-            long resp3Bytes = saturatedAdd(3L + decimalDigits(bodyBytes), saturatedAdd(bodyBytes, 2L));
-            add(Math.max(resp3Bytes, bulkStringEncodedBytes(dataBytes)));
-        }
-
-        @Override
-        public void blobError(String message) {
-            long messageBytes = Math.min(512L, saturatedAdd(4L, utf8Length(message == null ? "ERR error" : message)));
-            add(Math.max(3L + messageBytes, bulkStringEncodedBytes(messageBytes)));
-        }
-
-        @Override
-        public void bulkString(byte[] data) {
-            if (data == null) {
-                nullValue();
-                return;
-            }
-            add(bulkStringEncodedBytes(data.length));
-        }
-
-        @Override
-        public void bulkString(byte[] data, int off, int len) {
-            if (data == null) {
-                nullValue();
-                return;
-            }
-            Objects.checkFromIndexSize(off, len, data.length);
-            add(bulkStringEncodedBytes(len));
-        }
-
-        @Override
-        public void bulkString(BytesSlice slice) {
-            if (slice == null) {
-                nullValue();
-                return;
-            }
-            add(bulkStringEncodedBytes(slice.length()));
-        }
-
-        @Override
-        public void bulkStringLongAscii(long value) {
-            add(bulkStringEncodedBytes(Long.toString(value).length()));
-        }
-
-        @Override
-        public void nullValue() {
-            add(5L);
-        }
-
-        @Override
-        public void nullArray() {
-            add(5L);
-        }
-
-        @Override
-        public void arrayHeader(int count) {
-            add(3L + decimalDigits(Math.max(0L, count)));
-        }
-
-        @Override
-        public void emptyArray() {
-            arrayHeader(0);
-        }
-
-        @Override
-        public void mapHeader(int pairs) {
-            arrayHeader(saturatedDouble(Math.max(0, pairs)));
-        }
-
-        @Override
-        public void setHeader(int count) {
-            arrayHeader(count);
-        }
-
-        @Override
-        public void pushHeader(int count) {
-            arrayHeader(count);
-        }
-
-        @Override
-        public void attributeHeader(int pairs) {
-            arrayHeader(saturatedDouble(Math.max(0, pairs)));
-        }
-
-        private void add(long bytes) {
-            encodedBytes = saturatedAdd(encodedBytes, bytes);
-        }
-
-        private static long bulkStringEncodedBytes(long payloadBytes) {
-            if (payloadBytes < 0L) {
-                return 5L;
-            }
-            return saturatedAdd(3L + decimalDigits(payloadBytes), saturatedAdd(payloadBytes, 2L));
-        }
-
-        private static long asciiLength(String value) {
-            return value.getBytes(StandardCharsets.US_ASCII).length;
-        }
-
-        private static long utf8Length(String value) {
-            return value.getBytes(StandardCharsets.UTF_8).length;
-        }
-
-        private static int saturatedDouble(int value) {
-            return value > Integer.MAX_VALUE / 2 ? Integer.MAX_VALUE : value * 2;
-        }
-
-        private static int decimalDigits(long value) {
-            long nonNegative = Math.max(0L, value);
-            if (nonNegative < 10L) {
-                return 1;
-            }
-            int digits = 0;
-            while (nonNegative > 0L) {
-                nonNegative /= 10L;
-                digits++;
-            }
-            return digits;
-        }
-
-        private static long saturatedAdd(long left, long right) {
-            if (left < 0L || right < 0L || left > Long.MAX_VALUE - right) {
-                return Long.MAX_VALUE;
-            }
-            return left + right;
-        }
     }
 
     private static void writeHeader(RedisReplyWriter out, int pairs) {

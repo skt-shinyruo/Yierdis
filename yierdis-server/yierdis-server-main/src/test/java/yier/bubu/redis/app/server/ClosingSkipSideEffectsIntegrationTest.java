@@ -14,6 +14,7 @@ import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.ExecutionConnectionContext;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
+import yier.bubu.redis.protocol.resp.RespReplySizer;
 import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
 import yier.bubu.redis.protocol.resp.netty.RespProtocolErrorReplyHandler;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
@@ -35,8 +36,9 @@ public class ClosingSkipSideEffectsIntegrationTest {
         RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
-                engine::execute,
+                engine::prepare,
                 new NettySerialOwnerExecutor(eventExecutor),
+                new RespReplySizer(),
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
                 new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -69,8 +71,9 @@ public class ClosingSkipSideEffectsIntegrationTest {
         RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
-                engine::execute,
+                engine::prepare,
                 new NettySerialOwnerExecutor(eventExecutor),
+                new RespReplySizer(),
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
                 new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -150,8 +153,9 @@ public class ClosingSkipSideEffectsIntegrationTest {
         RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
-                engine::execute,
+                engine::prepare,
                 new NettySerialOwnerExecutor(eventExecutor),
+                new RespReplySizer(),
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
                 new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -190,8 +194,9 @@ public class ClosingSkipSideEffectsIntegrationTest {
         RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
-                engine::execute,
+                engine::prepare,
                 new NettySerialOwnerExecutor(eventExecutor),
+                new RespReplySizer(),
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
                 new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -253,8 +258,9 @@ public class ClosingSkipSideEffectsIntegrationTest {
         RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
-                engine::execute,
+                engine::prepare,
                 new NettySerialOwnerExecutor(eventExecutor),
+                new RespReplySizer(),
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
                 new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)

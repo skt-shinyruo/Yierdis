@@ -3,95 +3,99 @@ package yier.bubu.redis.execution.api;
 import org.junit.Assert;
 import org.junit.Test;
 
+import java.lang.reflect.Modifier;
 import java.lang.reflect.Method;
 import java.util.List;
 
 public class CoreContractSmokeTest {
     @Test
-    public void commandContextStoresCompleteCommandSession() throws Exception {
-        Assert.assertEquals(
-                "yier.bubu.redis.execution.api.CommandSession",
-                CommandContext.class.getDeclaredField("session").getType().getName()
+    public void preparationContextContainsOnlyTheCompleteCommandSession() {
+        NarrowSession session = new NarrowSession();
+
+        CommandPreparationContext context = new CommandPreparationContext(session);
+
+        Assert.assertTrue(CommandPreparationContext.class.isRecord());
+        Assert.assertArrayEquals(
+                new Class<?>[]{CommandSession.class},
+                java.util.Arrays.stream(CommandPreparationContext.class.getRecordComponents())
+                        .map(java.lang.reflect.RecordComponent::getType)
+                        .toArray(Class<?>[]::new)
+        );
+        Assert.assertSame(session, context.session());
+    }
+
+    @Test
+    public void executionContextHasNoPublicConstructorAndOneRequestFactory() throws Exception {
+        for (var constructor : CommandExecutionContext.class.getDeclaredConstructors()) {
+            Assert.assertFalse(Modifier.isPublic(constructor.getModifiers()));
+        }
+        Method factory = CommandExecutionContext.class.getMethod(
+                "forRequest", CommandSession.class, RedisReplyWriter.class, ExecutionRequest.class);
+        Assert.assertTrue(Modifier.isPublic(factory.getModifiers()));
+        Assert.assertTrue(Modifier.isStatic(factory.getModifiers()));
+
+        long requestFactories = java.util.Arrays.stream(CommandExecutionContext.class.getMethods())
+                .filter(method -> Modifier.isStatic(method.getModifiers()))
+                .filter(method -> java.util.Arrays.asList(method.getParameterTypes())
+                        .contains(ExecutionRequest.class))
+                .count();
+        Assert.assertEquals(1L, requestFactories);
+    }
+
+    @Test
+    public void executionContextExposesOneScopedMutationBorrow() {
+        RedisReplyWriter writer = noopWriter();
+        NarrowSession session = new NarrowSession();
+        ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("PING", List.of());
+
+        try (CommandExecutionContext context = CommandExecutionContext.forRequest(
+                session, writer, request)) {
+            Assert.assertSame(session, context.session());
+            Assert.assertSame(writer, context.reply());
+            Assert.assertTrue(context.mutationContext().hasCommandRecord());
+            Assert.assertSame(request, context.mutationContext().commandRecord());
+        } finally {
+            request.close();
+        }
+    }
+
+    @Test
+    public void preparedCommandSeparatesShapeValidationExecutionAndCleanup() {
+        Assert.assertTrue(AutoCloseable.class.isAssignableFrom(PreparedCommand.class));
+        Assert.assertArrayEquals(
+                new String[]{"close", "execute", "replyShape", "validateBeforeExecute"},
+                java.util.Arrays.stream(PreparedCommand.class.getDeclaredMethods())
+                        .map(Method::getName)
+                        .sorted()
+                        .toArray(String[]::new)
+        );
+        Assert.assertArrayEquals(
+                new ValidationResult[]{ValidationResult.VALID, ValidationResult.STALE},
+                ValidationResult.values()
         );
     }
 
     @Test
-    public void commandContextDoesNotExposeAggregateSessionCompatibilityAccessor() {
-        for (Method method : CommandContext.class.getDeclaredMethods()) {
-            Assert.assertFalse(
-                    "CommandContext must expose narrow capability accessors instead of session(): " + method,
-                    method.getName().equals("session") && method.getParameterCount() == 0
-            );
-        }
-    }
+    public void replyWriterOnlyRendersSemanticReplies() {
+        List<String> legacyMethods = List.of(
+                "require" + "Reply",
+                "require" + "ReplyEnvelope",
+                "transfer" + "ReplyOwnership",
+                "writeMeasured" + "BulkStringArray",
+                "writeMeasured" + "BulkStringMap"
+        );
+        List<String> legacyNestedTypes = List.of("Measured" + "ReplyVisitor");
 
-    @Test
-    public void commandContextCanBeBuiltFromNarrowCapabilitiesWithoutServerSession() {
-        RedisReplyWriter writer = noopWriter();
-        NarrowSession session = new NarrowSession();
-
-        CommandContext ctx = new CommandContext(session, writer);
-
-        ctx.dbIndexSession().setDbIndex(2);
-        ctx.clientMetadataSession().setClientName(" client ");
-        ctx.clientMetadataSession().setAuthenticated(true);
-        ctx.protocolNegotiationSession().setRespVersion(3);
-
-        Assert.assertSame(writer, ctx.out());
-        Assert.assertEquals(2, ctx.dbIndexSession().dbIndex());
-        Assert.assertEquals("client", ctx.clientMetadataSession().clientName());
-        Assert.assertTrue(ctx.clientMetadataSession().authenticated());
-        Assert.assertSame(session.transaction(), ctx.transactionSession().transaction());
-        Assert.assertNull(ctx.connectionStatsSession().connectionStats());
-        Assert.assertEquals(3, ctx.protocolNegotiationSession().respVersion());
-    }
-
-    @Test
-    public void commandContextDoesNotKeepServerSessionCompatibilityEntrypoints() {
-        for (var constructor : CommandContext.class.getDeclaredConstructors()) {
-            for (Class<?> parameterType : constructor.getParameterTypes()) {
-                Assert.assertNotEquals(
-                        "CommandContext must not expose ServerSession compatibility constructors",
-                        "yier.bubu.redis.execution.api.ServerSession",
-                        parameterType.getName()
-                );
-            }
-        }
-        for (Method method : CommandContext.class.getDeclaredMethods()) {
-            for (Class<?> parameterType : method.getParameterTypes()) {
-                Assert.assertNotEquals(
-                        "CommandContext must not expose ServerSession compatibility methods",
-                        "yier.bubu.redis.execution.api.ServerSession",
-                        parameterType.getName()
-                );
-            }
-        }
-    }
-
-    @Test
-    public void contractTypesComposeWithoutServerSessionAggregate() {
-        RedisReplyWriter writer = noopWriter();
-        NarrowSession session = new NarrowSession();
-
-        CommandContext ctx = new CommandContext(session, writer);
-
-        session.setDbIndex(4);
-        session.setClientName("client");
-        session.setAuthenticated(true);
-        session.setRespVersion(3);
-
-        Assert.assertSame(session, ctx.dbIndexSession());
-        Assert.assertSame(session, ctx.clientMetadataSession());
-        Assert.assertSame(session, ctx.transactionSession());
-        Assert.assertSame(session, ctx.connectionStatsSession());
-        Assert.assertSame(session, ctx.protocolNegotiationSession());
-        Assert.assertSame(writer, ctx.out());
-        Assert.assertEquals(4, ctx.dbIndexSession().dbIndex());
-        Assert.assertEquals("client", ctx.clientMetadataSession().clientName());
-        Assert.assertTrue(ctx.clientMetadataSession().authenticated());
-        Assert.assertEquals(3, ctx.protocolNegotiationSession().respVersion());
-        writer.requestCloseAfterReply();
-        Assert.assertTrue(writer.closeAfterReplyRequested());
+        Assert.assertFalse(
+                java.util.Arrays.stream(RedisReplyWriter.class.getMethods())
+                        .map(Method::getName)
+                        .anyMatch(legacyMethods::contains)
+        );
+        Assert.assertFalse(
+                java.util.Arrays.stream(RedisReplyWriter.class.getDeclaredClasses())
+                        .map(Class::getSimpleName)
+                        .anyMatch(legacyNestedTypes::contains)
+        );
     }
 
     private static RedisReplyWriter noopWriter() {

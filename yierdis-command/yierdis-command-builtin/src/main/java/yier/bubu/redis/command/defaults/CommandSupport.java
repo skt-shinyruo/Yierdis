@@ -8,20 +8,27 @@ import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.api.YierdisDbRouter;
 import yier.bubu.redis.storage.api.DbEngine;
+import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.YierdisCommandException;
-import yier.bubu.redis.execution.api.CommandContext;
+import yier.bubu.redis.execution.api.CommandExecutionContext;
+import yier.bubu.redis.execution.api.CommandPreparationContext;
 import yier.bubu.redis.execution.api.DbIndexSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyPlans;
-import yier.bubu.redis.execution.api.RedisReplyWriter;
-import yier.bubu.redis.storage.api.result.BulkStringMapMetrics;
-import yier.bubu.redis.storage.api.result.BulkStringValue;
-import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequence;
+import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.ReplyShape;
+import yier.bubu.redis.execution.api.ReplyShapes;
+import yier.bubu.redis.execution.api.ValidationResult;
+import yier.bubu.redis.storage.api.result.ByteMapSource;
+import yier.bubu.redis.storage.api.result.ByteSequenceSource;
+import yier.bubu.redis.storage.api.result.ByteValue;
 
 import java.nio.charset.StandardCharsets;
 import java.util.AbstractList;
 import java.util.Arrays;
 import java.util.RandomAccess;
+import java.util.Objects;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * Shared parsing helpers and request-scoped scratch buffers for low-allocation command handlers.
@@ -37,7 +44,6 @@ public final class CommandSupport {
     private byte[][] argvScratch = new byte[16][];
     private final CommandArgBytesView argView = new CommandArgBytesView();
     private final CommandArgBytesSlice argSlice = new CommandArgBytesSlice();
-    private final CommandDb commandDb = new CommandDb();
 
     CommandSupport(DbEngine engine) {
         this(singleDbRouter(engine), null, SlowCommandGovernor.DEFAULT);
@@ -57,9 +63,14 @@ public final class CommandSupport {
         this.slowGovernor = slowGovernor == null ? SlowCommandGovernor.DEFAULT : slowGovernor;
     }
 
-    public CommandDb commandDb(CommandContext ctx) {
-        java.util.Objects.requireNonNull(ctx, "ctx");
-        return commandDb.reset(dbRouter.dbFor(ctx.dbIndexSession()), ctx.mutationContext());
+    public CommandDb commandDb(CommandPreparationContext ctx) {
+        Objects.requireNonNull(ctx, "ctx");
+        return new CommandDb(dbRouter.dbFor(ctx.session()), null);
+    }
+
+    public CommandDb commandDb(CommandExecutionContext ctx) {
+        Objects.requireNonNull(ctx, "ctx");
+        return new CommandDb(dbRouter.dbFor(ctx.session()), ctx.mutationContext());
     }
 
     public int databases() {
@@ -136,48 +147,136 @@ public final class CommandSupport {
         };
     }
 
-    public static void wrongArity(RedisReplyWriter out, String cmdLower) {
-        out.error("ERR wrong number of arguments for '" + cmdLower + "' command");
-    }
-
-    public static void writeOwnedBulkString(RedisReplyWriter out, BulkStringValue value) {
-        java.util.Objects.requireNonNull(out, "out");
-        java.util.Objects.requireNonNull(value, "value");
-        boolean ownershipTransferred = false;
-        try {
-            out.requireReply(ReplyPlans.bulkString(value.payloadLength(), value.retainedMemoryBytes()));
-            value.writeTo(new BulkStringReplyAdapter(out));
-            out.transferReplyOwnership(value);
-            ownershipTransferred = true;
-        } finally {
-            if (!ownershipTransferred) {
-                value.close();
+    public static PreparedCommand fixed(
+            ReplyShape shape,
+            Consumer<CommandExecutionContext> execution
+    ) {
+        Objects.requireNonNull(shape, "shape");
+        Objects.requireNonNull(execution, "execution");
+        return new PreparedCommand() {
+            @Override
+            public ReplyShape replyShape() {
+                return shape;
             }
-        }
+
+            @Override
+            public ValidationResult validateBeforeExecute() {
+                return ValidationResult.VALID;
+            }
+
+            @Override
+            public void execute(CommandExecutionContext context) {
+                executeWithCommandErrorTranslation(context, execution);
+            }
+
+            @Override
+            public void close() {
+            }
+        };
     }
 
-    public static void writeMeasuredBulkStringArray(RedisReplyWriter out, MeasuredBulkStringSequence source) {
-        java.util.Objects.requireNonNull(out, "out");
-        java.util.Objects.requireNonNull(source, "source");
-        out.writeMeasuredBulkStringArray(
-                source.count(),
-                source.encodedElementBytes(),
+    public static PreparedCommand error(String message) {
+        return fixed(ReplyShapes.error(message), context -> context.reply().error(message));
+    }
+
+    public static PreparedCommand byteValue(ByteValue value) {
+        Objects.requireNonNull(value, "value");
+        ReplyShape shape = value.isNull()
+                ? ReplyShapes.nullValue()
+                : ReplyShapes.bulkString(value.payloadLength(), value.retainedMemoryBytes());
+        return owned(shape, value, context -> value.emitTo(new BulkStringReplyAdapter(context.reply())));
+    }
+
+    public static PreparedCommand sequence(ByteSequenceSource source) {
+        Objects.requireNonNull(source, "source");
+        ReplyShape shape = ReplyShapes.sequence(
+                source.elementCount(),
                 source.retainedMemoryBytes(),
-                source,
-                reply -> source.emitTo(new BulkStringReplyAdapter(reply))
+                consumer -> source.visitElementLengths(consumer::accept)
         );
+        return owned(shape, source, context -> {
+            context.reply().arrayHeader(source.elementCount());
+            source.emitTo(new BulkStringReplyAdapter(context.reply()));
+        });
     }
 
-    public static void writeMeasuredBulkStringMap(RedisReplyWriter out, BulkStringMapMetrics source) {
-        java.util.Objects.requireNonNull(out, "out");
-        java.util.Objects.requireNonNull(source, "source");
-        out.writeMeasuredBulkStringMap(
+    public static PreparedCommand byteMap(ByteMapSource source) {
+        Objects.requireNonNull(source, "source");
+        ReplyShape shape = ReplyShapes.byteMap(
                 source.pairCount(),
-                source.encodedElementBytes(),
                 source.retainedMemoryBytes(),
-                source,
-                reply -> source.emitPairsTo(new BulkStringReplyAdapter(reply))
+                consumer -> source.visitPairLengths(consumer::accept)
         );
+        return owned(shape, source, context -> {
+            context.reply().mapHeader(source.pairCount());
+            source.emitPairsTo(new BulkStringReplyAdapter(context.reply()));
+        });
+    }
+
+    public static PreparedCommand owned(
+            ReplyShape shape,
+            AutoCloseable resource,
+            Consumer<CommandExecutionContext> execution
+    ) {
+        return owned(shape, resource, () -> ValidationResult.VALID, execution);
+    }
+
+    public static PreparedCommand owned(
+            ReplyShape shape,
+            AutoCloseable resource,
+            Supplier<ValidationResult> validation,
+            Consumer<CommandExecutionContext> execution
+    ) {
+        Objects.requireNonNull(shape, "shape");
+        Objects.requireNonNull(resource, "resource");
+        Objects.requireNonNull(validation, "validation");
+        Objects.requireNonNull(execution, "execution");
+        return new PreparedCommand() {
+            private boolean closed;
+
+            @Override
+            public ReplyShape replyShape() {
+                return shape;
+            }
+
+            @Override
+            public ValidationResult validateBeforeExecute() {
+                return Objects.requireNonNull(validation.get(), "validation result");
+            }
+
+            @Override
+            public void execute(CommandExecutionContext context) {
+                executeWithCommandErrorTranslation(context, execution);
+            }
+
+            @Override
+            public void close() {
+                if (closed) {
+                    return;
+                }
+                closed = true;
+                try {
+                    resource.close();
+                } catch (RuntimeException | Error failure) {
+                    throw failure;
+                } catch (Exception failure) {
+                    throw new IllegalStateException("prepared reply source close failed", failure);
+                }
+            }
+        };
+    }
+
+    private static void executeWithCommandErrorTranslation(
+            CommandExecutionContext context,
+            Consumer<CommandExecutionContext> execution
+    ) {
+        try {
+            execution.accept(context);
+        } catch (WrongTypeException | YierdisCommandException failure) {
+            context.reply().error(failure.getMessage());
+        } catch (IllegalArgumentException failure) {
+            context.reply().error("ERR " + failure.getMessage());
+        }
     }
 
     public static String utf8(ExecutionRequest request, int argIndex) {

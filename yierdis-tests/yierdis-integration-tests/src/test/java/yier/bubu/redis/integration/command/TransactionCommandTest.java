@@ -2,9 +2,9 @@ package yier.bubu.redis.integration.command;
 
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandParsers;
-import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import org.junit.Assert;
@@ -19,6 +19,7 @@ import yier.bubu.redis.testutil.ReplyError;
 import yier.bubu.redis.testutil.ReplyNull;
 import yier.bubu.redis.testutil.ReplyObject;
 import yier.bubu.redis.testutil.ReplySimpleString;
+import yier.bubu.redis.testutil.TestPreparedCommands;
 
 import java.util.Arrays;
 import java.util.ArrayList;
@@ -119,11 +120,11 @@ public class TransactionCommandTest {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(
                     db,
-                    registration -> registration.register(CommandSpec.of(
+                    registration -> registration.register(new CommandDefinition<>(
                             new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
                                     TransactionPolicy.DISALLOWED_IN_MULTI),
                             CommandParsers.request(),
-                            (cmd, ctx) -> ctx.out().simpleString("HELLO")
+                            (cmd, context) -> TestPreparedCommands.simpleString("HELLO")
                     ))
             );
             TestSession session = new TestSession();
@@ -146,11 +147,11 @@ public class TransactionCommandTest {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(
                     db,
-                    registration -> registration.register(CommandSpec.of(
+                    registration -> registration.register(new CommandDefinition<>(
                             new CommandSyntax("STRICT", CommandArity.exact(2), CommandKeySpec.NONE,
                                     TransactionPolicy.QUEUEABLE),
                             CommandParsers.args(),
-                            (args, ctx) -> ctx.out().simpleString("OK")
+                            (args, context) -> TestPreparedCommands.simpleString("OK")
                     ))
             );
             TestSession session = new TestSession();

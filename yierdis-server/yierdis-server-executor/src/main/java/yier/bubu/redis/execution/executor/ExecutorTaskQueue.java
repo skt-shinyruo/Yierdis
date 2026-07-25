@@ -119,6 +119,28 @@ public final class ExecutorTaskQueue<K, T> {
         return true;
     }
 
+    public boolean retryAtHead(K key, T task) {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(task, "task");
+        if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
+            if (!globalBlockedHead.compareAndSet(null, task)) {
+                return false;
+            }
+            globalBlockedHeadReady.set(true);
+            return true;
+        }
+
+        ExecutorKeyState<T> state = stateProvider.getOrCreate(key);
+        if (!state.blockedHead().compareAndSet(null, task)) {
+            return false;
+        }
+        state.blockedHeadReady().set(true);
+        blockedKeys.offer(key);
+        blockedFairTasks.incrementAndGet();
+        scheduleFairKey(key, state);
+        return true;
+    }
+
     public boolean resumeBlocked(K key, T task) {
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(task, "task");

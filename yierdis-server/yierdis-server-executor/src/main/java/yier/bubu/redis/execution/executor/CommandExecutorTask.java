@@ -3,6 +3,8 @@ package yier.bubu.redis.execution.executor;
 import yier.bubu.redis.execution.api.CapacityRegistration;
 import yier.bubu.redis.execution.api.ExecutionReply;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.ReplyPlan;
 
 import java.util.Objects;
 
@@ -11,6 +13,8 @@ final class CommandExecutorTask<C extends ExecutionConnection> {
     final ExecutionRequest request;
     final int retainedBytes;
     final ExecutionReply reply;
+    PreparedCommand prepared;
+    ReplyPlan replyPlan;
     private CapacityRegistration capacityRegistration = CapacityRegistration.NONE;
 
     CommandExecutorTask(C connection, ExecutionRequest request, int retainedBytes, ExecutionReply reply) {
@@ -27,13 +31,18 @@ final class CommandExecutorTask<C extends ExecutionConnection> {
         previous.cancel();
     }
 
-    void capacityRegistrationSignalled() {
-        capacityRegistration = CapacityRegistration.NONE;
-    }
-
     void cancelCapacityRegistration() {
         CapacityRegistration registration = capacityRegistration;
         capacityRegistration = CapacityRegistration.NONE;
         registration.cancel();
+    }
+
+    void closePrepared() {
+        PreparedCommand owned = prepared;
+        prepared = null;
+        replyPlan = null;
+        if (owned != null) {
+            owned.close();
+        }
     }
 }

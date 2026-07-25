@@ -24,7 +24,7 @@ final class OrderedReplyTestFixture implements AutoCloseable {
             CommandExecutor<NettyExecutionConnection> executor,
             RedisReplyWriterFactory replyWriterFactory
     ) {
-        channel = new EmbeddedChannel(new YierdisFastCommandHandler(executor, replyWriterFactory));
+        channel = new EmbeddedChannel(new NettyExecutionRequestIngress(executor, replyWriterFactory));
         connection = NettyExecutionConnection.getOrCreate(channel, 16, 1_024);
         budget = new OutboundMemoryBudget(GLOBAL_BYTES);
         connectionMemory = budget.openConnection(CONNECTION_BYTES);

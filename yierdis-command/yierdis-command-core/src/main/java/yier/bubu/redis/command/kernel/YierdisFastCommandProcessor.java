@@ -1,18 +1,17 @@
 package yier.bubu.redis.command.kernel;
 
 import yier.bubu.redis.command.api.CommandParseResult;
-import yier.bubu.redis.command.api.CommandSpec;
-import yier.bubu.redis.execution.api.CommandContext;
+import yier.bubu.redis.command.api.CommandDefinition;
+import yier.bubu.redis.execution.api.CommandPreparationContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.RedisReplyWriter;
-import yier.bubu.redis.execution.api.TransactionState;
+import yier.bubu.redis.execution.api.PreparedCommand;
 
 import java.util.Objects;
 
 /**
  * A server-side command processor optimized for low allocation.
  * <p>
- * It executes commands and writes replies via {@link RedisReplyWriter}.
+ * It validates and prepares commands before the executor reserves reply capacity.
  */
 public final class YierdisFastCommandProcessor {
     private static final String NULL_BULK_STRING_ERR = "ERR Protocol error: null bulk string";
@@ -25,27 +24,29 @@ public final class YierdisFastCommandProcessor {
         this.registry = Objects.requireNonNull(registry, "registry");
     }
 
-    public void execute(ExecutionRequest request, CommandContext ctx) {
+    public PreparedCommand prepare(ExecutionRequest request, CommandPreparationContext ctx) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(ctx, "ctx");
-        try {
-            executeCommand(request, ctx);
-        } finally {
-            // CommandSupport 复用的 DB view 可能持有同一 context；统一释放借用，避免其继续强引用已完成命令的 argv。
-            ctx.releaseMutationContext();
-        }
+        return prepareCommand(request, ctx, true);
     }
 
-    private void executeCommand(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
+    PreparedCommand prepareQueued(ExecutionRequest request, CommandPreparationContext ctx) {
+        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(ctx, "ctx");
+        return prepareCommand(request, ctx, false);
+    }
+
+    private PreparedCommand prepareCommand(
+            ExecutionRequest request,
+            CommandPreparationContext ctx,
+            boolean applyTransactionQueuePolicy
+    ) {
         int argc = request.argc();
         if (argc <= 0) {
-            out.error("ERR empty command");
-            return;
+            return PreparedCommands.error("ERR empty command");
         }
         if (request.isNull(0) || request.len(0) == 0) {
-            out.error("ERR empty command");
-            return;
+            return PreparedCommands.error("ERR empty command");
         }
 
         // RESP arrays may legally carry null bulk strings into ExecutionRequest.
@@ -61,37 +62,43 @@ public final class YierdisFastCommandProcessor {
             if (allowNullMessage && argc == 2 && i == 1) {
                 continue;
             }
-            transactionQueuePolicy.markActiveTransactionAborted(ctx);
-            out.error(NULL_BULK_STRING_ERR);
-            return;
+            return PreparedCommands.error(
+                    NULL_BULK_STRING_ERR,
+                    () -> transactionQueuePolicy.markActiveTransactionAborted(ctx)
+            );
         }
 
-        if (transactionQueuePolicy.queueIfNeeded(request, ctx, registry)) {
-            return;
-        }
-
-        exceptionTranslator.run(out, () -> {
-            CommandSpec<?> spec = registry.spec(request);
-            if (spec == null) {
-                out.error(CommandRequestSupport.unknownCommandMessage(request));
-                return;
+        if (applyTransactionQueuePolicy) {
+            PreparedCommand queued = transactionQueuePolicy.queueIfNeeded(request, ctx, registry);
+            if (queued != null) {
+                return queued;
             }
-            executeSpec(spec, request, ctx);
-        });
-    }
-
-    private void executeSpec(CommandSpec<?> spec, ExecutionRequest request, CommandContext ctx) {
-        CommandParseResult<?> parsed = spec.parse(request);
-        if (!parsed.ok()) {
-            transactionQueuePolicy.markActiveTransactionAborted(ctx);
-            ctx.out().error(parsed.error().toReplyMessage());
-            return;
         }
-        executeParsedSpec(spec, parsed.value(), ctx);
+
+        return exceptionTranslator.prepare(() -> prepareDefinition(request, ctx));
     }
 
-    private void executeParsedSpec(CommandSpec<?> spec, Object parsed, CommandContext ctx) {
-        spec.executeParsed(parsed, ctx);
+    private PreparedCommand prepareDefinition(ExecutionRequest request, CommandPreparationContext ctx) {
+        CommandDefinition<?> definition = registry.definition(request);
+        if (definition == null) {
+            return PreparedCommands.error(CommandRequestSupport.unknownCommandMessage(request));
+        }
+        CommandParseResult<?> parsed = definition.parse(request);
+        if (!parsed.ok()) {
+            return PreparedCommands.error(
+                    parsed.error().toReplyMessage(),
+                    () -> transactionQueuePolicy.markActiveTransactionAborted(ctx)
+            );
+        }
+        return prepareParsedDefinition(definition, parsed.value(), ctx);
     }
 
+    @SuppressWarnings("unchecked")
+    private static <T> PreparedCommand prepareParsedDefinition(
+            CommandDefinition<T> definition,
+            Object parsed,
+            CommandPreparationContext ctx
+    ) {
+        return definition.preparer().prepare((T) parsed, ctx);
+    }
 }
