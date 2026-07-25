@@ -42,10 +42,13 @@ public final class CommandRegistries {
         }
     }
 
-    public static void registerTransactionSupport(CommandRegistry registry, QueuedCommandReplayer replayer) {
+    public static void registerTransactionSupport(
+            CommandRegistry registry,
+            YierdisFastCommandProcessor processor
+    ) {
         if (registry == null) {
             throw new NullPointerException("registry");
         }
-        new TransactionCommands(replayer, registry::replyPlan).register(registry);
+        new TransactionCommands(processor).register(registry);
     }
 }

@@ -15,6 +15,7 @@ import yier.bubu.redis.execution.engine.YierdisEngine;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
+import yier.bubu.redis.protocol.resp.RespReplySizer;
 import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
 import yier.bubu.redis.storage.api.DbEngineFactory;
@@ -237,8 +238,9 @@ public class YierdisServerBootstrapCloseTest {
             YierdisEngine engine = TestYierdisEngines.forInstance(instance);
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
-                    engine::execute,
+                    engine::prepare,
                     new NettySerialOwnerExecutor(commandGroup.next()),
+                    new RespReplySizer(),
                     new RespReplyWriterFactory(),
                     new NettyExecutionIoAdapter(),
                     new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)

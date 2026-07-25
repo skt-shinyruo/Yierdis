@@ -2,15 +2,16 @@ package yier.bubu.redis.integration.command;
 
 import yier.bubu.redis.command.kernel.CommandRegistry;
 import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandParsers;
-import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.testutil.TestPreparedCommands;
 
 import java.lang.reflect.Method;
 import java.util.List;
@@ -97,7 +98,7 @@ public class CommandRegistryTest {
     }
 
     private static void registerNoop(CommandRegistry registry, String name) {
-        registry.register(CommandSpec.of(
+        registry.register(new CommandDefinition<>(
                 new CommandSyntax(
                         name,
                         CommandArity.exact(1),
@@ -105,8 +106,7 @@ public class CommandRegistryTest {
                         TransactionPolicy.QUEUEABLE
                 ),
                 CommandParsers.request(),
-                (request, ctx) -> {
-                }
+                (request, context) -> TestPreparedCommands.simpleString("OK")
         ));
     }
 
@@ -116,11 +116,11 @@ public class CommandRegistryTest {
 
     private static Object spec(CommandRegistry registry, ExecutionRequest request) {
         try {
-            Method method = CommandRegistry.class.getDeclaredMethod("spec", ExecutionRequest.class);
+            Method method = CommandRegistry.class.getDeclaredMethod("definition", ExecutionRequest.class);
             method.setAccessible(true);
             return method.invoke(registry, request);
         } catch (ReflectiveOperationException e) {
-            throw new AssertionError("unable to access registry spec", e);
+            throw new AssertionError("unable to access registry definition", e);
         }
     }
 }

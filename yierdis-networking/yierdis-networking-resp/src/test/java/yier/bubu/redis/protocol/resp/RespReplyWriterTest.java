@@ -4,12 +4,8 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.execution.api.ReplyPlan;
-import yier.bubu.redis.execution.api.ReplyReservationSink;
 
-import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public class RespReplyWriterTest {
     @Test
@@ -112,57 +108,6 @@ public class RespReplyWriterTest {
         }));
     }
 
-    @Test
-    public void measuredReplyVisitorsReserveShapeWriteElementsAndReleaseDetachedSources() {
-        AtomicInteger arrayCloses = new AtomicInteger();
-        ByteArraySink arraySink = new ByteArraySink();
-        RespReplyWriter arrayWriter = new RespReplyWriter(arraySink, RespProtocolVersion.RESP2);
-
-        arrayWriter.writeMeasuredBulkStringArray(
-                2,
-                15L,
-                0L,
-                arrayCloses::incrementAndGet,
-                out -> {
-                    out.bulkString(bytes("a"));
-                    out.bulkString(bytes("bb"));
-                }
-        );
-
-        Assert.assertEquals("*2\r\n$1\r\na\r\n$2\r\nbb\r\n", arraySink.utf8());
-        Assert.assertEquals(1, arrayCloses.get());
-
-        AtomicInteger mapCloses = new AtomicInteger();
-        ByteArraySink mapSink = new ByteArraySink();
-        RespReplyWriter mapWriter = new RespReplyWriter(mapSink, RespProtocolVersion.RESP2);
-
-        mapWriter.writeMeasuredBulkStringMap(
-                1,
-                14L,
-                0L,
-                mapCloses::incrementAndGet,
-                out -> {
-                    out.bulkString(bytes("f"));
-                    out.bulkString(bytes("v"));
-                }
-        );
-
-        Assert.assertEquals("*2\r\n$1\r\nf\r\n$1\r\nv\r\n", mapSink.utf8());
-        Assert.assertEquals(1, mapCloses.get());
-    }
-
-    @Test
-    public void envelopePreflightIsForwardedToReservationSink() {
-        RecordingReservationSink sink = new RecordingReservationSink();
-        RespReplyWriter writer = new RespReplyWriter(sink, RespProtocolVersion.RESP2);
-        ReplyPlan expected = ReplyPlan.exact(37L, 11L);
-
-        writer.requireReplyEnvelope(expected);
-
-        Assert.assertEquals(expected, sink.envelopePlan);
-        Assert.assertNull(sink.requiredPlan);
-    }
-
     private static String write2(WriterAction action) {
         return write(RespProtocolVersion.RESP2, action);
     }
@@ -199,29 +144,4 @@ public class RespReplyWriterTest {
         }
     }
 
-    private static final class RecordingReservationSink implements ReplyReservationSink {
-        private final ByteArrayOutputStream out = new ByteArrayOutputStream();
-        private ReplyPlan requiredPlan;
-        private ReplyPlan envelopePlan;
-
-        @Override
-        public void require(ReplyPlan plan) {
-            requiredPlan = plan;
-        }
-
-        @Override
-        public void requireEnvelope(ReplyPlan plan) {
-            envelopePlan = plan;
-        }
-
-        @Override
-        public void writeBytes(byte[] src, int off, int len) {
-            out.write(src, off, len);
-        }
-
-        @Override
-        public long writtenBytes() {
-            return out.size();
-        }
-    }
 }

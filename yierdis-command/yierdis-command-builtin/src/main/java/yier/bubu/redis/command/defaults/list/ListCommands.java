@@ -1,30 +1,24 @@
 package yier.bubu.redis.command.defaults.list;
 
-import yier.bubu.redis.command.api.ArgReader;
+import java.util.Objects;
 import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
-import yier.bubu.redis.command.api.CommandParseError;
-import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandParsers;
-import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
-import yier.bubu.redis.command.api.ServerInfoProvider;
-import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.defaults.BulkStringReplyAdapter;
 import yier.bubu.redis.command.defaults.CommandSupport;
-
-import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequence;
-import yier.bubu.redis.storage.api.result.PoppedValueSequence;
-import yier.bubu.redis.execution.api.CommandContext;
+import yier.bubu.redis.execution.api.CommandExecutionContext;
+import yier.bubu.redis.execution.api.CommandPreparationContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyPlan;
-import yier.bubu.redis.execution.api.ReplyPlans;
-import yier.bubu.redis.execution.api.RedisReplyWriter;
-import yier.bubu.redis.common.command.ResultUnknownException;
-
-import java.util.Objects;
+import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.ReplyShape;
+import yier.bubu.redis.execution.api.ReplyShapes;
+import yier.bubu.redis.execution.api.ValidationResult;
+import yier.bubu.redis.storage.api.PreparedMutation;
+import yier.bubu.redis.storage.api.result.PoppedValueSequence;
 
 public final class ListCommands implements CommandModule {
     private static final CommandKeySpec KEY = new CommandKeySpec(1, 1, 1);
@@ -38,135 +32,137 @@ public final class ListCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register(CommandSpec.of(syntax("LPUSH", CommandArity.min(3)), CommandParsers.request(), this::lpush));
-        registration.register(CommandSpec.of(syntax("RPUSH", CommandArity.min(3)), CommandParsers.request(), this::rpush));
-        registration.register(CommandSpec.of(syntax("LRANGE", CommandArity.exact(4)), CommandParsers.request(), this::lrange));
-        registration.register(CommandSpec.of(syntax("LPOP", CommandArity.oneOf(2, 3)), CommandParsers.request(), this::lpop));
-        registration.register(CommandSpec.of(syntax("RPOP", CommandArity.oneOf(2, 3)), CommandParsers.request(), this::rpop));
+        registration.register(new CommandDefinition<>(syntax("LPUSH", CommandArity.min(3)),
+                CommandParsers.request(), (request, context) -> push(request, true)));
+        registration.register(new CommandDefinition<>(syntax("RPUSH", CommandArity.min(3)),
+                CommandParsers.request(), (request, context) -> push(request, false)));
+        registration.register(new CommandDefinition<>(syntax("LRANGE", CommandArity.exact(4)),
+                CommandParsers.request(), this::lrange));
+        registration.register(new CommandDefinition<>(syntax("LPOP", CommandArity.oneOf(2, 3)),
+                CommandParsers.request(), (request, context) -> pop(request, context, true)));
+        registration.register(new CommandDefinition<>(syntax("RPOP", CommandArity.oneOf(2, 3)),
+                CommandParsers.request(), (request, context) -> pop(request, context, false)));
     }
 
     private static CommandSyntax syntax(String nameUpper, CommandArity arity) {
         return new CommandSyntax(nameUpper, arity, KEY, TransactionPolicy.QUEUEABLE);
     }
 
-    private void lpush(ExecutionRequest request, CommandContext ctx) {
-        push(request, ctx, true);
+    private PreparedCommand push(ExecutionRequest request, boolean left) {
+        return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
+            int valuesLen = request.argc() - 2;
+            support.sliceResetFromRequest(request, 2, valuesLen);
+            try {
+                long length = (left
+                        ? support.commandDb(execution).writes().lists()
+                                .lpush(request.readOnlyByteArray(1), support.slice())
+                        : support.commandDb(execution).writes().lists()
+                                .rpush(request.readOnlyByteArray(1), support.slice())).value();
+                execution.reply().integer(length);
+            } finally {
+                support.clearScratch(valuesLen);
+            }
+        });
     }
 
-    private void rpush(ExecutionRequest request, CommandContext ctx) {
-        push(request, ctx, false);
-    }
-
-    private void lpop(ExecutionRequest request, CommandContext ctx) {
-        pop(request, ctx, true);
-    }
-
-    private void rpop(ExecutionRequest request, CommandContext ctx) {
-        pop(request, ctx, false);
-    }
-
-    private void push(ExecutionRequest request, CommandContext ctx, boolean left) {
-        RedisReplyWriter out = ctx.out();
-        int valuesLen = request.argc() - 2;
-        support.sliceResetFromRequest(request, 2, valuesLen);
-        try {
-            long length = (left
-                    ? support.commandDb(ctx).writes().lists().lpush(request.readOnlyByteArray(1), support.slice())
-                    : support.commandDb(ctx).writes().lists().rpush(request.readOnlyByteArray(1), support.slice()))
-                    .value();
-            out.integer(length);
-        } finally {
-            support.clearScratch(valuesLen);
-        }
-    }
-
-    private void lrange(ExecutionRequest request, CommandContext ctx) {
-        RedisReplyWriter out = ctx.out();
+    private PreparedCommand lrange(ExecutionRequest request, CommandPreparationContext context) {
         int start = CommandSupport.parseIntClamped(request, 2, "start");
         int stop = CommandSupport.parseIntClamped(request, 3, "stop");
-
-        byte[] key = request.readOnlyByteArray(1);
-        MeasuredBulkStringSequence seq = support.commandDb(ctx).reads().lists().lrange(key, start, stop);
-        CommandSupport.writeMeasuredBulkStringArray(out, seq);
+        return CommandSupport.sequence(support.commandDb(context).reads().lists()
+                .lrange(request.readOnlyByteArray(1), start, stop));
     }
 
-    private void pop(ExecutionRequest request, CommandContext ctx, boolean left) {
-        RedisReplyWriter out = ctx.out();
-        int count = 1;
+    private PreparedCommand pop(
+            ExecutionRequest request,
+            CommandPreparationContext context,
+            boolean left
+    ) {
         boolean hasCount = request.argc() == 3;
+        int count = 1;
         if (hasCount) {
-            long v = CommandSupport.parseLong(request, 2, "count");
-            if (v < 0) {
+            long parsed = CommandSupport.parseLong(request, 2, "count");
+            if (parsed < 0L) {
                 throw new IllegalArgumentException("value is not an integer or out of range");
             }
-            if (v > Integer.MAX_VALUE) {
-                count = Integer.MAX_VALUE;
-            } else {
-                count = (int) v;
-            }
+            count = parsed > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) parsed;
         }
-
-        ReplyPlan preflight;
-        try (PoppedValueSequence preview = support.commandDb(ctx).reads().lists()
-                .previewPop(request.readOnlyByteArray(1), count, left)) {
-            preflight = popReplyPlan(preview, hasCount);
-            out.requireReply(preflight);
-        }
-
-        PoppedValueSequence popped = (left
-                ? support.commandDb(ctx).writes().lists().lpop(request.readOnlyByteArray(1), count)
-                : support.commandDb(ctx).writes().lists().rpop(request.readOnlyByteArray(1), count))
-                .value();
-        boolean ownershipTransferred = false;
-        try {
-            if (!matchesPreflight(preflight, popped, hasCount)) {
-                throw new ResultUnknownException("pop reply source changed after mutation");
-            }
-            popResponse(out, popped, hasCount);
-            if (popped != null) {
-                out.transferReplyOwnership(popped);
-                ownershipTransferred = true;
-            }
-        } finally {
-            if (popped != null && !ownershipTransferred) {
-                popped.close();
-            }
-        }
+        PreparedMutation<PoppedValueSequence> mutation = support.commandDb(context).writes().lists()
+                .preparePop(request.readOnlyByteArray(1), count, left);
+        PoppedValueSequence preview = mutation.preview();
+        ReplyShape shape = popShape(preview, hasCount);
+        return new PreparedPop(mutation, preview, hasCount, shape);
     }
 
-    private static ReplyPlan popReplyPlan(PoppedValueSequence popped, boolean hasCount) {
-        if (!hasCount) {
-            if (popped == null || popped.isNull() || popped.count() == 0) {
-                return ReplyPlans.bulkString(-1, 0L);
-            }
-            return ReplyPlans.raw(popped.encodedElementBytes(), popped.retainedMemoryBytes());
+    private static ReplyShape popShape(PoppedValueSequence preview, boolean hasCount) {
+        if (preview == null || preview.isNull()) {
+            return hasCount ? ReplyShapes.nullArray() : ReplyShapes.nullValue();
         }
-        if (popped == null || popped.isNull()) {
-            return ReplyPlans.raw(5L, 0L);
+        if (hasCount) {
+            return ReplyShapes.sequence(
+                    preview.elementCount(),
+                    preview.retainedMemoryBytes(),
+                    consumer -> preview.visitElementLengths(consumer::accept)
+            );
         }
-        return ReplyPlans.bulkStringArray(popped.count(), popped.encodedElementBytes(), popped.retainedMemoryBytes());
+        int[] payloadLength = {-1};
+        preview.visitElementLengths(length -> payloadLength[0] = length);
+        return payloadLength[0] < 0
+                ? ReplyShapes.nullValue()
+                : ReplyShapes.bulkString(payloadLength[0], preview.retainedMemoryBytes());
     }
 
-    private static boolean matchesPreflight(ReplyPlan plan, PoppedValueSequence popped, boolean hasCount) {
-        return popReplyPlan(popped, hasCount).equals(plan);
-    }
+    private static final class PreparedPop implements PreparedCommand {
+        private final PreparedMutation<PoppedValueSequence> mutation;
+        private final PoppedValueSequence preview;
+        private final boolean hasCount;
+        private final ReplyShape shape;
+        private boolean closed;
 
-    private static void popResponse(RedisReplyWriter out, PoppedValueSequence popped, boolean hasCount) {
-        if (!hasCount) {
-            if (popped == null || popped.isNull() || popped.count() == 0) {
-                out.bulkString((byte[]) null);
+        private PreparedPop(
+                PreparedMutation<PoppedValueSequence> mutation,
+                PoppedValueSequence preview,
+                boolean hasCount,
+                ReplyShape shape
+        ) {
+            this.mutation = Objects.requireNonNull(mutation, "mutation");
+            this.preview = preview;
+            this.hasCount = hasCount;
+            this.shape = Objects.requireNonNull(shape, "shape");
+        }
+
+        @Override
+        public ReplyShape replyShape() {
+            return shape;
+        }
+
+        @Override
+        public ValidationResult validateBeforeExecute() {
+            return mutation.isCurrent() ? ValidationResult.VALID : ValidationResult.STALE;
+        }
+
+        @Override
+        public void execute(CommandExecutionContext context) {
+            mutation.commit(context.mutationContext());
+            if (preview == null || preview.isNull()) {
+                if (hasCount) {
+                    context.reply().nullArray();
+                } else {
+                    context.reply().nullValue();
+                }
                 return;
             }
-            popped.emitTo(new BulkStringReplyAdapter(out));
-            return;
+            if (hasCount) {
+                context.reply().arrayHeader(preview.elementCount());
+            }
+            preview.emitTo(new BulkStringReplyAdapter(context.reply()));
         }
-        if (popped == null || popped.isNull()) {
-            out.nullArray();
-            return;
-        }
-        out.arrayHeader(popped.count());
-        if (popped.count() > 0) {
-            popped.emitTo(new BulkStringReplyAdapter(out));
+
+        @Override
+        public void close() {
+            if (!closed) {
+                closed = true;
+                mutation.close();
+            }
         }
     }
 }

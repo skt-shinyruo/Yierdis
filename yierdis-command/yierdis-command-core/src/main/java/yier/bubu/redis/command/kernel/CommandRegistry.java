@@ -1,9 +1,8 @@
 package yier.bubu.redis.command.kernel;
 
 import yier.bubu.redis.command.api.CommandModule;
-import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyPlan;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -29,16 +28,16 @@ public final class CommandRegistry implements CommandModule.Registration {
     private static final class Entry {
         private final byte[] nameUpperAscii;
         private final long hash;
-        private final CommandSpec<?> spec;
+        private final CommandDefinition<?> definition;
 
         private Entry(
                 byte[] nameUpperAscii,
                 long hash,
-                CommandSpec<?> spec
+                CommandDefinition<?> definition
         ) {
             this.nameUpperAscii = Objects.requireNonNull(nameUpperAscii, "nameUpperAscii");
             this.hash = hash;
-            this.spec = Objects.requireNonNull(spec, "spec");
+            this.definition = Objects.requireNonNull(definition, "definition");
         }
     }
 
@@ -49,13 +48,13 @@ public final class CommandRegistry implements CommandModule.Registration {
     private int size = 0;
 
     @Override
-    public void register(CommandSpec<?> spec) {
-        registerInternal(spec);
+    public void register(CommandDefinition<?> definition) {
+        registerInternal(definition);
     }
 
-    private void registerInternal(CommandSpec<?> spec) {
-        Objects.requireNonNull(spec, "spec");
-        String nameUpper = spec.syntax().nameUpper();
+    private void registerInternal(CommandDefinition<?> definition) {
+        Objects.requireNonNull(definition, "definition");
+        String nameUpper = definition.syntax().nameUpper();
         if (!namesUpper.add(nameUpper)) {
             throw new IllegalArgumentException("duplicate command registration: " + nameUpper);
         }
@@ -69,22 +68,17 @@ public final class CommandRegistry implements CommandModule.Registration {
         insert(new Entry(
                 ascii,
                 hash,
-                spec
+                definition
         ));
     }
 
-    CommandSpec<?> spec(ExecutionRequest request) {
+    CommandDefinition<?> definition(ExecutionRequest request) {
         Entry entry = findEntry(request);
-        return entry == null ? null : entry.spec;
-    }
-
-    ReplyPlan replyPlan(ExecutionRequest request) {
-        CommandSpec spec = spec(request);
-        return spec == null ? ReplyPlan.maximum() : spec.planReply(request);
+        return entry == null ? null : entry.definition;
     }
 
     @Override
-    public CommandSpec<?> specByUpperName(String nameUpper) {
+    public CommandDefinition<?> definitionByUpperName(String nameUpper) {
         if (nameUpper == null || nameUpper.isBlank()) {
             return null;
         }
@@ -99,7 +93,7 @@ public final class CommandRegistry implements CommandModule.Registration {
             return null;
         }
         Entry entry = findEntry(ascii);
-        return entry == null ? null : entry.spec;
+        return entry == null ? null : entry.definition;
     }
 
     private Entry findEntry(ExecutionRequest request) {

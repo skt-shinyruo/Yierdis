@@ -3,9 +3,9 @@ package yier.bubu.redis.integration.command;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandParsers;
-import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.kernel.CommandRegistry;
@@ -15,6 +15,7 @@ import yier.bubu.redis.testutil.ReplyArray;
 import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplyObject;
+import yier.bubu.redis.testutil.TestPreparedCommands;
 
 import java.lang.reflect.Field;
 import java.util.Arrays;
@@ -24,7 +25,7 @@ import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class CommandSyntaxRegistryTest {
     @Test
-    public void registryExposesSyntaxAndMultiPolicyThroughUnifiedSpec() {
+    public void registryExposesSyntaxAndMultiPolicyThroughUnifiedDefinition() {
         CommandRegistry registry = new CommandRegistry();
         CommandSyntax syntax = new CommandSyntax(
                 "HELLO",
@@ -32,18 +33,18 @@ public class CommandSyntaxRegistryTest {
                 CommandKeySpec.NONE,
                 TransactionPolicy.DISALLOWED_IN_MULTI
         );
-        registry.register(CommandSpec.of(
+        registry.register(new CommandDefinition<>(
                 syntax,
                 CommandParsers.request(),
-                (cmd, ctx) -> ctx.out().simpleString("OK")
+                (cmd, context) -> TestPreparedCommands.simpleString("OK")
         ));
 
-        CommandSpec<?> spec = registry.specByUpperName("HELLO");
-        Assert.assertNotNull(spec);
-        Assert.assertSame(syntax, spec.syntax());
-        Assert.assertEquals(-1, spec.syntax().arity().redisMetadataArity());
-        Assert.assertEquals(CommandKeySpec.NONE, spec.syntax().keys());
-        Assert.assertEquals(TransactionPolicy.DISALLOWED_IN_MULTI, spec.syntax().transactionPolicy());
+        CommandDefinition<?> definition = registry.definitionByUpperName("HELLO");
+        Assert.assertNotNull(definition);
+        Assert.assertSame(syntax, definition.syntax());
+        Assert.assertEquals(-1, definition.syntax().arity().redisMetadataArity());
+        Assert.assertEquals(CommandKeySpec.NONE, definition.syntax().keys());
+        Assert.assertEquals(TransactionPolicy.DISALLOWED_IN_MULTI, definition.syntax().transactionPolicy());
     }
 
     @Test
@@ -51,7 +52,7 @@ public class CommandSyntaxRegistryTest {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(
                     db,
-                    registration -> registration.register(CommandSpec.of(
+                    registration -> registration.register(new CommandDefinition<>(
                             new CommandSyntax(
                                     "HELLO",
                                     CommandArity.exact(7),
@@ -59,7 +60,7 @@ public class CommandSyntaxRegistryTest {
                                     TransactionPolicy.QUEUEABLE
                             ),
                             CommandParsers.request(),
-                            (cmd, ctx) -> ctx.out().simpleString("OK")
+                            (cmd, context) -> TestPreparedCommands.simpleString("OK")
                     ))
             );
 
@@ -83,27 +84,27 @@ public class CommandSyntaxRegistryTest {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(
                     db,
                     registration -> {
-                        registration.register(CommandSpec.of(
+                        registration.register(new CommandDefinition<>(
                                 new CommandSyntax("INFO", CommandArity.min(1), CommandKeySpec.NONE,
                                         TransactionPolicy.QUEUEABLE),
                                 CommandParsers.request(),
-                                (cmd, ctx) -> ctx.out().simpleString("OK")
+                                (cmd, context) -> TestPreparedCommands.simpleString("OK")
                         ));
-                        registration.register(CommandSpec.of(
+                        registration.register(new CommandDefinition<>(
                                 new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
                                         TransactionPolicy.DISALLOWED_IN_MULTI),
                                 CommandParsers.request(),
-                                (cmd, ctx) -> ctx.out().simpleString("OK")
+                                (cmd, context) -> TestPreparedCommands.simpleString("OK")
                         ));
                     }
             );
             CommandRegistry registry = registryOf(processor);
-            Assert.assertEquals(-1, registry.specByUpperName("INFO").syntax().arity().redisMetadataArity());
+            Assert.assertEquals(-1, registry.definitionByUpperName("INFO").syntax().arity().redisMetadataArity());
             Assert.assertEquals(
                     TransactionPolicy.DISALLOWED_IN_MULTI,
-                    registry.specByUpperName("HELLO").syntax().transactionPolicy()
+                    registry.definitionByUpperName("HELLO").syntax().transactionPolicy()
             );
-            Assert.assertNotNull(registry.specByUpperName("SET").syntax());
+            Assert.assertNotNull(registry.definitionByUpperName("SET").syntax());
         });
     }
 

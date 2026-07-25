@@ -203,7 +203,7 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
                     .addLast("inboundReadCredit", inboundReadCredit)
                     .addLast("inboundByteAccounting", new InboundByteAccountingHandler(inboundReadCredit))
                     .addLast("respRequestDecoder", decoder)
-                    .addLast("commandHandler", new YierdisFastCommandHandler(executor, replyWriterFactory));
+                    .addLast("executionRequestIngress", new NettyExecutionRequestIngress(executor, replyWriterFactory));
         } finally {
             if (!lifecycleBound) {
                 childChannelRegistry.initializationFailed(ch);

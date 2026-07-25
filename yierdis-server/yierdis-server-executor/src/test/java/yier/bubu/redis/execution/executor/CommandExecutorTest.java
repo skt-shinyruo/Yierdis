@@ -8,7 +8,7 @@ import yier.bubu.redis.execution.api.CapacityRegistration;
 import yier.bubu.redis.execution.api.ExecutionReply;
 import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.ReplyReservationResult;
-import yier.bubu.redis.execution.api.ReplyTooLargeException;
+import yier.bubu.redis.execution.api.ReplyShapes;
 
 import java.io.ByteArrayOutputStream;
 import java.util.concurrent.CompletableFuture;
@@ -165,6 +165,7 @@ public class CommandExecutorTest {
                 () -> {},
                 engine,
                 ownerExecutor,
+                ExecutorCoreTestSupport.simpleReplySizer(),
                 ExecutorCoreTestSupport.simpleReplyWriterFactory(),
                 io,
                 new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -239,6 +240,7 @@ public class CommandExecutorTest {
                     () -> { },
                     ExecutorCoreTestSupport.simpleCommandEngine(),
                     ownerExecutor,
+                    ExecutorCoreTestSupport.simpleReplySizer(),
                     ExecutorCoreTestSupport.simpleReplyWriterFactory(),
                     io,
                     new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, policy)
@@ -299,6 +301,7 @@ public class CommandExecutorTest {
                     () -> { },
                     ExecutorCoreTestSupport.simpleCommandEngine(),
                     ownerExecutor,
+                    ExecutorCoreTestSupport.simpleReplySizer(),
                     ExecutorCoreTestSupport.simpleReplyWriterFactory(),
                     io,
                     new CommandExecutorConfig(4, 100, 8, 4, 0, 0, 1, 1_000, policy)
@@ -373,6 +376,7 @@ public class CommandExecutorTest {
                 () -> {},
                 engine,
                 ownerExecutor,
+                ExecutorCoreTestSupport.simpleReplySizer(),
                 ExecutorCoreTestSupport.simpleReplyWriterFactory(),
                 io,
                 new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -404,9 +408,10 @@ public class CommandExecutorTest {
         Assert.assertEquals(1, exploding.closeCalls());
         Assert.assertEquals(1, queued.closeCalls());
         Assert.assertEquals(2L, connection.context().statsSnapshot().commandsEnqueued());
-        Assert.assertEquals(1L, connection.context().statsSnapshot().commandsExecuted());
+        Assert.assertEquals(0L, connection.context().statsSnapshot().commandsExecuted());
         Assert.assertEquals(1L, connection.context().statsSnapshot().commandsSkippedClosing());
         Assert.assertEquals(2L, executor.statsSnapshot().submitAccepted());
+        Assert.assertEquals(0L, executor.statsSnapshot().commandsExecuted());
         Assert.assertEquals(1L, executor.statsSnapshot().closeAfterReply());
 
         CompletableFuture<Void> shutdown = executor.shutdownGracefully();
@@ -428,6 +433,7 @@ public class CommandExecutorTest {
                 () -> {},
                 engine,
                 ownerExecutor,
+                ExecutorCoreTestSupport.simpleReplySizer(),
                 ExecutorCoreTestSupport.simpleReplyWriterFactory(),
                 io,
                 new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -454,13 +460,17 @@ public class CommandExecutorTest {
     public void resultUnknownFailureCancelsTheRegisteredReplyAndClosesWithoutReplacementReply() {
         RecordingIoAdapter io = new RecordingIoAdapter();
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
-        CommandExecutionEngine engine = (session, request, out) -> {
-            throw new ResultUnknownException("mutation result may already be visible");
-        };
+        CommandExecutionEngine engine = (session, request) -> ExecutorCoreTestSupport.fixed(
+                ReplyShapes.simpleString("OK"),
+                context -> {
+                    throw new ResultUnknownException("mutation result may already be visible");
+                }
+        );
         CommandExecutor<TestConnection> executor = new CommandExecutor<>(
                 () -> { },
                 engine,
                 ownerExecutor,
+                ExecutorCoreTestSupport.simpleReplySizer(),
                 ExecutorCoreTestSupport.simpleReplyWriterFactory(),
                 io,
                 new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -488,16 +498,18 @@ public class CommandExecutorTest {
     }
 
     @Test
-    public void oversizedReplyCancelsTheRegisteredReplyAndClosesWithoutReplacementReply() {
+    public void oversizedReplyWritesAnErrorBeforeAnyMutation() {
         RecordingIoAdapter io = new RecordingIoAdapter();
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
-        CommandExecutionEngine engine = (session, request, out) -> {
-            throw new ReplyTooLargeException("reply exceeds configured single-reply capacity");
-        };
+        CommandExecutionEngine engine = (session, request) -> ExecutorCoreTestSupport.fixed(
+                ReplyShapes.bulkString(4096, 0L),
+                context -> context.reply().bulkString(new byte[4096])
+        );
         CommandExecutor<TestConnection> executor = new CommandExecutor<>(
                 () -> { },
                 engine,
                 ownerExecutor,
+                ExecutorCoreTestSupport.simpleReplySizer(),
                 ExecutorCoreTestSupport.simpleReplyWriterFactory(),
                 io,
                 new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -506,19 +518,18 @@ public class CommandExecutorTest {
 
         TestConnection connection = ExecutorCoreTestSupport.newConnection("c-1");
         TrackingExecutionRequest request = TrackingExecutionRequest.ofUtf8("GET", "large");
-        TrackingReply reply = new TrackingReply();
+        TrackingReply reply = new TrackingReply(ReplyReservationResult.TOO_LARGE);
         try {
             ExecutorCoreTestSupport.publish(executor, connection, request, reply);
 
             ownerExecutor.runAll();
 
-            Assert.assertTrue(connection.context().statsSnapshot().closing());
+            Assert.assertFalse(connection.context().statsSnapshot().closing());
             Assert.assertEquals(1, request.closeCalls());
-            Assert.assertEquals(1, reply.cancelCalls());
-            Assert.assertEquals(0, reply.readyCalls());
-            Assert.assertEquals(0, reply.writtenBytes());
-            Assert.assertEquals("", io.bufferedReply(connection));
-            Assert.assertEquals(1, io.closeCalls(connection));
+            Assert.assertEquals(0, reply.cancelCalls());
+            Assert.assertEquals(1, reply.readyCalls());
+            Assert.assertTrue(reply.writtenBytes() > 0);
+            Assert.assertEquals(0, io.closeCalls(connection));
         } finally {
             executor.close();
             ownerExecutor.runAll();
@@ -535,6 +546,7 @@ public class CommandExecutorTest {
                 () -> {},
                 engine,
                 ownerExecutor,
+                ExecutorCoreTestSupport.simpleReplySizer(),
                 ExecutorCoreTestSupport.simpleReplyWriterFactory(),
                 io,
                 new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -591,6 +603,7 @@ public class CommandExecutorTest {
                 },
                 engine,
                 serialOwner,
+                ExecutorCoreTestSupport.simpleReplySizer(),
                 ExecutorCoreTestSupport.simpleReplyWriterFactory(),
                 new RecordingIoAdapter(),
                 new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
@@ -657,10 +670,19 @@ public class CommandExecutorTest {
         private final ByteArrayOutputStream output = new ByteArrayOutputStream();
         private final AtomicInteger readyCalls = new AtomicInteger();
         private final AtomicInteger cancelCalls = new AtomicInteger();
+        private final ReplyReservationResult reservationResult;
+
+        private TrackingReply() {
+            this(ReplyReservationResult.RESERVED);
+        }
+
+        private TrackingReply(ReplyReservationResult reservationResult) {
+            this.reservationResult = reservationResult;
+        }
 
         @Override
         public ReplyReservationResult tryReserve(ReplyPlan plan) {
-            return ReplyReservationResult.RESERVED;
+            return reservationResult;
         }
 
         @Override

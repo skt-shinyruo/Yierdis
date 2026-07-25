@@ -4,14 +4,15 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandParsers;
-import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.ReplyShapes;
 
 import java.util.List;
 
@@ -28,35 +29,45 @@ public class YierdisFastCommandProcessorModuleTest {
     @Test
     public void explicitRegistryCanRegisterAdditionalCommands() {
         CommandRegistry registry = CommandRegistries.from(
-                registrar -> registrar.register(CommandSpec.of(
+                registrar -> registrar.register(new CommandDefinition<>(
                         syntax("LOCAL", CommandArity.exact(1)),
                         CommandParsers.request(),
-                        (request, ctx) -> ctx.out().simpleString("LOCAL")
+                        (request, preparation) -> PreparedCommands.fixed(
+                                ReplyShapes.simpleString("LOCAL"),
+                                execution -> execution.reply().simpleString("LOCAL")
+                        )
                 ))
         );
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
         ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of());
 
         CapturingReplyWriter out = new CapturingReplyWriter();
-        processor.execute(request, TestCommandContexts.context(out));
+        PreparedCommandTestSupport.execute(processor, request, out);
 
         Assert.assertEquals("LOCAL", out.simpleStringValue);
         Assert.assertNull(out.errorValue);
     }
 
     @Test
-    public void modulesCanRegisterTypedCommandSpecsDirectly() {
+    public void modulesCanRegisterTypedCommandDefinitionsDirectly() {
         CommandRegistry registry = CommandRegistries.from(
-                registrar -> registrar.register(CommandSpec.of(
+                registrar -> registrar.register(new CommandDefinition<>(
                         syntax("LOCAL", CommandArity.exact(1)),
                         CommandParsers.args(),
-                        (args, ctx) -> ctx.out().simpleString("LOCAL_OK")
+                        (args, preparation) -> PreparedCommands.fixed(
+                                ReplyShapes.simpleString("LOCAL_OK"),
+                                execution -> execution.reply().simpleString("LOCAL_OK")
+                        )
                 ))
         );
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
 
         CapturingReplyWriter out = new CapturingReplyWriter();
-        processor.execute(ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of()), TestCommandContexts.context(out));
+        PreparedCommandTestSupport.execute(
+                processor,
+                ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of()),
+                out
+        );
 
         Assert.assertEquals("LOCAL_OK", out.simpleStringValue);
         Assert.assertNull(out.errorValue);
@@ -70,7 +81,11 @@ public class YierdisFastCommandProcessorModuleTest {
 
     private static void assertUnknownCommand(YierdisFastCommandProcessor processor, String commandName) {
         CapturingReplyWriter out = new CapturingReplyWriter();
-        processor.execute(ByteArrayExecutionRequest.fromUtf8(commandName, List.of()), TestCommandContexts.context(out));
+        PreparedCommandTestSupport.execute(
+                processor,
+                ByteArrayExecutionRequest.fromUtf8(commandName, List.of()),
+                out
+        );
 
         Assert.assertNull(out.simpleStringValue);
         Assert.assertEquals("ERR unknown command '" + commandName + "'", out.errorValue);

@@ -4,11 +4,15 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.execution.api.CapacityRegistration;
+import yier.bubu.redis.execution.api.CommandExecutionContext;
 import yier.bubu.redis.execution.api.ExecutionReply;
+import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.ReplyCapacityUnavailableException;
 import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.ReplyReservationSink;
 import yier.bubu.redis.execution.api.ReplyReservationResult;
+import yier.bubu.redis.execution.api.ReplyShapes;
+import yier.bubu.redis.execution.api.ValidationResult;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -19,6 +23,103 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class ReplyCapacityBlockedSchedulingTest {
+    @Test
+    public void capacityWaitRetainsOnePreparedCommandAndExecutesItOnce() {
+        ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+        AtomicInteger prepares = new AtomicInteger();
+        AtomicInteger executes = new AtomicInteger();
+        AtomicInteger closes = new AtomicInteger();
+        CommandExecutionEngine engine = (session, request) -> {
+            prepares.incrementAndGet();
+            return countingPrepared(ValidationResult.VALID, executes, closes);
+        };
+        CommandExecutor<TestConnection> executor = newLifecycleExecutor(ownerExecutor, engine);
+        BlockingReply reply = new BlockingReply(false);
+        try {
+            ExecutorCoreTestSupport.publish(
+                    executor,
+                    ExecutorCoreTestSupport.newConnection("capacity"),
+                    TrackingExecutionRequest.ofUtf8("GET"),
+                    reply
+            );
+
+            ownerExecutor.runAll();
+            Assert.assertEquals(1, prepares.get());
+            Assert.assertEquals(0, executes.get());
+            Assert.assertEquals(0, closes.get());
+
+            reply.makeCapacityAvailable(10);
+            ownerExecutor.runAll();
+            Assert.assertEquals(1, prepares.get());
+            Assert.assertEquals(1, executes.get());
+            Assert.assertEquals(1, closes.get());
+        } finally {
+            executor.close();
+            ownerExecutor.runAll();
+        }
+    }
+
+    @Test
+    public void capacityWakeupRegistrationIsCancelledAfterTheReplyIsReserved() {
+        ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+        CommandExecutor<TestConnection> executor = newLifecycleExecutor(
+                ownerExecutor,
+                (session, request) -> countingPrepared(
+                        ValidationResult.VALID,
+                        new AtomicInteger(),
+                        new AtomicInteger()
+                )
+        );
+        BlockingReply reply = new BlockingReply(false);
+        try {
+            ExecutorCoreTestSupport.publish(
+                    executor,
+                    ExecutorCoreTestSupport.newConnection("capacity-registration"),
+                    TrackingExecutionRequest.ofUtf8("GET"),
+                    reply
+            );
+
+            ownerExecutor.runAll();
+            reply.makeCapacityAvailable(1);
+            ownerExecutor.runAll();
+
+            Assert.assertEquals(1, reply.capacityRegistrationCancelCalls());
+        } finally {
+            executor.close();
+            ownerExecutor.runAll();
+        }
+    }
+
+    @Test
+    public void stalePreparedCommandIsClosedAndPreparedAgainBeforeMutation() {
+        ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+        AtomicInteger prepares = new AtomicInteger();
+        AtomicInteger executes = new AtomicInteger();
+        AtomicInteger closes = new AtomicInteger();
+        CommandExecutionEngine engine = (session, request) -> countingPrepared(
+                prepares.getAndIncrement() == 0 ? ValidationResult.STALE : ValidationResult.VALID,
+                executes,
+                closes
+        );
+        CommandExecutor<TestConnection> executor = newLifecycleExecutor(ownerExecutor, engine);
+        try {
+            ExecutorCoreTestSupport.publish(
+                    executor,
+                    ExecutorCoreTestSupport.newConnection("stale"),
+                    TrackingExecutionRequest.ofUtf8("INCR"),
+                    new BlockingReply(true)
+            );
+
+            ownerExecutor.runAll();
+            Assert.assertEquals(2, prepares.get());
+            Assert.assertEquals(1, executes.get());
+            Assert.assertEquals(2, closes.get());
+        } finally {
+            executor.close();
+            ownerExecutor.runAll();
+        }
+    }
+
     @Test
     public void fairRunsOtherConnectionsWhileTheBlockedHeadKeepsItsOwnConnectionOrder() {
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
@@ -165,16 +266,21 @@ public class ReplyCapacityBlockedSchedulingTest {
             SchedulingPolicy policy,
             RecordingIoAdapter io
     ) {
-        CommandExecutionEngine engine = (session, request, writer) -> {
+        CommandExecutionEngine engine = (session, request) -> {
             String command = new String(request.toByteArray(0), StandardCharsets.US_ASCII);
-            writer.requireReply(ReplyPlan.exact(32L, 0L));
-            writer.simpleString(command);
-            completed.add(command);
+            return ExecutorCoreTestSupport.fixed(
+                    ReplyShapes.simpleString(command),
+                    context -> {
+                        context.reply().simpleString(command);
+                        completed.add(command);
+                    }
+            );
         };
         CommandExecutor<TestConnection> executor = new CommandExecutor<>(
                 () -> { },
                 engine,
                 ownerExecutor,
+                ExecutorCoreTestSupport.simpleReplySizer(),
                 ExecutorCoreTestSupport.simpleReplyWriterFactory(),
                 io,
                 new CommandExecutorConfig(16, 0, 8, 4, 0, 0, 128, 1_000, policy)
@@ -183,10 +289,62 @@ public class ReplyCapacityBlockedSchedulingTest {
         return executor;
     }
 
+    private static CommandExecutor<TestConnection> newLifecycleExecutor(
+            ManualOwnerExecutor ownerExecutor,
+            CommandExecutionEngine engine
+    ) {
+        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+                () -> { },
+                engine,
+                ownerExecutor,
+                (session, shape) -> ReplyPlan.exact(64L, shape.retainedSourceBytes()),
+                ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                new RecordingIoAdapter(),
+                new CommandExecutorConfig(16, 0, 8, 4, 0, 0, 128, 1_000, SchedulingPolicy.FAIR)
+        );
+        ExecutorCoreTestSupport.startExecutor(executor, ownerExecutor);
+        return executor;
+    }
+
+    private static PreparedCommand countingPrepared(
+            ValidationResult validation,
+            AtomicInteger executes,
+            AtomicInteger closes
+    ) {
+        return new PreparedCommand() {
+            private boolean closed;
+
+            @Override
+            public yier.bubu.redis.execution.api.ReplyShape replyShape() {
+                return ReplyShapes.bulkString(4096, 0L);
+            }
+
+            @Override
+            public ValidationResult validateBeforeExecute() {
+                return validation;
+            }
+
+            @Override
+            public void execute(CommandExecutionContext context) {
+                executes.incrementAndGet();
+                context.reply().simpleString("OK");
+            }
+
+            @Override
+            public void close() {
+                if (!closed) {
+                    closed = true;
+                    closes.incrementAndGet();
+                }
+            }
+        };
+    }
+
     private static final class BlockingReply implements ExecutionReply {
         private final AtomicBoolean capacityAvailable;
         private final AtomicInteger readyCalls = new AtomicInteger();
         private final AtomicInteger cancelCalls = new AtomicInteger();
+        private final AtomicInteger capacityRegistrationCancelCalls = new AtomicInteger();
         private final BlockingSink sink = new BlockingSink();
         private final AtomicBoolean capacityWaitActive = new AtomicBoolean();
         private Runnable wakeup;
@@ -216,7 +374,10 @@ public class ReplyCapacityBlockedSchedulingTest {
                     callback.run();
                 }
             };
-            return () -> capacityWaitActive.set(false);
+            return () -> {
+                capacityRegistrationCancelCalls.incrementAndGet();
+                capacityWaitActive.set(false);
+            };
         }
 
         @Override
@@ -258,6 +419,10 @@ public class ReplyCapacityBlockedSchedulingTest {
 
         private int cancelCalls() {
             return cancelCalls.get();
+        }
+
+        private int capacityRegistrationCancelCalls() {
+            return capacityRegistrationCancelCalls.get();
         }
 
         private final class BlockingSink implements ReplyReservationSink {

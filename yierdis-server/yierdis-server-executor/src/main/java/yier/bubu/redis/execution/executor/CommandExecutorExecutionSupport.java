@@ -1,11 +1,14 @@
 package yier.bubu.redis.execution.executor;
 
 import yier.bubu.redis.common.command.ResultUnknownException;
+import yier.bubu.redis.execution.api.CommandExecutionContext;
 import yier.bubu.redis.execution.api.ExecutionReply;
+import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
-import yier.bubu.redis.execution.api.ReplyCapacityUnavailableException;
-import yier.bubu.redis.execution.api.ReplyTooLargeException;
+import yier.bubu.redis.execution.api.ReplyReservationResult;
+import yier.bubu.redis.execution.api.ReplySizer;
+import yier.bubu.redis.execution.api.ValidationResult;
 
 import java.util.Collection;
 import java.util.Objects;
@@ -14,6 +17,7 @@ import java.util.function.BooleanSupplier;
 
 final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
     private final CommandExecutionEngine commandProcessor;
+    private final ReplySizer replySizer;
     private final RedisReplyWriterFactory replyWriterFactory;
     private final ExecutionIoAdapter<C> ioAdapter;
     private final ExecutorBacklogBudget backlogBudget;
@@ -28,6 +32,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
 
     CommandExecutorExecutionSupport(
             CommandExecutionEngine commandProcessor,
+            ReplySizer replySizer,
             RedisReplyWriterFactory replyWriterFactory,
             ExecutionIoAdapter<C> ioAdapter,
             ExecutorBacklogBudget backlogBudget,
@@ -38,6 +43,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
             BooleanSupplier running
     ) {
         this.commandProcessor = Objects.requireNonNull(commandProcessor, "commandProcessor");
+        this.replySizer = Objects.requireNonNull(replySizer, "replySizer");
         this.replyWriterFactory = Objects.requireNonNull(replyWriterFactory, "replyWriterFactory");
         this.ioAdapter = Objects.requireNonNull(ioAdapter, "ioAdapter");
         this.backlogBudget = Objects.requireNonNull(backlogBudget, "backlogBudget");
@@ -53,48 +59,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
             return ExecutionAttempt.CONNECTION_CLOSED;
         }
 
-        if (task.reply != null) {
-            return executeWithReply(task);
-        }
-
-        C connection = task.connection;
-        if (connection == null) {
-            closeRequest(task.request);
-            releaseReservedBudget(task.retainedBytes);
-            return ExecutionAttempt.CONNECTION_CLOSED;
-        }
-
-        ExecutionConnectionContext context = connection.context();
-        if (context.isClosing()) {
-            context.recordSkippedClosing();
-            commandsSkippedClosing.increment();
-            closeRequest(task.request);
-            finishTask(connection, task.retainedBytes, false);
-            return ExecutionAttempt.CONNECTION_CLOSED;
-        }
-
-        boolean executed = false;
-        try {
-            RedisReplyWriter writer = replyWriterFactory.newWriter(connection.session(), ioAdapter.newReplySink(connection));
-            commandProcessor.execute(connection.session(), task.request, writer);
-            if (writer.closeAfterReplyRequested()) {
-                context.recordCloseAfterReply();
-                closeAfterReply.increment();
-                connection.markClosing();
-            }
-            ioAdapter.writeBufferedReply(connection, writer.closeAfterReplyRequested());
-            touchedConnections.add(connection);
-            commandsExecuted.increment();
-            executed = true;
-        } catch (Throwable t) {
-            executed = true;
-            commandsExecuted.increment();
-            handleExecutionFailure(connection, context, touchedConnections);
-        } finally {
-            closeRequest(task.request);
-            finishTask(connection, task.retainedBytes, executed);
-        }
-        return ExecutionAttempt.COMPLETED;
+        return executeWithReply(task);
     }
 
     void flushPending(Collection<C> touchedConnections) {
@@ -109,6 +74,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
             return;
         }
         task.cancelCapacityRegistration();
+        closePrepared(task);
         closeRequest(task.request);
         cancelReply(task.reply);
         if (task.connection != null) {
@@ -158,6 +124,8 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
     private ExecutionAttempt executeWithReply(CommandExecutorTask<C> task) {
         C connection = task.connection;
         if (connection == null) {
+            task.cancelCapacityRegistration();
+            closePrepared(task);
             closeRequest(task.request);
             cancelReply(task.reply);
             releaseReservedBudget(task.retainedBytes);
@@ -168,6 +136,8 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         if (context.isClosing()) {
             context.recordSkippedClosing();
             commandsSkippedClosing.increment();
+            task.cancelCapacityRegistration();
+            closePrepared(task);
             closeRequest(task.request);
             cancelReply(task.reply);
             finishTask(connection, task.retainedBytes, false);
@@ -175,9 +145,50 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         }
 
         boolean terminal = false;
+        boolean executed = false;
         try {
+            if (task.prepared == null) {
+                task.prepared = Objects.requireNonNull(
+                        commandProcessor.prepare(connection.session(), task.request),
+                        "command engine returned null prepared command"
+                );
+                task.replyPlan = Objects.requireNonNull(
+                        replySizer.plan(connection.session(), task.prepared.replyShape()),
+                        "reply sizer returned null plan"
+                );
+            }
+
+            ReplyReservationResult reservation = task.reply.tryReserve(task.replyPlan);
+            if (reservation == ReplyReservationResult.WAITING) {
+                context.markInputPausedByReply();
+                backpressureController.disableAutoRead(connection);
+                return ExecutionAttempt.REPLY_CAPACITY_BLOCKED;
+            }
+            if (reservation == ReplyReservationResult.CLOSED) {
+                terminal = true;
+                return ExecutionAttempt.CONNECTION_CLOSED;
+            }
+            if (reservation == ReplyReservationResult.TOO_LARGE) {
+                RedisReplyWriter writer = replyWriterFactory.newWriter(connection.session(), task.reply.sink());
+                writer.error("ERR reply exceeds configured maximum");
+                task.reply.markReady(writer.closeAfterReplyRequested());
+                terminal = true;
+                return ExecutionAttempt.COMPLETED;
+            }
+
+            task.cancelCapacityRegistration();
+
+            if (task.prepared.validateBeforeExecute() == ValidationResult.STALE) {
+                task.closePrepared();
+                return ExecutionAttempt.REPREPARE;
+            }
+
             RedisReplyWriter writer = replyWriterFactory.newWriter(connection.session(), task.reply.sink());
-            commandProcessor.execute(connection.session(), task.request, writer);
+            try (CommandExecutionContext execution = CommandExecutionContext.forRequest(
+                    connection.session(), writer, task.request)) {
+                task.prepared.execute(execution);
+                executed = true;
+            }
             if (writer.closeAfterReplyRequested()) {
                 context.recordCloseAfterReply();
                 closeAfterReply.increment();
@@ -187,37 +198,37 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
             commandsExecuted.increment();
             terminal = true;
             return ExecutionAttempt.COMPLETED;
-        } catch (ReplyCapacityUnavailableException unavailable) {
-            if (!task.reply.hasWrittenBytes() && !context.isClosing()) {
-                context.markInputPausedByReply();
-                backpressureController.disableAutoRead(connection);
-                return ExecutionAttempt.REPLY_CAPACITY_BLOCKED;
-            }
-            terminal = true;
-            commandsExecuted.increment();
-            handleReplyExecutionFailure(connection, context, task.reply);
-            return ExecutionAttempt.CONNECTION_CLOSED;
-        } catch (ReplyTooLargeException tooLarge) {
-            terminal = true;
-            commandsExecuted.increment();
-            closeOversizedReply(connection, context, task.reply);
-            return ExecutionAttempt.CONNECTION_CLOSED;
         } catch (Throwable failure) {
             terminal = true;
-            commandsExecuted.increment();
-            if (isResultUnknownFailure(failure)) {
+            if (executed) {
+                commandsExecuted.increment();
+            }
+            if (executed || isResultUnknownFailure(failure)) {
                 closeResultUnknown(connection, context, task.reply);
                 return ExecutionAttempt.CONNECTION_CLOSED;
             }
             handleReplyExecutionFailure(connection, context, task.reply);
         } finally {
             if (terminal) {
+                task.cancelCapacityRegistration();
+                closePrepared(task);
                 closeRequest(task.request);
                 context.clearInputPausedByReply();
-                finishTask(connection, task.retainedBytes, true);
+                finishTask(connection, task.retainedBytes, executed);
             }
         }
         return ExecutionAttempt.CONNECTION_CLOSED;
+    }
+
+    private static void closePrepared(CommandExecutorTask<?> task) {
+        if (task == null) {
+            return;
+        }
+        try {
+            task.closePrepared();
+        } catch (Throwable ignored) {
+            // Terminal cleanup must continue through request, reply, and backlog ownership.
+        }
     }
 
     private void releaseReservedBudget(int retainedBytes) {

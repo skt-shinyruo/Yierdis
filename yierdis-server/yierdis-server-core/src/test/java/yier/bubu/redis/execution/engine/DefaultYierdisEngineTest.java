@@ -4,9 +4,9 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandParsers;
-import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.kernel.CommandRegistries;
@@ -14,10 +14,16 @@ import yier.bubu.redis.command.kernel.CommandRegistry;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
+import yier.bubu.redis.execution.api.CommandExecutionContext;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
+import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.ReplyShape;
+import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.execution.api.TransactionState;
+import yier.bubu.redis.execution.api.ValidationResult;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -27,34 +33,35 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 public class DefaultYierdisEngineTest {
     @Test
-    public void commandModulesDoNotReachThroughFullCommandContextSession() throws IOException {
+    public void commandModulesDoNotReferenceTheDeletedLegacyExecutionContext() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("unable to locate repository root", repoRoot);
 
         ArrayList<Path> offenders = new ArrayList<>();
-        assertNoFullSessionAccess(
+        assertNoLegacyContextReference(
                 repoRoot.resolve("yierdis-command/yierdis-command-core/src/main/java"),
                 offenders
         );
-        assertNoFullSessionAccess(
+        assertNoLegacyContextReference(
                 repoRoot.resolve("yierdis-command/yierdis-command-builtin/src/main/java"),
                 offenders
         );
 
-        Assert.assertTrue("ctx.session() usages must move to narrow CommandContext getters: " + offenders, offenders.isEmpty());
+        Assert.assertTrue("legacy execution-context references must be removed: " + offenders, offenders.isEmpty());
     }
 
     @Test
-    public void executeDelegatesThroughOwnedCommandProcessor() {
+    public void prepareDelegatesThroughOwnedCommandProcessor() {
         CommandRegistry registry = CommandRegistries.from(
-                registration -> registration.register(CommandSpec.of(
+                registration -> registration.register(new CommandDefinition<>(
                         syntax("LOCAL"),
                         CommandParsers.request(),
-                        (request, ctx) -> ctx.out().simpleString("LOCAL_OK")
+                        (request, preparation) -> preparedSimpleString("LOCAL_OK")
                 ))
         );
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
@@ -62,7 +69,8 @@ public class DefaultYierdisEngineTest {
         });
 
         CapturingReplyWriter out = new CapturingReplyWriter();
-        engine.execute(
+        executePrepared(
+                engine,
                 new EngineSession(16, 1024),
                 ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of()),
                 out
@@ -73,28 +81,28 @@ public class DefaultYierdisEngineTest {
     }
 
     @Test
-    public void executePassesTheRequestThroughTheExplicitMutationContext() {
+    public void preparedExecutionPassesTheRequestThroughTheExplicitMutationContext() {
         AtomicReference<MutationContext> successfulContext = new AtomicReference<>();
         AtomicReference<MutationContext> failedContext = new AtomicReference<>();
         CommandRegistry registry = CommandRegistries.from(
                 registration -> {
-                    registration.register(CommandSpec.of(
+                    registration.register(new CommandDefinition<>(
                             syntax("SCOPED"),
                             CommandParsers.request(),
-                            (request, ctx) -> {
-                                Assert.assertSame(request, ctx.mutationContext().commandRecord());
-                                successfulContext.set(ctx.mutationContext());
-                                ctx.out().simpleString("OK");
-                            }
+                            (request, preparation) -> prepared(ReplyShapes.simpleString("OK"), context -> {
+                                Assert.assertSame(request, context.mutationContext().commandRecord());
+                                successfulContext.set(context.mutationContext());
+                                context.reply().simpleString("OK");
+                            })
                     ));
-                    registration.register(CommandSpec.of(
+                    registration.register(new CommandDefinition<>(
                             syntax("FAIL"),
                             CommandParsers.request(),
-                            (request, ctx) -> {
-                                Assert.assertSame(request, ctx.mutationContext().commandRecord());
-                                failedContext.set(ctx.mutationContext());
+                            (request, preparation) -> prepared(ReplyShapes.simpleString("OK"), context -> {
+                                Assert.assertSame(request, context.mutationContext().commandRecord());
+                                failedContext.set(context.mutationContext());
                                 throw new IllegalStateException("injected");
-                            }
+                            })
                     ));
                 }
         );
@@ -102,12 +110,22 @@ public class DefaultYierdisEngineTest {
         });
         EngineSession session = new EngineSession(16, 1024);
 
-        engine.execute(session, ByteArrayExecutionRequest.fromUtf8("SCOPED", List.of()), new CapturingReplyWriter());
+        executePrepared(
+                engine,
+                session,
+                ByteArrayExecutionRequest.fromUtf8("SCOPED", List.of()),
+                new CapturingReplyWriter()
+        );
         Assert.assertFalse(successfulContext.get().hasCommandRecord());
 
         Assert.assertThrows(
                 IllegalStateException.class,
-                () -> engine.execute(session, ByteArrayExecutionRequest.fromUtf8("FAIL", List.of()), new CapturingReplyWriter())
+                () -> executePrepared(
+                        engine,
+                        session,
+                        ByteArrayExecutionRequest.fromUtf8("FAIL", List.of()),
+                        new CapturingReplyWriter()
+                )
         );
         Assert.assertFalse(failedContext.get().hasCommandRecord());
     }
@@ -117,35 +135,38 @@ public class DefaultYierdisEngineTest {
         AtomicReference<MutationContext> replayContext = new AtomicReference<>();
         CommandRegistry registry = new CommandRegistry();
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
-        CommandRegistries.registerTransactionSupport(registry, processor::execute);
-        registry.register(CommandSpec.of(
+        CommandRegistries.registerTransactionSupport(registry, processor);
+        registry.register(new CommandDefinition<>(
                 syntax("SCOPED"),
                 CommandParsers.request(),
-                (request, ctx) -> {
-                    Assert.assertSame(request, ctx.mutationContext().commandRecord());
-                    replayContext.set(ctx.mutationContext());
-                    ctx.out().simpleString("OK");
-                }
+                (request, preparation) -> prepared(ReplyShapes.simpleString("OK"), context -> {
+                    Assert.assertSame(request, context.mutationContext().commandRecord());
+                    replayContext.set(context.mutationContext());
+                    context.reply().simpleString("OK");
+                })
         ));
         YierdisEngine engine = new DefaultYierdisEngine(processor, () -> {
         });
         EngineSession session = new EngineSession(16, 1024);
         CapturingReplyWriter out = new CapturingReplyWriter();
 
-        engine.execute(session, ByteArrayExecutionRequest.fromUtf8("MULTI", List.of()), out);
-        engine.execute(session, ByteArrayExecutionRequest.fromUtf8("SCOPED", List.of()), out);
-        engine.execute(session, ByteArrayExecutionRequest.fromUtf8("EXEC", List.of()), out);
+        executePrepared(engine, session, ByteArrayExecutionRequest.fromUtf8("MULTI", List.of()), out);
+        executePrepared(engine, session, ByteArrayExecutionRequest.fromUtf8("SCOPED", List.of()), out);
+        executePrepared(engine, session, ByteArrayExecutionRequest.fromUtf8("EXEC", List.of()), out);
 
         Assert.assertFalse(replayContext.get().hasCommandRecord());
     }
 
     @Test
-    public void executeAcceptsCompleteCommandSession() {
+    public void prepareAcceptsCompleteCommandSession() {
         CommandRegistry registry = CommandRegistries.from(
-                registration -> registration.register(CommandSpec.of(
+                registration -> registration.register(new CommandDefinition<>(
                         syntax("LOCAL"),
                         CommandParsers.request(),
-                        (request, ctx) -> ctx.out().simpleString("DB_" + ctx.dbIndexSession().dbIndex())
+                        (request, preparation) -> prepared(
+                                ReplyShapes.simpleString("DB_" + preparation.session().dbIndex()),
+                                context -> context.reply().simpleString("DB_" + context.session().dbIndex())
+                        )
                 ))
         );
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
@@ -156,7 +177,8 @@ public class DefaultYierdisEngineTest {
         session.setDbIndex(7);
         CapturingReplyWriter out = new CapturingReplyWriter();
 
-        engine.execute(
+        executePrepared(
+                engine,
                 session,
                 ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of()),
                 out
@@ -187,6 +209,54 @@ public class DefaultYierdisEngineTest {
                 CommandKeySpec.NONE,
                 TransactionPolicy.QUEUEABLE
         );
+    }
+
+    private static PreparedCommand preparedSimpleString(String value) {
+        return prepared(
+                ReplyShapes.simpleString(value),
+                context -> context.reply().simpleString(value)
+        );
+    }
+
+    private static PreparedCommand prepared(
+            ReplyShape shape,
+            Consumer<CommandExecutionContext> execution
+    ) {
+        return new PreparedCommand() {
+            @Override
+            public ReplyShape replyShape() {
+                return shape;
+            }
+
+            @Override
+            public ValidationResult validateBeforeExecute() {
+                return ValidationResult.VALID;
+            }
+
+            @Override
+            public void execute(CommandExecutionContext context) {
+                execution.accept(context);
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+    }
+
+    private static void executePrepared(
+            YierdisEngine engine,
+            CommandSession session,
+            ExecutionRequest request,
+            RedisReplyWriter reply
+    ) {
+        try (request;
+             PreparedCommand prepared = engine.prepare(session, request)) {
+            Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
+            try (CommandExecutionContext context = CommandExecutionContext.forRequest(session, reply, request)) {
+                prepared.execute(context);
+            }
+        }
     }
 
     private static final class CapturingReplyWriter implements RedisReplyWriter {
@@ -413,21 +483,21 @@ public class DefaultYierdisEngineTest {
         }
     }
 
-    private static void assertNoFullSessionAccess(Path sourceRoot, List<Path> offenders) throws IOException {
+    private static void assertNoLegacyContextReference(Path sourceRoot, List<Path> offenders) throws IOException {
         if (!Files.isDirectory(sourceRoot)) {
             return;
         }
         try (Stream<Path> files = Files.walk(sourceRoot)) {
             files.filter(path -> path.toString().endsWith(".java"))
-                    .filter(DefaultYierdisEngineTest::containsFullSessionAccess)
+                    .filter(DefaultYierdisEngineTest::containsLegacyContextReference)
                     .map(sourceRoot::relativize)
                     .forEach(offenders::add);
         }
     }
 
-    private static boolean containsFullSessionAccess(Path path) {
+    private static boolean containsLegacyContextReference(Path path) {
         try {
-            return Files.readString(path).contains("ctx.session()");
+            return Files.readString(path).contains("Command" + "Context");
         } catch (IOException e) {
             throw new IllegalStateException(e);
         }

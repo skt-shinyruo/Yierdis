@@ -4,16 +4,16 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParsers;
-import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.ReplyShapes;
 
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
@@ -23,10 +23,13 @@ import java.util.List;
 public class YierdisFastCommandProcessorRegistrationTest {
     @Test
     public void explicitRegistryRegistersCallerSuppliedModulesOnly() {
-        CommandModule extraModule = registration -> registration.register(CommandSpec.of(
+        CommandModule extraModule = registration -> registration.register(new CommandDefinition<>(
                 syntax("TRACE", CommandArity.exact(1)),
                 CommandParsers.request(),
-                (request, ctx) -> ctx.out().simpleString("TRACE-OK")
+                (request, preparation) -> PreparedCommands.fixed(
+                        ReplyShapes.simpleString("TRACE-OK"),
+                        execution -> execution.reply().simpleString("TRACE-OK")
+                )
         ));
 
         CommandRegistry registry = CommandRegistries.from(extraModule);
@@ -62,24 +65,27 @@ public class YierdisFastCommandProcessorRegistrationTest {
     }
 
     @Test
-    public void registryLookupAndHelpersMustAcceptExecutionRequest() throws Exception {
-        Method spec = CommandRegistry.class.getDeclaredMethod("spec", ExecutionRequest.class);
-        Assert.assertEquals(CommandSpec.class, spec.getReturnType());
+    public void registryLookupAndHelpersMustReturnCommandDefinitions() throws Exception {
+        Method definition = CommandRegistry.class.getDeclaredMethod("definition", ExecutionRequest.class);
+        Assert.assertEquals(CommandDefinition.class, definition.getReturnType());
 
-        Method specByUpperName = CommandRegistry.class.getDeclaredMethod("specByUpperName", String.class);
-        Assert.assertEquals(CommandSpec.class, specByUpperName.getReturnType());
-
-        Method replyPlan = CommandRegistry.class.getDeclaredMethod("replyPlan", ExecutionRequest.class);
-        Assert.assertEquals(ReplyPlan.class, replyPlan.getReturnType());
+        Method definitionByUpperName = CommandRegistry.class.getDeclaredMethod("definitionByUpperName", String.class);
+        Assert.assertEquals(CommandDefinition.class, definitionByUpperName.getReturnType());
     }
 
     @Test
-    public void typedCommandSpecCanBeRegisteredAndExecuted() {
+    public void typedCommandDefinitionCanBeRegisteredAndExecuted() {
         CommandRegistry registry = CommandRegistries.from(
-                registration -> registration.register(CommandSpec.of(
+                registration -> registration.register(new CommandDefinition<>(
                         syntax("TYPED", CommandArity.exact(2)),
                         CommandParsers.args(),
-                        (args, ctx) -> ctx.out().bulkString(args.bytes(1))
+                        (args, preparation) -> {
+                            byte[] value = args.bytes(1);
+                            return PreparedCommands.fixed(
+                                    ReplyShapes.bulkString(value.length, 0L),
+                                    execution -> execution.reply().bulkString(value)
+                            );
+                        }
                 ))
         );
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
@@ -91,19 +97,26 @@ public class YierdisFastCommandProcessorRegistrationTest {
     public void processorReturnsParseErrorBeforeTypedHandlerRuns() {
         final boolean[] handlerCalled = {false};
         CommandRegistry registry = CommandRegistries.from(
-                registration -> registration.register(CommandSpec.of(
+                registration -> registration.register(new CommandDefinition<>(
                         syntax("STRICT", CommandArity.exact(2)),
                         CommandParsers.args(),
-                        (args, ctx) -> {
+                        (args, preparation) -> {
                             handlerCalled[0] = true;
-                            ctx.out().simpleString("OK");
+                            return PreparedCommands.fixed(
+                                    ReplyShapes.simpleString("OK"),
+                                    execution -> execution.reply().simpleString("OK")
+                            );
                         }
                 ))
         );
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
 
         TestReplyWriter out = new TestReplyWriter();
-        processor.execute(ByteArrayExecutionRequest.fromUtf8("STRICT", List.of()), TestCommandContexts.context(out));
+        PreparedCommandTestSupport.execute(
+                processor,
+                ByteArrayExecutionRequest.fromUtf8("STRICT", List.of()),
+                out
+        );
 
         Assert.assertFalse(handlerCalled[0]);
         Assert.assertEquals("ERR wrong number of arguments for 'strict' command", out.error());
@@ -112,15 +125,21 @@ public class YierdisFastCommandProcessorRegistrationTest {
     @Test
     public void commandRegistriesRegistersModulesInOrder() {
         CommandRegistry registry = CommandRegistries.from(
-                registration -> registration.register(CommandSpec.of(
+                registration -> registration.register(new CommandDefinition<>(
                         syntax("FIRST", CommandArity.exact(1)),
                         CommandParsers.request(),
-                        (request, ctx) -> ctx.out().simpleString("FIRST")
+                        (request, preparation) -> PreparedCommands.fixed(
+                                ReplyShapes.simpleString("FIRST"),
+                                execution -> execution.reply().simpleString("FIRST")
+                        )
                 )),
-                registration -> registration.register(CommandSpec.of(
+                registration -> registration.register(new CommandDefinition<>(
                         syntax("SECOND", CommandArity.exact(1)),
                         CommandParsers.request(),
-                        (request, ctx) -> ctx.out().simpleString("SECOND")
+                        (request, preparation) -> PreparedCommands.fixed(
+                                ReplyShapes.simpleString("SECOND"),
+                                execution -> execution.reply().simpleString("SECOND")
+                        )
                 ))
         );
 
@@ -134,10 +153,13 @@ public class YierdisFastCommandProcessorRegistrationTest {
         try {
             CommandRegistries.from(
                     java.util.Arrays.asList(
-                            registration -> registration.register(CommandSpec.of(
+                            registration -> registration.register(new CommandDefinition<>(
                                     syntax("OK", CommandArity.exact(1)),
                                     CommandParsers.request(),
-                                    (request, ctx) -> ctx.out().simpleString("OK")
+                                    (request, preparation) -> PreparedCommands.fixed(
+                                            ReplyShapes.simpleString("OK"),
+                                            execution -> execution.reply().simpleString("OK")
+                                    )
                             )),
                             null
                     )
@@ -156,7 +178,7 @@ public class YierdisFastCommandProcessorRegistrationTest {
 
     private static String executeSimpleString(YierdisFastCommandProcessor processor, String... argv) {
         TestReplyWriter writer = new TestReplyWriter();
-        processor.execute(new ArrayExecutionRequest(argv), TestCommandContexts.context(writer));
+        PreparedCommandTestSupport.execute(processor, new ArrayExecutionRequest(argv), writer);
         if (writer.error() != null) {
             Assert.fail("expected simple string reply, got error: " + writer.error());
         }
@@ -166,14 +188,18 @@ public class YierdisFastCommandProcessorRegistrationTest {
 
     private static String executeError(YierdisFastCommandProcessor processor, String... argv) {
         TestReplyWriter writer = new TestReplyWriter();
-        processor.execute(new ArrayExecutionRequest(argv), TestCommandContexts.context(writer));
+        PreparedCommandTestSupport.execute(processor, new ArrayExecutionRequest(argv), writer);
         Assert.assertNotNull("expected error reply", writer.error());
         return writer.error();
     }
 
     private static String executeBulkString(YierdisFastCommandProcessor processor, String command, String arg) {
         TestReplyWriter out = new TestReplyWriter();
-        processor.execute(ByteArrayExecutionRequest.fromUtf8(command, List.of(arg)), TestCommandContexts.context(out));
+        PreparedCommandTestSupport.execute(
+                processor,
+                ByteArrayExecutionRequest.fromUtf8(command, List.of(arg)),
+                out
+        );
         Assert.assertNull(out.error());
         return out.bulkString();
     }

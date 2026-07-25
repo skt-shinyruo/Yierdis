@@ -14,6 +14,7 @@ public class CommandExecutorBackpressureTest {
                 () -> {},
                 engine,
                 ownerExecutor,
+                ExecutorCoreTestSupport.simpleReplySizer(),
                 ExecutorCoreTestSupport.simpleReplyWriterFactory(),
                 io,
                 new CommandExecutorConfig(16, 0, 2, 1, 0, 0, 128, 10, SchedulingPolicy.FAIR)

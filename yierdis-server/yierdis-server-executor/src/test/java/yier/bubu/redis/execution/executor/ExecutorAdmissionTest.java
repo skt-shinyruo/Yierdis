@@ -113,6 +113,7 @@ public class ExecutorAdmissionTest {
                 () -> { },
                 ExecutorCoreTestSupport.simpleCommandEngine(),
                 owner,
+                ExecutorCoreTestSupport.simpleReplySizer(),
                 ExecutorCoreTestSupport.simpleReplyWriterFactory(),
                 new RecordingIoAdapter(),
                 new CommandExecutorConfig(

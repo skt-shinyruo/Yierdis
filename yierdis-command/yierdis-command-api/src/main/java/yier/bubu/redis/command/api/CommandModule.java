@@ -11,13 +11,13 @@ public interface CommandModule {
     void register(Registration registration);
 
     interface Registration {
-        void register(CommandSpec<?> spec);
+        void register(CommandDefinition<?> definition);
 
         int commandCount();
 
         boolean containsUpperName(String nameUpper);
 
-        CommandSpec<?> specByUpperName(String nameUpper);
+        CommandDefinition<?> definitionByUpperName(String nameUpper);
 
         String[] upperNamesSorted();
     }

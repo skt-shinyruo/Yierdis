@@ -2,13 +2,15 @@ package yier.bubu.redis.testutil;
 
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
-import yier.bubu.redis.execution.api.CommandContext;
+import yier.bubu.redis.execution.api.CommandExecutionContext;
+import yier.bubu.redis.execution.api.CommandPreparationContext;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.TransactionState;
+import yier.bubu.redis.execution.api.ValidationResult;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -44,15 +46,18 @@ public final class FastTestClient implements AutoCloseable {
         Objects.requireNonNull(request, "request");
         CapturingReplyWriter writer = new CapturingReplyWriter();
         try {
-            processor.execute(
-                    request,
-                    new CommandContext(
-                            session,
-                            writer,
-                            MutationContext.of(request)
-                    )
-            );
-            return writer.root();
+            CommandPreparationContext preparation = new CommandPreparationContext(session);
+            for (;;) {
+                try (PreparedCommand prepared = processor.prepare(request, preparation)) {
+                    if (prepared.validateBeforeExecute() == ValidationResult.STALE) {
+                        continue;
+                    }
+                    try (CommandExecutionContext execution = CommandExecutionContext.forRequest(session, writer, request)) {
+                        prepared.execute(execution);
+                    }
+                    return writer.root();
+                }
+            }
         } finally {
             request.close();
         }

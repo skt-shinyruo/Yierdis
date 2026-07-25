@@ -3,16 +3,21 @@ package yier.bubu.redis.execution.executor;
 import org.junit.Assert;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.execution.api.CapacityRegistration;
+import yier.bubu.redis.execution.api.CommandExecutionContext;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionReply;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.ReplyPlan;
-import yier.bubu.redis.execution.api.ReplyReservationSink;
+import yier.bubu.redis.execution.api.ReplyShape;
+import yier.bubu.redis.execution.api.ReplyShapes;
+import yier.bubu.redis.execution.api.ReplySizer;
 import yier.bubu.redis.execution.api.ReplyReservationResult;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.api.TransactionState;
+import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.ValidationResult;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -58,18 +63,48 @@ final class ExecutorCoreTestSupport {
         return (session, out) -> new SimpleReplyWriter(out);
     }
 
+    static ReplySizer simpleReplySizer() {
+        return (session, shape) -> ReplyPlan.exact(64L, shape.retainedSourceBytes());
+    }
+
     static CommandExecutionEngine simpleCommandEngine() {
-        return (session, request, out) -> {
+        return (session, request) -> {
             if (asciiEqualsIgnoreCase(request, 0, "PING")) {
-                out.simpleString("PONG");
-                return;
+                return fixed(ReplyShapes.simpleString("PONG"), context -> context.reply().simpleString("PONG"));
             }
             if (asciiEqualsIgnoreCase(request, 0, "QUIT")) {
-                out.simpleString("OK");
-                out.requestCloseAfterReply();
-                return;
+                return fixed(ReplyShapes.simpleString("OK"), context -> {
+                    context.reply().simpleString("OK");
+                    context.reply().requestCloseAfterReply();
+                });
             }
-            out.error("ERR unsupported test command");
+            return fixed(ReplyShapes.error("ERR unsupported test command"),
+                    context -> context.reply().error("ERR unsupported test command"));
+        };
+    }
+
+    static PreparedCommand fixed(ReplyShape shape, Consumer<CommandExecutionContext> execution) {
+        Objects.requireNonNull(shape, "shape");
+        Objects.requireNonNull(execution, "execution");
+        return new PreparedCommand() {
+            @Override
+            public ReplyShape replyShape() {
+                return shape;
+            }
+
+            @Override
+            public ValidationResult validateBeforeExecute() {
+                return ValidationResult.VALID;
+            }
+
+            @Override
+            public void execute(CommandExecutionContext context) {
+                execution.accept(context);
+            }
+
+            @Override
+            public void close() {
+            }
         };
     }
 
@@ -490,13 +525,6 @@ final class SimpleReplyWriter implements RedisReplyWriter {
     @Override
     public boolean closeAfterReplyRequested() {
         return closeAfterReplyRequested;
-    }
-
-    @Override
-    public void requireReply(ReplyPlan plan) {
-        if (out instanceof ReplyReservationSink reservationSink) {
-            reservationSink.require(plan);
-        }
     }
 
     @Override

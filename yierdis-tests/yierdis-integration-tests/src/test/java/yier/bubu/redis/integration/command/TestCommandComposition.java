@@ -27,7 +27,7 @@ public final class TestCommandComposition {
     ) {
         CommandRegistry registry = new CommandRegistry();
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
-        CommandRegistries.registerTransactionSupport(registry, processor::execute);
+        CommandRegistries.registerTransactionSupport(registry, processor);
         List<CommandModule> modules = new ArrayList<>();
         modules.add(DefaultCommandModules.create(dbRouter, null));
         if (extraModules != null) {

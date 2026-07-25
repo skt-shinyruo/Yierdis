@@ -1,22 +1,53 @@
 package yier.bubu.redis.command.kernel;
 
-import yier.bubu.redis.execution.api.CommandContext;
+import org.junit.Assert;
+import yier.bubu.redis.execution.api.CommandExecutionContext;
+import yier.bubu.redis.execution.api.CommandPreparationContext;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.TransactionState;
+import yier.bubu.redis.execution.api.ValidationResult;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.function.Consumer;
 
-final class TestCommandContexts {
-    private TestCommandContexts() {
+final class PreparedCommandTestSupport {
+    private PreparedCommandTestSupport() {
     }
 
-    static CommandContext context(RedisReplyWriter out) {
-        TestSession session = new TestSession();
-        return new CommandContext(session, out);
+    static CommandSession newSession() {
+        return new TestSession();
+    }
+
+    static void execute(
+            YierdisFastCommandProcessor processor,
+            ExecutionRequest request,
+            RedisReplyWriter reply
+    ) {
+        execute(processor, newSession(), request, reply);
+    }
+
+    static void execute(
+            YierdisFastCommandProcessor processor,
+            CommandSession session,
+            ExecutionRequest request,
+            RedisReplyWriter reply
+    ) {
+        Objects.requireNonNull(processor, "processor");
+        Objects.requireNonNull(session, "session");
+        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(reply, "reply");
+        try (request;
+             PreparedCommand prepared = processor.prepare(request, new CommandPreparationContext(session))) {
+            Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
+            try (CommandExecutionContext context = CommandExecutionContext.forRequest(session, reply, request)) {
+                prepared.execute(context);
+            }
+        }
     }
 
     private static final class TestSession implements CommandSession {

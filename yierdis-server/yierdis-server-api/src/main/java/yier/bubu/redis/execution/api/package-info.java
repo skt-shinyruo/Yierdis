@@ -20,7 +20,10 @@
  *     <li>DbIndexProvider - compatibility/deprecated. Audience: legacy embedders only; command routing uses DbIndexSession.</li>
  *     <li>ConnectionStatsView - API. Audience: server INFO/STATS views, executor/server observability, tests.</li>
  *     <li>TransactionState - API. Audience: command transaction handlers, engine sessions, server sessions, tests.</li>
- *     <li>CommandContext - API. Audience: engine and command handlers; executor/server must not construct it directly.</li>
+ *     <li>CommandPreparationContext - API。受众：命令 preparer；仅在回复容量预留前读取完整会话状态。</li>
+ *     <li>CommandExecutionContext - API。受众：PreparedCommand；由执行器在回复容量预留后创建，并提供本次请求的 mutation context 与 reply writer。</li>
+ *     <li>PreparedCommand - API。受众：engine、executor 与命令实现；封装回复形状、执行前校验和保留资源的关闭责任。</li>
+ *     <li>ReplyShape / ReplySizer - API/SPI。受众：命令层、executor 与协议实现；命令层描述语义形状，协议实现计算 wire 大小。</li>
  * </ul>
  */
 package yier.bubu.redis.execution.api;
