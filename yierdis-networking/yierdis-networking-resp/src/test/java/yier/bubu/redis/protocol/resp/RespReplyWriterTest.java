@@ -124,6 +124,104 @@ public class RespReplyWriterTest {
         }));
     }
 
+    @Test
+    public void nullProtocolDefaultsToResp2AndConstructorsRejectMissingDependencies() {
+        ByteArraySink sink = new ByteArraySink();
+        RespReplyWriter writer = new RespReplyWriter(sink, (RespProtocolVersion) null);
+
+        writer.nullValue();
+
+        Assert.assertEquals("$-1\r\n", sink.utf8());
+        Assert.assertThrows(NullPointerException.class,
+                () -> new RespReplyWriter(null, RespProtocolVersion.RESP2));
+        Assert.assertThrows(NullPointerException.class,
+                () -> new RespReplyWriter(new ByteArraySink(), (java.util.function.IntSupplier) null));
+    }
+
+    @Test
+    public void bigNumbersVerbatimStringsAndBlobErrorsRespectProtocolVersion() {
+        Assert.assertEquals("(12345678901234567890\r\n",
+                write3(w -> w.bigNumberAscii(" 12345678901234567890 ")));
+        Assert.assertEquals("$3\r\n123\r\n", write2(w -> w.bigNumberAscii(" 123 ")));
+        Assert.assertEquals("(a b\r\n", write3(w -> w.bigNumberAscii("a\nb")));
+        Assert.assertEquals("(\r\n", write3(w -> w.bigNumberAscii(null)));
+
+        Assert.assertEquals("=8\r\ntxt:data\r\n", write3(w -> w.verbatimString("x", bytes("data"))));
+        Assert.assertEquals("=7\r\nmar:doc\r\n", write3(w -> w.verbatimString("markdown", bytes("doc"))));
+        Assert.assertEquals("=4\r\ntxt:\r\n", write3(w -> w.verbatimString(null, null)));
+        Assert.assertEquals("$4\r\ndata\r\n", write2(w -> w.verbatimString("txt", bytes("data"))));
+
+        Assert.assertEquals("!10\r\nERR \u9519\u8bef\r\n", write3(w -> w.blobError("\u9519\u8bef")));
+        Assert.assertEquals("-ERR bad\r\n", write2(w -> w.blobError("bad")));
+    }
+
+    @Test
+    public void bulkStringOverloadsCoverNullOffsetsSlicesAndLongAscii() {
+        Assert.assertEquals("$-1\r\n", write2(w -> w.bulkString((byte[]) null)));
+        Assert.assertEquals("$-1\r\n", write2(w -> w.bulkString((byte[]) null, 99, -1)));
+        Assert.assertEquals("$-1\r\n", write2(w -> w.bulkString((BytesSlice) null)));
+        Assert.assertEquals("$3\r\nbcd\r\n", write2(w -> w.bulkString(bytes("abcde"), 1, 3)));
+        Assert.assertThrows(IndexOutOfBoundsException.class,
+                () -> write2(w -> w.bulkString(bytes("abc"), 2, 2)));
+
+        BytesSlice slice = new BytesSlice() {
+            @Override
+            public int length() {
+                return 3;
+            }
+
+            @Override
+            public void writeTo(BytesSink out) {
+                out.writeBytes(bytes("xyz"), 0, 3);
+            }
+
+            @Override
+            public byte getByte(int index) {
+                return bytes("xyz")[index];
+            }
+        };
+        Assert.assertEquals("$3\r\nxyz\r\n", write2(w -> w.bulkString(slice)));
+        Assert.assertEquals("$20\r\n-9223372036854775808\r\n",
+                write2(w -> w.bulkStringLongAscii(Long.MIN_VALUE)));
+    }
+
+    @Test
+    public void collectionHeadersUseNativeResp3TypesAndResp2Fallbacks() {
+        Assert.assertEquals("*0\r\n*-1\r\n", write2(w -> {
+            w.emptyArray();
+            w.nullArray();
+        }));
+        Assert.assertEquals("*0\r\n*0\r\n*0\r\n*0\r\n", write2(w -> {
+            w.arrayHeader(-1);
+            w.setHeader(-1);
+            w.pushHeader(-1);
+            w.attributeHeader(-1);
+        }));
+        Assert.assertEquals("~2\r\n>3\r\n|4\r\n", write3(w -> {
+            w.setHeader(2);
+            w.pushHeader(3);
+            w.attributeHeader(4);
+        }));
+    }
+
+    @Test
+    public void simpleAndErrorLinesAreSanitizedAndUtf8TruncationKeepsCodePointsWhole() {
+        Assert.assertEquals("+\r\n", write2(w -> w.simpleString(null)));
+        Assert.assertEquals("+a b c\r\n", write2(w -> w.simpleString("a\rb\nc")));
+        Assert.assertEquals("-ERR error\r\n", write2(w -> w.error(null)));
+        Assert.assertEquals("-ERR lower case\r\n", write2(w -> w.error("lower\rcase")));
+
+        String retained = "ERR " + "a".repeat(496) + "\u00e9\u754c\ud83d\ude00";
+        String oversized = retained + "\ud83d\ude00";
+        ByteArraySink sink = new ByteArraySink();
+        new RespReplyWriter(sink, RespProtocolVersion.RESP3).blobError(oversized);
+
+        byte[] body = retained.getBytes(StandardCharsets.UTF_8);
+        Assert.assertEquals(509, body.length);
+        Assert.assertEquals("!509\r\n" + retained + "\r\n", sink.utf8());
+        Assert.assertFalse(sink.utf8().contains("\ufffd"));
+    }
+
     private static String write2(WriterAction action) {
         return write(RespProtocolVersion.RESP2, action);
     }
@@ -157,6 +255,10 @@ public class RespReplyWriterTest {
 
         String utf8() {
             return out.toString(StandardCharsets.UTF_8);
+        }
+
+        byte[] bytes() {
+            return out.toByteArray();
         }
     }
 

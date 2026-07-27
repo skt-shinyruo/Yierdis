@@ -172,7 +172,8 @@ public final class ZSetCommands implements CommandModule {
                 }
                 try {
                     offset = args.nonNegativeLongAt(i + 1);
-                    count = args.nonNegativeLongAt(i + 2);
+                    long requestedCount = args.longAt(i + 2);
+                    count = requestedCount < 0L ? Long.MAX_VALUE : requestedCount;
                 } catch (IllegalArgumentException e) {
                     return CommandParseResult.error(CommandParseError.integerOutOfRange());
                 }

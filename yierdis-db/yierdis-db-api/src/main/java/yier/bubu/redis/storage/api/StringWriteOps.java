@@ -15,6 +15,16 @@ public interface StringWriteOps {
             ExpireOption expireOption
     );
 
+    default PreparedMutation<SetStringValue> prepareSet(
+            byte[] keyBytes,
+            BytesSlice value,
+            SetMode mode,
+            ExpireOption expireOption,
+            boolean returnOldValue
+    ) {
+        return prepareSet(keyBytes, value, mode, expireOption);
+    }
+
     WriteResult<Boolean> setString(byte[] keyBytes, byte[] value, SetMode mode, ExpireOption expireOption);
 
     WriteResult<Boolean> setString(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption);

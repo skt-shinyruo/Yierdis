@@ -1277,6 +1277,53 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
+    public void unusedDirectBytesApisAndPackedZSetMustStayRemoved() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录", repoRoot);
+
+        Path bytesSource = repoRoot.resolve(
+                "yierdis-common/yierdis-common-bytes/src/main/java/yier/bubu/redis/bytes/BytesSource.java"
+        ).normalize();
+        Path directBytesSink = repoRoot.resolve(
+                "yierdis-common/yierdis-common-bytes/src/main/java/yier/bubu/redis/bytes/DirectBytesSink.java"
+        ).normalize();
+        Path nettyByteBufSink = repoRoot.resolve(
+                "yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/bytes/netty/NettyByteBufSink.java"
+        ).normalize();
+        Path commandSupport = repoRoot.resolve(
+                "yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java"
+        ).normalize();
+        Path zsetValue = repoRoot.resolve(
+                "yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/ZSetValue.java"
+        ).normalize();
+        Path networkingNettyPom = repoRoot.resolve(
+                "yierdis-networking/yierdis-networking-netty/pom.xml"
+        ).normalize();
+
+        Assert.assertTrue("缺少 BytesSource.java", Files.isRegularFile(bytesSource));
+        String bytesSourceText = Files.readString(bytesSource, StandardCharsets.UTF_8);
+        Assert.assertFalse("BytesSource must not expose hasMemoryAddress", bytesSourceText.contains("hasMemoryAddress("));
+        Assert.assertFalse("BytesSource must not expose memoryAddress", bytesSourceText.contains("memoryAddress("));
+        Assert.assertFalse("DirectBytesSink must be removed", Files.exists(directBytesSink));
+        Assert.assertFalse("NettyByteBufSink must be removed", Files.exists(nettyByteBufSink));
+
+        Assert.assertTrue("缺少 CommandSupport.java", Files.isRegularFile(commandSupport));
+        String commandSource = Files.readString(commandSupport, StandardCharsets.UTF_8);
+        Assert.assertFalse("command slice must not expose hasMemoryAddress", commandSource.contains("hasMemoryAddress("));
+        Assert.assertFalse("command slice must not expose memoryAddress", commandSource.contains("memoryAddress("));
+
+        Assert.assertTrue("缺少 ZSetValue.java", Files.isRegularFile(zsetValue));
+        String zsetSource = Files.readString(zsetValue, StandardCharsets.UTF_8);
+        Assert.assertFalse("unused PackedZSet must be removed", zsetSource.contains("class PackedZSet"));
+
+        Assert.assertTrue("缺少 networking-netty/pom.xml", Files.isRegularFile(networkingNettyPom));
+        Assert.assertFalse(
+                "networking-netty must not keep an unused common-bytes dependency",
+                pomHasProductionDependency(networkingNettyPom, "yierdis-common-bytes")
+        );
+    }
+
+    @Test
     public void executionApiMustRemainNeutralContractModule() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);

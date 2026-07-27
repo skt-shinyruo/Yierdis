@@ -132,10 +132,6 @@ executor 在多连接之间选择任务的策略，目前文档中常见的是 `
 
 写入端口，只承诺接收 bytes，不承担 source ownership。协议编码器和 reply writer 用它做流式写出。
 
-### `DirectBytesSink`
-
-`BytesSink` 的 direct-aware 扩展，暴露 writer cursor 和 memory address，但不会改变 source ownership。
-
 ### materialize
 
 把 view/slice 复制成新的 heap byte[]。有些协议回包、测试断言或跨生命周期保存必须 materialize，但 hot path 会尽量避免。

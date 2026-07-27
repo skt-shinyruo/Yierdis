@@ -383,7 +383,8 @@ public class CommandProcessorTest {
                 Assert.assertTrue(((ReplyInteger) client.execute(cmd("TTL", "k"))).value() > 0L);
 
                 ReplyObject nxGet = client.execute(cmd("SET", "k", "v3", "NX", "GET"));
-                Assert.assertTrue(nxGet instanceof ReplyNull);
+                Assert.assertTrue(nxGet instanceof ReplyBulkString);
+                Assert.assertEquals("v2", ((ReplyBulkString) nxGet).asString());
             }
         });
     }

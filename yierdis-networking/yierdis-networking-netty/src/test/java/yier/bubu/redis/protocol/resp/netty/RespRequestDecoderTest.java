@@ -81,6 +81,28 @@ public class RespRequestDecoderTest {
     }
 
     @Test
+    public void decodesEverySingleByteFragmentIncludingAnEmptyBulkString() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024, 1024));
+        byte[] payload = bytes("*2\r\n$4\r\nECHO\r\n$0\r\n\r\n");
+        try {
+            for (int index = 0; index < payload.length; index++) {
+                boolean produced = ch.writeInbound(Unpooled.wrappedBuffer(new byte[]{payload[index]}));
+                Assert.assertEquals(index == payload.length - 1, produced);
+            }
+
+            try (ExecutionRequest req = readExecutionRequest(ch)) {
+                Assert.assertEquals(2, req.argc());
+                Assert.assertArrayEquals(bytes("ECHO"), req.readOnlyByteArray(0));
+                Assert.assertArrayEquals(new byte[0], req.readOnlyByteArray(1));
+                Assert.assertEquals(4, req.retainedBytes());
+            }
+            Assert.assertNull(ch.readInbound());
+        } finally {
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
     public void fragmentedOversizedCommandFailsOnceAndDropsRemainingInput() {
         EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024, 4));
         try {
@@ -148,6 +170,105 @@ public class RespRequestDecoderTest {
                 Assert.assertArrayEquals(bytes("A"), req.readOnlyByteArray(2));
                 Assert.assertEquals(7, req.retainedBytes());
             }
+        } finally {
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    public void ignoresBlankInlineLinesAndDecodesSingleQuotedEscapes() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024, 1024));
+        try {
+            Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer(
+                    "\r\n \t\r\nECHO 'a\\'b'\r\n",
+                    StandardCharsets.US_ASCII
+            )));
+
+            try (ExecutionRequest req = readExecutionRequest(ch)) {
+                Assert.assertEquals(2, req.argc());
+                Assert.assertArrayEquals(bytes("ECHO"), req.readOnlyByteArray(0));
+                Assert.assertArrayEquals(bytes("a'b"), req.readOnlyByteArray(1));
+            }
+            Assert.assertNull(ch.readInbound());
+        } finally {
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    public void rejectsConfiguredArrayInlineArgumentAndLineLimits() {
+        assertProtocolError(
+                new RespRequestDecoder(1024, 1, 1024, 1024),
+                "*2\r\n$4\r\nECHO\r\n$1\r\nx\r\n",
+                "ERR Protocol error: too many arguments"
+        );
+        assertProtocolError(
+                new RespRequestDecoder(1024, 2, 1024, 1024),
+                "SET a b\r\n",
+                "ERR Protocol error: too many arguments"
+        );
+        assertProtocolError(
+                new RespRequestDecoder(1024, 16, 4, 1024),
+                "abcde",
+                "ERR Protocol error: invalid inline command"
+        );
+        assertProtocolError(
+                new RespRequestDecoder(1024, 16, 4, 1024),
+                "PING\r\n",
+                "ERR Protocol error: invalid inline command"
+        );
+    }
+
+    @Test
+    public void rejectsMalformedArrayAndBulkFrames() {
+        assertProtocolError(
+                new RespRequestDecoder(1024, 16, 1024, 1024),
+                "*-1\r\n",
+                "ERR Protocol error: invalid multibulk length"
+        );
+        assertProtocolError(
+                new RespRequestDecoder(1024, 16, 1024, 1024),
+                "*x\r\n",
+                "ERR Protocol error: invalid multibulk length"
+        );
+        assertProtocolError(
+                new RespRequestDecoder(1024, 16, 1024, 1024),
+                "*1\n",
+                "ERR Protocol error: invalid multibulk length"
+        );
+        assertProtocolError(
+                new RespRequestDecoder(1024, 16, 1024, 1024),
+                "*1\r\n+PING\r\n",
+                "ERR Protocol error: expected '$', got other"
+        );
+        assertProtocolError(
+                new RespRequestDecoder(1024, 16, 1024, 1024),
+                "*1\r\n$x\r\n",
+                "ERR Protocol error: invalid bulk length"
+        );
+        assertProtocolError(
+                new RespRequestDecoder(1024, 16, 1024, 1024),
+                "*1\r\n$1\r\naXX",
+                "ERR Protocol error: invalid bulk string terminator"
+        );
+    }
+
+    @Test
+    public void passesThroughOtherMessagesAndReleasesInputAfterProtocolError() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024, 1024));
+        Object marker = new Object();
+        try {
+            Assert.assertTrue(ch.writeInbound(marker));
+            Assert.assertSame(marker, ch.readInbound());
+
+            Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer("*x\r\n", StandardCharsets.US_ASCII)));
+            Assert.assertTrue(ch.readInbound() instanceof RespProtocolError);
+
+            io.netty.buffer.ByteBuf ignored = Unpooled.buffer().writeByte('x');
+            Assert.assertEquals(1, ignored.refCnt());
+            Assert.assertFalse(ch.writeInbound(ignored));
+            Assert.assertEquals(0, ignored.refCnt());
+            Assert.assertNull(ch.readInbound());
         } finally {
             ch.finishAndReleaseAll();
         }
@@ -347,6 +468,24 @@ public class RespRequestDecoderTest {
             Assert.fail("decoder attempted to allocate from an invalid RESP length: " + e.getMessage());
         }
         return ch.readInbound();
+    }
+
+    private static void assertProtocolError(
+            RespRequestDecoder decoder,
+            String payload,
+            String expectedMessage
+    ) {
+        EmbeddedChannel ch = new EmbeddedChannel(decoder);
+        try {
+            Object message = writeInboundAndReadFirst(ch, payload);
+            Assert.assertTrue(message instanceof RespProtocolError);
+            RespProtocolError error = (RespProtocolError) message;
+            Assert.assertEquals(expectedMessage, error.message());
+            Assert.assertTrue(error.closeAfterReply());
+            Assert.assertNull(ch.readInbound());
+        } finally {
+            ch.finishAndReleaseAll();
+        }
     }
 
     @Test

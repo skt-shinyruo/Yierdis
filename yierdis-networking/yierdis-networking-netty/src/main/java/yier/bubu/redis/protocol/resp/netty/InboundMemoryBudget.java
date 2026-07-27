@@ -288,6 +288,9 @@ public final class InboundMemoryBudget implements AutoCloseable {
         if (delta >= 0L) {
             return saturatedAdd(current, delta);
         }
+        if (delta == Long.MIN_VALUE) {
+            throw new IllegalStateException(name + " counter underflow");
+        }
         long amount = -delta;
         if (amount > current) {
             throw new IllegalStateException(name + " counter underflow");

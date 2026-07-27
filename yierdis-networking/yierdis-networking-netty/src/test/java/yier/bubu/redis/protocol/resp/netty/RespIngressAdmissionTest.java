@@ -223,6 +223,91 @@ public class RespIngressAdmissionTest {
         }
     }
 
+    @Test
+    public void ingressConstructorRequiresBudgetAndConnectionTogether() {
+        InboundMemoryBudget budget = new InboundMemoryBudget(1_024);
+        InboundConnectionMemory connection = new InboundConnectionMemory(
+                "decoder", 1_024, Runnable::run, () -> { }
+        );
+
+        Assert.assertThrows(IllegalArgumentException.class, () -> RespRequestDecoder.withIngressAdmission(
+                1_024, 16, 1_024, 1_024, budget, null, RespDecodedMessageGate.PASS_THROUGH
+        ));
+        Assert.assertThrows(IllegalArgumentException.class, () -> RespRequestDecoder.withIngressAdmission(
+                1_024, 16, 1_024, 1_024, null, connection, RespDecodedMessageGate.PASS_THROUGH
+        ));
+        Assert.assertThrows(NullPointerException.class,
+                () -> new RespDecodedMessageGate.Admission(null, null));
+        Assert.assertThrows(NullPointerException.class,
+                () -> new RespDecodedMessageGate.Admission(
+                        RespDecodedMessageGate.Status.ADMITTED,
+                        null
+                ));
+    }
+
+    @Test
+    public void closedNullAndThrowingGatesReleaseDecodedRequestsAndIncomingBuffers() {
+        assertTerminalGateOutcome((ctx, decoded, resume) -> RespDecodedMessageGate.Admission.closed());
+        assertTerminalGateOutcome((ctx, decoded, resume) -> null);
+        assertTerminalGateOutcome((ctx, decoded, resume) -> {
+            throw new IllegalStateException("gate failed");
+        });
+    }
+
+    @Test
+    public void removingDecoderWhileGateWaitsReleasesThePendingRequestLease() {
+        InboundMemoryBudget budget = new InboundMemoryBudget(4_096);
+        InboundConnectionMemory connection = new InboundConnectionMemory(
+                "waiting-gate", 4_096, Runnable::run, () -> { }
+        );
+        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                1_024,
+                16,
+                1_024,
+                1_024,
+                budget,
+                connection,
+                (ctx, decoded, resume) -> RespDecodedMessageGate.Admission.waiting()
+        );
+        EmbeddedChannel channel = new EmbeddedChannel(decoder);
+
+        Assert.assertFalse(channel.writeInbound(unaccountedAscii("PING\r\n")));
+        Assert.assertEquals("WAITING_FOR_HANDOFF", decoder.stateNameForTests());
+        Assert.assertTrue(budget.stats().reservedBytes() > 0L);
+
+        channel.finishAndReleaseAll();
+
+        Assert.assertEquals(0L, budget.stats().reservedBytes());
+    }
+
+    private static void assertTerminalGateOutcome(RespDecodedMessageGate gate) {
+        InboundMemoryBudget budget = new InboundMemoryBudget(4_096);
+        InboundConnectionMemory connection = new InboundConnectionMemory(
+                "terminal-gate", 4_096, Runnable::run, () -> { }
+        );
+        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                1_024, 16, 1_024, 1_024, budget, connection, gate
+        );
+        EmbeddedChannel channel = new EmbeddedChannel(decoder);
+        io.netty.buffer.ByteBuf input = ascii("PING\r\n");
+        try {
+            Assert.assertFalse(channel.writeInbound(new AccountedInboundBuffer(
+                    input,
+                    InboundBufferLease.unaccounted()
+            )));
+            Assert.assertEquals("CLOSING", decoder.stateNameForTests());
+            Assert.assertEquals(0, input.refCnt());
+            Assert.assertEquals(0L, budget.stats().reservedBytes());
+
+            io.netty.buffer.ByteBuf late = ascii("PING\r\n");
+            Assert.assertFalse(channel.writeInbound(late));
+            Assert.assertEquals(0, late.refCnt());
+        } finally {
+            channel.finishAndReleaseAll();
+        }
+        Assert.assertEquals(0L, budget.stats().reservedBytes());
+    }
+
     private static io.netty.buffer.ByteBuf ascii(String value) {
         return Unpooled.copiedBuffer(value, StandardCharsets.US_ASCII);
     }

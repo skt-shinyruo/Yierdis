@@ -193,18 +193,35 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
             SetMode mode,
             ExpireOption expireOption
     ) {
+        return prepareSet(keyBytes, value, mode, expireOption, false);
+    }
+
+    @Override
+    public PreparedMutation<SetStringValue> prepareSet(
+            byte[] keyBytes,
+            BytesSlice value,
+            SetMode mode,
+            ExpireOption expireOption,
+            boolean returnOldValue
+    ) {
         internals.checkThread();
         Objects.requireNonNull(keyBytes, "keyBytes");
         byte[] preparedKey = Arrays.copyOf(keyBytes, keyBytes.length);
         byte[] preparedValue = bytesOf(value);
         PreparedEntryState state = preparedEntryState(preparedKey);
         EntryRecord current = state.liveRecord();
-        boolean applied = (mode != SetMode.NX || current == null)
-                && (mode != SetMode.XX || current != null);
-        if (applied && current != null && current.type() != ValueType.STRING) {
+        boolean currentIsNonString = current != null && current.type() != ValueType.STRING;
+        if (returnOldValue && currentIsNonString) {
             throw new WrongTypeException();
         }
-        ByteValue oldValue = applied && current != null
+        boolean applied = (mode != SetMode.NX || current == null)
+                && (mode != SetMode.XX || current != null);
+        if (applied && currentIsNonString) {
+            throw new WrongTypeException();
+        }
+        ByteValue oldValue = current != null
+                && current.type() == ValueType.STRING
+                && (returnOldValue || applied)
                 ? stringRoot.retainedValue(requireStringHandle(current))
                 : ByteValue.nullValue();
         return new PreparedSetMutation(
@@ -527,6 +544,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     @Override
     public int getBit(BytesView keyView, long offset) {
         internals.checkThread();
+        bitByteIndex(offset);
         EntryRecord record = liveTouchedStringRecord(keyView);
         if (record == null) {
             return 0;

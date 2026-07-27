@@ -50,7 +50,7 @@ public class ProductionHardeningSoakTest {
 
     @Test
     public void allowsMinorRssGrowthAcrossCompletedCycles() {
-        assertFinalThreeRssDoNotGrowMonotonically(List.of(
+        assertNoSustainedMaterialRssGrowth(List.of(
                 new CycleCompletion(0L, 0L, 0L, 0L, 0L, 100L * 1024L * 1024L),
                 new CycleCompletion(1L, 0L, 0L, 0L, 0L, 101L * 1024L * 1024L),
                 new CycleCompletion(2L, 0L, 0L, 0L, 0L, 102L * 1024L * 1024L),
@@ -59,9 +59,19 @@ public class ProductionHardeningSoakTest {
     }
 
     @Test
-    public void rejectsMaterialMonotonicRssGrowthAcrossCompletedCycles() {
+    public void allowsOneTimeRssExpansionFollowedByPlateau() {
+        assertNoSustainedMaterialRssGrowth(List.of(
+                new CycleCompletion(0L, 0L, 0L, 0L, 0L, 90L * 1024L * 1024L),
+                new CycleCompletion(1L, 0L, 0L, 0L, 0L, 100L * 1024L * 1024L),
+                new CycleCompletion(2L, 0L, 0L, 0L, 0L, 150L * 1024L * 1024L),
+                new CycleCompletion(3L, 0L, 0L, 0L, 0L, 151L * 1024L * 1024L)
+        ));
+    }
+
+    @Test
+    public void rejectsSustainedMaterialRssGrowthAcrossCompletedCycles() {
         try {
-            assertFinalThreeRssDoNotGrowMonotonically(List.of(
+            assertNoSustainedMaterialRssGrowth(List.of(
                     new CycleCompletion(0L, 0L, 0L, 0L, 0L, 100L * 1024L * 1024L),
                     new CycleCompletion(1L, 0L, 0L, 0L, 0L, 110L * 1024L * 1024L),
                     new CycleCompletion(2L, 0L, 0L, 0L, 0L, 120L * 1024L * 1024L),
@@ -181,7 +191,7 @@ public class ProductionHardeningSoakTest {
                     Assert.assertEquals("worker must stay responsive", "+PONG\r\n", execute(client, "PING"));
                     replySequence.incrementAndGet();
                     awaitCommitDrain(client);
-                    assertFinalThreeRssDoNotGrowMonotonically(completedCycles);
+                    assertNoSustainedMaterialRssGrowth(completedCycles);
                     Assert.assertEquals("soak must complete each configured cycle", SOAK_CYCLE_COUNT, completedCycles.size());
                     Assert.assertTrue("soak must emit multiple samples", samples.size() >= SOAK_CYCLE_COUNT);
                     Assert.assertTrue("commit sink delay was not exercised", delayedCommitCallbacks.get() > 0L);
@@ -642,19 +652,20 @@ public class ProductionHardeningSoakTest {
         );
     }
 
-    private static void assertFinalThreeRssDoNotGrowMonotonically(List<CycleCompletion> completions) {
+    private static void assertNoSustainedMaterialRssGrowth(List<CycleCompletion> completions) {
         Assert.assertTrue("soak needs one warmup and three measured cycles", completions.size() >= 4);
         CycleCompletion first = completions.get(completions.size() - 3);
         CycleCompletion second = completions.get(completions.size() - 2);
         CycleCompletion third = completions.get(completions.size() - 1);
-        boolean growsMonotonically = first.rssBytes() <= second.rssBytes()
-                && second.rssBytes() <= third.rssBytes()
+        long materialCycleGrowth = RSS_MONOTONIC_GROWTH_TOLERANCE_BYTES / 2L;
+        boolean growsSustainably = second.rssBytes() - first.rssBytes() > materialCycleGrowth
+                && third.rssBytes() - second.rssBytes() > materialCycleGrowth
                 && third.rssBytes() - first.rssBytes() > RSS_MONOTONIC_GROWTH_TOLERANCE_BYTES;
         Assert.assertFalse(
-                "RSS grew materially and monotonically across the final three completed cycles: "
+                "RSS grew materially across both final measured cycle transitions: "
                         + first.rssBytes() + ", " + second.rssBytes() + ", " + third.rssBytes()
                         + " (tolerance=" + RSS_MONOTONIC_GROWTH_TOLERANCE_BYTES + ")",
-                growsMonotonically
+                growsSustainably
         );
     }
 

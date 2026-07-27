@@ -408,6 +408,49 @@ public class ZSetCommandTest {
     }
 
     @Test
+    public void scoreRangeLimitNegativeCountReturnsAllRemainingMembers() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
+
+        byte[] key = b("zrangebyscore:unbounded-limit");
+        client.execute(Arrays.asList(
+                b("ZADD"), key,
+                b("1"), b("a"),
+                b("2"), b("b"),
+                b("2"), b("c"),
+                b("3"), b("d")
+        ));
+
+        ReplyArray forward = (ReplyArray) client.execute(Arrays.asList(
+                b("ZRANGEBYSCORE"), key, b("-inf"), b("+inf"), b("LIMIT"), b("1"), b("-1")
+        ));
+        Assert.assertEquals(3, forward.values().size());
+        Assert.assertEquals("b", ((ReplyBulkString) forward.values().get(0)).asString());
+        Assert.assertEquals("c", ((ReplyBulkString) forward.values().get(1)).asString());
+        Assert.assertEquals("d", ((ReplyBulkString) forward.values().get(2)).asString());
+
+        ReplyArray otherNegativeForward = (ReplyArray) client.execute(Arrays.asList(
+                b("ZRANGEBYSCORE"), key, b("-inf"), b("+inf"), b("LIMIT"), b("1"), b("-2")
+        ));
+        Assert.assertEquals(3, otherNegativeForward.values().size());
+        Assert.assertEquals("b", ((ReplyBulkString) otherNegativeForward.values().get(0)).asString());
+        Assert.assertEquals("c", ((ReplyBulkString) otherNegativeForward.values().get(1)).asString());
+        Assert.assertEquals("d", ((ReplyBulkString) otherNegativeForward.values().get(2)).asString());
+
+        ReplyArray reverse = (ReplyArray) client.execute(Arrays.asList(
+                b("ZREVRANGEBYSCORE"), key, b("+inf"), b("-inf"), b("LIMIT"), b("1"), b("-1")
+        ));
+        Assert.assertEquals(3, reverse.values().size());
+        Assert.assertEquals("c", ((ReplyBulkString) reverse.values().get(0)).asString());
+        Assert.assertEquals("b", ((ReplyBulkString) reverse.values().get(1)).asString());
+        Assert.assertEquals("a", ((ReplyBulkString) reverse.values().get(2)).asString());
+
+            }
+        });
+    }
+
+    @Test
     public void zremrangeByRankRemovesAndDeletesKeyWhenEmpty() {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);

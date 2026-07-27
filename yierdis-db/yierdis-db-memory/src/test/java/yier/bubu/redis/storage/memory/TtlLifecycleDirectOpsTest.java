@@ -72,6 +72,45 @@ public class TtlLifecycleDirectOpsTest {
         });
     }
 
+    @Test
+    public void nonPositiveRelativeAndPastAbsoluteExpirationsDeleteImmediately() {
+        withDb(db -> {
+            Assert.assertFalse(db.writes().ttl().persist(view("missing")).value());
+
+            db.writes().strings().setString(b("persistent"), b("v"), SetMode.NORMAL, null);
+            Assert.assertFalse(db.writes().ttl().persist(view("persistent")).value());
+
+            db.writes().strings().setString(b("seconds"), b("v"), SetMode.NORMAL, null);
+            Assert.assertTrue(db.writes().ttl().expire(view("seconds"), 0).value());
+            Assert.assertNull(db.reads().keyspace().typeOf(view("seconds")));
+
+            db.writes().strings().setString(b("millis"), b("v"), SetMode.NORMAL, null);
+            Assert.assertTrue(db.writes().ttl().pexpire(view("millis"), -1).value());
+            Assert.assertNull(db.reads().keyspace().typeOf(view("millis")));
+
+            db.writes().strings().setString(b("absolute"), b("v"), SetMode.NORMAL, null);
+            Assert.assertTrue(db.writes().ttl().expireAtMillis(view("absolute"), 0).value());
+            Assert.assertEquals(-2L, db.reads().ttl().ttlSeconds(view("absolute")));
+        });
+    }
+
+    @Test
+    public void overflowingRelativeAndAbsoluteExpirationsClampToFarFuture() {
+        withDb(db -> {
+            db.writes().strings().setString(b("seconds"), b("v"), SetMode.NORMAL, null);
+            Assert.assertTrue(db.writes().ttl().expire(view("seconds"), Long.MAX_VALUE).value());
+            Assert.assertTrue(db.reads().ttl().ttlMillis(view("seconds")) > 0L);
+
+            db.writes().strings().setString(b("millis"), b("v"), SetMode.NORMAL, null);
+            Assert.assertTrue(db.writes().ttl().pexpire(view("millis"), Long.MAX_VALUE).value());
+            Assert.assertTrue(db.reads().ttl().ttlSeconds(view("millis")) > 0L);
+
+            db.writes().strings().setString(b("absolute"), b("v"), SetMode.NORMAL, null);
+            Assert.assertTrue(db.writes().ttl().expireAtSeconds(view("absolute"), Long.MAX_VALUE).value());
+            Assert.assertTrue(db.reads().ttl().ttlMillis(view("absolute")) > 0L);
+        });
+    }
+
     private static void withDb(DbConsumer consumer) {
         YierdisDb db = TestDbSupport.open();
         try {

@@ -9,6 +9,7 @@ import yier.bubu.redis.testutil.ReplyObject;
 
 import java.util.Arrays;
 
+import static yier.bubu.redis.testutil.ReplyAssertions.assertArraySize;
 import static yier.bubu.redis.testutil.ReplyAssertions.assertBulkString;
 import static yier.bubu.redis.testutil.ReplyAssertions.assertErrorContaining;
 import static yier.bubu.redis.testutil.ReplyAssertions.assertInteger;
@@ -57,6 +58,36 @@ public class StringCommandTest {
             long pxat = System.currentTimeMillis() + 60_000L;
             assertSimpleString("OK", client.execute(cmd("SET", "pxat", "v", "PXAT", Long.toString(pxat))));
             assertPositiveInteger(client.execute(cmd("PTTL", "pxat")));
+        });
+    }
+
+    @Test
+    public void setNxGetReturnsTheExistingStringWithoutReplacingIt() {
+        withClient(client -> {
+            assertSimpleString("OK", client.execute(cmd("SET", "key", "old")));
+
+            assertBulkString("old", client.execute(cmd("SET", "key", "new", "NX", "GET")));
+            assertBulkString("old", client.execute(cmd("GET", "key")));
+        });
+    }
+
+    @Test
+    public void setNxGetReportsWrongTypeForAnExistingList() {
+        withClient(client -> {
+            assertInteger(1, client.execute(cmd("LPUSH", "key", "item")));
+
+            assertErrorContaining("WRONGTYPE", client.execute(cmd("SET", "key", "new", "NX", "GET")));
+            assertBulkString("item", assertArraySize(1, client.execute(cmd("LRANGE", "key", "0", "-1"))).values().get(0));
+        });
+    }
+
+    @Test
+    public void setXxWithoutGetRetainsWrongTypeProtection() {
+        withClient(client -> {
+            assertInteger(1, client.execute(cmd("LPUSH", "key", "item")));
+
+            assertErrorContaining("WRONGTYPE", client.execute(cmd("SET", "key", "new", "XX")));
+            assertBulkString("item", assertArraySize(1, client.execute(cmd("LRANGE", "key", "0", "-1"))).values().get(0));
         });
     }
 

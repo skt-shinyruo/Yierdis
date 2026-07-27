@@ -85,6 +85,67 @@ public class ZSetValueTest {
     }
 
     @Test
+    public void preparedPackedAddRejectsReleaseBeforeCommitAbortReuseAndDoubleCommit() {
+        try (TestBackend runtime = TestBackend.open("zset-prepared-state-guards");
+             StableMemoryBackend allocator = runtime.backend()) {
+            ZSetValue zset = new ZSetValue(allocator);
+            try {
+                zset.zaddMany(List.of(b("1"), b("member")));
+                long liveBefore = allocator.stats().liveObjects();
+
+                ZSetValue.PreparedExistingAdd aborted = zset.prepareExistingAdd(
+                        zset.planExistingAdd(List.of(b("2"), b("member")))
+                );
+                Assert.assertTrue(allocator.stats().liveObjects() > liveBefore);
+                Assert.assertThrows(IllegalStateException.class, aborted::releaseSuperseded);
+                aborted.close();
+                aborted.close();
+                Assert.assertEquals(liveBefore, allocator.stats().liveObjects());
+                Assert.assertThrows(IllegalStateException.class, aborted::commit);
+                Assert.assertEquals("1", scoreFor(zset, "member"));
+
+                try (ZSetValue.PreparedExistingAdd committed = zset.prepareExistingAdd(
+                        zset.planExistingAdd(List.of(b("2"), b("member"))))) {
+                    committed.commit();
+                    Assert.assertThrows(IllegalStateException.class, committed::commit);
+                    committed.releaseSuperseded();
+                    committed.releaseSuperseded();
+                }
+                Assert.assertEquals("2", scoreFor(zset, "member"));
+                Assert.assertEquals(liveBefore, allocator.stats().liveObjects());
+            } finally {
+                zset.close();
+            }
+            Assert.assertEquals(0L, allocator.stats().liveObjects());
+        }
+    }
+
+    @Test
+    public void closingNoopPreparedAddMakesItTerminalWithoutAllocating() {
+        try (TestBackend runtime = TestBackend.open("zset-prepared-noop-abort");
+             StableMemoryBackend allocator = runtime.backend()) {
+            ZSetValue zset = new ZSetValue(allocator);
+            try {
+                zset.zaddMany(List.of(b("1"), b("member")));
+                long liveBefore = allocator.stats().liveObjects();
+                ZSetValue.PreparedExistingAdd prepared = zset.prepareExistingAdd(
+                        zset.planExistingAdd(List.of(b("1"), b("member")))
+                );
+
+                prepared.close();
+                prepared.close();
+
+                Assert.assertEquals(liveBefore, allocator.stats().liveObjects());
+                Assert.assertThrows(IllegalStateException.class, prepared::commit);
+                Assert.assertThrows(IllegalStateException.class, prepared::releaseSuperseded);
+                Assert.assertEquals("1", scoreFor(zset, "member"));
+            } finally {
+                zset.close();
+            }
+        }
+    }
+
+    @Test
     public void preparedAddHeapUpperBoundsCoverPackedAndSkiplistStagingTopology() {
         try (TestBackend runtime = TestBackend.open("zset-staged-heap-bound");
              StableMemoryBackend allocator = runtime.backend()) {
@@ -556,6 +617,18 @@ public class ZSetValueTest {
         }
     }
 
+    @Test
+    public void scoreAndRankBoundariesMatchPackedAndSkiplistEncodings() {
+        assertScoreAndRankBoundaries(false);
+        assertScoreAndRankBoundaries(true);
+    }
+
+    @Test
+    public void scoreAndRankRemovalsMatchPackedAndSkiplistEncodings() {
+        assertScoreAndRankRemovals(false);
+        assertScoreAndRankRemovals(true);
+    }
+
     private static byte[] b(String s) {
         return s.getBytes(StandardCharsets.US_ASCII);
     }
@@ -645,6 +718,89 @@ public class ZSetValueTest {
                 zset.close();
             }
         }
+    }
+
+    private static void assertScoreAndRankBoundaries(boolean skiplist) {
+        try (TestBackend runtime = TestBackend.open("zset-boundaries-" + skiplist);
+             StableMemoryBackend allocator = runtime.backend()) {
+            ZSetValue zset = new ZSetValue(allocator);
+            try {
+                if (skiplist) {
+                    zset.prepareSkiplistForBuild();
+                }
+                zset.zaddMany(scoreBoundaryPairs());
+                Assert.assertEquals(
+                        skiplist ? ValueEncoding.ZSET_SKIPLIST : ValueEncoding.ZSET_PACKED,
+                        zset.encoding()
+                );
+
+                Assert.assertEquals(
+                        List.of("d"),
+                        strings(zset.zrangeByScore(2, true, 4, true, false, 0, 10))
+                );
+                Assert.assertEquals(
+                        List.of("b", "2", "c", "2"),
+                        strings(zset.zrangeByScore(1, false, 4, false, true, 1, 2))
+                );
+                Assert.assertEquals(
+                        List.of("d", "3", "c", "2", "b", "2"),
+                        strings(zset.zrevrangeByScore(1, false, 4, false, true, 1, 3))
+                );
+                Assert.assertTrue(zset.zrangeByScore(1, false, 4, false, false, 0, 0).isEmpty());
+                Assert.assertTrue(zset.zrevrangeByScore(1, false, 4, false, false, 0, -1).isEmpty());
+
+                Assert.assertEquals(List.of("e", "d", "c"), strings(zset.zrevrange(0, 2, false)));
+                Assert.assertEquals(List.of("d", "e"), strings(zset.zrange(-2, -1, false)));
+                Assert.assertEquals(4, zset.zrangeByScoreCount(1, false, 4, false, false, 1, 10));
+                Assert.assertEquals(6, zset.zrevrangeByScoreCount(1, false, 4, false, true, 1, 3));
+
+                RecordingSink out = new RecordingSink();
+                zset.zrevrangeByScoreWriteTo(1, false, 4, false, true, 1, 2, out);
+                Assert.assertEquals(List.of("d", "3", "c", "2"), out.values);
+
+                Assert.assertEquals(2, zset.countExistingMembers(List.of(
+                        b("a"), b("a"), b("missing"), b("e")
+                )));
+            } finally {
+                zset.close();
+            }
+        }
+    }
+
+    private static void assertScoreAndRankRemovals(boolean skiplist) {
+        try (TestBackend runtime = TestBackend.open("zset-removals-" + skiplist);
+             StableMemoryBackend allocator = runtime.backend()) {
+            ZSetValue zset = new ZSetValue(allocator);
+            try {
+                if (skiplist) {
+                    zset.prepareSkiplistForBuild();
+                }
+                zset.zaddMany(scoreBoundaryPairs());
+
+                Assert.assertEquals(2, zset.countRemovalsByScore(2, true, 4, false));
+                Assert.assertEquals(2, zset.zremrangeByScore(2, true, 4, false));
+                Assert.assertEquals(List.of("a", "b", "c"), strings(zset.zrange(0, -1, false)));
+
+                Assert.assertEquals(2, zset.countRemovalsByRank(-2, -1));
+                Assert.assertEquals(2, zset.zremrangeByRank(-2, -1));
+                Assert.assertEquals(List.of("a"), strings(zset.zrange(0, -1, false)));
+                Assert.assertEquals(0, zset.countRemovalsByRank(5, 9));
+                Assert.assertEquals(0, zset.zremrangeByRank(-1, -2));
+            } finally {
+                zset.close();
+            }
+            Assert.assertEquals(0L, allocator.stats().liveObjects());
+        }
+    }
+
+    private static List<byte[]> scoreBoundaryPairs() {
+        return List.of(
+                b("1"), b("a"),
+                b("2"), b("b"),
+                b("2"), b("c"),
+                b("3"), b("d"),
+                b("4"), b("e")
+        );
     }
 
     private record ZSetValueFactory(String runtimeName, boolean skiplist) {

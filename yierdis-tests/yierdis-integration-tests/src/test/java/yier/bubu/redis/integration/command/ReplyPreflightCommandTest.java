@@ -55,6 +55,33 @@ public class ReplyPreflightCommandTest {
     }
 
     @Test
+    public void setNxGetCapacityRejectionReservesTheExistingValueReply() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
+                client.execute(cmd("SET", "key", "old"));
+
+                EngineSession session = new EngineSession(16, 16 * 1024L);
+                ReplyPlan expectedOldValuePlan = execute(
+                        processor,
+                        session,
+                        new TrackingReplyWriter(),
+                        cmd("GET", "key")
+                );
+                TrackingReplyWriter writer = new TrackingReplyWriter();
+                CapacityGate capacity = CapacityGate.rejecting();
+                Assert.assertThrows(
+                        ReplyCapacityUnavailableException.class,
+                        () -> execute(processor, session, capacity, writer, cmd("SET", "key", "new", "NX", "GET"))
+                );
+
+                Assert.assertArrayEquals(b("old"), db.reads().strings().getStringBytes(b("key")));
+                Assert.assertEquals(expectedOldValuePlan, capacity.reservedPlan());
+            }
+        });
+    }
+
+    @Test
     public void countedPopCapacityRejectionLeavesTheListUntouched() {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);

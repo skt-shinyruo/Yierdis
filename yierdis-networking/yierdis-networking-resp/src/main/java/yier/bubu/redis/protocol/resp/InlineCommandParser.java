@@ -27,7 +27,7 @@ public final class InlineCommandParser {
         if (input == null) {
             throw new IllegalArgumentException("input must not be null");
         }
-        if (off < 0 || len < 0 || off + len > input.length) {
+        if (off < 0 || len < 0 || off > input.length - len) {
             throw new IndexOutOfBoundsException();
         }
 

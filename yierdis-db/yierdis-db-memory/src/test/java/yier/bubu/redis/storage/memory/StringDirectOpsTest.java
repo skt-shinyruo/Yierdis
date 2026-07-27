@@ -289,6 +289,124 @@ public class StringDirectOpsTest {
         });
     }
 
+    @Test
+    public void missingKeysAndWrongTypesCoverEveryStringReadAndMutationPath() {
+        withDb(db -> {
+            Assert.assertNull(db.reads().strings().getStringBytes(b("missing")));
+            try (ByteValue missing = db.reads().strings().getStringValue(view("missing"))) {
+                Assert.assertTrue(missing.isNull());
+            }
+            Assert.assertEquals(0L, db.reads().strings().strlen(view("missing")));
+            Assert.assertEquals(0, db.reads().strings().getBit(view("missing"), 10));
+
+            Assert.assertEquals(Long.valueOf(0L), db.writes().strings().append(b("empty"), slice("")).value());
+            Assert.assertArrayEquals(new byte[0], db.reads().strings().getStringBytes(b("empty")));
+            Assert.assertEquals(Long.valueOf(3L), db.writes().strings().append(b("append"), slice("abc")).value());
+            Assert.assertArrayEquals(b("abc"), db.reads().strings().getStringBytes(b("append")));
+
+            Assert.assertEquals(Integer.valueOf(0), db.writes().strings().setBit(b("bits"), 9L, 1).value());
+            Assert.assertArrayEquals(new byte[]{0, 0x40}, db.reads().strings().getStringBytes(b("bits")));
+            Assert.assertEquals(Long.valueOf(-2L), db.writes().strings().incrBy(b("counter"), -2L).value());
+            Assert.assertArrayEquals(b("-2"), db.reads().strings().getStringBytes(b("counter")));
+
+            db.writes().lists().rpush(b("list"), List.of(b("a")));
+            expectWrongType(() -> db.reads().strings().getStringBytes(b("list")));
+            expectWrongType(() -> db.reads().strings().getStringValue(view("list")));
+            expectWrongType(() -> db.reads().strings().strlen(view("list")));
+            expectWrongType(() -> db.reads().strings().getBit(view("list"), 0));
+            expectWrongType(() -> db.writes().strings().append(b("list"), slice("x")));
+            expectWrongType(() -> db.writes().strings().setBit(b("list"), 0, 1));
+            expectWrongType(() -> db.writes().strings().incrBy(b("list"), 1));
+        });
+    }
+
+    @Test
+    public void bitOperationsRejectInvalidValuesAndOffsetsBeforeAllocation() {
+        withDb(db -> {
+            expectCommandError(
+                    "ERR bit is not an integer or out of range",
+                    () -> db.writes().strings().setBit(b("bits"), 0, -1)
+            );
+            expectCommandError(
+                    "ERR bit is not an integer or out of range",
+                    () -> db.writes().strings().setBit(b("bits"), 0, 2)
+            );
+            expectCommandError(
+                    "ERR bit offset is not an integer or out of range",
+                    () -> db.writes().strings().setBit(b("bits"), -1, 0)
+            );
+            expectCommandError(
+                    "ERR bit offset is not an integer or out of range",
+                    () -> db.reads().strings().getBit(view("missing"), -1)
+            );
+            expectCommandError(
+                    "ERR bit offset is not an integer or out of range",
+                    () -> db.reads().strings().getBit(
+                            view("missing"),
+                            ((long) Integer.MAX_VALUE + 1L) << 3
+                    )
+            );
+            expectCommandError(
+                    "ERR string exceeds maximum allowed size",
+                    () -> db.writes().strings().setBit(
+                            b("bits"),
+                            512L * 1024L * 1024L * 8L,
+                            1
+                    )
+            );
+            Assert.assertNull(db.reads().keyspace().typeOf(view("bits")));
+        });
+    }
+
+    @Test
+    public void incrByAcceptsSignsAndRejectsMalformedOrOverflowingIntegers() {
+        withDb(db -> {
+            db.writes().strings().setString(b("positive"), b("+41"), SetMode.NORMAL, null);
+            Assert.assertEquals(Long.valueOf(42L), db.writes().strings().incrBy(b("positive"), 1L).value());
+            db.writes().strings().setString(b("negative"), b("-41"), SetMode.NORMAL, null);
+            Assert.assertEquals(Long.valueOf(-40L), db.writes().strings().incrBy(b("negative"), 1L).value());
+
+            for (String invalid : List.of(
+                    "",
+                    "+",
+                    "-",
+                    "12x",
+                    " 1",
+                    "9223372036854775808",
+                    "-9223372036854775809"
+            )) {
+                byte[] key = b("invalid-" + invalid);
+                db.writes().strings().setString(key, b(invalid), SetMode.NORMAL, null);
+                expectCommandError(
+                        "ERR value is not an integer or out of range",
+                        () -> db.writes().strings().incrBy(key, 1L)
+                );
+                Assert.assertArrayEquals(b(invalid), db.reads().strings().getStringBytes(key));
+            }
+
+            db.writes().strings().setString(
+                    b("max"),
+                    b(Long.toString(Long.MAX_VALUE)),
+                    SetMode.NORMAL,
+                    null
+            );
+            expectCommandError(
+                    "ERR value is not an integer or out of range",
+                    () -> db.writes().strings().incrBy(b("max"), 1L)
+            );
+            db.writes().strings().setString(
+                    b("min"),
+                    b(Long.toString(Long.MIN_VALUE)),
+                    SetMode.NORMAL,
+                    null
+            );
+            expectCommandError(
+                    "ERR value is not an integer or out of range",
+                    () -> db.writes().strings().incrBy(b("min"), -1L)
+            );
+        });
+    }
+
     private static OverwriteAdmissionCase maxmemoryThatAllowsInitialSetAndRejectsOverwrite(
             byte[] key,
             byte[] initialValue,
@@ -456,6 +574,15 @@ public class StringDirectOpsTest {
             Assert.fail("expected WrongTypeException");
         } catch (WrongTypeException expected) {
             // expected
+        }
+    }
+
+    private static void expectCommandError(String expectedMessage, ThrowingRunnable runnable) {
+        try {
+            runnable.run();
+            Assert.fail("expected YierdisCommandException");
+        } catch (YierdisCommandException expected) {
+            Assert.assertEquals(expectedMessage, expected.getMessage());
         }
     }
 

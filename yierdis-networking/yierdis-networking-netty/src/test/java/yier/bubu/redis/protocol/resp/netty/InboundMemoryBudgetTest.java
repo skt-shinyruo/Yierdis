@@ -6,6 +6,7 @@ import org.junit.Test;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.RejectedExecutionException;
 
 public class InboundMemoryBudgetTest {
     @Test
@@ -132,6 +133,131 @@ public class InboundMemoryBudgetTest {
 
         Assert.assertEquals(0L, budget.stats().reservedBytes());
         Assert.assertEquals(0, budget.attachedAccountCountForTests());
+    }
+
+    @Test
+    public void rejectsInvalidCapacitiesAmountsCreditsAndForeignAccounts() {
+        Assert.assertThrows(IllegalArgumentException.class, () -> new InboundMemoryBudget(-1));
+        Assert.assertThrows(IllegalArgumentException.class,
+                () -> new InboundConnectionMemory("negative", -1, Runnable::run, () -> { }));
+        Assert.assertThrows(NullPointerException.class,
+                () -> new InboundConnectionMemory(null, 1, Runnable::run, () -> { }));
+        Assert.assertThrows(NullPointerException.class,
+                () -> new InboundConnectionMemory("missing-executor", 1, null, () -> { }));
+        Assert.assertThrows(NullPointerException.class,
+                () -> new InboundConnectionMemory("missing-callback", 1, Runnable::run, null));
+
+        InboundMemoryBudget budget = new InboundMemoryBudget(10);
+        InboundConnectionMemory connection = connection("invalid", 10, () -> { });
+        Assert.assertThrows(NullPointerException.class, () -> budget.tryReserve(null, 1));
+        Assert.assertThrows(IllegalArgumentException.class, () -> budget.tryReserve(connection, -1));
+        Assert.assertThrows(IllegalArgumentException.class, () -> budget.tryTransfer(connection, -1, 0));
+        Assert.assertThrows(IllegalArgumentException.class, () -> budget.tryTransfer(connection, 1, -1));
+        Assert.assertThrows(IllegalArgumentException.class, () -> budget.tryTransfer(connection, 1, 1));
+        Assert.assertThrows(IllegalArgumentException.class, () -> budget.release(connection, -1));
+        Assert.assertThrows(NullPointerException.class, () -> budget.release((InboundConnectionMemory) null, 0));
+        Assert.assertThrows(NullPointerException.class, () -> budget.cancelWaiter(null));
+        Assert.assertThrows(IllegalStateException.class,
+                () -> new InboundMemoryBudget(10).release(connection, 0));
+
+        InboundMemoryBudget other = new InboundMemoryBudget(10);
+        Assert.assertThrows(IllegalStateException.class, () -> other.tryReserve(connection, 0));
+    }
+
+    @Test
+    public void repeatedWaiterIsNotDuplicatedAndCancellationLetsTheNextWaiterRun() {
+        InboundMemoryBudget budget = new InboundMemoryBudget(100);
+        AtomicInteger resumedB = new AtomicInteger();
+        AtomicInteger resumedC = new AtomicInteger();
+        InboundConnectionMemory blocker = connection("blocker", 100, () -> { });
+        InboundConnectionMemory b = connection("b", 100, resumedB::incrementAndGet);
+        InboundConnectionMemory c = connection("c", 100, resumedC::incrementAndGet);
+
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.RESERVED, budget.tryReserve(blocker, 75));
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.WAITING, budget.tryReserve(b, 20));
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.WAITING, budget.tryReserve(b, 10));
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.WAITING, budget.tryReserve(c, 20));
+        Assert.assertEquals(2, budget.stats().waitingConnections());
+
+        budget.cancelWaiter(b);
+        budget.release(blocker, 25);
+
+        Assert.assertEquals(0, resumedB.get());
+        Assert.assertEquals(1, resumedC.get());
+        Assert.assertEquals(0, budget.stats().waitingConnections());
+        budget.release(blocker, 50);
+        budget.release(c, 20);
+        Assert.assertEquals(0L, budget.stats().reservedBytes());
+    }
+
+    @Test
+    public void closedQueuedAccountIsSkippedWhenAnotherWaiterCanBeGranted() {
+        InboundMemoryBudget budget = new InboundMemoryBudget(100);
+        AtomicInteger resumed = new AtomicInteger();
+        InboundConnectionMemory blocker = connection("blocker", 100, () -> { });
+        InboundConnectionMemory closed = connection("closed", 100, () -> { });
+        InboundConnectionMemory live = connection("live", 100, resumed::incrementAndGet);
+
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.RESERVED, budget.tryReserve(blocker, 75));
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.WAITING, budget.tryReserve(closed, 20));
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.WAITING, budget.tryReserve(live, 20));
+        closed.account().markClosed();
+
+        budget.release(blocker, 25);
+
+        Assert.assertEquals(1, resumed.get());
+        Assert.assertEquals(0, budget.stats().waitingConnections());
+        budget.release(blocker, 50);
+        budget.release(live, 20);
+    }
+
+    @Test
+    public void rejectedResumeExecutorClosesConnectionAndReturnsGrantedBytes() {
+        InboundMemoryBudget budget = new InboundMemoryBudget(100);
+        InboundConnectionMemory blocker = connection("blocker", 100, () -> { });
+        InboundConnectionMemory rejected = new InboundConnectionMemory(
+                "rejected",
+                100,
+                command -> { throw new RejectedExecutionException("rejected"); },
+                () -> { }
+        );
+
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.RESERVED, budget.tryReserve(blocker, 75));
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.WAITING, budget.tryReserve(rejected, 20));
+
+        budget.release(blocker, 25);
+
+        Assert.assertTrue(rejected.closed());
+        Assert.assertEquals(50L, budget.stats().reservedBytes());
+        budget.release(blocker, 50);
+        Assert.assertEquals(0L, budget.stats().reservedBytes());
+    }
+
+    @Test
+    public void countersSaturateRejectUnderflowAndZeroCapacityHasDefinedBehavior() {
+        InboundMemoryBudget budget = new InboundMemoryBudget(0);
+        InboundConnectionMemory connection = connection("zero", 0, () -> { });
+
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.RESERVED, budget.tryReserve(connection, 0));
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.REQUEST_LIMIT, budget.tryReserve(connection, 1));
+        Assert.assertFalse(budget.stats().backpressured());
+
+        budget.adjustReadCredit(Long.MAX_VALUE);
+        budget.adjustReadCredit(1);
+        budget.adjustRetainedInputCapacity(3);
+        budget.adjustConsolidation(4);
+        Assert.assertEquals(Long.MAX_VALUE, budget.stats().readCreditBytes());
+        Assert.assertThrows(IllegalStateException.class, () -> budget.adjustReadCredit(Long.MIN_VALUE));
+        Assert.assertThrows(IllegalStateException.class, () -> budget.adjustRetainedInputCapacity(-4));
+        Assert.assertThrows(IllegalStateException.class, () -> budget.adjustConsolidation(-5));
+        budget.adjustRetainedInputCapacity(-3);
+        budget.adjustConsolidation(-4);
+
+        Assert.assertEquals(Long.MAX_VALUE, InboundMemoryBudget.saturatedAdd(Long.MAX_VALUE, 1));
+        Assert.assertEquals(Long.MAX_VALUE, InboundMemoryBudget.saturatedAdd(-1, 1));
+        budget.close();
+        budget.close();
+        Assert.assertTrue(budget.stats().closed());
     }
 
     private static InboundConnectionMemory connection(String id, long hardLimit, Runnable onResume) {

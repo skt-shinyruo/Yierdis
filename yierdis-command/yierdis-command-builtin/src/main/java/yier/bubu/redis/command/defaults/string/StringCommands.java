@@ -150,23 +150,21 @@ public final class StringCommands implements CommandModule {
                         args.key(),
                         support.argSlice(args.request(), args.valueIndex()),
                         args.mode(),
-                        args.expire()
+                        args.expire(),
+                        args.getOld()
                 );
         StringWriteOps.SetStringValue preview = mutation.preview();
         return new PreparedSet(mutation, preview, args.getOld(), setShape(preview, args.getOld()));
     }
 
     private static ReplyShape setShape(StringWriteOps.SetStringValue preview, boolean getOld) {
-        if (!preview.applied()) {
-            return ReplyShapes.nullValue();
+        if (getOld) {
+            ByteValue value = preview.oldValue();
+            return value.isNull()
+                    ? ReplyShapes.nullValue()
+                    : ReplyShapes.bulkString(value.payloadLength(), value.retainedMemoryBytes());
         }
-        if (!getOld) {
-            return ReplyShapes.simpleString("OK");
-        }
-        ByteValue value = preview.oldValue();
-        return value.isNull()
-                ? ReplyShapes.nullValue()
-                : ReplyShapes.bulkString(value.payloadLength(), value.retainedMemoryBytes());
+        return preview.applied() ? ReplyShapes.simpleString("OK") : ReplyShapes.nullValue();
     }
 
     private PreparedCommand get(ArgReader args, CommandPreparationContext context) {
@@ -270,15 +268,15 @@ public final class StringCommands implements CommandModule {
 
         private void executeCommitted(CommandExecutionContext context) {
             mutation.commit(context.mutationContext());
-            if (!preview.applied()) {
-                context.reply().nullValue();
+            if (getOld) {
+                preview.oldValue().emitTo(new BulkStringReplyAdapter(context.reply()));
                 return;
             }
-            if (!getOld) {
+            if (preview.applied()) {
                 context.reply().simpleString("OK");
                 return;
             }
-            preview.oldValue().emitTo(new BulkStringReplyAdapter(context.reply()));
+            context.reply().nullValue();
         }
 
         @Override

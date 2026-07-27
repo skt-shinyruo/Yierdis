@@ -1571,6 +1571,7 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
         private boolean committed;
         private boolean metadataRefreshed;
         private boolean released;
+        private boolean closed;
 
         private PreparedMutation(
                 ListValue owner,
@@ -1735,6 +1736,9 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
             if (committed) {
                 throw new IllegalStateException("prepared list mutation is already committed");
             }
+            if (closed) {
+                throw new IllegalStateException("prepared list mutation is closed");
+            }
             validateSourceTopology();
             if (finalSize == sourceSize
                     && packedReplacement == null
@@ -1897,9 +1901,10 @@ public final class ListValue implements YierdisValue, NativeHandleOwner, HeapTra
 
         @Override
         public void close() {
-            if (committed) {
+            if (committed || closed) {
                 return;
             }
+            closed = true;
             Throwable failure = null;
             if (packedReplacement != null) {
                 try {

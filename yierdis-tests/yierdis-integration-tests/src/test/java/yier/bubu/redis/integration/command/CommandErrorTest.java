@@ -160,9 +160,6 @@ public class CommandErrorTest {
             ReplyError negativeOffset = (ReplyError) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), b("k"), b("0"), b("1"), b("LIMIT"), b("-1"), b("1")));
             Assert.assertEquals("ERR value is not an integer or out of range", negativeOffset.message());
 
-            ReplyError negativeCount = (ReplyError) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), b("k"), b("1"), b("0"), b("LIMIT"), b("0"), b("-1")));
-            Assert.assertEquals("ERR value is not an integer or out of range", negativeCount.message());
-
             ReplyError badCount = (ReplyError) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), b("k"), b("1"), b("0"), b("LIMIT"), b("0"), b("x")));
             Assert.assertEquals("ERR value is not an integer or out of range", badCount.message());
 

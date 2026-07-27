@@ -2,6 +2,7 @@ package yier.bubu.redis.storage.memory.internal.expire;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
@@ -44,6 +45,187 @@ public class ExpireIndexContractTest {
             String fieldType = field.getType().getName();
             Assert.assertFalse(fieldType, fieldType.contains("memory." + "foreign"));
         Assert.assertFalse(fieldType, fieldType.contains("java.lang." + "foreign"));
+        }
+    }
+
+    @Test
+    public void emptyIndexHasNoFootprintAndMissingKeyOperationsAreNoops() {
+        try (TestBackend runtime = TestBackend.open("expire-empty-contract");
+             StableMemoryBackend allocator = runtime.backend();
+             NativeKeyDirectory directory = new NativeKeyDirectory(allocator, FIXED_SEED)) {
+            long baselineRegions = allocator.liveRegionCount();
+            YierdisNativeExpireIndex expires = new YierdisNativeExpireIndex(allocator, FIXED_SEED, null);
+            try {
+                byte[] missing = bytes("missing");
+                Assert.assertEquals(0, expires.size());
+                Assert.assertEquals(0, expires.table0Capacity());
+                Assert.assertEquals(0, expires.table1Capacity());
+                Assert.assertEquals(0L, expires.nativeBytes());
+                Assert.assertEquals(0L, expires.heapEstimatedBytes());
+                Assert.assertEquals(baselineRegions, allocator.liveRegionCount());
+                Assert.assertNull(expires.get(missing));
+                Assert.assertNull(expires.get(view(missing)));
+                Assert.assertNull(expires.randomKey());
+                Assert.assertNull(expires.randomKeyHandle());
+                Assert.assertFalse(expires.hasMaintenanceDebt());
+                Assert.assertEquals(0L, expires.estimatedMaintenanceGrowthBytes());
+                Assert.assertNull(expires.stageMaintenanceResize());
+                Assert.assertNull(expires.prepareMaintenance());
+
+                expires.removeExpire(missing);
+                try (NativeKeyDirectory.StagedInsert staged = directory.stageInsert(missing)) {
+                    Assert.assertSame(
+                            PreparedTtlMutation.NONE,
+                            expires.prepareRemoveExpire(staged.keyHandle())
+                    );
+                }
+                HashTableWorkResult work = expires.advanceRehash(
+                        HashTableWorkBudget.of(1L, Long.MAX_VALUE)
+                );
+                Assert.assertTrue(work.rehashComplete());
+                Assert.assertEquals(HashTableWorkResult.StopReason.NOT_REHASHING, work.stopReason());
+            } finally {
+                expires.close();
+            }
+            Assert.assertEquals(baselineRegions, allocator.liveRegionCount());
+        }
+    }
+
+    @Test
+    public void preparedReplacementSupportsAbortCommitAndTerminalStateGuards() {
+        try (TestBackend runtime = TestBackend.open("expire-prepared-replacement");
+             StableMemoryBackend allocator = runtime.backend();
+             NativeKeyDirectory directory = new NativeKeyDirectory(allocator, FIXED_SEED)) {
+            YierdisNativeExpireIndex expires = new YierdisNativeExpireIndex(allocator, FIXED_SEED, null);
+            List<NativeHandle> entries = new ArrayList<>();
+            byte[] key = bytes("prepared-replacement");
+            try {
+                directory.compute(key, (ignored, old) -> new EntryHandle(allocateEntry(allocator, entries)));
+                KeyHandle handle = directory.getKeyHandle(key);
+                long baselineRegions = allocator.liveRegionCount();
+
+                PreparedTtlMutation aborted = expires.prepareSetExpireAtMillis(handle, 100L);
+                Assert.assertTrue(aborted.stagedNonNativeGrowthBytes() > 0L);
+                Assert.assertTrue(allocator.liveRegionCount() > baselineRegions);
+                aborted.releaseSuperseded();
+                Assert.assertNull(expires.get(handle));
+                aborted.abort();
+                aborted.abort();
+                Assert.assertEquals(baselineRegions, allocator.liveRegionCount());
+                Assert.assertThrows(IllegalStateException.class, aborted::commit);
+
+                PreparedTtlMutation inserted = expires.prepareSetExpireAtMillis(handle, 200L);
+                inserted.commit();
+                Assert.assertEquals(Long.valueOf(200L), expires.get(handle));
+                Assert.assertThrows(IllegalStateException.class, inserted::commit);
+                inserted.abort();
+                inserted.releaseSuperseded();
+                inserted.releaseSuperseded();
+
+                PreparedTtlMutation replacement = expires.prepareSetExpireAtMillis(handle, 300L);
+                replacement.commit();
+                Assert.assertEquals(Long.valueOf(300L), expires.get(handle));
+                replacement.releaseSuperseded();
+            } finally {
+                expires.clear();
+                expires.close();
+                freeEntries(allocator, entries);
+            }
+        }
+    }
+
+    @Test
+    public void preparedRemovalRejectsAbortDoubleCommitAndStaleTargets() {
+        try (TestBackend runtime = TestBackend.open("expire-prepared-removal-guards");
+             StableMemoryBackend allocator = runtime.backend();
+             NativeKeyDirectory directory = new NativeKeyDirectory(allocator, FIXED_SEED)) {
+            YierdisNativeExpireIndex expires = new YierdisNativeExpireIndex(allocator, FIXED_SEED, null);
+            List<NativeHandle> entries = new ArrayList<>();
+            byte[] key = bytes("prepared-remove");
+            try {
+                directory.compute(key, (ignored, old) -> new EntryHandle(allocateEntry(allocator, entries)));
+                KeyHandle handle = directory.getKeyHandle(key);
+                expires.setExpireAtMillis(handle, 100L);
+
+                PreparedTtlMutation aborted = expires.prepareRemoveExpire(handle);
+                aborted.abort();
+                aborted.abort();
+                Assert.assertThrows(IllegalStateException.class, aborted::commit);
+                Assert.assertEquals(Long.valueOf(100L), expires.get(handle));
+
+                PreparedTtlMutation first = expires.prepareRemoveExpire(handle);
+                PreparedTtlMutation stale = expires.prepareRemoveExpire(handle);
+                first.releaseSuperseded();
+                Assert.assertEquals(Long.valueOf(100L), expires.get(handle));
+                first.commit();
+                Assert.assertThrows(IllegalStateException.class, first::commit);
+                Assert.assertThrows(IllegalStateException.class, stale::commit);
+                stale.abort();
+                first.releaseSuperseded();
+                first.releaseSuperseded();
+
+                Assert.assertNull(expires.get(handle));
+                Assert.assertEquals(0, expires.size());
+                Assert.assertSame(PreparedTtlMutation.NONE, expires.prepareRemoveExpire(handle));
+                Assert.assertEquals(0, expires.table0Capacity());
+                Assert.assertEquals(0, expires.table1Capacity());
+            } finally {
+                expires.close();
+                freeEntries(allocator, entries);
+            }
+        }
+    }
+
+    @Test
+    public void stagedMaintenanceAbortAndStalePublishReleaseTheirRegions() {
+        try (TestBackend runtime = TestBackend.open("expire-staged-resize-guards");
+             StableMemoryBackend allocator = runtime.backend();
+             NativeKeyDirectory directory = new NativeKeyDirectory(allocator, FIXED_SEED)) {
+            YierdisNativeExpireIndex expires = new YierdisNativeExpireIndex(allocator, FIXED_SEED, null);
+            List<NativeHandle> entries = new ArrayList<>();
+            List<byte[]> keys = new ArrayList<>();
+            try {
+                for (int index = 0; index < 64; index++) {
+                    byte[] key = bytes("resize-guard-" + index);
+                    keys.add(key);
+                    directory.compute(key, (ignored, old) -> new EntryHandle(allocateEntry(allocator, entries)));
+                    expires.setExpireAtMillis(directory.getKeyHandle(key), 1_000L + index);
+                }
+                drainRehash(expires);
+                for (int index = 0; index < 60; index++) {
+                    PreparedTtlMutation removal = expires.prepareRemoveExpire(
+                            directory.getKeyHandle(keys.get(index))
+                    );
+                    removal.commit();
+                    removal.releaseSuperseded();
+                }
+                long liveBeforeStaging = allocator.liveRegionCount();
+
+                HashTableMaintenanceRegistry.MaintenancePreparation preparation = expires.prepareMaintenance();
+                Assert.assertNotNull(preparation);
+                Assert.assertTrue(preparation.stagedNonNativeGrowthBytes() > 0L);
+                preparation.abort();
+                preparation.abort();
+                Assert.assertEquals(liveBeforeStaging, allocator.liveRegionCount());
+                Assert.assertThrows(IllegalStateException.class, preparation::stagedNonNativeGrowthBytes);
+                Assert.assertThrows(IllegalStateException.class, preparation::commit);
+
+                YierdisNativeExpireIndex.StagedResize first = expires.stageMaintenanceResize();
+                YierdisNativeExpireIndex.StagedResize stale = expires.stageMaintenanceResize();
+                Assert.assertNotNull(first);
+                Assert.assertNotNull(stale);
+                first.stagedNonNativeGrowthBytes();
+                expires.publishStagedResize(first);
+                Assert.assertThrows(IllegalStateException.class, first::stagedNonNativeGrowthBytes);
+                Assert.assertThrows(IllegalStateException.class, () -> expires.publishStagedResize(stale));
+                stale.close();
+                stale.close();
+                drainRehash(expires);
+            } finally {
+                expires.clear();
+                expires.close();
+                freeEntries(allocator, entries);
+            }
         }
     }
 
@@ -424,6 +606,20 @@ public class ExpireIndexContractTest {
 
     private static byte[] bytes(String value) {
         return value.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static BytesView view(byte[] value) {
+        return new BytesView() {
+            @Override
+            public int length() {
+                return value.length;
+            }
+
+            @Override
+            public byte getByte(int index) {
+                return value[index];
+            }
+        };
     }
 
     private static byte[] keyForInitialExpirySlot(int slot) {

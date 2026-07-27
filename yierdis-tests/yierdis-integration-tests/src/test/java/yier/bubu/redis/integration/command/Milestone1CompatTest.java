@@ -123,8 +123,10 @@ public class Milestone1CompatTest {
                 Assert.assertEquals("v", old.asString());
                 Assert.assertTrue(((ReplyInteger) client.execute(Arrays.asList(b("TTL"), b("k")))).value() > 0L);
 
-	                ReplyObject nxGet = client.execute(Arrays.asList(b("SET"), b("k"), b("v3"), b("NX"), b("GET")));
-	                Assert.assertTrue(nxGet instanceof ReplyNull);
+                ReplyBulkString nxGet = (ReplyBulkString) client.execute(
+                        Arrays.asList(b("SET"), b("k"), b("v3"), b("NX"), b("GET"))
+                );
+                Assert.assertEquals("v2", nxGet.asString());
             }
         });
     }

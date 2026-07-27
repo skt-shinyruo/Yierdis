@@ -633,17 +633,5 @@ public final class CommandSupport {
             }
         }
 
-        @Override
-        public boolean hasMemoryAddress() {
-            return frame != null && frameOffset >= 0 && frame.hasMemoryAddress();
-        }
-
-        @Override
-        public long memoryAddress() {
-            if (!hasMemoryAddress()) {
-                throw new UnsupportedOperationException("memoryAddress not supported");
-            }
-            return frame.memoryAddress() + frameOffset;
-        }
     }
 }
