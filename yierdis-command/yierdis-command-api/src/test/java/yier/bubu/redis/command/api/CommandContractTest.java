@@ -5,6 +5,7 @@ import org.junit.Test;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 
+import java.lang.reflect.Method;
 import java.util.Arrays;
 
 public class CommandContractTest {
@@ -26,43 +27,47 @@ public class CommandContractTest {
     }
 
     @Test
-    public void arityValidatorsReturnNullWhenValidAndErrorsWhenInvalid() {
-        Assert.assertNull(CommandArity.exact(2).validate("get", args("GET", "k")));
-        Assert.assertEquals(
-                "ERR wrong number of arguments for 'get' command",
-                CommandArity.exact(2).validate("get", args("GET")).toReplyMessage()
+    public void arityValidatorsAcceptValidCountsAndThrowCanonicalErrors() throws Exception {
+        CommandArity.exact(2).validate("get", commandArgs("GET", "k"));
+        assertWrongArity("get", CommandArity.exact(2), commandArgs("GET"));
+
+        CommandArity.min(3).validate("del", commandArgs("DEL", "a", "b"));
+        assertWrongArity("del", CommandArity.min(3), commandArgs("DEL", "a"));
+
+        CommandArity.range(4, 6).validate("zrange", commandArgs("ZRANGE", "z", "0", "-1"));
+        CommandArity.range(4, 6).validate(
+                "zrange", commandArgs("ZRANGE", "z", "0", "-1", "WITHSCORES", "REV"));
+        assertWrongArity(
+                "zrange",
+                CommandArity.range(4, 6),
+                commandArgs("ZRANGE", "z", "0", "-1", "WITHSCORES", "REV", "X")
         );
 
-        Assert.assertNull(CommandArity.min(3).validate("del", args("DEL", "a", "b")));
-        Assert.assertEquals(
-                "ERR wrong number of arguments for 'del' command",
-                CommandArity.min(3).validate("del", args("DEL", "a")).toReplyMessage()
-        );
+        CommandArity.oneOf(1, 2).validate("ping", commandArgs("PING"));
+        CommandArity.oneOf(1, 2).validate("ping", commandArgs("PING", "hello"));
+        assertWrongArity("ping", CommandArity.oneOf(1, 2), commandArgs("PING", "a", "b"));
 
-        Assert.assertNull(CommandArity.range(4, 6).validate("zrange", args("ZRANGE", "z", "0", "-1")));
-        Assert.assertNull(CommandArity.range(4, 6).validate("zrange", args("ZRANGE", "z", "0", "-1", "WITHSCORES", "REV")));
-        Assert.assertEquals(
-                "ERR wrong number of arguments for 'zrange' command",
-                CommandArity.range(4, 6).validate("zrange", args("ZRANGE", "z", "0", "-1", "WITHSCORES", "REV", "X")).toReplyMessage()
+        CommandArity.pairTail(4, 2).validate("hset", commandArgs("HSET", "h", "f", "v"));
+        CommandArity.pairTail(4, 2).validate(
+                "hset", commandArgs("HSET", "h", "f1", "v1", "f2", "v2"));
+        assertWrongArity("hset", CommandArity.pairTail(4, 2), commandArgs("HSET", "h", "f"));
+        assertWrongArity(
+                "hset",
+                CommandArity.pairTail(4, 2),
+                commandArgs("HSET", "h", "f1", "v1", "f2")
         );
+    }
 
-        Assert.assertNull(CommandArity.oneOf(1, 2).validate("ping", args("PING")));
-        Assert.assertNull(CommandArity.oneOf(1, 2).validate("ping", args("PING", "hello")));
-        Assert.assertEquals(
-                "ERR wrong number of arguments for 'ping' command",
-                CommandArity.oneOf(1, 2).validate("ping", args("PING", "a", "b")).toReplyMessage()
-        );
+    @Test
+    public void handlerOnlyReceivesCommandArgs() throws Exception {
+        Method parse = CommandHandler.class.getMethod("parse", CommandArgs.class);
 
-        Assert.assertNull(CommandArity.pairTail(4, 2).validate("hset", args("HSET", "h", "f", "v")));
-        Assert.assertNull(CommandArity.pairTail(4, 2).validate("hset", args("HSET", "h", "f1", "v1", "f2", "v2")));
-        Assert.assertEquals(
-                "ERR wrong number of arguments for 'hset' command",
-                CommandArity.pairTail(4, 2).validate("hset", args("HSET", "h", "f")).toReplyMessage()
-        );
-        Assert.assertEquals(
-                "ERR wrong number of arguments for 'hset' command",
-                CommandArity.pairTail(4, 2).validate("hset", args("HSET", "h", "f1", "v1", "f2")).toReplyMessage()
-        );
+        Assert.assertEquals(CommandInvocation.class, parse.getReturnType());
+        Assert.assertArrayEquals(new Class<?>[]{CommandArgs.class}, parse.getParameterTypes());
+        Assert.assertArrayEquals(new Class<?>[]{CommandParseException.class}, parse.getExceptionTypes());
+        Assert.assertEquals(1, Arrays.stream(CommandHandler.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals("parse"))
+                .count());
     }
 
     @Test
@@ -99,6 +104,22 @@ public class CommandContractTest {
     private static ArgReader args(String command, String... rest) {
         ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8(command, Arrays.asList(rest));
         return ArgReader.of(request);
+    }
+
+    private static CommandArgs commandArgs(String command, String... rest) {
+        ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8(command, Arrays.asList(rest));
+        return CommandArgs.of(request);
+    }
+
+    private static void assertWrongArity(String commandLower, CommandArity arity, CommandArgs args) {
+        CommandParseException failure = Assert.assertThrows(
+                CommandParseException.class,
+                () -> arity.validate(commandLower, args)
+        );
+        Assert.assertEquals(
+                "ERR wrong number of arguments for '" + commandLower + "' command",
+                failure.replyMessage()
+        );
     }
 
     private static byte[] bytes(String s) {

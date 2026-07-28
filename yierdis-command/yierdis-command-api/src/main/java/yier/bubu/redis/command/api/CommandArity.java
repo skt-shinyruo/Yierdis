@@ -59,16 +59,26 @@ public final class CommandArity {
         return new CommandArity(Kind.PAIR_TAIL, minArgc, tailStartIndex, null);
     }
 
-    public CommandParseError validate(String commandLower, ArgReader args) {
-        int argc = args.argc();
-        boolean accepted = switch (kind) {
+    public void validate(String commandLower, CommandArgs args) throws CommandParseException {
+        if (!accepts(args.argc())) {
+            throw new CommandParseException(
+                    "ERR wrong number of arguments for '" + commandLower + "' command"
+            );
+        }
+    }
+
+    CommandParseError validate(String commandLower, ArgReader args) {
+        return accepts(args.argc()) ? null : CommandParseError.wrongArity(commandLower);
+    }
+
+    private boolean accepts(int argc) {
+        return switch (kind) {
             case EXACT -> argc == first;
             case MIN -> argc >= first;
             case RANGE -> argc >= first && argc <= second;
             case ONE_OF -> Arrays.binarySearch(allowed, argc) >= 0;
             case PAIR_TAIL -> argc >= first && ((argc - second) & 1) == 0;
         };
-        return accepted ? null : CommandParseError.wrongArity(commandLower);
     }
 
     public int redisMetadataArity() {

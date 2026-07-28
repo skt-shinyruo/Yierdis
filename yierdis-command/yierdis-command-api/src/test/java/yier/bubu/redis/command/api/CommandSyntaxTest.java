@@ -19,14 +19,23 @@ public class CommandSyntaxTest {
     }
 
     @Test
-    public void registrationTakesOneDefinitionWithoutASeparateName() throws Exception {
+    public void registrationTakesSpecsAndLegacyDefinitionsWithoutSeparateNames() throws Exception {
+        Assert.assertNotNull(CommandModule.Registration.class.getMethod(
+                "register", CommandSpec.class));
         Assert.assertNotNull(CommandModule.Registration.class.getMethod(
                 "register", CommandDefinition.class));
+        java.util.List<Class<?>> registrationTypes = new java.util.ArrayList<>();
         for (java.lang.reflect.Method method : CommandModule.Registration.class.getMethods()) {
             if (method.getName().equals("register")) {
-                Assert.assertArrayEquals(new Class<?>[]{CommandDefinition.class}, method.getParameterTypes());
+                Assert.assertEquals(1, method.getParameterCount());
+                registrationTypes.add(method.getParameterTypes()[0]);
             }
         }
+        Assert.assertEquals(2, registrationTypes.size());
+        Assert.assertEquals(
+                java.util.Set.of(CommandSpec.class, CommandDefinition.class),
+                java.util.Set.copyOf(registrationTypes)
+        );
     }
 
     @Test
