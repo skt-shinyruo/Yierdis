@@ -145,6 +145,7 @@ public class DefaultYierdisEngineTest {
                     context.reply().simpleString("OK");
                 })
         ));
+        registry.seal();
         YierdisEngine engine = new DefaultYierdisEngine(processor, () -> {
         });
         EngineSession session = new EngineSession(16, 1024);
@@ -191,8 +192,10 @@ public class DefaultYierdisEngineTest {
     @Test
     public void maintenanceTickDelegatesToOwnerThreadRuntimeHook() {
         AtomicInteger ticks = new AtomicInteger();
+        CommandRegistry registry = new CommandRegistry();
+        registry.seal();
         YierdisEngine engine = new DefaultYierdisEngine(
-                new YierdisFastCommandProcessor(new CommandRegistry()),
+                new YierdisFastCommandProcessor(registry),
                 ticks::incrementAndGet
         );
 

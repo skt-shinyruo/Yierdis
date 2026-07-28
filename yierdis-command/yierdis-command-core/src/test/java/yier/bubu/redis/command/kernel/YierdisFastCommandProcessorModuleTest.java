@@ -19,7 +19,9 @@ import java.util.List;
 public class YierdisFastCommandProcessorModuleTest {
     @Test
     public void emptyRegistryDoesNotRegisterDefaultDataCommands() {
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(new CommandRegistry());
+        CommandRegistry registry = new CommandRegistry();
+        registry.seal();
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
 
         assertUnknownCommand(processor, "PING");
         assertUnknownCommand(processor, "GET");

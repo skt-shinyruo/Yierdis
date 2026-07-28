@@ -8,6 +8,7 @@ import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
@@ -65,12 +66,12 @@ public class YierdisFastCommandProcessorRegistrationTest {
     }
 
     @Test
-    public void registryLookupAndHelpersMustReturnCommandDefinitions() throws Exception {
-        Method definition = CommandRegistry.class.getDeclaredMethod("definition", ExecutionRequest.class);
-        Assert.assertEquals(CommandDefinition.class, definition.getReturnType());
-
+    public void registryMetadataHelpersExposeDirectAndLegacyRegistrations() throws Exception {
         Method definitionByUpperName = CommandRegistry.class.getDeclaredMethod("definitionByUpperName", String.class);
         Assert.assertEquals(CommandDefinition.class, definitionByUpperName.getReturnType());
+
+        Method specByUpperName = CommandRegistry.class.getDeclaredMethod("specByUpperName", String.class);
+        Assert.assertEquals(CommandSpec.class, specByUpperName.getReturnType());
     }
 
     @Test

@@ -25,6 +25,7 @@ public final class ServerCommandComposition {
                 DefaultCommandModules.create(dbRouter, infoProvider, slowGovernor),
                 new ServerCommandModule(infoProvider)
         );
+        registry.seal();
         return processor;
     }
 }

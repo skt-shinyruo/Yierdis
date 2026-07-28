@@ -9,39 +9,29 @@ import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
-import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.testutil.TestPreparedCommands;
 
-import java.lang.reflect.Method;
-import java.util.List;
 import java.util.Locale;
 
 public class CommandRegistryTest {
     @Test
-    public void findIsCaseInsensitive() {
+    public void metadataLookupIsCaseInsensitive() {
         CommandRegistry registry = new CommandRegistry();
         registerNoop(registry, "PING");
+        registry.seal();
 
-        try (ExecutionRequest c1 = request("PING")) {
-            Assert.assertNotNull(spec(registry, c1));
-        }
-        try (ExecutionRequest c2 = request("ping")) {
-            Assert.assertNotNull(spec(registry, c2));
-        }
-        try (ExecutionRequest c3 = request("PiNg")) {
-            Assert.assertNotNull(spec(registry, c3));
-        }
+        Assert.assertNotNull(registry.specByUpperName("PING"));
+        Assert.assertNotNull(registry.specByUpperName("ping"));
+        Assert.assertNotNull(registry.specByUpperName("PiNg"));
     }
 
     @Test
     public void unknownCommandReturnsNull() {
         CommandRegistry registry = new CommandRegistry();
         registerNoop(registry, "PING");
+        registry.seal();
 
-        try (ExecutionRequest cmd = request("NOPE")) {
-            Assert.assertNull(spec(registry, cmd));
-        }
+        Assert.assertNull(registry.specByUpperName("NOPE"));
     }
 
     @Test
@@ -89,11 +79,13 @@ public class CommandRegistryTest {
         for (String name : names) {
             registerNoop(registry, name);
         }
+        registry.seal();
 
         for (String name : names) {
-            try (ExecutionRequest cmd = request(name.toLowerCase(Locale.ROOT))) {
-                Assert.assertNotNull("expected spec for " + name, spec(registry, cmd));
-            }
+            Assert.assertNotNull(
+                    "expected spec for " + name,
+                    registry.specByUpperName(name.toLowerCase(Locale.ROOT))
+            );
         }
     }
 
@@ -110,17 +102,4 @@ public class CommandRegistryTest {
         ));
     }
 
-    private static ExecutionRequest request(String commandName) {
-        return ByteArrayExecutionRequest.fromUtf8(commandName, List.of());
-    }
-
-    private static Object spec(CommandRegistry registry, ExecutionRequest request) {
-        try {
-            Method method = CommandRegistry.class.getDeclaredMethod("definition", ExecutionRequest.class);
-            method.setAccessible(true);
-            return method.invoke(registry, request);
-        } catch (ReflectiveOperationException e) {
-            throw new AssertionError("unable to access registry definition", e);
-        }
-    }
 }

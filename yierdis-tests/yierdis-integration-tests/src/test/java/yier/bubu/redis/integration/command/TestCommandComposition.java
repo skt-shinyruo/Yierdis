@@ -36,6 +36,7 @@ public final class TestCommandComposition {
             }
         }
         CommandRegistries.registerInto(registry, modules);
+        registry.seal();
         return processor;
     }
 

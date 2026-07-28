@@ -22,6 +22,7 @@ public final class EmbeddedCommandComposition {
                 registry,
                 DefaultCommandModules.create(TestDbRouters.forInstance(instance), null)
         );
+        registry.seal();
         return processor;
     }
 
@@ -37,6 +38,7 @@ public final class EmbeddedCommandComposition {
             }
         }
         CommandRegistries.registerInto(registry, modules);
+        registry.seal();
         return processor;
     }
 }

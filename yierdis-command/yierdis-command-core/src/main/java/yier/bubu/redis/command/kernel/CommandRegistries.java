@@ -11,12 +11,14 @@ public final class CommandRegistries {
     public static CommandRegistry from(CommandModule... modules) {
         CommandRegistry registry = new CommandRegistry();
         registerInto(registry, modules);
+        registry.seal();
         return registry;
     }
 
     public static CommandRegistry from(Iterable<? extends CommandModule> modules) {
         CommandRegistry registry = new CommandRegistry();
         registerInto(registry, modules);
+        registry.seal();
         return registry;
     }
 

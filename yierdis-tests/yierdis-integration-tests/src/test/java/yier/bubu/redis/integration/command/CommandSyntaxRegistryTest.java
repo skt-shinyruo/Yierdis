@@ -6,6 +6,7 @@ import yier.bubu.redis.command.api.CommandArity;
 import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.kernel.CommandRegistry;
@@ -25,7 +26,7 @@ import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class CommandSyntaxRegistryTest {
     @Test
-    public void registryExposesSyntaxAndMultiPolicyThroughUnifiedDefinition() {
+    public void registryExposesSyntaxAndMultiPolicyThroughUnifiedSpec() {
         CommandRegistry registry = new CommandRegistry();
         CommandSyntax syntax = new CommandSyntax(
                 "HELLO",
@@ -33,18 +34,20 @@ public class CommandSyntaxRegistryTest {
                 CommandKeySpec.NONE,
                 TransactionPolicy.DISALLOWED_IN_MULTI
         );
-        registry.register(new CommandDefinition<>(
+        registry.register(new CommandSpec(
                 syntax,
-                CommandParsers.args(),
-                (cmd, context) -> TestPreparedCommands.simpleString("OK")
+                args -> session -> yier.bubu.redis.execution.api.PreparedCommands.ready(
+                        yier.bubu.redis.execution.api.RedisReplies.simpleString("OK")
+                )
         ));
+        registry.seal();
 
-        CommandDefinition<?> definition = registry.definitionByUpperName("HELLO");
-        Assert.assertNotNull(definition);
-        Assert.assertSame(syntax, definition.syntax());
-        Assert.assertEquals(-1, definition.syntax().arity().redisMetadataArity());
-        Assert.assertEquals(CommandKeySpec.NONE, definition.syntax().keys());
-        Assert.assertEquals(TransactionPolicy.DISALLOWED_IN_MULTI, definition.syntax().transactionPolicy());
+        CommandSpec spec = registry.specByUpperName("HELLO");
+        Assert.assertNotNull(spec);
+        Assert.assertSame(syntax, spec.syntax());
+        Assert.assertEquals(-1, spec.syntax().arity().redisMetadataArity());
+        Assert.assertEquals(CommandKeySpec.NONE, spec.syntax().keys());
+        Assert.assertEquals(TransactionPolicy.DISALLOWED_IN_MULTI, spec.syntax().transactionPolicy());
     }
 
     @Test
@@ -99,12 +102,12 @@ public class CommandSyntaxRegistryTest {
                     }
             );
             CommandRegistry registry = registryOf(processor);
-            Assert.assertEquals(-1, registry.definitionByUpperName("INFO").syntax().arity().redisMetadataArity());
+            Assert.assertEquals(-1, registry.specByUpperName("INFO").syntax().arity().redisMetadataArity());
             Assert.assertEquals(
                     TransactionPolicy.DISALLOWED_IN_MULTI,
-                    registry.definitionByUpperName("HELLO").syntax().transactionPolicy()
+                    registry.specByUpperName("HELLO").syntax().transactionPolicy()
             );
-            Assert.assertNotNull(registry.definitionByUpperName("SET").syntax());
+            Assert.assertNotNull(registry.specByUpperName("SET").syntax());
         });
     }
 
@@ -134,9 +137,12 @@ public class CommandSyntaxRegistryTest {
 
     private static CommandRegistry registryOf(YierdisFastCommandProcessor processor) {
         try {
-            Field field = YierdisFastCommandProcessor.class.getDeclaredField("registry");
-            field.setAccessible(true);
-            return (CommandRegistry) field.get(processor);
+            Field dispatcherField = YierdisFastCommandProcessor.class.getDeclaredField("dispatcher");
+            dispatcherField.setAccessible(true);
+            Object dispatcher = dispatcherField.get(processor);
+            Field registryField = dispatcher.getClass().getDeclaredField("registry");
+            registryField.setAccessible(true);
+            return (CommandRegistry) registryField.get(dispatcher);
         } catch (ReflectiveOperationException e) {
             throw new AssertionError("unable to access processor registry", e);
         }
