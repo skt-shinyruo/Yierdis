@@ -1,5 +1,7 @@
 package yier.bubu.redis.storage.memory;
 
+import yier.bubu.redis.storage.memory.EntryMutationEntries.CurrentEntry;
+import yier.bubu.redis.storage.memory.EntryMutationEntries.StagedEntry;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.HllReadOps;
 import yier.bubu.redis.storage.api.HllWriteOps;
@@ -7,14 +9,12 @@ import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.WriteResult;
-import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
-import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
@@ -52,7 +52,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
 
             @Override
             public PreparedDbMutation<WriteResult<Integer>> prepare() {
-                CurrentEntry currentEntry = currentEntry(keyBytes);
+                CurrentEntry currentEntry = EntryMutationEntries.current(keyLifecycle, keyBytes);
                 EntryRecord current = currentEntry.record();
                 byte[] currentBytes = null;
                 if (current != null) {
@@ -73,7 +73,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                 try {
                     KeyHandle targetKey = currentEntry.keyHandle();
                     if (current == null) {
-                        staged = stageNewEntry(keyBytes);
+                        staged = EntryMutationEntries.stage(keyLifecycle, keyBytes);
                         targetKey = staged.keyHandle();
                     }
 
@@ -88,16 +88,14 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                     WriteResult<Integer> result = WriteResult.of(changed ? 1 : 0, outcome);
                     long deltaBytes = estimateRecordBytes(targetKey, next)
                             - estimateRecordBytes(targetKey, current);
-                    PreparedEntryMutation<WriteResult<Integer>> prepared = new PreparedEntryMutation<>(
+                    PreparedEntryMutation<WriteResult<Integer>> prepared = EntryMutationEntries.upsert(
                             keyLifecycle,
                             result,
                             deltaBytes,
                             staged == null ? 0L : staged.stagedHeapBytes(),
                             outcome,
-                            currentEntry.entryHandle(),
-                            staged == null ? null : staged.entryHandle(),
-                            staged == null ? null : staged.stagedKey(),
-                            current,
+                            currentEntry,
+                            staged,
                             next,
                             true,
                             PreparedTtlMutation.NONE
@@ -154,7 +152,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
             @Override
             public PreparedDbMutation<WriteResult<Void>> prepare() {
                 MergeRegisters merged = mergeSourceRegisters(sourceKeys, now);
-                CurrentEntry currentEntry = currentEntry(destKeyBytes);
+                CurrentEntry currentEntry = EntryMutationEntries.current(keyLifecycle, destKeyBytes);
                 EntryRecord current = currentEntry.record();
                 byte[] currentBytes = null;
                 ValueHandle currentHandle = null;
@@ -178,7 +176,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                 try {
                     KeyHandle targetKey = currentEntry.keyHandle();
                     if (current == null) {
-                        staged = stageNewEntry(destKeyBytes);
+                        staged = EntryMutationEntries.stage(keyLifecycle, destKeyBytes);
                         targetKey = staged.keyHandle();
                     }
 
@@ -195,16 +193,14 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                     WriteResult<Void> result = WriteResult.of(null, outcome);
                     long deltaBytes = estimateRecordBytes(targetKey, next)
                             - estimateRecordBytes(targetKey, current);
-                    PreparedEntryMutation<WriteResult<Void>> prepared = new PreparedEntryMutation<>(
+                    PreparedEntryMutation<WriteResult<Void>> prepared = EntryMutationEntries.upsert(
                             keyLifecycle,
                             result,
                             deltaBytes,
                             staged == null ? 0L : staged.stagedHeapBytes(),
                             outcome,
-                            currentEntry.entryHandle(),
-                            staged == null ? null : staged.entryHandle(),
-                            staged == null ? null : staged.stagedKey(),
-                            current,
+                            currentEntry,
+                            staged,
                             next,
                             valueChanged,
                             ttlMutation
@@ -410,13 +406,6 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
         return keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
     }
 
-    private CurrentEntry currentEntry(byte[] keyBytes) {
-        EntryHandle entryHandle = keyLifecycle.entryHandle(keyBytes);
-        EntryRecord record = entryHandle == null ? null : keyLifecycle.entryRecord(entryHandle);
-        KeyHandle keyHandle = entryHandle == null ? null : keyLifecycle.keyHandle(keyBytes);
-        return new CurrentEntry(entryHandle, keyHandle, record);
-    }
-
     private void reclaimExpiredBeforeMutation(byte[] keyBytes, long nowMillis) {
         KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
         if (keyHandle == null) {
@@ -428,44 +417,8 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
         }
     }
 
-    private StagedEntry stageNewEntry(byte[] keyBytes) {
-        EntryHandle entryHandle = keyLifecycle.entryTable().reserve();
-        NativeKeyDirectory.StagedInsert stagedKey = null;
-        try {
-            stagedKey = keyLifecycle.keyDirectory().stageInsert(keyBytes);
-            return new StagedEntry(entryHandle, stagedKey);
-        } catch (RuntimeException | Error failure) {
-            try {
-                keyLifecycle.entryTable().release(entryHandle);
-            } catch (RuntimeException | Error releaseFailure) {
-                failure.addSuppressed(releaseFailure);
-            }
-            if (stagedKey != null) {
-                try {
-                    stagedKey.close();
-                } catch (RuntimeException | Error closeFailure) {
-                    failure.addSuppressed(closeFailure);
-                }
-            }
-            throw failure;
-        }
-    }
-
     private <T> PreparedEntryMutation<T> preparedNoEntry(T result, MutationOutcome outcome) {
-        return new PreparedEntryMutation<>(
-                keyLifecycle,
-                result,
-                0L,
-                0L,
-                outcome,
-                null,
-                null,
-                null,
-                null,
-                null,
-                false,
-                PreparedTtlMutation.NONE
-        );
+        return PreparedEntryMutation.unchanged(keyLifecycle, result, outcome);
     }
 
     private void abortStaged(
@@ -488,18 +441,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                 failure.addSuppressed(releaseFailure);
             }
         }
-        if (staged != null) {
-            try {
-                staged.close();
-            } catch (RuntimeException | Error closeFailure) {
-                failure.addSuppressed(closeFailure);
-            }
-            try {
-                keyLifecycle.entryTable().release(staged.entryHandle());
-            } catch (RuntimeException | Error releaseFailure) {
-                failure.addSuppressed(releaseFailure);
-            }
-        }
+        EntryMutationEntries.abortStaged(keyLifecycle, staged, failure);
     }
 
     private long withScopeBookkeeping(long upperBound) {
@@ -514,31 +456,6 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
             return Long.MAX_VALUE;
         }
         return left + right;
-    }
-
-    private record CurrentEntry(
-            EntryHandle entryHandle,
-            KeyHandle keyHandle,
-            EntryRecord record
-    ) {
-    }
-
-    private record StagedEntry(
-            EntryHandle entryHandle,
-            NativeKeyDirectory.StagedInsert stagedKey
-    ) implements AutoCloseable {
-        private KeyHandle keyHandle() {
-            return stagedKey.keyHandle();
-        }
-
-        private long stagedHeapBytes() {
-            return stagedKey.stagedHeapBytes();
-        }
-
-        @Override
-        public void close() {
-            stagedKey.close();
-        }
     }
 
     private record MergeRegisters(int[] registers, long copiedBytes) {

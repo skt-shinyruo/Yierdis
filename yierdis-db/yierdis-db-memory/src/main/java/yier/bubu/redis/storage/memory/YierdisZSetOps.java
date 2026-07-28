@@ -1,5 +1,7 @@
 package yier.bubu.redis.storage.memory;
 
+import yier.bubu.redis.storage.memory.EntryMutationEntries.CurrentEntry;
+import yier.bubu.redis.storage.memory.EntryMutationEntries.StagedEntry;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.ScanCursorV2;
@@ -11,14 +13,12 @@ import yier.bubu.redis.storage.api.ZSetWriteOps;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
 import yier.bubu.redis.storage.api.result.ByteSequenceSources;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
-import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
-import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedCallbackMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
@@ -74,7 +74,7 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
 
             @Override
             public PreparedDbMutation<WriteResult<Long>> prepare() {
-                CurrentEntry currentEntry = currentEntry(keyBytes);
+                CurrentEntry currentEntry = EntryMutationEntries.current(keyLifecycle, keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current != null) {
                     requireZSet(current);
@@ -86,7 +86,7 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                 try {
                     KeyHandle targetKey = currentEntry.keyHandle();
                     if (current == null) {
-                        staged = stageNewEntry(keyBytes);
+                        staged = EntryMutationEntries.stage(keyLifecycle, keyBytes);
                         targetKey = staged.keyHandle();
                     }
                     ValueHandle sourceHandle = current == null ? null : requireZSetHandle(current);
@@ -114,7 +114,7 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                     WriteResult<Long> result = WriteResult.of((long) added.added(), outcome);
                     long deltaBytes = estimateRecordBytes(targetKey, next)
                             - estimateRecordBytes(targetKey, current);
-                    PreparedEntryMutation<WriteResult<Long>> prepared = new PreparedEntryMutation<>(
+                    PreparedEntryMutation<WriteResult<Long>> prepared = EntryMutationEntries.upsert(
                             keyLifecycle,
                             result,
                             deltaBytes,
@@ -123,18 +123,16 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                                     preparedAdd.stagedNonNativeGrowthBytes()
                             ),
                             outcome,
-                            currentEntry.entryHandle(),
-                            staged == null ? null : staged.entryHandle(),
-                            staged == null ? null : staged.stagedKey(),
-                            current,
+                            currentEntry,
+                            staged,
                             next,
                             !stableHandle,
-                            stableHandle ? preparedAdd::releaseSuperseded : null,
-                            PreparedTtlMutation.NONE,
-                            stableHandle ? preparedAdd : null
+                            PreparedTtlMutation.NONE
                     );
                     if (stableHandle) {
-                        prepared.beforeEntryPublish(preparedAdd::commit);
+                        prepared.releaseReplacedValueWith(preparedAdd::releaseSuperseded)
+                                .closeOnAbort(preparedAdd)
+                                .beforeEntryPublish(preparedAdd::commit);
                     }
                     staged = null;
                     replacement = null;
@@ -167,51 +165,8 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
         });
     }
 
-    private CurrentEntry currentEntry(byte[] keyBytes) {
-        EntryHandle entryHandle = keyLifecycle.entryHandle(keyBytes);
-        EntryRecord record = entryHandle == null ? null : keyLifecycle.entryRecord(entryHandle);
-        KeyHandle keyHandle = entryHandle == null ? null : keyLifecycle.keyHandle(keyBytes);
-        return new CurrentEntry(entryHandle, keyHandle, record);
-    }
-
-    private StagedEntry stageNewEntry(byte[] keyBytes) {
-        EntryHandle entryHandle = keyLifecycle.entryTable().reserve();
-        NativeKeyDirectory.StagedInsert stagedKey = null;
-        try {
-            stagedKey = keyLifecycle.keyDirectory().stageInsert(keyBytes);
-            return new StagedEntry(entryHandle, stagedKey);
-        } catch (RuntimeException | Error failure) {
-            try {
-                keyLifecycle.entryTable().release(entryHandle);
-            } catch (RuntimeException | Error releaseFailure) {
-                failure.addSuppressed(releaseFailure);
-            }
-            if (stagedKey != null) {
-                try {
-                    stagedKey.close();
-                } catch (RuntimeException | Error closeFailure) {
-                    failure.addSuppressed(closeFailure);
-                }
-            }
-            throw failure;
-        }
-    }
-
     private <T> PreparedEntryMutation<T> preparedNoEntry(T result, MutationOutcome outcome) {
-        return new PreparedEntryMutation<>(
-                keyLifecycle,
-                result,
-                0L,
-                0L,
-                outcome,
-                null,
-                null,
-                null,
-                null,
-                null,
-                false,
-                PreparedTtlMutation.NONE
-        );
+        return PreparedEntryMutation.unchanged(keyLifecycle, result, outcome);
     }
 
     private void abortStaged(StagedEntry staged, ValueHandle replacement, Throwable failure) {
@@ -222,18 +177,7 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                 failure.addSuppressed(releaseFailure);
             }
         }
-        if (staged != null) {
-            try {
-                staged.close();
-            } catch (RuntimeException | Error closeFailure) {
-                failure.addSuppressed(closeFailure);
-            }
-            try {
-                keyLifecycle.entryTable().release(staged.entryHandle());
-            } catch (RuntimeException | Error releaseFailure) {
-                failure.addSuppressed(releaseFailure);
-            }
-        }
+        EntryMutationEntries.abortStaged(keyLifecycle, staged, failure);
     }
 
     private long nativePeak(long heapGrowthBytes, int... nativeAllocationSizes) {
@@ -321,31 +265,6 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                 zsetRoot.estimatedBytes(handle)
         );
         return withScopeBookkeeping(Math.max(logicalUpperBound, nativeUpperBound));
-    }
-
-    private record CurrentEntry(
-            EntryHandle entryHandle,
-            KeyHandle keyHandle,
-            EntryRecord record
-    ) {
-    }
-
-    private record StagedEntry(
-            EntryHandle entryHandle,
-            NativeKeyDirectory.StagedInsert stagedKey
-    ) implements AutoCloseable {
-        private KeyHandle keyHandle() {
-            return stagedKey.keyHandle();
-        }
-
-        private long stagedHeapBytes() {
-            return stagedKey.stagedHeapBytes();
-        }
-
-        @Override
-        public void close() {
-            stagedKey.close();
-        }
     }
 
     @Override
@@ -564,7 +483,7 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
 
             @Override
             public PreparedDbMutation<WriteResult<Long>> prepare() {
-                CurrentEntry currentEntry = currentEntry(keyBytes);
+                CurrentEntry currentEntry = EntryMutationEntries.current(keyLifecycle, keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current == null) {
                     return preparedNoEntry(WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
@@ -675,17 +594,13 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
             MutationOutcome outcome,
             PreparedTtlMutation ttlMutation
     ) {
-        return new PreparedEntryMutation<>(
+        return PreparedEntryMutation.delete(
                 keyLifecycle,
                 result,
                 -estimateRecordBytes(currentEntry.keyHandle(), current),
-                0L,
                 outcome,
                 currentEntry.entryHandle(),
-                null,
-                null,
                 current,
-                null,
                 true,
                 ttlMutation
         );

@@ -24,20 +24,22 @@
 3. server observability provider
 4. change event bridge
 
-## Command Session Capabilities
+## Command Session Contract
 
-executor 交给 engine 的是通用 `Session`，但命令层不能用一个弱 marker session 静默运行。`DefaultYierdisEngine.execute(...)` 会先把 `Session` 收窄成 `CommandSessionCapabilities`，再构造 `CommandContext`。
+executor 和 engine 之间直接使用 `CommandSession`。这个接口聚合命令所需的连接能力，避免命令层接收一个弱 marker session 后再做运行时收窄。
 
 ```text
 CommandExecutorExecutionSupport
-  -> CommandExecutionEngine.execute(session, request, writer)
-  -> DefaultYierdisEngine.execute(...)
-  -> CommandSessionCapabilities.from(session)
-  -> CommandContext
+  -> CommandExecutionEngine.prepare(commandSession, request)
+  -> DefaultYierdisEngine.prepare(...)
+  -> CommandPreparationContext
   -> YierdisFastCommandProcessor
+  -> PreparedCommand
+  -> reply capacity reservation
+  -> CommandExecutionContext.forRequest(commandSession, writer, request)
 ```
 
-`CommandSessionCapabilities` 要求 session 同时提供这些能力：
+`CommandSession` 同时提供这些能力：
 
 - `DbIndexSession`
 - `ClientMetadataSession`
@@ -45,13 +47,14 @@ CommandExecutorExecutionSupport
 - `ConnectionStatsSession`
 - `ProtocolNegotiationSession`
 
-如果缺任一能力，engine 会 fail fast。这个代理层的意义是让命令实现明确依赖连接状态能力，而不是假设所有 `Session` 都天然支持 DB routing、事务、客户端元数据和 RESP 协商。
+类型边界保证 engine 收到的 session 已具备全部能力。准备阶段只暴露 session；reply capacity 预留成功后，`CommandExecutionContext` 再加入 writer 和请求级 `MutationContext`。
 
 源码入口：
 
-- `DefaultYierdisEngine.execute(...)`
-- `CommandSessionCapabilities.from(...)`
-- `CommandContext`
+- `DefaultYierdisEngine.prepare(...)`
+- `CommandSession`
+- `CommandPreparationContext`
+- `CommandExecutionContext`
 - `EngineSession`
 
 ## DB Routing And CommandDb
@@ -65,8 +68,8 @@ SELECT <db>
 
 every command
   -> CommandSupport.commandDb(ctx)
-  -> YierdisDbRouter.dbFor(ctx.dbIndexSession())
-  -> CommandDb.reset(selected DbEngine)
+  -> YierdisDbRouter.dbFor(ctx.session())
+  -> new CommandDb(selected DbEngine, optional MutationContext)
   -> DbReads / DbWrites / MemoryOps / DbLifecycleOps
 ```
 
@@ -107,6 +110,8 @@ MEMORY STATS
 
 `ServerInfoProvider` 位于 command API，生产实现 `NettyServerInfoProvider` 位于 server-main。这个方向很重要：command 层可以请求观测摘要，但不能反向 import Netty channel、server bootstrap 或 executor implementation details。
 
+每次 `INFO`、结构化 `INFO`、`STATS` 或 health 请求都会先创建一份请求级 `ServerStatsSnapshot`。executor、ingress、commit stream、egress、child channels、runtime health 和 uptime 在该回复中只采样一次，所有 writer 共享同一份公共事实；memory 与 keyspace 聚合仍按 section 按需执行，避免轻量 health 请求扫描全部 DB。
+
 源码入口：
 
 - `ServerInfoProvider`
@@ -124,10 +129,13 @@ change event 是 DB 提交事实的有界、顺序化视图。它适合作为 AO
 用户命令路径：
 
 ```text
-DefaultYierdisEngine
-  -> MutationContext.of(request)
-  -> YierdisFastCommandProcessor
-  -> command handler / DbWrites
+DefaultYierdisEngine.prepare(...)
+  -> YierdisFastCommandProcessor.prepare(...)
+  -> PreparedCommand
+  -> reply capacity reservation
+  -> CommandExecutionContext.forRequest(...)
+     -> MutationContext.of(request)
+  -> PreparedCommand.execute(...) / DbWrites
   -> YierdisDbMutationExecutor
      -> reserve immutable commit record before visibility
      -> storage + ledger commit
@@ -136,7 +144,7 @@ DefaultYierdisEngine
   -> YierdisChangeSink.onChange(callback-scoped event)
 ```
 
-`MutationContext` 是命令边界内借用的 immutable command record 视图；processor 结束命令后会关闭它，跨越当前调用栈的 commit record 必须显式 retain。`YierdisDbMutationExecutor` 仅在 prepared mutation 的 outcome 表示真实变化时预留 stream slot；预留失败发生在 storage commit 之前，因此不会把不可发布的写入变成可见状态。发布转换本身不分配、不回调，也不进行新的容量判断。
+`MutationContext` 是命令执行边界内借用的 immutable command record 视图；`CommandExecutionContext` 关闭时会释放它，跨越当前调用栈的 commit record 必须显式 retain。`YierdisDbMutationExecutor` 仅在 prepared mutation 的 outcome 表示真实变化时预留 stream slot；预留失败发生在 storage commit 之前，因此不会把不可发布的写入变成可见状态。发布转换本身不分配、不回调，也不进行新的容量判断。
 
 expire 和 eviction 的路径也经同一个 DB commit boundary。DB lifecycle 为实际删除构造规范化的 `DEL key` record，并分别使用 `EXPIRED` 或 `EVICTED` kind；客户端并没有真的发送这条 `DEL` 命令。
 

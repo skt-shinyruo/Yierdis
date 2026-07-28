@@ -13,13 +13,11 @@ import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.defaults.BulkStringReplyAdapter;
 import yier.bubu.redis.command.defaults.CommandSupport;
-import yier.bubu.redis.execution.api.CommandExecutionContext;
 import yier.bubu.redis.execution.api.CommandPreparationContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.ReplyShape;
 import yier.bubu.redis.execution.api.ReplyShapes;
-import yier.bubu.redis.execution.api.ValidationResult;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.PreparedMutation;
 import yier.bubu.redis.storage.api.SetMode;
@@ -47,7 +45,7 @@ public final class StringCommands implements CommandModule {
         registration.register(new CommandDefinition<>(syntax("SETBIT", CommandArity.exact(4)), CommandParsers.args(), this::setbit));
         registration.register(new CommandDefinition<>(syntax("GETBIT", CommandArity.exact(3)), CommandParsers.args(), this::getbit));
         registration.register(new CommandDefinition<>(syntax("BITCOUNT", CommandArity.oneOf(2, 4)),
-                CommandParsers.request(), this::bitcount));
+                CommandParsers.args(), this::bitcount));
         registration.register(new CommandDefinition<>(syntax("INCR", CommandArity.exact(2)), CommandParsers.args(),
                 (args, context) -> incrBy(args, 1L)));
         registration.register(new CommandDefinition<>(syntax("DECR", CommandArity.exact(2)), CommandParsers.args(),
@@ -154,7 +152,16 @@ public final class StringCommands implements CommandModule {
                         args.getOld()
                 );
         StringWriteOps.SetStringValue preview = mutation.preview();
-        return new PreparedSet(mutation, preview, args.getOld(), setShape(preview, args.getOld()));
+        boolean getOld = args.getOld();
+        return CommandSupport.preparedMutation(setShape(preview, getOld), mutation, execution -> {
+            if (getOld) {
+                preview.oldValue().emitTo(new BulkStringReplyAdapter(execution.reply()));
+            } else if (preview.applied()) {
+                execution.reply().simpleString("OK");
+            } else {
+                execution.reply().nullValue();
+            }
+        });
     }
 
     private static ReplyShape setShape(StringWriteOps.SetStringValue preview, boolean getOld) {
@@ -190,8 +197,8 @@ public final class StringCommands implements CommandModule {
 
     private PreparedCommand setbit(ArgReader args, CommandPreparationContext context) {
         ExecutionRequest request = args.request();
-        long offset = CommandSupport.parseNonNegativeLong(request, 2, "offset");
-        long value = CommandSupport.parseLong(request, 3, "value");
+        long offset = args.nonNegativeLongAt(2);
+        long value = args.longAt(3);
         if (value != 0L && value != 1L) {
             return CommandSupport.error("ERR bit is not an integer or out of range");
         }
@@ -207,18 +214,19 @@ public final class StringCommands implements CommandModule {
 
     private PreparedCommand getbit(ArgReader args, CommandPreparationContext context) {
         ExecutionRequest request = args.request();
-        long offset = CommandSupport.parseNonNegativeLong(request, 2, "offset");
+        long offset = args.nonNegativeLongAt(2);
         long value = support.commandDb(context).reads().strings().getBit(support.argView(request, 1), offset);
         return CommandSupport.fixed(ReplyShapes.integer(value), execution -> execution.reply().integer(value));
     }
 
-    private PreparedCommand bitcount(ExecutionRequest request, CommandPreparationContext context) {
-        long count = request.argc() == 2
+    private PreparedCommand bitcount(ArgReader args, CommandPreparationContext context) {
+        ExecutionRequest request = args.request();
+        long count = args.argc() == 2
                 ? support.commandDb(context).reads().strings().bitcount(support.argView(request, 1))
                 : support.commandDb(context).reads().strings().bitcount(
                         support.argView(request, 1),
-                        CommandSupport.parseLong(request, 2, "start"),
-                        CommandSupport.parseLong(request, 3, "end")
+                        args.longAt(2),
+                        args.longAt(3)
                 );
         return CommandSupport.fixed(ReplyShapes.integer(count), execution -> execution.reply().integer(count));
     }
@@ -232,59 +240,4 @@ public final class StringCommands implements CommandModule {
         });
     }
 
-    private static final class PreparedSet implements PreparedCommand {
-        private final PreparedMutation<StringWriteOps.SetStringValue> mutation;
-        private final StringWriteOps.SetStringValue preview;
-        private final boolean getOld;
-        private final ReplyShape shape;
-        private boolean closed;
-
-        private PreparedSet(
-                PreparedMutation<StringWriteOps.SetStringValue> mutation,
-                StringWriteOps.SetStringValue preview,
-                boolean getOld,
-                ReplyShape shape
-        ) {
-            this.mutation = Objects.requireNonNull(mutation, "mutation");
-            this.preview = Objects.requireNonNull(preview, "preview");
-            this.getOld = getOld;
-            this.shape = Objects.requireNonNull(shape, "shape");
-        }
-
-        @Override
-        public ReplyShape replyShape() {
-            return shape;
-        }
-
-        @Override
-        public ValidationResult validateBeforeExecute() {
-            return mutation.isCurrent() ? ValidationResult.VALID : ValidationResult.STALE;
-        }
-
-        @Override
-        public void execute(CommandExecutionContext context) {
-            CommandSupport.executeWithCommandErrorTranslation(context, this::executeCommitted);
-        }
-
-        private void executeCommitted(CommandExecutionContext context) {
-            mutation.commit(context.mutationContext());
-            if (getOld) {
-                preview.oldValue().emitTo(new BulkStringReplyAdapter(context.reply()));
-                return;
-            }
-            if (preview.applied()) {
-                context.reply().simpleString("OK");
-                return;
-            }
-            context.reply().nullValue();
-        }
-
-        @Override
-        public void close() {
-            if (!closed) {
-                closed = true;
-                mutation.close();
-            }
-        }
-    }
 }

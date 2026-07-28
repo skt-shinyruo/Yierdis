@@ -295,110 +295,13 @@ public final class YierdisServerArgs {
         if (noCleanup) {
             cleanupIntervalMillis = 0;
         }
-
-        normalizeAndValidateServer();
-        normalizeAndValidateExecutor();
-        validateProtocolAndClientLimits();
-        validateReplyLimits();
-        normalizeAndValidateMemoryAndMaintenance();
-    }
-
-    private void normalizeAndValidateServer() {
-        if (bind == null || bind.isBlank()) {
-            throw new IllegalArgumentException("bind must not be blank");
+        if (bind != null) {
+            bind = bind.trim();
         }
-        bind = bind.trim();
-        requireRange(port, 0, 65535, "port");
-        requirePositive(maxClients, "maxClients");
-        requirePositive(databases, "databases");
-        requireAtMost(databases, 1024, "databases");
-        requireNonNegative(cleanupIntervalMillis, "cleanupIntervalMillis");
-        requirePositive(ioThreads, "ioThreads");
-    }
-
-    private void normalizeAndValidateExecutor() {
-        requirePositive(executorQueueCapacity, "executorQueueCapacity");
-        requireNonNegative(executorQueueMaxBytes, "executorQueueMaxBytes");
         executorSchedulingPolicy = normalizeExecutorSchedulingPolicy(executorSchedulingPolicy);
-        requirePositive(backpressureHighWatermark, "backpressureHighWatermark");
-        requireNonNegative(backpressureLowWatermark, "backpressureLowWatermark");
-        if (backpressureLowWatermark >= backpressureHighWatermark) {
-            throw new IllegalArgumentException("backpressureLowWatermark must be < backpressureHighWatermark");
-        }
-        requireNonNegative(backpressureBytesHighWatermark, "backpressureBytesHighWatermark");
-        requireNonNegative(backpressureBytesLowWatermark, "backpressureBytesLowWatermark");
-        if (backpressureBytesHighWatermark == 0 && backpressureBytesLowWatermark != 0) {
-            throw new IllegalArgumentException("backpressureBytesLowWatermark must be 0 when backpressureBytesHighWatermark is 0");
-        }
-        if (backpressureBytesHighWatermark > 0 && backpressureBytesLowWatermark >= backpressureBytesHighWatermark) {
-            throw new IllegalArgumentException("backpressureBytesLowWatermark must be < backpressureBytesHighWatermark");
-        }
-        requirePositive(executorMaxDrainCommands, "executorMaxDrainCommands");
-        requirePositive(executorDrainTimeLimitMillis, "executorDrainTimeLimitMillis");
-        requireNonNegative(transactionQueueMaxCommands, "transactionQueueMaxCommands");
-        requireNonNegative(transactionQueueMaxBytes, "transactionQueueMaxBytes");
-    }
-
-    private void validateProtocolAndClientLimits() {
-        requirePositive(protocolMaxBulkBytes, "protocolMaxBulkBytes");
-        requireAtMost(protocolMaxBulkBytes, RespProtocolLimits.MAX_BULK_BYTES, "protocolMaxBulkBytes");
-        requirePositive(protocolMaxArgs, "protocolMaxArgs");
-        requireAtMost(protocolMaxArgs, RespProtocolLimits.MAX_ARGS, "protocolMaxArgs");
-        requirePositive(protocolMaxLineBytes, "protocolMaxLineBytes");
-        requirePositive(protocolMaxCommandBytes, "protocolMaxCommandBytes");
-        requireAtMost(protocolMaxCommandBytes, RespProtocolLimits.MAX_COMMAND_BYTES, "protocolMaxCommandBytes");
-        requireNonNegative(protocolGlobalInFlightBytes, "protocolGlobalInFlightBytes");
-        requireNonNegative(clientIdleTimeoutMillis, "clientIdleTimeoutMillis");
-        requireNonNegative(clientOutputBufferLimitBytes, "clientOutputBufferLimitBytes");
-        requireNonNegative(clientOutputBufferOverLimitMillis, "clientOutputBufferOverLimitMillis");
-        if (clientOutputBufferLimitBytes > 0 && clientOutputBufferOverLimitMillis <= 0) {
-            throw new IllegalArgumentException("clientOutputBufferOverLimitMillis must be > 0 when clientOutputBufferLimitBytes is enabled");
-        }
-    }
-
-    private void validateReplyLimits() {
-        requirePositive(replyGlobalCapacityBytes, "replyGlobalCapacityBytes");
-        requirePositive(replyPerConnectionCapacityBytes, "replyPerConnectionCapacityBytes");
-        requirePositive(replyMaxTotalBytes, "replyMaxTotalBytes");
-        requirePositive(replyChunkPayloadBytes, "replyChunkPayloadBytes");
-        requirePositive(replyControlReservationBytes, "replyControlReservationBytes");
-        if (replyControlReservationBytes < YierdisServerRuntimeConfig.MIN_REPLY_CONTROL_RESERVATION_BYTES) {
-            throw new IllegalArgumentException(
-                    "replyControlReservationBytes must fit reply fixed overhead and the largest scalar error frame"
-            );
-        }
-        requirePositive(replyDrainTimeoutMillis, "replyDrainTimeoutMillis");
-        if (replyControlReservationBytes > replyMaxTotalBytes) {
-            throw new IllegalArgumentException("replyControlReservationBytes must be <= replyMaxTotalBytes");
-        }
-        if (replyMaxTotalBytes > replyPerConnectionCapacityBytes) {
-            throw new IllegalArgumentException("replyMaxTotalBytes must be <= replyPerConnectionCapacityBytes");
-        }
-        if (replyPerConnectionCapacityBytes > replyGlobalCapacityBytes) {
-            throw new IllegalArgumentException("replyPerConnectionCapacityBytes must be <= replyGlobalCapacityBytes");
-        }
-        long minimumReplyCharge = saturatedAdd(
-                saturatedAdd(replyControlReservationBytes, replyChunkPayloadBytes),
-                YierdisServerRuntimeConfig.REPLY_FIXED_OVERHEAD_BYTES
-        );
-        if (minimumReplyCharge > replyMaxTotalBytes) {
-            throw new IllegalArgumentException("reply chunk, control, and fixed overhead must fit replyMaxTotalBytes");
-        }
-    }
-
-    private void normalizeAndValidateMemoryAndMaintenance() {
-        requireNonNegative(maxmemoryBytes, "maxmemoryBytes");
         maxmemoryScope = normalizeMaxmemoryScope(maxmemoryScope);
         maxmemoryPolicy = normalizeMaxmemoryPolicy(maxmemoryPolicy);
-        requirePositive(maxmemorySamples, "maxmemorySamples");
-        requirePositive(evictionTimeLimitMillis, "evictionTimeLimitMillis");
-        requirePositive(expireCleanupTimeLimitMillis, "expireCleanupTimeLimitMillis");
-        requireNonNegative(nativeDefragMaxMoveBytes, "nativeDefragMaxMoveBytes");
-        requireNonNegative(nativeDefragMaxObjects, "nativeDefragMaxObjects");
-        requireNonNegative(nativeDefragTimeLimitMillis, "nativeDefragTimeLimitMillis");
-        requireNonNegative(nativeSlotCapacity, "nativeSlotCapacity");
-        requireNonNegative(keysTimeBudgetMillis, "keysTimeBudgetMillis");
-        requireNonNegative(keysMaxResults, "keysMaxResults");
+        toRuntimeConfig().executorConfig();
     }
 
     public YierdisServerArgs copy() {
@@ -588,30 +491,6 @@ public final class YierdisServerArgs {
         addArg(argv, name, Long.toString(value));
     }
 
-    private static void requirePositive(long value, String name) {
-        if (value <= 0L) {
-            throw new IllegalArgumentException(name + " must be > 0");
-        }
-    }
-
-    private static void requireNonNegative(long value, String name) {
-        if (value < 0L) {
-            throw new IllegalArgumentException(name + " must be >= 0");
-        }
-    }
-
-    private static void requireAtMost(long value, long maximum, String name) {
-        if (value > maximum) {
-            throw new IllegalArgumentException(name + " must be <= " + maximum);
-        }
-    }
-
-    private static void requireRange(long value, long minimum, long maximum, String name) {
-        if (value < minimum || value > maximum) {
-            throw new IllegalArgumentException(name + " must be in range " + minimum + ".." + maximum);
-        }
-    }
-
     private static String normalizeExecutorSchedulingPolicy(String rawValue) {
         return YierdisServerRuntimeConfig.ExecutorSchedulingPolicy.parseCliValue(rawValue).argvValue();
     }
@@ -625,6 +504,9 @@ public final class YierdisServerArgs {
     }
 
     private static long deriveProtocolGlobalInFlightBytes(long executorQueueMaxBytes, long configuredBytes) {
+        if (configuredBytes < 0L) {
+            throw new IllegalArgumentException("protocolGlobalInFlightBytes must be >= 0");
+        }
         if (configuredBytes > 0L) {
             return configuredBytes;
         }
@@ -633,10 +515,4 @@ public final class YierdisServerArgs {
         return Math.max(MIN_PROTOCOL_GLOBAL_IN_FLIGHT_BYTES, doubled);
     }
 
-    private static long saturatedAdd(long left, long right) {
-        if (left < 0L || right < 0L || left > Long.MAX_VALUE - right) {
-            return Long.MAX_VALUE;
-        }
-        return left + right;
-    }
 }

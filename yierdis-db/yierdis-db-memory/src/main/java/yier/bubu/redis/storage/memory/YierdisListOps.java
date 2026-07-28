@@ -3,6 +3,8 @@ package yier.bubu.redis.storage.memory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import yier.bubu.redis.storage.memory.EntryMutationEntries.CurrentEntry;
+import yier.bubu.redis.storage.memory.EntryMutationEntries.StagedEntry;
 import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
@@ -23,7 +25,6 @@ import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
@@ -121,7 +122,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
 
             @Override
             public PreparedEntryMutation<WriteResult<Long>> prepare() {
-                CurrentEntry currentEntry = currentEntry(keyBytes);
+                CurrentEntry currentEntry = EntryMutationEntries.current(keyLifecycle, keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current != null) {
                     requireList(current);
@@ -134,7 +135,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                 try {
                     KeyHandle targetKey = currentEntry.keyHandle();
                     if (current == null) {
-                        staged = stageNewEntry(keyBytes);
+                        staged = EntryMutationEntries.stage(keyLifecycle, keyBytes);
                         targetKey = staged.keyHandle();
                     }
 
@@ -150,7 +151,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                     );
                     WriteResult<Long> result = WriteResult.of((long) len, MutationOutcome.VALUE_CHANGED);
                     long deltaBytes = estimateRecordBytes(targetKey, next);
-                    PreparedEntryMutation<WriteResult<Long>> prepared = new PreparedEntryMutation<>(
+                    PreparedEntryMutation<WriteResult<Long>> prepared = PreparedEntryMutation.insert(
                             keyLifecycle,
                             result,
                             deltaBytes,
@@ -159,12 +160,9 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                                     listRoot.positiveRetainedHeapGrowthBytes(rootHeapBefore)
                             ),
                             MutationOutcome.VALUE_CHANGED,
-                            null,
-                            staged == null ? null : staged.entryHandle(),
-                            staged == null ? null : staged.stagedKey(),
-                            null,
+                            staged.entryHandle(),
+                            staged.stagedKey(),
                             next,
-                            true,
                             PreparedTtlMutation.NONE
                     );
                     staged = null;
@@ -204,7 +202,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
 
             @Override
             public PreparedEntryMutation<WriteResult<PoppedValueSequence>> prepare() {
-                CurrentEntry currentEntry = currentEntry(keyBytes);
+                CurrentEntry currentEntry = EntryMutationEntries.current(keyLifecycle, keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current == null) {
                     return preparedNoEntry(
@@ -296,22 +294,20 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
             long deltaBytes = estimateRecordBytes(currentEntry.keyHandle(), next)
                     - estimateRecordBytes(currentEntry.keyHandle(), current);
             ListValue.PreparedMutation transferred = valueMutation;
-            return new PreparedEntryMutation<>(
+            return PreparedEntryMutation.replace(
                     keyLifecycle,
                     WriteResult.of((long) valueMutation.size(), MutationOutcome.VALUE_CHANGED),
                     deltaBytes,
                     valueMutation.stagedHeapBytes(),
                     MutationOutcome.VALUE_CHANGED,
                     currentEntry.entryHandle(),
-                    null,
-                    null,
                     current,
                     next,
                     false,
-                    transferred::releaseSuperseded,
-                    PreparedTtlMutation.NONE,
-                    transferred
-            ).beforeEntryPublish(transferred::commit);
+                    PreparedTtlMutation.NONE
+            ).releaseReplacedValueWith(transferred::releaseSuperseded)
+                    .closeOnAbort(transferred)
+                    .beforeEntryPublish(transferred::commit);
         } catch (RuntimeException | Error failure) {
             closePreparedValueMutation(valueMutation, failure);
             throw failure;
@@ -340,22 +336,20 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
             long deltaBytes = estimateRecordBytes(currentEntry.keyHandle(), next)
                     - estimateRecordBytes(currentEntry.keyHandle(), current);
             ListValue.PreparedMutation transferred = valueMutation;
-            return new PreparedEntryMutation<>(
+            return PreparedEntryMutation.replace(
                     keyLifecycle,
                     result,
                     deltaBytes,
                     valueMutation.stagedHeapBytes(),
                     MutationOutcome.VALUE_CHANGED,
                     currentEntry.entryHandle(),
-                    null,
-                    null,
                     current,
                     next,
                     false,
-                    () -> releasePreparedPopToReply(transferred, popped),
-                    PreparedTtlMutation.NONE,
-                    transferred
-            ).beforeEntryPublish(transferred::commit);
+                    PreparedTtlMutation.NONE
+            ).releaseReplacedValueWith(() -> releasePreparedPopToReply(transferred, popped))
+                    .closeOnAbort(transferred)
+                    .beforeEntryPublish(transferred::commit);
         } catch (RuntimeException | Error failure) {
             closePreparedValueMutation(valueMutation, failure);
             throw failure;
@@ -530,13 +524,6 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
         return keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
     }
 
-    private CurrentEntry currentEntry(byte[] keyBytes) {
-        EntryHandle entryHandle = keyLifecycle.entryHandle(keyBytes);
-        EntryRecord record = entryHandle == null ? null : keyLifecycle.entryRecord(entryHandle);
-        KeyHandle keyHandle = entryHandle == null ? null : keyLifecycle.keyHandle(keyBytes);
-        return new CurrentEntry(entryHandle, keyHandle, record);
-    }
-
     private PreparedEntryState preparedEntryState(byte[] keyBytes) {
         EntryHandle entryHandle = keyLifecycle.entryHandle(keyBytes);
         EntryRecord record = entryHandle == null ? null : keyLifecycle.entryRecord(entryHandle);
@@ -558,44 +545,8 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
         }
     }
 
-    private StagedEntry stageNewEntry(byte[] keyBytes) {
-        EntryHandle entryHandle = keyLifecycle.entryTable().reserve();
-        NativeKeyDirectory.StagedInsert stagedKey = null;
-        try {
-            stagedKey = keyLifecycle.keyDirectory().stageInsert(keyBytes);
-            return new StagedEntry(entryHandle, stagedKey);
-        } catch (RuntimeException | Error failure) {
-            try {
-                keyLifecycle.entryTable().release(entryHandle);
-            } catch (RuntimeException | Error releaseFailure) {
-                failure.addSuppressed(releaseFailure);
-            }
-            if (stagedKey != null) {
-                try {
-                    stagedKey.close();
-                } catch (RuntimeException | Error closeFailure) {
-                    failure.addSuppressed(closeFailure);
-                }
-            }
-            throw failure;
-        }
-    }
-
     private <T> PreparedEntryMutation<T> preparedNoEntry(T result, MutationOutcome outcome) {
-        return new PreparedEntryMutation<>(
-                keyLifecycle,
-                result,
-                0L,
-                0L,
-                outcome,
-                null,
-                null,
-                null,
-                null,
-                null,
-                false,
-                PreparedTtlMutation.NONE
-        );
+        return PreparedEntryMutation.unchanged(keyLifecycle, result, outcome);
     }
 
     private <T> PreparedEntryMutation<T> preparedDelete(
@@ -624,24 +575,22 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
             MutationOutcome outcome,
             boolean releaseOldValue,
             PreparedTtlMutation ttlMutation,
-            Runnable releaseReplacedValueHook
+        Runnable releaseReplacedValueHook
     ) {
         long deltaBytes = -estimateRecordBytes(currentEntry.keyHandle(), current);
-        return new PreparedEntryMutation<>(
+        PreparedEntryMutation<T> prepared = PreparedEntryMutation.delete(
                 keyLifecycle,
                 result,
                 deltaBytes,
-                0L,
                 outcome,
                 currentEntry.entryHandle(),
-                null,
-                null,
                 current,
-                null,
                 releaseOldValue,
-                releaseReplacedValueHook,
                 ttlMutation
         );
+        return releaseReplacedValueHook == null
+                ? prepared
+                : prepared.releaseReplacedValueWith(releaseReplacedValueHook);
     }
 
     private Runnable releaseOldListToPopped(ValueHandle oldHandle, PreparedPoppedValueSequence popped) {
@@ -706,18 +655,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                 failure.addSuppressed(releaseFailure);
             }
         }
-        if (staged != null) {
-            try {
-                staged.close();
-            } catch (RuntimeException | Error closeFailure) {
-                failure.addSuppressed(closeFailure);
-            }
-            try {
-                keyLifecycle.entryTable().release(staged.entryHandle());
-            } catch (RuntimeException | Error releaseFailure) {
-                failure.addSuppressed(releaseFailure);
-            }
-        }
+        EntryMutationEntries.abortStaged(keyLifecycle, staged, failure);
     }
 
     private static void abortTtl(PreparedTtlMutation ttlMutation, Throwable failure) {
@@ -758,13 +696,6 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
 
     private static int valueCount(List<byte[]> values) {
         return values == null ? 0 : values.size();
-    }
-
-    private record CurrentEntry(
-            EntryHandle entryHandle,
-            KeyHandle keyHandle,
-            EntryRecord record
-    ) {
     }
 
     private record PreparedEntryState(
@@ -859,39 +790,4 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
         }
     }
 
-    private record StagedEntry(
-            EntryHandle entryHandle,
-            NativeKeyDirectory.StagedInsert stagedKey
-    ) implements AutoCloseable {
-        private KeyHandle keyHandle() {
-            return stagedKey.keyHandle();
-        }
-
-        private long stagedHeapBytes() {
-            return stagedKey.stagedHeapBytes();
-        }
-
-        @Override
-        public void close() {
-            Throwable failure = null;
-            try {
-                stagedKey.close();
-            } catch (RuntimeException | Error e) {
-                failure = e;
-            }
-            if (failure != null) {
-                rethrow(failure);
-            }
-        }
-    }
-
-    private static void rethrow(Throwable failure) {
-        if (failure instanceof RuntimeException e) {
-            throw e;
-        }
-        if (failure instanceof Error e) {
-            throw e;
-        }
-        throw new IllegalStateException(failure);
-    }
 }

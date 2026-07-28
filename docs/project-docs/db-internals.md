@@ -146,7 +146,7 @@ command
 
 ```text
 command
-  -> CommandSupport.dbWrites(ctx)
+  -> CommandSupport.commandDb(ctx).writes()
   -> DbWrites.<family>()
   -> Yierdis*Ops write method
   -> estimate upper bound
@@ -169,6 +169,10 @@ command
 ```
 
 `YierdisDbMutationExecutor` 把新写路径统一成 `MutationPlan.upperBoundBytes()`、`MutationPlan.prepare()` 和 `PreparedDbMutation` 的 `commit()` / `releaseSuperseded()` / `abort()`。prepare 阶段完成会失败的 native allocation、replacement topology 和 planner canonicalization，并记录 source table、generation、entry raw handle/value 等前置条件；staged collection 的 commit 只交换引用、写槽位或重连预分配节点。需要 commit stream 时，executor 在触及 DB 可见状态前预留发布容量，然后固定按 commit、allocation promote、ledger settle、stream publish、release superseded、optional trim 的顺序完成写入。
+
+string、list、hash、set、zset 和 HLL 写路径通过 `EntryMutationEntries` 复用 entry 层样板：`current(...)` 查找现有 entry，`stage(...)` 为新 key 预留 entry 与 key insert，`upsert(...)` 在 insert/replace 之间选择，`abortStaged(...)` 按原异常的 suppressed 顺序清理 staging 失败。这样各 family ops 只保留自己的 value/root 准备逻辑。
+
+`PreparedEntryMutation` 用 `unchanged(...)`、`insert(...)`、`replace(...)`、`delete(...)` 四个命名 factory 表达 entry 状态转换。只有特定 value representation 需要额外所有权动作时，才附加 `releaseReplacedValueWith(...)`、`closeOnAbort(...)`、`releaseNewValueOnAbortWith(...)` 或 `beforeEntryPublish(...)` hook；commit、TTL publication、abort 和 superseded-value release 的固定顺序仍由该类统一维护。
 
 失败边界以 `prepared.commit()` 开始为界。commit 开始前的失败可以依次 abort prepared resource、abort allocation scope、关闭 commit-stream reservation 并 rollback ledger reservation，旧 graph 保持可见；commit 一旦开始，executor 不再假设 mutation 可回滚，而会 best-effort 完成 allocation promote、ledger settle、superseded release 和 stream failure 标记，将 DB 标记为 degraded，并以 post-commit/result-unknown 结束请求。这个边界避免把“未能 publish stream”误报成“mutation 一定没有发生”。
 

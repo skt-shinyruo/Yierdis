@@ -227,24 +227,21 @@ public class YierdisDbHealthTest {
                 EntryRecord oldRecord = keyLifecycle.entryRecord(existingEntryHandle);
                 ValueHandle replacement = keyLifecycle.stringRoot().store(nextBytes);
                 EntryRecord newRecord = stringRecord(keyLifecycle, keyHandle, replacement, oldRecord);
-                return new PreparedEntryMutation<>(
+                return PreparedEntryMutation.<Void>replace(
                         keyLifecycle,
                         null,
                         0L,
                         0L,
                         MutationOutcome.VALUE_CHANGED,
                         existingEntryHandle,
-                        null,
-                        null,
                         oldRecord,
                         newRecord,
                         true,
-                        () -> {
+                        PreparedTtlMutation.NONE
+                ).releaseReplacedValueWith(() -> {
                             keyLifecycle.releaseValue(oldRecord);
                             throw new NativeMemoryException("corrupt metadata");
-                        },
-                        PreparedTtlMutation.NONE
-                );
+                        });
             }
         });
     }

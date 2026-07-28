@@ -35,7 +35,7 @@ public class CommandSyntaxRegistryTest {
         );
         registry.register(new CommandDefinition<>(
                 syntax,
-                CommandParsers.request(),
+                CommandParsers.args(),
                 (cmd, context) -> TestPreparedCommands.simpleString("OK")
         ));
 
@@ -59,7 +59,7 @@ public class CommandSyntaxRegistryTest {
                                     new CommandKeySpec(2, 2, 1),
                                     TransactionPolicy.QUEUEABLE
                             ),
-                            CommandParsers.request(),
+                            CommandParsers.args(),
                             (cmd, context) -> TestPreparedCommands.simpleString("OK")
                     ))
             );
@@ -87,13 +87,13 @@ public class CommandSyntaxRegistryTest {
                         registration.register(new CommandDefinition<>(
                                 new CommandSyntax("INFO", CommandArity.min(1), CommandKeySpec.NONE,
                                         TransactionPolicy.QUEUEABLE),
-                                CommandParsers.request(),
+                                CommandParsers.args(),
                                 (cmd, context) -> TestPreparedCommands.simpleString("OK")
                         ));
                         registration.register(new CommandDefinition<>(
                                 new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
                                         TransactionPolicy.DISALLOWED_IN_MULTI),
-                                CommandParsers.request(),
+                                CommandParsers.args(),
                                 (cmd, context) -> TestPreparedCommands.simpleString("OK")
                         ));
                     }

@@ -35,7 +35,7 @@ public class YierdisFastCommandProcessorPolicyTest {
         YierdisFastCommandProcessor processor = processorWithTransactions(
                 registration -> registration.register(new CommandDefinition<>(
                         syntax("LOCAL", CommandArity.exact(1)),
-                        CommandParsers.request(),
+                        CommandParsers.args(),
                         (request, preparation) -> fixedReply("LOCAL")
                 ))
         );
@@ -63,7 +63,7 @@ public class YierdisFastCommandProcessorPolicyTest {
         YierdisFastCommandProcessor processor = processorWithTransactions(
                 registration -> registration.register(new CommandDefinition<>(
                         syntax("FORBIDDEN", CommandArity.exact(1), TransactionPolicy.DISALLOWED_IN_MULTI),
-                        CommandParsers.request(),
+                        CommandParsers.args(),
                         (request, preparation) -> {
                             handlerCalled[0] = true;
                             return fixedReply("FORBIDDEN");
@@ -139,9 +139,9 @@ public class YierdisFastCommandProcessorPolicyTest {
         CommandRegistries.registerTransactionSupport(registry, processor);
         registry.register(new CommandDefinition<>(
                 syntax("WRITE", CommandArity.exact(1)),
-                CommandParsers.request(),
-                (request, preparation) -> {
-                    String command = arg(request, 0);
+                CommandParsers.args(),
+                (args, preparation) -> {
+                    String command = arg(args.request(), 0);
                     return PreparedCommands.fixed(
                             ReplyShapes.simpleString("REPLAY_" + command),
                             execution -> {
@@ -175,7 +175,7 @@ public class YierdisFastCommandProcessorPolicyTest {
         CommandRegistries.registerTransactionSupport(registry, processor);
         registry.register(new CommandDefinition<>(
                 syntax("FIRST", CommandArity.exact(1)),
-                CommandParsers.request(),
+                CommandParsers.args(),
                 (request, preparation) -> PreparedCommands.fixed(
                         ReplyShapes.simpleString("OK"),
                         execution -> {
@@ -186,7 +186,7 @@ public class YierdisFastCommandProcessorPolicyTest {
         ));
         registry.register(new CommandDefinition<>(
                 syntax("SECOND", CommandArity.exact(1)),
-                CommandParsers.request(),
+                CommandParsers.args(),
                 (request, preparation) -> fixedReply("SECOND")
         ));
         TestSession session = new TestSession();
@@ -222,12 +222,12 @@ public class YierdisFastCommandProcessorPolicyTest {
         CommandRegistries.registerTransactionSupport(registry, processor);
         registry.register(new CommandDefinition<>(
                 syntax("FIRST", CommandArity.exact(1)),
-                CommandParsers.request(),
+                CommandParsers.args(),
                 (request, preparation) -> countingPrepared(firstChildCloses)
         ));
         registry.register(new CommandDefinition<>(
                 syntax("SECOND", CommandArity.exact(1)),
-                CommandParsers.request(),
+                CommandParsers.args(),
                 (request, preparation) -> countingPrepared(secondChildCloses)
         ));
         TestSession session = new TestSession();

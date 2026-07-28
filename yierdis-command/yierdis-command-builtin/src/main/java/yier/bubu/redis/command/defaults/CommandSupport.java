@@ -7,17 +7,16 @@ import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.api.YierdisDbRouter;
-import yier.bubu.redis.storage.api.DbEngine;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.execution.api.CommandExecutionContext;
 import yier.bubu.redis.execution.api.CommandPreparationContext;
-import yier.bubu.redis.execution.api.DbIndexSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.ReplyShape;
 import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.execution.api.ValidationResult;
+import yier.bubu.redis.storage.api.PreparedMutation;
 import yier.bubu.redis.storage.api.result.ByteMapSource;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
 import yier.bubu.redis.storage.api.result.ByteValue;
@@ -44,14 +43,6 @@ public final class CommandSupport {
     private byte[][] argvScratch = new byte[16][];
     private final CommandArgBytesView argView = new CommandArgBytesView();
     private final CommandArgBytesSlice argSlice = new CommandArgBytesSlice();
-
-    CommandSupport(DbEngine engine) {
-        this(singleDbRouter(engine), null, SlowCommandGovernor.DEFAULT);
-    }
-
-    CommandSupport(DbEngine engine, ServerInfoProvider infoProvider) {
-        this(singleDbRouter(engine), infoProvider, SlowCommandGovernor.DEFAULT);
-    }
 
     CommandSupport(YierdisDbRouter dbRouter, ServerInfoProvider infoProvider) {
         this(dbRouter, infoProvider, SlowCommandGovernor.DEFAULT);
@@ -130,21 +121,6 @@ public final class CommandSupport {
             next <<= 1;
         }
         argvScratch = Arrays.copyOf(argvScratch, next);
-    }
-
-    private static YierdisDbRouter singleDbRouter(DbEngine engine) {
-        DbEngine fixed = java.util.Objects.requireNonNull(engine, "engine");
-        return new YierdisDbRouter() {
-            @Override
-            public DbEngine dbFor(DbIndexSession session) {
-                return fixed;
-            }
-
-            @Override
-            public int databases() {
-                return 1;
-            }
-        };
     }
 
     public static PreparedCommand fixed(
@@ -266,6 +242,24 @@ public final class CommandSupport {
         };
     }
 
+    public static PreparedCommand preparedMutation(
+            ReplyShape shape,
+            PreparedMutation<?> mutation,
+            Consumer<CommandExecutionContext> reply
+    ) {
+        Objects.requireNonNull(mutation, "mutation");
+        Objects.requireNonNull(reply, "reply");
+        return owned(
+                shape,
+                mutation,
+                () -> mutation.isCurrent() ? ValidationResult.VALID : ValidationResult.STALE,
+                context -> {
+                    mutation.commit(context.mutationContext());
+                    reply.accept(context);
+                }
+        );
+    }
+
     public static void executeWithCommandErrorTranslation(
             CommandExecutionContext context,
             Consumer<CommandExecutionContext> execution
@@ -279,39 +273,8 @@ public final class CommandSupport {
         }
     }
 
-    public static String utf8(ExecutionRequest request, int argIndex) {
-        return utf8(request.readOnlyByteArray(argIndex));
-    }
-
     public static String utf8(byte[] s) {
         return s == null ? null : new String(s, StandardCharsets.UTF_8);
-    }
-
-    public static boolean asciiEqualsIgnoreCase(ExecutionRequest request, int argIndex, String literal) {
-        if (literal == null) {
-            return false;
-        }
-        if (request.isNull(argIndex)) {
-            return false;
-        }
-        int len = request.len(argIndex);
-        if (len != literal.length()) {
-            return false;
-        }
-        for (int i = 0; i < len; i++) {
-            int b = request.byteAt(argIndex, i) & 0xFF;
-            int c = literal.charAt(i);
-            if (b >= 'A' && b <= 'Z') {
-                b |= 0x20;
-            }
-            if (c >= 'A' && c <= 'Z') {
-                c |= 0x20;
-            }
-            if (b != c) {
-                return false;
-            }
-        }
-        return true;
     }
 
     public static boolean asciiEqualsIgnoreCase(byte[] raw, String literal) {
@@ -362,29 +325,6 @@ public final class CommandSupport {
             }
         }
         return true;
-    }
-
-    public static long parseLong(ExecutionRequest request, int argIndex, String label) {
-        return parseLong(request.readOnlyByteArray(argIndex), label);
-    }
-
-    public static long parseNonNegativeLong(ExecutionRequest request, int argIndex, String label) {
-        long v = parseLong(request, argIndex, label);
-        if (v < 0) {
-            throw new IllegalArgumentException("value is not an integer or out of range");
-        }
-        return v;
-    }
-
-    public static int parseIntClamped(ExecutionRequest request, int argIndex, String label) {
-        long v = parseLong(request, argIndex, label);
-        if (v > Integer.MAX_VALUE) {
-            return Integer.MAX_VALUE;
-        }
-        if (v < Integer.MIN_VALUE) {
-            return Integer.MIN_VALUE;
-        }
-        return (int) v;
     }
 
     public static long parseLong(byte[] s, String label) {

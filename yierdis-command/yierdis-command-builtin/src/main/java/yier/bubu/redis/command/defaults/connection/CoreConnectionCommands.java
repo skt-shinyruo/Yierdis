@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import yier.bubu.redis.command.api.ArgReader;
 import yier.bubu.redis.command.api.CommandArity;
 import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
@@ -30,41 +31,41 @@ public final class CoreConnectionCommands {
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
         registration.register(new CommandDefinition<>(syntax("PING", CommandArity.oneOf(1, 2)),
-                CommandParsers.request(), this::ping));
+                CommandParsers.args(), this::ping));
         registration.register(new CommandDefinition<>(syntax("ECHO", CommandArity.exact(2)),
-                CommandParsers.request(), this::echo));
+                CommandParsers.args(), this::echo));
         registration.register(new CommandDefinition<>(syntax("COMMAND", CommandArity.min(1)),
-                CommandParsers.request(), (request, context) -> command(request, registration)));
+                CommandParsers.args(), (args, context) -> command(args, registration)));
         registration.register(new CommandDefinition<>(syntax("SELECT", CommandArity.exact(2)),
-                CommandParsers.request(), this::select));
+                CommandParsers.args(), this::select));
         registration.register(new CommandDefinition<>(syntax("QUIT", CommandArity.exact(1)),
-                CommandParsers.request(), this::quit));
+                CommandParsers.args(), this::quit));
         registration.register(new CommandDefinition<>(syntax("CLIENT", CommandArity.min(2)),
-                CommandParsers.request(), this::client));
+                CommandParsers.args(), this::client));
         registration.register(new CommandDefinition<>(syntax("AUTH", CommandArity.min(2)),
-                CommandParsers.request(), this::auth));
+                CommandParsers.args(), this::auth));
         registration.register(new CommandDefinition<>(syntax("FLUSHDB", CommandArity.oneOf(1, 2)),
-                CommandParsers.request(), this::flushdb));
+                CommandParsers.args(), this::flushdb));
     }
 
     private static CommandSyntax syntax(String nameUpper, CommandArity arity) {
         return new CommandSyntax(nameUpper, arity, CommandKeySpec.NONE, TransactionPolicy.QUEUEABLE);
     }
 
-    private PreparedCommand ping(ExecutionRequest request, CommandPreparationContext context) {
-        return request.argc() == 1
+    private PreparedCommand ping(ArgReader args, CommandPreparationContext context) {
+        return args.argc() == 1
                 ? CommandSupport.fixed(ReplyShapes.simpleString("PONG"), reply -> reply.reply().simpleString("PONG"))
-                : retainedArgument(request, 1);
+                : retainedArgument(args.request(), 1);
     }
 
-    private PreparedCommand echo(ExecutionRequest request, CommandPreparationContext context) {
-        return retainedArgument(request, 1);
+    private PreparedCommand echo(ArgReader args, CommandPreparationContext context) {
+        return retainedArgument(args.request(), 1);
     }
 
-    private PreparedCommand select(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand select(ArgReader args, CommandPreparationContext context) {
         final long parsed;
         try {
-            parsed = CommandSupport.parseLong(request, 1, "index");
+            parsed = args.longAt(1);
         } catch (IllegalArgumentException ignored) {
             return CommandSupport.error("ERR value is not an integer or out of range");
         }
@@ -79,29 +80,29 @@ public final class CoreConnectionCommands {
         });
     }
 
-    private PreparedCommand quit(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand quit(ArgReader args, CommandPreparationContext context) {
         return CommandSupport.fixed(ReplyShapes.simpleString("OK"), execution -> {
             execution.reply().simpleString("OK");
             execution.reply().requestCloseAfterReply();
         });
     }
 
-    private PreparedCommand client(ExecutionRequest request, CommandPreparationContext context) {
-        if (CommandSupport.asciiEqualsIgnoreCase(request, 1, "SETINFO")) {
+    private PreparedCommand client(ArgReader args, CommandPreparationContext context) {
+        if (args.is(1, "SETINFO")) {
             return CommandSupport.fixed(ReplyShapes.simpleString("OK"), execution -> execution.reply().simpleString("OK"));
         }
-        if (CommandSupport.asciiEqualsIgnoreCase(request, 1, "SETNAME")) {
-            if (request.argc() != 3) {
+        if (args.is(1, "SETNAME")) {
+            if (args.argc() != 3) {
                 return CommandSupport.error("ERR wrong number of arguments for 'client|setname' command");
             }
-            String name = CommandSupport.utf8(request, 2);
+            String name = CommandSupport.utf8(args.bytes(2));
             return CommandSupport.fixed(ReplyShapes.simpleString("OK"), execution -> {
                 execution.session().setClientName(name);
                 execution.reply().simpleString("OK");
             });
         }
-        if (CommandSupport.asciiEqualsIgnoreCase(request, 1, "GETNAME")) {
-            if (request.argc() != 2) {
+        if (args.is(1, "GETNAME")) {
+            if (args.argc() != 2) {
                 return CommandSupport.error("ERR wrong number of arguments for 'client|getname' command");
             }
             String name = context.session().clientName();
@@ -112,21 +113,19 @@ public final class CoreConnectionCommands {
             return CommandSupport.fixed(ReplyShapes.bulkString(bytes.length, 0L),
                     execution -> execution.reply().bulkString(bytes));
         }
-        return CommandSupport.error("ERR unknown subcommand '" + CommandSupport.utf8(request, 1)
+        return CommandSupport.error("ERR unknown subcommand '" + CommandSupport.utf8(args.bytes(1))
                 + "'. Try CLIENT HELP.");
     }
 
-    private PreparedCommand auth(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand auth(ArgReader args, CommandPreparationContext context) {
         return CommandSupport.error(
                 "ERR AUTH <password> called without any password configured for the default user. "
                         + "Are you sure your configuration is correct?"
         );
     }
 
-    private PreparedCommand flushdb(ExecutionRequest request, CommandPreparationContext context) {
-        if (request.argc() == 2
-                && !CommandSupport.asciiEqualsIgnoreCase(request, 1, "SYNC")
-                && !CommandSupport.asciiEqualsIgnoreCase(request, 1, "ASYNC")) {
+    private PreparedCommand flushdb(ArgReader args, CommandPreparationContext context) {
+        if (args.argc() == 2 && !args.is(1, "SYNC") && !args.is(1, "ASYNC")) {
             return CommandSupport.error("ERR syntax error");
         }
         return CommandSupport.fixed(ReplyShapes.simpleString("OK"), execution -> {
@@ -147,8 +146,8 @@ public final class CoreConnectionCommands {
         );
     }
 
-    private static PreparedCommand command(ExecutionRequest request, CommandModule.Registration registration) {
-        if (request.argc() == 1) {
+    private static PreparedCommand command(ArgReader args, CommandModule.Registration registration) {
+        if (args.argc() == 1) {
             ArrayList<CommandInfo> infos = new ArrayList<>();
             for (String name : registration.upperNamesSorted()) {
                 yier.bubu.redis.command.api.CommandDefinition<?> definition = registration.definitionByUpperName(name);
@@ -156,17 +155,17 @@ public final class CoreConnectionCommands {
             }
             return commandInfos(infos);
         }
-        if (request.argc() == 2 && CommandSupport.asciiEqualsIgnoreCase(request, 1, "COUNT")) {
+        if (args.argc() == 2 && args.is(1, "COUNT")) {
             int count = registration.commandCount();
             return CommandSupport.fixed(ReplyShapes.integer(count), execution -> execution.reply().integer(count));
         }
-        if (request.argc() >= 2 && CommandSupport.asciiEqualsIgnoreCase(request, 1, "INFO")) {
-            if (request.argc() == 2) {
+        if (args.argc() >= 2 && args.is(1, "INFO")) {
+            if (args.argc() == 2) {
                 return CommandSupport.error("ERR wrong number of arguments for 'command' command");
             }
-            ArrayList<CommandInfo> infos = new ArrayList<>(request.argc() - 2);
-            for (int index = 2; index < request.argc(); index++) {
-                String upper = commandInfoName(request, index);
+            ArrayList<CommandInfo> infos = new ArrayList<>(args.argc() - 2);
+            for (int index = 2; index < args.argc(); index++) {
+                String upper = commandInfoName(args, index);
                 yier.bubu.redis.command.api.CommandDefinition<?> definition = upper == null
                         ? null
                         : registration.definitionByUpperName(upper);
@@ -195,11 +194,11 @@ public final class CoreConnectionCommands {
         });
     }
 
-    private static String commandInfoName(ExecutionRequest request, int index) {
-        if (request.isNull(index) || request.len(index) <= 0) {
+    private static String commandInfoName(ArgReader args, int index) {
+        if (args.isNull(index) || args.len(index) <= 0) {
             return null;
         }
-        String upper = CommandSupport.utf8(request, index);
+        String upper = CommandSupport.utf8(args.bytes(index));
         return upper == null || upper.isBlank() ? null : upper.trim().toUpperCase(Locale.ROOT);
     }
 

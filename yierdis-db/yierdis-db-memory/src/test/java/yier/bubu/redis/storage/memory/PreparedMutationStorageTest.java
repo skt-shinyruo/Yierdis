@@ -71,7 +71,7 @@ public class PreparedMutationStorageTest {
             db.set("key", "old");
             try (PreparedMutation<StringWriteOps.SetStringValue> stale =
                          db.writes().strings().prepareSet(
-                                 bytes("key"), slice("new"), SetMode.NORMAL, null
+                                 bytes("key"), slice("new"), SetMode.NORMAL, null, true
                          )) {
                 Assert.assertTrue(stale.preview().applied());
                 Assert.assertEquals("old", string(stale.preview().oldValue()));
@@ -89,7 +89,7 @@ public class PreparedMutationStorageTest {
 
             try (PreparedMutation<StringWriteOps.SetStringValue> fresh =
                          db.writes().strings().prepareSet(
-                                 bytes("key"), slice("fresh"), SetMode.NORMAL, null
+                                 bytes("key"), slice("fresh"), SetMode.NORMAL, null, true
                          )) {
                 StringWriteOps.SetStringValue preview = fresh.preview();
                 Assert.assertTrue(preview.applied());

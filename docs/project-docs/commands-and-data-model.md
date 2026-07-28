@@ -12,8 +12,9 @@
 ExecutionRequest
   -> YierdisFastCommandProcessor
   -> CommandRegistry
-  -> CommandSpec<ExecutionRequest> / typed CommandSpec<T>
-  -> CommandContext
+  -> CommandDefinition<ArgReader> / typed CommandDefinition<T>
+  -> CommandPreparationContext / PreparedCommand
+  -> CommandExecutionContext
   -> CommandSupport
   -> DbReads / DbWrites / DbEngine
   -> typed ops
@@ -25,25 +26,24 @@ ExecutionRequest
 
 本页只保留命令抽象、命令家族和逻辑类型模型。
 
-- 如果你要追 `CommandRegistry`、`CommandSpec`、`ArgReader`、parse error、unknown command、change observer gate，请看 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)。
+- 如果你要追 `CommandRegistry`、`CommandDefinition`、`ArgReader`、parse error、unknown command 或事务排队，请看 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)。
 - 如果你要追 `MULTI/EXEC/DISCARD`、队列快照、abort、replay 和 queue limit，请看 [`transaction-and-replay.md`](./transaction-and-replay.md)。
 
-## CommandRegistry 和 CommandSpec
+## CommandRegistry 和 CommandDefinition
 
-`YierdisFastCommandProcessor` 构造时创建 `CommandRegistry`。它先注册 `TransactionCommands`，再注册注入的 `CommandModule`。生产默认模块来自 `DefaultCommandModules`，server runtime 还会补充 `ServerCommandModule`。
+composition root 创建 `CommandRegistry` 和 `YierdisFastCommandProcessor`，再注册 `TransactionCommands` 与注入的 `CommandModule`。生产默认模块来自 `DefaultCommandModules`，server runtime 还会补充 `ServerCommandModule`。
 
-`CommandRegistry` 是命令名到 `CommandSpec` 的查找表。处理器读取 `argv[0]` 后，按 ASCII case-insensitive 方式查找注册项；找不到时返回 unknown command。
+`CommandRegistry` 是命令名到 `CommandDefinition` 的查找表。处理器读取 `argv[0]` 后，按 ASCII case-insensitive 方式查找注册项；找不到时返回 unknown command。
 
-`CommandSpec<T>` 是单条命令的统一注册形状，包含：
+`CommandDefinition<T>` 是单条命令的统一注册形状，包含：
 
-- parser：把 `ExecutionRequest` 解析成 `T`；
-- handler：执行 parsed command；
-- `CommandDescriptor`：描述 arity 和 key 位置，供 `COMMAND INFO` 风格能力使用；
-- MULTI policy：声明命令在事务中是否允许入队或执行。
+- `CommandSyntax`：保存命令名、`CommandArity`、`CommandKeySpec` 和 `TransactionPolicy`；
+- `CommandParser<T>`：把 `ArgReader` 解析成 `T`；
+- `CommandPreparer<T>`：把解析结果准备成带 `ReplyShape` 的 `PreparedCommand`。
 
-有些简单命令可以直接使用 `CommandSpec<ExecutionRequest>`，也就是 handler 仍接收原始 argv 视图；更复杂的命令通常使用 typed parsed object，把参数形状和业务执行分开。
+简单命令通常使用 `CommandParsers.args()`，让 preparer 直接接收 `ArgReader`；更复杂的命令使用 typed parsed object，把参数形状和业务准备分开。`args.request()` 是需要 retained 参数、slice、bulk traversal 或 request snapshot 时的底层逃生口，不是默认 parser 形状。
 
-完整的分发表构建、`YierdisFastCommandProcessor.execute(...)` 主流程和事务入队前复用校验，不在本页展开，统一见 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)。
+完整的分发表构建、`YierdisFastCommandProcessor.prepare(...)` 主流程和事务入队前复用校验，不在本页展开，统一见 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)。
 
 ## 参数解析和错误
 
@@ -51,25 +51,25 @@ ExecutionRequest
 
 - `ArgReader` 包住 `ExecutionRequest`，提供 `argc()`、`bytes(index)`、`is(index, literal)`、`longAt(...)`、`positiveLongAt(...)` 等读取能力，并尽量直接基于 argv bytes 做 ASCII 比较。
 - `CommandArity` 表达参数个数规则，包括 exact、min、range、one-of 和 pair-tail。pair-tail 用于 `HSET field value ...`、`ZADD score member ...` 这类尾部成对参数。
-- `CommandParsers` 把常见 arity rule 包成 `CommandParser<T>`，也支持 mapper 把 `ArgReader` 转成 typed parsed object。
+- `CommandParsers.args()` 是 `ArgReader` identity parser；需要 typed value 时由命令家族提供自己的 `CommandParser<T>`。
 - `CommandParseError` 集中表达 wrong arity、syntax、integer out of range 和自定义错误，并转换成 Redis 风格 reply 文案。
 
-`CommandSpec.parse(...)` 返回 parse result。解析失败时，处理器直接通过 `RedisReplyWriter.error(...)` 写出错误；解析成功时，handler 才会运行。这个约束同样用于事务入队：`MULTI` 状态下，普通命令会先 lookup spec、检查事务策略、运行 parser，通过后才保存 `ExecutionRequest` 快照并返回 `QUEUED`。
+`CommandDefinition.parse(...)` 先运行 arity 校验，再返回 parser 的结果。解析失败时，处理器准备一个 error command；解析成功时，preparer 才会运行。这个约束同样用于事务入队：`MULTI` 状态下，普通命令会先 lookup definition、检查事务策略、运行 parser，通过后才 retain `ExecutionRequest` 并返回 `QUEUED`。
 
 这里保留的是 parser 抽象和错误模型；真正的分支顺序、unknown command、change observer gate 和错误翻译，见 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)。
 
-## CommandContext 和 RedisReplyWriter
+## 准备、执行上下文和 RedisReplyWriter
 
-`CommandContext` 是一次命令执行的环境对象，通常提供：
+命令分成两个明确阶段：
 
-- `RedisReplyWriter`；
-- `CommandSessionCapabilities` 视图；
-- 当前 DB index / transaction / client metadata / protocol negotiation 能力；
-- 可通过上下文取得的 DB runtime 能力。
+- `CommandPreparationContext` 只提供 `CommandSession`。preparer 在 reply capacity 预留前完成参数校验、只读查询、mutation prepare 和 `ReplyShape` 计算。
+- `CommandExecutionContext` 在 capacity 预留成功后创建，提供同一个 `CommandSession`、`RedisReplyWriter` 和请求级 `MutationContext`。`PreparedCommand.execute(...)` 在这个阶段执行一次。
+
+`CommandSession` 聚合当前 DB index、transaction、client metadata、connection stats 和 protocol negotiation 能力。准备阶段不能写 reply；执行阶段则在已经预留的形状内写 reply，并把 mutation record 显式传给 DB 写视图。
 
 `RedisReplyWriter` 是命令层唯一的 Redis reply 语义模型。命令 handler 写的是 `simpleString`、`bulkString`、`integer`、`arrayHeader`、`mapHeader`、`nullValue`、`error` 等 Redis reply 形状，不写 `+OK\r\n`、`$-1\r\n` 这类协议字节。RESP2 / RESP3 的差异由协议 writer 根据连接版本处理。
 
-`CommandSupport` 是内置命令的公共工具箱。它帮助各个 `*Commands` 类读取参数、解析整数、取得 `DbReads` / `DbWrites` / `DbEngine`、复用 scratch buffer，并把 DB 返回的 bulk-string 序列适配到 `RedisReplyWriter`。
+`CommandSupport` 是内置命令的公共工具箱。参数读取统一由 `ArgReader` 完成；`CommandSupport` 负责选择当前 DB、创建 preparation/execution 对应的 DB view、复用 scratch buffer，并把 DB 返回的 bulk-string 序列适配到 `PreparedCommand` 和 `RedisReplyWriter`。
 
 集合读命令通常按这个顺序写回：
 
@@ -180,23 +180,23 @@ HLL 也没有独立 `ValueType`。命令层有 `HllCommands`，DB 层有 `Yierdi
 
 事务是连接级状态，由 `TransactionCommands` 和 command processor 协作实现。
 
-`MULTI` 开启事务后，大多数普通命令不会立即执行。处理器会先查 `CommandRegistry`，检查对应 `CommandSpec` 的 MULTI policy，并运行同一套 parser。解析通过后，当前 `ExecutionRequest` 会保存为执行快照，客户端收到 `QUEUED`。
+`MULTI` 开启事务后，大多数普通命令不会立即执行。处理器会先查 `CommandRegistry`，检查对应 `CommandSyntax.transactionPolicy()`，并运行同一套 `CommandDefinition.parse(...)`。解析通过后，事务队列会 retain 当前 `ExecutionRequest`，客户端收到 `QUEUED`。
 
 `EXEC` 回放已入队的请求，按队列顺序调用同一个命令处理器执行；`DISCARD` 清空队列并退出事务。事务控制命令本身有特殊策略，例如 `HELLO` 这类连接协议协商命令在 `MULTI` 中被禁止。
 
 这里的事务语义是 Redis 风格最小子集：它提供连接级队列和顺序回放，但不应被理解成完整 Redis 事务生态、Lua、watch 或集群语义。
 
-本页只解释事务在 command model 里的位置。`TransactionState` 的所有权、为什么队列里保存的是 `ExecutionRequest` 快照、`EXEC` 如何 replay、abort/cleanup/queue limit 如何收敛，都放在 [`transaction-and-replay.md`](./transaction-and-replay.md)。
+本页只解释事务在 command model 里的位置。`TransactionState` 的所有权、为什么队列里保存 retained `ExecutionRequest`、`EXEC` 如何 replay、abort/cleanup/queue limit 如何收敛，都放在 [`transaction-and-replay.md`](./transaction-and-replay.md)。
 
 ## 新增命令时的路线
 
 新增命令时优先沿着现有命令层边界走：
 
 1. 确认命令属于哪个 family，或是否需要新的 `CommandModule`。
-2. 在 `CommandRegistry` 中注册 `CommandSpec`，补齐 parser、handler、`CommandDescriptor` 和 MULTI policy。
+2. 在模块中注册 `CommandDefinition`，补齐 `CommandSyntax`、parser、preparer 和 transaction policy。
 3. 用 `ArgReader`、`CommandArity`、`CommandParsers`、`CommandParseError` 表达参数规则和错误，不在 handler 里散落重复校验。
-4. 通过 `CommandContext` 取得 `RedisReplyWriter`，通过 `CommandSupport` 取得 DB capability。
-5. 让 handler 调用 typed ops，不直接触碰 value root、allocator handle 或 RESP 字节。
+4. 在 preparation 阶段计算 `ReplyShape`，在 `CommandExecutionContext` 中通过 `RedisReplyWriter` 写出同一形状。
+5. 通过 `CommandSupport` 取得 DB capability，让 preparer / prepared command 调用 typed ops，不直接触碰 value root、allocator handle 或 RESP 字节。
 6. 补命令家族测试、错误路径测试；如果新增 server-only 行为，再补 server-main 组装或协议集成测试。
 
 如果命令会暴露内部编码或 memory 信息，还需要同时检查 `OBJECT ENCODING`、`MEMORY USAGE`、`MEMORY STATS` 等 introspection 行为是否仍然一致。

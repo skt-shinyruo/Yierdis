@@ -1,6 +1,7 @@
 package yier.bubu.redis.command.defaults.list;
 
 import java.util.Objects;
+import yier.bubu.redis.command.api.ArgReader;
 import yier.bubu.redis.command.api.CommandArity;
 import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
@@ -10,13 +11,11 @@ import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.defaults.BulkStringReplyAdapter;
 import yier.bubu.redis.command.defaults.CommandSupport;
-import yier.bubu.redis.execution.api.CommandExecutionContext;
 import yier.bubu.redis.execution.api.CommandPreparationContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.ReplyShape;
 import yier.bubu.redis.execution.api.ReplyShapes;
-import yier.bubu.redis.execution.api.ValidationResult;
 import yier.bubu.redis.storage.api.PreparedMutation;
 import yier.bubu.redis.storage.api.result.PoppedValueSequence;
 
@@ -33,22 +32,23 @@ public final class ListCommands implements CommandModule {
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
         registration.register(new CommandDefinition<>(syntax("LPUSH", CommandArity.min(3)),
-                CommandParsers.request(), (request, context) -> push(request, true)));
+                CommandParsers.args(), (args, context) -> push(args, true)));
         registration.register(new CommandDefinition<>(syntax("RPUSH", CommandArity.min(3)),
-                CommandParsers.request(), (request, context) -> push(request, false)));
+                CommandParsers.args(), (args, context) -> push(args, false)));
         registration.register(new CommandDefinition<>(syntax("LRANGE", CommandArity.exact(4)),
-                CommandParsers.request(), this::lrange));
+                CommandParsers.args(), this::lrange));
         registration.register(new CommandDefinition<>(syntax("LPOP", CommandArity.oneOf(2, 3)),
-                CommandParsers.request(), (request, context) -> pop(request, context, true)));
+                CommandParsers.args(), (args, context) -> pop(args, context, true)));
         registration.register(new CommandDefinition<>(syntax("RPOP", CommandArity.oneOf(2, 3)),
-                CommandParsers.request(), (request, context) -> pop(request, context, false)));
+                CommandParsers.args(), (args, context) -> pop(args, context, false)));
     }
 
     private static CommandSyntax syntax(String nameUpper, CommandArity arity) {
         return new CommandSyntax(nameUpper, arity, KEY, TransactionPolicy.QUEUEABLE);
     }
 
-    private PreparedCommand push(ExecutionRequest request, boolean left) {
+    private PreparedCommand push(ArgReader args, boolean left) {
+        ExecutionRequest request = args.request();
         return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
             int valuesLen = request.argc() - 2;
             support.sliceResetFromRequest(request, 2, valuesLen);
@@ -65,32 +65,45 @@ public final class ListCommands implements CommandModule {
         });
     }
 
-    private PreparedCommand lrange(ExecutionRequest request, CommandPreparationContext context) {
-        int start = CommandSupport.parseIntClamped(request, 2, "start");
-        int stop = CommandSupport.parseIntClamped(request, 3, "stop");
+    private PreparedCommand lrange(ArgReader args, CommandPreparationContext context) {
+        int start = args.intClampedAt(2);
+        int stop = args.intClampedAt(3);
         return CommandSupport.sequence(support.commandDb(context).reads().lists()
-                .lrange(request.readOnlyByteArray(1), start, stop));
+                .lrange(args.bytes(1), start, stop));
     }
 
     private PreparedCommand pop(
-            ExecutionRequest request,
+            ArgReader args,
             CommandPreparationContext context,
             boolean left
     ) {
-        boolean hasCount = request.argc() == 3;
+        boolean hasCount = args.argc() == 3;
         int count = 1;
         if (hasCount) {
-            long parsed = CommandSupport.parseLong(request, 2, "count");
+            long parsed = args.longAt(2);
             if (parsed < 0L) {
                 throw new IllegalArgumentException("value is not an integer or out of range");
             }
             count = parsed > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) parsed;
         }
         PreparedMutation<PoppedValueSequence> mutation = support.commandDb(context).writes().lists()
-                .preparePop(request.readOnlyByteArray(1), count, left);
+                .preparePop(args.bytes(1), count, left);
         PoppedValueSequence preview = mutation.preview();
         ReplyShape shape = popShape(preview, hasCount);
-        return new PreparedPop(mutation, preview, hasCount, shape);
+        return CommandSupport.preparedMutation(shape, mutation, execution -> {
+            if (preview == null || preview.isNull()) {
+                if (hasCount) {
+                    execution.reply().nullArray();
+                } else {
+                    execution.reply().nullValue();
+                }
+                return;
+            }
+            if (hasCount) {
+                execution.reply().arrayHeader(preview.elementCount());
+            }
+            preview.emitTo(new BulkStringReplyAdapter(execution.reply()));
+        });
     }
 
     private static ReplyShape popShape(PoppedValueSequence preview, boolean hasCount) {
@@ -111,62 +124,4 @@ public final class ListCommands implements CommandModule {
                 : ReplyShapes.bulkString(payloadLength[0], preview.retainedMemoryBytes());
     }
 
-    private static final class PreparedPop implements PreparedCommand {
-        private final PreparedMutation<PoppedValueSequence> mutation;
-        private final PoppedValueSequence preview;
-        private final boolean hasCount;
-        private final ReplyShape shape;
-        private boolean closed;
-
-        private PreparedPop(
-                PreparedMutation<PoppedValueSequence> mutation,
-                PoppedValueSequence preview,
-                boolean hasCount,
-                ReplyShape shape
-        ) {
-            this.mutation = Objects.requireNonNull(mutation, "mutation");
-            this.preview = preview;
-            this.hasCount = hasCount;
-            this.shape = Objects.requireNonNull(shape, "shape");
-        }
-
-        @Override
-        public ReplyShape replyShape() {
-            return shape;
-        }
-
-        @Override
-        public ValidationResult validateBeforeExecute() {
-            return mutation.isCurrent() ? ValidationResult.VALID : ValidationResult.STALE;
-        }
-
-        @Override
-        public void execute(CommandExecutionContext context) {
-            CommandSupport.executeWithCommandErrorTranslation(context, this::executeCommitted);
-        }
-
-        private void executeCommitted(CommandExecutionContext context) {
-            mutation.commit(context.mutationContext());
-            if (preview == null || preview.isNull()) {
-                if (hasCount) {
-                    context.reply().nullArray();
-                } else {
-                    context.reply().nullValue();
-                }
-                return;
-            }
-            if (hasCount) {
-                context.reply().arrayHeader(preview.elementCount());
-            }
-            preview.emitTo(new BulkStringReplyAdapter(context.reply()));
-        }
-
-        @Override
-        public void close() {
-            if (!closed) {
-                closed = true;
-                mutation.close();
-            }
-        }
-    }
 }

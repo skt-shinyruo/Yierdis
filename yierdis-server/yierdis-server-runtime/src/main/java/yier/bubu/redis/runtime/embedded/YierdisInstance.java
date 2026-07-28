@@ -45,7 +45,7 @@ public final class YierdisInstance implements AutoCloseable {
     public static YierdisInstance create(YierdisInstanceConfig config) {
         Objects.requireNonNull(config, "config");
         YierdisInstanceConfig.EngineFactoryBinding binding = config.engineFactoryBinding();
-        DbEngineFactory engineFactory = binding == null ? config.engineFactory() : binding.engineFactory();
+        DbEngineFactory engineFactory = config.engineFactory();
         if (engineFactory == null) {
             throw new IllegalArgumentException("engineFactory must be configured");
         }

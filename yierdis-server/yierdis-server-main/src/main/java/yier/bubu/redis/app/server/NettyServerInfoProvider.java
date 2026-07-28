@@ -196,35 +196,18 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             return;
         }
 
+        ServerStatsSnapshot snapshot = serverStatsSnapshot(ex);
         String section = request != null && request.argc() == 2 ? asciiLower(request, 1) : null;
         if ("health".equals(section)) {
-            writeHealth(out, healthView());
+            writeHealth(out, snapshot);
             return;
         }
         if ("yierdis".equals(section)) {
-            CommandExecutor.StatsSnapshot stats = ex.statsSnapshot();
-            long uptimeMillis = Math.max(0L, System.currentTimeMillis() - startedMillis);
-            InboundMemoryBudgetStats inboundStats = inboundStats();
-            CommitStreamStats streamStats = commitStreamStats();
-            OutboundMemoryBudgetStats outboundStats = outboundStats();
-            ReplyEgressStats.Snapshot egressStats = replyEgressStats();
-            int liveChildChannels = liveChildChannels();
-            HealthView health = healthView();
-            writeYierdisStructuredInfo(
-                    out,
-                    stats,
-                    uptimeMillis,
-                    inboundStats,
-                    streamStats,
-                    outboundStats,
-                    egressStats,
-                    liveChildChannels,
-                    health
-            );
+            writeYierdisStructuredInfo(out, snapshot);
             return;
         }
 
-        byte[] response = buildRedisInfo(section, ex).getBytes(StandardCharsets.UTF_8);
+        byte[] response = buildRedisInfo(section, snapshot).getBytes(StandardCharsets.UTF_8);
         out.bulkString(response);
     }
 
@@ -243,25 +226,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             return;
         }
 
-        CommandExecutor.StatsSnapshot s = ex.statsSnapshot();
-        ConnectionStatsView stats = connectionStats(session);
-        InboundMemoryBudgetStats inboundStats = inboundStats();
-        CommitStreamStats streamStats = commitStreamStats();
-        OutboundMemoryBudgetStats outboundStats = outboundStats();
-        ReplyEgressStats.Snapshot egressStats = replyEgressStats();
-        int liveChildChannels = liveChildChannels();
-        HealthView health = healthView();
-        writeStats(
-                out,
-                s,
-                stats,
-                inboundStats,
-                streamStats,
-                outboundStats,
-                egressStats,
-                liveChildChannels,
-                health
-        );
+        writeStats(out, serverStatsSnapshot(ex), connectionStats(session));
     }
 
     @Override
@@ -298,69 +263,58 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
 
     private void writeStats(
             RedisReplyWriter out,
-            CommandExecutor.StatsSnapshot s,
-            ConnectionStatsView stats,
-            InboundMemoryBudgetStats inboundStats,
-            CommitStreamStats streamStats,
-            OutboundMemoryBudgetStats outboundStats,
-            ReplyEgressStats.Snapshot egressStats,
-            int liveChildChannels,
-            HealthView health
+            ServerStatsSnapshot snapshot,
+            ConnectionStatsView connectionStats
     ) {
-        int pairs = 69 + (stats == null ? 0 : 11);
+        CommandExecutor.StatsSnapshot stats = snapshot.executor();
+        int pairs = 69 + (connectionStats == null ? 0 : 11);
         writeHeader(out, pairs);
 
-        writePair(out, KEY_QUEUED_TASKS, s.queuedTasks());
-        writePair(out, KEY_QUEUED_BYTES, s.queuedBytes());
-        writePair(out, KEY_CHANNELS_AUTOREAD_DISABLED, s.channelsAutoReadDisabled());
-        writePair(out, KEY_SUBMIT_ACCEPTED_TOTAL, s.submitAccepted());
-        writePair(out, KEY_SUBMIT_REJECTED_NOT_RUNNING_TOTAL, s.submitRejectedNotRunning());
-        writePair(out, KEY_SUBMIT_REJECTED_CLOSING_TOTAL, s.submitRejectedClosing());
-        writePair(out, KEY_SUBMIT_REJECTED_QUEUE_FULL_TOTAL, s.submitRejectedQueueFull());
-        writePair(out, KEY_SUBMIT_REJECTED_BYTES_BUDGET_TOTAL, s.submitRejectedBytesBudget());
-        writePair(out, KEY_SUBMIT_REJECTED_OFFER_FAILED_TOTAL, s.submitRejectedOfferFailed());
-        writePair(out, KEY_COMMANDS_EXECUTED_TOTAL, s.commandsExecuted());
-        writePair(out, KEY_COMMANDS_SKIPPED_CLOSING_TOTAL, s.commandsSkippedClosing());
-        writePair(out, KEY_CLOSE_AFTER_REPLY_TOTAL, s.closeAfterReply());
-        writePair(out, KEY_BACKPRESSURE_ENTER_TOTAL, s.backpressureEnter());
-        writePair(out, KEY_BACKPRESSURE_EXIT_TOTAL, s.backpressureExit());
-        writePair(out, KEY_DRAIN_LIMITED_MAX_COMMANDS_TOTAL, s.drainLimitedByMaxCommands());
-        writePair(out, KEY_DRAIN_LIMITED_TIME_BUDGET_TOTAL, s.drainLimitedByTimeBudget());
-        writePair(out, KEY_DEFERRED_FAIR_REPLY_HEADS, s.deferredFairReplyHeads());
-        writePair(out, KEY_DEFERRED_GLOBAL_REPLY_HEADS, s.deferredGlobalReplyHeads());
-        writeInboundStats(out, inboundStats);
-        writeCommitStreamStats(out, streamStats);
-        writeOutboundStats(out, outboundStats, egressStats, liveChildChannels);
-        writeHealthPairs(out, health, childStats(), config.maxClients(), false);
+        writePair(out, KEY_QUEUED_TASKS, stats.queuedTasks());
+        writePair(out, KEY_QUEUED_BYTES, stats.queuedBytes());
+        writePair(out, KEY_CHANNELS_AUTOREAD_DISABLED, stats.channelsAutoReadDisabled());
+        writePair(out, KEY_SUBMIT_ACCEPTED_TOTAL, stats.submitAccepted());
+        writePair(out, KEY_SUBMIT_REJECTED_NOT_RUNNING_TOTAL, stats.submitRejectedNotRunning());
+        writePair(out, KEY_SUBMIT_REJECTED_CLOSING_TOTAL, stats.submitRejectedClosing());
+        writePair(out, KEY_SUBMIT_REJECTED_QUEUE_FULL_TOTAL, stats.submitRejectedQueueFull());
+        writePair(out, KEY_SUBMIT_REJECTED_BYTES_BUDGET_TOTAL, stats.submitRejectedBytesBudget());
+        writePair(out, KEY_SUBMIT_REJECTED_OFFER_FAILED_TOTAL, stats.submitRejectedOfferFailed());
+        writePair(out, KEY_COMMANDS_EXECUTED_TOTAL, stats.commandsExecuted());
+        writePair(out, KEY_COMMANDS_SKIPPED_CLOSING_TOTAL, stats.commandsSkippedClosing());
+        writePair(out, KEY_CLOSE_AFTER_REPLY_TOTAL, stats.closeAfterReply());
+        writePair(out, KEY_BACKPRESSURE_ENTER_TOTAL, stats.backpressureEnter());
+        writePair(out, KEY_BACKPRESSURE_EXIT_TOTAL, stats.backpressureExit());
+        writePair(out, KEY_DRAIN_LIMITED_MAX_COMMANDS_TOTAL, stats.drainLimitedByMaxCommands());
+        writePair(out, KEY_DRAIN_LIMITED_TIME_BUDGET_TOTAL, stats.drainLimitedByTimeBudget());
+        writePair(out, KEY_DEFERRED_FAIR_REPLY_HEADS, stats.deferredFairReplyHeads());
+        writePair(out, KEY_DEFERRED_GLOBAL_REPLY_HEADS, stats.deferredGlobalReplyHeads());
+        writeInboundStats(out, snapshot.inbound());
+        writeCommitStreamStats(out, snapshot.commitStream());
+        writeOutboundStats(out, snapshot.outbound(), snapshot.egress(), snapshot.liveChildChannels());
+        writeHealthPairs(out, snapshot.health(), snapshot.children(), config.maxClients(), false);
 
-        if (stats == null) {
+        if (connectionStats == null) {
             return;
         }
 
-        writePair(out, KEY_CONN_PENDING, stats.pending());
-        writePair(out, KEY_CONN_PENDING_BYTES, stats.pendingBytes());
-        writePair(out, KEY_CONN_AUTOREAD_DISABLED, stats.inputDisabledByExecutor() ? 1 : 0);
-        writePair(out, KEY_CONN_CLOSING, stats.closing() ? 1 : 0);
-        writePair(out, KEY_CONN_COMMANDS_ENQUEUED, stats.commandsEnqueued());
-        writePair(out, KEY_CONN_COMMANDS_EXECUTED, stats.commandsExecuted());
-        writePair(out, KEY_CONN_COMMANDS_REJECTED, stats.commandsRejected());
-        writePair(out, KEY_CONN_COMMANDS_SKIPPED_CLOSING, stats.commandsSkippedClosing());
-        writePair(out, KEY_CONN_CLOSE_AFTER_REPLY, stats.closeAfterReply());
-        writePair(out, KEY_CONN_BACKPRESSURE_ENTER, stats.backpressureEnter());
-        writePair(out, KEY_CONN_BACKPRESSURE_EXIT, stats.backpressureExit());
+        writePair(out, KEY_CONN_PENDING, connectionStats.pending());
+        writePair(out, KEY_CONN_PENDING_BYTES, connectionStats.pendingBytes());
+        writePair(out, KEY_CONN_AUTOREAD_DISABLED, connectionStats.inputDisabledByExecutor() ? 1 : 0);
+        writePair(out, KEY_CONN_CLOSING, connectionStats.closing() ? 1 : 0);
+        writePair(out, KEY_CONN_COMMANDS_ENQUEUED, connectionStats.commandsEnqueued());
+        writePair(out, KEY_CONN_COMMANDS_EXECUTED, connectionStats.commandsExecuted());
+        writePair(out, KEY_CONN_COMMANDS_REJECTED, connectionStats.commandsRejected());
+        writePair(out, KEY_CONN_COMMANDS_SKIPPED_CLOSING, connectionStats.commandsSkippedClosing());
+        writePair(out, KEY_CONN_CLOSE_AFTER_REPLY, connectionStats.closeAfterReply());
+        writePair(out, KEY_CONN_BACKPRESSURE_ENTER, connectionStats.backpressureEnter());
+        writePair(out, KEY_CONN_BACKPRESSURE_EXIT, connectionStats.backpressureExit());
     }
 
     private void writeYierdisStructuredInfo(
             RedisReplyWriter out,
-            CommandExecutor.StatsSnapshot s,
-            long uptimeMillis,
-            InboundMemoryBudgetStats inboundStats,
-            CommitStreamStats streamStats,
-            OutboundMemoryBudgetStats outboundStats,
-            ReplyEgressStats.Snapshot egressStats,
-            int liveChildChannels,
-            HealthView health
+            ServerStatsSnapshot snapshot
     ) {
+        CommandExecutor.StatsSnapshot stats = snapshot.executor();
         int pairs = 68;
         writeHeader(out, pairs);
 
@@ -368,7 +322,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         writePair(out, KEY_VERSION, VALUE_VERSION);
         writePair(out, KEY_PORT, config.port());
         writePair(out, KEY_IO_THREADS, config.ioThreads());
-        writePair(out, KEY_EXECUTOR_POLICY, ascii(String.valueOf(s.schedulingPolicy())));
+        writePair(out, KEY_EXECUTOR_POLICY, ascii(String.valueOf(stats.schedulingPolicy())));
         writePair(out, KEY_EXECUTOR_QUEUE_CAPACITY, config.executorQueueCapacity());
         writePair(out, KEY_EXECUTOR_QUEUE_MAX_BYTES, config.executorQueueMaxBytes());
         writePair(out, KEY_BACKPRESSURE_HIGH, config.backpressureHighWatermark());
@@ -378,19 +332,18 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         writePair(out, KEY_EXECUTOR_MAX_DRAIN, config.executorMaxDrainCommands());
         writePair(out, KEY_EXECUTOR_DRAIN_MILLIS, config.executorDrainTimeLimitMillis());
         writePair(out, KEY_STARTED_MILLIS, startedMillis);
-        writePair(out, KEY_UPTIME_MILLIS, uptimeMillis);
-        writePair(out, KEY_DEFERRED_FAIR_REPLY_HEADS, s.deferredFairReplyHeads());
-        writePair(out, KEY_DEFERRED_GLOBAL_REPLY_HEADS, s.deferredGlobalReplyHeads());
-        writeInboundStats(out, inboundStats);
-        writeCommitStreamStats(out, streamStats);
-        writeOutboundStats(out, outboundStats, egressStats, liveChildChannels);
-        writeHealthPairs(out, health, childStats(), config.maxClients(), false);
+        writePair(out, KEY_UPTIME_MILLIS, snapshot.uptimeMillis());
+        writePair(out, KEY_DEFERRED_FAIR_REPLY_HEADS, stats.deferredFairReplyHeads());
+        writePair(out, KEY_DEFERRED_GLOBAL_REPLY_HEADS, stats.deferredGlobalReplyHeads());
+        writeInboundStats(out, snapshot.inbound());
+        writeCommitStreamStats(out, snapshot.commitStream());
+        writeOutboundStats(out, snapshot.outbound(), snapshot.egress(), snapshot.liveChildChannels());
+        writeHealthPairs(out, snapshot.health(), snapshot.children(), config.maxClients(), false);
     }
 
-    private String buildRedisInfo(String section, CommandExecutor<NettyExecutionConnection> ex) {
-        CommandExecutor.StatsSnapshot s = ex.statsSnapshot();
-        long nowMillis = System.currentTimeMillis();
-        long uptimeMillis = Math.max(0, nowMillis - startedMillis);
+    private String buildRedisInfo(String section, ServerStatsSnapshot snapshot) {
+        CommandExecutor.StatsSnapshot statsSnapshot = snapshot.executor();
+        long uptimeMillis = snapshot.uptimeMillis();
         long uptimeSeconds = Math.max(0, uptimeMillis / 1000L);
 
         boolean all = section == null || section.isBlank() || "default".equals(section) || "all".equals(section);
@@ -402,8 +355,8 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         boolean keyspace = all || "keyspace".equals(section);
 
         StringBuilder sb = new StringBuilder(512);
-        ChildChannelRegistry.StatsSnapshot childStats = childStats();
-        HealthView healthView = healthView();
+        ChildChannelRegistry.StatsSnapshot childStats = snapshot.children();
+        HealthView healthView = snapshot.health();
 
         if (server) {
             sb.append("# Server\r\n");
@@ -480,17 +433,18 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
 
         if (stats) {
-            InboundMemoryBudgetStats inboundStats = inboundStats();
-            CommitStreamStats streamStats = commitStreamStats();
-            OutboundMemoryBudgetStats outboundStats = outboundStats();
-            ReplyEgressStats.Snapshot egressStats = replyEgressStats();
+            InboundMemoryBudgetStats inboundStats = snapshot.inbound();
+            CommitStreamStats streamStats = snapshot.commitStream();
+            OutboundMemoryBudgetStats outboundStats = snapshot.outbound();
+            ReplyEgressStats.Snapshot egressStats = snapshot.egress();
             sb.append("# Stats\r\n");
-            sb.append("total_commands_processed:").append(s.commandsExecuted()).append("\r\n");
+            sb.append("total_commands_processed:").append(statsSnapshot.commandsExecuted()).append("\r\n");
             sb.append("rejected_connections:").append(childStats.rejectedConnections()).append("\r\n");
             sb.append("total_connections_received:").append(childStats.acceptedConnections()).append("\r\n");
-            sb.append("instantaneous_ops_per_sec:").append(instantaneousOpsPerSecond(s, uptimeSeconds)).append("\r\n");
-            sb.append("yierdis_queued_tasks:").append(s.queuedTasks()).append("\r\n");
-            sb.append("yierdis_queued_bytes:").append(s.queuedBytes()).append("\r\n");
+            sb.append("instantaneous_ops_per_sec:")
+                    .append(instantaneousOpsPerSecond(statsSnapshot, uptimeSeconds)).append("\r\n");
+            sb.append("yierdis_queued_tasks:").append(statsSnapshot.queuedTasks()).append("\r\n");
+            sb.append("yierdis_queued_bytes:").append(statsSnapshot.queuedBytes()).append("\r\n");
             sb.append("yierdis_inbound_capacity_bytes:").append(inboundStats.capacityBytes()).append("\r\n");
             sb.append("yierdis_inbound_reserved_bytes:").append(inboundStats.reservedBytes()).append("\r\n");
             sb.append("yierdis_inbound_peak_reserved_bytes:").append(inboundStats.peakReservedBytes()).append("\r\n");
@@ -536,9 +490,11 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             sb.append("yierdis_outbound_write_failures:").append(egressStats.writeFailures()).append("\r\n");
             sb.append("yierdis_result_unknown_closes:").append(egressStats.resultUnknownCloses()).append("\r\n");
             sb.append("yierdis_reply_shutdown_timeouts:").append(egressStats.shutdownTimeouts()).append("\r\n");
-            sb.append("yierdis_live_child_channels:").append(liveChildChannels()).append("\r\n");
-            sb.append("yierdis_deferred_fair_reply_heads:").append(s.deferredFairReplyHeads()).append("\r\n");
-            sb.append("yierdis_deferred_global_reply_heads:").append(s.deferredGlobalReplyHeads()).append("\r\n");
+            sb.append("yierdis_live_child_channels:").append(snapshot.liveChildChannels()).append("\r\n");
+            sb.append("yierdis_deferred_fair_reply_heads:")
+                    .append(statsSnapshot.deferredFairReplyHeads()).append("\r\n");
+            sb.append("yierdis_deferred_global_reply_heads:")
+                    .append(statsSnapshot.deferredGlobalReplyHeads()).append("\r\n");
             sb.append("\r\n");
         }
 
@@ -572,39 +528,9 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         if (runtimeObservability != null) {
             return runtimeObservability.memoryStats();
         }
-        return new YierdisMemoryStats(
+        return YierdisMemoryStats.empty(
                 config.maxmemoryBytes(),
-                0,
-                0,
-                0,
-                0,
-                0,
-                config.maxmemoryScope() == YierdisServerRuntimeConfig.MaxmemoryScope.GLOBAL,
-                false,
-                0,
-                0,
-                false,
-                0,
-                0,
-                0,
-                false,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0
+                config.maxmemoryScope() == YierdisServerRuntimeConfig.MaxmemoryScope.GLOBAL
         );
     }
 
@@ -631,11 +557,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         );
     }
 
-    private CommitStreamStats commitStreamStats() {
-        YierdisInstanceObservability runtimeObservability = observability;
-        return runtimeObservability == null ? CommitStreamStats.disabled() : runtimeObservability.commitStreamStats();
-    }
-
     private OutboundMemoryBudgetStats outboundStats() {
         OutboundMemoryBudget budget = outboundMemoryBudget;
         if (budget != null) {
@@ -660,10 +581,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         return stats == null ? ReplyEgressStats.noop().snapshot() : stats.snapshot();
     }
 
-    private int liveChildChannels() {
-        return childStats().activeConnections();
-    }
-
     private ChildChannelRegistry.StatsSnapshot childStats() {
         ChildChannelRegistry registry = childChannelRegistry;
         return registry == null
@@ -671,7 +588,17 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
                 : registry.statsSnapshot();
     }
 
-    private HealthView healthView() {
+    private ServerStatsSnapshot serverStatsSnapshot(CommandExecutor<NettyExecutionConnection> executor) {
+        InboundMemoryBudgetStats inbound = inboundStats();
+        OutboundMemoryBudgetStats outbound = outboundStats();
+        YierdisInstanceObservability runtimeObservability = observability;
+        CommitStreamStats commitStream = runtimeObservability == null
+                ? CommitStreamStats.disabled()
+                : runtimeObservability.commitStreamStats();
+        YierdisInstanceObservability.RuntimeHealthSnapshot databaseHealth = runtimeObservability == null
+                ? new YierdisInstanceObservability.RuntimeHealthSnapshot(0, 0, null, null, 0L)
+                : runtimeObservability.healthSnapshot();
+        ChildChannelRegistry.StatsSnapshot children = childStats();
         String state;
         try {
             state = lifecycleState.get();
@@ -681,32 +608,45 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         if (state == null || state.isBlank()) {
             state = "UNKNOWN";
         }
-
-        YierdisInstanceObservability.RuntimeHealthSnapshot dbHealth = observability == null
-                ? new YierdisInstanceObservability.RuntimeHealthSnapshot(0, 0, null, null, 0L)
-                : observability.healthSnapshot();
-        CommitStreamStats stream = commitStreamStats();
-        InboundMemoryBudgetStats inbound = inboundStats();
-        OutboundMemoryBudgetStats outbound = outboundStats();
-        boolean commitHealthy = stream.state() == yier.bubu.redis.runtime.embedded.CommitStreamState.DISABLED
-                || stream.state() == yier.bubu.redis.runtime.embedded.CommitStreamState.RUNNING;
-        boolean infrastructureHealthy = "RUNNING".equals(state) && !inbound.closed() && !outbound.closed();
-        boolean ready = infrastructureHealthy && dbHealth.healthy() && commitHealthy;
-        return new HealthView(
-                state,
-                ready,
-                ready,
-                dbHealth.databaseCount(),
-                dbHealth.degradedDatabaseCount(),
-                stream.state().name(),
-                dbHealth.firstFailureType(),
-                dbHealth.firstFailureMessage()
+        HealthView health = healthView(state, databaseHealth, commitStream, inbound, outbound);
+        return new ServerStatsSnapshot(
+                executor.statsSnapshot(),
+                Math.max(0L, System.currentTimeMillis() - startedMillis),
+                inbound,
+                commitStream,
+                outbound,
+                replyEgressStats(),
+                children,
+                health
         );
     }
 
-    private void writeHealth(RedisReplyWriter out, HealthView health) {
+    private static HealthView healthView(
+            String lifecycleState,
+            YierdisInstanceObservability.RuntimeHealthSnapshot databaseHealth,
+            CommitStreamStats commitStream,
+            InboundMemoryBudgetStats inbound,
+            OutboundMemoryBudgetStats outbound
+    ) {
+        boolean commitHealthy = commitStream.state() == yier.bubu.redis.runtime.embedded.CommitStreamState.DISABLED
+                || commitStream.state() == yier.bubu.redis.runtime.embedded.CommitStreamState.RUNNING;
+        boolean infrastructureHealthy = "RUNNING".equals(lifecycleState) && !inbound.closed() && !outbound.closed();
+        boolean ready = infrastructureHealthy && databaseHealth.healthy() && commitHealthy;
+        return new HealthView(
+                lifecycleState,
+                ready,
+                ready,
+                databaseHealth.databaseCount(),
+                databaseHealth.degradedDatabaseCount(),
+                commitStream.state().name(),
+                databaseHealth.firstFailureType(),
+                databaseHealth.firstFailureMessage()
+        );
+    }
+
+    private void writeHealth(RedisReplyWriter out, ServerStatsSnapshot snapshot) {
         writeHeader(out, 11);
-        writeHealthPairs(out, health, childStats(), config.maxClients(), true);
+        writeHealthPairs(out, snapshot.health(), snapshot.children(), config.maxClients(), true);
     }
 
     private static void writeHealthPairs(
@@ -776,6 +716,21 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             String firstFailureType,
             String firstFailureMessage
     ) {
+    }
+
+    private record ServerStatsSnapshot(
+            CommandExecutor.StatsSnapshot executor,
+            long uptimeMillis,
+            InboundMemoryBudgetStats inbound,
+            CommitStreamStats commitStream,
+            OutboundMemoryBudgetStats outbound,
+            ReplyEgressStats.Snapshot egress,
+            ChildChannelRegistry.StatsSnapshot children,
+            HealthView health
+    ) {
+        private int liveChildChannels() {
+            return children.activeConnections();
+        }
     }
 
     private void writeOutboundStats(

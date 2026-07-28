@@ -93,7 +93,7 @@ fallback 也同样重要。以下 heap materialization 是有意的：
 
 - protocol snapshots：`RetainedRespExecutionRequest` / `ExecutionRequest` 需要稳定 argv 跨过 decoder 生命周期和 executor queue。
 - DB lifecycle lookup：当前 `YierdisDbKeyLifecycle` 用 `YierdisDb.toByteArray(...)` 把 `BytesView` 转成 heap `byte[]`，再进入 `NativeKeyDirectory`。
-- transaction replay：事务队列需要保存可重放的 `ByteArrayExecutionRequest` / `ExecutionRecord`，不能引用短生命周期 frame。
+- transaction replay：事务队列通过 `ExecutionRequest.retain()` 取得独立所有权；生产网络实现共享不可变 argv 和 reference-counted request-memory lease，默认接口实现才使用 heap copy。
 - explicit introspection：`SCAN`、snapshot、`MEMORY` / object 类输出需要构造返回值或诊断对象，不能把 native view 泄漏给调用方。
 - tests：测试经常用 heap arrays 和 recording sinks 断言内容，这是可读性和确定性的取舍。
 - ownership-returning DB APIs：`GET` / `HGET` / pop / snapshot / introspection 等返回 owned `byte[]` 或集合快照时会复制。

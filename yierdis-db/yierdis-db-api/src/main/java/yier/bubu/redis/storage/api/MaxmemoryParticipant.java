@@ -7,13 +7,6 @@ package yier.bubu.redis.storage.api;
  */
 public interface MaxmemoryParticipant extends MemoryUsageParticipant {
     /**
-     * 兼容旧调用方的 maxmemory 使用量投影。
-     */
-    default long usedBytesForMaxmemory() {
-        return memoryUsage().effectiveBytesForMaxmemory();
-    }
-
-    /**
      * Returns a non-negative estimate of evictable keys currently held by this participant.
      * <p>
      * This value may be approximate and is allowed to saturate at {@link Integer#MAX_VALUE}.

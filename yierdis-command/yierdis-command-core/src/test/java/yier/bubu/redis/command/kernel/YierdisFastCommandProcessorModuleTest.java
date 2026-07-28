@@ -31,7 +31,7 @@ public class YierdisFastCommandProcessorModuleTest {
         CommandRegistry registry = CommandRegistries.from(
                 registrar -> registrar.register(new CommandDefinition<>(
                         syntax("LOCAL", CommandArity.exact(1)),
-                        CommandParsers.request(),
+                        CommandParsers.args(),
                         (request, preparation) -> PreparedCommands.fixed(
                                 ReplyShapes.simpleString("LOCAL"),
                                 execution -> execution.reply().simpleString("LOCAL")

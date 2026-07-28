@@ -71,58 +71,60 @@ public final class KeyCommands implements CommandModule {
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
         registration.register(new CommandDefinition<>(syntax("TYPE", CommandArity.exact(2), KEY),
-                CommandParsers.request(), this::type));
+                CommandParsers.args(), this::type));
         registration.register(new CommandDefinition<>(syntax("MEMORY", CommandArity.min(2), CommandKeySpec.NONE),
-                CommandParsers.request(), this::memory));
+                CommandParsers.args(), this::memory));
         registration.register(new CommandDefinition<>(syntax("OBJECT", CommandArity.min(2), CommandKeySpec.NONE),
-                CommandParsers.request(), this::object));
+                CommandParsers.args(), this::object));
         registration.register(new CommandDefinition<>(syntax("KEYS", CommandArity.exact(2), CommandKeySpec.NONE),
-                CommandParsers.request(), this::keys));
+                CommandParsers.args(), this::keys));
         registration.register(new CommandDefinition<>(syntax("SCAN", CommandArity.min(2), CommandKeySpec.NONE),
                 this::parseScan, this::scan));
         registration.register(new CommandDefinition<>(syntax("DEL", CommandArity.min(2), MULTI_KEYS),
-                CommandParsers.request(), this::del));
+                CommandParsers.args(), this::del));
         registration.register(new CommandDefinition<>(syntax("EXISTS", CommandArity.min(2), MULTI_KEYS),
-                CommandParsers.request(), this::exists));
+                CommandParsers.args(), this::exists));
         registration.register(new CommandDefinition<>(syntax("EXPIRE", CommandArity.exact(3), KEY),
-                CommandParsers.request(), this::expire));
+                CommandParsers.args(), this::expire));
         registration.register(new CommandDefinition<>(syntax("PEXPIRE", CommandArity.exact(3), KEY),
-                CommandParsers.request(), this::pexpire));
+                CommandParsers.args(), this::pexpire));
         registration.register(new CommandDefinition<>(syntax("EXPIREAT", CommandArity.exact(3), KEY),
-                CommandParsers.request(), this::expireat));
+                CommandParsers.args(), this::expireat));
         registration.register(new CommandDefinition<>(syntax("PEXPIREAT", CommandArity.exact(3), KEY),
-                CommandParsers.request(), this::pexpireat));
+                CommandParsers.args(), this::pexpireat));
         registration.register(new CommandDefinition<>(syntax("PERSIST", CommandArity.exact(2), KEY),
-                CommandParsers.request(), this::persist));
+                CommandParsers.args(), this::persist));
         registration.register(new CommandDefinition<>(syntax("TTL", CommandArity.exact(2), KEY),
-                CommandParsers.request(), this::ttl));
+                CommandParsers.args(), this::ttl));
         registration.register(new CommandDefinition<>(syntax("PTTL", CommandArity.exact(2), KEY),
-                CommandParsers.request(), this::pttl));
+                CommandParsers.args(), this::pttl));
     }
 
     private static CommandSyntax syntax(String nameUpper, CommandArity arity, CommandKeySpec keys) {
         return new CommandSyntax(nameUpper, arity, keys, TransactionPolicy.QUEUEABLE);
     }
 
-    private PreparedCommand type(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand type(ArgReader args, CommandPreparationContext context) {
+        ExecutionRequest request = args.request();
         ValueType valueType = support.commandDb(context).reads().keyspace().typeOf(support.argView(request, 1));
         String value = valueType == null ? "none" : valueType.name().toLowerCase(Locale.ROOT);
         return CommandSupport.fixed(ReplyShapes.simpleString(value), execution -> execution.reply().simpleString(value));
     }
 
-    private PreparedCommand memory(ExecutionRequest request, CommandPreparationContext context) {
-        if (CommandSupport.asciiEqualsIgnoreCase(request, 1, "USAGE")) {
-            if (request.argc() != 3) {
+    private PreparedCommand memory(ArgReader args, CommandPreparationContext context) {
+        if (args.is(1, "USAGE")) {
+            if (args.argc() != 3) {
                 return CommandSupport.error("ERR wrong number of arguments for 'memory' command");
             }
+            ExecutionRequest request = args.request();
             long bytes = support.commandDb(context).memory().memoryUsage(support.argView(request, 2));
             return bytes < 0L
                     ? CommandSupport.fixed(ReplyShapes.nullValue(), execution -> execution.reply().nullValue())
                     : CommandSupport.fixed(ReplyShapes.integer(bytes), execution -> execution.reply().integer(bytes));
         }
 
-        if (CommandSupport.asciiEqualsIgnoreCase(request, 1, "STATS")) {
-            if (request.argc() != 2) {
+        if (args.is(1, "STATS")) {
+            if (args.argc() != 2) {
                 return CommandSupport.error("ERR wrong number of arguments for 'memory' command");
             }
             ServerInfoProvider infoProvider = support.infoProvider();
@@ -174,13 +176,14 @@ public final class KeyCommands implements CommandModule {
     private record MemoryStatValue(byte[] key, long value) {
     }
 
-    private PreparedCommand object(ExecutionRequest request, CommandPreparationContext context) {
-        if (request.argc() != 3) {
+    private PreparedCommand object(ArgReader args, CommandPreparationContext context) {
+        if (args.argc() != 3) {
             return CommandSupport.error("ERR wrong number of arguments for 'object' command");
         }
-        if (!CommandSupport.asciiEqualsIgnoreCase(request, 1, "ENCODING")) {
+        if (!args.is(1, "ENCODING")) {
             return CommandSupport.error("ERR syntax error");
         }
+        ExecutionRequest request = args.request();
         String encoding = support.commandDb(context).memory().objectEncoding(support.argView(request, 2));
         if (encoding == null) {
             return CommandSupport.fixed(ReplyShapes.nullValue(), execution -> execution.reply().nullValue());
@@ -190,7 +193,7 @@ public final class KeyCommands implements CommandModule {
                 execution -> execution.reply().bulkString(value));
     }
 
-    private PreparedCommand keys(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand keys(ArgReader args, CommandPreparationContext context) {
         SlowCommandGovernor governor = support.slowGovernor();
         long timeBudgetNanos = governor.keysTimeBudgetNanos(context);
         long deadlineNanos = deadlineNanos(timeBudgetNanos);
@@ -200,7 +203,7 @@ public final class KeyCommands implements CommandModule {
             }
             long remainingBudgetNanos = remainingBudgetNanos(timeBudgetNanos, deadlineNanos);
             KeyScanWindow window = support.commandDb(context).reads().keyspace().keys(
-                    request.readOnlyByteArray(1),
+                    args.bytes(1),
                     governor.keysMaxResults(context),
                     remainingBudgetNanos
             );
@@ -329,7 +332,8 @@ public final class KeyCommands implements CommandModule {
         return Math.max(1L, deadlineNanos - System.nanoTime());
     }
 
-    private PreparedCommand del(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand del(ArgReader args, CommandPreparationContext context) {
+        ExecutionRequest request = args.request();
         return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
             int len = request.argc() - 1;
             support.sliceResetFromRequest(request, 1, len);
@@ -342,9 +346,10 @@ public final class KeyCommands implements CommandModule {
         });
     }
 
-    private PreparedCommand exists(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand exists(ArgReader args, CommandPreparationContext context) {
+        ExecutionRequest request = args.request();
         long count = 0L;
-        for (int i = 1; i < request.argc(); i++) {
+        for (int i = 1; i < args.argc(); i++) {
             if (support.commandDb(context).reads().keyspace().existsKey(support.argView(request, i))) {
                 count++;
             }
@@ -353,10 +358,11 @@ public final class KeyCommands implements CommandModule {
         return CommandSupport.fixed(ReplyShapes.integer(value), execution -> execution.reply().integer(value));
     }
 
-    private PreparedCommand expire(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand expire(ArgReader args, CommandPreparationContext context) {
+        ExecutionRequest request = args.request();
         final long seconds;
         try {
-            seconds = CommandSupport.parseLong(request, 2, "seconds");
+            seconds = args.longAt(2);
         } catch (IllegalArgumentException e) {
             return CommandSupport.error("ERR value is not an integer or out of range");
         }
@@ -368,10 +374,11 @@ public final class KeyCommands implements CommandModule {
         });
     }
 
-    private PreparedCommand pexpire(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand pexpire(ArgReader args, CommandPreparationContext context) {
+        ExecutionRequest request = args.request();
         final long millis;
         try {
-            millis = CommandSupport.parseLong(request, 2, "milliseconds");
+            millis = args.longAt(2);
         } catch (IllegalArgumentException e) {
             return CommandSupport.error("ERR value is not an integer or out of range");
         }
@@ -383,10 +390,11 @@ public final class KeyCommands implements CommandModule {
         });
     }
 
-    private PreparedCommand expireat(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand expireat(ArgReader args, CommandPreparationContext context) {
+        ExecutionRequest request = args.request();
         final long seconds;
         try {
-            seconds = CommandSupport.parseLong(request, 2, "seconds");
+            seconds = args.longAt(2);
         } catch (IllegalArgumentException e) {
             return CommandSupport.error("ERR value is not an integer or out of range");
         }
@@ -398,10 +406,11 @@ public final class KeyCommands implements CommandModule {
         });
     }
 
-    private PreparedCommand pexpireat(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand pexpireat(ArgReader args, CommandPreparationContext context) {
+        ExecutionRequest request = args.request();
         final long millis;
         try {
-            millis = CommandSupport.parseLong(request, 2, "milliseconds");
+            millis = args.longAt(2);
         } catch (IllegalArgumentException e) {
             return CommandSupport.error("ERR value is not an integer or out of range");
         }
@@ -413,7 +422,8 @@ public final class KeyCommands implements CommandModule {
         });
     }
 
-    private PreparedCommand persist(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand persist(ArgReader args, CommandPreparationContext context) {
+        ExecutionRequest request = args.request();
         return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
             boolean applied = support.commandDb(execution).writes().ttl()
                     .persist(support.argView(request, 1))
@@ -422,12 +432,14 @@ public final class KeyCommands implements CommandModule {
         });
     }
 
-    private PreparedCommand ttl(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand ttl(ArgReader args, CommandPreparationContext context) {
+        ExecutionRequest request = args.request();
         long value = support.commandDb(context).reads().ttl().ttlSeconds(support.argView(request, 1));
         return CommandSupport.fixed(ReplyShapes.integer(value), execution -> execution.reply().integer(value));
     }
 
-    private PreparedCommand pttl(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand pttl(ArgReader args, CommandPreparationContext context) {
+        ExecutionRequest request = args.request();
         long value = support.commandDb(context).reads().ttl().ttlMillis(support.argView(request, 1));
         return CommandSupport.fixed(ReplyShapes.integer(value), execution -> execution.reply().integer(value));
     }

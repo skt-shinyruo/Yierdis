@@ -28,7 +28,109 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
     private boolean entryPublished;
     private boolean replacedValueReleaseClaimed;
 
-    public PreparedEntryMutation(
+    public static <T> PreparedEntryMutation<T> unchanged(
+            YierdisDbKeyLifecycle keyLifecycle,
+            T result,
+            MutationOutcome outcome
+    ) {
+        return new PreparedEntryMutation<>(
+                keyLifecycle,
+                result,
+                0L,
+                0L,
+                outcome,
+                null,
+                null,
+                null,
+                null,
+                null,
+                false,
+                PreparedTtlMutation.NONE
+        );
+    }
+
+    public static <T> PreparedEntryMutation<T> insert(
+            YierdisDbKeyLifecycle keyLifecycle,
+            T result,
+            long actualDeltaBytes,
+            long stagedNonNativeGrowthBytes,
+            MutationOutcome outcome,
+            EntryHandle stagedEntryHandle,
+            NativeKeyDirectory.StagedInsert stagedKey,
+            EntryRecord newRecord,
+            PreparedTtlMutation ttlMutation
+    ) {
+        return new PreparedEntryMutation<>(
+                keyLifecycle,
+                result,
+                actualDeltaBytes,
+                stagedNonNativeGrowthBytes,
+                outcome,
+                null,
+                stagedEntryHandle,
+                stagedKey,
+                null,
+                newRecord,
+                false,
+                ttlMutation
+        );
+    }
+
+    public static <T> PreparedEntryMutation<T> replace(
+            YierdisDbKeyLifecycle keyLifecycle,
+            T result,
+            long actualDeltaBytes,
+            long stagedNonNativeGrowthBytes,
+            MutationOutcome outcome,
+            EntryHandle existingEntryHandle,
+            EntryRecord oldRecord,
+            EntryRecord newRecord,
+            boolean releaseReplacedValue,
+            PreparedTtlMutation ttlMutation
+    ) {
+        return new PreparedEntryMutation<>(
+                keyLifecycle,
+                result,
+                actualDeltaBytes,
+                stagedNonNativeGrowthBytes,
+                outcome,
+                existingEntryHandle,
+                null,
+                null,
+                oldRecord,
+                newRecord,
+                releaseReplacedValue,
+                ttlMutation
+        );
+    }
+
+    public static <T> PreparedEntryMutation<T> delete(
+            YierdisDbKeyLifecycle keyLifecycle,
+            T result,
+            long actualDeltaBytes,
+            MutationOutcome outcome,
+            EntryHandle existingEntryHandle,
+            EntryRecord oldRecord,
+            boolean releaseReplacedValue,
+            PreparedTtlMutation ttlMutation
+    ) {
+        return new PreparedEntryMutation<>(
+                keyLifecycle,
+                result,
+                actualDeltaBytes,
+                0L,
+                outcome,
+                existingEntryHandle,
+                null,
+                null,
+                oldRecord,
+                null,
+                releaseReplacedValue,
+                ttlMutation
+        );
+    }
+
+    private PreparedEntryMutation(
             YierdisDbKeyLifecycle keyLifecycle,
             T result,
             long actualDeltaBytes,
@@ -41,110 +143,6 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
             EntryRecord newRecord,
             boolean releaseReplacedValue,
             PreparedTtlMutation ttlMutation
-    ) {
-        this(
-                keyLifecycle,
-                result,
-                actualDeltaBytes,
-                stagedNonNativeGrowthBytes,
-                outcome,
-                existingEntryHandle,
-                stagedEntryHandle,
-                stagedKey,
-                oldRecord,
-                newRecord,
-                releaseReplacedValue,
-                null,
-                ttlMutation,
-                null
-        );
-    }
-
-    public PreparedEntryMutation(
-            YierdisDbKeyLifecycle keyLifecycle,
-            T result,
-            long actualDeltaBytes,
-            long stagedNonNativeGrowthBytes,
-            MutationOutcome outcome,
-            EntryHandle existingEntryHandle,
-            EntryHandle stagedEntryHandle,
-            NativeKeyDirectory.StagedInsert stagedKey,
-            EntryRecord oldRecord,
-            EntryRecord newRecord,
-            boolean releaseReplacedValue,
-            Runnable releaseReplacedValueHook,
-            PreparedTtlMutation ttlMutation
-    ) {
-        this(
-                keyLifecycle,
-                result,
-                actualDeltaBytes,
-                stagedNonNativeGrowthBytes,
-                outcome,
-                existingEntryHandle,
-                stagedEntryHandle,
-                stagedKey,
-                oldRecord,
-                newRecord,
-                releaseReplacedValue,
-                releaseReplacedValueHook,
-                ttlMutation,
-                null,
-                null
-        );
-    }
-
-    public PreparedEntryMutation(
-            YierdisDbKeyLifecycle keyLifecycle,
-            T result,
-            long actualDeltaBytes,
-            long stagedNonNativeGrowthBytes,
-            MutationOutcome outcome,
-            EntryHandle existingEntryHandle,
-            EntryHandle stagedEntryHandle,
-            NativeKeyDirectory.StagedInsert stagedKey,
-            EntryRecord oldRecord,
-            EntryRecord newRecord,
-            boolean releaseReplacedValue,
-            Runnable releaseReplacedValueHook,
-            PreparedTtlMutation ttlMutation,
-            AutoCloseable abortResource
-    ) {
-        this(
-                keyLifecycle,
-                result,
-                actualDeltaBytes,
-                stagedNonNativeGrowthBytes,
-                outcome,
-                existingEntryHandle,
-                stagedEntryHandle,
-                stagedKey,
-                oldRecord,
-                newRecord,
-                releaseReplacedValue,
-                releaseReplacedValueHook,
-                ttlMutation,
-                abortResource,
-                null
-        );
-    }
-
-    public PreparedEntryMutation(
-            YierdisDbKeyLifecycle keyLifecycle,
-            T result,
-            long actualDeltaBytes,
-            long stagedNonNativeGrowthBytes,
-            MutationOutcome outcome,
-            EntryHandle existingEntryHandle,
-            EntryHandle stagedEntryHandle,
-            NativeKeyDirectory.StagedInsert stagedKey,
-            EntryRecord oldRecord,
-            EntryRecord newRecord,
-            boolean releaseReplacedValue,
-            Runnable releaseReplacedValueHook,
-            PreparedTtlMutation ttlMutation,
-            AutoCloseable abortResource,
-            Runnable abortNewValueHook
     ) {
         super(
                 actualDeltaBytes,
@@ -162,10 +160,31 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
         this.oldRecord = oldRecord;
         this.newRecord = newRecord;
         this.releaseReplacedValue = releaseReplacedValue;
-        this.releaseReplacedValueHook = releaseReplacedValueHook;
         this.ttlMutation = ttlMutation == null ? PreparedTtlMutation.NONE : ttlMutation;
-        this.abortResource = abortResource;
-        this.abortNewValueHook = abortNewValueHook;
+    }
+
+    public PreparedEntryMutation<T> releaseReplacedValueWith(Runnable hook) {
+        if (releaseReplacedValueHook != null) {
+            throw new IllegalStateException("replaced-value release hook is already configured");
+        }
+        releaseReplacedValueHook = Objects.requireNonNull(hook, "hook");
+        return this;
+    }
+
+    public PreparedEntryMutation<T> closeOnAbort(AutoCloseable resource) {
+        if (abortResource != null) {
+            throw new IllegalStateException("abort resource is already configured");
+        }
+        abortResource = Objects.requireNonNull(resource, "resource");
+        return this;
+    }
+
+    public PreparedEntryMutation<T> releaseNewValueOnAbortWith(Runnable hook) {
+        if (abortNewValueHook != null) {
+            throw new IllegalStateException("new-value abort hook is already configured");
+        }
+        abortNewValueHook = Objects.requireNonNull(hook, "hook");
+        return this;
     }
 
     public PreparedEntryMutation<T> beforeEntryPublish(Runnable hook) {

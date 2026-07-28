@@ -25,7 +25,7 @@ public class YierdisFastCommandProcessorRegistrationTest {
     public void explicitRegistryRegistersCallerSuppliedModulesOnly() {
         CommandModule extraModule = registration -> registration.register(new CommandDefinition<>(
                 syntax("TRACE", CommandArity.exact(1)),
-                CommandParsers.request(),
+                CommandParsers.args(),
                 (request, preparation) -> PreparedCommands.fixed(
                         ReplyShapes.simpleString("TRACE-OK"),
                         execution -> execution.reply().simpleString("TRACE-OK")
@@ -127,7 +127,7 @@ public class YierdisFastCommandProcessorRegistrationTest {
         CommandRegistry registry = CommandRegistries.from(
                 registration -> registration.register(new CommandDefinition<>(
                         syntax("FIRST", CommandArity.exact(1)),
-                        CommandParsers.request(),
+                        CommandParsers.args(),
                         (request, preparation) -> PreparedCommands.fixed(
                                 ReplyShapes.simpleString("FIRST"),
                                 execution -> execution.reply().simpleString("FIRST")
@@ -135,7 +135,7 @@ public class YierdisFastCommandProcessorRegistrationTest {
                 )),
                 registration -> registration.register(new CommandDefinition<>(
                         syntax("SECOND", CommandArity.exact(1)),
-                        CommandParsers.request(),
+                        CommandParsers.args(),
                         (request, preparation) -> PreparedCommands.fixed(
                                 ReplyShapes.simpleString("SECOND"),
                                 execution -> execution.reply().simpleString("SECOND")
@@ -155,7 +155,7 @@ public class YierdisFastCommandProcessorRegistrationTest {
                     java.util.Arrays.asList(
                             registration -> registration.register(new CommandDefinition<>(
                                     syntax("OK", CommandArity.exact(1)),
-                                    CommandParsers.request(),
+                                    CommandParsers.args(),
                                     (request, preparation) -> PreparedCommands.fixed(
                                             ReplyShapes.simpleString("OK"),
                                             execution -> execution.reply().simpleString("OK")

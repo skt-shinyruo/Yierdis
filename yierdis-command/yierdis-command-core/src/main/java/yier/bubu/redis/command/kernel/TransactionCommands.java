@@ -3,6 +3,7 @@ package yier.bubu.redis.command.kernel;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import yier.bubu.redis.command.api.ArgReader;
 import yier.bubu.redis.command.api.CommandArity;
 import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
@@ -31,11 +32,11 @@ final class TransactionCommands implements CommandModule {
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
         registration.register(new CommandDefinition<>(
-                syntax("MULTI"), CommandParsers.request(), this::multi));
+                syntax("MULTI"), CommandParsers.args(), this::multi));
         registration.register(new CommandDefinition<>(
-                syntax("DISCARD"), CommandParsers.request(), this::discard));
+                syntax("DISCARD"), CommandParsers.args(), this::discard));
         registration.register(new CommandDefinition<>(
-                syntax("EXEC"), CommandParsers.request(), this::exec));
+                syntax("EXEC"), CommandParsers.args(), this::exec));
     }
 
     private static CommandSyntax syntax(String name) {
@@ -47,7 +48,7 @@ final class TransactionCommands implements CommandModule {
         );
     }
 
-    private PreparedCommand multi(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand multi(ArgReader args, CommandPreparationContext context) {
         TransactionState tx = context.session().transaction();
         if (tx.active()) {
             return PreparedCommands.error("ERR MULTI calls can not be nested");
@@ -58,7 +59,7 @@ final class TransactionCommands implements CommandModule {
         });
     }
 
-    private PreparedCommand discard(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand discard(ArgReader args, CommandPreparationContext context) {
         TransactionState tx = context.session().transaction();
         if (!tx.active()) {
             return PreparedCommands.error("ERR DISCARD without MULTI");
@@ -69,7 +70,7 @@ final class TransactionCommands implements CommandModule {
         });
     }
 
-    private PreparedCommand exec(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand exec(ArgReader args, CommandPreparationContext context) {
         TransactionState tx = context.session().transaction();
         if (!tx.active()) {
             return PreparedCommands.error("ERR EXEC without MULTI");

@@ -105,7 +105,7 @@ public class CommandRegistryTest {
                         CommandKeySpec.NONE,
                         TransactionPolicy.QUEUEABLE
                 ),
-                CommandParsers.request(),
+                CommandParsers.args(),
                 (request, context) -> TestPreparedCommands.simpleString("OK")
         ));
     }

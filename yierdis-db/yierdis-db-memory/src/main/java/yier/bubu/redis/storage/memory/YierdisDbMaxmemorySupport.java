@@ -103,7 +103,6 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
         return memoryUsageSupplier.get();
     }
 
-    @Override
     public long usedBytesForMaxmemory() {
         threadChecker.run();
         return usedBytesForMaxmemory.getAsLong();

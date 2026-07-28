@@ -189,16 +189,6 @@ public final class YierdisDbWrites implements DbWrites {
                 byte[] keyBytes,
                 BytesSlice value,
                 SetMode mode,
-                ExpireOption expireOption
-        ) {
-            return invoke(() -> strings.prepareSet(keyBytes, value, mode, expireOption));
-        }
-
-        @Override
-        public PreparedMutation<SetStringValue> prepareSet(
-                byte[] keyBytes,
-                BytesSlice value,
-                SetMode mode,
                 ExpireOption expireOption,
                 boolean returnOldValue
         ) {

@@ -254,7 +254,8 @@ public final class TestDbSupport {
                 keyBytes,
                 value,
                 mode,
-                expireOption
+                expireOption,
+                false
         );
         boolean completed = false;
         try {

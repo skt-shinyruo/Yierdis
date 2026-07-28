@@ -1,5 +1,8 @@
 package yier.bubu.redis.app.server.args;
 
+import yier.bubu.redis.execution.executor.CommandExecutorConfig;
+import yier.bubu.redis.execution.executor.SchedulingPolicy;
+import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
 import java.util.Locale;
@@ -57,16 +60,42 @@ public record YierdisServerRuntimeConfig(
             (long) REPLY_FIXED_OVERHEAD_BYTES + REPLY_MAX_CONTROL_ERROR_FRAME_BYTES;
 
     public YierdisServerRuntimeConfig {
-        Objects.requireNonNull(bind, "bind");
         Objects.requireNonNull(executorSchedulingPolicy, "executorSchedulingPolicy");
         Objects.requireNonNull(maxmemoryScope, "maxmemoryScope");
         Objects.requireNonNull(maxmemoryPolicy, "maxmemoryPolicy");
-        if (bind.isBlank()) {
+        if (bind == null || bind.isBlank()) {
             throw new IllegalArgumentException("bind must not be blank");
         }
+        requireRange(port, 0, 65_535, "port");
         if (maxClients <= 0) {
             throw new IllegalArgumentException("maxClients must be > 0");
         }
+        requireRange(databases, 1, 1_024, "databases");
+        requireNonNegative(cleanupIntervalMillis, "cleanupIntervalMillis");
+        requirePositive(ioThreads, "ioThreads");
+        requireNonNegative(transactionQueueMaxCommands, "transactionQueueMaxCommands");
+        requireNonNegative(transactionQueueMaxBytes, "transactionQueueMaxBytes");
+        requireRange(protocolMaxBulkBytes, 1, RespProtocolLimits.MAX_BULK_BYTES, "protocolMaxBulkBytes");
+        requireRange(protocolMaxArgs, 1, RespProtocolLimits.MAX_ARGS, "protocolMaxArgs");
+        requirePositive(protocolMaxLineBytes, "protocolMaxLineBytes");
+        requireRange(
+                protocolMaxCommandBytes,
+                1,
+                RespProtocolLimits.MAX_COMMAND_BYTES,
+                "protocolMaxCommandBytes"
+        );
+        requireNonNegative(clientIdleTimeoutMillis, "clientIdleTimeoutMillis");
+        requireNonNegative(clientOutputBufferLimitBytes, "clientOutputBufferLimitBytes");
+        requireNonNegative(clientOutputBufferOverLimitMillis, "clientOutputBufferOverLimitMillis");
+        if (clientOutputBufferLimitBytes > 0L && clientOutputBufferOverLimitMillis <= 0L) {
+            throw new IllegalArgumentException(
+                    "clientOutputBufferOverLimitMillis must be > 0 when clientOutputBufferLimitBytes is enabled"
+            );
+        }
+        requireNonNegative(maxmemoryBytes, "maxmemoryBytes");
+        requirePositive(maxmemorySamples, "maxmemorySamples");
+        requirePositive(evictionTimeLimitMillis, "evictionTimeLimitMillis");
+        requirePositive(expireCleanupTimeLimitMillis, "expireCleanupTimeLimitMillis");
         if (nativeDefragMaxMoveBytes < 0) {
             throw new IllegalArgumentException("nativeDefragMaxMoveBytes must be >= 0");
         }
@@ -82,6 +111,8 @@ public record YierdisServerRuntimeConfig(
         if (protocolGlobalInFlightBytes < 0) {
             throw new IllegalArgumentException("protocolGlobalInFlightBytes must be >= 0");
         }
+        requireNonNegative(keysTimeBudgetMillis, "keysTimeBudgetMillis");
+        requireNonNegative(keysMaxResults, "keysMaxResults");
         if (replyGlobalCapacityBytes <= 0L) {
             throw new IllegalArgumentException("replyGlobalCapacityBytes must be > 0");
         }
@@ -120,6 +151,41 @@ public record YierdisServerRuntimeConfig(
         );
         if (minimumReplyCharge > replyMaxTotalBytes) {
             throw new IllegalArgumentException("reply chunk, control, and fixed overhead must fit replyMaxTotalBytes");
+        }
+    }
+
+    public CommandExecutorConfig executorConfig() {
+        return new CommandExecutorConfig(
+                executorQueueCapacity,
+                executorQueueMaxBytes,
+                backpressureHighWatermark,
+                backpressureLowWatermark,
+                backpressureBytesHighWatermark,
+                backpressureBytesLowWatermark,
+                executorMaxDrainCommands,
+                executorDrainTimeLimitMillis,
+                switch (executorSchedulingPolicy) {
+                    case GLOBAL -> SchedulingPolicy.GLOBAL;
+                    case FAIR -> SchedulingPolicy.FAIR;
+                }
+        );
+    }
+
+    private static void requirePositive(long value, String name) {
+        if (value <= 0L) {
+            throw new IllegalArgumentException(name + " must be > 0");
+        }
+    }
+
+    private static void requireNonNegative(long value, String name) {
+        if (value < 0L) {
+            throw new IllegalArgumentException(name + " must be >= 0");
+        }
+    }
+
+    private static void requireRange(long value, long minimum, long maximum, String name) {
+        if (value < minimum || value > maximum) {
+            throw new IllegalArgumentException(name + " must be in range " + minimum + ".." + maximum);
         }
     }
 

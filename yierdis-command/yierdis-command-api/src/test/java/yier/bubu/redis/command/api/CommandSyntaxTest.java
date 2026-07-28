@@ -30,7 +30,7 @@ public class CommandSyntaxTest {
     }
 
     @Test
-    public void commandParsersExposeOnlyTheTwoNonArityFactories() {
+    public void commandParsersExposeOnlyTheArgumentReaderFactory() {
         java.util.List<String> publicStaticSignatures = java.util.Arrays.stream(
                         CommandParsers.class.getDeclaredMethods()
                 )
@@ -40,7 +40,7 @@ public class CommandSyntaxTest {
                 .sorted()
                 .toList();
 
-        Assert.assertEquals(java.util.List.of("args[]", "request[]"), publicStaticSignatures);
+        Assert.assertEquals(java.util.List.of("args[]"), publicStaticSignatures);
     }
 
     private static ByteArrayExecutionRequest request(String... args) {

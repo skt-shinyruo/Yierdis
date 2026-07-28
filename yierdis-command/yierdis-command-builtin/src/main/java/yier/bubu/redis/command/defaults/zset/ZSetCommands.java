@@ -47,7 +47,7 @@ public final class ZSetCommands implements CommandModule {
         registration.register(new CommandDefinition<>(syntax("ZREMRANGEBYRANK", CommandArity.exact(4)),
                 this::parseZRemRangeByRank, this::zremrangebyrank));
         registration.register(new CommandDefinition<>(syntax("ZREM", CommandArity.min(3)),
-                CommandParsers.request(), this::zrem));
+                CommandParsers.args(), this::zrem));
         registration.register(new CommandDefinition<>(syntax("ZSCAN", CommandArity.min(3)),
                 args -> CollectionScanCommandSupport.parse(args, false), this::zscan));
     }
@@ -269,7 +269,8 @@ public final class ZSetCommands implements CommandModule {
         });
     }
 
-    private PreparedCommand zrem(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand zrem(ArgReader args, CommandPreparationContext context) {
+        ExecutionRequest request = args.request();
         return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
             int membersLen = request.argc() - 2;
             support.sliceResetFromRequest(request, 2, membersLen);

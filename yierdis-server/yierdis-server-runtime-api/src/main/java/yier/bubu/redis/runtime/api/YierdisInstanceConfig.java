@@ -24,7 +24,6 @@ public final class YierdisInstanceConfig {
 
     private final int databases;
     private final EngineFactoryBinding engineFactoryBinding;
-    private final DbEngineFactory engineFactory;
     private final YierdisChangeSink changeSink;
 
     private final long maxmemoryBytes;
@@ -38,14 +37,18 @@ public final class YierdisInstanceConfig {
     private final long commitStreamMaxRetainedBytes;
     private final long commitStreamShutdownTimeoutMillis;
 
-    private YierdisInstanceConfig(Builder b) {
-        this.databases = b.databases;
+    private YierdisInstanceConfig(
+            Builder b,
+            int databases,
+            MaxmemoryScope maxmemoryScope,
+            MaxmemoryPolicy maxmemoryPolicy
+    ) {
+        this.databases = databases;
         this.engineFactoryBinding = b.engineFactoryBinding;
-        this.engineFactory = b.engineFactoryBinding == null ? b.engineFactory : b.engineFactoryBinding.engineFactory();
         this.changeSink = b.changeSink == null ? YierdisChangeSink.NOOP : b.changeSink;
         this.maxmemoryBytes = b.maxmemoryBytes;
-        this.maxmemoryScope = b.maxmemoryScope;
-        this.maxmemoryPolicy = b.maxmemoryPolicy;
+        this.maxmemoryScope = maxmemoryScope;
+        this.maxmemoryPolicy = maxmemoryPolicy;
         this.maxmemorySamples = b.maxmemorySamples;
         this.evictionTimeLimitMillis = b.evictionTimeLimitMillis;
         this.expireCleanupTimeLimitMillis = b.expireCleanupTimeLimitMillis;
@@ -64,7 +67,7 @@ public final class YierdisInstanceConfig {
     }
 
     public DbEngineFactory engineFactory() {
-        return engineFactory;
+        return engineFactoryBinding == null ? null : engineFactoryBinding.engineFactory();
     }
 
     public EngineFactoryBinding engineFactoryBinding() {
@@ -118,7 +121,6 @@ public final class YierdisInstanceConfig {
     public static final class Builder {
         private int databases = 1;
         private EngineFactoryBinding engineFactoryBinding;
-        private DbEngineFactory engineFactory;
         private YierdisChangeSink changeSink = YierdisChangeSink.NOOP;
 
         private long maxmemoryBytes;
@@ -141,14 +143,12 @@ public final class YierdisInstanceConfig {
         }
 
         public Builder engineFactory(DbEngineFactory engineFactory) {
-            this.engineFactory = engineFactory;
-            this.engineFactoryBinding = null;
+            this.engineFactoryBinding = engineFactory == null ? null : new EngineFactoryBinding(engineFactory);
             return this;
         }
 
         public Builder engineFactoryBinding(EngineFactoryBinding engineFactoryBinding) {
             this.engineFactoryBinding = engineFactoryBinding;
-            this.engineFactory = engineFactoryBinding == null ? null : engineFactoryBinding.engineFactory();
             return this;
         }
 
@@ -232,20 +232,7 @@ public final class YierdisInstanceConfig {
             }
             MaxmemoryScope scope = maxmemoryScope == null ? MaxmemoryScope.PER_DB : maxmemoryScope;
             MaxmemoryPolicy policy = maxmemoryPolicy == null ? MaxmemoryPolicy.NOEVICTION : maxmemoryPolicy;
-            EngineFactoryBinding binding = engineFactoryBinding;
-            if (binding == null && engineFactory != null) {
-                binding = new EngineFactoryBinding(engineFactory);
-            }
-
-            Builder normalized = this;
-            normalized.databases = dbs;
-            normalized.maxmemoryScope = scope;
-            normalized.maxmemoryPolicy = policy;
-            normalized.engineFactoryBinding = binding;
-            if (binding != null) {
-                normalized.engineFactory = binding.engineFactory();
-            }
-            return new YierdisInstanceConfig(normalized);
+            return new YierdisInstanceConfig(this, dbs, scope, policy);
         }
     }
 }

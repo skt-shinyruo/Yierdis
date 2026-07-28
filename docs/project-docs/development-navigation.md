@@ -43,7 +43,10 @@
 
 先打开：
 
-- [`CommandSpec.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandSpec.java)
+- [`CommandDefinition.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandDefinition.java)
+- [`CommandSyntax.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandSyntax.java)
+- [`ArgReader.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/ArgReader.java)
+- [`CommandParsers.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandParsers.java)
 - [`CommandRegistry.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java)
 - [`YierdisFastCommandProcessor.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java)
 - [`CommandSupport.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java)
@@ -72,6 +75,8 @@
 - HLL command：对应 `HllCommands`
 - API：`StringReadOps`、`StringWriteOps`、`HllReadOps`、`HllWriteOps`
 - DB 实现：`YierdisStringOps`、HLL 相关 ops
+- 共享 entry staging：[`EntryMutationEntries.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/EntryMutationEntries.java)
+- entry 提交生命周期：[`PreparedEntryMutation.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/PreparedEntryMutation.java)
 - 内部结构：`StringRoot`、`YierdisHyperLogLog`
 
 继续追：
@@ -97,6 +102,8 @@
 - 对应 command 家族：`ListCommands`、`HashCommands`、`SetCommands`、`ZSetCommands`
 - API：`ListReadOps` / `ListWriteOps` 等同名 family ops
 - DB 实现：对应 `Yierdis*Ops`
+- 共享 entry staging：[`EntryMutationEntries.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/EntryMutationEntries.java)
+- entry 提交生命周期：[`PreparedEntryMutation.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/PreparedEntryMutation.java)
 - root/value：`ListRoot`、`HashRoot`、`SetRoot`、`ZSetRoot`、`ListValue`、`HashValue`、`SetValue`、`ZSetValue`
 
 继续追：
@@ -167,7 +174,7 @@
 - `EntryHandle`、`ValueHandle`、`KeyHandle`
 - `NativeKeyDirectory`
 - `NativeBytesSlice`、`NativeByteStore`、`NativeByteMap`、`NativeListpack`
-- `YierdisDbNativeHandleGraph`
+- 测试侧 reachable graph：[`YierdisDbNativeHandleGraph.java`](../../yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/YierdisDbNativeHandleGraph.java)
 
 继续追：
 
@@ -194,7 +201,7 @@
 - [`CommandExecutorSubmitter.java`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorSubmitter.java)
 - [`CommandExecutorDrainLoop.java`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorDrainLoop.java)
 - [`CommandExecutorExecutionSupport.java`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorExecutionSupport.java)
-- [`CommandExecutorConfigs.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/CommandExecutorConfigs.java)
+- [`YierdisServerRuntimeConfig.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/args/YierdisServerRuntimeConfig.java)
 
 继续追：
 
@@ -221,6 +228,8 @@
 - [`YierdisDbMemoryReporter.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporter.java)
 - `CommandExecutor` stats accessors
 
+`NettyServerInfoProvider.serverStatsSnapshot(...)` 是 INFO / STATS / health 的公共采样边界。新增公共统计时先进入这份请求级快照；memory/keyspace 这类 DB 聚合保持按 section 读取，避免 health 路径无条件扫描实例数据。
+
 继续追：
 
 - 可观测命令和配置含义看 [`configuration-and-operations.md`](./configuration-and-operations.md)。
@@ -239,7 +248,8 @@
 先打开：
 
 - [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)
-- [`CommandSessionCapabilities.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/CommandSessionCapabilities.java)
+- [`CommandSession.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/CommandSession.java)
+- [`CommandExecutionContext.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/CommandExecutionContext.java)
 - [`YierdisDbRouter.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/YierdisDbRouter.java)
 - [`CommandSupport.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java)
 - [`ServerInfoProvider.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/ServerInfoProvider.java)

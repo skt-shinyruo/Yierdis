@@ -4,6 +4,7 @@ package yier.bubu.redis.app.client;
 
 import picocli.CommandLine;
 import yier.bubu.redis.protocol.resp.InlineCommandParser;
+import yier.bubu.redis.protocol.resp.RespClientCodec;
 import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 
 import java.io.BufferedReader;
@@ -43,7 +44,7 @@ public final class YierdisCli {
                         .map(s -> s == null ? null : s.getBytes(StandardCharsets.UTF_8))
                         .toList();
 
-                YierdisClient.RespReply reply = client.execute(commandArgs, parsed.timeoutMillis);
+                RespClientCodec.RespReply reply = client.execute(commandArgs, parsed.timeoutMillis);
                 printReply(reply, parsed.hex);
                 return isSuccess(reply) ? 0 : 1;
             }
@@ -90,7 +91,7 @@ public final class YierdisCli {
             }
 
             try {
-                YierdisClient.RespReply reply = client.execute(cmd, config.timeoutMillis);
+                RespClientCodec.RespReply reply = client.execute(cmd, config.timeoutMillis);
                 printReply(reply, config.hex);
             } catch (Exception e) {
                 System.err.println("(error) " + e.getMessage());
@@ -98,11 +99,11 @@ public final class YierdisCli {
         }
     }
 
-    private static void printReply(YierdisClient.RespReply reply, boolean hex) {
+    private static void printReply(RespClientCodec.RespReply reply, boolean hex) {
         printReply(reply, hex, "");
     }
 
-    private static void printReply(YierdisClient.RespReply reply, boolean hex, String prefix) {
+    private static void printReply(RespClientCodec.RespReply reply, boolean hex, String prefix) {
         if (reply == null || reply.isNull()) {
             System.out.println(prefix + "(nil)");
             return;
@@ -118,8 +119,8 @@ public final class YierdisCli {
         }
     }
 
-    private static void printArray(YierdisClient.RespReply reply, boolean hex, String prefix) {
-        List<YierdisClient.RespReply> values = reply.values();
+    private static void printArray(RespClientCodec.RespReply reply, boolean hex, String prefix) {
+        List<RespClientCodec.RespReply> values = reply.values();
         if (values == null) {
             System.out.println(prefix + "(nil)");
             return;
@@ -129,8 +130,8 @@ public final class YierdisCli {
         }
     }
 
-    private static boolean isSuccess(YierdisClient.RespReply reply) {
-        return reply != null && reply.kind() != YierdisClient.RespReply.Kind.ERROR;
+    private static boolean isSuccess(RespClientCodec.RespReply reply) {
+        return reply != null && reply.kind() != RespClientCodec.RespReply.Kind.ERROR;
     }
 
     private static String formatBulk(byte[] bytes, boolean hex) {

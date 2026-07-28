@@ -141,7 +141,7 @@ public class YierdisServerBootstrapCommandWiringTest {
         )) {
             instance.bindToCurrentThread();
             NettyServerInfoProvider infoProvider = new NettyServerInfoProvider(
-                    runtimeConfig(0, 0, 1024, 0, 4, 5)
+                    runtimeConfig(0, 0, 1024, 1, 4, 5)
             );
             YierdisFastCommandProcessor processor = ServerCommandComposition.createProcessor(
                     TestDbRouters.forInstance(instance),

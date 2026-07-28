@@ -51,8 +51,6 @@ public class GlobalPhysicalMemoryAccountingTest {
 
         Assert.assertTrue(first.memoryUsageCalls.get() > 0);
         Assert.assertTrue(second.memoryUsageCalls.get() > 0);
-        Assert.assertEquals("global admission must not use legacy maxmemory counters", 0,
-                first.legacyUsedBytesCalls.get() + second.legacyUsedBytesCalls.get());
         Assert.assertEquals("global admission must not read memory stats through MemoryOps", 0,
                 first.memoryAccessCalls.get() + second.memoryAccessCalls.get());
     }
@@ -188,7 +186,12 @@ public class GlobalPhysicalMemoryAccountingTest {
                 nativeMetadataCommitted,
                 nativeDataCommitted,
                 nativeDataLive,
-                nativeReclaimable
+                nativeReclaimable,
+                0,
+                "COMPLETE",
+                0L,
+                0L,
+                0L
         );
     }
 
@@ -196,7 +199,6 @@ public class GlobalPhysicalMemoryAccountingTest {
         private final MemoryUsageSnapshot usage;
         private final YierdisMemoryStats stats;
         private final AtomicInteger memoryUsageCalls = new AtomicInteger();
-        private final AtomicInteger legacyUsedBytesCalls = new AtomicInteger();
         private final AtomicInteger memoryAccessCalls = new AtomicInteger();
         private MaxmemoryCoordinator attachedCoordinator;
 
@@ -259,12 +261,6 @@ public class GlobalPhysicalMemoryAccountingTest {
         @Override
         public boolean evict(MaxmemoryCandidate candidate, long nowMillis) {
             return false;
-        }
-
-        @Override
-        public long usedBytesForMaxmemory() {
-            legacyUsedBytesCalls.incrementAndGet();
-            return 1_000L;
         }
 
         @Override

@@ -130,15 +130,13 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
                 PreparedTtlMutation ttlMutation = keyLifecycle.prepareRemoveExpire(handle);
                 EntryRecord next = keyLifecycle.withExpireAtMillis(handle, current, -1L);
                 WriteResult<Boolean> result = WriteResult.of(Boolean.TRUE, MutationOutcome.TTL_CHANGED);
-                return new PreparedEntryMutation<>(
+                return PreparedEntryMutation.replace(
                         keyLifecycle,
                         result,
                         0L,
                         0L,
                         MutationOutcome.TTL_CHANGED,
                         entryHandle,
-                        null,
-                        null,
                         current,
                         next,
                         false,
@@ -214,17 +212,13 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
                 PreparedTtlMutation ttlMutation = PreparedTtlMutation.NONE;
                 try {
                     ttlMutation = keyLifecycle.prepareRemoveExpire(handle);
-                    return new PreparedEntryMutation<>(
+                    return PreparedEntryMutation.delete(
                             keyLifecycle,
                             WriteResult.of(Boolean.TRUE, MutationOutcome.VALUE_CHANGED),
                             -keyLifecycle.estimatedBytesForRemoval(handle, current),
-                            0L,
                             MutationOutcome.VALUE_CHANGED,
                             entryHandle,
-                            null,
-                            null,
                             current,
-                            null,
                             true,
                             ttlMutation
                     );
@@ -258,15 +252,13 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
                 PreparedTtlMutation ttlMutation = keyLifecycle.prepareSetExpireAtMillis(handle, expireAtMillis);
                 EntryRecord next = keyLifecycle.withExpireAtMillis(handle, current, expireAtMillis);
                 WriteResult<Boolean> result = WriteResult.of(Boolean.TRUE, MutationOutcome.TTL_CHANGED);
-                return new PreparedEntryMutation<>(
+                return PreparedEntryMutation.replace(
                         keyLifecycle,
                         result,
                         0L,
                         0L,
                         MutationOutcome.TTL_CHANGED,
                         entryHandle,
-                        null,
-                        null,
                         current,
                         next,
                         false,
@@ -277,20 +269,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
     }
 
     private <T> PreparedEntryMutation<T> preparedNoEntry(T result, MutationOutcome outcome) {
-        return new PreparedEntryMutation<>(
-                keyLifecycle,
-                result,
-                0L,
-                0L,
-                outcome,
-                null,
-                null,
-                null,
-                null,
-                null,
-                false,
-                PreparedTtlMutation.NONE
-        );
+        return PreparedEntryMutation.unchanged(keyLifecycle, result, outcome);
     }
 
     private EntryRecord liveRecord(KeyHandle handle) {

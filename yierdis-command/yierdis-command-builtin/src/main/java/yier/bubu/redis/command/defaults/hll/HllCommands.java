@@ -1,6 +1,7 @@
 package yier.bubu.redis.command.defaults.hll;
 
 import java.util.Objects;
+import yier.bubu.redis.command.api.ArgReader;
 import yier.bubu.redis.command.api.CommandArity;
 import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
@@ -28,18 +29,19 @@ public final class HllCommands implements CommandModule {
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
         registration.register(new CommandDefinition<>(syntax("PFADD", CommandArity.min(3), KEY),
-                CommandParsers.request(), this::pfadd));
+                CommandParsers.args(), this::pfadd));
         registration.register(new CommandDefinition<>(syntax("PFCOUNT", CommandArity.min(2), MULTI_KEYS),
-                CommandParsers.request(), this::pfcount));
+                CommandParsers.args(), this::pfcount));
         registration.register(new CommandDefinition<>(syntax("PFMERGE", CommandArity.min(3), MULTI_KEYS),
-                CommandParsers.request(), this::pfmerge));
+                CommandParsers.args(), this::pfmerge));
     }
 
     private static CommandSyntax syntax(String nameUpper, CommandArity arity, CommandKeySpec keys) {
         return new CommandSyntax(nameUpper, arity, keys, TransactionPolicy.QUEUEABLE);
     }
 
-    private PreparedCommand pfadd(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand pfadd(ArgReader args, CommandPreparationContext context) {
+        ExecutionRequest request = args.request();
         return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
             int elementsLen = request.argc() - 2;
             support.sliceResetFromRequest(request, 2, elementsLen);
@@ -54,7 +56,8 @@ public final class HllCommands implements CommandModule {
         });
     }
 
-    private PreparedCommand pfcount(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand pfcount(ArgReader args, CommandPreparationContext context) {
+        ExecutionRequest request = args.request();
         int len = request.argc() - 1;
         long count;
         support.sliceResetFromRequest(request, 1, len);
@@ -66,7 +69,8 @@ public final class HllCommands implements CommandModule {
         return CommandSupport.fixed(ReplyShapes.integer(count), execution -> execution.reply().integer(count));
     }
 
-    private PreparedCommand pfmerge(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand pfmerge(ArgReader args, CommandPreparationContext context) {
+        ExecutionRequest request = args.request();
         return CommandSupport.fixed(ReplyShapes.simpleString("OK"), execution -> {
             int sourcesLen = request.argc() - 2;
             support.sliceResetFromRequest(request, 2, sourcesLen);

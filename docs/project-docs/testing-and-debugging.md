@@ -48,7 +48,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests/yierdis-integration-tests -am -Dtest=StringCommandTest,BitmapCommandTest,CommandErrorTest,CommandVariantCoverageTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-新增命令或新增 option/subcommand 时，优先补最窄的命令家族测试和错误测试；server-only 命令还要补 server-main 组装或协议集成测试。排障顺序：先看 `CommandRegistry` 是否注册，`CommandSpec` arity/key metadata 是否正确，再看 `YierdisFastCommandProcessor` 是否进入事务队列、错误路径或实际 handler。
+新增命令或新增 option/subcommand 时，优先补最窄的命令家族测试和错误测试；server-only 命令还要补 server-main 组装或协议集成测试。排障顺序：先看 `CommandRegistry` 是否注册，`CommandDefinition.syntax()` 的 arity/key metadata 是否正确，再看 `YierdisFastCommandProcessor` 是否进入事务队列、错误路径或实际 preparer。
 
 ## 改 DB 或数据结构时
 
@@ -74,7 +74,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server-core,yierdis-server/yierdis-server-api -am -Dtest=EngineSessionTest,TransactionCommandTest,TransactionQueueCleanupTest,YierdisFastCommandProcessorPolicyTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-排障顺序：`TransactionState` -> `EngineSession` -> `ByteArrayExecutionRequest.copyOf(...)` -> `EXEC` replay -> `ExecutionRecord` / change-event 快照。事务与 replay 的完整主线看 [`transaction-and-replay.md`](./transaction-and-replay.md)。
+排障顺序：`TransactionState` -> `EngineSession.DefaultTransactionState.tryEnqueue(...)` -> `ExecutionRequest.retain()` -> `EXEC` replay。`ExecutionRecord` 只属于 change-event API，不是事务队列载体。事务与 replay 的完整主线看 [`transaction-and-replay.md`](./transaction-and-replay.md)。
 
 ## 改 TTL / expiration 时
 
@@ -166,7 +166,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 | 现象 | 先看哪里 | 常用测试 |
 | --- | --- | --- |
-| unknown command 或 arity 不对 | `CommandRegistry`, `CommandSpec`, command handler | `CommandRegistryGuardTest`, `CommandErrorTest` |
+| unknown command 或 arity 不对 | `CommandRegistry`, `CommandDefinition`, command preparer | `CommandRegistryGuardTest`, `CommandErrorTest` |
 | 事务里行为不同 | `YierdisFastCommandProcessor`, `TransactionState` | `TransactionCommandTest`, `TransactionQueueCleanupTest` |
 | RESP 回包形状不对 | `RedisReplyWriter`, `RespReplyWriter` | `RespReplyWriterTest`, `RespProtocolIntegrationTest` |
 | TTL 不准或过期 key 仍可见 | `YierdisExpireIndex`, lifecycle cleanup | `TtlLifecycleDirectOpsTest`, `ExpireIndexTest` |

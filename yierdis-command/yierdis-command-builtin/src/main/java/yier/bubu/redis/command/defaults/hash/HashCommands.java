@@ -31,13 +31,13 @@ public final class HashCommands implements CommandModule {
         registration.register(new CommandDefinition<>(syntax("HSET", CommandArity.pairTail(4, 2)),
                 CommandParsers.args(), this::hset));
         registration.register(new CommandDefinition<>(syntax("HGET", CommandArity.exact(3)),
-                CommandParsers.request(), this::hget));
+                CommandParsers.args(), this::hget));
         registration.register(new CommandDefinition<>(syntax("HGETALL", CommandArity.exact(2)),
-                CommandParsers.request(), this::hgetall));
+                CommandParsers.args(), this::hgetall));
         registration.register(new CommandDefinition<>(syntax("HLEN", CommandArity.exact(2)),
-                CommandParsers.request(), this::hlen));
+                CommandParsers.args(), this::hlen));
         registration.register(new CommandDefinition<>(syntax("HDEL", CommandArity.min(3)),
-                CommandParsers.request(), this::hdel));
+                CommandParsers.args(), this::hdel));
         registration.register(new CommandDefinition<>(syntax("HSCAN", CommandArity.min(3)),
                 args -> CollectionScanCommandSupport.parse(args, true), this::hscan));
     }
@@ -61,22 +61,23 @@ public final class HashCommands implements CommandModule {
         });
     }
 
-    private PreparedCommand hget(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand hget(ArgReader args, CommandPreparationContext context) {
         return CommandSupport.byteValue(support.commandDb(context).reads().hashes()
-                .hget(request.readOnlyByteArray(1), request.readOnlyByteArray(2)));
+                .hget(args.bytes(1), args.bytes(2)));
     }
 
-    private PreparedCommand hgetall(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand hgetall(ArgReader args, CommandPreparationContext context) {
         return CommandSupport.byteMap(support.commandDb(context).reads().hashes()
-                .hgetall(request.readOnlyByteArray(1)));
+                .hgetall(args.bytes(1)));
     }
 
-    private PreparedCommand hlen(ExecutionRequest request, CommandPreparationContext context) {
-        long length = support.commandDb(context).reads().hashes().hlen(request.readOnlyByteArray(1));
+    private PreparedCommand hlen(ArgReader args, CommandPreparationContext context) {
+        long length = support.commandDb(context).reads().hashes().hlen(args.bytes(1));
         return CommandSupport.fixed(ReplyShapes.integer(length), execution -> execution.reply().integer(length));
     }
 
-    private PreparedCommand hdel(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand hdel(ArgReader args, CommandPreparationContext context) {
+        ExecutionRequest request = args.request();
         return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
             int fieldsLen = request.argc() - 2;
             support.sliceResetFromRequest(request, 2, fieldsLen);

@@ -21,7 +21,7 @@ YierdisServer
   -> YierdisServerChannelInitializer
   -> RespRequestDecoder
   -> RetainedRespExecutionRequest
-  -> YierdisFastCommandHandler
+  -> NettyExecutionRequestIngress
   -> CommandExecutor
   -> DefaultYierdisEngine
   -> YierdisFastCommandProcessor
@@ -99,9 +99,9 @@ pipeline 的关键点是 `RespRequestDecoder`。它在完成 ingress admission �
 
 ## 6. Executor 提交和 drain
 
-看 [`YierdisFastCommandHandler.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java) 和 [`CommandExecutor.java`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java)。
+看 [`NettyExecutionRequestIngress.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionRequestIngress.java) 和 [`CommandExecutor.java`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java)。
 
-`YierdisFastCommandHandler` 只提交，不执行。`CommandExecutor` 负责：
+`NettyExecutionRequestIngress` 只处理 reply slot 与 executor admission，不执行命令。`CommandExecutor` 负责：
 
 - 排队
 - 背压
@@ -116,7 +116,7 @@ pipeline 的关键点是 `RespRequestDecoder`。它在完成 ingress admission �
 
 `DefaultYierdisEngine` 接住调度合同，把 `Session + ExecutionRequest + RedisReplyWriter` 送进命令层。
 
-`YierdisFastCommandProcessor` 才是命令分发入口，它会把请求分到具体 `CommandSpec` 和 typed handler。
+`YierdisFastCommandProcessor` 才是命令分发入口，它会查找具体 `CommandDefinition`，解析参数并准备 `PreparedCommand`。
 
 ## 8. PING 路径
 
@@ -154,7 +154,7 @@ pipeline 的关键点是 `RespRequestDecoder`。它在完成 ingress admission �
 ## 容易读错的边界
 
 - `YierdisServerBootstrap` 是组装层，不是命令层
-- `YierdisFastCommandHandler` 只提交，不执行
+- `NettyExecutionRequestIngress` 只做 admission/publish，不执行命令
 - `CommandExecutor` 只调度，不解析命令
 - `DefaultYierdisEngine` 是执行入口，不是 DB 实现
 - `StringCommands` 负责命令语义，不负责 RESP 编码

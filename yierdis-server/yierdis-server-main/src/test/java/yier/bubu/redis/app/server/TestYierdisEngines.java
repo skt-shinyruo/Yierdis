@@ -15,7 +15,7 @@ final class TestYierdisEngines {
     static YierdisEngine forInstance(YierdisInstance instance) {
         YierdisFastCommandProcessor processor = ServerCommandComposition.createProcessor(
                 TestDbRouters.forInstance(instance),
-                new NettyServerInfoProvider(runtimeConfig(0, 0, 1024, 0, 4, 5)),
+                new NettyServerInfoProvider(runtimeConfig(0, 0, 1024, 1, 4, 5)),
                 SlowCommandGovernor.DEFAULT
         );
         return new DefaultYierdisEngine(

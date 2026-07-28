@@ -14,6 +14,7 @@ import io.netty.util.ReferenceCountUtil;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.server.YierdisServerBootstrap;
+import yier.bubu.redis.protocol.resp.RespClientCodec;
 
 import java.io.IOException;
 import java.net.ConnectException;
@@ -36,8 +37,8 @@ public class YierdisClientTest {
     public void pingReturnsSimpleStringPongOverResp() throws Exception {
         try (TestServer server = TestServer.start();
              YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-            YierdisClient.RespReply reply = client.executeUtf8(List.of("PING"), 1000);
-            Assert.assertEquals(YierdisClient.RespReply.Kind.SIMPLE_STRING, reply.kind());
+            RespClientCodec.RespReply reply = client.executeUtf8(List.of("PING"), 1000);
+            Assert.assertEquals(RespClientCodec.RespReply.Kind.SIMPLE_STRING, reply.kind());
             Assert.assertEquals("PONG", reply.text());
         }
     }
@@ -46,14 +47,14 @@ public class YierdisClientTest {
     public void helloReturnsMapAndNullIsDecoded() throws Exception {
         try (TestServer server = TestServer.start();
              YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-            Map<String, YierdisClient.RespReply> hello = replyMap(client.execute(Arrays.asList(b("HELLO")), 1000));
+            Map<String, RespClientCodec.RespReply> hello = replyMap(client.execute(Arrays.asList(b("HELLO")), 1000));
             Assert.assertEquals("yierdis", stringField(hello, "server"));
             Assert.assertNotNull(stringField(hello, "version"));
             Assert.assertEquals(2L, longField(hello, "proto"));
             Assert.assertEquals("standalone", stringField(hello, "mode"));
             Assert.assertEquals("master", stringField(hello, "role"));
 
-            YierdisClient.RespReply missing = client.execute(Arrays.asList(b("GET"), b("missing")), 1000);
+            RespClientCodec.RespReply missing = client.execute(Arrays.asList(b("GET"), b("missing")), 1000);
             Assert.assertTrue(missing.isNull());
         }
     }
@@ -68,7 +69,7 @@ public class YierdisClientTest {
             Assert.assertTrue(infoText.contains("# Stats\r\n"));
             Assert.assertTrue(infoText.contains("yierdis_queued_tasks:"));
 
-            Map<String, YierdisClient.RespReply> stats = replyMap(client.execute(Arrays.asList(b("STATS")), 1000));
+            Map<String, RespClientCodec.RespReply> stats = replyMap(client.execute(Arrays.asList(b("STATS")), 1000));
             Assert.assertTrue(longField(stats, "queued_tasks") >= 0);
             Assert.assertTrue(longField(stats, "commands_executed_total") >= 0);
             Assert.assertTrue(longField(stats, "conn_commands_enqueued") >= 0);
@@ -89,7 +90,7 @@ public class YierdisClientTest {
     public void rawByteExecutePreservesBinaryArgsOverResp() throws Exception {
         try (TestServer server = TestServer.start();
              YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-            YierdisClient.RespReply reply = client.execute(Arrays.asList(b("ECHO"), new byte[]{(byte) 0xFF}), 1000);
+            RespClientCodec.RespReply reply = client.execute(Arrays.asList(b("ECHO"), new byte[]{(byte) 0xFF}), 1000);
 
             Assert.assertArrayEquals(new byte[]{(byte) 0xFF}, bulkBytes(reply));
         }
@@ -99,9 +100,9 @@ public class YierdisClientTest {
     public void unknownCommandReturnsCommandErrorReply() throws Exception {
         try (TestServer server = TestServer.start();
              YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-            YierdisClient.RespReply reply = client.execute(Arrays.asList(b("NOPE")), 1000);
+            RespClientCodec.RespReply reply = client.execute(Arrays.asList(b("NOPE")), 1000);
 
-            Assert.assertEquals(YierdisClient.RespReply.Kind.ERROR, reply.kind());
+            Assert.assertEquals(RespClientCodec.RespReply.Kind.ERROR, reply.kind());
             Assert.assertTrue(reply.text().startsWith("ERR unknown command"));
         }
     }
@@ -110,7 +111,7 @@ public class YierdisClientTest {
     public void memoryStatsHasStableKeySet() throws Exception {
         try (TestServer server = TestServer.start();
              YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-            Map<String, YierdisClient.RespReply> stats = replyMap(client.execute(Arrays.asList(b("MEMORY"), b("STATS")), 1000));
+            Map<String, RespClientCodec.RespReply> stats = replyMap(client.execute(Arrays.asList(b("MEMORY"), b("STATS")), 1000));
 
             HashSet<String> keys = new HashSet<>(stats.keySet());
             Assert.assertTrue(keys.contains("maxmemory_bytes"));
@@ -218,7 +219,7 @@ public class YierdisClientTest {
     public void respReplyBulkBytesAccessorReturnsDefensiveCopy() throws Exception {
         try (TestServer server = TestServer.start();
              YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-            YierdisClient.RespReply reply = client.execute(Arrays.asList(b("ECHO"), b("original")), 1000);
+            RespClientCodec.RespReply reply = client.execute(Arrays.asList(b("ECHO"), b("original")), 1000);
 
             byte[] bytes = reply.bytes();
             bytes[0] = 'x';
@@ -230,55 +231,55 @@ public class YierdisClientTest {
     @Test
     public void respReplyPublicConstructorDefensivelyCopiesBytesAndValues() {
         byte[] bytes = b("scalar");
-        YierdisClient.RespReply bulk = new YierdisClient.RespReply(
-                YierdisClient.RespReply.Kind.BULK_STRING, null, bytes, null, null
+        RespClientCodec.RespReply bulk = new RespClientCodec.RespReply(
+                RespClientCodec.RespReply.Kind.BULK_STRING, null, bytes, null, null
         );
         bytes[0] = 'x';
         Assert.assertEquals("scalar", stringResult(bulk));
 
-        ArrayList<YierdisClient.RespReply> values = new ArrayList<>();
-        values.add(new YierdisClient.RespReply(YierdisClient.RespReply.Kind.INTEGER, null, null, 1L, null));
-        YierdisClient.RespReply array = new YierdisClient.RespReply(
-                YierdisClient.RespReply.Kind.ARRAY, null, null, null, values
+        ArrayList<RespClientCodec.RespReply> values = new ArrayList<>();
+        values.add(new RespClientCodec.RespReply(RespClientCodec.RespReply.Kind.INTEGER, null, null, 1L, null));
+        RespClientCodec.RespReply array = new RespClientCodec.RespReply(
+                RespClientCodec.RespReply.Kind.ARRAY, null, null, null, values
         );
         values.clear();
         Assert.assertEquals(1, array.values().size());
     }
 
-    private static Map<String, YierdisClient.RespReply> replyMap(YierdisClient.RespReply reply) {
-        Assert.assertEquals(YierdisClient.RespReply.Kind.ARRAY, reply.kind());
-        List<YierdisClient.RespReply> values = reply.values();
+    private static Map<String, RespClientCodec.RespReply> replyMap(RespClientCodec.RespReply reply) {
+        Assert.assertEquals(RespClientCodec.RespReply.Kind.ARRAY, reply.kind());
+        List<RespClientCodec.RespReply> values = reply.values();
         Assert.assertNotNull(values);
         Assert.assertEquals("expected even RESP2 map array length", 0, values.size() % 2);
-        Map<String, YierdisClient.RespReply> map = new LinkedHashMap<>();
+        Map<String, RespClientCodec.RespReply> map = new LinkedHashMap<>();
         for (int i = 0; i < values.size(); i += 2) {
             map.put(stringResult(values.get(i)), values.get(i + 1));
         }
         return map;
     }
 
-    private static String stringField(Map<String, YierdisClient.RespReply> map, String key) {
+    private static String stringField(Map<String, RespClientCodec.RespReply> map, String key) {
         return stringResult(map.get(key));
     }
 
-    private static long longField(Map<String, YierdisClient.RespReply> map, String key) {
-        YierdisClient.RespReply value = map.get(key);
+    private static long longField(Map<String, RespClientCodec.RespReply> map, String key) {
+        RespClientCodec.RespReply value = map.get(key);
         Assert.assertNotNull("expected integer field: " + key, value);
-        Assert.assertEquals("expected integer field: " + key, YierdisClient.RespReply.Kind.INTEGER, value.kind());
+        Assert.assertEquals("expected integer field: " + key, RespClientCodec.RespReply.Kind.INTEGER, value.kind());
         return value.integer();
     }
 
-    private static String stringResult(YierdisClient.RespReply reply) {
+    private static String stringResult(RespClientCodec.RespReply reply) {
         Assert.assertNotNull(reply);
-        if (reply.kind() == YierdisClient.RespReply.Kind.SIMPLE_STRING) {
+        if (reply.kind() == RespClientCodec.RespReply.Kind.SIMPLE_STRING) {
             return reply.text();
         }
         return new String(bulkBytes(reply), StandardCharsets.UTF_8);
     }
 
-    private static byte[] bulkBytes(YierdisClient.RespReply reply) {
+    private static byte[] bulkBytes(RespClientCodec.RespReply reply) {
         Assert.assertNotNull(reply);
-        Assert.assertEquals(YierdisClient.RespReply.Kind.BULK_STRING, reply.kind());
+        Assert.assertEquals(RespClientCodec.RespReply.Kind.BULK_STRING, reply.kind());
         return reply.bytes();
     }
 

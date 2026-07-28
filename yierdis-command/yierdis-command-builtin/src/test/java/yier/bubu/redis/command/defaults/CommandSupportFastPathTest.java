@@ -2,6 +2,7 @@ package yier.bubu.redis.command.defaults;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.command.api.ArgReader;
 import yier.bubu.redis.command.api.YierdisDbRouter;
 import yier.bubu.redis.execution.api.DbIndexSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
@@ -28,14 +29,14 @@ public class CommandSupportFastPathTest {
     public void utf8PrefersReadOnlyFastPathWhenAvailable() {
         ExecutionRequest request = fastPathAwareRequest(ascii("PING"));
 
-        Assert.assertEquals("PING", CommandSupport.utf8(request, 0));
+        Assert.assertEquals("PING", CommandSupport.utf8(ArgReader.of(request).bytes(0)));
     }
 
     @Test
     public void parseLongPrefersReadOnlyFastPathWhenAvailable() {
         ExecutionRequest request = fastPathAwareRequest(ascii("12345"));
 
-        Assert.assertEquals(12345L, CommandSupport.parseLong(request, 0, "value"));
+        Assert.assertEquals(12345L, ArgReader.of(request).longAt(0));
     }
 
     @Test

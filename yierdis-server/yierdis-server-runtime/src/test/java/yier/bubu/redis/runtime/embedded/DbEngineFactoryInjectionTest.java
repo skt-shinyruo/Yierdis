@@ -415,7 +415,12 @@ public class DbEngineFactoryInjectionTest {
                     0L,
                     0L,
                     0L,
-                    offHeapBytes
+                    offHeapBytes,
+                    0,
+                    "COMPLETE",
+                    0L,
+                    0L,
+                    0L
             );
         }
 

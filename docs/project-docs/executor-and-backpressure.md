@@ -18,7 +18,7 @@ Yierdis 把“收包”和“执行命令”分开：Netty I/O 线程只解析�
 - `ExecutionConnectionContext`：每个连接的 executor 状态，包括 pending count、pending bytes、closing、fair queue state 和统计。
 - `NettyExecutionConnection`：Netty channel 到 executor connection 的 adapter，挂载 `EngineSession` 和 `ExecutionConnectionContext`。
 
-Netty 侧还有 `YierdisFastCommandHandler` 和 `YierdisServerChannelInitializer.WriteBufferBackpressureHandler`：前者把 decoded request 交给 executor，后者把 channel writability 变化反馈给 executor。
+Netty 侧还有 `NettyExecutionRequestIngress` 和 `YierdisServerChannelInitializer.WriteBufferBackpressureHandler`：前者把 registered request/reply slot 交给 executor，并在容量不足时等待；后者把 channel writability 变化反馈给 executor。
 
 ## 提交路径
 
@@ -26,26 +26,24 @@ Netty 侧还有 `YierdisFastCommandHandler` 和 `YierdisServerChannelInitializer
 
 ```text
 RespRequestDecoder
-  -> RespRequestDecoder
   -> RetainedRespExecutionRequest / ExecutionRequest
-  -> YierdisFastCommandHandler.channelRead0(...)
-  -> CommandExecutor.trySubmit(connection, request)
-  -> CommandExecutorSubmitter.trySubmit(...)
+  -> RegisteredRespMessage(request, replySlot)
+  -> NettyExecutionRequestIngress
+  -> CommandExecutor.tryAcquire(connection, retainedBytes)
+  -> ExecutorAdmission.publish(request, replySlot)
 ```
 
 `CommandExecutorSubmitter` 的顺序很重要：
 
 1. 检查 executor 是否 running。
 2. 检查连接是否已经 `closing`；已 closing 的连接在任何 queue slot / bytes budget 预留前直接拒绝。
-3. 根据全局 backlog、连接 pending count、连接 pending bytes 必要时关闭该连接 `autoRead`。
-4. 调用 `ExecutorBacklogBudget.tryReserveSlot()` 预留 queue slot。
-5. 从 `ExecutionRequest.retainedBytes()` 计算 retained bytes。
-6. 调用 `tryReserveQueuedBytes(retainedBytes)` 预留 queued bytes。
-7. 向 `ExecutorTaskQueue.offer(...)` 投递 `CommandExecutorTask`。
-8. 在 `ExecutionConnectionContext.recordCommandEnqueued(...)` 增加 pending 和 pendingBytes。
-9. 再次评估连接和全局背压，调度 drain loop。
+3. 检查单个 request 是否永远不可能装入 configured bytes budget。
+4. 用 `ExecutorBacklogBudget.tryReserve(...)` 依次预留 queue slot 和 queued bytes。
+5. 预算成功时返回尚未发布的 `ExecutorAdmission`；ingress 再把 request 和 reply slot 一起 publish。
+6. publish 时先在 `ExecutionConnectionContext.recordCommandEnqueued(...)` 增加 pending 和 pendingBytes，再向 `ExecutorTaskQueue.offer(...)` 投递 task。
+7. 再次评估连接和全局背压，调度 drain loop。
 
-失败时不会默默丢请求。`trySubmit(...)` 返回 reject reason，Netty handler 回 `ERR busy <reason>`，当前 reason 包括 `not_running`、`queue_full`、`bytes_budget`、`offer_failed`。`connection_closing` 也是 reject reason，但 handler 只清理 request，不再对已经 closing 的连接追加 busy reply。
+queue slot 或 bytes budget 暂时不足会返回 `Unavailable`，不是终态拒绝。ingress 保留 submission、暂停输入，并通过 `onAdmissionAvailable(...)` 注册一次性容量回调后重试。只有 `request_too_large` 会在当前 reply slot 返回明确错误；not-running、connection-closing 或 publish invariant failure 会清理所有权并结束连接，避免打乱已注册 reply slot 的顺序。
 
 ## backlog budget
 
@@ -56,7 +54,7 @@ RespRequestDecoder
 - `queuedTasks`：当前已 reserve 但未释放的任务数。
 - `queuedBytes`：当前已 reserve 的 retained bytes。
 
-提交时先 reserve slot，再 reserve queued bytes，offer 失败或后续异常会回滚已 reserve 的预算。命令执行完成后，`CommandExecutorExecutionSupport` 释放 slot 和 queued bytes，并减少连接 pending 状态。
+admission 时先 reserve slot，再 reserve queued bytes；尚未 publish 的 admission 可以显式释放，publish 失败会回收 task 或关闭连接。命令执行完成后，`CommandExecutorExecutionSupport` 释放 slot 和 queued bytes，并减少连接 pending 状态；释放预算时会唤醒满足条件的 capacity waiter。
 
 全局背压水位由 budget 根据硬上限推导：
 
@@ -89,12 +87,12 @@ RespRequestDecoder
 单个 task 执行的大致顺序是：
 
 1. 检查连接是否 active / closing。
-2. 为 reply 分配 output buffer。
-3. 创建 `RedisReplyWriter`。
-4. 调用 `CommandExecutorExecutionSupport.execute(...)`。
-5. 将 reply 写入 channel。
-6. 如需 close-after-reply，flush 后关闭连接。
-7. finally 中释放 request、backlog budget 和 connection pending 状态。
+2. 调用 command engine 准备 `PreparedCommand`，并根据 `ReplyShape` 生成 reply plan。
+3. 尝试预留 reply capacity；暂时不足时保留 prepared state 并等待容量回调。
+4. 调用 `validateBeforeExecute()`；stale 时关闭并重新 prepare。
+5. 创建 `RedisReplyWriter` 和 `CommandExecutionContext`，执行 prepared command。
+6. 标记 reply ready；如需 close-after-reply，flush 后关闭连接。
+7. 终态 finally 中释放 prepared command、request、backlog budget 和 connection pending 状态。
 
 drain loop 使用 batched flush：单条命令通常只 `write`，tick 结束时统一 flush，减少高频命令下的 flush 次数。
 
@@ -103,9 +101,9 @@ drain loop 使用 batched flush：单条命令通常只 `write`，tick 结束时
 `CommandExecutorExecutionSupport` 是 executor 与 command engine 的连接层。它负责：
 
 - 通过 I/O adapter 检查 channel active/writable、分配 output、write/flush/close。
-- 通过 `RedisReplyWriterFactory` 创建 `RedisReplyWriter`。
 - 从 `ExecutionConnection` 获取 `EngineSession`。
-- 调用 `CommandExecutionEngine.execute(session, request, writer)`。
+- 调用 `CommandExecutionEngine.prepare(session, request)`，并按 `ReplyShape` 规划/预留容量。
+- 容量成功后通过 `RedisReplyWriterFactory` 创建 writer 和请求级执行上下文，校验并执行 `PreparedCommand`。
 - 命令结束后释放 `ExecutorBacklogBudget` 中的 slot/queued bytes。
 - 更新 `ExecutionConnectionContext.recordCommandFinished(...)`。
 - 在连接 pending、本地 bytes 和全局 backlog 都恢复后尝试恢复 `autoRead`。

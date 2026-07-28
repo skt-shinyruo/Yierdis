@@ -5,6 +5,7 @@ package yier.bubu.redis.app.client;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.server.YierdisServerBootstrap;
+import yier.bubu.redis.protocol.resp.RespClientCodec;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -21,27 +22,27 @@ public class TransactionQueueLimitTest {
             Assert.assertEquals("OK", stringResult(execute(client, b("MULTI"))));
             Assert.assertEquals("QUEUED", stringResult(execute(client, b("SET"), b("k"), b("v"))));
 
-            YierdisClient.RespReply queueFull = execute(client, b("GET"), b("k"));
+            RespClientCodec.RespReply queueFull = execute(client, b("GET"), b("k"));
             Assert.assertEquals("ERR Transaction queue is full", errorText(queueFull));
 
-            YierdisClient.RespReply execAbort = execute(client, b("EXEC"));
+            RespClientCodec.RespReply execAbort = execute(client, b("EXEC"));
             Assert.assertEquals("EXECABORT Transaction discarded because of previous errors.", errorText(execAbort));
 
-            YierdisClient.RespReply missing = execute(client, b("GET"), b("k"));
+            RespClientCodec.RespReply missing = execute(client, b("GET"), b("k"));
             Assert.assertTrue(missing.isNull());
 
             // DISCARD 复位路径：超限后 DISCARD 应回到可用状态。
             Assert.assertEquals("OK", stringResult(execute(client, b("MULTI"))));
             Assert.assertEquals("QUEUED", stringResult(execute(client, b("SET"), b("x"), b("1"))));
-            YierdisClient.RespReply queueFull2 = execute(client, b("GET"), b("x"));
+            RespClientCodec.RespReply queueFull2 = execute(client, b("GET"), b("x"));
             Assert.assertEquals("ERR Transaction queue is full", errorText(queueFull2));
             Assert.assertEquals("OK", stringResult(execute(client, b("DISCARD"))));
 
             Assert.assertEquals("OK", stringResult(execute(client, b("MULTI"))));
             Assert.assertEquals("QUEUED", stringResult(execute(client, b("SET"), b("k"), b("v"))));
-            YierdisClient.RespReply execResult = execute(client, b("EXEC"));
-            Assert.assertEquals(YierdisClient.RespReply.Kind.ARRAY, execResult.kind());
-            List<YierdisClient.RespReply> values = execResult.values();
+            RespClientCodec.RespReply execResult = execute(client, b("EXEC"));
+            Assert.assertEquals(RespClientCodec.RespReply.Kind.ARRAY, execResult.kind());
+            List<RespClientCodec.RespReply> values = execResult.values();
             Assert.assertNotNull(values);
             Assert.assertEquals(1, values.size());
             Assert.assertEquals("OK", stringResult(values.get(0)));
@@ -61,30 +62,30 @@ public class TransactionQueueLimitTest {
             byte[] big = new byte[64];
             Arrays.fill(big, (byte) 'a');
 
-            YierdisClient.RespReply queueFull = execute(client, b("SET"), b("k"), big);
+            RespClientCodec.RespReply queueFull = execute(client, b("SET"), b("k"), big);
             Assert.assertEquals("ERR Transaction queue is full", errorText(queueFull));
 
-            YierdisClient.RespReply execAbort = execute(client, b("EXEC"));
+            RespClientCodec.RespReply execAbort = execute(client, b("EXEC"));
             Assert.assertEquals("EXECABORT Transaction discarded because of previous errors.", errorText(execAbort));
         }
     }
 
-    private static YierdisClient.RespReply execute(YierdisClient client, byte[]... args) throws Exception {
+    private static RespClientCodec.RespReply execute(YierdisClient client, byte[]... args) throws Exception {
         return client.execute(Arrays.asList(args), 2000);
     }
 
-    private static String stringResult(YierdisClient.RespReply reply) {
+    private static String stringResult(RespClientCodec.RespReply reply) {
         Assert.assertNotNull(reply);
-        if (reply.kind() == YierdisClient.RespReply.Kind.SIMPLE_STRING) {
+        if (reply.kind() == RespClientCodec.RespReply.Kind.SIMPLE_STRING) {
             return reply.text();
         }
-        Assert.assertEquals(YierdisClient.RespReply.Kind.BULK_STRING, reply.kind());
+        Assert.assertEquals(RespClientCodec.RespReply.Kind.BULK_STRING, reply.kind());
         return new String(reply.bytes(), StandardCharsets.UTF_8);
     }
 
-    private static String errorText(YierdisClient.RespReply reply) {
+    private static String errorText(RespClientCodec.RespReply reply) {
         Assert.assertNotNull(reply);
-        Assert.assertEquals(YierdisClient.RespReply.Kind.ERROR, reply.kind());
+        Assert.assertEquals(RespClientCodec.RespReply.Kind.ERROR, reply.kind());
         return reply.text();
     }
 

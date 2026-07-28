@@ -123,7 +123,7 @@ public class TransactionCommandTest {
                     registration -> registration.register(new CommandDefinition<>(
                             new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
                                     TransactionPolicy.DISALLOWED_IN_MULTI),
-                            CommandParsers.request(),
+                            CommandParsers.args(),
                             (cmd, context) -> TestPreparedCommands.simpleString("HELLO")
                     ))
             );

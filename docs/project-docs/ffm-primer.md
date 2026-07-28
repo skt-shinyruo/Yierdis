@@ -71,7 +71,7 @@ segment.set(ValueLayout.JAVA_LONG_UNALIGNED, 8, 100L);
 long value = segment.get(ValueLayout.JAVA_LONG_UNALIGNED, 8);
 ```
 
-Yierdis 的 `YierdisFfmAccess` 就是把这类读写集中起来：`getByte`、`setByte`、`getInt`、`setLong` 等方法先做 range check，再用 `ValueLayout` 访问 `YierdisFfmSpan` 背后的 segment。
+Yierdis 的生产实现把这类读写集中在 `YierdisFfmRegion`：`getByte`、`setByte`、little-endian int/long 和 bulk copy 方法先做 open/range check，再用 `ValueLayout` 或 `MemorySegment.copy(...)` 访问底层 segment。
 
 ## offset 和 index
 

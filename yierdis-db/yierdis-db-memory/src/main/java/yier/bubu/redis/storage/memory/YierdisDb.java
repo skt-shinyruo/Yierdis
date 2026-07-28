@@ -157,7 +157,6 @@ public final class YierdisDb
         maintenance.defragMaintenance();
     }
 
-    @Override
     public long usedBytesForMaxmemory() {
         return maintenance.usedBytesForMaxmemory();
     }

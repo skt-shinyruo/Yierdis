@@ -1,6 +1,7 @@
 package yier.bubu.redis.command.defaults.set;
 
 import java.util.Objects;
+import yier.bubu.redis.command.api.ArgReader;
 import yier.bubu.redis.command.api.CommandArity;
 import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
@@ -28,15 +29,15 @@ public final class SetCommands implements CommandModule {
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
         registration.register(new CommandDefinition<>(syntax("SADD", CommandArity.min(3)),
-                CommandParsers.request(), this::sadd));
+                CommandParsers.args(), this::sadd));
         registration.register(new CommandDefinition<>(syntax("SREM", CommandArity.min(3)),
-                CommandParsers.request(), this::srem));
+                CommandParsers.args(), this::srem));
         registration.register(new CommandDefinition<>(syntax("SMEMBERS", CommandArity.exact(2)),
-                CommandParsers.request(), this::smembers));
+                CommandParsers.args(), this::smembers));
         registration.register(new CommandDefinition<>(syntax("SISMEMBER", CommandArity.exact(3)),
-                CommandParsers.request(), this::sismember));
+                CommandParsers.args(), this::sismember));
         registration.register(new CommandDefinition<>(syntax("SCARD", CommandArity.exact(2)),
-                CommandParsers.request(), this::scard));
+                CommandParsers.args(), this::scard));
         registration.register(new CommandDefinition<>(syntax("SSCAN", CommandArity.min(3)),
                 args -> CollectionScanCommandSupport.parse(args, false), this::sscan));
     }
@@ -45,15 +46,16 @@ public final class SetCommands implements CommandModule {
         return new CommandSyntax(nameUpper, arity, KEY, TransactionPolicy.QUEUEABLE);
     }
 
-    private PreparedCommand sadd(ExecutionRequest request, CommandPreparationContext context) {
-        return changingMembers(request, true);
+    private PreparedCommand sadd(ArgReader args, CommandPreparationContext context) {
+        return changingMembers(args, true);
     }
 
-    private PreparedCommand srem(ExecutionRequest request, CommandPreparationContext context) {
-        return changingMembers(request, false);
+    private PreparedCommand srem(ArgReader args, CommandPreparationContext context) {
+        return changingMembers(args, false);
     }
 
-    private PreparedCommand changingMembers(ExecutionRequest request, boolean add) {
+    private PreparedCommand changingMembers(ArgReader args, boolean add) {
+        ExecutionRequest request = args.request();
         return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
             int membersLen = request.argc() - 2;
             support.sliceResetFromRequest(request, 2, membersLen);
@@ -70,19 +72,19 @@ public final class SetCommands implements CommandModule {
         });
     }
 
-    private PreparedCommand smembers(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand smembers(ArgReader args, CommandPreparationContext context) {
         return CommandSupport.sequence(support.commandDb(context).reads().sets()
-                .smembers(request.readOnlyByteArray(1)));
+                .smembers(args.bytes(1)));
     }
 
-    private PreparedCommand sismember(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand sismember(ArgReader args, CommandPreparationContext context) {
         long result = support.commandDb(context).reads().sets()
-                .sismember(request.readOnlyByteArray(1), request.readOnlyByteArray(2)) ? 1L : 0L;
+                .sismember(args.bytes(1), args.bytes(2)) ? 1L : 0L;
         return CommandSupport.fixed(ReplyShapes.integer(result), execution -> execution.reply().integer(result));
     }
 
-    private PreparedCommand scard(ExecutionRequest request, CommandPreparationContext context) {
-        long count = support.commandDb(context).reads().sets().scard(request.readOnlyByteArray(1));
+    private PreparedCommand scard(ArgReader args, CommandPreparationContext context) {
+        long count = support.commandDb(context).reads().sets().scard(args.bytes(1));
         return CommandSupport.fixed(ReplyShapes.integer(count), execution -> execution.reply().integer(count));
     }
 

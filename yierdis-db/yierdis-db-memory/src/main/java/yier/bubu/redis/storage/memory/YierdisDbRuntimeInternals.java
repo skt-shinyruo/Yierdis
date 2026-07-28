@@ -180,36 +180,23 @@ public final class YierdisDbRuntimeInternals implements YierdisDbInternals {
                 long removalBytes = keyLifecycle.estimatedBytesForRemoval(keyHandle, current);
                 PreparedTtlMutation ttlMutation = keyLifecycle.prepareRemoveExpire(keyHandle);
                 deletedKey = keyBytes;
-                return new PreparedEntryMutation<>(
+                return PreparedEntryMutation.delete(
                         keyLifecycle,
                         Boolean.TRUE,
                         -removalBytes,
-                        0L,
                         MutationOutcome.VALUE_CHANGED,
                         entryHandle,
-                        null,
-                        null,
                         current,
-                        null,
                         true,
                         ttlMutation
                 );
             }
 
             private PreparedEntryMutation<Boolean> preparedNoDeletion() {
-                return new PreparedEntryMutation<>(
+                return PreparedEntryMutation.unchanged(
                         keyLifecycle,
                         Boolean.FALSE,
-                        0L,
-                        0L,
-                        MutationOutcome.NONE,
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                        false,
-                        PreparedTtlMutation.NONE
+                        MutationOutcome.NONE
                 );
             }
         });

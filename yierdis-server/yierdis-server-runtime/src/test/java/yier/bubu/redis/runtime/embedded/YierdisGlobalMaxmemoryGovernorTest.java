@@ -78,11 +78,6 @@ public class YierdisGlobalMaxmemoryGovernorTest {
             }
 
             @Override
-            public long usedBytesForMaxmemory() {
-                return 0L;
-            }
-
-            @Override
             public int keyCountEstimate() {
                 return 0;
             }

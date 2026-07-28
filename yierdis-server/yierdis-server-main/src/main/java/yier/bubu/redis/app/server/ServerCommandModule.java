@@ -3,6 +3,7 @@ package yier.bubu.redis.app.server;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Objects;
+import yier.bubu.redis.command.api.ArgReader;
 import yier.bubu.redis.command.api.CommandArity;
 import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
@@ -13,7 +14,6 @@ import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.defaults.CommandSupport;
 import yier.bubu.redis.execution.api.CommandPreparationContext;
-import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.ReplyShape;
 import yier.bubu.redis.execution.api.ReplyShapes;
@@ -41,38 +41,38 @@ final class ServerCommandModule implements CommandModule {
         registration.register(new CommandDefinition<>(
                 new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
                         TransactionPolicy.DISALLOWED_IN_MULTI),
-                CommandParsers.request(),
+                CommandParsers.args(),
                 this::hello
         ));
         registration.register(new CommandDefinition<>(
                 new CommandSyntax("INFO", CommandArity.oneOf(1, 2), CommandKeySpec.NONE,
                         TransactionPolicy.QUEUEABLE),
-                CommandParsers.request(),
+                CommandParsers.args(),
                 this::info
         ));
         registration.register(new CommandDefinition<>(
                 new CommandSyntax("STATS", CommandArity.exact(1), CommandKeySpec.NONE,
                         TransactionPolicy.QUEUEABLE),
-                CommandParsers.request(),
+                CommandParsers.args(),
                 this::stats
         ));
     }
 
-    private PreparedCommand info(ExecutionRequest request, CommandPreparationContext context) {
-        return infoProvider.prepareInfo(request, context);
+    private PreparedCommand info(ArgReader args, CommandPreparationContext context) {
+        return infoProvider.prepareInfo(args.request(), context);
     }
 
-    private PreparedCommand stats(ExecutionRequest request, CommandPreparationContext context) {
-        return infoProvider.prepareStats(request, context);
+    private PreparedCommand stats(ArgReader args, CommandPreparationContext context) {
+        return infoProvider.prepareStats(args.request(), context);
     }
 
-    private PreparedCommand hello(ExecutionRequest request, CommandPreparationContext context) {
+    private PreparedCommand hello(ArgReader args, CommandPreparationContext context) {
         int requested = context.session().respVersion();
         int index = 1;
         String requestedClientName = null;
         boolean setClientName = false;
-        if (request.argc() >= 2) {
-            String version = CommandSupport.utf8(request, 1);
+        if (args.argc() >= 2) {
+            String version = CommandSupport.utf8(args.bytes(1));
             if ("2".equals(version)) {
                 requested = 2;
                 index = 2;
@@ -83,14 +83,14 @@ final class ServerCommandModule implements CommandModule {
                 return CommandSupport.error("NOPROTO unsupported protocol version");
             }
         }
-        while (index < request.argc()) {
-            if (CommandSupport.asciiEqualsIgnoreCase(request, index, "SETNAME") && index + 1 < request.argc()) {
-                requestedClientName = CommandSupport.utf8(request, index + 1);
+        while (index < args.argc()) {
+            if (args.is(index, "SETNAME") && index + 1 < args.argc()) {
+                requestedClientName = CommandSupport.utf8(args.bytes(index + 1));
                 setClientName = true;
                 index += 2;
                 continue;
             }
-            if (CommandSupport.asciiEqualsIgnoreCase(request, index, "AUTH")) {
+            if (args.is(index, "AUTH")) {
                 return CommandSupport.error(
                         "ERR AUTH <password> called without any password configured for the default user. "
                                 + "Are you sure your configuration is correct?"

@@ -231,40 +231,7 @@ public final class YierdisInstanceObservability {
     }
 
     private static YierdisMemoryStats emptyStats(long maxmemoryBytes, boolean offHeapIncludedInMaxmemory) {
-        return new YierdisMemoryStats(
-                maxmemoryBytes,
-                0,
-                0,
-                0,
-                0,
-                0,
-                offHeapIncludedInMaxmemory,
-                false,
-                0,
-                0,
-                false,
-                0,
-                0,
-                0,
-                false,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0
-        );
+        return YierdisMemoryStats.empty(maxmemoryBytes, offHeapIncludedInMaxmemory);
     }
 
     private static long addSaturating(long left, long right) {

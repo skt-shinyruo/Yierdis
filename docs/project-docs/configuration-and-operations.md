@@ -15,9 +15,9 @@ argv
   -> YierdisServerBootstrap
 ```
 
-`YierdisServerArgs` 用 picocli 声明 server 参数、默认值和 usage。`normalizeAndValidate()` 会先处理派生语义，例如 `--noCleanup` 会把 `cleanupIntervalMillis` 归零，再校验端口、DB 数量、executor 队列、协议上限、事务队列、maxmemory、native defrag 和慢客户端参数。字符串枚举也在这里归一化：`executorSchedulingPolicy` 只接受 `global|fair`，`maxmemoryScope` 接受 `global|per-db`，并兼容 `perdb` / `per_db` 写法。
+`YierdisServerArgs` 用 picocli 声明 server 参数、默认值和 usage。`normalizeAndValidate()` 只处理 CLI 归一化和派生语义，例如 `--noCleanup` 会把 `cleanupIntervalMillis` 归零，字符串枚举会归一化成稳定 argv 值。网络、协议、reply、内存和 maintenance 约束由 `YierdisServerRuntimeConfig` 的构造器统一校验；executor 队列与背压约束由 `CommandExecutorConfig` 校验。`normalizeAndValidate()` 通过构造这两个领域配置触发校验，避免 CLI、bootstrap 和 embedded 路径各维护一套规则。
 
-`toRuntimeConfig()` 把已归一化参数转成 `YierdisServerRuntimeConfig` record。这个 record 是 server-main 内部后续组装的稳定配置对象，字段已经是 enum、number 和 boolean，不再携带原始 CLI 字符串。
+`toRuntimeConfig()` 把已归一化参数转成 `YierdisServerRuntimeConfig` record。这个 record 是 server-main 内部后续组装的稳定配置对象，字段已经是 enum、number 和 boolean，不再携带原始 CLI 字符串；`executorConfig()` 直接生成 executor 领域配置。
 
 `ServerConfig.fromArgs(...)` 是 CLI 到组合根的边界：解析失败或校验失败时打印 usage，并抛 `YierdisCliException.usageError(...)`；`--help` 打印 usage 并返回 `null`。`YierdisServerBootstrap.start(String... args)` 收到 `null` 会视为没有可启动配置。
 
@@ -76,7 +76,7 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar STATS
 
 `--protocolMaxBulkBytes`、`--protocolMaxArgs`、`--protocolMaxLineBytes` 和 `--protocolMaxCommandBytes` 会直接传给 `RespRequestDecoder`。它们分别约束 bulk body、参数个数、header/inline 行长度，以及单条命令累计字节数。暴露在不可信网络里时，优先收紧这四个入口上限，再考虑更深层的内存调参。
 
-解析失败会走 RESP protocol error 路径：`RespRequestDecoder` 负责 RESP 解析、入口限制和 ingress admission，出错时产出 `RespProtocolError`；`RespProtocolErrorReplyHandler` 统一回协议错误并关闭连接，避免请求和回包错位。这个路径不会进入 `YierdisFastCommandHandler` 的命令提交主链。
+解析失败会走 RESP protocol error 路径：`RespRequestDecoder` 负责 RESP 解析、入口限制和 ingress admission，出错时把 `RespProtocolError` 放进已注册 reply slot；`NettyExecutionRequestIngress` 统一回协议错误并关闭连接，避免请求和回包错位。这个路径不会进入 command executor。
 
 ## executor 和 backpressure
 
@@ -90,12 +90,10 @@ executor 参数分两类：全局队列预算和单连接背压。
 - `--backpressureHigh` / `--backpressureLow`：单连接 pending 命令高低水位，默认 `256/128`。
 - `--backpressureBytesHigh` / `--backpressureBytesLow`：单连接 pending bytes 高低水位，默认 `16777216/8388608`；high 为 `0` 时 bytes 背压禁用，low 也必须为 `0`。
 
-`CommandExecutorConfigs.from(...)` 把 runtime config 映射成 `CommandExecutorConfig`。`CommandExecutor` 只有一个 owner executor，启动时调用 `runtimeAccess.bindToCurrentThread`，之后通过 `trySubmit(...)` 接收 Netty pipeline 交来的请求。队列满或 bytes budget 超限时，客户端会收到类似：
+`YierdisServerRuntimeConfig.executorConfig()` 把已经校验的 runtime 字段映射成 `CommandExecutorConfig`。`CommandExecutor` 只有一个 owner executor，启动时调用 `runtimeAccess.bindToCurrentThread`，之后通过 `tryAcquire(...)` 和 `ExecutorAdmission.publish(...)` 接收 Netty pipeline 交来的请求。queue slot 或 bytes budget 暂时不足时，ingress 会暂停输入并等待容量，而不是立即生成 busy reply；单个请求本身超过 bytes hard limit 时返回：
 
 ```text
-ERR busy queue_full
-ERR busy bytes_budget
-ERR busy not_running
+ERR request exceeds executor queue byte limit
 ```
 
 连接已经进入 closing 时，提交层会在预留 queue slot / bytes budget 前拒绝，计入 `submit_rejected_closing_total`；该路径不会再额外写 `ERR busy`。`STATS` 是排查入口。重点看 `queued_tasks`、`queued_bytes`、`submit_rejected_queue_full_total`、`submit_rejected_bytes_budget_total`、`submit_rejected_closing_total`、`backpressure_enter_total`、`backpressure_exit_total`，以及当前连接的 `conn_pending`、`conn_pending_bytes`、`conn_autoread_disabled_by_executor` 和 `conn_commands_rejected`。
@@ -109,7 +107,7 @@ ERR busy not_running
 
 传给 `EngineSession` 的 `DefaultTransactionState`。默认值分别是 `1024` 和 `67108864`；`0` 表示对应限制禁用。
 
-在 `MULTI` 状态下，命令入队会复制 `ExecutionRequest` 快照并累计 retained bytes。超过命令数或 bytes 上限时，事务被标记为 aborted，入队返回 `ERR Transaction queue is full`；后续 `EXEC` 会返回 Redis 风格 `EXECABORT Transaction discarded because of previous errors.` 并丢弃队列。这是为了防止大事务或大参数在连接状态里无界驻留。
+在 `MULTI` 状态下，命令入队会通过 `ExecutionRequest.retain()` 取得事务自己的所有权并累计 retained bytes；网络请求共享不可变 argv 和 request-memory lease。超过命令数或 bytes 上限时，事务被标记为 aborted，入队返回 `ERR Transaction queue is full`；后续 `EXEC` 会返回 Redis 风格 `EXECABORT Transaction discarded because of previous errors.` 并丢弃队列。这是为了防止大事务或大参数在连接状态里无界驻留。
 
 推荐看 `TransactionQueueLimitTest` 和 `EngineSession`。
 
@@ -181,6 +179,8 @@ maxmemory 参数：
 `INFO yierdis` 返回结构化 map，更适合脚本和测试。它暴露 `server`、`version`、`port`、`io_threads`、`executor_policy`、`executor_queue_capacity`、`executor_queue_max_bytes`、`backpressure_high`、`backpressure_low`、`backpressure_bytes_high`、`backpressure_bytes_low`、`executor_max_drain`、`executor_drain_millis`、`started_millis`、`uptime_millis`。
 
 `STATS` 返回结构化 map，专注 executor 和当前连接统计。遇到 `ERR busy ...`、输入被暂停、吞吐抖动时先看它。
+
+每次 `INFO`、`INFO yierdis`、`INFO health` 或 `STATS` 执行时，`NettyServerInfoProvider` 都先构造一份请求级 `ServerStatsSnapshot`。executor、ingress、commit stream、egress、child channels、runtime health 和 uptime 只采集一次，文本与结构化 writer 共享这份快照，避免同一个回复里的字段来自不同采样时刻。`INFO memory` 和 `INFO keyspace` 的 DB 聚合仍按 section 按需读取，不让轻量 health 探针承担全库聚合成本。
 
 `MEMORY STATS` 返回内存估算 map。常用字段包括 `maxmemory_bytes`、`used_bytes_for_maxmemory`、`effective_used_bytes_for_maxmemory`、`ledger_used_bytes`、`ledger_reserved_bytes`、`offheap_used_bytes`、`offheap_included_in_maxmemory`、`key_count`、`expire_count`、`keyspace_rehashing`、`expire_rehashing` 和 table capacity。global scope 下优先读聚合视角；per-db scope 下更贴近当前 DB。native defrag 摘要当前在 `INFO` memory section 中输出。
 

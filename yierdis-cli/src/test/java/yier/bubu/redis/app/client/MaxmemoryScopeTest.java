@@ -5,6 +5,7 @@ package yier.bubu.redis.app.client;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.server.YierdisServerBootstrap;
+import yier.bubu.redis.protocol.resp.RespClientCodec;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -38,15 +39,15 @@ public class MaxmemoryScopeTest {
             ok(client, b("SET"), b("c"), value);
 
             ok(client, b("SELECT"), b("1"));
-            YierdisClient.RespReply bVal = execute(client, b("GET"), b("b"));
+            RespClientCodec.RespReply bVal = execute(client, b("GET"), b("b"));
 
             ok(client, b("SELECT"), b("0"));
-            YierdisClient.RespReply aVal = execute(client, b("GET"), b("a"));
-            YierdisClient.RespReply cVal = execute(client, b("GET"), b("c"));
+            RespClientCodec.RespReply aVal = execute(client, b("GET"), b("a"));
+            RespClientCodec.RespReply cVal = execute(client, b("GET"), b("c"));
 
             Assert.assertTrue(bVal.isNull());
-            Assert.assertEquals(YierdisClient.RespReply.Kind.BULK_STRING, aVal.kind());
-            Assert.assertEquals(YierdisClient.RespReply.Kind.BULK_STRING, cVal.kind());
+            Assert.assertEquals(RespClientCodec.RespReply.Kind.BULK_STRING, aVal.kind());
+            Assert.assertEquals(RespClientCodec.RespReply.Kind.BULK_STRING, cVal.kind());
         }
     }
 
@@ -71,14 +72,14 @@ public class MaxmemoryScopeTest {
             ok(client, b("SET"), b("c"), value);
 
             ok(client, b("SELECT"), b("1"));
-            YierdisClient.RespReply bVal = execute(client, b("GET"), b("b"));
-            Assert.assertEquals(YierdisClient.RespReply.Kind.BULK_STRING, bVal.kind());
+            RespClientCodec.RespReply bVal = execute(client, b("GET"), b("b"));
+            Assert.assertEquals(RespClientCodec.RespReply.Kind.BULK_STRING, bVal.kind());
 
             ok(client, b("SELECT"), b("0"));
-            YierdisClient.RespReply aVal = execute(client, b("GET"), b("a"));
+            RespClientCodec.RespReply aVal = execute(client, b("GET"), b("a"));
             Assert.assertTrue(aVal.isNull());
-            YierdisClient.RespReply cVal = execute(client, b("GET"), b("c"));
-            Assert.assertEquals(YierdisClient.RespReply.Kind.BULK_STRING, cVal.kind());
+            RespClientCodec.RespReply cVal = execute(client, b("GET"), b("c"));
+            Assert.assertEquals(RespClientCodec.RespReply.Kind.BULK_STRING, cVal.kind());
         }
     }
 
@@ -187,19 +188,19 @@ public class MaxmemoryScopeTest {
         return parseMemoryStats(execute(client, b("MEMORY"), b("STATS")));
     }
 
-    private static HashMap<String, Long> parseMemoryStats(YierdisClient.RespReply reply) {
-        Map<String, YierdisClient.RespReply> values = replyMap(reply);
+    private static HashMap<String, Long> parseMemoryStats(RespClientCodec.RespReply reply) {
+        Map<String, RespClientCodec.RespReply> values = replyMap(reply);
         HashMap<String, Long> out = new HashMap<>();
-        for (Map.Entry<String, YierdisClient.RespReply> e : values.entrySet()) {
-            YierdisClient.RespReply v = e.getValue();
-            if (v.kind() == YierdisClient.RespReply.Kind.INTEGER) {
+        for (Map.Entry<String, RespClientCodec.RespReply> e : values.entrySet()) {
+            RespClientCodec.RespReply v = e.getValue();
+            if (v.kind() == RespClientCodec.RespReply.Kind.INTEGER) {
                 out.put(e.getKey(), v.integer());
             }
         }
         return out;
     }
 
-    private static YierdisClient.RespReply execute(YierdisClient client, byte[]... args) throws Exception {
+    private static RespClientCodec.RespReply execute(YierdisClient client, byte[]... args) throws Exception {
         return client.execute(Arrays.asList(args), 2000);
     }
 
@@ -207,27 +208,27 @@ public class MaxmemoryScopeTest {
         Assert.assertEquals("OK", stringResult(execute(client, args)));
     }
 
-    private static Map<String, YierdisClient.RespReply> replyMap(YierdisClient.RespReply reply) {
-        Assert.assertEquals(YierdisClient.RespReply.Kind.ARRAY, reply.kind());
-        List<YierdisClient.RespReply> values = reply.values();
+    private static Map<String, RespClientCodec.RespReply> replyMap(RespClientCodec.RespReply reply) {
+        Assert.assertEquals(RespClientCodec.RespReply.Kind.ARRAY, reply.kind());
+        List<RespClientCodec.RespReply> values = reply.values();
         Assert.assertNotNull(values);
         Assert.assertEquals(0, values.size() % 2);
-        Map<String, YierdisClient.RespReply> map = new LinkedHashMap<>();
+        Map<String, RespClientCodec.RespReply> map = new LinkedHashMap<>();
         for (int i = 0; i < values.size(); i += 2) {
             map.put(stringResult(values.get(i)), values.get(i + 1));
         }
         return map;
     }
 
-    private static String stringResult(YierdisClient.RespReply reply) {
+    private static String stringResult(RespClientCodec.RespReply reply) {
         Assert.assertNotNull(reply);
-        if (reply.kind() == YierdisClient.RespReply.Kind.SIMPLE_STRING) {
+        if (reply.kind() == RespClientCodec.RespReply.Kind.SIMPLE_STRING) {
             return reply.text();
         }
-        if (reply.kind() == YierdisClient.RespReply.Kind.ERROR) {
+        if (reply.kind() == RespClientCodec.RespReply.Kind.ERROR) {
             Assert.fail("unexpected error reply: " + reply.text());
         }
-        Assert.assertEquals(YierdisClient.RespReply.Kind.BULK_STRING, reply.kind());
+        Assert.assertEquals(RespClientCodec.RespReply.Kind.BULK_STRING, reply.kind());
         return new String(reply.bytes(), StandardCharsets.UTF_8);
     }
 

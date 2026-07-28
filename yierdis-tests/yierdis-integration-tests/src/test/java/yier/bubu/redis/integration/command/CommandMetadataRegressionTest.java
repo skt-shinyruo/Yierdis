@@ -47,7 +47,7 @@ public class CommandMetadataRegressionTest {
                     registration -> registration.register(new CommandDefinition<>(
                             new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
                                     TransactionPolicy.QUEUEABLE),
-                            CommandParsers.request(),
+                            CommandParsers.args(),
                             (cmd, context) -> TestPreparedCommands.simpleString("OK")
                     ))
             );

@@ -32,7 +32,6 @@ import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.memory.api.OffHeapOutOfMemoryException;
 import yier.bubu.redis.storage.memory.TestBackend;
 
 import java.nio.charset.StandardCharsets;
@@ -442,59 +441,7 @@ public class MutationExecutorReservationTest {
     }
 
     @Test
-    public void legacyReclamationBypassesNormalReservation() {
-        YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(() -> {
-        }, preparedLedger);
-
-        String result = executor.execute(new YierdisDbMutationExecutor.LegacyMutationPlan<>() {
-            @Override
-            public long upperBoundBytes() {
-                return 0;
-            }
-
-            @Override
-            public AdmissionMode admissionMode() {
-                return AdmissionMode.RECLAMATION;
-            }
-
-            @Override
-            public YierdisDbMutationExecutor.MutationResult<String> apply() {
-                return YierdisDbMutationExecutor.MutationResult.of("removed", 0);
-            }
-        });
-
-        org.junit.Assert.assertEquals("removed", result);
-        org.junit.Assert.assertEquals(1, preparedLedger.reclamationBegins());
-        org.junit.Assert.assertEquals(0, preparedLedger.normalReservations());
-    }
-
-    @Test
-    public void legacyNonCapacityOffHeapFailureAfterApplyStartsIsResultUnknown() {
-        YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(() -> {
-        }, preparedLedger);
-        OffHeapOutOfMemoryException failure = new OffHeapOutOfMemoryException("not capacity");
-
-        PostCommitMutationException thrown = org.junit.Assert.assertThrows(
-                PostCommitMutationException.class,
-                () -> executor.execute(new YierdisDbMutationExecutor.LegacyMutationPlan<Void>() {
-                    @Override
-                    public long upperBoundBytes() {
-                        return 0;
-                    }
-
-                    @Override
-                    public YierdisDbMutationExecutor.MutationResult<Void> apply() {
-                        throw failure;
-                    }
-            })
-        );
-
-        org.junit.Assert.assertSame(failure, thrown.getCause());
-        org.junit.Assert.assertEquals(0L, preparedLedger.reservedBytes());
-    }
-
-    @Test
-    public void legacyCommandFailureBeforeVisibilityDoesNotDegradeDb() {
+    public void commandFailureDuringPreparationDoesNotDegradeDb() {
         YierdisDb db = TestDbSupport.open();
         db.bindToCurrentThread();
         try {
@@ -502,20 +449,15 @@ public class MutationExecutorReservationTest {
 
             WrongTypeException failure = org.junit.Assert.assertThrows(
                     WrongTypeException.class,
-                    () -> executor.execute(new YierdisDbMutationExecutor.LegacyMutationPlan<Void>() {
+                    () -> executor.execute(new YierdisDbMutationExecutor.MutationPlan<Void>() {
                         @Override
                         public long upperBoundBytes() {
                             return 0L;
                         }
 
                         @Override
-                        public void validateBeforeMutation() {
+                        public PreparedDbMutation<Void> prepare() {
                             throw new WrongTypeException();
-                        }
-
-                        @Override
-                        public YierdisDbMutationExecutor.MutationResult<Void> apply() {
-                            throw new AssertionError("apply must not run after preflight failure");
                         }
                     })
             );
@@ -523,53 +465,6 @@ public class MutationExecutorReservationTest {
             org.junit.Assert.assertEquals("WRONGTYPE Operation against a key holding the wrong kind of value", failure.getMessage());
             org.junit.Assert.assertFalse(db.health().degraded());
             org.junit.Assert.assertEquals(0L, db.memory().memoryStats().reservedBytes());
-        } finally {
-            db.shutdown();
-        }
-    }
-
-    @Test
-    public void legacyCapacityFailureAfterApplyStartsDegradesDbAndSettlesConservatively() {
-        YierdisDb db = TestDbSupport.open(
-                PREPARED_TEST_UPPER_BOUND_BYTES,
-                MaxmemoryPolicy.NOEVICTION,
-                5,
-                5,
-                5
-        );
-        db.bindToCurrentThread();
-        try {
-            YierdisDbMutationExecutor executor = MutationExecutorTestSupport.create(db);
-            AtomicBoolean visibilityMayHaveChanged = new AtomicBoolean();
-
-            PostCommitMutationException failure = org.junit.Assert.assertThrows(
-                    PostCommitMutationException.class,
-                    () -> executor.execute(new YierdisDbMutationExecutor.LegacyMutationPlan<Void>() {
-                        @Override
-                        public long upperBoundBytes() {
-                            return 64L;
-                        }
-
-                        @Override
-                        public YierdisDbMutationExecutor.MutationResult<Void> apply() {
-                            visibilityMayHaveChanged.set(true);
-                            throw new NativeCapacityExceededException("injected after visibility");
-                        }
-                    })
-            );
-
-            org.junit.Assert.assertTrue(visibilityMayHaveChanged.get());
-            org.junit.Assert.assertTrue(failure.getCause() instanceof IllegalStateException);
-            org.junit.Assert.assertTrue(failure.getCause().getCause() instanceof NativeCapacityExceededException);
-            org.junit.Assert.assertTrue(db.health().degraded());
-            org.junit.Assert.assertTrue(db.memory().memoryStats().usedBytesForMaxmemory() >= 0L);
-            org.junit.Assert.assertEquals(0L, db.memory().memoryStats().reservedBytes());
-
-            YierdisCommandException rejected = org.junit.Assert.assertThrows(
-                    YierdisCommandException.class,
-                    () -> db.writes().strings().setString(bytes("later"), bytes("value"), SetMode.NORMAL, null)
-            );
-            org.junit.Assert.assertEquals(YierdisDbHealth.MISCONF_DEGRADED, rejected.getMessage());
         } finally {
             db.shutdown();
         }
@@ -844,7 +739,7 @@ public class MutationExecutorReservationTest {
     }
 
     @Test
-    public void legacyPreflightFailureRollsBackReservationAndDoesNotPoisonNextMutation() {
+    public void preparationFailureRollsBackReservationAndDoesNotPoisonNextMutation() {
         YierdisDb db = TestDbSupport.open(
                 PREPARED_TEST_UPPER_BOUND_BYTES,
                 MaxmemoryPolicy.NOEVICTION,
@@ -857,20 +752,15 @@ public class MutationExecutorReservationTest {
             YierdisDbMutationExecutor executor = MutationExecutorTestSupport.create(db);
 
             try {
-                executor.execute(new YierdisDbMutationExecutor.LegacyMutationPlan<Void>() {
+                executor.execute(new YierdisDbMutationExecutor.MutationPlan<Void>() {
                     @Override
                     public long upperBoundBytes() {
                         return 64;
                     }
 
                     @Override
-                    public void validateBeforeMutation() {
+                    public PreparedDbMutation<Void> prepare() {
                         throw new WrongTypeException();
-                    }
-
-                    @Override
-                    public YierdisDbMutationExecutor.MutationResult<Void> apply() {
-                        throw new AssertionError("apply must not run after preflight failure");
                     }
                 });
                 Assert.fail("expected mutation failure");
@@ -891,24 +781,24 @@ public class MutationExecutorReservationTest {
     }
 
     @Test
-    public void noevictionRejectsBeforeMutationCanRun() {
+    public void noevictionRejectsBeforePreparationCanRun() {
         YierdisDb db = TestDbSupport.open(1, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
         db.bindToCurrentThread();
         try {
             YierdisDbMutationExecutor executor = MutationExecutorTestSupport.create(db);
-            boolean[] mutated = new boolean[]{false};
+            boolean[] prepared = new boolean[]{false};
 
             try {
-                executor.execute(new YierdisDbMutationExecutor.LegacyMutationPlan<Void>() {
+                executor.execute(new YierdisDbMutationExecutor.MutationPlan<Void>() {
                     @Override
                     public long upperBoundBytes() {
                         return 64;
                     }
 
                     @Override
-                    public YierdisDbMutationExecutor.MutationResult<Void> apply() {
-                        mutated[0] = true;
-                        return YierdisDbMutationExecutor.MutationResult.of(null, 64);
+                    public PreparedDbMutation<Void> prepare() {
+                        prepared[0] = true;
+                        throw new AssertionError("preparation must not run after rejected admission");
                     }
                 });
                 Assert.fail("expected OOM");
@@ -916,7 +806,7 @@ public class MutationExecutorReservationTest {
                 Assert.assertEquals(MaxmemoryErrors.OOM_ERR, expected.getMessage());
             }
 
-            Assert.assertFalse(mutated[0]);
+            Assert.assertFalse(prepared[0]);
             Assert.assertNull(db.reads().strings().getStringBytes(bytes("oom")));
             Assert.assertEquals(0L, db.memory().memoryStats().reservedBytes());
         } finally {

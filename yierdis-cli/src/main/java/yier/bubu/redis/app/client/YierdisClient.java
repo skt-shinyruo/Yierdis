@@ -52,7 +52,7 @@ public final class YierdisClient implements AutoCloseable {
         }
     }
 
-    public RespReply execute(List<byte[]> args, long timeoutMillis) throws InterruptedException {
+    public RespClientCodec.RespReply execute(List<byte[]> args, long timeoutMillis) throws InterruptedException {
         Objects.requireNonNull(args, "args");
         if (timeoutMillis <= 0) {
             throw new IllegalArgumentException("timeoutMillis must be > 0");
@@ -71,7 +71,7 @@ public final class YierdisClient implements AutoCloseable {
                 socket.setSoTimeout(toSocketTimeoutMillis(timeoutMillis));
                 RespClientCodec.writeCommand(out, args);
                 out.flush();
-                return RespReply.from(RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES));
+                return RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
             } catch (SocketTimeoutException e) {
                 closeSilently();
                 throw new IllegalStateException("Timeout waiting for response (connection closed to prevent response desync)", e);
@@ -86,7 +86,7 @@ public final class YierdisClient implements AutoCloseable {
         }
     }
 
-    public RespReply executeUtf8(List<String> args, long timeoutMillis) throws InterruptedException {
+    public RespClientCodec.RespReply executeUtf8(List<String> args, long timeoutMillis) throws InterruptedException {
         Objects.requireNonNull(args, "args");
         List<byte[]> out = new ArrayList<>(args.size());
         for (String a : args) {
@@ -116,41 +116,4 @@ public final class YierdisClient implements AutoCloseable {
         return timeoutMillis > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) timeoutMillis;
     }
 
-    public record RespReply(Kind kind, String text, byte[] bytes, Long integer, List<RespReply> values) {
-        public RespReply {
-            Objects.requireNonNull(kind, "kind");
-            bytes = bytes == null ? null : bytes.clone();
-            values = values == null ? null : List.copyOf(values);
-        }
-
-        public enum Kind {
-            SIMPLE_STRING, ERROR, INTEGER, BULK_STRING, NULL, ARRAY
-        }
-
-        public boolean isNull() {
-            return kind == Kind.NULL;
-        }
-
-        public boolean isSimpleString(String expected) {
-            return kind == Kind.SIMPLE_STRING && Objects.equals(text, expected);
-        }
-
-        @Override
-        public byte[] bytes() {
-            return bytes == null ? null : bytes.clone();
-        }
-
-        private static RespReply from(RespClientCodec.RespReply reply) {
-            Objects.requireNonNull(reply, "reply");
-            Kind kind = Kind.valueOf(reply.kind().name());
-            List<RespReply> converted = null;
-            if (reply.values() != null) {
-                converted = new ArrayList<>(reply.values().size());
-                for (RespClientCodec.RespReply value : reply.values()) {
-                    converted.add(from(value));
-                }
-            }
-            return new RespReply(kind, reply.text(), reply.bytes(), reply.integer(), converted);
-        }
-    }
 }

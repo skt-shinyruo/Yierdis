@@ -60,7 +60,7 @@ public class DefaultYierdisEngineTest {
         CommandRegistry registry = CommandRegistries.from(
                 registration -> registration.register(new CommandDefinition<>(
                         syntax("LOCAL"),
-                        CommandParsers.request(),
+                        CommandParsers.args(),
                         (request, preparation) -> preparedSimpleString("LOCAL_OK")
                 ))
         );
@@ -88,18 +88,18 @@ public class DefaultYierdisEngineTest {
                 registration -> {
                     registration.register(new CommandDefinition<>(
                             syntax("SCOPED"),
-                            CommandParsers.request(),
+                            CommandParsers.args(),
                             (request, preparation) -> prepared(ReplyShapes.simpleString("OK"), context -> {
-                                Assert.assertSame(request, context.mutationContext().commandRecord());
+                                Assert.assertSame(request.request(), context.mutationContext().commandRecord());
                                 successfulContext.set(context.mutationContext());
                                 context.reply().simpleString("OK");
                             })
                     ));
                     registration.register(new CommandDefinition<>(
                             syntax("FAIL"),
-                            CommandParsers.request(),
+                            CommandParsers.args(),
                             (request, preparation) -> prepared(ReplyShapes.simpleString("OK"), context -> {
-                                Assert.assertSame(request, context.mutationContext().commandRecord());
+                                Assert.assertSame(request.request(), context.mutationContext().commandRecord());
                                 failedContext.set(context.mutationContext());
                                 throw new IllegalStateException("injected");
                             })
@@ -138,9 +138,9 @@ public class DefaultYierdisEngineTest {
         CommandRegistries.registerTransactionSupport(registry, processor);
         registry.register(new CommandDefinition<>(
                 syntax("SCOPED"),
-                CommandParsers.request(),
+                CommandParsers.args(),
                 (request, preparation) -> prepared(ReplyShapes.simpleString("OK"), context -> {
-                    Assert.assertSame(request, context.mutationContext().commandRecord());
+                    Assert.assertSame(request.request(), context.mutationContext().commandRecord());
                     replayContext.set(context.mutationContext());
                     context.reply().simpleString("OK");
                 })
@@ -162,7 +162,7 @@ public class DefaultYierdisEngineTest {
         CommandRegistry registry = CommandRegistries.from(
                 registration -> registration.register(new CommandDefinition<>(
                         syntax("LOCAL"),
-                        CommandParsers.request(),
+                        CommandParsers.args(),
                         (request, preparation) -> prepared(
                                 ReplyShapes.simpleString("DB_" + preparation.session().dbIndex()),
                                 context -> context.reply().simpleString("DB_" + context.session().dbIndex())

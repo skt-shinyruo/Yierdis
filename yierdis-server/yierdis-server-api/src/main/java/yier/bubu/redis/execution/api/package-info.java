@@ -17,7 +17,6 @@
  *     <li>TransactionSession - API. Audience: transaction command handlers and command processor queueing.</li>
  *     <li>ConnectionStatsSession - API. Audience: server INFO/STATS views.</li>
  *     <li>ProtocolNegotiationSession - API. Audience: protocol reply writers and HELLO command handlers.</li>
- *     <li>DbIndexProvider - compatibility/deprecated. Audience: legacy embedders only; command routing uses DbIndexSession.</li>
  *     <li>ConnectionStatsView - API. Audience: server INFO/STATS views, executor/server observability, tests.</li>
  *     <li>TransactionState - API. Audience: command transaction handlers, engine sessions, server sessions, tests.</li>
  *     <li>CommandPreparationContext - API。受众：命令 preparer；仅在回复容量预留前读取完整会话状态。</li>

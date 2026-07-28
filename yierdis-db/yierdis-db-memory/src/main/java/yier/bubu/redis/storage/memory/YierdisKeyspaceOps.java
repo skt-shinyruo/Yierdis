@@ -85,17 +85,13 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                     try {
                         ttlMutation = keyLifecycle.prepareRemoveExpire(handle);
                         long removalBytes = keyLifecycle.estimatedBytesForRemoval(handle, current);
-                        PreparedEntryMutation<Void> mutation = new PreparedEntryMutation<>(
+                        PreparedEntryMutation<Void> mutation = PreparedEntryMutation.delete(
                                 keyLifecycle,
                                 null,
                                 -removalBytes,
-                                0L,
                                 MutationOutcome.VALUE_CHANGED,
                                 entryHandle,
-                                null,
-                                null,
                                 current,
-                                null,
                                 true,
                                 ttlMutation
                         );

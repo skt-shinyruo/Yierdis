@@ -10,11 +10,11 @@
 
 ### `ByteArrayExecutionRequest`
 
-以 heap `byte[]` 保存参数的 `ExecutionRequest` 实现。测试、事务 replay 和部分适配路径会使用它。详见 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)。
+以 heap `byte[]` 保存参数的 `ExecutionRequest` 实现。测试、显式 copy、change-event 公开快照和部分适配路径会使用它；事务 replay 保留原请求实现的 retained view。详见 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)。
 
 ### `ExecutionRecord`
 
-`dbIndex` + `ExecutionRequest` 的不可变 replay / change-event 快照。构造时会归一化 `dbIndex` 并复制请求，避免把 mutable request 引用带进事务队列或 change sink。详见 [`transaction-and-replay.md`](./transaction-and-replay.md) 和 [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)。
+`dbIndex` + `CommandRecordView` 的 change-event 记录。公开构造入口会归一化 `dbIndex` 并复制 `ExecutionRequest`；runtime 的 `borrowed(...)` 入口交付 callback-scoped view。事务 replay 不使用该类型。详见 [`transaction-and-replay.md`](./transaction-and-replay.md) 和 [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)。
 
 ### `RedisReplyWriter`
 
@@ -26,17 +26,17 @@
 
 ## Command Layer
 
-### `CommandSpec`
+### `CommandDefinition`
 
-命令定义单元，包含名称、arity、key metadata、handler 和 `MULTI` 限制。新增命令时它是注册表里的核心对象。详见 [`commands-and-data-model.md`](./commands-and-data-model.md)。
+命令最终注册单元，由 `CommandSyntax`、`CommandParser<T>` 和 `CommandPreparer<T>` 组成。syntax 保存名称、arity、key metadata 和 `TransactionPolicy`；preparer 返回 `PreparedCommand`。详见 [`commands-and-data-model.md`](./commands-and-data-model.md)。
 
 ### `CommandRegistry`
 
-命令名到 `CommandSpec` 的注册表。`YierdisFastCommandProcessor` 通过它做 unknown command 判断和分发。详见 [`core-logic-index.md`](./core-logic-index.md)。
+命令名到 `CommandDefinition<?>` 的注册表。`YierdisFastCommandProcessor` 通过它做 unknown command 判断和分发。详见 [`core-logic-index.md`](./core-logic-index.md)。
 
-### `CommandContext`
+### `CommandPreparationContext` / `CommandExecutionContext`
 
-单次命令执行的上下文，携带 `RedisReplyWriter`、`CommandSessionCapabilities`、当前 DB 路由和 mutation outcome。它把 handler 和执行环境连接起来。
+准备上下文只暴露 `CommandSession`，供 reply capacity 预留前的解析、读取和 mutation prepare 使用；执行上下文在预留成功后增加 `RedisReplyWriter` 与请求级 `MutationContext`，并在关闭时释放 mutation record。
 
 ### command variant
 

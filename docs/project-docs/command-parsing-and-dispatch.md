@@ -1,6 +1,6 @@
 # 命令解析与分发
 
-本文解释 Yierdis 如何从 `ExecutionRequest` 走到 `CommandSpec`、参数解析、事务分支、命令实现和错误回包。
+本文解释 Yierdis 如何从 `ExecutionRequest` 走到 `CommandDefinition`、参数解析、事务分支、命令准备和错误回包。
 
 ## 入口和边界
 
@@ -10,7 +10,7 @@
 RESP bytes
   -> RespRequestDecoder
   -> RetainedRespExecutionRequest / ExecutionRequest
-  -> YierdisFastCommandHandler
+  -> NettyExecutionRequestIngress
   -> CommandExecutor
   -> DefaultYierdisEngine
   -> YierdisFastCommandProcessor
@@ -18,47 +18,47 @@ RESP bytes
 
 这里最重要的边界是：
 
-- `YierdisFastCommandHandler` 只负责提交，提交失败时在 I/O 边界直接回 `ERR busy <reason>`，运行时异常时回 `ERR internal error`，不会承担 RESP protocol error 的回包职责。
+- `NettyExecutionRequestIngress` 只负责 reply slot 对齐和 executor admission：容量暂时不足时暂停输入并等待回调，request 永远不可能装入 bytes budget 时直接回错；它不执行命令语义。
 - `CommandExecutor` 只负责 owner-thread 调度、budget 和关闭保护，不解释命令语义。
-- `DefaultYierdisEngine` 把 `Session` 收窄成命令层需要的 capability，并把 `ExecutionRequest` 和 `RedisReplyWriter` 交给 processor。
+- `DefaultYierdisEngine` 把 `CommandSession` 和 `ExecutionRequest` 交给 processor，返回 `PreparedCommand`；reply writer 在容量预留成功后才创建。
 - `YierdisFastCommandProcessor` 只消费 transport-neutral 的 `ExecutionRequest`，不接触 RESP DTO，也不拼协议字节。
 - command handler 只通过 `RedisReplyWriter` 写 Redis reply 语义，不直接写 `+OK\r\n` 这类 wire bytes。
 
 所以这条链里“提交失败回错”和“命令解析执行”是两段不同责任：前者属于 server/executor 边界，后者才属于 command-kernel。
 
-## `CommandRegistry` 和 `CommandSpec`
+## `CommandRegistry` 和 `CommandDefinition`
 
-`CommandRegistry` 是命令名到 `CommandSpec` 的 SSOT。构造 `YierdisFastCommandProcessor` 时会先注册 `TransactionCommands`，再注册额外 `CommandModule`。
+`CommandRegistry` 是命令名到 `CommandDefinition` 的 SSOT。composition root 先创建 registry 和 `YierdisFastCommandProcessor`，再注册 `TransactionCommands` 与额外 `CommandModule`。
 
 lookup 不是用 `Map<String, ...>` 在热路径里做字符串分配。`CommandRegistry` 在注册阶段把命令名标准化成 ASCII upper-case bytes，并构造 open-addressed hash table；运行时直接对 `ExecutionRequest argv[0]` 做 ASCII case-insensitive 比较。
 
-`CommandSpec<T>` 是单条命令的统一形状，固定包含四件东西：
+`CommandDefinition<T>` 是单条命令的最终注册形状，固定包含三件东西：
 
-- parser：把 `ExecutionRequest` 解析成 typed command，或保留为 `ExecutionRequest`
-- handler：执行 parsed command
-- `CommandDescriptor`：记录 arity 和 key 位置信息
-- `disallowedInMultiError`：声明这个命令在 `MULTI` 中是否禁止
+- `CommandSyntax`：保存规范化命令名、`CommandArity`、`CommandKeySpec` 和 `TransactionPolicy`
+- `CommandParser<T>`：接收 `ArgReader`，返回 typed value 或 `CommandParseError`
+- `CommandPreparer<T>`：在 reply capacity 预留前读取 DB、计算回复形状，并返回 `PreparedCommand`
 
-因此 `CommandSpec` 同时控制：
+因此 `CommandDefinition` 同时控制：
 
 - 命令如何被找到
 - 命令如何校验参数
-- 命令如何执行业务逻辑
+- 命令如何准备后续执行单元
 - 命令在事务中是允许入队还是直接报错
 
-`CommandSupport` 不是 registry 的一部分，但它是内置命令的公共工具箱：参数读取、DB routing、常用 reply/error helper 都在这里收敛。
+`CommandSupport` 不是 registry 的一部分，但它是内置命令的公共工具箱：DB routing、scratch buffer 和常用 prepared reply/error helper 都在这里收敛；参数读取由 `ArgReader` 负责。
 
-## `YierdisFastCommandProcessor.execute(...)` 主流程
+## `YierdisFastCommandProcessor.prepare(...)` 主流程
 
-`YierdisFastCommandProcessor.execute(...)` 的顺序很短，但每一步都带着边界含义：
+`YierdisFastCommandProcessor.prepare(...)` 的顺序很短，但每一步都带着边界含义：
 
 1. 检查 `argc <= 0` 或 `argv[0]` 为空，直接回 `ERR empty command`
 2. 提前拒绝非法 null bulk string，只有 `PING` / `ECHO` 的单 message 参数允许为 null
 3. 把事务排队逻辑委托给 `TransactionQueuePolicy.queueIfNeeded(...)`
-4. 进入 `CommandExceptionTranslator.run(...)`
-5. 用 `registry.spec(request)` 查表
+4. 进入 `CommandExceptionTranslator.prepare(...)`
+5. 用 `registry.definition(request)` 查表
 6. 找不到命令时回 `ERR unknown command ...`
-7. `executeSpec(...)` 先 `spec.parse(request)`，解析成功后再 `spec.executeParsed(...)`
+7. `CommandDefinition.parse(...)` 先做 arity 校验再调用 parser
+8. 解析成功后调用 `CommandPreparer.prepare(...)`，返回带 `ReplyShape` 的 `PreparedCommand`
 
 可以简化成：
 
@@ -68,7 +68,9 @@ sanity checks
   -> exception translator
   -> registry lookup
   -> parse
-  -> execute handler
+  -> prepare command
+  -> reserve reply capacity
+  -> validate and execute prepared command
 ```
 
 这个主流程刻意保持薄：
@@ -80,12 +82,13 @@ sanity checks
 
 ## 参数解析、arity 和 parse error
 
-参数解析不是 handler 里零散 `if/else` 的集合，而是 `CommandSpec.parse(...)` 的固定前置阶段。
+参数解析不是 handler 里零散 `if/else` 的集合，而是 `CommandDefinition.parse(...)` 的固定前置阶段。
 
 解析期常见组件有：
 
 - `ArgReader`：基于 `ExecutionRequest` 读取参数、比较 literal、解析 long
-- `CommandParsers`：把常见 arity rule 和 mapper 收敛成 `CommandParser<T>`
+- `CommandArity`：表达 exact、min、range、one-of 和 pair-tail 等参数个数规则
+- `CommandParsers.args()`：不做额外转换的 identity parser，把同一个 `ArgReader` 交给 preparer
 - `CommandParseError`：统一 wrong arity、syntax、integer out of range 和 custom message
 
 `CommandParseError.toReplyMessage()` 是命令层错误文案的集中出口，例如：
@@ -100,7 +103,7 @@ sanity checks
 - 事务入队前也复用同一套 parser
 - 命令实现不需要各自再维护一套 arity 文案
 
-对于 typed command，handler 拿到的是 parse 后的对象；对于简单命令，`CommandSpec<ExecutionRequest>` 仍然可以直接把原始 argv 视图传下去。
+对于 typed command，preparer 拿到的是 parse 后的对象；简单命令使用 `CommandDefinition<ArgReader>`。只有需要保留参数切片、遍历 bulk payload 或创建 request 快照时，才通过 `args.request()` 取得底层 `ExecutionRequest`。
 
 ## 未知命令、空命令和错误翻译
 
@@ -125,7 +128,7 @@ RESP 协议层现在会把 array 里的 `$-1` 忠实解成 `ExecutionRequest` �
 
 ### 协议错误不在这里处理
 
-RESP frame 级别的 protocol error 发生在 `RespRequestDecoder` / `RespProtocolErrorReplyHandler` 边界，由协议层回错并关闭连接；它不会进入 `ExecutionRequest` 或 command-kernel。
+RESP frame 级别的 protocol error 由 `RespRequestDecoder` 产出，再由 `NettyExecutionRequestIngress` 使用已注册的 reply slot 回错并关闭连接；它不会进入 command-kernel。
 
 ## 事务排队前的复用规则
 
@@ -133,25 +136,25 @@ RESP frame 级别的 protocol error 发生在 `RespRequestDecoder` / `RespProtoc
 
 顺序是：
 
-1. 取 `ctx.transactionSession().transaction()`
+1. 取 `ctx.session().transaction()`
 2. 如果当前不在事务里，或命令本身是 `MULTI/EXEC/DISCARD`，则不走排队策略
-3. 用 `registry.spec(request)` 查表
-4. 找不到 spec：标记 transaction aborted，直接回 unknown command
-5. `spec.disallowedInMultiError()` 非空：标记 aborted，直接回该错误
-6. `spec.parse(request)` 预解析；parse error 同样会标记 aborted
+3. 用 `registry.definition(request)` 查表
+4. 找不到 definition：标记 transaction aborted，直接回 unknown command
+5. 根据 `definition.syntax().transactionPolicy()` 处理 transaction-control 或 disallowed 分支
+6. `definition.parse(request)` 预解析；parse error 同样会标记 aborted
 7. `tx.tryEnqueue(request)` 真正入队；成功回 `QUEUED`
 
 因此“事务排队前的复用规则”是：
 
 - lookup 复用同一个 `CommandRegistry`
-- 参数校验复用同一个 `CommandSpec.parse(...)`
-- 事务里禁止的命令仍由 `CommandSpec` 描述
+- 参数校验复用同一个 `CommandDefinition.parse(...)`
+- 事务策略由同一个 `CommandSyntax` 描述
 
-真正保存进队列的也不是原始请求引用，而是 `EngineSession.DefaultTransactionState.tryEnqueue(...)` 里的 `ByteArrayExecutionRequest.copyOf(request)` 快照。队列保存的是后续可 replay 的执行请求，不是另一套内部 IR。
+`EngineSession.DefaultTransactionState.tryEnqueue(...)` 通过 `request.retain()` 取得队列独立拥有的请求视图。生产网络请求共享不可变 argv 和 request-memory lease，不做第二次逐参数复制；队列保存的是后续可 replay 且最终必须关闭的 `ExecutionRequest`，不是另一套内部 IR。
 
 ## 命令记录与 DB 提交边界
 
-命令层只负责解析、执行和写回 Redis 语义，不根据 handler 返回值推断或发布变更事件。`DefaultYierdisEngine.execute(...)` 为当前请求创建显式 `MutationContext`，并由 processor 在命令边界的 `finally` 中关闭借用；DB view 不再从隐式 `ThreadLocal` 读取命令记录。
+命令层只负责解析、准备、执行和写回 Redis 语义，不根据 preparer 返回值推断或发布变更事件。reply capacity 预留成功后，executor 为当前请求创建 `CommandExecutionContext`；该作用域持有显式 `MutationContext`，执行结束时关闭，DB view 不从隐式 `ThreadLocal` 读取命令记录。
 
 真正的变更发布由 DB 持有。`YierdisDbMutationExecutor` 只会在 prepared mutation 确认实际发生变化后，先向 `DbCommitPublisher` 预留记录容量，再开始可见性提交；storage 和 ledger 都提交后才把预留转换为已发布事件。这样读命令、parse error、unknown command、条件写入的 no-op 以及 `MULTI` 的 `QUEUED` 阶段都不会产生 commit-stream 事件。
 
