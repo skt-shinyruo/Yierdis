@@ -138,6 +138,27 @@ public class YierdisServerBootstrapCommandWiringTest {
     }
 
     @Test
+    public void infoHealthKeepsElevenPairsAcrossResp2AndResp3() throws Exception {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
+                "--port", "0",
+                "--maxmemoryBytes", "0",
+                "--databases", "1"
+        ); Socket socket = new Socket("127.0.0.1", server.port())) {
+            socket.setSoTimeout(2000);
+            OutputStream out = socket.getOutputStream();
+            InputStream in = socket.getInputStream();
+
+            Map<String, Object> resp2 = respMap(roundTrip(out, in, "INFO", "health"));
+            assertHealthInfo(resp2);
+
+            Assert.assertEquals(3L, asLong(respMap(roundTrip(out, in, "HELLO", "3")).get("proto")));
+            Map<String, Object> resp3 = respMap(roundTrip(out, in, "INFO", "health"));
+            assertHealthInfo(resp3);
+            Assert.assertEquals(resp2.keySet(), resp3.keySet());
+        }
+    }
+
+    @Test
     public void serverCommandCompositionBuildsDispatcherWithServerAndDefaultCommands() throws Exception {
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(
                 YierdisInstanceConfig.builder().databases(1).build()
@@ -492,6 +513,7 @@ public class YierdisServerBootstrapCommandWiringTest {
             case ':' -> Long.parseLong(readLine(in));
             case '$' -> readBulk(in);
             case '*' -> readArray(in);
+            case '%' -> readMap(in);
             case '_' -> {
                 expectLineEnd(in);
                 yield null;
@@ -520,6 +542,19 @@ public class YierdisServerBootstrapCommandWiringTest {
         }
         List<Object> values = new ArrayList<>(len);
         for (int i = 0; i < len; i++) {
+            values.add(readResp(in));
+        }
+        return values;
+    }
+
+    private static List<Object> readMap(InputStream in) throws IOException {
+        int pairs = Integer.parseInt(readLine(in));
+        if (pairs < 0) {
+            return null;
+        }
+        List<Object> values = new ArrayList<>(pairs * 2);
+        for (int i = 0; i < pairs; i++) {
+            values.add(readResp(in));
             values.add(readResp(in));
         }
         return values;
@@ -576,6 +611,21 @@ public class YierdisServerBootstrapCommandWiringTest {
     private static long asLong(Object value) {
         Assert.assertTrue("expected integer, got " + value, value instanceof Long);
         return (Long) value;
+    }
+
+    private static void assertHealthInfo(Map<String, Object> health) {
+        Assert.assertEquals(11, health.size());
+        Assert.assertEquals("RUNNING", asString(health.get("lifecycle_state")));
+        Assert.assertEquals(1L, asLong(health.get("ready")));
+        Assert.assertEquals(1L, asLong(health.get("writable")));
+        Assert.assertEquals(0L, asLong(health.get("degraded_databases")));
+        Assert.assertEquals(1L, asLong(health.get("databases")));
+        Assert.assertEquals("DISABLED", asString(health.get("commit_stream_state")));
+        Assert.assertTrue(health.containsKey("first_failure_type"));
+        Assert.assertTrue(health.containsKey("first_failure_message"));
+        Assert.assertTrue(asLong(health.get("total_connections_received")) >= 1L);
+        Assert.assertTrue(health.containsKey("rejected_connections"));
+        Assert.assertTrue(health.containsKey("max_clients"));
     }
 
     private static void assertCommandInfo(
