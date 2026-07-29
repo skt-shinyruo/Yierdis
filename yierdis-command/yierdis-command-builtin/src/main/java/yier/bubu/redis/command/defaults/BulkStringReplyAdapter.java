@@ -4,14 +4,14 @@ package yier.bubu.redis.command.defaults;
 
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.storage.api.result.ByteValueSink;
-import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.ReplySink;
 
 import java.util.Objects;
 
 public final class BulkStringReplyAdapter implements ByteValueSink {
-    private final RedisReplyWriter reply;
+    private final ReplySink reply;
 
-    public BulkStringReplyAdapter(RedisReplyWriter reply) {
+    public BulkStringReplyAdapter(ReplySink reply) {
         this.reply = Objects.requireNonNull(reply, "reply");
     }
 

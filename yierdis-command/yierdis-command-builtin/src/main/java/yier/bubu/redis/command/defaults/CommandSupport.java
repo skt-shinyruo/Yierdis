@@ -11,8 +11,11 @@ import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.execution.api.CommandExecutionContext;
 import yier.bubu.redis.execution.api.CommandPreparationContext;
+import yier.bubu.redis.execution.api.CommandResult;
+import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.PreparedCommands;
 import yier.bubu.redis.execution.api.ReplyShape;
 import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.execution.api.ValidationResult;
@@ -27,6 +30,7 @@ import java.util.Arrays;
 import java.util.RandomAccess;
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -56,7 +60,12 @@ public final class CommandSupport {
 
     public CommandDb commandDb(CommandPreparationContext ctx) {
         Objects.requireNonNull(ctx, "ctx");
-        return new CommandDb(dbRouter.dbFor(ctx.session()), null);
+        return commandDb(ctx.session());
+    }
+
+    public CommandDb commandDb(CommandSession session) {
+        Objects.requireNonNull(session, "session");
+        return new CommandDb(dbRouter.dbFor(session), null);
     }
 
     public CommandDb commandDb(CommandExecutionContext ctx) {
@@ -240,6 +249,27 @@ public final class CommandSupport {
                 }
             }
         };
+    }
+
+    public static PreparedCommand preparedMutation(
+            ReplyShape reservationShape,
+            PreparedMutation<?> mutation,
+            Function<CommandExecutionContext, CommandResult> action
+    ) {
+        return PreparedCommands.ownedAction(
+                reservationShape,
+                mutation,
+                () -> mutation.isCurrent() ? ValidationResult.VALID : ValidationResult.STALE,
+                context -> translateExpectedCommandFailure(() -> action.apply(context))
+        );
+    }
+
+    static CommandResult translateExpectedCommandFailure(Supplier<CommandResult> action) {
+        try {
+            return action.get();
+        } catch (WrongTypeException | YierdisCommandException failure) {
+            return CommandResult.controlError(failure.getMessage());
+        }
     }
 
     public static PreparedCommand preparedMutation(
