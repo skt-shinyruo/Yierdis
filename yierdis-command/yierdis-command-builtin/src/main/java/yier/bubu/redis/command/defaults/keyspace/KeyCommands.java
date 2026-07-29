@@ -128,7 +128,7 @@ public final class KeyCommands implements CommandModule {
                 return CommandSupport.error("ERR wrong number of arguments for 'memory' command");
             }
             ServerInfoProvider infoProvider = support.infoProvider();
-            YierdisMemoryStats stats = infoProvider == null ? null : infoProvider.memoryStats(context);
+            YierdisMemoryStats stats = infoProvider == null ? null : infoProvider.memoryStats(context.session());
             if (stats == null) {
                 stats = support.commandDb(context).memory().memoryStats();
             }
@@ -195,7 +195,7 @@ public final class KeyCommands implements CommandModule {
 
     private PreparedCommand keys(ArgReader args, CommandPreparationContext context) {
         SlowCommandGovernor governor = support.slowGovernor();
-        long timeBudgetNanos = governor.keysTimeBudgetNanos(context);
+        long timeBudgetNanos = governor.keysTimeBudgetNanos(context.session());
         long deadlineNanos = deadlineNanos(timeBudgetNanos);
         for (int attempt = 0; attempt < KEY_WINDOW_DISCOVERY_ATTEMPTS; attempt++) {
             if (attempt > 0 && deadlineExpired(deadlineNanos)) {
@@ -204,7 +204,7 @@ public final class KeyCommands implements CommandModule {
             long remainingBudgetNanos = remainingBudgetNanos(timeBudgetNanos, deadlineNanos);
             KeyScanWindow window = support.commandDb(context).reads().keyspace().keys(
                     args.bytes(1),
-                    governor.keysMaxResults(context),
+                    governor.keysMaxResults(context.session()),
                     remainingBudgetNanos
             );
             if (!window.current()) {

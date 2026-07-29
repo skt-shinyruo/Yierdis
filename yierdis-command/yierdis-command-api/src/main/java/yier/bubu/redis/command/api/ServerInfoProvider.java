@@ -1,9 +1,8 @@
 package yier.bubu.redis.command.api;
 
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
-import yier.bubu.redis.execution.api.CommandPreparationContext;
-import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.CommandSession;
+import yier.bubu.redis.execution.api.RedisReply;
 
 /**
  * Server 运行时信息提供者（可观测性扩展点）。
@@ -12,14 +11,14 @@ import yier.bubu.redis.execution.api.PreparedCommand;
  * 仍能获取 server/executor/connection 的统计摘要。
  */
 public interface ServerInfoProvider {
-    PreparedCommand prepareInfo(ExecutionRequest request, CommandPreparationContext context);
+    RedisReply info(CommandArgs args, CommandSession session);
 
-    PreparedCommand prepareStats(ExecutionRequest request, CommandPreparationContext context);
+    RedisReply stats(CommandSession session);
 
     /**
      * 供 MEMORY STATS 等命令复用的内存摘要（可选）。
      * <p>
      * 返回 {@code null} 表示使用 DB 级默认实现（兼容单 DB 或不关心全局口径的场景）。
      */
-    YierdisMemoryStats memoryStats(CommandPreparationContext context);
+    YierdisMemoryStats memoryStats(CommandSession session);
 }

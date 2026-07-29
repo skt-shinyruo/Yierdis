@@ -3,7 +3,10 @@ package yier.bubu.redis.command.api;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
+import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.RedisReply;
+import yier.bubu.redis.storage.api.YierdisMemoryStats;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
@@ -67,6 +70,27 @@ public class CommandContractTest {
         Assert.assertArrayEquals(new Class<?>[]{CommandParseException.class}, parse.getExceptionTypes());
         Assert.assertEquals(1, Arrays.stream(CommandHandler.class.getDeclaredMethods())
                 .filter(method -> method.getName().equals("parse"))
+                .count());
+    }
+
+    @Test
+    public void serverServicesUseSemanticRepliesAndSessions() throws Exception {
+        Method info = ServerInfoProvider.class.getMethod("info", CommandArgs.class, CommandSession.class);
+        Method stats = ServerInfoProvider.class.getMethod("stats", CommandSession.class);
+        Method memoryStats = ServerInfoProvider.class.getMethod("memoryStats", CommandSession.class);
+        Method keysBudget = SlowCommandGovernor.class.getMethod("keysTimeBudgetNanos", CommandSession.class);
+        Method keysMaxResults = SlowCommandGovernor.class.getMethod("keysMaxResults", CommandSession.class);
+
+        Assert.assertEquals(RedisReply.class, info.getReturnType());
+        Assert.assertEquals(RedisReply.class, stats.getReturnType());
+        Assert.assertEquals(YierdisMemoryStats.class, memoryStats.getReturnType());
+        Assert.assertEquals(long.class, keysBudget.getReturnType());
+        Assert.assertEquals(int.class, keysMaxResults.getReturnType());
+        Assert.assertEquals(3, Arrays.stream(ServerInfoProvider.class.getDeclaredMethods())
+                .filter(method -> !method.isSynthetic())
+                .count());
+        Assert.assertEquals(2, Arrays.stream(SlowCommandGovernor.class.getDeclaredMethods())
+                .filter(method -> !method.isSynthetic())
                 .count());
     }
 

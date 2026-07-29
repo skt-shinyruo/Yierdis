@@ -1,8 +1,16 @@
 package yier.bubu.redis.integration.command;
 
 import yier.bubu.redis.command.kernel.CommandDispatcher;
+import yier.bubu.redis.command.api.CommandArgs;
+import yier.bubu.redis.command.api.ServerInfoProvider;
+import yier.bubu.redis.command.defaults.DefaultCommandModules;
+import yier.bubu.redis.command.kernel.CommandRegistries;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.execution.api.CommandSession;
+import yier.bubu.redis.execution.api.RedisReplies;
+import yier.bubu.redis.execution.api.RedisReply;
+import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyInteger;
@@ -60,5 +68,48 @@ public class MemoryStatsCommandTest {
                 }
             }
         });
+    }
+
+    @Test
+    public void memoryStatsUsesGlobalProviderOnlyWhenItSuppliesAGlobalSnapshot() {
+        forEachDb(db -> {
+            YierdisMemoryStats global = YierdisMemoryStats.empty(31_337L, false);
+            CommandDispatcher globalDispatcher = CommandRegistries.dispatcher(
+                    DefaultCommandModules.create(db, new MemoryStatsProvider(global)));
+            CommandDispatcher perDbDispatcher = CommandRegistries.dispatcher(
+                    DefaultCommandModules.create(db, new MemoryStatsProvider(null)));
+
+            Assert.assertEquals(31_337L, maxmemoryBytes(globalDispatcher));
+            Assert.assertEquals(db.memory().memoryStats().maxmemoryBytes(), maxmemoryBytes(perDbDispatcher));
+        });
+    }
+
+    private static long maxmemoryBytes(CommandDispatcher dispatcher) {
+        try (FastTestClient client = new FastTestClient(dispatcher)) {
+            ReplyMap map = (ReplyMap) client.execute(cmd("MEMORY", "STATS"));
+            for (ReplyMap.Entry entry : map.entries()) {
+                if ("maxmemory_bytes".equals(((ReplyBulkString) entry.key()).asString())) {
+                    return ((ReplyInteger) entry.value()).value();
+                }
+            }
+            throw new AssertionError("MEMORY STATS did not include maxmemory_bytes");
+        }
+    }
+
+    private record MemoryStatsProvider(YierdisMemoryStats global) implements ServerInfoProvider {
+        @Override
+        public RedisReply info(CommandArgs args, CommandSession session) {
+            return RedisReplies.error("ERR INFO unavailable");
+        }
+
+        @Override
+        public RedisReply stats(CommandSession session) {
+            return RedisReplies.error("ERR STATS unavailable");
+        }
+
+        @Override
+        public YierdisMemoryStats memoryStats(CommandSession session) {
+            return global;
+        }
     }
 }

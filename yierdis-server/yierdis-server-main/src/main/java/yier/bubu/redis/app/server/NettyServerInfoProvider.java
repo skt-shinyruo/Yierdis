@@ -4,16 +4,11 @@ package yier.bubu.redis.app.server;
 
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
-import yier.bubu.redis.execution.api.CommandExecutionContext;
-import yier.bubu.redis.execution.api.CommandPreparationContext;
+import yier.bubu.redis.command.api.CommandArgs;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
-import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.PreparedCommand;
-import yier.bubu.redis.execution.api.RedisReplyWriter;
-import yier.bubu.redis.execution.api.ReplyShape;
-import yier.bubu.redis.execution.api.ReplyShapes;
-import yier.bubu.redis.execution.api.ValidationResult;
+import yier.bubu.redis.execution.api.RedisReplies;
+import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
@@ -22,9 +17,10 @@ import yier.bubu.redis.runtime.embedded.CommitStreamStats;
 import yier.bubu.redis.runtime.embedded.YierdisInstanceObservability;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
-import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
@@ -182,163 +178,119 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     }
 
     @Override
-    public PreparedCommand prepareInfo(ExecutionRequest request, CommandPreparationContext context) {
-        Objects.requireNonNull(context, "context");
-        return maximumReply(execution -> writeInfo(request, execution.session(), execution.reply()));
-    }
-
-    private void writeInfo(ExecutionRequest request, CommandSession session, RedisReplyWriter out) {
+    public RedisReply info(CommandArgs args, CommandSession session) {
         Objects.requireNonNull(session, "session");
-        Objects.requireNonNull(out, "out");
         CommandExecutor<NettyExecutionConnection> ex = executor;
         if (ex == null) {
-            out.error("ERR INFO not ready");
-            return;
+            return RedisReplies.error("ERR INFO not ready");
         }
 
         ServerStatsSnapshot snapshot = serverStatsSnapshot(ex);
-        String section = request != null && request.argc() == 2 ? asciiLower(request, 1) : null;
+        String section = args != null && args.argc() == 2 ? asciiLower(args, 1) : null;
         if ("health".equals(section)) {
-            writeHealth(out, snapshot);
-            return;
+            return healthReply(snapshot);
         }
         if ("yierdis".equals(section)) {
-            writeYierdisStructuredInfo(out, snapshot);
-            return;
+            return yierdisStructuredInfo(snapshot);
         }
 
         byte[] response = buildRedisInfo(section, snapshot).getBytes(StandardCharsets.UTF_8);
-        out.bulkString(response);
+        return RedisReplies.bulkString(response);
     }
 
     @Override
-    public PreparedCommand prepareStats(ExecutionRequest request, CommandPreparationContext context) {
-        Objects.requireNonNull(context, "context");
-        return maximumReply(execution -> writeStats(request, execution.session(), execution.reply()));
-    }
-
-    private void writeStats(ExecutionRequest request, CommandSession session, RedisReplyWriter out) {
+    public RedisReply stats(CommandSession session) {
         Objects.requireNonNull(session, "session");
-        Objects.requireNonNull(out, "out");
         CommandExecutor<NettyExecutionConnection> ex = executor;
         if (ex == null) {
-            out.error("ERR STATS not ready");
-            return;
+            return RedisReplies.error("ERR STATS not ready");
         }
 
-        writeStats(out, serverStatsSnapshot(ex), connectionStats(session));
+        return statsReply(serverStatsSnapshot(ex), connectionStats(session));
     }
 
     @Override
-    public YierdisMemoryStats memoryStats(CommandPreparationContext context) {
+    public YierdisMemoryStats memoryStats(CommandSession session) {
         if (config.maxmemoryScope() != YierdisServerRuntimeConfig.MaxmemoryScope.GLOBAL) {
             return null;
         }
         return aggregatedMemoryStats();
     }
 
-    private static PreparedCommand maximumReply(Consumer<CommandExecutionContext> execution) {
-        Objects.requireNonNull(execution, "execution");
-        return new PreparedCommand() {
-            @Override
-            public ReplyShape replyShape() {
-                return ReplyShapes.maximum();
-            }
-
-            @Override
-            public ValidationResult validateBeforeExecute() {
-                return ValidationResult.VALID;
-            }
-
-            @Override
-            public void execute(CommandExecutionContext context) {
-                execution.accept(context);
-            }
-
-            @Override
-            public void close() {
-            }
-        };
-    }
-
-    private void writeStats(
-            RedisReplyWriter out,
+    private RedisReply statsReply(
             ServerStatsSnapshot snapshot,
             ConnectionStatsView connectionStats
     ) {
         CommandExecutor.StatsSnapshot stats = snapshot.executor();
-        int pairs = 69 + (connectionStats == null ? 0 : 11);
-        writeHeader(out, pairs);
+        List<RedisReply> fields = new ArrayList<>(160);
 
-        writePair(out, KEY_QUEUED_TASKS, stats.queuedTasks());
-        writePair(out, KEY_QUEUED_BYTES, stats.queuedBytes());
-        writePair(out, KEY_CHANNELS_AUTOREAD_DISABLED, stats.channelsAutoReadDisabled());
-        writePair(out, KEY_SUBMIT_ACCEPTED_TOTAL, stats.submitAccepted());
-        writePair(out, KEY_SUBMIT_REJECTED_NOT_RUNNING_TOTAL, stats.submitRejectedNotRunning());
-        writePair(out, KEY_SUBMIT_REJECTED_CLOSING_TOTAL, stats.submitRejectedClosing());
-        writePair(out, KEY_SUBMIT_REJECTED_QUEUE_FULL_TOTAL, stats.submitRejectedQueueFull());
-        writePair(out, KEY_SUBMIT_REJECTED_BYTES_BUDGET_TOTAL, stats.submitRejectedBytesBudget());
-        writePair(out, KEY_SUBMIT_REJECTED_OFFER_FAILED_TOTAL, stats.submitRejectedOfferFailed());
-        writePair(out, KEY_COMMANDS_EXECUTED_TOTAL, stats.commandsExecuted());
-        writePair(out, KEY_COMMANDS_SKIPPED_CLOSING_TOTAL, stats.commandsSkippedClosing());
-        writePair(out, KEY_CLOSE_AFTER_REPLY_TOTAL, stats.closeAfterReply());
-        writePair(out, KEY_BACKPRESSURE_ENTER_TOTAL, stats.backpressureEnter());
-        writePair(out, KEY_BACKPRESSURE_EXIT_TOTAL, stats.backpressureExit());
-        writePair(out, KEY_DRAIN_LIMITED_MAX_COMMANDS_TOTAL, stats.drainLimitedByMaxCommands());
-        writePair(out, KEY_DRAIN_LIMITED_TIME_BUDGET_TOTAL, stats.drainLimitedByTimeBudget());
-        writePair(out, KEY_DEFERRED_FAIR_REPLY_HEADS, stats.deferredFairReplyHeads());
-        writePair(out, KEY_DEFERRED_GLOBAL_REPLY_HEADS, stats.deferredGlobalReplyHeads());
-        writeInboundStats(out, snapshot.inbound());
-        writeCommitStreamStats(out, snapshot.commitStream());
-        writeOutboundStats(out, snapshot.outbound(), snapshot.egress(), snapshot.liveChildChannels());
-        writeHealthPairs(out, snapshot.health(), snapshot.children(), config.maxClients(), false);
+        addPair(fields, KEY_QUEUED_TASKS, stats.queuedTasks());
+        addPair(fields, KEY_QUEUED_BYTES, stats.queuedBytes());
+        addPair(fields, KEY_CHANNELS_AUTOREAD_DISABLED, stats.channelsAutoReadDisabled());
+        addPair(fields, KEY_SUBMIT_ACCEPTED_TOTAL, stats.submitAccepted());
+        addPair(fields, KEY_SUBMIT_REJECTED_NOT_RUNNING_TOTAL, stats.submitRejectedNotRunning());
+        addPair(fields, KEY_SUBMIT_REJECTED_CLOSING_TOTAL, stats.submitRejectedClosing());
+        addPair(fields, KEY_SUBMIT_REJECTED_QUEUE_FULL_TOTAL, stats.submitRejectedQueueFull());
+        addPair(fields, KEY_SUBMIT_REJECTED_BYTES_BUDGET_TOTAL, stats.submitRejectedBytesBudget());
+        addPair(fields, KEY_SUBMIT_REJECTED_OFFER_FAILED_TOTAL, stats.submitRejectedOfferFailed());
+        addPair(fields, KEY_COMMANDS_EXECUTED_TOTAL, stats.commandsExecuted());
+        addPair(fields, KEY_COMMANDS_SKIPPED_CLOSING_TOTAL, stats.commandsSkippedClosing());
+        addPair(fields, KEY_CLOSE_AFTER_REPLY_TOTAL, stats.closeAfterReply());
+        addPair(fields, KEY_BACKPRESSURE_ENTER_TOTAL, stats.backpressureEnter());
+        addPair(fields, KEY_BACKPRESSURE_EXIT_TOTAL, stats.backpressureExit());
+        addPair(fields, KEY_DRAIN_LIMITED_MAX_COMMANDS_TOTAL, stats.drainLimitedByMaxCommands());
+        addPair(fields, KEY_DRAIN_LIMITED_TIME_BUDGET_TOTAL, stats.drainLimitedByTimeBudget());
+        addPair(fields, KEY_DEFERRED_FAIR_REPLY_HEADS, stats.deferredFairReplyHeads());
+        addPair(fields, KEY_DEFERRED_GLOBAL_REPLY_HEADS, stats.deferredGlobalReplyHeads());
+        addInboundStats(fields, snapshot.inbound());
+        addCommitStreamStats(fields, snapshot.commitStream());
+        addOutboundStats(fields, snapshot.outbound(), snapshot.egress(), snapshot.liveChildChannels());
+        addHealthPairs(fields, snapshot.health(), snapshot.children(), config.maxClients(), false);
 
         if (connectionStats == null) {
-            return;
+            return mapReply(fields);
         }
 
-        writePair(out, KEY_CONN_PENDING, connectionStats.pending());
-        writePair(out, KEY_CONN_PENDING_BYTES, connectionStats.pendingBytes());
-        writePair(out, KEY_CONN_AUTOREAD_DISABLED, connectionStats.inputDisabledByExecutor() ? 1 : 0);
-        writePair(out, KEY_CONN_CLOSING, connectionStats.closing() ? 1 : 0);
-        writePair(out, KEY_CONN_COMMANDS_ENQUEUED, connectionStats.commandsEnqueued());
-        writePair(out, KEY_CONN_COMMANDS_EXECUTED, connectionStats.commandsExecuted());
-        writePair(out, KEY_CONN_COMMANDS_REJECTED, connectionStats.commandsRejected());
-        writePair(out, KEY_CONN_COMMANDS_SKIPPED_CLOSING, connectionStats.commandsSkippedClosing());
-        writePair(out, KEY_CONN_CLOSE_AFTER_REPLY, connectionStats.closeAfterReply());
-        writePair(out, KEY_CONN_BACKPRESSURE_ENTER, connectionStats.backpressureEnter());
-        writePair(out, KEY_CONN_BACKPRESSURE_EXIT, connectionStats.backpressureExit());
+        addPair(fields, KEY_CONN_PENDING, connectionStats.pending());
+        addPair(fields, KEY_CONN_PENDING_BYTES, connectionStats.pendingBytes());
+        addPair(fields, KEY_CONN_AUTOREAD_DISABLED, connectionStats.inputDisabledByExecutor() ? 1 : 0);
+        addPair(fields, KEY_CONN_CLOSING, connectionStats.closing() ? 1 : 0);
+        addPair(fields, KEY_CONN_COMMANDS_ENQUEUED, connectionStats.commandsEnqueued());
+        addPair(fields, KEY_CONN_COMMANDS_EXECUTED, connectionStats.commandsExecuted());
+        addPair(fields, KEY_CONN_COMMANDS_REJECTED, connectionStats.commandsRejected());
+        addPair(fields, KEY_CONN_COMMANDS_SKIPPED_CLOSING, connectionStats.commandsSkippedClosing());
+        addPair(fields, KEY_CONN_CLOSE_AFTER_REPLY, connectionStats.closeAfterReply());
+        addPair(fields, KEY_CONN_BACKPRESSURE_ENTER, connectionStats.backpressureEnter());
+        addPair(fields, KEY_CONN_BACKPRESSURE_EXIT, connectionStats.backpressureExit());
+        return mapReply(fields);
     }
 
-    private void writeYierdisStructuredInfo(
-            RedisReplyWriter out,
-            ServerStatsSnapshot snapshot
-    ) {
+    private RedisReply yierdisStructuredInfo(ServerStatsSnapshot snapshot) {
         CommandExecutor.StatsSnapshot stats = snapshot.executor();
-        int pairs = 68;
-        writeHeader(out, pairs);
+        List<RedisReply> fields = new ArrayList<>(136);
 
-        writePair(out, KEY_SERVER, VALUE_SERVER);
-        writePair(out, KEY_VERSION, VALUE_VERSION);
-        writePair(out, KEY_PORT, config.port());
-        writePair(out, KEY_IO_THREADS, config.ioThreads());
-        writePair(out, KEY_EXECUTOR_POLICY, ascii(String.valueOf(stats.schedulingPolicy())));
-        writePair(out, KEY_EXECUTOR_QUEUE_CAPACITY, config.executorQueueCapacity());
-        writePair(out, KEY_EXECUTOR_QUEUE_MAX_BYTES, config.executorQueueMaxBytes());
-        writePair(out, KEY_BACKPRESSURE_HIGH, config.backpressureHighWatermark());
-        writePair(out, KEY_BACKPRESSURE_LOW, config.backpressureLowWatermark());
-        writePair(out, KEY_BACKPRESSURE_BYTES_HIGH, config.backpressureBytesHighWatermark());
-        writePair(out, KEY_BACKPRESSURE_BYTES_LOW, config.backpressureBytesLowWatermark());
-        writePair(out, KEY_EXECUTOR_MAX_DRAIN, config.executorMaxDrainCommands());
-        writePair(out, KEY_EXECUTOR_DRAIN_MILLIS, config.executorDrainTimeLimitMillis());
-        writePair(out, KEY_STARTED_MILLIS, startedMillis);
-        writePair(out, KEY_UPTIME_MILLIS, snapshot.uptimeMillis());
-        writePair(out, KEY_DEFERRED_FAIR_REPLY_HEADS, stats.deferredFairReplyHeads());
-        writePair(out, KEY_DEFERRED_GLOBAL_REPLY_HEADS, stats.deferredGlobalReplyHeads());
-        writeInboundStats(out, snapshot.inbound());
-        writeCommitStreamStats(out, snapshot.commitStream());
-        writeOutboundStats(out, snapshot.outbound(), snapshot.egress(), snapshot.liveChildChannels());
-        writeHealthPairs(out, snapshot.health(), snapshot.children(), config.maxClients(), false);
+        addPair(fields, KEY_SERVER, VALUE_SERVER);
+        addPair(fields, KEY_VERSION, VALUE_VERSION);
+        addPair(fields, KEY_PORT, config.port());
+        addPair(fields, KEY_IO_THREADS, config.ioThreads());
+        addPair(fields, KEY_EXECUTOR_POLICY, ascii(String.valueOf(stats.schedulingPolicy())));
+        addPair(fields, KEY_EXECUTOR_QUEUE_CAPACITY, config.executorQueueCapacity());
+        addPair(fields, KEY_EXECUTOR_QUEUE_MAX_BYTES, config.executorQueueMaxBytes());
+        addPair(fields, KEY_BACKPRESSURE_HIGH, config.backpressureHighWatermark());
+        addPair(fields, KEY_BACKPRESSURE_LOW, config.backpressureLowWatermark());
+        addPair(fields, KEY_BACKPRESSURE_BYTES_HIGH, config.backpressureBytesHighWatermark());
+        addPair(fields, KEY_BACKPRESSURE_BYTES_LOW, config.backpressureBytesLowWatermark());
+        addPair(fields, KEY_EXECUTOR_MAX_DRAIN, config.executorMaxDrainCommands());
+        addPair(fields, KEY_EXECUTOR_DRAIN_MILLIS, config.executorDrainTimeLimitMillis());
+        addPair(fields, KEY_STARTED_MILLIS, startedMillis);
+        addPair(fields, KEY_UPTIME_MILLIS, snapshot.uptimeMillis());
+        addPair(fields, KEY_DEFERRED_FAIR_REPLY_HEADS, stats.deferredFairReplyHeads());
+        addPair(fields, KEY_DEFERRED_GLOBAL_REPLY_HEADS, stats.deferredGlobalReplyHeads());
+        addInboundStats(fields, snapshot.inbound());
+        addCommitStreamStats(fields, snapshot.commitStream());
+        addOutboundStats(fields, snapshot.outbound(), snapshot.egress(), snapshot.liveChildChannels());
+        addHealthPairs(fields, snapshot.health(), snapshot.children(), config.maxClients(), false);
+        return mapReply(fields);
     }
 
     private String buildRedisInfo(String section, ServerStatsSnapshot snapshot) {
@@ -644,31 +596,32 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         );
     }
 
-    private void writeHealth(RedisReplyWriter out, ServerStatsSnapshot snapshot) {
-        writeHeader(out, 11);
-        writeHealthPairs(out, snapshot.health(), snapshot.children(), config.maxClients(), true);
+    private RedisReply healthReply(ServerStatsSnapshot snapshot) {
+        List<RedisReply> fields = new ArrayList<>(22);
+        addHealthPairs(fields, snapshot.health(), snapshot.children(), config.maxClients(), true);
+        return mapReply(fields);
     }
 
-    private static void writeHealthPairs(
-            RedisReplyWriter out,
+    private static void addHealthPairs(
+            List<RedisReply> fields,
             HealthView health,
             ChildChannelRegistry.StatsSnapshot child,
             int maxClients,
             boolean includeCommitStreamState
     ) {
-        writePair(out, KEY_LIFECYCLE_STATE, ascii(health.lifecycleState()));
-        writePair(out, KEY_READY, health.ready ? 1L : 0L);
-        writePair(out, KEY_WRITABLE, health.writable ? 1L : 0L);
-        writePair(out, KEY_DEGRADED_DATABASES, health.degradedDatabases);
-        writePair(out, KEY_DATABASES, health.databases);
+        addPair(fields, KEY_LIFECYCLE_STATE, ascii(health.lifecycleState()));
+        addPair(fields, KEY_READY, health.ready ? 1L : 0L);
+        addPair(fields, KEY_WRITABLE, health.writable ? 1L : 0L);
+        addPair(fields, KEY_DEGRADED_DATABASES, health.degradedDatabases);
+        addPair(fields, KEY_DATABASES, health.databases);
         if (includeCommitStreamState) {
-            writePair(out, KEY_COMMIT_STREAM_STATE, ascii(health.commitStreamState));
+            addPair(fields, KEY_COMMIT_STREAM_STATE, ascii(health.commitStreamState));
         }
-        writePair(out, KEY_FIRST_FAILURE_TYPE, ascii(health.firstFailureType));
-        writePair(out, KEY_FIRST_FAILURE_MESSAGE, ascii(health.firstFailureMessage));
-        writePair(out, KEY_TOTAL_CONNECTIONS_RECEIVED, child.acceptedConnections());
-        writePair(out, KEY_REJECTED_CONNECTIONS, child.rejectedConnections());
-        writePair(out, KEY_MAX_CLIENTS, maxClients);
+        addPair(fields, KEY_FIRST_FAILURE_TYPE, ascii(health.firstFailureType));
+        addPair(fields, KEY_FIRST_FAILURE_MESSAGE, ascii(health.firstFailureMessage));
+        addPair(fields, KEY_TOTAL_CONNECTIONS_RECEIVED, child.acceptedConnections());
+        addPair(fields, KEY_REJECTED_CONNECTIONS, child.rejectedConnections());
+        addPair(fields, KEY_MAX_CLIENTS, maxClients);
     }
 
     private static void appendHealthText(
@@ -733,85 +686,80 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
     }
 
-    private void writeOutboundStats(
-            RedisReplyWriter out,
+    private void addOutboundStats(
+            List<RedisReply> fields,
             OutboundMemoryBudgetStats outboundStats,
             ReplyEgressStats.Snapshot egressStats,
             int liveChildChannels
     ) {
-        writePair(out, KEY_REPLY_GLOBAL_CAPACITY_BYTES, config.replyGlobalCapacityBytes());
-        writePair(out, KEY_REPLY_PER_CONNECTION_CAPACITY_BYTES, config.replyPerConnectionCapacityBytes());
-        writePair(out, KEY_REPLY_MAX_TOTAL_BYTES, config.replyMaxTotalBytes());
-        writePair(out, KEY_REPLY_CHUNK_PAYLOAD_BYTES, config.replyChunkPayloadBytes());
-        writePair(out, KEY_REPLY_CONTROL_RESERVATION_BYTES, config.replyControlReservationBytes());
-        writePair(out, KEY_REPLY_DRAIN_TIMEOUT_MILLIS, config.replyDrainTimeoutMillis());
-        writePair(out, KEY_OUTBOUND_RESERVED_BYTES, outboundStats.reservedBytes());
-        writePair(out, KEY_OUTBOUND_ALLOCATED_BYTES, outboundStats.allocatedBytes());
-        writePair(out, KEY_OUTBOUND_PEAK_RESERVED_BYTES, outboundStats.peakReservedBytes());
-        writePair(out, KEY_OUTBOUND_PEAK_ALLOCATED_BYTES, outboundStats.peakAllocatedBytes());
-        writePair(out, KEY_OUTBOUND_CAPACITY_REJECTS, outboundStats.capacityRejects());
-        writePair(out, KEY_OUTBOUND_WAITING_CONNECTIONS, outboundStats.waitingConnections());
-        writePair(out, KEY_OUTBOUND_ACTIVE_CONNECTIONS, outboundStats.activeConnections());
-        writePair(out, KEY_OUTBOUND_ACTIVE_SLOTS, outboundStats.activeSlots());
-        writePair(out, KEY_OUTBOUND_CLOSED, outboundStats.closed() ? 1L : 0L);
-        writePair(out, KEY_OUTBOUND_ACTIVE_CHUNKS, egressStats.activeChunks());
-        writePair(out, KEY_OUTBOUND_ACTIVE_SOURCES, egressStats.activeSources());
-        writePair(out, KEY_OUTBOUND_OVERSIZED_REPLIES, egressStats.oversizedReplies());
-        writePair(out, KEY_OUTBOUND_CANCELLED_SLOTS, egressStats.cancelledSlots());
-        writePair(out, KEY_OUTBOUND_FAILED_SLOTS, egressStats.failedSlots());
-        writePair(out, KEY_OUTBOUND_WRITE_FAILURES, egressStats.writeFailures());
-        writePair(out, KEY_RESULT_UNKNOWN_CLOSES, egressStats.resultUnknownCloses());
-        writePair(out, KEY_REPLY_SHUTDOWN_TIMEOUTS, egressStats.shutdownTimeouts());
-        writePair(out, KEY_LIVE_CHILD_CHANNELS, liveChildChannels);
+        addPair(fields, KEY_REPLY_GLOBAL_CAPACITY_BYTES, config.replyGlobalCapacityBytes());
+        addPair(fields, KEY_REPLY_PER_CONNECTION_CAPACITY_BYTES, config.replyPerConnectionCapacityBytes());
+        addPair(fields, KEY_REPLY_MAX_TOTAL_BYTES, config.replyMaxTotalBytes());
+        addPair(fields, KEY_REPLY_CHUNK_PAYLOAD_BYTES, config.replyChunkPayloadBytes());
+        addPair(fields, KEY_REPLY_CONTROL_RESERVATION_BYTES, config.replyControlReservationBytes());
+        addPair(fields, KEY_REPLY_DRAIN_TIMEOUT_MILLIS, config.replyDrainTimeoutMillis());
+        addPair(fields, KEY_OUTBOUND_RESERVED_BYTES, outboundStats.reservedBytes());
+        addPair(fields, KEY_OUTBOUND_ALLOCATED_BYTES, outboundStats.allocatedBytes());
+        addPair(fields, KEY_OUTBOUND_PEAK_RESERVED_BYTES, outboundStats.peakReservedBytes());
+        addPair(fields, KEY_OUTBOUND_PEAK_ALLOCATED_BYTES, outboundStats.peakAllocatedBytes());
+        addPair(fields, KEY_OUTBOUND_CAPACITY_REJECTS, outboundStats.capacityRejects());
+        addPair(fields, KEY_OUTBOUND_WAITING_CONNECTIONS, outboundStats.waitingConnections());
+        addPair(fields, KEY_OUTBOUND_ACTIVE_CONNECTIONS, outboundStats.activeConnections());
+        addPair(fields, KEY_OUTBOUND_ACTIVE_SLOTS, outboundStats.activeSlots());
+        addPair(fields, KEY_OUTBOUND_CLOSED, outboundStats.closed() ? 1L : 0L);
+        addPair(fields, KEY_OUTBOUND_ACTIVE_CHUNKS, egressStats.activeChunks());
+        addPair(fields, KEY_OUTBOUND_ACTIVE_SOURCES, egressStats.activeSources());
+        addPair(fields, KEY_OUTBOUND_OVERSIZED_REPLIES, egressStats.oversizedReplies());
+        addPair(fields, KEY_OUTBOUND_CANCELLED_SLOTS, egressStats.cancelledSlots());
+        addPair(fields, KEY_OUTBOUND_FAILED_SLOTS, egressStats.failedSlots());
+        addPair(fields, KEY_OUTBOUND_WRITE_FAILURES, egressStats.writeFailures());
+        addPair(fields, KEY_RESULT_UNKNOWN_CLOSES, egressStats.resultUnknownCloses());
+        addPair(fields, KEY_REPLY_SHUTDOWN_TIMEOUTS, egressStats.shutdownTimeouts());
+        addPair(fields, KEY_LIVE_CHILD_CHANNELS, liveChildChannels);
     }
 
-    private static void writeInboundStats(RedisReplyWriter out, InboundMemoryBudgetStats stats) {
-        writePair(out, KEY_INBOUND_CAPACITY_BYTES, stats.capacityBytes());
-        writePair(out, KEY_INBOUND_RESERVED_BYTES, stats.reservedBytes());
-        writePair(out, KEY_INBOUND_PEAK_RESERVED_BYTES, stats.peakReservedBytes());
-        writePair(out, KEY_INBOUND_WAITING_CONNECTIONS, stats.waitingConnections());
-        writePair(out, KEY_INBOUND_BACKPRESSURED, stats.backpressured() ? 1L : 0L);
-        writePair(out, KEY_INBOUND_REJECTED_CONNECTIONS, stats.rejectedConnections());
-        writePair(out, KEY_INBOUND_CLOSED, stats.closed() ? 1L : 0L);
+    private static void addInboundStats(List<RedisReply> fields, InboundMemoryBudgetStats stats) {
+        addPair(fields, KEY_INBOUND_CAPACITY_BYTES, stats.capacityBytes());
+        addPair(fields, KEY_INBOUND_RESERVED_BYTES, stats.reservedBytes());
+        addPair(fields, KEY_INBOUND_PEAK_RESERVED_BYTES, stats.peakReservedBytes());
+        addPair(fields, KEY_INBOUND_WAITING_CONNECTIONS, stats.waitingConnections());
+        addPair(fields, KEY_INBOUND_BACKPRESSURED, stats.backpressured() ? 1L : 0L);
+        addPair(fields, KEY_INBOUND_REJECTED_CONNECTIONS, stats.rejectedConnections());
+        addPair(fields, KEY_INBOUND_CLOSED, stats.closed() ? 1L : 0L);
     }
 
-    private static void writeCommitStreamStats(RedisReplyWriter out, CommitStreamStats stats) {
-        writePair(out, KEY_COMMIT_STREAM_STATE, ascii(stats.state().name()));
-        writePair(out, KEY_COMMIT_STREAM_RESERVED_EVENTS, stats.reservedEvents());
-        writePair(out, KEY_COMMIT_STREAM_RESERVED_BYTES, stats.reservedBytes());
-        writePair(out, KEY_COMMIT_STREAM_REJECTED_WRITES, stats.rejectedWrites());
-        writePair(out, KEY_COMMIT_STREAM_LAST_ASSIGNED_SEQUENCE, stats.lastAssignedSequence());
-        writePair(out, KEY_COMMIT_STREAM_LAST_ACKNOWLEDGED_SEQUENCE, stats.lastAcknowledgedSequence());
-        writePair(out, KEY_COMMIT_STREAM_CALLBACK_ACTIVE, stats.callbackActive() ? 1L : 0L);
-        writePair(out, KEY_COMMIT_STREAM_SHUTDOWN_TIMED_OUT, stats.shutdownTimedOut() ? 1L : 0L);
-        writePair(out, KEY_COMMIT_STREAM_FIRST_FAILURE_TYPE, ascii(stats.firstFailureType()));
-        writePair(out, KEY_COMMIT_STREAM_FIRST_FAILURE_MESSAGE, ascii(stats.firstFailureMessage()));
+    private static void addCommitStreamStats(List<RedisReply> fields, CommitStreamStats stats) {
+        addPair(fields, KEY_COMMIT_STREAM_STATE, ascii(stats.state().name()));
+        addPair(fields, KEY_COMMIT_STREAM_RESERVED_EVENTS, stats.reservedEvents());
+        addPair(fields, KEY_COMMIT_STREAM_RESERVED_BYTES, stats.reservedBytes());
+        addPair(fields, KEY_COMMIT_STREAM_REJECTED_WRITES, stats.rejectedWrites());
+        addPair(fields, KEY_COMMIT_STREAM_LAST_ASSIGNED_SEQUENCE, stats.lastAssignedSequence());
+        addPair(fields, KEY_COMMIT_STREAM_LAST_ACKNOWLEDGED_SEQUENCE, stats.lastAcknowledgedSequence());
+        addPair(fields, KEY_COMMIT_STREAM_CALLBACK_ACTIVE, stats.callbackActive() ? 1L : 0L);
+        addPair(fields, KEY_COMMIT_STREAM_SHUTDOWN_TIMED_OUT, stats.shutdownTimedOut() ? 1L : 0L);
+        addPair(fields, KEY_COMMIT_STREAM_FIRST_FAILURE_TYPE, ascii(stats.firstFailureType()));
+        addPair(fields, KEY_COMMIT_STREAM_FIRST_FAILURE_MESSAGE, ascii(stats.firstFailureMessage()));
     }
 
-    private static void writeHeader(RedisReplyWriter out, int pairs) {
-        try {
-            out.mapHeader(pairs);
-        } catch (RuntimeException e) {
-            // Best-effort compatibility: some reply writers may not support maps.
-            out.arrayHeader(pairs * 2);
-        }
+    private static void addPair(List<RedisReply> fields, byte[] key, byte[] value) {
+        fields.add(RedisReplies.bulkString(key));
+        fields.add(RedisReplies.bulkString(value));
     }
 
-    private static void writePair(RedisReplyWriter out, byte[] key, byte[] value) {
-        out.bulkString(key);
-        out.bulkString(value);
+    private static void addPair(List<RedisReply> fields, byte[] key, long value) {
+        fields.add(RedisReplies.bulkString(key));
+        fields.add(RedisReplies.integer(value));
     }
 
-    private static void writePair(RedisReplyWriter out, byte[] key, long value) {
-        out.bulkString(key);
-        out.integer(value);
+    private static RedisReply mapReply(List<RedisReply> fields) {
+        return RedisReplies.map(fields);
     }
 
-    private static String asciiLower(ExecutionRequest request, int argIndex) {
-        if (request == null || argIndex < 0 || argIndex >= request.argc() || request.isNull(argIndex) || request.len(argIndex) <= 0) {
+    private static String asciiLower(CommandArgs args, int argIndex) {
+        if (args == null || argIndex < 0 || argIndex >= args.argc() || args.isNull(argIndex) || args.length(argIndex) <= 0) {
             return null;
         }
-        byte[] raw = request.toByteArray(argIndex);
+        byte[] raw = args.bytes(argIndex);
         if (raw == null || raw.length == 0) {
             return null;
         }

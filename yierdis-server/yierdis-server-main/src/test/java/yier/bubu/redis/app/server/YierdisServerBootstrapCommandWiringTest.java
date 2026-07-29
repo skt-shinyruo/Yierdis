@@ -7,6 +7,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.command.api.CommandArgs;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandExecutionContext;
 import yier.bubu.redis.execution.api.CommandSession;
@@ -15,6 +16,7 @@ import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.execution.api.ValidationResult;
 import yier.bubu.redis.execution.executor.CommandExecutionEngine;
@@ -165,6 +167,31 @@ public class YierdisServerBootstrapCommandWiringTest {
         Assert.assertFalse(source.contains("Yierdis" + "Engine"));
         Assert.assertFalse(source.contains("DefaultYierdis" + "Engine"));
         Assert.assertFalse(source.contains("YierdisFastCommand" + "Processor"));
+    }
+
+    @Test
+    public void serverCommandSourcesUseSemanticRepliesWithoutWriterBridges() throws Exception {
+        for (Path sourcePath : List.of(serverSource("ServerCommandModule.java"),
+                serverSource("NettyServerInfoProvider.java"))) {
+            String source = Files.readString(sourcePath, StandardCharsets.UTF_8);
+            Assert.assertFalse(source.contains("CommandPreparationContext"));
+            Assert.assertFalse(source.contains("RedisReplyWriter"));
+            Assert.assertFalse(source.contains("CommandExecutionContext"));
+            Assert.assertFalse(source.contains("ReplyShapes.maximum()"));
+            Assert.assertFalse(source.contains("maximumReply("));
+        }
+    }
+
+    @Test
+    public void unboundInfoProviderReturnsSemanticNotReadyErrors() {
+        NettyServerInfoProvider provider = new NettyServerInfoProvider(runtimeConfig(0, 0, 1024, 1, 4, 5));
+        EngineSession session = new EngineSession();
+
+        RedisReply info = provider.info(CommandArgs.of(request("INFO")), session);
+        RedisReply stats = provider.stats(session);
+
+        Assert.assertEquals("ERR INFO not ready", ((RedisReply.Error) info).message());
+        Assert.assertEquals("ERR STATS not ready", ((RedisReply.Error) stats).message());
     }
 
     @Test
@@ -641,6 +668,18 @@ public class YierdisServerBootstrapCommandWiringTest {
                 "yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java"
         );
         Assert.assertTrue("cannot locate YierdisServerBootstrap.java from " + moduleRoot, Files.isRegularFile(fromRepo));
+        return fromRepo;
+    }
+
+    private static Path serverSource(String fileName) {
+        Path moduleRoot = Path.of("").toAbsolutePath().normalize();
+        Path fromModule = moduleRoot.resolve("src/main/java/yier/bubu/redis/app/server").resolve(fileName);
+        if (Files.isRegularFile(fromModule)) {
+            return fromModule;
+        }
+        Path fromRepo = moduleRoot.resolve("yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server")
+                .resolve(fileName);
+        Assert.assertTrue("cannot locate " + fileName + " from " + moduleRoot, Files.isRegularFile(fromRepo));
         return fromRepo;
     }
 

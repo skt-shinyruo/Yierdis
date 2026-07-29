@@ -3,20 +3,20 @@ package yier.bubu.redis.app.server;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Objects;
-import yier.bubu.redis.command.api.ArgReader;
+import yier.bubu.redis.command.api.CommandArgs;
 import yier.bubu.redis.command.api.CommandArity;
-import yier.bubu.redis.command.api.CommandDefinition;
+import yier.bubu.redis.command.api.CommandInvocation;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
-import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandParseException;
+import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.TransactionPolicy;
-import yier.bubu.redis.command.defaults.CommandSupport;
-import yier.bubu.redis.execution.api.CommandPreparationContext;
-import yier.bubu.redis.execution.api.PreparedCommand;
-import yier.bubu.redis.execution.api.ReplyShape;
-import yier.bubu.redis.execution.api.ReplyShapes;
+import yier.bubu.redis.execution.api.CommandResult;
+import yier.bubu.redis.execution.api.PreparedCommands;
+import yier.bubu.redis.execution.api.RedisReplies;
+import yier.bubu.redis.execution.api.RedisReply;
 
 final class ServerCommandModule implements CommandModule {
     private static final byte[] HELLO_SERVER_KEY = "server".getBytes(StandardCharsets.US_ASCII);
@@ -38,101 +38,95 @@ final class ServerCommandModule implements CommandModule {
     @Override
     public void register(Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register(new CommandDefinition<>(
+        registration.register(new CommandSpec(
                 new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
                         TransactionPolicy.DISALLOWED_IN_MULTI),
-                CommandParsers.args(),
                 this::hello
         ));
-        registration.register(new CommandDefinition<>(
+        registration.register(new CommandSpec(
                 new CommandSyntax("INFO", CommandArity.oneOf(1, 2), CommandKeySpec.NONE,
                         TransactionPolicy.QUEUEABLE),
-                CommandParsers.args(),
                 this::info
         ));
-        registration.register(new CommandDefinition<>(
+        registration.register(new CommandSpec(
                 new CommandSyntax("STATS", CommandArity.exact(1), CommandKeySpec.NONE,
                         TransactionPolicy.QUEUEABLE),
-                CommandParsers.args(),
                 this::stats
         ));
     }
 
-    private PreparedCommand info(ArgReader args, CommandPreparationContext context) {
-        return infoProvider.prepareInfo(args.request(), context);
+    private CommandInvocation info(CommandArgs args) {
+        return session -> PreparedCommands.ready(infoProvider.info(args, session));
     }
 
-    private PreparedCommand stats(ArgReader args, CommandPreparationContext context) {
-        return infoProvider.prepareStats(args.request(), context);
+    private CommandInvocation stats(CommandArgs args) {
+        return session -> PreparedCommands.ready(infoProvider.stats(session));
     }
 
-    private PreparedCommand hello(ArgReader args, CommandPreparationContext context) {
-        int requested = context.session().respVersion();
+    private CommandInvocation hello(CommandArgs args) throws CommandParseException {
+        Integer requestedVersion = null;
         int index = 1;
         String requestedClientName = null;
         boolean setClientName = false;
         if (args.argc() >= 2) {
-            String version = CommandSupport.utf8(args.bytes(1));
+            String version = args.utf8(1);
             if ("2".equals(version)) {
-                requested = 2;
+                requestedVersion = 2;
                 index = 2;
             } else if ("3".equals(version)) {
-                requested = 3;
+                requestedVersion = 3;
                 index = 2;
             } else {
-                return CommandSupport.error("NOPROTO unsupported protocol version");
+                throw new CommandParseException("NOPROTO unsupported protocol version");
             }
         }
         while (index < args.argc()) {
             if (args.is(index, "SETNAME") && index + 1 < args.argc()) {
-                requestedClientName = CommandSupport.utf8(args.bytes(index + 1));
+                requestedClientName = args.utf8(index + 1);
                 setClientName = true;
                 index += 2;
                 continue;
             }
             if (args.is(index, "AUTH")) {
-                return CommandSupport.error(
+                throw new CommandParseException(
                         "ERR AUTH <password> called without any password configured for the default user. "
                                 + "Are you sure your configuration is correct?"
                 );
             }
-            return CommandSupport.error("ERR syntax error");
+            throw new CommandParseException("ERR syntax error");
         }
 
-        int targetRespVersion = requested;
-        String clientName = requestedClientName;
-        boolean shouldSetClientName = setClientName;
-        return CommandSupport.fixed(helloReplyShape(targetRespVersion), execution -> {
-            execution.session().setRespVersion(targetRespVersion);
-            if (shouldSetClientName) {
-                execution.session().setClientName(clientName);
-            }
-            execution.reply().mapHeader(5);
-            execution.reply().bulkString(HELLO_SERVER_KEY);
-            execution.reply().bulkString(HELLO_SERVER_VALUE);
-            execution.reply().bulkString(HELLO_VERSION_KEY);
-            execution.reply().bulkString(HELLO_VERSION_VALUE);
-            execution.reply().bulkString(HELLO_PROTO_KEY);
-            execution.reply().integer(targetRespVersion);
-            execution.reply().bulkString(HELLO_MODE_KEY);
-            execution.reply().bulkString(HELLO_MODE_VALUE);
-            execution.reply().bulkString(HELLO_ROLE_KEY);
-            execution.reply().bulkString(HELLO_ROLE_VALUE);
-        });
+        HelloArgs hello = new HelloArgs(requestedVersion, setClientName, requestedClientName);
+        return session -> {
+            int targetRespVersion = hello.requestedVersion() == null
+                    ? session.respVersion()
+                    : hello.requestedVersion();
+            RedisReply reply = helloReply(targetRespVersion);
+            return PreparedCommands.action(reply.shape(), execution -> {
+                execution.session().setRespVersion(targetRespVersion);
+                if (hello.setClientName()) {
+                    execution.session().setClientName(hello.clientName());
+                }
+                return CommandResult.reply(reply);
+            });
+        };
     }
 
-    private static ReplyShape helloReplyShape(int targetRespVersion) {
-        return ReplyShapes.map(List.of(
-                ReplyShapes.bulkString(HELLO_SERVER_KEY.length, 0L),
-                ReplyShapes.bulkString(HELLO_SERVER_VALUE.length, 0L),
-                ReplyShapes.bulkString(HELLO_VERSION_KEY.length, 0L),
-                ReplyShapes.bulkString(HELLO_VERSION_VALUE.length, 0L),
-                ReplyShapes.bulkString(HELLO_PROTO_KEY.length, 0L),
-                ReplyShapes.integer(targetRespVersion),
-                ReplyShapes.bulkString(HELLO_MODE_KEY.length, 0L),
-                ReplyShapes.bulkString(HELLO_MODE_VALUE.length, 0L),
-                ReplyShapes.bulkString(HELLO_ROLE_KEY.length, 0L),
-                ReplyShapes.bulkString(HELLO_ROLE_VALUE.length, 0L)
+    private static RedisReply helloReply(int targetRespVersion) {
+        return RedisReplies.map(List.of(
+                RedisReplies.bulkString(HELLO_SERVER_KEY),
+                RedisReplies.bulkString(HELLO_SERVER_VALUE),
+                RedisReplies.bulkString(HELLO_VERSION_KEY),
+                RedisReplies.bulkString(HELLO_VERSION_VALUE),
+                RedisReplies.bulkString(HELLO_PROTO_KEY),
+                RedisReplies.integer(targetRespVersion),
+                RedisReplies.bulkString(HELLO_MODE_KEY),
+                RedisReplies.bulkString(HELLO_MODE_VALUE),
+                RedisReplies.bulkString(HELLO_ROLE_KEY),
+                RedisReplies.bulkString(HELLO_ROLE_VALUE)
         ));
+    }
+
+    private record HelloArgs(Integer requestedVersion, boolean setClientName, String clientName) {
     }
 }

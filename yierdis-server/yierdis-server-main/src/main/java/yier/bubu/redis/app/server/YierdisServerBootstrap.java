@@ -17,7 +17,7 @@ import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.api.YierdisDbRouter;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
-import yier.bubu.redis.execution.api.CommandPreparationContext;
+import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.executor.CommandExecutionEngine;
 import yier.bubu.redis.execution.executor.CommandExecutor;
@@ -239,12 +239,12 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                     : TimeUnit.MILLISECONDS.toNanos(runtimeConfig.keysTimeBudgetMillis());
 
             @Override
-            public long keysTimeBudgetNanos(CommandPreparationContext context) {
+            public long keysTimeBudgetNanos(CommandSession session) {
                 return timeBudgetNanos;
             }
 
             @Override
-            public int keysMaxResults(CommandPreparationContext context) {
+            public int keysMaxResults(CommandSession session) {
                 return runtimeConfig.keysMaxResults();
             }
         };
