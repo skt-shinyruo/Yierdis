@@ -73,7 +73,10 @@ public final class CommandDispatcher {
                     );
                 }
                 if (policy == TransactionPolicy.QUEUEABLE) {
-                    spec.handler().parse(args);
+                    Objects.requireNonNull(
+                            spec.handler().parse(args),
+                            "command handler returned null"
+                    );
                     return queued(transaction, request);
                 }
             }

@@ -114,6 +114,29 @@ public class CommandDispatcherTest {
     }
 
     @Test
+    public void queueableNullInvocationFailsPreflightWithoutEnqueueing() {
+        CommandDispatcher dispatcher = dispatcher(spec(
+                "WRITE", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
+                args -> null
+        ));
+        RecordingSession session = new RecordingSession(true);
+
+        try (ExecutionRequest request = request("WRITE")) {
+            NullPointerException failure = Assert.assertThrows(
+                    NullPointerException.class,
+                    () -> {
+                        try (PreparedCommand ignored = dispatcher.prepare(session, request)) {
+                        }
+                    }
+            );
+
+            Assert.assertEquals("command handler returned null", failure.getMessage());
+            Assert.assertEquals(0, session.tx.enqueueCalls);
+            Assert.assertNull(session.tx.lastEnqueued);
+        }
+    }
+
+    @Test
     public void disallowedCommandInMultiSkipsHandlerAndAbortsAfterReservation() {
         AtomicInteger parses = new AtomicInteger();
         AtomicInteger prepares = new AtomicInteger();

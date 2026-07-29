@@ -16,12 +16,17 @@ public class CommandRegistryTest {
     public void sealFreezesOneNormalizedSpecMap() {
         CommandRegistry registry = new CommandRegistry();
         CommandSpec ping = spec("ping", CommandArity.exact(1));
+        registry.register(spec("ZADD"));
         registry.register(ping);
+        registry.register(spec("APPEND"));
         registry.seal();
 
         Assert.assertSame(ping, registry.specByUpperName(" PiNg "));
         Assert.assertTrue(registry.containsUpperName(" ping "));
-        Assert.assertArrayEquals(new String[]{"PING"}, registry.upperNamesSorted());
+        Assert.assertArrayEquals(
+                new String[]{"APPEND", "PING", "ZADD"},
+                registry.upperNamesSorted()
+        );
         Assert.assertThrows(IllegalStateException.class, () -> registry.register(spec("GET")));
     }
 
