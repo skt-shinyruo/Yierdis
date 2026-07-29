@@ -332,6 +332,170 @@ public class CommandDispatcherTest {
         }
     }
 
+    @Test
+    public void transactionQueuePreflightParsesOnlyAndRetainsTheOriginalRequestAfterQueuedReply() {
+        AtomicInteger parses = new AtomicInteger();
+        AtomicInteger prepares = new AtomicInteger();
+        CommandDispatcher dispatcher = transactionDispatcher(registration -> registration.register(spec(
+                "WRITE", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
+                args -> {
+                    parses.incrementAndGet();
+                    return session -> {
+                        prepares.incrementAndGet();
+                        return ready("WRITTEN");
+                    };
+                }
+        )));
+        TrackingTransactionState tx = new TrackingTransactionState();
+        TrackingSession session = new TrackingSession(tx);
+        tx.begin();
+        TrackingRequest request = trackingRequest("WRITE");
+
+        try (PreparedCommand queued = dispatcher.prepare(session, request)) {
+            Assert.assertEquals(1, parses.get());
+            Assert.assertEquals(0, prepares.get());
+            Assert.assertEquals(0, tx.size());
+
+            Assert.assertEquals("QUEUED", execute(queued, session, request).simpleString());
+            Assert.assertEquals(1, tx.size());
+            Assert.assertSame(request, tx.request(0));
+            Assert.assertEquals(0, prepares.get());
+            Assert.assertEquals(0, request.closeCount());
+        }
+        tx.discard();
+        Assert.assertEquals(1, request.closeCount());
+    }
+
+    @Test
+    public void multiChildExecUsesTheWriterBridgeAndClosesEveryOwnerOnce() {
+        TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
+        TrackingPrepared first = writingChild(
+                ReplyShapes.bulkString(3, 0), out -> out.bulkString(bytes("one")));
+        TrackingPrepared second = writingChild(
+                ReplyShapes.integer(2), out -> out.integer(2));
+        PreparedCommand exec = prepareExec(tx, first, second);
+
+        EventReplyWriter out = executeWithWriter(exec, tx);
+        Assert.assertEquals(List.of("array:2", "bulk:one", "integer:2"), out.events());
+        Assert.assertEquals(1, first.closeCount());
+        Assert.assertEquals(1, second.closeCount());
+        Assert.assertEquals(1, tx.request(0).closeCount());
+        Assert.assertEquals(1, tx.request(1).closeCount());
+
+        exec.close();
+        Assert.assertEquals(1, first.closeCount());
+        Assert.assertEquals(1, second.closeCount());
+    }
+
+    @Test
+    public void dynamicExecClosesStaleChildBeforeRepreparingTheSameRequest() {
+        TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
+        TrackingPrepared stale = writingChild(ReplyShapes.simpleString("OLD"), out -> out.simpleString("OLD"));
+        stale.stale = true;
+        TrackingPrepared current = writingChild(ReplyShapes.simpleString("NEW"), out -> out.simpleString("NEW"));
+        TrackingPrepared second = writingChild(ReplyShapes.integer(2), out -> out.integer(2));
+        AtomicInteger firstPreparations = new AtomicInteger();
+        CommandDispatcher dispatcher = transactionDispatcher(registration -> {
+            registration.register(spec("FIRST", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
+                    args -> session -> firstPreparations.getAndIncrement() == 0 ? stale : current));
+            registration.register(spec("SECOND", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
+                    args -> session -> second));
+        });
+        TrackingSession session = new TrackingSession(tx);
+        PreparedCommand exec = prepare(dispatcher, session, "EXEC");
+
+        EventReplyWriter out = executeWithWriter(exec, session, trackingRequest("EXEC"));
+        Assert.assertEquals(List.of("array:2", "simple:NEW", "integer:2"), out.events());
+        Assert.assertEquals(1, stale.closeCount());
+        Assert.assertEquals(1, current.closeCount());
+        Assert.assertEquals(1, second.closeCount());
+        Assert.assertEquals(2, firstPreparations.get());
+    }
+
+    @Test
+    public void execFailureClosesTheRemainingQueuedRequestsAndSuppressesCloseFailures() {
+        TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
+        IllegalStateException executionFailure = new IllegalStateException("execute failure");
+        TrackingPrepared first = writingChild(ReplyShapes.simpleString("ONE"), out -> {
+            throw executionFailure;
+        });
+        TrackingPrepared second = writingChild(ReplyShapes.simpleString("TWO"), out -> out.simpleString("TWO"));
+        IllegalStateException closeFailure = new IllegalStateException("tail close failure");
+        tx.request(1).closeFailure = closeFailure;
+        PreparedCommand exec = prepareExec(tx, first, second);
+
+        IllegalStateException thrown = Assert.assertThrows(
+                IllegalStateException.class,
+                () -> executeWithWriter(exec, tx)
+        );
+        Assert.assertSame(executionFailure, thrown);
+        Assert.assertEquals(1, first.closeCount());
+        Assert.assertEquals(0, second.closeCount());
+        Assert.assertEquals(1, tx.request(0).closeCount());
+        Assert.assertEquals(1, tx.request(1).closeCount());
+        Assert.assertArrayEquals(new Throwable[]{closeFailure}, thrown.getSuppressed());
+    }
+
+    private static CommandDispatcher transactionDispatcher(CommandModuleAction module) {
+        return CommandRegistries.dispatcher(registration -> module.register(registration));
+    }
+
+    private static PreparedCommand prepareExec(
+            TrackingTransactionState tx,
+            TrackingPrepared first,
+            TrackingPrepared second
+    ) {
+        CommandDispatcher dispatcher = transactionDispatcher(registration -> {
+            registration.register(spec("FIRST", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
+                    args -> session -> first));
+            registration.register(spec("SECOND", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
+                    args -> session -> second));
+        });
+        return prepare(dispatcher, new TrackingSession(tx), "EXEC");
+    }
+
+    private static PreparedCommand prepare(CommandDispatcher dispatcher, CommandSession session, String command) {
+        return dispatcher.prepare(session, trackingRequest(command));
+    }
+
+    private static TrackingTransactionState transactionWith(String... commands) {
+        TrackingTransactionState tx = new TrackingTransactionState();
+        tx.begin();
+        for (String command : commands) {
+            tx.tryEnqueue(trackingRequest(command));
+        }
+        return tx;
+    }
+
+    private static TrackingRequest trackingRequest(String command) {
+        return new TrackingRequest(ByteArrayExecutionRequest.fromUtf8(command, List.of()));
+    }
+
+    private static TrackingPrepared writingChild(ReplyShape shape, Consumer<RedisReplyWriter> writing) {
+        return new TrackingPrepared(shape, writing);
+    }
+
+    private static EventReplyWriter executeWithWriter(PreparedCommand command, TrackingTransactionState tx) {
+        return executeWithWriter(command, new TrackingSession(tx), trackingRequest("EXEC"));
+    }
+
+    private static EventReplyWriter executeWithWriter(
+            PreparedCommand command,
+            CommandSession session,
+            ExecutionRequest request
+    ) {
+        Assert.assertEquals(ValidationResult.VALID, command.validateBeforeExecute());
+        EventReplyWriter out = new EventReplyWriter();
+        try (request; CommandExecutionContext context = CommandExecutionContext.forRequest(session, out, request)) {
+            command.execute(context);
+        }
+        return out;
+    }
+
+    private static byte[] bytes(String value) {
+        return value.getBytes(StandardCharsets.UTF_8);
+    }
+
     private static CommandDispatcher dispatcher(CommandSpec... specs) {
         return new CommandDispatcher(registry(specs));
     }
@@ -428,6 +592,122 @@ public class CommandDispatcherTest {
     }
 
     private record ValidationCase(ExecutionRequest request, String expectedReply) {
+    }
+
+    @FunctionalInterface
+    private interface CommandModuleAction {
+        void register(yier.bubu.redis.command.api.CommandModule.Registration registration);
+    }
+
+    private static final class TrackingSession implements CommandSession {
+        private final TrackingTransactionState tx;
+
+        private TrackingSession(TrackingTransactionState tx) {
+            this.tx = tx;
+        }
+
+        @Override public int dbIndex() { return 0; }
+        @Override public void setDbIndex(int dbIndex) { }
+        @Override public long clientId() { return 1L; }
+        @Override public String clientName() { return null; }
+        @Override public void setClientName(String clientName) { }
+        @Override public boolean authenticated() { return false; }
+        @Override public void setAuthenticated(boolean authenticated) { }
+        @Override public TransactionState transaction() { return tx; }
+        @Override public ConnectionStatsView connectionStats() { return null; }
+        @Override public int respVersion() { return 2; }
+        @Override public void setRespVersion(int respVersion) { }
+    }
+
+    private static final class TrackingTransactionState implements TransactionState {
+        private boolean active;
+        private boolean aborted;
+        private final ArrayList<TrackingRequest> queue = new ArrayList<>();
+        private final ArrayList<TrackingRequest> requests = new ArrayList<>();
+
+        @Override public boolean active() { return active; }
+        @Override public boolean aborted() { return aborted; }
+        @Override public void begin() { active = true; aborted = false; }
+        @Override public void markAborted() { aborted = true; }
+        @Override public int size() { return queue.size(); }
+        @Override public void forEachQueued(Consumer<? super ExecutionRequest> visitor) { queue.forEach(visitor); }
+        @Override public String tryEnqueue(ExecutionRequest request) {
+            TrackingRequest tracked = (TrackingRequest) request;
+            queue.add(tracked);
+            requests.add(tracked);
+            return null;
+        }
+        @Override public List<ExecutionRequest> drain() {
+            List<ExecutionRequest> drained = new ArrayList<>(queue);
+            queue.clear();
+            active = false;
+            aborted = false;
+            return drained;
+        }
+        @Override public void discard() {
+            for (TrackingRequest request : queue) {
+                request.close();
+            }
+            queue.clear();
+            active = false;
+            aborted = false;
+        }
+        @Override public void close() { discard(); }
+
+        private TrackingRequest request(int index) { return requests.get(index); }
+    }
+
+    private static final class TrackingRequest implements ExecutionRequest {
+        private final ExecutionRequest delegate;
+        private int closeCount;
+        private RuntimeException closeFailure;
+
+        private TrackingRequest(ExecutionRequest delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override public int argc() { return delegate.argc(); }
+        @Override public boolean isNull(int index) { return delegate.isNull(index); }
+        @Override public int len(int index) { return delegate.len(index); }
+        @Override public byte byteAt(int index, int offset) { return delegate.byteAt(index, offset); }
+        @Override public void copyToByteArray(int index, byte[] dst, int dstOff) {
+            delegate.copyToByteArray(index, dst, dstOff);
+        }
+        @Override public byte[] toByteArray(int index) { return delegate.toByteArray(index); }
+        @Override public byte[] readOnlyByteArray(int index) { return delegate.readOnlyByteArray(index); }
+        @Override public int retainedBytes() { return delegate.retainedBytes(); }
+        @Override public long admittedMemoryBytes() { return delegate.admittedMemoryBytes(); }
+        @Override public TrackingRequest retain() { return new TrackingRequest(delegate.retain()); }
+        @Override public void close() {
+            closeCount++;
+            delegate.close();
+            if (closeFailure != null) {
+                throw closeFailure;
+            }
+        }
+
+        private int closeCount() { return closeCount; }
+    }
+
+    private static final class TrackingPrepared implements PreparedCommand {
+        private final ReplyShape shape;
+        private final Consumer<RedisReplyWriter> writing;
+        private boolean stale;
+        private int closeCount;
+
+        private TrackingPrepared(ReplyShape shape, Consumer<RedisReplyWriter> writing) {
+            this.shape = shape;
+            this.writing = writing;
+        }
+
+        @Override public ReplyShape replyShape() { return shape; }
+        @Override public ValidationResult validateBeforeExecute() {
+            return stale ? ValidationResult.STALE : ValidationResult.VALID;
+        }
+        @Override public void execute(CommandExecutionContext context) { writing.accept(context.reply()); }
+        @Override public void close() { closeCount++; }
+
+        private int closeCount() { return closeCount; }
     }
 
     private static final class RecordingSession implements CommandSession {
@@ -678,6 +958,43 @@ public class CommandDispatcherTest {
         public void bulkStringLongAscii(long value) {
             throw unsupported();
         }
+
+        private UnsupportedOperationException unsupported() {
+            return new UnsupportedOperationException("reply shape not used by this test");
+        }
+    }
+
+    private static final class EventReplyWriter implements RedisReplyWriter {
+        private final ArrayList<String> events = new ArrayList<>();
+
+        private List<String> events() { return List.copyOf(events); }
+
+        @Override public void requestCloseAfterReply() { }
+        @Override public boolean closeAfterReplyRequested() { return false; }
+        @Override public void simpleString(String value) { events.add("simple:" + value); }
+        @Override public void error(String message) { events.add("error:" + message); }
+        @Override public void integer(long value) { events.add("integer:" + value); }
+        @Override public void booleanValue(boolean value) { throw unsupported(); }
+        @Override public void doubleValue(double value) { throw unsupported(); }
+        @Override public void bigNumberAscii(String value) { throw unsupported(); }
+        @Override public void verbatimString(String format, byte[] data) { throw unsupported(); }
+        @Override public void blobError(String message) { throw unsupported(); }
+        @Override public void nullValue() { throw unsupported(); }
+        @Override public void nullArray() { throw unsupported(); }
+        @Override public void arrayHeader(int count) { events.add("array:" + count); }
+        @Override public void emptyArray() { events.add("array:0"); }
+        @Override public void mapHeader(int pairs) { throw unsupported(); }
+        @Override public void setHeader(int count) { throw unsupported(); }
+        @Override public void pushHeader(int count) { throw unsupported(); }
+        @Override public void attributeHeader(int pairs) { throw unsupported(); }
+        @Override public void bulkString(byte[] data) {
+            events.add("bulk:" + new String(data, StandardCharsets.UTF_8));
+        }
+        @Override public void bulkString(byte[] data, int off, int len) {
+            events.add("bulk:" + new String(data, off, len, StandardCharsets.UTF_8));
+        }
+        @Override public void bulkString(BytesSlice slice) { throw unsupported(); }
+        @Override public void bulkStringLongAscii(long value) { throw unsupported(); }
 
         private UnsupportedOperationException unsupported() {
             return new UnsupportedOperationException("reply shape not used by this test");

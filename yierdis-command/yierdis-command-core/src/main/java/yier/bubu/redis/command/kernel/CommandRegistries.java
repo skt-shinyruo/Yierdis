@@ -22,6 +22,22 @@ public final class CommandRegistries {
         return registry;
     }
 
+    public static CommandDispatcher dispatcher(CommandModule... modules) {
+        if (modules == null) {
+            return dispatcher((Iterable<? extends CommandModule>) null);
+        }
+        return dispatcher(Arrays.asList(modules));
+    }
+
+    public static CommandDispatcher dispatcher(Iterable<? extends CommandModule> modules) {
+        CommandRegistry registry = new CommandRegistry();
+        CommandDispatcher dispatcher = new CommandDispatcher(registry);
+        new TransactionCommands(dispatcher).register(registry);
+        registerInto(registry, modules);
+        registry.seal();
+        return dispatcher;
+    }
+
     public static void registerInto(CommandRegistry registry, CommandModule... modules) {
         if (modules == null) {
             return;
@@ -51,6 +67,6 @@ public final class CommandRegistries {
         if (registry == null) {
             throw new NullPointerException("registry");
         }
-        new TransactionCommands(processor).register(registry);
+        new TransactionCommands(new CommandDispatcher(registry)).register(registry);
     }
 }

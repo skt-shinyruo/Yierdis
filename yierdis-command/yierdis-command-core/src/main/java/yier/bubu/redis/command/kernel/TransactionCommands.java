@@ -3,18 +3,20 @@ package yier.bubu.redis.command.kernel;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import yier.bubu.redis.command.api.ArgReader;
+import yier.bubu.redis.command.api.CommandArgs;
 import yier.bubu.redis.command.api.CommandArity;
-import yier.bubu.redis.command.api.CommandDefinition;
+import yier.bubu.redis.command.api.CommandInvocation;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
-import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.execution.api.CommandExecutionContext;
-import yier.bubu.redis.execution.api.CommandPreparationContext;
+import yier.bubu.redis.execution.api.CommandResult;
+import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.ReplyShape;
 import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.execution.api.TransactionState;
@@ -22,21 +24,20 @@ import yier.bubu.redis.execution.api.ValidationResult;
 
 /** Transaction control commands and the prepared EXEC reply envelope. */
 final class TransactionCommands implements CommandModule {
-    private final YierdisFastCommandProcessor processor;
+    private static final String EXEC_ABORT = "EXECABORT Transaction discarded because of previous errors.";
 
-    TransactionCommands(YierdisFastCommandProcessor processor) {
-        this.processor = Objects.requireNonNull(processor, "processor");
+    private final CommandDispatcher dispatcher;
+
+    TransactionCommands(CommandDispatcher dispatcher) {
+        this.dispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
     }
 
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register(new CommandDefinition<>(
-                syntax("MULTI"), CommandParsers.args(), this::multi));
-        registration.register(new CommandDefinition<>(
-                syntax("DISCARD"), CommandParsers.args(), this::discard));
-        registration.register(new CommandDefinition<>(
-                syntax("EXEC"), CommandParsers.args(), this::exec));
+        registration.register(new CommandSpec(syntax("MULTI"), this::multi));
+        registration.register(new CommandSpec(syntax("DISCARD"), this::discard));
+        registration.register(new CommandSpec(syntax("EXEC"), this::exec));
     }
 
     private static CommandSyntax syntax(String name) {
@@ -48,87 +49,130 @@ final class TransactionCommands implements CommandModule {
         );
     }
 
-    private PreparedCommand multi(ArgReader args, CommandPreparationContext context) {
-        TransactionState tx = context.session().transaction();
-        if (tx.active()) {
-            return PreparedCommands.error("ERR MULTI calls can not be nested");
-        }
-        return PreparedCommands.fixed(ReplyShapes.simpleString("OK"), execution -> {
-            tx.begin();
-            execution.reply().simpleString("OK");
-        });
+    private CommandInvocation multi(CommandArgs args) {
+        return session -> {
+            TransactionState tx = session.transaction();
+            if (tx.active()) {
+                return error("ERR MULTI calls can not be nested");
+            }
+            return yier.bubu.redis.execution.api.PreparedCommands.action(
+                    ReplyShapes.simpleString("OK"),
+                    context -> {
+                        tx.begin();
+                        return CommandResult.reply(RedisReplies.simpleString("OK"));
+                    }
+            );
+        };
     }
 
-    private PreparedCommand discard(ArgReader args, CommandPreparationContext context) {
-        TransactionState tx = context.session().transaction();
-        if (!tx.active()) {
-            return PreparedCommands.error("ERR DISCARD without MULTI");
-        }
-        return PreparedCommands.fixed(ReplyShapes.simpleString("OK"), execution -> {
-            tx.discard();
-            execution.reply().simpleString("OK");
-        });
+    private CommandInvocation discard(CommandArgs args) {
+        return session -> {
+            TransactionState tx = session.transaction();
+            if (!tx.active()) {
+                return error("ERR DISCARD without MULTI");
+            }
+            return yier.bubu.redis.execution.api.PreparedCommands.action(
+                    ReplyShapes.simpleString("OK"),
+                    context -> {
+                        tx.discard();
+                        return CommandResult.reply(RedisReplies.simpleString("OK"));
+                    }
+            );
+        };
     }
 
-    private PreparedCommand exec(ArgReader args, CommandPreparationContext context) {
-        TransactionState tx = context.session().transaction();
+    private CommandInvocation exec(CommandArgs args) {
+        return session -> prepareExec(session);
+    }
+
+    private PreparedCommand prepareExec(CommandSession session) {
+        TransactionState tx = session.transaction();
         if (!tx.active()) {
-            return PreparedCommands.error("ERR EXEC without MULTI");
+            return error("ERR EXEC without MULTI");
         }
         if (tx.aborted()) {
-            return PreparedCommands.fixed(
-                    ReplyShapes.error("EXECABORT Transaction discarded because of previous errors."),
-                    execution -> {
+            return yier.bubu.redis.execution.api.PreparedCommands.action(
+                    ReplyShapes.error(EXEC_ABORT),
+                    context -> {
                         tx.discard();
-                        execution.reply().error("EXECABORT Transaction discarded because of previous errors.");
-                }
+                        return CommandResult.error(EXEC_ABORT);
+                    }
             );
         }
-
-        if (tx.size() > 1) {
-            return new PreparedExec(tx, processor, new ArrayList<>(), ReplyShapes.maximum(), true);
+        if (tx.size() <= 1) {
+            return preparedExactExec(tx, session);
         }
+        return preparedDynamicExec(tx, session);
+    }
 
+    private PreparedCommand preparedExactExec(TransactionState tx, CommandSession session) {
         ArrayList<PreparedCommand> children = new ArrayList<>(tx.size());
         ArrayList<ReplyShape> shapes = new ArrayList<>(tx.size());
         try {
-            tx.forEachQueued(queued -> {
-                PreparedCommand child = processor.prepareQueued(queued, context);
+            tx.forEachQueued(request -> {
+                PreparedCommand child = dispatcher.prepareReplay(session, request);
                 children.add(child);
                 shapes.add(child.replyShape());
             });
         } catch (RuntimeException | Error failure) {
-            closeChildrenReverse(children);
+            closeChildrenReverse(children, failure);
             throw failure;
         }
-        return new PreparedExec(tx, processor, children, ReplyShapes.array(shapes), false);
+        return new PreparedExec(tx, dispatcher, session, children, ReplyShapes.array(shapes), false);
     }
 
-    private static void closeChildrenReverse(List<PreparedCommand> children) {
-        RuntimeException failure = null;
+    private PreparedCommand preparedDynamicExec(TransactionState tx, CommandSession session) {
+        return new PreparedExec(tx, dispatcher, session, new ArrayList<>(), ReplyShapes.maximum(), true);
+    }
+
+    private static PreparedCommand error(String message) {
+        return yier.bubu.redis.execution.api.PreparedCommands.ready(RedisReplies.error(message));
+    }
+
+    private static void closeChildrenReverse(List<PreparedCommand> children, Throwable primary) {
+        Throwable failure = primary;
         for (int index = children.size() - 1; index >= 0; index--) {
             PreparedCommand child = children.get(index);
-            if (child == null) {
-                continue;
-            }
-            try {
-                child.close();
-            } catch (RuntimeException closeFailure) {
-                if (failure == null) {
-                    failure = closeFailure;
-                } else {
-                    failure.addSuppressed(closeFailure);
+            if (child != null) {
+                try {
+                    child.close();
+                } catch (RuntimeException | Error closeFailure) {
+                    if (failure == null) {
+                        failure = closeFailure;
+                    } else {
+                        failure.addSuppressed(closeFailure);
+                    }
                 }
+                children.set(index, null);
             }
         }
-        if (failure != null) {
-            throw failure;
+        if (primary == null && failure != null) {
+            rethrow(failure);
         }
+    }
+
+    private static void closeSuppressing(Throwable primary, Runnable close) {
+        try {
+            close.run();
+        } catch (RuntimeException | Error closeFailure) {
+            if (primary == null) {
+                throw closeFailure;
+            }
+            primary.addSuppressed(closeFailure);
+        }
+    }
+
+    private static void rethrow(Throwable failure) {
+        if (failure instanceof RuntimeException runtime) {
+            throw runtime;
+        }
+        throw (Error) failure;
     }
 
     private static final class PreparedExec implements PreparedCommand {
         private final TransactionState tx;
-        private final YierdisFastCommandProcessor processor;
+        private final CommandDispatcher dispatcher;
+        private final CommandSession session;
         private final ArrayList<PreparedCommand> children;
         private final ReplyShape replyShape;
         private final boolean prepareDuringExecution;
@@ -136,13 +180,15 @@ final class TransactionCommands implements CommandModule {
 
         private PreparedExec(
                 TransactionState tx,
-                YierdisFastCommandProcessor processor,
+                CommandDispatcher dispatcher,
+                CommandSession session,
                 ArrayList<PreparedCommand> children,
                 ReplyShape replyShape,
                 boolean prepareDuringExecution
         ) {
             this.tx = Objects.requireNonNull(tx, "tx");
-            this.processor = Objects.requireNonNull(processor, "processor");
+            this.dispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
+            this.session = Objects.requireNonNull(session, "session");
             this.children = Objects.requireNonNull(children, "children");
             this.replyShape = Objects.requireNonNull(replyShape, "replyShape");
             this.prepareDuringExecution = prepareDuringExecution;
@@ -169,53 +215,60 @@ final class TransactionCommands implements CommandModule {
         @Override
         public void execute(CommandExecutionContext context) {
             List<ExecutionRequest> queued = tx.drain();
-            if (!prepareDuringExecution && queued.size() != children.size()) {
-                closeQueuedRequests(queued, 0);
-                throw new IllegalStateException("transaction queue changed after EXEC preparation");
-            }
-
-            int firstUnclosed = 0;
+            Throwable primary = null;
+            int next = 0;
             try {
+                if (!prepareDuringExecution && queued.size() != children.size()) {
+                    throw new IllegalStateException("transaction queue changed after EXEC preparation");
+                }
                 context.reply().arrayHeader(queued.size());
                 for (int index = 0; index < queued.size(); index++) {
                     ExecutionRequest request = queued.get(index);
-                    firstUnclosed = index + 1;
-                    if (prepareDuringExecution) {
-                        try (request) {
-                            executeCurrentChild(context, request);
-                        }
-                    } else {
-                        try (request;
-                             CommandExecutionContext childContext = CommandExecutionContext.forRequest(
-                                     context.session(), context.reply(), request)) {
-                            children.get(index).execute(childContext);
-                        } finally {
-                            closeChild(index);
-                        }
+                    PreparedCommand child = null;
+                    try {
+                        child = prepareDuringExecution
+                                ? prepareCurrentChild(request)
+                                : children.get(index);
+                        executeChild(context, request, child);
+                    } catch (RuntimeException | Error failure) {
+                        primary = failure;
+                        closeChild(index, child, primary);
+                        closeRequest(request, primary);
+                        next = index + 1;
+                        throw failure;
                     }
+                    closeChild(index, child, null);
+                    closeRequest(request, null);
+                    next = index + 1;
                 }
+            } catch (RuntimeException | Error failure) {
+                primary = failure;
+                throw failure;
             } finally {
-                closeQueuedRequests(queued, firstUnclosed);
-                closeChildrenFrom(firstUnclosed);
+                closeQueuedTail(queued, next, primary);
+                closeChildrenFrom(next, primary);
             }
         }
 
-        private void executeCurrentChild(CommandExecutionContext context, ExecutionRequest request) {
+        private PreparedCommand prepareCurrentChild(ExecutionRequest request) {
             for (;;) {
-                try (PreparedCommand child = processor.prepareQueued(
-                        request,
-                        new CommandPreparationContext(context.session())
-                )) {
-                    if (child.validateBeforeExecute() == ValidationResult.STALE) {
-                        continue;
-                    }
-                    try (CommandExecutionContext childContext = CommandExecutionContext.forRequest(
-                            context.session(), context.reply(), request
-                    )) {
-                        child.execute(childContext);
-                    }
-                    return;
+                PreparedCommand child = dispatcher.prepareReplay(session, request);
+                if (child.validateBeforeExecute() != ValidationResult.STALE) {
+                    return child;
                 }
+                closeSuppressing(null, child::close);
+            }
+        }
+
+        private static void executeChild(
+                CommandExecutionContext context,
+                ExecutionRequest request,
+                PreparedCommand child
+        ) {
+            try (CommandExecutionContext childContext = CommandExecutionContext.forRequest(
+                    context.session(), context.reply(), request
+            )) {
+                child.execute(childContext);
             }
         }
 
@@ -225,34 +278,35 @@ final class TransactionCommands implements CommandModule {
                 return;
             }
             closed = true;
-            closeChildrenReverse(children);
-            for (int index = 0; index < children.size(); index++) {
+            closeChildrenReverse(children, null);
+        }
+
+        private void closeChild(int index, PreparedCommand child, Throwable primary) {
+            if (!prepareDuringExecution && index < children.size() && children.get(index) == child) {
                 children.set(index, null);
             }
-        }
-
-        private void closeChild(int index) {
-            PreparedCommand child = children.get(index);
-            if (child == null) {
-                return;
+            if (child != null) {
+                closeSuppressing(primary, child::close);
             }
-            children.set(index, null);
-            child.close();
         }
 
-        private void closeChildrenFrom(int start) {
+        private static void closeRequest(ExecutionRequest request, Throwable primary) {
+            closeSuppressing(primary, request::close);
+        }
+
+        private void closeChildrenFrom(int start, Throwable primary) {
             for (int index = Math.max(0, start); index < children.size(); index++) {
-                closeChild(index);
+                PreparedCommand child = children.get(index);
+                if (child != null) {
+                    children.set(index, null);
+                    closeSuppressing(primary, child::close);
+                }
             }
         }
 
-        private static void closeQueuedRequests(List<ExecutionRequest> requests, int from) {
+        private static void closeQueuedTail(List<ExecutionRequest> requests, int from, Throwable primary) {
             for (int index = Math.max(0, from); index < requests.size(); index++) {
-                try {
-                    requests.get(index).close();
-                } catch (RuntimeException | Error ignored) {
-                    // Preserve the original command failure while releasing transaction-owned tail requests.
-                }
+                closeRequest(requests.get(index), primary);
             }
         }
     }
