@@ -139,7 +139,7 @@ final class TransactionCommands implements CommandModule {
                 } catch (RuntimeException | Error closeFailure) {
                     if (failure == null) {
                         failure = closeFailure;
-                    } else {
+                    } else if (failure != closeFailure) {
                         failure.addSuppressed(closeFailure);
                     }
                 }
@@ -158,7 +158,9 @@ final class TransactionCommands implements CommandModule {
             if (primary == null) {
                 throw closeFailure;
             }
-            primary.addSuppressed(closeFailure);
+            if (primary != closeFailure) {
+                primary.addSuppressed(closeFailure);
+            }
         }
     }
 
@@ -238,8 +240,8 @@ final class TransactionCommands implements CommandModule {
                         throw failure;
                     }
                     closeChild(index, child, null);
-                    closeRequest(request, null);
                     next = index + 1;
+                    closeRequest(request, null);
                 }
             } catch (RuntimeException | Error failure) {
                 primary = failure;
@@ -253,7 +255,14 @@ final class TransactionCommands implements CommandModule {
         private PreparedCommand prepareCurrentChild(ExecutionRequest request) {
             for (;;) {
                 PreparedCommand child = dispatcher.prepareReplay(session, request);
-                if (child.validateBeforeExecute() != ValidationResult.STALE) {
+                ValidationResult validation;
+                try {
+                    validation = child.validateBeforeExecute();
+                } catch (RuntimeException | Error failure) {
+                    closeSuppressing(failure, child::close);
+                    throw failure;
+                }
+                if (validation != ValidationResult.STALE) {
                     return child;
                 }
                 closeSuppressing(null, child::close);

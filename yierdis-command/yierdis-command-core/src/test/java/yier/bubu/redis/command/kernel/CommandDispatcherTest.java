@@ -375,6 +375,7 @@ public class CommandDispatcherTest {
                 ReplyShapes.integer(2), out -> out.integer(2));
         PreparedCommand exec = prepareExec(tx, first, second);
 
+        Assert.assertEquals(ReplyShapes.maximum(), exec.replyShape());
         EventReplyWriter out = executeWithWriter(exec, tx);
         Assert.assertEquals(List.of("array:2", "bulk:one", "integer:2"), out.events());
         Assert.assertEquals(1, first.closeCount());
@@ -388,18 +389,65 @@ public class CommandDispatcherTest {
     }
 
     @Test
+    public void singleChildExecUsesExactShapeAndClosesStaleChildBeforeRepreparing() {
+        TrackingTransactionState tx = transactionWith("FIRST");
+        List<String> lifecycle = new ArrayList<>();
+        ReplyShape staleShape = ReplyShapes.simpleString("OLD");
+        TrackingPrepared stale = writingChild(staleShape, out -> out.simpleString("OLD"));
+        stale.stale = true;
+        stale.onClose = () -> lifecycle.add("close:stale");
+        ReplyShape currentShape = ReplyShapes.simpleString("NEW");
+        TrackingPrepared current = writingChild(currentShape, out -> out.simpleString("NEW"));
+        current.onClose = () -> lifecycle.add("close:current");
+        AtomicInteger preparations = new AtomicInteger();
+        CommandDispatcher dispatcher = transactionDispatcher(registration -> registration.register(spec(
+                "FIRST", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
+                args -> session -> {
+                    int preparation = preparations.incrementAndGet();
+                    lifecycle.add("prepare:" + preparation);
+                    return preparation == 1 ? stale : current;
+                }
+        )));
+        TrackingSession session = new TrackingSession(tx);
+
+        PreparedCommand staleExec = prepare(dispatcher, session, "EXEC");
+        Assert.assertEquals(ReplyShapes.array(List.of(staleShape)), staleExec.replyShape());
+        Assert.assertEquals(ValidationResult.STALE, staleExec.validateBeforeExecute());
+        staleExec.close();
+
+        PreparedCommand currentExec = prepare(dispatcher, session, "EXEC");
+        Assert.assertEquals(ReplyShapes.array(List.of(currentShape)), currentExec.replyShape());
+        EventReplyWriter out = executeWithWriter(currentExec, session, trackingRequest("EXEC"));
+
+        Assert.assertEquals(List.of("array:1", "simple:NEW"), out.events());
+        Assert.assertEquals(List.of("prepare:1", "close:stale", "prepare:2", "close:current"), lifecycle);
+        Assert.assertEquals(1, stale.closeCount());
+        Assert.assertEquals(1, current.closeCount());
+        Assert.assertEquals(1, tx.request(0).closeCount());
+    }
+
+    @Test
     public void dynamicExecClosesStaleChildBeforeRepreparingTheSameRequest() {
         TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
+        List<String> lifecycle = new ArrayList<>();
         TrackingPrepared stale = writingChild(ReplyShapes.simpleString("OLD"), out -> out.simpleString("OLD"));
         stale.stale = true;
+        stale.onClose = () -> lifecycle.add("close:stale");
         TrackingPrepared current = writingChild(ReplyShapes.simpleString("NEW"), out -> out.simpleString("NEW"));
         TrackingPrepared second = writingChild(ReplyShapes.integer(2), out -> out.integer(2));
         AtomicInteger firstPreparations = new AtomicInteger();
         CommandDispatcher dispatcher = transactionDispatcher(registration -> {
             registration.register(spec("FIRST", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
-                    args -> session -> firstPreparations.getAndIncrement() == 0 ? stale : current));
+                    args -> session -> {
+                        int preparation = firstPreparations.incrementAndGet();
+                        lifecycle.add("prepare:first:" + preparation);
+                        return preparation == 1 ? stale : current;
+                    }));
             registration.register(spec("SECOND", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
-                    args -> session -> second));
+                    args -> session -> {
+                        lifecycle.add("prepare:second");
+                        return second;
+                    }));
         });
         TrackingSession session = new TrackingSession(tx);
         PreparedCommand exec = prepare(dispatcher, session, "EXEC");
@@ -410,6 +458,93 @@ public class CommandDispatcherTest {
         Assert.assertEquals(1, current.closeCount());
         Assert.assertEquals(1, second.closeCount());
         Assert.assertEquals(2, firstPreparations.get());
+        Assert.assertTrue(lifecycle.indexOf("close:stale") < lifecycle.indexOf("prepare:first:2"));
+    }
+
+    @Test
+    public void dynamicExecClosesEveryRequestWhenChildParseFails() {
+        TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
+        IllegalStateException parseFailure = new IllegalStateException("parse failure");
+        AtomicInteger secondPreparations = new AtomicInteger();
+        TrackingPrepared second = writingChild(ReplyShapes.simpleString("TWO"), out -> out.simpleString("TWO"));
+        CommandDispatcher dispatcher = transactionDispatcher(registration -> {
+            registration.register(spec("FIRST", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
+                    args -> {
+                        throw parseFailure;
+                    }));
+            registration.register(spec("SECOND", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
+                    args -> session -> {
+                        secondPreparations.incrementAndGet();
+                        return second;
+                    }));
+        });
+
+        PreparedCommand exec = prepare(dispatcher, new TrackingSession(tx), "EXEC");
+        IllegalStateException thrown = Assert.assertThrows(
+                IllegalStateException.class,
+                () -> executeWithWriter(exec, tx)
+        );
+
+        Assert.assertSame(parseFailure, thrown);
+        Assert.assertEquals(1, tx.request(0).closeCount());
+        Assert.assertEquals(1, tx.request(1).closeCount());
+        Assert.assertEquals(0, secondPreparations.get());
+        Assert.assertEquals(0, second.closeCount());
+    }
+
+    @Test
+    public void dynamicExecClosesEveryRequestWhenChildPreparationFails() {
+        TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
+        IllegalStateException prepareFailure = new IllegalStateException("prepare failure");
+        AtomicInteger secondPreparations = new AtomicInteger();
+        TrackingPrepared second = writingChild(ReplyShapes.simpleString("TWO"), out -> out.simpleString("TWO"));
+        CommandDispatcher dispatcher = transactionDispatcher(registration -> {
+            registration.register(spec("FIRST", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
+                    args -> session -> {
+                        throw prepareFailure;
+                    }));
+            registration.register(spec("SECOND", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
+                    args -> session -> {
+                        secondPreparations.incrementAndGet();
+                        return second;
+                    }));
+        });
+
+        PreparedCommand exec = prepare(dispatcher, new TrackingSession(tx), "EXEC");
+        IllegalStateException thrown = Assert.assertThrows(
+                IllegalStateException.class,
+                () -> executeWithWriter(exec, tx)
+        );
+
+        Assert.assertSame(prepareFailure, thrown);
+        Assert.assertEquals(1, tx.request(0).closeCount());
+        Assert.assertEquals(1, tx.request(1).closeCount());
+        Assert.assertEquals(0, secondPreparations.get());
+        Assert.assertEquals(0, second.closeCount());
+    }
+
+    @Test
+    public void dynamicExecClosesPreparedChildWhenValidationFails() {
+        TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
+        IllegalStateException validationFailure = new IllegalStateException("validation failure");
+        IllegalStateException closeFailure = new IllegalStateException("validation cleanup failure");
+        TrackingPrepared first = writingChild(ReplyShapes.simpleString("ONE"), out -> out.simpleString("ONE"));
+        first.validationFailure = validationFailure;
+        first.closeFailure = closeFailure;
+        TrackingPrepared second = writingChild(ReplyShapes.simpleString("TWO"), out -> out.simpleString("TWO"));
+        PreparedCommand exec = prepareExec(tx, first, second);
+
+        IllegalStateException thrown = Assert.assertThrows(
+                IllegalStateException.class,
+                () -> executeWithWriter(exec, tx)
+        );
+
+        Assert.assertSame(validationFailure, thrown);
+        Assert.assertArrayEquals(new Throwable[]{closeFailure}, thrown.getSuppressed());
+        Assert.assertEquals(1, first.closeCount());
+        Assert.assertEquals(0, second.closeCount());
+        Assert.assertEquals(1, tx.request(0).closeCount());
+        Assert.assertEquals(1, tx.request(1).closeCount());
     }
 
     @Test
@@ -434,6 +569,80 @@ public class CommandDispatcherTest {
         Assert.assertEquals(1, tx.request(0).closeCount());
         Assert.assertEquals(1, tx.request(1).closeCount());
         Assert.assertArrayEquals(new Throwable[]{closeFailure}, thrown.getSuppressed());
+    }
+
+    @Test
+    public void currentRequestCloseFailureDoesNotCloseThatRequestTwice() {
+        TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
+        IllegalStateException closeFailure = new IllegalStateException("current request close failure");
+        tx.request(0).closeFailure = closeFailure;
+        TrackingPrepared first = writingChild(ReplyShapes.simpleString("ONE"), out -> out.simpleString("ONE"));
+        TrackingPrepared second = writingChild(ReplyShapes.simpleString("TWO"), out -> out.simpleString("TWO"));
+        PreparedCommand exec = prepareExec(tx, first, second);
+
+        IllegalStateException thrown = Assert.assertThrows(
+                IllegalStateException.class,
+                () -> executeWithWriter(exec, tx)
+        );
+
+        Assert.assertSame(closeFailure, thrown);
+        Assert.assertEquals(1, first.closeCount());
+        Assert.assertEquals(0, second.closeCount());
+        Assert.assertEquals(1, tx.request(0).closeCount());
+        Assert.assertEquals(1, tx.request(1).closeCount());
+    }
+
+    @Test
+    public void retainedChildCloseRethrowingPrimaryDoesNotStopRequestCleanup() {
+        TrackingTransactionState tx = transactionWith("FIRST");
+        IllegalStateException executionFailure = new IllegalStateException("execute and close failure");
+        TrackingPrepared child = writingChild(ReplyShapes.simpleString("ONE"), out -> {
+            throw executionFailure;
+        });
+        child.closeFailure = executionFailure;
+        CommandDispatcher dispatcher = transactionDispatcher(registration -> registration.register(spec(
+                "FIRST", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
+                args -> session -> child
+        )));
+        PreparedCommand exec = prepare(dispatcher, new TrackingSession(tx), "EXEC");
+
+        IllegalStateException thrown = Assert.assertThrows(
+                IllegalStateException.class,
+                () -> executeWithWriter(exec, tx)
+        );
+
+        Assert.assertSame(executionFailure, thrown);
+        Assert.assertEquals(1, child.closeCount());
+        Assert.assertEquals(1, tx.request(0).closeCount());
+    }
+
+    @Test
+    public void exactPreparationFailureContinuesClosingRetainedChildrenWhenCloseRethrowsPrimary() {
+        TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
+        tx.reportedSize = 1;
+        IllegalStateException preparationFailure = new IllegalStateException("reply shape failure");
+        TrackingPrepared first = writingChild(ReplyShapes.simpleString("ONE"), out -> out.simpleString("ONE"));
+        TrackingPrepared second = writingChild(ReplyShapes.simpleString("TWO"), out -> out.simpleString("TWO"));
+        second.replyShapeFailure = preparationFailure;
+        second.closeFailure = preparationFailure;
+        CommandDispatcher dispatcher = transactionDispatcher(registration -> {
+            registration.register(spec("FIRST", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
+                    args -> session -> first));
+            registration.register(spec("SECOND", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
+                    args -> session -> second));
+        });
+
+        IllegalStateException thrown = Assert.assertThrows(
+                IllegalStateException.class,
+                () -> prepare(dispatcher, new TrackingSession(tx), "EXEC")
+        );
+
+        Assert.assertSame(preparationFailure, thrown);
+        Assert.assertEquals(1, second.closeCount());
+        Assert.assertEquals(1, first.closeCount());
+        tx.discard();
+        Assert.assertEquals(1, tx.request(0).closeCount());
+        Assert.assertEquals(1, tx.request(1).closeCount());
     }
 
     private static CommandDispatcher transactionDispatcher(CommandModuleAction module) {
@@ -622,6 +831,7 @@ public class CommandDispatcherTest {
     private static final class TrackingTransactionState implements TransactionState {
         private boolean active;
         private boolean aborted;
+        private Integer reportedSize;
         private final ArrayList<TrackingRequest> queue = new ArrayList<>();
         private final ArrayList<TrackingRequest> requests = new ArrayList<>();
 
@@ -629,7 +839,7 @@ public class CommandDispatcherTest {
         @Override public boolean aborted() { return aborted; }
         @Override public void begin() { active = true; aborted = false; }
         @Override public void markAborted() { aborted = true; }
-        @Override public int size() { return queue.size(); }
+        @Override public int size() { return reportedSize == null ? queue.size() : reportedSize; }
         @Override public void forEachQueued(Consumer<? super ExecutionRequest> visitor) { queue.forEach(visitor); }
         @Override public String tryEnqueue(ExecutionRequest request) {
             TrackingRequest tracked = (TrackingRequest) request;
@@ -693,6 +903,10 @@ public class CommandDispatcherTest {
         private final ReplyShape shape;
         private final Consumer<RedisReplyWriter> writing;
         private boolean stale;
+        private RuntimeException replyShapeFailure;
+        private RuntimeException validationFailure;
+        private RuntimeException closeFailure;
+        private Runnable onClose = () -> { };
         private int closeCount;
 
         private TrackingPrepared(ReplyShape shape, Consumer<RedisReplyWriter> writing) {
@@ -700,12 +914,26 @@ public class CommandDispatcherTest {
             this.writing = writing;
         }
 
-        @Override public ReplyShape replyShape() { return shape; }
+        @Override public ReplyShape replyShape() {
+            if (replyShapeFailure != null) {
+                throw replyShapeFailure;
+            }
+            return shape;
+        }
         @Override public ValidationResult validateBeforeExecute() {
+            if (validationFailure != null) {
+                throw validationFailure;
+            }
             return stale ? ValidationResult.STALE : ValidationResult.VALID;
         }
         @Override public void execute(CommandExecutionContext context) { writing.accept(context.reply()); }
-        @Override public void close() { closeCount++; }
+        @Override public void close() {
+            closeCount++;
+            onClose.run();
+            if (closeFailure != null) {
+                throw closeFailure;
+            }
+        }
 
         private int closeCount() { return closeCount; }
     }
