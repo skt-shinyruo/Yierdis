@@ -1,6 +1,6 @@
 package yier.bubu.redis.command.defaults;
 
-// BulkStringReplyAdapter：将 storage 的语义字节值适配到命令层回复 writer。
+// 将 storage 字节值适配到语义回复使用的流式 ReplySink，不承担协议头或资源关闭。
 
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.storage.api.result.ByteValueSink;
