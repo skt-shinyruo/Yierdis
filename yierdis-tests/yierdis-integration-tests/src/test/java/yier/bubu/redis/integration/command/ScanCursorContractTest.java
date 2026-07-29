@@ -1,6 +1,6 @@
 package yier.bubu.redis.integration.command;
 
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.testutil.FastTestClient;
@@ -17,8 +17,8 @@ public class ScanCursorContractTest {
     @Test
     public void cursorTerminatesAtZeroAndMakesProgress() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 for (int i = 0; i < 50; i++) {
                     client.execute(Arrays.asList(b("SET"), b("k" + i), b("v")));
                 }
@@ -47,8 +47,8 @@ public class ScanCursorContractTest {
     @Test
     public void countAndMatchNeverDeadlockEvenWhenNoKeyMatches() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 for (int i = 0; i < 20; i++) {
                     client.execute(Arrays.asList(b("SET"), b("k" + i), b("v")));
                 }
@@ -74,8 +74,8 @@ public class ScanCursorContractTest {
     @Test
     public void cursorTerminatesEvenWhenDatasetMutatesDuringRehash() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 // Fill enough keys to trigger growth/rehash at least once.
                 for (int i = 0; i < 200; i++) {
                     client.execute(Arrays.asList(b("SET"), b("k" + i), b("v")));

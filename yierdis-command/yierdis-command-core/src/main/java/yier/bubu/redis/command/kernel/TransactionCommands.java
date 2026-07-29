@@ -16,6 +16,7 @@ import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.PreparedCommands;
 import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.ReplyShape;
 import yier.bubu.redis.execution.api.ReplyShapes;
@@ -55,7 +56,7 @@ final class TransactionCommands implements CommandModule {
             if (tx.active()) {
                 return error("ERR MULTI calls can not be nested");
             }
-            return yier.bubu.redis.execution.api.PreparedCommands.action(
+            return PreparedCommands.action(
                     ReplyShapes.simpleString("OK"),
                     context -> {
                         tx.begin();
@@ -71,7 +72,7 @@ final class TransactionCommands implements CommandModule {
             if (!tx.active()) {
                 return error("ERR DISCARD without MULTI");
             }
-            return yier.bubu.redis.execution.api.PreparedCommands.action(
+            return PreparedCommands.action(
                     ReplyShapes.simpleString("OK"),
                     context -> {
                         tx.discard();
@@ -91,7 +92,7 @@ final class TransactionCommands implements CommandModule {
             return error("ERR EXEC without MULTI");
         }
         if (tx.aborted()) {
-            return yier.bubu.redis.execution.api.PreparedCommands.action(
+            return PreparedCommands.action(
                     ReplyShapes.error(EXEC_ABORT),
                     context -> {
                         tx.discard();
@@ -126,7 +127,7 @@ final class TransactionCommands implements CommandModule {
     }
 
     private static PreparedCommand error(String message) {
-        return yier.bubu.redis.execution.api.PreparedCommands.ready(RedisReplies.error(message));
+        return PreparedCommands.ready(RedisReplies.error(message));
     }
 
     private static void closeChildrenReverse(List<PreparedCommand> children, Throwable primary) {

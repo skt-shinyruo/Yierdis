@@ -1,6 +1,6 @@
 package yier.bubu.redis.integration.command;
 
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.command.api.CommandArity;
 import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
@@ -32,9 +32,9 @@ public class TransactionCommandTest {
     @Test
     public void multiQueuesAndExecAppliesInOrder() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(db);
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(processor, session)) {
+            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
                 Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), b("k"), b("v")))).value());
                 Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(Arrays.asList(b("GET"), b("k")))).value());
@@ -53,9 +53,9 @@ public class TransactionCommandTest {
     @Test
     public void execAndDiscardWithoutMultiReturnErrors() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(db);
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(processor, session)) {
+            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
                 ReplyObject exec = client.execute(Arrays.asList(b("EXEC")));
                 Assert.assertTrue(exec instanceof ReplyError);
                 Assert.assertEquals("ERR EXEC without MULTI", ((ReplyError) exec).message());
@@ -70,9 +70,9 @@ public class TransactionCommandTest {
     @Test
     public void multiCannotBeNested() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(db);
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(processor, session)) {
+            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
 
                 ReplyObject nested = client.execute(Arrays.asList(b("MULTI")));
@@ -87,9 +87,9 @@ public class TransactionCommandTest {
     @Test
     public void multiQueueCopiesArgvToPreventMutationAfterEnqueue() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(db);
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(processor, session)) {
+            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
 
                 byte[] key = b("k");
@@ -118,7 +118,7 @@ public class TransactionCommandTest {
     @Test
     public void modulesCanRejectCommandsInsideMultiAndAbortTransaction() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(
                     db,
                     registration -> registration.register(new CommandDefinition<>(
                             new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
@@ -128,7 +128,7 @@ public class TransactionCommandTest {
                     ))
             );
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(processor, session)) {
+            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
 
                 ReplyObject hello = client.execute(Arrays.asList(b("HELLO")));
@@ -145,7 +145,7 @@ public class TransactionCommandTest {
     @Test
     public void syntaxErrorInsideMultiAbortsBeforeExec() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(
                     db,
                     registration -> registration.register(new CommandDefinition<>(
                             new CommandSyntax("STRICT", CommandArity.exact(2), CommandKeySpec.NONE,
@@ -155,7 +155,7 @@ public class TransactionCommandTest {
                     ))
             );
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(processor, session)) {
+            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
 
                 ReplyObject wrongArity = client.execute(Arrays.asList(b("STRICT")));
@@ -173,9 +173,9 @@ public class TransactionCommandTest {
     @Test
     public void unknownCommandInsideMultiAbortsBeforeExec() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(db);
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(processor, session)) {
+            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
 
                 ReplyObject unknown = client.execute(Arrays.asList(b("NO_SUCH_COMMAND")));
@@ -193,9 +193,9 @@ public class TransactionCommandTest {
     @Test
     public void builtInWrongArityInsideMultiAbortsBeforeExecAfterParserMigration() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(db);
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(processor, session)) {
+            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
 
                 ReplyObject wrongArity = client.execute(Arrays.asList(b("GET")));
@@ -213,9 +213,9 @@ public class TransactionCommandTest {
     @Test
     public void setOptionSyntaxInsideMultiAbortsBeforeExecAfterParserMigration() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(db);
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(processor, session)) {
+            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
 
                 ReplyObject badSet = client.execute(Arrays.asList(b("SET"), b("k"), b("v"), b("NX"), b("XX")));
@@ -233,9 +233,9 @@ public class TransactionCommandTest {
     @Test
     public void nullBulkStringInsideMultiAbortsBeforeExec() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(db);
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(processor, session)) {
+            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
 
                 ReplyObject badNull = client.execute(Arrays.asList(b("SET"), b("k"), null));
@@ -254,10 +254,10 @@ public class TransactionCommandTest {
     public void transactionControlParseErrorsAbortAndDiscardQueuedWrites() {
         forEachDb(db -> {
             for (String control : List.of("MULTI", "EXEC", "DISCARD")) {
-                YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(db);
+                CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
                 TestSession session = new TestSession();
                 byte[] key = b("dirty:" + control.toLowerCase(java.util.Locale.ROOT));
-                try (FastTestClient client = new FastTestClient(processor, session)) {
+                try (FastTestClient client = new FastTestClient(dispatcher, session)) {
                     Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
                     Assert.assertEquals(
                             "QUEUED",
@@ -286,9 +286,9 @@ public class TransactionCommandTest {
     @Test
     public void testCommandCompositionKeepsTransactionCommandsExplicitlyRegistered() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(db);
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(processor, session)) {
+            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("DISCARD")))).value());
             }
@@ -298,7 +298,7 @@ public class TransactionCommandTest {
     @Test
     public void bareAuthOutsideMultiUsesTheSyntaxArity() {
         forEachDb(db -> {
-            try (FastTestClient client = new FastTestClient(TestCommandComposition.createProcessor(db))) {
+            try (FastTestClient client = new FastTestClient(TestCommandComposition.createDispatcher(db))) {
                 ReplyError error = (ReplyError) client.execute(List.of(b("AUTH")));
                 Assert.assertEquals("ERR wrong number of arguments for 'auth' command", error.message());
             }
@@ -308,7 +308,7 @@ public class TransactionCommandTest {
     @Test
     public void bareAuthInsideMultiMarksDirtyAndExecDoesNotApplyQueuedWrites() {
         forEachDb(db -> {
-            try (FastTestClient client = new FastTestClient(TestCommandComposition.createProcessor(db))) {
+            try (FastTestClient client = new FastTestClient(TestCommandComposition.createDispatcher(db))) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
                 Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(List.of(b("SET"), b("k"), b("v")))).value());
                 ReplyError arity = (ReplyError) client.execute(List.of(b("AUTH")));

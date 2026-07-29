@@ -2,7 +2,7 @@ package yier.bubu.redis.integration.command;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplyObject;
@@ -113,8 +113,8 @@ public class StringCommandTest {
 
     private static void withClient(ClientCase test) {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 test.run(client);
             }
         });

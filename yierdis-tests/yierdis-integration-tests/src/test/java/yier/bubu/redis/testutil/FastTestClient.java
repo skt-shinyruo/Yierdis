@@ -1,10 +1,9 @@
 package yier.bubu.redis.testutil;
 
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandExecutionContext;
-import yier.bubu.redis.execution.api.CommandPreparationContext;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
@@ -24,16 +23,16 @@ import java.util.Objects;
  * 说明：对外协议已切换为 RESP，因此 core 单测不再依赖任何 wire codec/对象模型。
  */
 public final class FastTestClient implements AutoCloseable {
-    private final YierdisFastCommandProcessor processor;
+    private final CommandDispatcher dispatcher;
     private final CommandSession session;
 
-    public FastTestClient(YierdisFastCommandProcessor processor) {
-        this(processor, null);
+    public FastTestClient(CommandDispatcher dispatcher) {
+        this(dispatcher, null);
     }
 
-    public FastTestClient(YierdisFastCommandProcessor processor, CommandSession session) {
-        Objects.requireNonNull(processor, "processor");
-        this.processor = processor;
+    public FastTestClient(CommandDispatcher dispatcher, CommandSession session) {
+        Objects.requireNonNull(dispatcher, "dispatcher");
+        this.dispatcher = dispatcher;
         this.session = session != null ? session : new DefaultTestSession();
     }
 
@@ -46,9 +45,8 @@ public final class FastTestClient implements AutoCloseable {
         Objects.requireNonNull(request, "request");
         CapturingReplyWriter writer = new CapturingReplyWriter();
         try {
-            CommandPreparationContext preparation = new CommandPreparationContext(session);
             for (;;) {
-                try (PreparedCommand prepared = processor.prepare(request, preparation)) {
+                try (PreparedCommand prepared = dispatcher.prepare(session, request)) {
                     if (prepared.validateBeforeExecute() == ValidationResult.STALE) {
                         continue;
                     }

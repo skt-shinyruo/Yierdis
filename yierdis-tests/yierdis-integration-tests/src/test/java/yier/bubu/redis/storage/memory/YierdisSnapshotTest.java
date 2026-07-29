@@ -5,11 +5,11 @@ import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.testutil.TestDbs;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplySimpleString;
-import yier.bubu.redis.runtime.embedded.TestCommandProcessors;
+import yier.bubu.redis.runtime.embedded.TestCommandDispatchers;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -22,8 +22,8 @@ public class YierdisSnapshotTest {
     @Test
     public void snapshotReturnsKeysValuesAndExpireAtForStrings() {
         TestDbs.runDefaultFfm(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 Assert.assertTrue(client.execute(cmd("SET", "a", "1")) instanceof ReplySimpleString);
                 Assert.assertTrue(client.execute(cmd("SET", "b", "2")) instanceof ReplySimpleString);
                 Assert.assertTrue(client.execute(cmd("EXPIRE", "a", "10")) instanceof ReplyInteger);

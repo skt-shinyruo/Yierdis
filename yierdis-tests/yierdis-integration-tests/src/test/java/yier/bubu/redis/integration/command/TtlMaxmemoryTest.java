@@ -1,6 +1,6 @@
 package yier.bubu.redis.integration.command;
 
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.storage.api.ExpireOption;
@@ -59,8 +59,8 @@ public class TtlMaxmemoryTest {
         YierdisDb db = openFfm(maxmemoryBytes);
         db.bindToCurrentThread();
 
-        YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-        try (FastTestClient client = new FastTestClient(processor)) {
+        CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+        try (FastTestClient client = new FastTestClient(dispatcher)) {
             ReplyObject set = client.execute(List.of(b("SET"), key, value, b("EX"), b("60")));
             Assert.assertTrue(set instanceof ReplyError);
             Assert.assertEquals(MaxmemoryErrors.OOM_ERR, ((ReplyError) set).message());
@@ -83,8 +83,8 @@ public class TtlMaxmemoryTest {
         YierdisDb db = openFfm(maxmemoryBytes);
         db.bindToCurrentThread();
 
-        YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-        try (FastTestClient client = new FastTestClient(processor)) {
+        CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+        try (FastTestClient client = new FastTestClient(dispatcher)) {
             Assert.assertTrue(client.execute(List.of(b("SET"), key, value)) instanceof ReplySimpleString);
             long usedBefore = db.memory().memoryStats().usedBytesForMaxmemory();
             long nativeDataBefore = db.memory().memoryStats().nativeDataCommittedBytes();

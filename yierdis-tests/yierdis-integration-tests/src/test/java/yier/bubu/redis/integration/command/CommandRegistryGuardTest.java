@@ -1,6 +1,6 @@
 package yier.bubu.redis.integration.command;
 
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.testutil.FastTestClient;
@@ -22,8 +22,8 @@ public class CommandRegistryGuardTest {
     @Test
     public void minimalCommandSetIsRegistered() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 assertNotUnknown(client.execute(cmd("PING")));
 
                 assertNotUnknown(client.execute(cmd("SET", "k", "v")));

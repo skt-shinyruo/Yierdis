@@ -2,14 +2,14 @@ package yier.bubu.redis.storage.memory;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.StableMemoryBackendFactory;
 import yier.bubu.redis.memory.foreign.YierdisFfmStableMemoryBackend;
-import yier.bubu.redis.runtime.embedded.TestCommandProcessors;
+import yier.bubu.redis.runtime.embedded.TestCommandDispatchers;
 import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.DbEngineConfig;
 import yier.bubu.redis.storage.api.GlobalMaxmemoryDbEngine;
@@ -43,8 +43,8 @@ public class OffHeapLeakRegressionTest {
             MemoryUsageSnapshot baseline = backend.memoryUsage();
             long baselineLiveRegions = backend.liveRegionCount();
             MemoryUsageSnapshot highWater = baseline;
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 byte[] spanValue = repeat((byte) 'x', SPAN_VALUE_BYTES);
 
                 ReplyObject firstSet = client.execute(List.of(b("SET"), b("a"), spanValue));
@@ -84,8 +84,8 @@ public class OffHeapLeakRegressionTest {
             MemoryUsageSnapshot baseline = backend.memoryUsage();
             long baselineLiveRegions = backend.liveRegionCount();
             MemoryUsageSnapshot highWater = baseline;
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 byte[] spanValue = repeat((byte) 'x', SPAN_VALUE_BYTES);
 
                 ReplyObject firstSet = client.execute(Arrays.asList(b("SET"), b("a"), spanValue));

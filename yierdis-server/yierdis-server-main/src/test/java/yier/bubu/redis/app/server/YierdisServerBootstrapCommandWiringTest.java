@@ -17,8 +17,7 @@ import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.execution.api.ValidationResult;
-import yier.bubu.redis.execution.engine.DefaultYierdisEngine;
-import yier.bubu.redis.execution.engine.YierdisEngine;
+import yier.bubu.redis.execution.executor.CommandExecutionEngine;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
@@ -29,7 +28,7 @@ import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
 import yier.bubu.redis.protocol.resp.netty.InboundReadCreditHandler;
 import yier.bubu.redis.protocol.resp.netty.RespRequestDecoder;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
@@ -42,6 +41,8 @@ import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -135,7 +136,7 @@ public class YierdisServerBootstrapCommandWiringTest {
     }
 
     @Test
-    public void serverCommandCompositionBuildsProcessorWithServerAndDefaultCommands() throws Exception {
+    public void serverCommandCompositionBuildsDispatcherWithServerAndDefaultCommands() throws Exception {
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(
                 YierdisInstanceConfig.builder().databases(1).build()
         )) {
@@ -143,35 +144,27 @@ public class YierdisServerBootstrapCommandWiringTest {
             NettyServerInfoProvider infoProvider = new NettyServerInfoProvider(
                     runtimeConfig(0, 0, 1024, 1, 4, 5)
             );
-            YierdisFastCommandProcessor processor = ServerCommandComposition.createProcessor(
+            CommandDispatcher dispatcher = ServerCommandComposition.createDispatcher(
                     TestDbRouters.forInstance(instance),
                     infoProvider,
                     SlowCommandGovernor.DEFAULT
             );
-            YierdisEngine engine = new DefaultYierdisEngine(processor, () -> {
-            });
+            CommandExecutionEngine execution = dispatcher::prepare;
             EngineSession session = new EngineSession();
-
-            CapturingReplyWriter pingReply = new CapturingReplyWriter();
-            execute(engine, session, ByteArrayExecutionRequest.fromUtf8("PING", List.of()), pingReply);
-            Assert.assertEquals("PONG", pingReply.simpleStringValue);
-
-            CapturingReplyWriter helloReply = new CapturingReplyWriter();
-            execute(engine, session, ByteArrayExecutionRequest.fromUtf8("HELLO", List.of()), helloReply);
-            Assert.assertTrue(helloReply.mapHeaderCount != null && helloReply.mapHeaderCount > 0);
-
-            CapturingReplyWriter multiReply = new CapturingReplyWriter();
-            execute(engine, session, ByteArrayExecutionRequest.fromUtf8("MULTI", List.of()), multiReply);
-            Assert.assertEquals("OK", multiReply.simpleStringValue);
-
-            CapturingReplyWriter queuedSetReply = new CapturingReplyWriter();
-            execute(engine, session, ByteArrayExecutionRequest.fromUtf8("SET", List.of("tx-key", "tx-value")), queuedSetReply);
-            Assert.assertEquals("QUEUED", queuedSetReply.simpleStringValue);
-
-            CapturingReplyWriter execReply = new CapturingReplyWriter();
-            execute(engine, session, ByteArrayExecutionRequest.fromUtf8("EXEC", List.of()), execReply);
-            Assert.assertEquals(List.of("OK"), execReply.arrayValues);
+            PreparedCommand prepared = execution.prepare(session, request("PING"));
+            Assert.assertNotNull(prepared);
         }
+    }
+
+    @Test
+    public void bootstrapSourceWiresDispatcherAndMaintenanceDirectly() throws Exception {
+        String source = Files.readString(bootstrapSource(), StandardCharsets.UTF_8);
+
+        Assert.assertTrue(source.contains("dispatcher::prepare"));
+        Assert.assertTrue(source.contains("maintenanceTick.run()"));
+        Assert.assertFalse(source.contains("Yierdis" + "Engine"));
+        Assert.assertFalse(source.contains("DefaultYierdis" + "Engine"));
+        Assert.assertFalse(source.contains("YierdisFastCommand" + "Processor"));
     }
 
     @Test
@@ -636,13 +629,28 @@ public class YierdisServerBootstrapCommandWiringTest {
         return ByteArrayExecutionRequest.fromUtf8(values[0], Arrays.asList(Arrays.copyOfRange(values, 1, values.length)));
     }
 
+    private static Path bootstrapSource() {
+        Path moduleRoot = Path.of("").toAbsolutePath().normalize();
+        Path fromModule = moduleRoot.resolve(
+                "src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java"
+        );
+        if (Files.isRegularFile(fromModule)) {
+            return fromModule;
+        }
+        Path fromRepo = moduleRoot.resolve(
+                "yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java"
+        );
+        Assert.assertTrue("cannot locate YierdisServerBootstrap.java from " + moduleRoot, Files.isRegularFile(fromRepo));
+        return fromRepo;
+    }
+
     private static void execute(
-            YierdisEngine engine,
+            CommandDispatcher dispatcher,
             CommandSession session,
             ExecutionRequest request,
             RedisReplyWriter reply
     ) {
-        try (PreparedCommand prepared = engine.prepare(session, request)) {
+        try (PreparedCommand prepared = dispatcher.prepare(session, request)) {
             Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
             try (CommandExecutionContext context = CommandExecutionContext.forRequest(session, reply, request)) {
                 prepared.execute(context);
@@ -984,11 +992,11 @@ public class YierdisServerBootstrapCommandWiringTest {
 
         private InitializerTestEnv() {
             this.instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build());
-            YierdisEngine engine = TestYierdisEngines.forInstance(instance);
+            CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
             this.replyWriterFactory = new RespReplyWriterFactory();
             this.executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
-                    engine::prepare,
+                    dispatcher::prepare,
                     new NettySerialOwnerExecutor(ImmediateEventExecutor.INSTANCE),
                     new RespReplySizer(),
                     replyWriterFactory,

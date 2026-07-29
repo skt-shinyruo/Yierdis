@@ -16,11 +16,9 @@ import org.slf4j.LoggerFactory;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.api.YierdisDbRouter;
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.execution.api.CommandPreparationContext;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
-import yier.bubu.redis.execution.engine.DefaultYierdisEngine;
-import yier.bubu.redis.execution.engine.YierdisEngine;
 import yier.bubu.redis.execution.executor.CommandExecutionEngine;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
@@ -80,7 +78,6 @@ public final class YierdisServerBootstrap implements AutoCloseable {
 
     // Core resources (closed in reverse order).
     private YierdisInstance instance;
-    private YierdisEngine engine;
     private CommandExecutor<NettyExecutionConnection> executor;
     private NettyServerInfoProvider infoProvider;
     private InboundMemoryBudget inboundMemoryBudget;
@@ -251,18 +248,13 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 return runtimeConfig.keysMaxResults();
             }
         };
-        YierdisFastCommandProcessor commandProcessor = ServerCommandComposition.createProcessor(
+        CommandDispatcher dispatcher = ServerCommandComposition.createDispatcher(
                 dbRouter(instance),
                 infoProvider,
                 slowGovernor
         );
-        YierdisEngine commandEngine = new DefaultYierdisEngine(
-                commandProcessor,
-                maintenanceTick
-        );
-        engine = commandEngine;
         CommandExecutionEngine executionEngine = Objects.requireNonNull(
-                commandEngineDecorator.apply(commandEngine::prepare),
+                commandEngineDecorator.apply(dispatcher::prepare),
                 "commandEngineDecorator result"
         );
         commandGroup = new DefaultEventExecutorGroup(1);
@@ -300,7 +292,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 }
                 exForTask.executeMaintenance(() -> {
                     try {
-                        commandEngine.maintenanceTick();
+                        maintenanceTick.run();
                     } catch (Exception e) {
                         log.debug("Expiration cleanup error", e);
                     } finally {
@@ -443,16 +435,6 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         }
         outboundMemoryBudget = null;
         replyEgressStats = null;
-
-        YierdisEngine eng = engine;
-        if (eng != null) {
-            try {
-                eng.close();
-            } catch (Throwable t) {
-                failure = recordCloseFailure(failure, t);
-            }
-        }
-        engine = null;
 
         YierdisInstance inst = instance;
         if (inst != null) {

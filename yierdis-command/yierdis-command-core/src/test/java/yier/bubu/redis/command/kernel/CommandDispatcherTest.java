@@ -4,18 +4,22 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.command.api.CommandArity;
+import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandHandler;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandParseException;
+import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
+import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandExecutionContext;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.PreparedCommands;
 import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.ReplyShape;
@@ -29,9 +33,109 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 public class CommandDispatcherTest {
+    @Test
+    public void dispatcherPreparesAndExecutesRegisteredCommand() {
+        CommandDispatcher dispatcher = dispatcher(spec(
+                "LOCAL",
+                CommandArity.exact(1),
+                TransactionPolicy.QUEUEABLE,
+                args -> session -> ready("LOCAL_OK")
+        ));
+        RecordingSession session = new RecordingSession(false);
+
+        try (ExecutionRequest request = request("LOCAL");
+             PreparedCommand prepared = dispatcher.prepare(session, request)) {
+            CapturingReplyWriter reply = execute(prepared, session, request);
+            Assert.assertEquals("LOCAL_OK", reply.simpleString());
+            Assert.assertNull(reply.error());
+        }
+    }
+
+    @Test
+    public void preparedExecutionScopesTheRequestAsItsExplicitMutationContext() {
+        AtomicReference<MutationContext> successfulContext = new AtomicReference<>();
+        AtomicReference<MutationContext> failedContext = new AtomicReference<>();
+        CommandDispatcher dispatcher = CommandRegistries.dispatcher(registration -> {
+            registration.register(new CommandDefinition<>(
+                    syntax("SCOPED"),
+                    CommandParsers.args(),
+                    (request, preparation) -> prepared(ReplyShapes.simpleString("OK"), context -> {
+                        Assert.assertSame(request.request(), context.mutationContext().commandRecord());
+                        successfulContext.set(context.mutationContext());
+                        context.reply().simpleString("OK");
+                    })
+            ));
+            registration.register(new CommandDefinition<>(
+                    syntax("FAIL"),
+                    CommandParsers.args(),
+                    (request, preparation) -> prepared(ReplyShapes.simpleString("OK"), context -> {
+                        Assert.assertSame(request.request(), context.mutationContext().commandRecord());
+                        failedContext.set(context.mutationContext());
+                        throw new IllegalStateException("injected");
+                    })
+            ));
+        });
+        RecordingSession session = new RecordingSession(false);
+
+        executePrepared(dispatcher, session, request("SCOPED"), new CapturingReplyWriter());
+        Assert.assertFalse(successfulContext.get().hasCommandRecord());
+
+        Assert.assertThrows(
+                IllegalStateException.class,
+                () -> executePrepared(dispatcher, session, request("FAIL"), new CapturingReplyWriter())
+        );
+        Assert.assertFalse(failedContext.get().hasCommandRecord());
+    }
+
+    @Test
+    public void transactionReplayUsesTheQueuedRequestAsItsCurrentMutationRecord() {
+        AtomicReference<MutationContext> replayContext = new AtomicReference<>();
+        CommandDispatcher dispatcher = CommandRegistries.dispatcher(registration -> registration.register(
+                new CommandDefinition<>(
+                        syntax("SCOPED"),
+                        CommandParsers.args(),
+                        (request, preparation) -> prepared(ReplyShapes.simpleString("OK"), context -> {
+                            Assert.assertSame(request.request(), context.mutationContext().commandRecord());
+                            replayContext.set(context.mutationContext());
+                            context.reply().simpleString("OK");
+                        })
+                )
+        ));
+        TrackingTransactionState transaction = transactionWith("SCOPED");
+
+        PreparedCommand exec = prepare(dispatcher, new TrackingSession(transaction), "EXEC");
+        executeWithWriter(exec, transaction);
+
+        Assert.assertFalse(replayContext.get().hasCommandRecord());
+    }
+
+    @Test
+    public void dispatcherPreparationAcceptsCompleteCommandSession() {
+        CommandDispatcher dispatcher = CommandRegistries.dispatcher(registration -> registration.register(
+                new CommandDefinition<>(
+                        syntax("LOCAL"),
+                        CommandParsers.args(),
+                        (request, preparation) -> prepared(
+                                ReplyShapes.simpleString("DB_" + preparation.session().dbIndex()),
+                                context -> context.reply().simpleString("DB_" + context.session().dbIndex())
+                        )
+                )
+        ));
+        RecordingSession session = new RecordingSession(false);
+        session.setDbIndex(7);
+
+        try (ExecutionRequest request = request("LOCAL");
+             PreparedCommand prepared = dispatcher.prepare(session, request)) {
+            CapturingReplyWriter reply = execute(prepared, session, request);
+            Assert.assertEquals("DB_7", reply.simpleString());
+            Assert.assertNull(reply.error());
+        }
+    }
+
     @Test
     public void validationErrorsSkipHandlersAndAbortActiveTransactionAfterReservation() {
         List<ValidationCase> cases = List.of(
@@ -723,6 +827,15 @@ public class CommandDispatcherTest {
                 args -> session -> ready("OK"));
     }
 
+    private static CommandSyntax syntax(String name) {
+        return new CommandSyntax(
+                name,
+                CommandArity.exact(1),
+                CommandKeySpec.NONE,
+                TransactionPolicy.QUEUEABLE
+        );
+    }
+
     private static CommandSpec spec(
             String name,
             CommandArity arity,
@@ -750,9 +863,33 @@ public class CommandDispatcherTest {
     }
 
     private static PreparedCommand ready(String reply) {
-        return yier.bubu.redis.execution.api.PreparedCommands.ready(
+        return PreparedCommands.ready(
                 RedisReplies.simpleString(reply)
         );
+    }
+
+    private static PreparedCommand prepared(ReplyShape shape, Consumer<CommandExecutionContext> execution) {
+        return new PreparedCommand() {
+            @Override public ReplyShape replyShape() { return shape; }
+            @Override public ValidationResult validateBeforeExecute() { return ValidationResult.VALID; }
+            @Override public void execute(CommandExecutionContext context) { execution.accept(context); }
+            @Override public void close() { }
+        };
+    }
+
+    private static void executePrepared(
+            CommandDispatcher dispatcher,
+            CommandSession session,
+            ExecutionRequest request,
+            RedisReplyWriter reply
+    ) {
+        try (request;
+             PreparedCommand prepared = dispatcher.prepare(session, request)) {
+            Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
+            try (CommandExecutionContext context = CommandExecutionContext.forRequest(session, reply, request)) {
+                prepared.execute(context);
+            }
+        }
     }
 
     private static PreparedCommand throwingClose(RuntimeException failure) {
@@ -940,6 +1077,7 @@ public class CommandDispatcherTest {
 
     private static final class RecordingSession implements CommandSession {
         private final RecordingTransactionState tx;
+        private int dbIndex;
 
         private RecordingSession(boolean active) {
             tx = new RecordingTransactionState(active);
@@ -947,11 +1085,12 @@ public class CommandDispatcherTest {
 
         @Override
         public int dbIndex() {
-            return 0;
+            return dbIndex;
         }
 
         @Override
         public void setDbIndex(int dbIndex) {
+            this.dbIndex = dbIndex;
         }
 
         @Override

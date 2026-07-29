@@ -9,7 +9,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.engine.YierdisEngine;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.ExecutionConnectionContext;
@@ -32,11 +32,11 @@ public class ClosingSkipSideEffectsIntegrationTest {
         EventExecutor eventExecutor = group.next();
 
         YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build());
-        YierdisEngine engine = TestYierdisEngines.forInstance(instance);
+        CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
         RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
-                engine::prepare,
+                dispatcher::prepare,
                 new NettySerialOwnerExecutor(eventExecutor),
                 new RespReplySizer(),
                 replyWriterFactory,
@@ -67,11 +67,11 @@ public class ClosingSkipSideEffectsIntegrationTest {
         EventExecutor eventExecutor = group.next();
 
         YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build());
-        YierdisEngine engine = TestYierdisEngines.forInstance(instance);
+        CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
         RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
-                engine::prepare,
+                dispatcher::prepare,
                 new NettySerialOwnerExecutor(eventExecutor),
                 new RespReplySizer(),
                 replyWriterFactory,
@@ -150,11 +150,11 @@ public class ClosingSkipSideEffectsIntegrationTest {
         EventExecutor eventExecutor = group.next();
 
         YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build());
-        YierdisEngine engine = TestYierdisEngines.forInstance(instance);
+        CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
         RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
-                engine::prepare,
+                dispatcher::prepare,
                 new NettySerialOwnerExecutor(eventExecutor),
                 new RespReplySizer(),
                 replyWriterFactory,
@@ -191,11 +191,11 @@ public class ClosingSkipSideEffectsIntegrationTest {
         EventExecutor eventExecutor = group.next();
 
         YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build());
-        YierdisEngine engine = TestYierdisEngines.forInstance(instance);
+        CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
         RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
-                engine::prepare,
+                dispatcher::prepare,
                 new NettySerialOwnerExecutor(eventExecutor),
                 new RespReplySizer(),
                 replyWriterFactory,
@@ -255,11 +255,11 @@ public class ClosingSkipSideEffectsIntegrationTest {
         EventExecutor eventExecutor = group.next();
 
         YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build());
-        YierdisEngine engine = TestYierdisEngines.forInstance(instance);
+        CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
         RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
-                engine::prepare,
+                dispatcher::prepare,
                 new NettySerialOwnerExecutor(eventExecutor),
                 new RespReplySizer(),
                 replyWriterFactory,

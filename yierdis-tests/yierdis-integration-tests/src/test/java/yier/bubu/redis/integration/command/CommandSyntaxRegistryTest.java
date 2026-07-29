@@ -10,7 +10,7 @@ import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.kernel.CommandRegistry;
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
 import yier.bubu.redis.testutil.ReplyBulkString;
@@ -53,7 +53,7 @@ public class CommandSyntaxRegistryTest {
     @Test
     public void commandInfoUsesSyntaxFromRegistryRegistration() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(
                     db,
                     registration -> registration.register(new CommandDefinition<>(
                             new CommandSyntax(
@@ -67,7 +67,7 @@ public class CommandSyntaxRegistryTest {
                     ))
             );
 
-            try (FastTestClient client = new FastTestClient(processor)) {
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 ReplyArray info = (ReplyArray) client.execute(Arrays.asList(
                         b("COMMAND"),
                         b("INFO"),
@@ -84,7 +84,7 @@ public class CommandSyntaxRegistryTest {
     @Test
     public void registrySpecsRemainAuthoritativeForBuiltInAndExtraMetadata() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(
                     db,
                     registration -> {
                         registration.register(new CommandDefinition<>(
@@ -101,7 +101,7 @@ public class CommandSyntaxRegistryTest {
                         ));
                     }
             );
-            CommandRegistry registry = registryOf(processor);
+            CommandRegistry registry = registryOf(dispatcher);
             Assert.assertEquals(-1, registry.specByUpperName("INFO").syntax().arity().redisMetadataArity());
             Assert.assertEquals(
                     TransactionPolicy.DISALLOWED_IN_MULTI,
@@ -135,16 +135,13 @@ public class CommandSyntaxRegistryTest {
         Assert.assertEquals(expectedStep, ((ReplyInteger) info.values().get(5)).value());
     }
 
-    private static CommandRegistry registryOf(YierdisFastCommandProcessor processor) {
+    private static CommandRegistry registryOf(CommandDispatcher dispatcher) {
         try {
-            Field dispatcherField = YierdisFastCommandProcessor.class.getDeclaredField("dispatcher");
-            dispatcherField.setAccessible(true);
-            Object dispatcher = dispatcherField.get(processor);
-            Field registryField = dispatcher.getClass().getDeclaredField("registry");
+            Field registryField = CommandDispatcher.class.getDeclaredField("registry");
             registryField.setAccessible(true);
             return (CommandRegistry) registryField.get(dispatcher);
         } catch (ReflectiveOperationException e) {
-            throw new AssertionError("unable to access processor registry", e);
+            throw new AssertionError("unable to access dispatcher registry", e);
         }
     }
 }

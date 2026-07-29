@@ -1,6 +1,6 @@
 package yier.bubu.redis.integration.command;
 
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.command.api.CommandArity;
 import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
@@ -42,7 +42,7 @@ public class CommandMetadataRegressionTest {
     @Test
     public void commandInfoKeepsMetadataForBuiltInAndExtraCommands() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(
                     db,
                     registration -> registration.register(new CommandDefinition<>(
                             new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
@@ -51,7 +51,7 @@ public class CommandMetadataRegressionTest {
                             (cmd, context) -> TestPreparedCommands.simpleString("OK")
                     ))
             );
-            try (FastTestClient client = new FastTestClient(processor)) {
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 ReplyArray info = (ReplyArray) client.execute(Arrays.asList(
                         b("COMMAND"),
                         b("INFO"),

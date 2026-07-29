@@ -3,9 +3,8 @@ package yier.bubu.redis.integration.command;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.YierdisDbRouter;
 import yier.bubu.redis.command.defaults.DefaultCommandModules;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.command.kernel.CommandRegistries;
-import yier.bubu.redis.command.kernel.CommandRegistry;
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.execution.api.DbIndexSession;
 import yier.bubu.redis.storage.api.DbEngine;
 
@@ -17,17 +16,14 @@ public final class TestCommandComposition {
     private TestCommandComposition() {
     }
 
-    public static YierdisFastCommandProcessor createProcessor(DbEngine db, CommandModule... extraModules) {
-        return createProcessor(singleDbRouter(db), extraModules);
+    public static CommandDispatcher createDispatcher(DbEngine db, CommandModule... extraModules) {
+        return createDispatcher(singleDbRouter(db), extraModules);
     }
 
-    public static YierdisFastCommandProcessor createProcessor(
+    public static CommandDispatcher createDispatcher(
             YierdisDbRouter dbRouter,
             CommandModule... extraModules
     ) {
-        CommandRegistry registry = new CommandRegistry();
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
-        CommandRegistries.registerTransactionSupport(registry, processor);
         List<CommandModule> modules = new ArrayList<>();
         modules.add(DefaultCommandModules.create(dbRouter, null));
         if (extraModules != null) {
@@ -35,9 +31,7 @@ public final class TestCommandComposition {
                 modules.add(extraModule);
             }
         }
-        CommandRegistries.registerInto(registry, modules);
-        registry.seal();
-        return processor;
+        return CommandRegistries.dispatcher(modules);
     }
 
     private static YierdisDbRouter singleDbRouter(DbEngine db) {

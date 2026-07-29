@@ -2,8 +2,8 @@ package yier.bubu.redis.integration.runtime;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
-import yier.bubu.redis.integration.command.TestCommandProcessors;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
+import yier.bubu.redis.integration.command.TestCommandDispatchers;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
@@ -40,9 +40,9 @@ public class GlobalMaxmemoryLruAcrossDbsTest {
 
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
             instance.bindToCurrentThread();
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forRouter(TestDbRouters.forInstance(instance));
+            CommandDispatcher dispatcher = TestCommandDispatchers.forRouter(TestDbRouters.forInstance(instance));
 
-            try (FastTestClient client = new FastTestClient(processor)) {
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), b("a"), value))).value());
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), b("b"), value))).value());
 

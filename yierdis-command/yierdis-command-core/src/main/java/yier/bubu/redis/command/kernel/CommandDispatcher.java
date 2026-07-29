@@ -9,6 +9,7 @@ import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.PreparedCommands;
 import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.execution.api.TransactionState;
@@ -97,7 +98,7 @@ public final class CommandDispatcher {
     }
 
     private static PreparedCommand queued(TransactionState transaction, ExecutionRequest request) {
-        return yier.bubu.redis.execution.api.PreparedCommands.action(
+        return PreparedCommands.action(
                 ReplyShapes.maximum(),
                 context -> {
                     String enqueueError = transaction.tryEnqueue(request);
@@ -109,7 +110,7 @@ public final class CommandDispatcher {
     }
 
     private static PreparedCommand abortingError(CommandSession session, String message) {
-        return yier.bubu.redis.execution.api.PreparedCommands.action(
+        return PreparedCommands.action(
                 ReplyShapes.error(message),
                 context -> {
                     TransactionState transaction = session.transaction();
@@ -122,7 +123,7 @@ public final class CommandDispatcher {
     }
 
     private static PreparedCommand error(String message) {
-        return yier.bubu.redis.execution.api.PreparedCommands.ready(
+        return PreparedCommands.ready(
                 RedisReplies.error(message)
         );
     }

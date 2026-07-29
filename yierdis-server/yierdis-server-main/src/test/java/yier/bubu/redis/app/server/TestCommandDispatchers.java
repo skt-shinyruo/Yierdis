@@ -2,26 +2,19 @@ package yier.bubu.redis.app.server;
 
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
-import yier.bubu.redis.execution.engine.DefaultYierdisEngine;
-import yier.bubu.redis.execution.engine.YierdisEngine;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
-final class TestYierdisEngines {
-    private TestYierdisEngines() {
+final class TestCommandDispatchers {
+    private TestCommandDispatchers() {
     }
 
-    static YierdisEngine forInstance(YierdisInstance instance) {
-        YierdisFastCommandProcessor processor = ServerCommandComposition.createProcessor(
+    static CommandDispatcher forInstance(YierdisInstance instance) {
+        return ServerCommandComposition.createDispatcher(
                 TestDbRouters.forInstance(instance),
                 new NettyServerInfoProvider(runtimeConfig(0, 0, 1024, 1, 4, 5)),
                 SlowCommandGovernor.DEFAULT
-        );
-        return new DefaultYierdisEngine(
-                processor,
-                () -> {
-                }
         );
     }
 

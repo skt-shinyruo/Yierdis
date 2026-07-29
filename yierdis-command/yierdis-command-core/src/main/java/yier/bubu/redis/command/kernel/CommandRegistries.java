@@ -10,14 +10,14 @@ public final class CommandRegistries {
 
     public static CommandRegistry from(CommandModule... modules) {
         CommandRegistry registry = new CommandRegistry();
-        registerInto(registry, modules);
+        registerModules(registry, modules == null ? null : Arrays.asList(modules));
         registry.seal();
         return registry;
     }
 
     public static CommandRegistry from(Iterable<? extends CommandModule> modules) {
         CommandRegistry registry = new CommandRegistry();
-        registerInto(registry, modules);
+        registerModules(registry, modules);
         registry.seal();
         return registry;
     }
@@ -33,22 +33,12 @@ public final class CommandRegistries {
         CommandRegistry registry = new CommandRegistry();
         CommandDispatcher dispatcher = new CommandDispatcher(registry);
         new TransactionCommands(dispatcher).register(registry);
-        registerInto(registry, modules);
+        registerModules(registry, modules);
         registry.seal();
         return dispatcher;
     }
 
-    public static void registerInto(CommandRegistry registry, CommandModule... modules) {
-        if (modules == null) {
-            return;
-        }
-        registerInto(registry, Arrays.asList(modules));
-    }
-
-    public static void registerInto(CommandRegistry registry, Iterable<? extends CommandModule> modules) {
-        if (registry == null) {
-            throw new NullPointerException("registry");
-        }
+    private static void registerModules(CommandRegistry registry, Iterable<? extends CommandModule> modules) {
         if (modules == null) {
             return;
         }
@@ -58,15 +48,5 @@ public final class CommandRegistries {
             }
             module.register(registry);
         }
-    }
-
-    public static void registerTransactionSupport(
-            CommandRegistry registry,
-            YierdisFastCommandProcessor processor
-    ) {
-        if (registry == null) {
-            throw new NullPointerException("registry");
-        }
-        new TransactionCommands(new CommandDispatcher(registry)).register(registry);
     }
 }

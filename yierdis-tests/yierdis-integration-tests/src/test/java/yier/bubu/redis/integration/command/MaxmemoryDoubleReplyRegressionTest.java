@@ -1,6 +1,6 @@
 package yier.bubu.redis.integration.command;
 
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.storage.memory.YierdisDb;
@@ -30,8 +30,8 @@ public class MaxmemoryDoubleReplyRegressionTest {
         ), 0);
         try {
             db.bindToCurrentThread();
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 ReplyObject reply = client.execute(Arrays.asList(
                         b("APPEND"),
                         b("k"),

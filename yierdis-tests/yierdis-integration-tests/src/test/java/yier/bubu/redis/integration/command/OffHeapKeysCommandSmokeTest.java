@@ -1,6 +1,6 @@
 package yier.bubu.redis.integration.command;
 
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.storage.memory.YierdisDb;
@@ -34,8 +34,8 @@ public class OffHeapKeysCommandSmokeTest {
         ), 0);
         try {
             db.bindToCurrentThread();
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 byte[] v = b("v");
                 byte[] a1 = b("a1");
                 byte[] b1 = b("b1");

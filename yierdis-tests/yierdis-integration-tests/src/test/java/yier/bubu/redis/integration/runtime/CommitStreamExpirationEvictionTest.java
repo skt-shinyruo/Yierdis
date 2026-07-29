@@ -9,9 +9,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
-import yier.bubu.redis.integration.command.TestCommandProcessors;
+import yier.bubu.redis.integration.command.TestCommandDispatchers;
 import yier.bubu.redis.runtime.api.YierdisChangeKind;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
@@ -66,8 +66,8 @@ public class CommitStreamExpirationEvictionTest {
 
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
             instance.bindToCurrentThread();
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forRouter(TestDbRouters.forInstance(instance));
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forRouter(TestDbRouters.forInstance(instance));
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) executeScoped(
                         client, List.of(b("SET"), b("expiring"), b("value"))
                 )).value());
@@ -165,8 +165,8 @@ public class CommitStreamExpirationEvictionTest {
 
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
             instance.bindToCurrentThread();
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forRouter(TestDbRouters.forInstance(instance));
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forRouter(TestDbRouters.forInstance(instance));
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) executeScoped(
                         client, List.of(b("SET"), b("victim"), value)
                 )).value());

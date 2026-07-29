@@ -9,6 +9,7 @@ import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
+import yier.bubu.redis.execution.api.PreparedCommands;
 import yier.bubu.redis.execution.api.RedisReplies;
 
 public class CommandRegistryTest {
@@ -59,7 +60,7 @@ public class CommandRegistryTest {
         CommandDefinition<?> definition = new CommandDefinition<>(
                 syntax("LEGACY", CommandArity.exact(1), TransactionPolicy.QUEUEABLE),
                 CommandParsers.args(),
-                (args, context) -> yier.bubu.redis.execution.api.PreparedCommands.ready(
+                (args, context) -> PreparedCommands.ready(
                         RedisReplies.simpleString("OK")
                 )
         );
@@ -77,7 +78,7 @@ public class CommandRegistryTest {
     private static CommandSpec spec(String name, CommandArity arity) {
         return new CommandSpec(
                 syntax(name, arity, TransactionPolicy.QUEUEABLE),
-                args -> session -> yier.bubu.redis.execution.api.PreparedCommands.ready(
+                args -> session -> PreparedCommands.ready(
                         RedisReplies.simpleString("PONG")
                 )
         );

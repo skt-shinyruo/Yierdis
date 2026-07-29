@@ -1,6 +1,6 @@
 package yier.bubu.redis.integration.command;
 
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.testutil.FastTestClient;
@@ -19,8 +19,8 @@ public class EmptyBulkStringCommandTest {
     @Test
     public void smembersAllowsEmptyMember() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 byte[] key = b("s-empty");
                 byte[] empty = b("");
 
@@ -36,8 +36,8 @@ public class EmptyBulkStringCommandTest {
     @Test
     public void hgetallAllowsEmptyField() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 byte[] key = b("h-empty");
                 byte[] field = b("");
                 byte[] value = b("v");
@@ -55,8 +55,8 @@ public class EmptyBulkStringCommandTest {
     @Test
     public void zrangeAllowsEmptyMemberWithScores() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 byte[] key = b("z-empty");
                 byte[] empty = b("");
 

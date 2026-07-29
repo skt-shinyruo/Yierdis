@@ -2,7 +2,7 @@ package yier.bubu.redis.integration.command;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
 import yier.bubu.redis.testutil.ReplyBulkString;
@@ -57,8 +57,8 @@ public class DefaultCommandRegistrationTest {
     @Test
     public void testCommandCompositionListsEveryDefaultCommandIncludingTransactions() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 assertInteger(DEFAULT_COMMANDS.size(), client.execute(cmd("COMMAND", "COUNT")));
             }
         });
@@ -185,8 +185,8 @@ public class DefaultCommandRegistrationTest {
 
     private static void withClient(ClientCase test) {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 test.run(client);
             }
         });

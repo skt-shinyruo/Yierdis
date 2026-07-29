@@ -294,9 +294,9 @@ public class ArchitectureBoundaryTest {
                 offenders,
                 "import yier.bubu.redis.command.api.ServerInfoProvider;",
                 "import yier.bubu.redis.command.api.SlowCommandGovernor;",
-                "import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;",
-                "new YierdisFastCommandProcessor(",
-                "newCommandProcessor("
+                "import yier.bubu.redis.command.kernel.CommandDispatcher;",
+                "new CommandDispatcher(",
+                "createDispatcher("
         );
 
         if (!offenders.isEmpty()) {
@@ -320,13 +320,13 @@ public class ArchitectureBoundaryTest {
             offenders.add(relativePath(repoRoot, serverCommands) + " (server-facing commands should live in yierdis-server-main)");
         }
 
-        Path processorFile = repoRoot.resolve(
-                "yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java"
+        Path dispatcherFile = repoRoot.resolve(
+                "yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java"
         ).normalize();
-        Assert.assertTrue("缺少 YierdisFastCommandProcessor.java，无法执行 command-kernel 默认装配护栏", Files.isRegularFile(processorFile));
+        Assert.assertTrue("缺少 CommandDispatcher.java，无法执行 command-kernel 默认装配护栏", Files.isRegularFile(dispatcherFile));
         scanFileForForbiddenText(
                 repoRoot,
-                processorFile,
+                dispatcherFile,
                 offenders,
                 "new ServerCommands(",
                 "ERR HELLO is not allowed in MULTI",
@@ -597,7 +597,7 @@ public class ArchitectureBoundaryTest {
         );
         scanFileForForbiddenText(
                 repoRoot,
-                commandKernelFile(repoRoot, "YierdisFastCommandProcessor.java"),
+                commandKernelFile(repoRoot, "CommandDispatcher.java"),
                 offenders,
                 "tx.tryEnqueue(ByteArrayExecutionRequest.copyOf(request))"
         );
@@ -861,36 +861,36 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
-    public void engineAndExecutorMustExposeSessionRequestReplyBoundary() throws IOException {
+    public void dispatcherAndExecutorMustExposeSessionRequestReplyBoundary() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
 
-        Path engineFile = repoRoot.resolve(
-                "yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/YierdisEngine.java"
+        Path dispatcherFile = repoRoot.resolve(
+                "yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java"
         );
-        Assert.assertTrue("缺少 YierdisEngine.java，无法约束 engine 执行边界", Files.isRegularFile(engineFile));
-        String engineSource = Files.readString(engineFile, StandardCharsets.UTF_8);
+        Assert.assertTrue("缺少 CommandDispatcher.java，无法约束 dispatcher 执行边界", Files.isRegularFile(dispatcherFile));
+        String dispatcherSource = Files.readString(dispatcherFile, StandardCharsets.UTF_8);
         String retiredExecutionContext = "Command" + "Context";
-        String preparedBoundary = "PreparedCommand prepare(CommandSession session, ExecutionRequest request);";
+        String preparedBoundary = "PreparedCommand prepare(CommandSession session, ExecutionRequest request)";
         Assert.assertTrue(
-                "YierdisEngine public execution boundary must prepare work from CommandSession and ExecutionRequest",
-                engineSource.contains(preparedBoundary)
+                "CommandDispatcher public execution boundary must prepare work from CommandSession and ExecutionRequest",
+                dispatcherSource.contains(preparedBoundary)
         );
         Assert.assertFalse(
-                "YierdisEngine must not import or reference the deleted marker session",
-                engineSource.contains("execution.api." + "Session")
+                "CommandDispatcher must not import or reference the deleted marker session",
+                dispatcherSource.contains("execution.api." + "Session")
         );
         Assert.assertFalse(
-                "YierdisEngine public API must not expose the retired execution context",
-                engineSource.contains(retiredExecutionContext)
+                "CommandDispatcher public API must not expose the retired execution context",
+                dispatcherSource.contains(retiredExecutionContext)
         );
         Assert.assertFalse(
-                "YierdisEngine public API must not render replies directly",
-                engineSource.contains("RedisReplyWriter")
+                "CommandDispatcher public API must not render replies directly",
+                dispatcherSource.contains("RedisReplyWriter")
         );
         Assert.assertFalse(
-                "YierdisEngine public API must not retain the old execution entry point",
-                engineSource.contains("void " + "execute(")
+                "CommandDispatcher public API must not retain the old execution entry point",
+                dispatcherSource.contains("void " + "execute(")
         );
 
         Path executorEngineFile = repoRoot.resolve(
@@ -1094,7 +1094,7 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 commandDefaults.resolve("src/main/java").normalize(),
                 offenders,
-                "import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;",
+                "import yier.bubu.redis.command.kernel.CommandDispatcher;",
                 "import yier.bubu.redis.command.kernel.CommandRegistry;",
                 "new CommandRegistry("
         );
@@ -1132,7 +1132,7 @@ public class ArchitectureBoundaryTest {
         );
         assertPackageDeclaration(
                 repoRoot,
-                commandKernelMain(repoRoot).resolve("yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java"),
+                commandKernelMain(repoRoot).resolve("yier/bubu/redis/command/kernel/CommandDispatcher.java"),
                 "package yier.bubu.redis.command.kernel;"
         );
         assertPackageDeclaration(
@@ -3087,17 +3087,9 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
-    public void serverBootstrapMustWireCommandExecutionThroughYierdisEngine() throws IOException {
+    public void serverBootstrapMustWireCommandExecutionThroughDispatcher() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
-
-        Path engineFile = engineRoot(repoRoot).resolve(
-                "src/main/java/yier/bubu/redis/execution/engine/YierdisEngine.java"
-        );
-        Assert.assertTrue(
-                "缺少 YierdisEngine facade，server bootstrap 不应继续直接接线 command processor",
-                Files.isRegularFile(engineFile)
-        );
 
         Path bootstrapFile = repoRoot.resolve(
                 "yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java"
@@ -3109,7 +3101,6 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 bootstrapFile,
                 offenders,
-                "new YierdisFastCommandProcessor(",
                 "processor::" + "execute",
                 "maintenance.maintenanceTick()"
         );
@@ -3117,20 +3108,21 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 bootstrapFile,
                 offenders,
-                "ServerCommandComposition.createProcessor(",
-                "commandEngine::prepare"
+                "ServerCommandComposition.createDispatcher(",
+                "dispatcher::prepare",
+                "maintenanceTick.run()"
         );
 
         if (!offenders.isEmpty()) {
             Assert.fail(
-                    "检测到 server bootstrap 仍绕过 YierdisEngine 直接接线 command processor 或 maintenance：\n"
+                    "检测到 server bootstrap 未直接接线 dispatcher 或 maintenance：\n"
                             + String.join("\n", offenders)
             );
         }
     }
 
     @Test
-    public void serverMustNotBypassEngineForCommandExecution() throws IOException {
+    public void serverMustNotBypassDispatcherForCommandExecution() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
 
@@ -3143,7 +3135,8 @@ public class ArchitectureBoundaryTest {
                 List.of(
                         serverMainRoot.resolve("yier/bubu/redis/app/server/ServerCommandComposition.java").normalize()
                 ),
-                "new YierdisFastCommandProcessor(",
+                "new CommandDispatcher(",
+                "new CommandRegistry(",
                 "new Command" + "Context(",
                 "." + "execute(request, new Command" + "Context"
         );
@@ -3151,7 +3144,7 @@ public class ArchitectureBoundaryTest {
 
         if (!offenders.isEmpty()) {
             Assert.fail(
-                    "检测到 server 生产代码绕过 YierdisEngine 构造命令处理器或命令上下文：\n"
+                    "检测到 server 生产代码绕过 composition root 构造 dispatcher 或命令上下文：\n"
                     + String.join("\n", offenders)
             );
         }
@@ -3165,23 +3158,17 @@ public class ArchitectureBoundaryTest {
         List<String> offenders = new ArrayList<>();
         scanFileForForbiddenText(
                 repoRoot,
-                commandKernelMain(repoRoot).resolve("yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java"),
+                commandKernelMain(repoRoot).resolve("yier/bubu/redis/command/kernel/CommandDispatcher.java"),
                 offenders,
                 "new TransactionCommands(this)",
                 "registerExtraModules(",
                 "CommandModule..."
         );
-        scanFileForForbiddenText(
-                repoRoot,
-                engineRoot(repoRoot).resolve("src/main/java/yier/bubu/redis/execution/engine/DefaultYierdisEngine.java"),
-                offenders,
-                "new YierdisFastCommandProcessor("
-        );
 
         assertFileContainsAllText(
                 repoRoot,
                 repoRoot.resolve(
-                        "yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/TestCommandProcessors.java"
+                        "yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/TestCommandDispatchers.java"
                 ).normalize(),
                 offenders,
                 "TestCommandComposition"
@@ -3189,17 +3176,17 @@ public class ArchitectureBoundaryTest {
         scanFileForForbiddenText(
                 repoRoot,
                 repoRoot.resolve(
-                        "yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/TestCommandProcessors.java"
+                        "yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/TestCommandDispatchers.java"
                 ).normalize(),
                 offenders,
-                "new YierdisFastCommandProcessor(",
-                "new DefaultYierdisEngine("
+                "new CommandDispatcher(",
+                "CommandRegistries.dispatcher("
         );
 
         assertFileContainsAllText(
                 repoRoot,
                 repoRoot.resolve(
-                        "yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/TestYierdisEngines.java"
+                        "yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/TestCommandDispatchers.java"
                 ).normalize(),
                 offenders,
                 "ServerCommandComposition"
@@ -3207,16 +3194,17 @@ public class ArchitectureBoundaryTest {
         scanFileForForbiddenText(
                 repoRoot,
                 repoRoot.resolve(
-                        "yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/TestYierdisEngines.java"
+                        "yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/TestCommandDispatchers.java"
                 ).normalize(),
                 offenders,
-                "new YierdisFastCommandProcessor("
+                "new CommandDispatcher(",
+                "CommandRegistries.dispatcher("
         );
 
         assertFileContainsAllText(
                 repoRoot,
                 repoRoot.resolve(
-                        "yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/runtime/embedded/TestCommandProcessors.java"
+                        "yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/runtime/embedded/TestCommandDispatchers.java"
                 ).normalize(),
                 offenders,
                 "EmbeddedCommandComposition"
@@ -3224,11 +3212,11 @@ public class ArchitectureBoundaryTest {
         scanFileForForbiddenText(
                 repoRoot,
                 repoRoot.resolve(
-                        "yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/runtime/embedded/TestCommandProcessors.java"
+                        "yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/runtime/embedded/TestCommandDispatchers.java"
                 ).normalize(),
                 offenders,
-                "new YierdisFastCommandProcessor(",
-                "new DefaultYierdisEngine("
+                "new CommandDispatcher(",
+                "CommandRegistries.dispatcher("
         );
 
         if (!offenders.isEmpty()) {
@@ -3668,7 +3656,7 @@ public class ArchitectureBoundaryTest {
 
     private static Path commandKernelFile(Path repoRoot, String fileName) {
         return switch (fileName) {
-            case "TransactionCommands.java", "CommandRegistry.java", "YierdisFastCommandProcessor.java" ->
+            case "TransactionCommands.java", "CommandRegistry.java", "CommandDispatcher.java" ->
                     commandKernelMain(repoRoot).resolve("yier/bubu/redis/command/kernel").resolve(fileName).normalize();
             default -> commandKernelMain(repoRoot).resolve("yier/bubu/redis/command").resolve(fileName).normalize();
         };

@@ -10,8 +10,8 @@ import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.ImmediateEventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
-import yier.bubu.redis.execution.engine.YierdisEngine;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
@@ -235,10 +235,10 @@ public class YierdisServerBootstrapCloseTest {
                     .engineFactory(factory)
                     .build());
 
-            YierdisEngine engine = TestYierdisEngines.forInstance(instance);
+            CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
-                    engine::prepare,
+                    dispatcher::prepare,
                     new NettySerialOwnerExecutor(commandGroup.next()),
                     new RespReplySizer(),
                     new RespReplyWriterFactory(),

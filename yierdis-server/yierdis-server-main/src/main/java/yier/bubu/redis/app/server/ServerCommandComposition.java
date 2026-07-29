@@ -4,28 +4,21 @@ import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.api.YierdisDbRouter;
 import yier.bubu.redis.command.defaults.DefaultCommandModules;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.command.kernel.CommandRegistries;
-import yier.bubu.redis.command.kernel.CommandRegistry;
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 
 public final class ServerCommandComposition {
     private ServerCommandComposition() {
     }
 
-    public static YierdisFastCommandProcessor createProcessor(
+    public static CommandDispatcher createDispatcher(
             YierdisDbRouter dbRouter,
             ServerInfoProvider infoProvider,
             SlowCommandGovernor slowGovernor
     ) {
-        CommandRegistry registry = new CommandRegistry();
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
-        CommandRegistries.registerTransactionSupport(registry, processor);
-        CommandRegistries.registerInto(
-                registry,
+        return CommandRegistries.dispatcher(
                 DefaultCommandModules.create(dbRouter, infoProvider, slowGovernor),
                 new ServerCommandModule(infoProvider)
         );
-        registry.seal();
-        return processor;
     }
 }

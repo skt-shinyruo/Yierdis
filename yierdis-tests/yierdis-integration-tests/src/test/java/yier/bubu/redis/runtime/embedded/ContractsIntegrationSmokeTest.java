@@ -2,7 +2,7 @@ package yier.bubu.redis.runtime.embedded;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
@@ -36,10 +36,10 @@ public class ContractsIntegrationSmokeTest {
 
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
             instance.bindToCurrentThread();
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forInstance(instance);
+            CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
             TestSession session = new TestSession();
 
-            try (FastTestClient client = new FastTestClient(processor, session)) {
+            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
                 // TTL family: basic Redis-like conventions.
                 Assert.assertEquals(-2L, ((ReplyInteger) client.execute(Arrays.asList(b("TTL"), b("missing")))).value());
 

@@ -1,6 +1,6 @@
 package yier.bubu.redis.integration.command;
 
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.storage.memory.YierdisDb;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
@@ -24,8 +24,8 @@ public class CommandProcessorTest {
     @Test
     public void clientMetadataCommandsAreAccepted() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 ReplySimpleString setinfo = (ReplySimpleString) client.execute(cmd("CLIENT", "SETINFO", "LIB-NAME", "go-redis"));
                 Assert.assertEquals("OK", setinfo.value());
 
@@ -43,8 +43,8 @@ public class CommandProcessorTest {
     @Test
     public void authReportsNoPasswordConfigured() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 ReplyError auth = (ReplyError) client.execute(cmd("AUTH", "secret"));
 
                 Assert.assertEquals(
@@ -58,8 +58,8 @@ public class CommandProcessorTest {
     @Test
     public void stringIsBinarySafe() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] key = b("k");
             byte[] value = new byte[]{0, (byte) 0xFF, 'a', '\n'};
@@ -104,8 +104,8 @@ public class CommandProcessorTest {
     @Test
     public void incrWorksAfterAppendWhenRawStringHasSpareCapacity() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             Assert.assertTrue(client.execute(cmd("SET", "k", "1")) instanceof ReplySimpleString);
 
@@ -124,8 +124,8 @@ public class CommandProcessorTest {
     @Test
     public void integerLikeStringsAreBinarySafe() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             assertBinarySafeRoundTrip(client, b("k:01"), b("01"));
             assertBinarySafeRoundTrip(client, b("k:+1"), b("+1"));
@@ -137,8 +137,8 @@ public class CommandProcessorTest {
     @Test
     public void binaryKeyIsSupportedEndToEnd() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] key = new byte[]{0, (byte) 0xFF, 'k'};
             byte[] value = new byte[]{1, 2, 3};
@@ -166,8 +166,8 @@ public class CommandProcessorTest {
     @Test
     public void keysGlobMatchesOnRawBytes() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] v = new byte[]{1};
             byte[] k1 = new byte[]{0, 'a'};
@@ -202,8 +202,8 @@ public class CommandProcessorTest {
     @Test
     public void keysGlobSupportsBracketsNegationRangesAndEscapes() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] v = new byte[]{1};
             byte[] ka1 = b("a1");
@@ -260,8 +260,8 @@ public class CommandProcessorTest {
     @Test
     public void incrErrorsOnNonIntegerOrOverflow() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] key = b("k");
 
@@ -284,8 +284,8 @@ public class CommandProcessorTest {
     @Test
     public void expireZeroDeletesKeyImmediately() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] key = new byte[]{0, (byte) 0xFF};
             byte[] value = new byte[]{1, 2, 3};
@@ -311,8 +311,8 @@ public class CommandProcessorTest {
     @Test
     public void setGetIncrExpireTtl() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             Assert.assertTrue(client.execute(cmd("SET", "a", "1")) instanceof ReplySimpleString);
             ReplyObject get = client.execute(cmd("GET", "a"));
@@ -338,8 +338,8 @@ public class CommandProcessorTest {
             Locale.setDefault(new Locale("tr", "TR"));
 
             forEachDb(db -> {
-                YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-                try (FastTestClient client = new FastTestClient(processor)) {
+                CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+                try (FastTestClient client = new FastTestClient(dispatcher)) {
 
                 ReplyObject pong = client.execute(cmd("ping"));
                 Assert.assertTrue(pong instanceof ReplySimpleString);
@@ -359,8 +359,8 @@ public class CommandProcessorTest {
     @Test
     public void setNxReturnsNilWhenKeyExists() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
 	            Assert.assertTrue(client.execute(cmd("SET", "k", "v")) instanceof ReplySimpleString);
 	            ReplyObject res = client.execute(cmd("SET", "k", "v2", "NX"));
@@ -373,8 +373,8 @@ public class CommandProcessorTest {
     @Test
     public void setGetAndKeepTtlSemanticsRemainIntact() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 Assert.assertTrue(client.execute(cmd("SET", "k", "v", "EX", "5")) instanceof ReplySimpleString);
                 Assert.assertTrue(((ReplyInteger) client.execute(cmd("TTL", "k"))).value() > 0L);
 
@@ -392,8 +392,8 @@ public class CommandProcessorTest {
     @Test
     public void setGetOnNonStringKeyReturnsWrongType() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 ReplyObject push = client.execute(cmd("LPUSH", "k", "x"));
                 Assert.assertTrue(push instanceof ReplyInteger);
 
@@ -407,8 +407,8 @@ public class CommandProcessorTest {
     @Test
     public void wrongTypeReturnsError() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             client.execute(cmd("SET", "a", "1"));
             ReplyObject err = client.execute(cmd("LPUSH", "a", "x"));

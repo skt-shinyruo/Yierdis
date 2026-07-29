@@ -8,7 +8,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.engine.YierdisEngine;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.ExecutionConnectionContext;
@@ -28,11 +28,11 @@ public class NettyExecutionAdapterIntegrationTest {
     @Test
     public void registeredRequestSubmitsThroughNettyExecutionConnection() {
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build())) {
-            YierdisEngine engine = TestYierdisEngines.forInstance(instance);
+            CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
             RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
-                    engine::prepare,
+                    dispatcher::prepare,
                     new NettySerialOwnerExecutor(ImmediateEventExecutor.INSTANCE),
                     new RespReplySizer(),
                     replyWriterFactory,
@@ -61,7 +61,7 @@ public class NettyExecutionAdapterIntegrationTest {
         RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
-                TestYierdisEngines.forInstance(instance)::prepare,
+                TestCommandDispatchers.forInstance(instance)::prepare,
                 new NettySerialOwnerExecutor(eventExecutor),
                 new RespReplySizer(),
                 replyWriterFactory,
@@ -113,7 +113,7 @@ public class NettyExecutionAdapterIntegrationTest {
         RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
-                TestYierdisEngines.forInstance(instance)::prepare,
+                TestCommandDispatchers.forInstance(instance)::prepare,
                 new NettySerialOwnerExecutor(eventExecutor),
                 new RespReplySizer(),
                 replyWriterFactory,
@@ -161,7 +161,7 @@ public class NettyExecutionAdapterIntegrationTest {
             RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
-                    TestYierdisEngines.forInstance(instance)::prepare,
+                    TestCommandDispatchers.forInstance(instance)::prepare,
                     new NettySerialOwnerExecutor(ImmediateEventExecutor.INSTANCE),
                     new RespReplySizer(),
                     replyWriterFactory,
@@ -188,7 +188,7 @@ public class NettyExecutionAdapterIntegrationTest {
             RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
-                    TestYierdisEngines.forInstance(instance)::prepare,
+                    TestCommandDispatchers.forInstance(instance)::prepare,
                     new NettySerialOwnerExecutor(ImmediateEventExecutor.INSTANCE),
                     new RespReplySizer(),
                     replyWriterFactory,

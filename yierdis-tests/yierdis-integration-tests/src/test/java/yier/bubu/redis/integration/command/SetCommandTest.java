@@ -2,7 +2,7 @@ package yier.bubu.redis.integration.command;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
 import yier.bubu.redis.testutil.ReplyBulkString;
@@ -27,8 +27,8 @@ public class SetCommandTest {
     @Test
     public void upgradeFromIntsetKeepsExistingMembers() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] key = new byte[]{'s', 0, 1};
 
@@ -68,8 +68,8 @@ public class SetCommandTest {
     @Test
     public void setMembersAreBinarySafeEvenWhenIntegerLike() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] key = b("s");
 
@@ -111,8 +111,8 @@ public class SetCommandTest {
     @Test
     public void sremDeletesKeyWhenEmpty() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] key = new byte[]{0, 's'};
             byte[] member = new byte[]{(byte) 0xFF};

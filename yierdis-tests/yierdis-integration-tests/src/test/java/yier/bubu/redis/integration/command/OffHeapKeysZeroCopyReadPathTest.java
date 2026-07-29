@@ -1,6 +1,6 @@
 package yier.bubu.redis.integration.command;
 
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.storage.memory.YierdisDb;
@@ -29,8 +29,8 @@ public class OffHeapKeysZeroCopyReadPathTest {
         ), 0);
         try {
             db.bindToCurrentThread();
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 Assert.assertTrue(client.execute(cmd("SET", "k", "v")) instanceof ReplySimpleString);
                 Assert.assertTrue(db.memory().memoryStats().keysStoredOffHeap());
 

@@ -2,7 +2,7 @@ package yier.bubu.redis.integration.command;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.storage.memory.YierdisDb;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
@@ -30,8 +30,8 @@ public class ListCommandTest {
     @Test
     public void lpopRpopCountVariantsAndDeleteWhenEmpty() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] key = new byte[]{'l', 0, (byte) 0xFF};
             byte[] a = new byte[]{0};
@@ -69,8 +69,8 @@ public class ListCommandTest {
     @Test
     public void lrangeClampsIndicesAndHandlesOutOfRange() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] key = b("mylist");
             client.execute(Arrays.asList(b("RPUSH"), key, b("a"), b("b"), b("c")));
@@ -104,8 +104,8 @@ public class ListCommandTest {
     @Test
     public void listUpgradesAfterManyElementsAndKeepsOrder() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] key = b("big-list");
             int n = 129; // > ListValue.LISTPACK_MAX_ENTRIES
@@ -139,8 +139,8 @@ public class ListCommandTest {
     @Test
     public void lrangeDoesNotOverflowOnHugePositiveIndices() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] key = b("list:huge-index");
             client.execute(Arrays.asList(b("RPUSH"), key, b("a"), b("b"), b("c")));
@@ -157,8 +157,8 @@ public class ListCommandTest {
     @Test
     public void lpopRpopDoNotOverflowOnHugeCount() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] key = b("list:huge-count");
             client.execute(Arrays.asList(b("RPUSH"), key, b("a"), b("b"), b("c")));

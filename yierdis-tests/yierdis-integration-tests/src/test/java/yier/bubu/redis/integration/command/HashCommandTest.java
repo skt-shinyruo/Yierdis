@@ -2,7 +2,7 @@ package yier.bubu.redis.integration.command;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.storage.memory.YierdisDb;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyBulkString;
@@ -32,8 +32,8 @@ public class HashCommandTest {
     @Test
     public void hsetHgetHlenAndHgetallAreBinarySafe() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] key = new byte[]{'h', 0, (byte) 0xFF};
             byte[] f1 = new byte[]{0, 'f', 1};
@@ -74,8 +74,8 @@ public class HashCommandTest {
     @Test
     public void hdelRemovesHashKeyWhenEmpty() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] key = new byte[]{0, 'h'};
             byte[] field = new byte[]{(byte) 0xFF};
@@ -107,8 +107,8 @@ public class HashCommandTest {
     @Test
     public void hashUpgradesAfterManyFieldsAndKeepsData() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] key = b("big-hash");
 
@@ -140,8 +140,8 @@ public class HashCommandTest {
     @Test
     public void ffmHashStartsAsListpackAndUpgradesToHashtableAfterThreshold() {
         runDefaultFfm(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
                 // 512 is YierdisEncodingThresholds.HASH_MAX_LISTPACK_ENTRIES (kept package-private).
                 int threshold = 512;
 

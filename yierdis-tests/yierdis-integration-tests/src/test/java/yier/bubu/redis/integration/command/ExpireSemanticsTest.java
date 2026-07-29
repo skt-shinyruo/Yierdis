@@ -2,7 +2,7 @@ package yier.bubu.redis.integration.command;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.storage.memory.YierdisDb;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
@@ -20,8 +20,8 @@ public class ExpireSemanticsTest {
     @Test
     public void expireZeroRemovesListAndSubsequentWritesRecreate() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] key = b("list");
             Assert.assertEquals(2L, ((ReplyInteger) client.execute(Arrays.asList(b("RPUSH"), key, b("a"), b("b")))).value());
@@ -43,8 +43,8 @@ public class ExpireSemanticsTest {
     @Test
     public void expireZeroRemovesHashAndSubsequentWritesRecreate() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] key = b("hash");
             Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("HSET"), key, b("f"), b("v")))).value());
@@ -66,8 +66,8 @@ public class ExpireSemanticsTest {
     @Test
     public void expireZeroRemovesSetAndSubsequentWritesRecreate() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] key = b("set");
             Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("SADD"), key, b("a")))).value());
@@ -89,8 +89,8 @@ public class ExpireSemanticsTest {
     @Test
     public void expireZeroRemovesZsetAndSubsequentWritesRecreate() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
 
             byte[] key = b("zset");
             Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("ZADD"), key, b("1"), b("a")))).value());
