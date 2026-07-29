@@ -102,4 +102,23 @@ public class BitmapCommandTest {
             }
         });
     }
+
+    @Test
+    public void bitmapCommandsRejectInvalidArgumentsBeforeExecution() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
+                assertError("not an integer or out of range", client.execute(cmd("SETBIT", "k", "-1", "0")));
+                assertError("bit is not an integer or out of range", client.execute(cmd("SETBIT", "k", "0", "2")));
+                assertError("bit is not an integer or out of range", client.execute(cmd("SETBIT", "k", "0", "nope")));
+                assertError("not an integer or out of range", client.execute(cmd("GETBIT", "k", "-1")));
+                assertError("not an integer or out of range", client.execute(cmd("BITCOUNT", "k", "from", "2")));
+            }
+        });
+    }
+
+    private static void assertError(String message, ReplyObject reply) {
+        Assert.assertTrue(reply instanceof ReplyError);
+        Assert.assertTrue(((ReplyError) reply).message(), ((ReplyError) reply).message().contains(message));
+    }
 }

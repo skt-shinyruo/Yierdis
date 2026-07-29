@@ -7,11 +7,11 @@ import yier.bubu.redis.storage.api.result.ByteMapSource;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
 import yier.bubu.redis.storage.api.result.ByteValue;
 
-final class DbReplies {
+public final class DbReplies {
     private DbReplies() {
     }
 
-    static RedisReply value(ByteValue value) {
+    public static RedisReply value(ByteValue value) {
         ByteValue source = Objects.requireNonNull(value, "value");
         if (source.isNull()) {
             return RedisReplies.nullValue();

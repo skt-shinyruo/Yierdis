@@ -22,6 +22,20 @@ public class CommandPipelineArchitectureTest {
         Assert.assertEquals(8, occurrences(source, "new CommandSpec("));
     }
 
+    @Test
+    public void stringCommandsUseDirectSemanticPipeline() throws IOException {
+        String source = Files.readString(mainSourceRoot().resolve("string/StringCommands.java"));
+
+        for (String forbidden : List.of(
+                "CommandDefinition", "CommandParsers", "ArgReader",
+                "CommandParseResult", "CommandParseError", "CommandPreparationContext",
+                "RedisReplyWriter", "BulkStringReplyAdapter", ".reply()", "new PreparedCommand"
+        )) {
+            Assert.assertFalse("legacy command path remains: " + forbidden, source.contains(forbidden));
+        }
+        Assert.assertEquals(9, occurrences(source, "new CommandSpec("));
+    }
+
     private static int occurrences(String source, String needle) {
         int count = 0;
         int offset = 0;

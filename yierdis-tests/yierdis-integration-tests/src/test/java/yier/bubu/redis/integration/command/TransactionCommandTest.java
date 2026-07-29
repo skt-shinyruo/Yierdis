@@ -231,6 +231,32 @@ public class TransactionCommandTest {
     }
 
     @Test
+    public void bitmapParseErrorsInsideMultiAbortBeforeExec() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            TestSession session = new TestSession();
+            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
+
+                ReplyObject invalid = client.execute(Arrays.asList(b("SETBIT"), b("k"), b("0"), b("nope")));
+                Assert.assertTrue(invalid instanceof ReplyError);
+                Assert.assertEquals(
+                        "ERR bit is not an integer or out of range",
+                        ((ReplyError) invalid).message()
+                );
+                Assert.assertEquals(0, session.transactionState().size());
+
+                ReplyObject exec = client.execute(Arrays.asList(b("EXEC")));
+                Assert.assertTrue(exec instanceof ReplyError);
+                Assert.assertEquals(
+                        "EXECABORT Transaction discarded because of previous errors.",
+                        ((ReplyError) exec).message()
+                );
+            }
+        });
+    }
+
+    @Test
     public void nullBulkStringInsideMultiAbortsBeforeExec() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);

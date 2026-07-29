@@ -47,4 +47,36 @@ public class MaxmemoryDoubleReplyRegressionTest {
             db.shutdown();
         }
     }
+
+    @Test
+    public void setbitUnderMaxmemoryReturnsSingleErrorReply() {
+        YierdisDb db = createFfmDb(new DbEngineConfig(
+                0,
+                40L,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                5L,
+                5L,
+                new DbDefragConfig(false, 0L, 0L, 0L)
+        ), 0);
+        try {
+            db.bindToCurrentThread();
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
+                ReplyObject reply = client.execute(Arrays.asList(
+                        b("SETBIT"),
+                        b("k"),
+                        b("80"),
+                        b("1")
+                ));
+                Assert.assertTrue(reply instanceof ReplyError);
+                Assert.assertEquals(
+                        "OOM command not allowed when used memory > 'maxmemory'.",
+                        ((ReplyError) reply).message()
+                );
+            }
+        } finally {
+            db.shutdown();
+        }
+    }
 }
