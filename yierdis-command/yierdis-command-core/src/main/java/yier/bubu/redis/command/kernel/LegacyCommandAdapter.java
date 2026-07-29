@@ -10,6 +10,8 @@ import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.execution.api.CommandPreparationContext;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.PreparedCommands;
+import yier.bubu.redis.execution.api.RedisReplies;
 
 import java.util.Objects;
 
@@ -48,7 +50,13 @@ final class LegacyCommandAdapter {
         }
 
         private PreparedCommand prepare(T parsed, CommandSession session) {
-            return definition.preparer().prepare(parsed, new CommandPreparationContext(session));
+            try {
+                return definition.preparer().prepare(parsed, new CommandPreparationContext(session));
+            } catch (IllegalArgumentException failure) {
+                return PreparedCommands.ready(
+                        RedisReplies.error("ERR " + failure.getMessage())
+                );
+            }
         }
     }
 }
