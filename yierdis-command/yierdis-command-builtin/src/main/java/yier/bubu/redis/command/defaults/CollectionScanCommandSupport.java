@@ -1,32 +1,32 @@
 package yier.bubu.redis.command.defaults;
 
+import java.util.List;
 import java.util.Objects;
-import yier.bubu.redis.command.api.ArgReader;
-import yier.bubu.redis.command.api.CommandParseError;
-import yier.bubu.redis.command.api.CommandParseResult;
+import yier.bubu.redis.command.api.CommandArgs;
+import yier.bubu.redis.command.api.CommandParseException;
+import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.PreparedCommand;
-import yier.bubu.redis.execution.api.ReplyShape;
-import yier.bubu.redis.execution.api.ReplyShapes;
+import yier.bubu.redis.execution.api.PreparedCommands;
+import yier.bubu.redis.execution.api.RedisReplies;
+import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
-import java.util.List;
 
-/** HSCAN、SSCAN 与 ZSCAN 共用的参数和嵌套回复处理。 */
 public final class CollectionScanCommandSupport {
     private static final int DEFAULT_COUNT = 10;
+    private static final String SYNTAX_ERROR = "ERR syntax error";
+    private static final String INTEGER_ERROR = "ERR value is not an integer or out of range";
 
     private CollectionScanCommandSupport() {
     }
 
-    public static CommandParseResult<Arguments> parse(
-            ArgReader args,
-            boolean allowNoValues
-    ) {
+    public static Arguments parse(CommandArgs args, boolean allowNoValues)
+            throws CommandParseException {
         ScanCursorV2 cursor;
         try {
             cursor = ScanCursorV2.of(args.nonNegativeLongAt(2));
-        } catch (IllegalArgumentException e) {
-            return CommandParseResult.error(CommandParseError.integerOutOfRange());
+        } catch (IllegalArgumentException failure) {
+            throw integerFailure();
         }
 
         byte[] match = null;
@@ -34,24 +34,19 @@ public final class CollectionScanCommandSupport {
         boolean noValues = false;
         for (int index = 3; index < args.argc(); index++) {
             if (args.is(index, "MATCH")) {
-                if (index + 1 >= args.argc()) {
-                    return CommandParseResult.error(CommandParseError.syntax());
+                if (++index >= args.argc()) {
+                    throw syntaxFailure();
                 }
-                match = args.bytes(++index);
+                match = args.bytes(index);
                 continue;
             }
             if (args.is(index, "COUNT")) {
-                if (index + 1 >= args.argc()) {
-                    return CommandParseResult.error(CommandParseError.syntax());
+                if (++index >= args.argc()) {
+                    throw syntaxFailure();
                 }
-                long parsed;
-                try {
-                    parsed = args.positiveLongAt(++index);
-                } catch (IllegalArgumentException e) {
-                    return CommandParseResult.error(CommandParseError.integerOutOfRange());
-                }
+                long parsed = args.positiveLongAt(index);
                 if (parsed > Integer.MAX_VALUE) {
-                    return CommandParseResult.error(CommandParseError.integerOutOfRange());
+                    throw integerFailure();
                 }
                 count = (int) parsed;
                 continue;
@@ -60,29 +55,26 @@ public final class CollectionScanCommandSupport {
                 noValues = true;
                 continue;
             }
-            return CommandParseResult.error(CommandParseError.syntax());
+            throw syntaxFailure();
         }
-        return CommandParseResult.ok(new Arguments(args.bytes(1), cursor, match, count, noValues));
+        return new Arguments(args.bytes(1), cursor, match, count, noValues);
     }
 
     public static PreparedCommand prepareReply(CollectionScanWindow window) {
         Objects.requireNonNull(window, "window");
-        byte[] nextCursor = window.nextCursor().toAsciiBytes();
-        ReplyShape elements = ReplyShapes.sequence(
-                window.elementCount(),
-                window.retainedMemoryBytes(),
-                consumer -> window.visitElementLengths(consumer::accept)
-        );
-        ReplyShape shape = ReplyShapes.array(List.of(
-                ReplyShapes.bulkString(nextCursor.length, 0L),
-                elements
+        RedisReply reply = RedisReplies.array(List.of(
+                RedisReplies.bulkString(window.nextCursor().toAsciiBytes()),
+                DbReplies.sequence(window)
         ));
-        return CommandSupport.owned(shape, window, context -> {
-            context.reply().arrayHeader(2);
-            context.reply().bulkString(nextCursor);
-            context.reply().arrayHeader(window.elementCount());
-            window.emitTo(new BulkStringReplyAdapter(context.reply()));
-        });
+        return PreparedCommands.owned(CommandResult.reply(reply), window);
+    }
+
+    private static CommandParseException syntaxFailure() {
+        return new CommandParseException(SYNTAX_ERROR);
+    }
+
+    private static CommandParseException integerFailure() {
+        return new CommandParseException(INTEGER_ERROR);
     }
 
     public record Arguments(

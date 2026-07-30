@@ -31,7 +31,20 @@ public final class DbReplies {
                 sink -> values.emitTo(new BulkStringReplyAdapter(sink)));
     }
 
-    static RedisReply map(ByteMapSource source) {
+    public static RedisReply singleValue(ByteSequenceSource source) {
+        ByteSequenceSource values = Objects.requireNonNull(source, "source");
+        if (values.elementCount() != 1) {
+            throw new IllegalArgumentException("single value source must contain one element");
+        }
+        int[] payloadLength = {-1};
+        values.visitElementLengths(length -> payloadLength[0] = length);
+        return RedisReplies.bulkString(
+                payloadLength[0],
+                values.retainedMemoryBytes(),
+                sink -> values.emitTo(new BulkStringReplyAdapter(sink)));
+    }
+
+    public static RedisReply map(ByteMapSource source) {
         ByteMapSource values = Objects.requireNonNull(source, "source");
         return RedisReplies.byteMap(
                 values.pairCount(),

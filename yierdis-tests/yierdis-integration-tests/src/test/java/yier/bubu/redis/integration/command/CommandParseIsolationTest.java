@@ -136,6 +136,71 @@ public class CommandParseIsolationTest {
         }
     }
 
+    @Test
+    public void collectionCommandParsersDoNotAccessRuntimeServices() throws Exception {
+        AtomicInteger routerCalls = new AtomicInteger();
+        AtomicInteger providerCalls = new AtomicInteger();
+        CommandRegistry registry = CommandRegistries.from(DefaultCommandModules.create(
+                throwingRouter(routerCalls),
+                throwingProvider(providerCalls)
+        ));
+
+        for (ParseCase command : List.of(
+                parseCase("LPUSH", "LPUSH", "list", "a", "b"),
+                parseCase("RPUSH", "RPUSH", "list", "a", "b"),
+                parseCase("LRANGE", "LRANGE", "list", "0", "-1"),
+                parseCase("LPOP", "LPOP", "list", "2"),
+                parseCase("RPOP", "RPOP", "list"),
+                parseCase("HSET", "HSET", "hash", "field", "value"),
+                parseCase("HGET", "HGET", "hash", "field"),
+                parseCase("HGETALL", "HGETALL", "hash"),
+                parseCase("HLEN", "HLEN", "hash"),
+                parseCase("HDEL", "HDEL", "hash", "field"),
+                parseCase("HSCAN", "HSCAN", "hash", "0", "MATCH", "f*", "COUNT", "10", "NOVALUES"),
+                parseCase("SADD", "SADD", "set", "a", "b"),
+                parseCase("SREM", "SREM", "set", "a"),
+                parseCase("SMEMBERS", "SMEMBERS", "set"),
+                parseCase("SISMEMBER", "SISMEMBER", "set", "a"),
+                parseCase("SCARD", "SCARD", "set"),
+                parseCase("SSCAN", "SSCAN", "set", "0", "MATCH", "a*", "COUNT", "10")
+        )) {
+            CommandSpec spec = registry.specByUpperName(command.commandName());
+            Assert.assertNotNull(command.commandName(), spec);
+            Assert.assertNotNull(command.commandName(), spec.handler().parse(command.args()));
+        }
+
+        Assert.assertEquals(0, routerCalls.get());
+        Assert.assertEquals(0, providerCalls.get());
+    }
+
+    @Test
+    public void collectionCommandParsersRejectInvalidUserInputBeforePreparation() {
+        CommandRegistry registry = CommandRegistries.from(DefaultCommandModules.create(
+                throwingRouter(new AtomicInteger()),
+                throwingProvider(new AtomicInteger())
+        ));
+
+        for (CommandArgs invalid : new CommandArgs[]{
+                argv("LPOP", "list", "-1"),
+                argv("LPOP", "list", "not-a-number"),
+                argv("RPOP", "list", "-1"),
+                argv("RPOP", "list", "not-a-number"),
+                argv("HSCAN", "hash", "-1"),
+                argv("HSCAN", "hash", "9223372036854775808"),
+                argv("HSCAN", "hash", "0", "MATCH"),
+                argv("HSCAN", "hash", "0", "COUNT"),
+                argv("HSCAN", "hash", "0", "COUNT", "0"),
+                argv("SSCAN", "set", "-1"),
+                argv("SSCAN", "set", "9223372036854775808"),
+                argv("SSCAN", "set", "0", "MATCH"),
+                argv("SSCAN", "set", "0", "COUNT"),
+                argv("SSCAN", "set", "0", "COUNT", "0"),
+                argv("SSCAN", "set", "0", "NOVALUES")
+        }) {
+            assertParseFailure(registry, invalid);
+        }
+    }
+
     private static void assertParseFailure(CommandRegistry registry, CommandArgs args) {
         try {
             CommandSpec spec = registry.specByUpperName(args.utf8(0));

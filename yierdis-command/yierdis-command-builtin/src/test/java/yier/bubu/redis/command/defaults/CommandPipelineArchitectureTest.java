@@ -51,6 +51,27 @@ public class CommandPipelineArchitectureTest {
         Assert.assertEquals(14, occurrences(source, "new CommandSpec("));
     }
 
+    @Test
+    public void collectionCommandsUseDirectSemanticPipeline() throws IOException {
+        assertDirectPipeline("list/ListCommands.java", 5);
+        assertDirectPipeline("hash/HashCommands.java", 6);
+        assertDirectPipeline("set/SetCommands.java", 6);
+        assertDirectPipeline("CollectionScanCommandSupport.java", 0);
+    }
+
+    private static void assertDirectPipeline(String relativePath, int expectedSpecs) throws IOException {
+        String source = Files.readString(mainSourceRoot().resolve(relativePath));
+        for (String forbidden : List.of(
+                "CommandDefinition", "CommandParsers", "ArgReader",
+                "CommandParseResult", "CommandParseError", "CommandPreparationContext",
+                "RedisReplyWriter", "BulkStringReplyAdapter", ".reply()", "new PreparedCommand",
+                "sliceResetFromRequest", "clearScratch"
+        )) {
+            Assert.assertFalse(relativePath + " retains legacy path: " + forbidden, source.contains(forbidden));
+        }
+        Assert.assertEquals(relativePath, expectedSpecs, occurrences(source, "new CommandSpec("));
+    }
+
     private static int occurrences(String source, String needle) {
         int count = 0;
         int offset = 0;

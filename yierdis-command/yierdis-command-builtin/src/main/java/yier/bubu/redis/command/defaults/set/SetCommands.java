@@ -1,20 +1,27 @@
 package yier.bubu.redis.command.defaults.set;
 
+import java.util.List;
 import java.util.Objects;
-import yier.bubu.redis.command.api.ArgReader;
+import yier.bubu.redis.command.api.CommandArgs;
 import yier.bubu.redis.command.api.CommandArity;
-import yier.bubu.redis.command.api.CommandDefinition;
+import yier.bubu.redis.command.api.CommandInvocation;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
-import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandParseException;
+import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.defaults.CollectionScanCommandSupport;
 import yier.bubu.redis.command.defaults.CommandSupport;
-import yier.bubu.redis.execution.api.CommandPreparationContext;
-import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.command.defaults.DbReplies;
+import yier.bubu.redis.execution.api.CommandResult;
+import yier.bubu.redis.execution.api.PreparedCommands;
+import yier.bubu.redis.execution.api.RedisReplies;
+import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.execution.api.ReplyShapes;
+import yier.bubu.redis.storage.api.WrongTypeException;
+import yier.bubu.redis.storage.api.YierdisCommandException;
+import yier.bubu.redis.storage.api.result.ByteSequenceSource;
 
 public final class SetCommands implements CommandModule {
     private static final CommandKeySpec KEY = new CommandKeySpec(1, 1, 1);
@@ -28,72 +35,60 @@ public final class SetCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register(new CommandDefinition<>(syntax("SADD", CommandArity.min(3)),
-                CommandParsers.args(), this::sadd));
-        registration.register(new CommandDefinition<>(syntax("SREM", CommandArity.min(3)),
-                CommandParsers.args(), this::srem));
-        registration.register(new CommandDefinition<>(syntax("SMEMBERS", CommandArity.exact(2)),
-                CommandParsers.args(), this::smembers));
-        registration.register(new CommandDefinition<>(syntax("SISMEMBER", CommandArity.exact(3)),
-                CommandParsers.args(), this::sismember));
-        registration.register(new CommandDefinition<>(syntax("SCARD", CommandArity.exact(2)),
-                CommandParsers.args(), this::scard));
-        registration.register(new CommandDefinition<>(syntax("SSCAN", CommandArity.min(3)),
-                args -> CollectionScanCommandSupport.parse(args, false), this::sscan));
+        registration.register(new CommandSpec(syntax("SADD", CommandArity.min(3)), args -> change(args, true)));
+        registration.register(new CommandSpec(syntax("SREM", CommandArity.min(3)), args -> change(args, false)));
+        registration.register(new CommandSpec(syntax("SMEMBERS", CommandArity.exact(2)), this::smembers));
+        registration.register(new CommandSpec(syntax("SISMEMBER", CommandArity.exact(3)), this::sismember));
+        registration.register(new CommandSpec(syntax("SCARD", CommandArity.exact(2)), this::scard));
+        registration.register(new CommandSpec(syntax("SSCAN", CommandArity.min(3)), this::sscan));
     }
 
     private static CommandSyntax syntax(String nameUpper, CommandArity arity) {
         return new CommandSyntax(nameUpper, arity, KEY, TransactionPolicy.QUEUEABLE);
     }
 
-    private PreparedCommand sadd(ArgReader args, CommandPreparationContext context) {
-        return changingMembers(args, true);
-    }
-
-    private PreparedCommand srem(ArgReader args, CommandPreparationContext context) {
-        return changingMembers(args, false);
-    }
-
-    private PreparedCommand changingMembers(ArgReader args, boolean add) {
-        ExecutionRequest request = args.request();
-        return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
-            int membersLen = request.argc() - 2;
-            support.sliceResetFromRequest(request, 2, membersLen);
+    private CommandInvocation change(CommandArgs args, boolean add) {
+        byte[] key = args.bytes(1);
+        List<byte[]> members = args.byteArraysFrom(2);
+        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
             try {
-                long changed = add
-                        ? support.commandDb(execution).writes().sets()
-                                .sadd(request.readOnlyByteArray(1), support.slice()).value()
-                        : support.commandDb(execution).writes().sets()
-                                .srem(request.readOnlyByteArray(1), support.slice()).value();
-                execution.reply().integer(changed);
-            } finally {
-                support.clearScratch(membersLen);
+                long changed = (add
+                        ? support.commandDb(execution).writes().sets().sadd(key, members)
+                        : support.commandDb(execution).writes().sets().srem(key, members)).value();
+                return CommandResult.reply(RedisReplies.integer(changed));
+            } catch (WrongTypeException | YierdisCommandException failure) {
+                return CommandResult.controlError(failure.getMessage());
             }
         });
     }
 
-    private PreparedCommand smembers(ArgReader args, CommandPreparationContext context) {
-        return CommandSupport.sequence(support.commandDb(context).reads().sets()
-                .smembers(args.bytes(1)));
+    private CommandInvocation smembers(CommandArgs args) {
+        byte[] key = args.bytes(1);
+        return session -> {
+            ByteSequenceSource values = support.commandDb(session).reads().sets().smembers(key);
+            RedisReply reply = DbReplies.sequence(values);
+            return PreparedCommands.owned(CommandResult.reply(reply), values);
+        };
     }
 
-    private PreparedCommand sismember(ArgReader args, CommandPreparationContext context) {
-        long result = support.commandDb(context).reads().sets()
-                .sismember(args.bytes(1), args.bytes(2)) ? 1L : 0L;
-        return CommandSupport.fixed(ReplyShapes.integer(result), execution -> execution.reply().integer(result));
+    private CommandInvocation sismember(CommandArgs args) {
+        byte[] key = args.bytes(1);
+        byte[] member = args.bytes(2);
+        return session -> PreparedCommands.ready(RedisReplies.integer(
+                support.commandDb(session).reads().sets().sismember(key, member) ? 1L : 0L));
     }
 
-    private PreparedCommand scard(ArgReader args, CommandPreparationContext context) {
-        long count = support.commandDb(context).reads().sets().scard(args.bytes(1));
-        return CommandSupport.fixed(ReplyShapes.integer(count), execution -> execution.reply().integer(count));
+    private CommandInvocation scard(CommandArgs args) {
+        byte[] key = args.bytes(1);
+        return session -> PreparedCommands.ready(RedisReplies.integer(
+                support.commandDb(session).reads().sets().scard(key)));
     }
 
-    private PreparedCommand sscan(
-            CollectionScanCommandSupport.Arguments args,
-            CommandPreparationContext context
-    ) {
-        return CollectionScanCommandSupport.prepareReply(support.commandDb(context).reads().sets().sscan(
-                args.key(), args.cursor(), args.match(), args.count()
-        ));
+    private CommandInvocation sscan(CommandArgs args) throws CommandParseException {
+        CollectionScanCommandSupport.Arguments parsed = CollectionScanCommandSupport.parse(args, false);
+        return session -> CollectionScanCommandSupport.prepareReply(
+                support.commandDb(session).reads().sets().sscan(
+                        parsed.key(), parsed.cursor(), parsed.match(), parsed.count()
+                ));
     }
 }

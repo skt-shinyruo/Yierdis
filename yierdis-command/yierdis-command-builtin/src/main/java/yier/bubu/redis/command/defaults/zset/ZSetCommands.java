@@ -2,11 +2,13 @@ package yier.bubu.redis.command.defaults.zset;
 
 import java.util.Objects;
 import yier.bubu.redis.command.api.ArgReader;
+import yier.bubu.redis.command.api.CommandArgs;
 import yier.bubu.redis.command.api.CommandArity;
 import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParseError;
+import yier.bubu.redis.command.api.CommandParseException;
 import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.CommandSyntax;
@@ -49,11 +51,20 @@ public final class ZSetCommands implements CommandModule {
         registration.register(new CommandDefinition<>(syntax("ZREM", CommandArity.min(3)),
                 CommandParsers.args(), this::zrem));
         registration.register(new CommandDefinition<>(syntax("ZSCAN", CommandArity.min(3)),
-                args -> CollectionScanCommandSupport.parse(args, false), this::zscan));
+                this::parseZScan, this::zscan));
     }
 
     private static CommandSyntax syntax(String nameUpper, CommandArity arity) {
         return new CommandSyntax(nameUpper, arity, KEY, TransactionPolicy.QUEUEABLE);
+    }
+
+    private CommandParseResult<CollectionScanCommandSupport.Arguments> parseZScan(ArgReader args) {
+        try {
+            return CommandParseResult.ok(CollectionScanCommandSupport.parse(
+                    CommandArgs.of(args.request()), false));
+        } catch (CommandParseException failure) {
+            return CommandParseResult.error(CommandParseError.custom(failure.replyMessage()));
+        }
     }
 
     private PreparedCommand zadd(ArgReader args, CommandPreparationContext context) {

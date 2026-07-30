@@ -1,20 +1,28 @@
 package yier.bubu.redis.command.defaults.hash;
 
+import java.util.List;
 import java.util.Objects;
-import yier.bubu.redis.command.api.ArgReader;
+import yier.bubu.redis.command.api.CommandArgs;
 import yier.bubu.redis.command.api.CommandArity;
-import yier.bubu.redis.command.api.CommandDefinition;
+import yier.bubu.redis.command.api.CommandInvocation;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
-import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandParseException;
+import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.defaults.CollectionScanCommandSupport;
 import yier.bubu.redis.command.defaults.CommandSupport;
-import yier.bubu.redis.execution.api.CommandPreparationContext;
-import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.command.defaults.DbReplies;
+import yier.bubu.redis.execution.api.CommandResult;
+import yier.bubu.redis.execution.api.PreparedCommands;
+import yier.bubu.redis.execution.api.RedisReplies;
+import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.execution.api.ReplyShapes;
+import yier.bubu.redis.storage.api.WrongTypeException;
+import yier.bubu.redis.storage.api.YierdisCommandException;
+import yier.bubu.redis.storage.api.result.ByteMapSource;
+import yier.bubu.redis.storage.api.result.ByteValue;
 
 public final class HashCommands implements CommandModule {
     private static final CommandKeySpec KEY = new CommandKeySpec(1, 1, 1);
@@ -28,75 +36,73 @@ public final class HashCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register(new CommandDefinition<>(syntax("HSET", CommandArity.pairTail(4, 2)),
-                CommandParsers.args(), this::hset));
-        registration.register(new CommandDefinition<>(syntax("HGET", CommandArity.exact(3)),
-                CommandParsers.args(), this::hget));
-        registration.register(new CommandDefinition<>(syntax("HGETALL", CommandArity.exact(2)),
-                CommandParsers.args(), this::hgetall));
-        registration.register(new CommandDefinition<>(syntax("HLEN", CommandArity.exact(2)),
-                CommandParsers.args(), this::hlen));
-        registration.register(new CommandDefinition<>(syntax("HDEL", CommandArity.min(3)),
-                CommandParsers.args(), this::hdel));
-        registration.register(new CommandDefinition<>(syntax("HSCAN", CommandArity.min(3)),
-                args -> CollectionScanCommandSupport.parse(args, true), this::hscan));
+        registration.register(new CommandSpec(syntax("HSET", CommandArity.pairTail(4, 2)), this::hset));
+        registration.register(new CommandSpec(syntax("HGET", CommandArity.exact(3)), this::hget));
+        registration.register(new CommandSpec(syntax("HGETALL", CommandArity.exact(2)), this::hgetall));
+        registration.register(new CommandSpec(syntax("HLEN", CommandArity.exact(2)), this::hlen));
+        registration.register(new CommandSpec(syntax("HDEL", CommandArity.min(3)), this::hdel));
+        registration.register(new CommandSpec(syntax("HSCAN", CommandArity.min(3)), this::hscan));
     }
 
     private static CommandSyntax syntax(String nameUpper, CommandArity arity) {
         return new CommandSyntax(nameUpper, arity, KEY, TransactionPolicy.QUEUEABLE);
     }
 
-    private PreparedCommand hset(ArgReader args, CommandPreparationContext context) {
-        ExecutionRequest request = args.request();
-        return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
-            int pairsLen = request.argc() - 2;
-            support.sliceResetFromRequest(request, 2, pairsLen);
+    private CommandInvocation hset(CommandArgs args) {
+        byte[] key = args.bytes(1);
+        List<byte[]> pairs = args.byteArraysFrom(2);
+        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
             try {
-                long added = support.commandDb(execution).writes().hashes()
-                        .hset(request.readOnlyByteArray(1), support.slice()).value();
-                execution.reply().integer(added);
-            } finally {
-                support.clearScratch(pairsLen);
+                long added = support.commandDb(execution).writes().hashes().hset(key, pairs).value();
+                return CommandResult.reply(RedisReplies.integer(added));
+            } catch (WrongTypeException | YierdisCommandException failure) {
+                return CommandResult.controlError(failure.getMessage());
             }
         });
     }
 
-    private PreparedCommand hget(ArgReader args, CommandPreparationContext context) {
-        return CommandSupport.byteValue(support.commandDb(context).reads().hashes()
-                .hget(args.bytes(1), args.bytes(2)));
+    private CommandInvocation hget(CommandArgs args) {
+        byte[] key = args.bytes(1);
+        byte[] field = args.bytes(2);
+        return session -> {
+            ByteValue value = support.commandDb(session).reads().hashes().hget(key, field);
+            return PreparedCommands.owned(CommandResult.reply(DbReplies.value(value)), value);
+        };
     }
 
-    private PreparedCommand hgetall(ArgReader args, CommandPreparationContext context) {
-        return CommandSupport.byteMap(support.commandDb(context).reads().hashes()
-                .hgetall(args.bytes(1)));
+    private CommandInvocation hgetall(CommandArgs args) {
+        byte[] key = args.bytes(1);
+        return session -> {
+            ByteMapSource values = support.commandDb(session).reads().hashes().hgetall(key);
+            RedisReply reply = DbReplies.map(values);
+            return PreparedCommands.owned(CommandResult.reply(reply), values);
+        };
     }
 
-    private PreparedCommand hlen(ArgReader args, CommandPreparationContext context) {
-        long length = support.commandDb(context).reads().hashes().hlen(args.bytes(1));
-        return CommandSupport.fixed(ReplyShapes.integer(length), execution -> execution.reply().integer(length));
+    private CommandInvocation hlen(CommandArgs args) {
+        byte[] key = args.bytes(1);
+        return session -> PreparedCommands.ready(RedisReplies.integer(
+                support.commandDb(session).reads().hashes().hlen(key)));
     }
 
-    private PreparedCommand hdel(ArgReader args, CommandPreparationContext context) {
-        ExecutionRequest request = args.request();
-        return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
-            int fieldsLen = request.argc() - 2;
-            support.sliceResetFromRequest(request, 2, fieldsLen);
+    private CommandInvocation hdel(CommandArgs args) {
+        byte[] key = args.bytes(1);
+        List<byte[]> fields = args.byteArraysFrom(2);
+        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
             try {
-                long deleted = support.commandDb(execution).writes().hashes()
-                        .hdel(request.readOnlyByteArray(1), support.slice()).value();
-                execution.reply().integer(deleted);
-            } finally {
-                support.clearScratch(fieldsLen);
+                long deleted = support.commandDb(execution).writes().hashes().hdel(key, fields).value();
+                return CommandResult.reply(RedisReplies.integer(deleted));
+            } catch (WrongTypeException | YierdisCommandException failure) {
+                return CommandResult.controlError(failure.getMessage());
             }
         });
     }
 
-    private PreparedCommand hscan(
-            CollectionScanCommandSupport.Arguments args,
-            CommandPreparationContext context
-    ) {
-        return CollectionScanCommandSupport.prepareReply(support.commandDb(context).reads().hashes().hscan(
-                args.key(), args.cursor(), args.match(), args.count(), args.noValues()
-        ));
+    private CommandInvocation hscan(CommandArgs args) throws CommandParseException {
+        CollectionScanCommandSupport.Arguments parsed = CollectionScanCommandSupport.parse(args, true);
+        return session -> CollectionScanCommandSupport.prepareReply(
+                support.commandDb(session).reads().hashes().hscan(
+                        parsed.key(), parsed.cursor(), parsed.match(), parsed.count(), parsed.noValues()
+                ));
     }
 }
