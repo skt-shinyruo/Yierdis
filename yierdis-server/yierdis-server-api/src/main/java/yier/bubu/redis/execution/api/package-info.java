@@ -9,7 +9,7 @@
  *     <li>ByteArrayExecutionRequest - API. Audience: protocol adapters, engine replay, runtime/tests needing heap snapshots.</li>
  *     <li>ExecutionRecord - API. Audience: command transaction/replay logic, runtime change tracking, tests.</li>
  *     <li>ReplySink - API. Audience: command/storage value streaming adapters and reply writer implementations.</li>
- *     <li>RedisReplyWriter - API. Audience: command handlers and server reply implementations that need the explicit Redis command reply model.</li>
+ *     <li>RedisReplyWriter - SPI。受众：executor、server 与协议实现；把语义回复和控制错误编码到已预留的 reply sink。</li>
  *     <li>RedisReplyWriterFactory - API. Audience: executor, server/protocol adapter composition, tests.</li>
  *     <li>CommandSession - API。受众：executor、engine、server 会话实现与测试。</li>
  *     <li>DbIndexSession - API. Audience: DB routing and SELECT command handlers.</li>
@@ -20,8 +20,8 @@
  *     <li>ConnectionStatsView - API. Audience: server INFO/STATS views, executor/server observability, tests.</li>
  *     <li>TransactionState - API. Audience: command transaction handlers, engine sessions, server sessions, tests.</li>
  *     <li>CommandPreparationContext - API。受众：命令 preparer；仅在回复容量预留前读取完整会话状态。</li>
- *     <li>CommandExecutionContext - API。受众：PreparedCommand；由执行器在回复容量预留后创建，并提供本次请求的 mutation context 与 reply writer。</li>
- *     <li>PreparedCommand - API。受众：engine、executor 与命令实现；封装回复形状、执行前校验和保留资源的关闭责任。</li>
+ *     <li>CommandExecutionContext - API。受众：PreparedCommand；由执行器在回复容量预留后创建，只提供本次会话与请求的 mutation context。</li>
+ *     <li>PreparedCommand - API。受众：engine、executor 与命令实现；封装预留形状、执行前校验、语义结果和保留资源的关闭责任。</li>
  *     <li>ReplyShape / ReplySizer - API/SPI。受众：命令层、executor 与协议实现；命令层描述语义形状，协议实现计算 wire 大小。</li>
  * </ul>
  */

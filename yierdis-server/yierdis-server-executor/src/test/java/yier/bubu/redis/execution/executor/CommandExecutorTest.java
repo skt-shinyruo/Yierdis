@@ -5,12 +5,22 @@ import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.common.command.ResultUnknownException;
 import yier.bubu.redis.execution.api.CapacityRegistration;
+import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.ExecutionReply;
+import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.ReplyPlan;
+import yier.bubu.redis.execution.api.ReplyReservationSink;
 import yier.bubu.redis.execution.api.ReplyReservationResult;
+import yier.bubu.redis.execution.api.ReplySizer;
 import yier.bubu.redis.execution.api.ReplyShapes;
+import yier.bubu.redis.execution.api.ReplyTooLargeException;
+import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -424,11 +434,24 @@ public class CommandExecutorTest {
     }
 
     @Test
-    public void executorHandlesSuccessfulCloseAfterReplyCommand() {
+    public void executorRendersResultThenAppliesCloseFlagAndClosesPreparedOwner() {
         RecordingIoAdapter io = new RecordingIoAdapter();
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
-
-        CommandExecutionEngine engine = ExecutorCoreTestSupport.simpleCommandEngine();
+        List<String> lifecycle = new ArrayList<>();
+        CommandExecutionEngine engine = (session, request) -> ExecutorCoreTestSupport.fixed(
+                ReplyShapes.bulkString(2, 0L),
+                context -> {
+                    lifecycle.add("execute");
+                    return CommandResult.closeAfterReply(RedisReplies.bulkString(
+                            2,
+                            0L,
+                            sink -> {
+                                lifecycle.add("render");
+                                sink.bulkString(new byte[]{'O', 'K'});
+                            }));
+                },
+                () -> lifecycle.add("close")
+        );
         CommandExecutor<TestConnection> executor = new CommandExecutor<>(
                 () -> {},
                 engine,
@@ -441,15 +464,23 @@ public class CommandExecutorTest {
         ExecutorCoreTestSupport.startExecutor(executor, ownerExecutor);
 
         TestConnection connection = ExecutorCoreTestSupport.newConnection("c-1");
-        TrackingExecutionRequest quit = TrackingExecutionRequest.ofUtf8("QUIT");
+        TrackingExecutionRequest quit = TrackingExecutionRequest.ofUtf8(
+                "QUIT", () -> lifecycle.add("request-close"));
+        TrackingReply reply = new TrackingReply();
 
-        ExecutorCoreTestSupport.publish(executor, connection, quit, ExecutorCoreTestSupport.ioReply(io, connection));
+        ExecutorCoreTestSupport.publish(executor, connection, quit, reply);
         ownerExecutor.runAll();
 
-        Assert.assertEquals("OK\n", io.bufferedReply(connection));
-        Assert.assertTrue(io.closeAfterReply(connection));
+        Assert.assertEquals("OK\n", reply.bytes());
+        Assert.assertTrue(reply.readyCloseAfterReply());
         Assert.assertTrue(connection.context().statsSnapshot().closing());
         Assert.assertEquals(1, quit.closeCalls());
+        Assert.assertEquals(1, reply.readyCalls());
+        Assert.assertEquals(0, reply.cancelCalls());
+        Assert.assertEquals(0, reply.resultUnknownCalls());
+        Assert.assertEquals(
+                List.of("execute", "render", "close", "request-close"),
+                lifecycle);
         Assert.assertEquals(1L, executor.statsSnapshot().closeAfterReply());
 
         executor.close();
@@ -457,14 +488,384 @@ public class CommandExecutorTest {
     }
 
     @Test
-    public void resultUnknownFailureCancelsTheRegisteredReplyAndClosesWithoutReplacementReply() {
+    public void nullResultBecomesInternalErrorWithoutMarkingTheActionExecuted() {
         RecordingIoAdapter io = new RecordingIoAdapter();
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+        AtomicInteger actions = new AtomicInteger();
+        AtomicInteger closes = new AtomicInteger();
         CommandExecutionEngine engine = (session, request) -> ExecutorCoreTestSupport.fixed(
                 ReplyShapes.simpleString("OK"),
                 context -> {
+                    actions.incrementAndGet();
+                    return null;
+                },
+                closes::incrementAndGet
+        );
+        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+                () -> { },
+                engine,
+                ownerExecutor,
+                ExecutorCoreTestSupport.simpleReplySizer(),
+                ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                io,
+                new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+        );
+        ExecutorCoreTestSupport.startExecutor(executor, ownerExecutor);
+
+        TestConnection connection = ExecutorCoreTestSupport.newConnection("null-result");
+        TrackingExecutionRequest request = TrackingExecutionRequest.ofUtf8("TEST");
+        TrackingReply reply = new TrackingReply();
+        try {
+            ExecutorCoreTestSupport.publish(executor, connection, request, reply);
+
+            ownerExecutor.runAll();
+
+            Assert.assertEquals(1, actions.get());
+            Assert.assertEquals(1, closes.get());
+            Assert.assertEquals(1, request.closeCalls());
+            Assert.assertEquals("ERR internal error\n", reply.bytes());
+            Assert.assertEquals(1, reply.readyCalls());
+            Assert.assertTrue(reply.readyCloseAfterReply());
+            Assert.assertEquals(0, reply.cancelCalls());
+            Assert.assertEquals(0, reply.resultUnknownCalls());
+            Assert.assertTrue(connection.context().statsSnapshot().closing());
+            Assert.assertEquals(0L, executor.statsSnapshot().commandsExecuted());
+            Assert.assertEquals(1L, executor.statsSnapshot().closeAfterReply());
+        } finally {
+            executor.close();
+            ownerExecutor.runAll();
+        }
+    }
+
+    @Test
+    public void ordinaryExecuteFailureUsesInternalControlReplyAndClosesOwnersOnce() {
+        RecordingIoAdapter io = new RecordingIoAdapter();
+        ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+        AtomicInteger actions = new AtomicInteger();
+        AtomicInteger preparedCloses = new AtomicInteger();
+        IllegalStateException executeFailure = new IllegalStateException("execute failed");
+        CommandExecutionEngine engine = (session, request) -> ExecutorCoreTestSupport.fixed(
+                ReplyShapes.simpleString("X"),
+                context -> {
+                    actions.incrementAndGet();
+                    throw executeFailure;
+                },
+                preparedCloses::incrementAndGet
+        );
+        CommandExecutor<TestConnection> executor = newStartedExecutor(
+                ownerExecutor,
+                engine,
+                (session, shape) -> ReplyPlan.exact(2L, 0L),
+                ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                io
+        );
+
+        TestConnection connection = ExecutorCoreTestSupport.newConnection("execute-failure");
+        TrackingExecutionRequest request = TrackingExecutionRequest.ofUtf8("FAIL");
+        TrackingReply reply = TrackingReply.bounded(64L);
+        try {
+            ExecutorCoreTestSupport.publish(executor, connection, request, reply);
+
+            ownerExecutor.runAll();
+
+            Assert.assertEquals(1, actions.get());
+            Assert.assertEquals(1, preparedCloses.get());
+            Assert.assertEquals(1, request.closeCalls());
+            Assert.assertEquals("ERR internal error\n", reply.bytes());
+            Assert.assertEquals(1, reply.requireCalls());
+            Assert.assertEquals(1, reply.controlReservationUses());
+            Assert.assertEquals(1, reply.readyCalls());
+            Assert.assertTrue(reply.readyCloseAfterReply());
+            Assert.assertEquals(0, reply.cancelCalls());
+            Assert.assertEquals(0, reply.resultUnknownCalls());
+            Assert.assertEquals(0, io.closeCalls(connection));
+            Assert.assertTrue(connection.context().statsSnapshot().closing());
+            Assert.assertEquals(0L, executor.statsSnapshot().commandsExecuted());
+            Assert.assertEquals(1L, executor.statsSnapshot().closeAfterReply());
+        } finally {
+            executor.close();
+            ownerExecutor.runAll();
+        }
+    }
+
+    @Test
+    public void topLevelControlErrorSwitchesToControlReservationAndPublishesNormally() {
+        RecordingIoAdapter io = new RecordingIoAdapter();
+        ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+        AtomicInteger actions = new AtomicInteger();
+        AtomicInteger preparedCloses = new AtomicInteger();
+        CommandExecutionEngine engine = (session, request) -> ExecutorCoreTestSupport.fixed(
+                ReplyShapes.simpleString("X"),
+                context -> {
+                    actions.incrementAndGet();
+                    return CommandResult.controlError("ERR expected");
+                },
+                preparedCloses::incrementAndGet
+        );
+        CommandExecutor<TestConnection> executor = newStartedExecutor(
+                ownerExecutor,
+                engine,
+                (session, shape) -> ReplyPlan.exact(2L, 0L),
+                ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                io
+        );
+
+        TestConnection connection = ExecutorCoreTestSupport.newConnection("control-error");
+        TrackingExecutionRequest request = TrackingExecutionRequest.ofUtf8("EXPECTED");
+        TrackingReply reply = TrackingReply.bounded(64L);
+        try {
+            ExecutorCoreTestSupport.publish(executor, connection, request, reply);
+
+            ownerExecutor.runAll();
+
+            Assert.assertEquals(1, actions.get());
+            Assert.assertEquals(1, preparedCloses.get());
+            Assert.assertEquals(1, request.closeCalls());
+            Assert.assertEquals("ERR expected\n", reply.bytes());
+            Assert.assertEquals(1, reply.requireCalls());
+            Assert.assertEquals(1, reply.controlReservationUses());
+            Assert.assertEquals(1, reply.readyCalls());
+            Assert.assertFalse(reply.readyCloseAfterReply());
+            Assert.assertEquals(0, reply.cancelCalls());
+            Assert.assertEquals(0, reply.resultUnknownCalls());
+            Assert.assertEquals(0, io.closeCalls(connection));
+            Assert.assertFalse(connection.context().statsSnapshot().closing());
+            Assert.assertEquals(1L, executor.statsSnapshot().commandsExecuted());
+            Assert.assertEquals(0L, executor.statsSnapshot().closeAfterReply());
+        } finally {
+            executor.close();
+            ownerExecutor.runAll();
+        }
+    }
+
+    @Test
+    public void writerFactoryFailureAfterActionMarksResultUnknownAndClosesOwnersOnce() {
+        RecordingIoAdapter io = new RecordingIoAdapter();
+        ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+        AtomicInteger actions = new AtomicInteger();
+        AtomicInteger preparedCloses = new AtomicInteger();
+        AtomicInteger writerCreations = new AtomicInteger();
+        IllegalStateException writerFailure = new IllegalStateException("writer factory failed");
+        CommandExecutionEngine engine = (session, request) -> ExecutorCoreTestSupport.fixed(
+                ReplyShapes.simpleString("OK"),
+                context -> {
+                    actions.incrementAndGet();
+                    return CommandResult.reply(RedisReplies.simpleString("OK"));
+                },
+                preparedCloses::incrementAndGet
+        );
+        RedisReplyWriterFactory writerFactory = (session, out) -> {
+            writerCreations.incrementAndGet();
+            throw writerFailure;
+        };
+        CommandExecutor<TestConnection> executor = newStartedExecutor(
+                ownerExecutor,
+                engine,
+                ExecutorCoreTestSupport.simpleReplySizer(),
+                writerFactory,
+                io
+        );
+
+        TestConnection connection = ExecutorCoreTestSupport.newConnection("writer-failure");
+        TrackingExecutionRequest request = TrackingExecutionRequest.ofUtf8("MUTATE");
+        TrackingReply reply = new TrackingReply();
+        try {
+            ExecutorCoreTestSupport.publish(executor, connection, request, reply);
+
+            ownerExecutor.runAll();
+
+            Assert.assertEquals(1, actions.get());
+            Assert.assertEquals(1, writerCreations.get());
+            Assert.assertEquals(1, preparedCloses.get());
+            Assert.assertEquals(1, request.closeCalls());
+            Assert.assertEquals(0, reply.writtenBytes());
+            Assert.assertEquals(0, reply.readyCalls());
+            Assert.assertEquals(1, reply.resultUnknownCalls());
+            Assert.assertEquals(1, reply.cancelCalls());
+            Assert.assertEquals(1, io.closeCalls(connection));
+            Assert.assertTrue(connection.context().statsSnapshot().closing());
+            Assert.assertEquals(1L, executor.statsSnapshot().commandsExecuted());
+            Assert.assertArrayEquals(new Throwable[0], writerFailure.getSuppressed());
+        } finally {
+            executor.close();
+            ownerExecutor.runAll();
+        }
+    }
+
+    @Test
+    public void reservationBoundViolationAfterActionMarksResultUnknownAndClosesOwnersOnce() {
+        RecordingIoAdapter io = new RecordingIoAdapter();
+        ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+        AtomicInteger actions = new AtomicInteger();
+        AtomicInteger preparedCloses = new AtomicInteger();
+        CommandExecutionEngine engine = (session, request) -> ExecutorCoreTestSupport.fixed(
+                ReplyShapes.simpleString("X"),
+                context -> {
+                    actions.incrementAndGet();
+                    return CommandResult.reply(RedisReplies.simpleString("TOO-LONG"));
+                },
+                preparedCloses::incrementAndGet
+        );
+        CommandExecutor<TestConnection> executor = newStartedExecutor(
+                ownerExecutor,
+                engine,
+                (session, shape) -> ReplyPlan.exact(2L, 0L),
+                ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                io
+        );
+
+        TestConnection connection = ExecutorCoreTestSupport.newConnection("reservation-bound");
+        TrackingExecutionRequest request = TrackingExecutionRequest.ofUtf8("MUTATE");
+        TrackingReply reply = TrackingReply.bounded(64L);
+        try {
+            ExecutorCoreTestSupport.publish(executor, connection, request, reply);
+
+            ownerExecutor.runAll();
+
+            Assert.assertEquals(1, actions.get());
+            Assert.assertEquals(1, preparedCloses.get());
+            Assert.assertEquals(1, request.closeCalls());
+            Assert.assertEquals(1, reply.requireCalls());
+            Assert.assertEquals(0, reply.controlReservationUses());
+            Assert.assertEquals(0, reply.writtenBytes());
+            Assert.assertEquals(0, reply.readyCalls());
+            Assert.assertEquals(1, reply.resultUnknownCalls());
+            Assert.assertEquals(1, reply.cancelCalls());
+            Assert.assertEquals(1, io.closeCalls(connection));
+            Assert.assertTrue(connection.context().statsSnapshot().closing());
+            Assert.assertEquals(1L, executor.statsSnapshot().commandsExecuted());
+        } finally {
+            executor.close();
+            ownerExecutor.runAll();
+        }
+    }
+
+    @Test
+    public void resultUnknownCleanupRemainsExhaustiveAndSuppressesCleanupFailures() {
+        RecordingIoAdapter io = new RecordingIoAdapter();
+        ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+        AtomicInteger actions = new AtomicInteger();
+        AtomicInteger preparedCloses = new AtomicInteger();
+        IllegalStateException renderFailure = new IllegalStateException("render failed");
+        IllegalStateException markFailure = new IllegalStateException("mark result unknown failed");
+        IllegalStateException cancelFailure = new IllegalStateException("reply cancel failed");
+        IllegalStateException transportFailure = new IllegalStateException("transport close failed");
+        io.failCloseConnectionWith(transportFailure);
+        CommandExecutionEngine engine = (session, request) -> ExecutorCoreTestSupport.fixed(
+                ReplyShapes.bulkString(1, 0L),
+                context -> {
+                    actions.incrementAndGet();
+                    return CommandResult.reply(RedisReplies.bulkString(
+                            1,
+                            0L,
+                            sink -> {
+                                throw renderFailure;
+                            }));
+                },
+                preparedCloses::incrementAndGet
+        );
+        CommandExecutor<TestConnection> executor = newStartedExecutor(
+                ownerExecutor,
+                engine,
+                ExecutorCoreTestSupport.simpleReplySizer(),
+                ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                io
+        );
+
+        TestConnection connection = ExecutorCoreTestSupport.newConnection("cleanup-failures");
+        TrackingExecutionRequest request = TrackingExecutionRequest.ofUtf8("MUTATE");
+        TrackingReply reply = TrackingReply.failingCleanup(markFailure, cancelFailure);
+        try {
+            ExecutorCoreTestSupport.publish(executor, connection, request, reply);
+
+            ownerExecutor.runAll();
+
+            Assert.assertEquals(1, actions.get());
+            Assert.assertEquals(1, preparedCloses.get());
+            Assert.assertEquals(1, request.closeCalls());
+            Assert.assertEquals(0, reply.readyCalls());
+            Assert.assertEquals(1, reply.resultUnknownCalls());
+            Assert.assertEquals(1, reply.cancelCalls());
+            Assert.assertEquals(1, io.closeCalls(connection));
+            Assert.assertTrue(connection.context().statsSnapshot().closing());
+            Assert.assertArrayEquals(
+                    new Throwable[]{markFailure, cancelFailure, transportFailure},
+                    renderFailure.getSuppressed());
+            Assert.assertEquals(1L, executor.statsSnapshot().commandsExecuted());
+        } finally {
+            executor.close();
+            ownerExecutor.runAll();
+        }
+    }
+
+    @Test
+    public void renderFailureAfterActionDoesNotRetryAndClosesOwnedResult() {
+        RecordingIoAdapter io = new RecordingIoAdapter();
+        ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+        AtomicInteger actions = new AtomicInteger();
+        AtomicInteger closes = new AtomicInteger();
+        CommandExecutionEngine engine = (session, request) -> ExecutorCoreTestSupport.fixed(
+                ReplyShapes.bulkString(1, 0L),
+                context -> {
+                    actions.incrementAndGet();
+                    return CommandResult.reply(RedisReplies.bulkString(
+                            1,
+                            0L,
+                            sink -> {
+                                sink.bulkString(new byte[]{'x'});
+                                throw new IllegalStateException("render failed");
+                            }));
+                },
+                closes::incrementAndGet
+        );
+        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+                () -> { },
+                engine,
+                ownerExecutor,
+                ExecutorCoreTestSupport.simpleReplySizer(),
+                ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                io,
+                new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+        );
+        ExecutorCoreTestSupport.startExecutor(executor, ownerExecutor);
+
+        TestConnection connection = ExecutorCoreTestSupport.newConnection("render-failure");
+        TrackingExecutionRequest request = TrackingExecutionRequest.ofUtf8("MUTATE");
+        TrackingReply reply = new TrackingReply();
+        try {
+            ExecutorCoreTestSupport.publish(executor, connection, request, reply);
+
+            ownerExecutor.runAll();
+
+            Assert.assertEquals(1, actions.get());
+            Assert.assertEquals(1, closes.get());
+            Assert.assertEquals(1, request.closeCalls());
+            Assert.assertEquals("x\n", reply.bytes());
+            Assert.assertEquals(0, reply.readyCalls());
+            Assert.assertEquals(1, reply.cancelCalls());
+            Assert.assertEquals(1, reply.resultUnknownCalls());
+            Assert.assertTrue(connection.context().statsSnapshot().closing());
+            Assert.assertEquals(1, io.closeCalls(connection));
+            Assert.assertEquals(1L, executor.statsSnapshot().commandsExecuted());
+        } finally {
+            executor.close();
+            ownerExecutor.runAll();
+        }
+    }
+
+    @Test
+    public void resultUnknownFailureCancelsTheRegisteredReplyAndClosesWithoutReplacementReply() {
+        RecordingIoAdapter io = new RecordingIoAdapter();
+        ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+        AtomicInteger actions = new AtomicInteger();
+        AtomicInteger closes = new AtomicInteger();
+        CommandExecutionEngine engine = (session, request) -> ExecutorCoreTestSupport.fixed(
+                ReplyShapes.simpleString("OK"),
+                context -> {
+                    actions.incrementAndGet();
                     throw new ResultUnknownException("mutation result may already be visible");
-                }
+                },
+                closes::incrementAndGet
         );
         CommandExecutor<TestConnection> executor = new CommandExecutor<>(
                 () -> { },
@@ -485,10 +886,13 @@ public class CommandExecutorTest {
 
             ownerExecutor.runAll();
 
+            Assert.assertEquals(1, actions.get());
+            Assert.assertEquals(1, closes.get());
             Assert.assertTrue(connection.context().statsSnapshot().closing());
             Assert.assertEquals(1, request.closeCalls());
             Assert.assertEquals(1, reply.cancelCalls());
             Assert.assertEquals(0, reply.readyCalls());
+            Assert.assertEquals(1, reply.resultUnknownCalls());
             Assert.assertEquals(0, reply.writtenBytes());
             Assert.assertEquals(1, io.closeCalls(connection));
         } finally {
@@ -504,7 +908,10 @@ public class CommandExecutorTest {
         AtomicBoolean executed = new AtomicBoolean();
         CommandExecutionEngine engine = (session, request) -> ExecutorCoreTestSupport.fixed(
                 ReplyShapes.bulkString(4096, 0L),
-                context -> executed.set(true)
+                context -> {
+                    executed.set(true);
+                    return CommandResult.reply(RedisReplies.simpleString("OK"));
+                }
         );
         CommandExecutor<TestConnection> executor = new CommandExecutor<>(
                 () -> { },
@@ -638,6 +1045,26 @@ public class CommandExecutorTest {
         return ((ExecutorAdmissionAttempt.Rejected<C>) attempt).reason();
     }
 
+    private static CommandExecutor<TestConnection> newStartedExecutor(
+            ManualOwnerExecutor ownerExecutor,
+            CommandExecutionEngine engine,
+            ReplySizer replySizer,
+            RedisReplyWriterFactory replyWriterFactory,
+            RecordingIoAdapter io
+    ) {
+        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+                () -> { },
+                engine,
+                ownerExecutor,
+                replySizer,
+                replyWriterFactory,
+                io,
+                new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+        );
+        ExecutorCoreTestSupport.startExecutor(executor, ownerExecutor);
+        return executor;
+    }
+
     private static void assertInvalidConfig(
             int queueCapacity,
             long queueMaxBytes,
@@ -672,18 +1099,60 @@ public class CommandExecutorTest {
         private final ByteArrayOutputStream output = new ByteArrayOutputStream();
         private final AtomicInteger readyCalls = new AtomicInteger();
         private final AtomicInteger cancelCalls = new AtomicInteger();
+        private final AtomicInteger resultUnknownCalls = new AtomicInteger();
+        private final AtomicBoolean readyCloseAfterReply = new AtomicBoolean();
         private final ReplyReservationResult reservationResult;
+        private final TrackingReplySink sink;
+        private final RuntimeException markResultUnknownFailure;
+        private final RuntimeException cancelFailure;
 
         private TrackingReply() {
-            this(ReplyReservationResult.RESERVED);
+            this(ReplyReservationResult.RESERVED, false, Long.MAX_VALUE, null, null);
         }
 
         private TrackingReply(ReplyReservationResult reservationResult) {
-            this.reservationResult = reservationResult;
+            this(reservationResult, false, Long.MAX_VALUE, null, null);
+        }
+
+        private TrackingReply(
+                ReplyReservationResult reservationResult,
+                boolean enforceBound,
+                long controlReservationBytes,
+                RuntimeException markResultUnknownFailure,
+                RuntimeException cancelFailure
+        ) {
+            this.reservationResult = Objects.requireNonNull(reservationResult, "reservationResult");
+            this.sink = new TrackingReplySink(enforceBound, controlReservationBytes);
+            this.markResultUnknownFailure = markResultUnknownFailure;
+            this.cancelFailure = cancelFailure;
+        }
+
+        private static TrackingReply bounded(long controlReservationBytes) {
+            return new TrackingReply(
+                    ReplyReservationResult.RESERVED,
+                    true,
+                    controlReservationBytes,
+                    null,
+                    null);
+        }
+
+        private static TrackingReply failingCleanup(
+                RuntimeException markResultUnknownFailure,
+                RuntimeException cancelFailure
+        ) {
+            return new TrackingReply(
+                    ReplyReservationResult.RESERVED,
+                    false,
+                    Long.MAX_VALUE,
+                    Objects.requireNonNull(markResultUnknownFailure, "markResultUnknownFailure"),
+                    Objects.requireNonNull(cancelFailure, "cancelFailure"));
         }
 
         @Override
         public ReplyReservationResult tryReserve(ReplyPlan plan) {
+            if (reservationResult == ReplyReservationResult.RESERVED) {
+                sink.require(plan);
+            }
             return reservationResult;
         }
 
@@ -694,17 +1163,21 @@ public class CommandExecutorTest {
 
         @Override
         public BytesSink sink() {
-            return output::write;
+            return sink;
         }
 
         @Override
         public void markReady(boolean closeAfterReply) {
+            readyCloseAfterReply.set(closeAfterReply);
             readyCalls.incrementAndGet();
         }
 
         @Override
         public void cancel() {
             cancelCalls.incrementAndGet();
+            if (cancelFailure != null) {
+                throw cancelFailure;
+            }
         }
 
         @Override
@@ -714,6 +1187,10 @@ public class CommandExecutorTest {
 
         @Override
         public void markResultUnknown() {
+            resultUnknownCalls.incrementAndGet();
+            if (markResultUnknownFailure != null) {
+                throw markResultUnknownFailure;
+            }
         }
 
         @Override
@@ -731,6 +1208,83 @@ public class CommandExecutorTest {
 
         private int writtenBytes() {
             return output.size();
+        }
+
+        private String bytes() {
+            return output.toString(StandardCharsets.UTF_8);
+        }
+
+        private boolean readyCloseAfterReply() {
+            return readyCloseAfterReply.get();
+        }
+
+        private int resultUnknownCalls() {
+            return resultUnknownCalls.get();
+        }
+
+        private int requireCalls() {
+            return sink.requireCalls();
+        }
+
+        private int controlReservationUses() {
+            return sink.controlReservationUses();
+        }
+
+        private final class TrackingReplySink implements ReplyReservationSink {
+            private final boolean enforceBound;
+            private final long controlReservationBytes;
+            private long encodedLimit = Long.MAX_VALUE;
+            private int requireCalls;
+            private int controlReservationUses;
+
+            private TrackingReplySink(boolean enforceBound, long controlReservationBytes) {
+                if (controlReservationBytes < 0L) {
+                    throw new IllegalArgumentException("controlReservationBytes must be non-negative");
+                }
+                this.enforceBound = enforceBound;
+                this.controlReservationBytes = controlReservationBytes;
+            }
+
+            @Override
+            public void require(ReplyPlan plan) {
+                ReplyPlan required = Objects.requireNonNull(plan, "plan");
+                requireCalls++;
+                if (enforceBound) {
+                    encodedLimit = required.reserveMaximum()
+                            ? Long.MAX_VALUE
+                            : required.encodedUpperBoundBytes();
+                }
+            }
+
+            @Override
+            public void useControlReservation() {
+                controlReservationUses++;
+                if (enforceBound) {
+                    encodedLimit = controlReservationBytes;
+                }
+            }
+
+            @Override
+            public void writeBytes(byte[] source, int sourceIndex, int length) {
+                Objects.checkFromIndexSize(sourceIndex, length, source.length);
+                if (enforceBound && length > encodedLimit - output.size()) {
+                    throw new ReplyTooLargeException("reply exceeded its exact reservation");
+                }
+                output.write(source, sourceIndex, length);
+            }
+
+            @Override
+            public long writtenBytes() {
+                return output.size();
+            }
+
+            private int requireCalls() {
+                return requireCalls;
+            }
+
+            private int controlReservationUses() {
+                return controlReservationUses;
+            }
         }
     }
 }

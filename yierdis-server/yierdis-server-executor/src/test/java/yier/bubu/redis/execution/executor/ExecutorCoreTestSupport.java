@@ -4,6 +4,7 @@ import org.junit.Assert;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.execution.api.CapacityRegistration;
 import yier.bubu.redis.execution.api.CommandExecutionContext;
+import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionReply;
@@ -13,8 +14,10 @@ import yier.bubu.redis.execution.api.ReplyShape;
 import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.execution.api.ReplySizer;
 import yier.bubu.redis.execution.api.ReplyReservationResult;
+import yier.bubu.redis.execution.api.ReplyReservationSink;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
+import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.ValidationResult;
@@ -29,6 +32,7 @@ import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 final class ExecutorCoreTestSupport {
     private ExecutorCoreTestSupport() {
@@ -70,25 +74,41 @@ final class ExecutorCoreTestSupport {
     static CommandExecutionEngine simpleCommandEngine() {
         return (session, request) -> {
             if (asciiEqualsIgnoreCase(request, 0, "PING")) {
-                return fixed(ReplyShapes.simpleString("PONG"), context -> context.reply().simpleString("PONG"));
+                return fixed(
+                        ReplyShapes.simpleString("PONG"),
+                        context -> CommandResult.reply(RedisReplies.simpleString("PONG")));
             }
             if (asciiEqualsIgnoreCase(request, 0, "QUIT")) {
-                return fixed(ReplyShapes.simpleString("OK"), context -> {
-                    context.reply().simpleString("OK");
-                    context.reply().requestCloseAfterReply();
-                });
+                return fixed(
+                        ReplyShapes.simpleString("OK"),
+                        context -> CommandResult.closeAfterReply(RedisReplies.simpleString("OK")));
             }
-            return fixed(ReplyShapes.error("ERR unsupported test command"),
-                    context -> context.reply().error("ERR unsupported test command"));
+            return fixed(
+                    ReplyShapes.error("ERR unsupported test command"),
+                    context -> CommandResult.error("ERR unsupported test command"));
         };
     }
 
-    static PreparedCommand fixed(ReplyShape shape, Consumer<CommandExecutionContext> execution) {
+    static PreparedCommand fixed(
+            ReplyShape shape,
+            Function<CommandExecutionContext, CommandResult> execution
+    ) {
+        return fixed(shape, execution, () -> { });
+    }
+
+    static PreparedCommand fixed(
+            ReplyShape shape,
+            Function<CommandExecutionContext, CommandResult> execution,
+            Runnable closeAction
+    ) {
         Objects.requireNonNull(shape, "shape");
         Objects.requireNonNull(execution, "execution");
+        Objects.requireNonNull(closeAction, "closeAction");
         return new PreparedCommand() {
+            private boolean closed;
+
             @Override
-            public ReplyShape replyShape() {
+            public ReplyShape reservationShape() {
                 return shape;
             }
 
@@ -98,12 +118,17 @@ final class ExecutorCoreTestSupport {
             }
 
             @Override
-            public void execute(CommandExecutionContext context) {
-                execution.accept(context);
+            public CommandResult execute(CommandExecutionContext context) {
+                return execution.apply(context);
             }
 
             @Override
             public void close() {
+                if (closed) {
+                    return;
+                }
+                closed = true;
+                closeAction.run();
             }
         };
     }
@@ -422,23 +447,43 @@ final class TrackingExecutionRequest implements ExecutionRequest {
     private final byte[][] argv;
     private final int retainedBytes;
     private final boolean failOnCommandRead;
+    private final Runnable closeAction;
     private final AtomicInteger closeCalls = new AtomicInteger();
 
-    private TrackingExecutionRequest(byte[][] argv, int retainedBytes, boolean failOnCommandRead) {
+    private TrackingExecutionRequest(
+            byte[][] argv,
+            int retainedBytes,
+            boolean failOnCommandRead,
+            Runnable closeAction
+    ) {
         this.argv = argv;
         this.retainedBytes = retainedBytes;
         this.failOnCommandRead = failOnCommandRead;
+        this.closeAction = Objects.requireNonNull(closeAction, "closeAction");
     }
 
     static TrackingExecutionRequest ofUtf8(String cmd, String... args) {
-        return fromUtf8(false, cmd, args);
+        return fromUtf8(false, () -> { }, cmd, args);
+    }
+
+    static TrackingExecutionRequest ofUtf8(
+            String cmd,
+            Runnable closeAction,
+            String... args
+    ) {
+        return fromUtf8(false, closeAction, cmd, args);
     }
 
     static TrackingExecutionRequest failingOnCommandRead(String cmd, String... args) {
-        return fromUtf8(true, cmd, args);
+        return fromUtf8(true, () -> { }, cmd, args);
     }
 
-    private static TrackingExecutionRequest fromUtf8(boolean failOnCommandRead, String cmd, String... args) {
+    private static TrackingExecutionRequest fromUtf8(
+            boolean failOnCommandRead,
+            Runnable closeAction,
+            String cmd,
+            String... args
+    ) {
         byte[][] argv = new byte[args.length + 1][];
         int retainedBytes = 0;
 
@@ -451,7 +496,7 @@ final class TrackingExecutionRequest implements ExecutionRequest {
             argv[i + 1] = utf8(args[i]);
             retainedBytes += argv[i + 1].length;
         }
-        return new TrackingExecutionRequest(argv, retainedBytes, failOnCommandRead);
+        return new TrackingExecutionRequest(argv, retainedBytes, failOnCommandRead, closeAction);
     }
 
     int closeCalls() {
@@ -502,6 +547,7 @@ final class TrackingExecutionRequest implements ExecutionRequest {
     @Override
     public void close() {
         closeCalls.incrementAndGet();
+        closeAction.run();
     }
 
     private static byte[] utf8(String value) {
@@ -538,13 +584,21 @@ final class SimpleReplyWriter implements RedisReplyWriter {
     }
 
     @Override
+    public void controlError(String message) {
+        if (out instanceof ReplyReservationSink reservationSink) {
+            reservationSink.useControlReservation();
+        }
+        write(message == null ? "ERR internal error" : message);
+    }
+
+    @Override
     public void protocolError(String message) {
         write(message == null ? "Protocol error" : message);
     }
 
     @Override
     public void internalError(String message) {
-        write(message == null ? "ERR internal error" : message);
+        controlError(message == null ? "ERR internal error" : message);
     }
 
     @Override
@@ -653,6 +707,7 @@ final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
     private final List<String> lastFlushedConnectionIds = new ArrayList<>();
     private final List<String> executionOrder = new ArrayList<>();
     private int flushCalls;
+    private RuntimeException closeFailure;
 
     @Override
     public boolean isActive(TestConnection connection) {
@@ -682,6 +737,9 @@ final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
     @Override
     public void closeConnection(TestConnection connection) {
         state(connection).closeCalls++;
+        if (closeFailure != null) {
+            throw closeFailure;
+        }
     }
 
     @Override
@@ -746,6 +804,10 @@ final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
 
     int closeCalls(TestConnection connection) {
         return state(connection).closeCalls;
+    }
+
+    void failCloseConnectionWith(RuntimeException failure) {
+        closeFailure = Objects.requireNonNull(failure, "failure");
     }
 
     void setActive(TestConnection connection, boolean active) {

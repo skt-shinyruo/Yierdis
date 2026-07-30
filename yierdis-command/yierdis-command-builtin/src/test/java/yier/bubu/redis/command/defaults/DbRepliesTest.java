@@ -17,6 +17,7 @@ import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.PreparedCommands;
 import yier.bubu.redis.execution.api.RedisReply;
+import yier.bubu.redis.execution.api.RedisReplyRenderer;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.ReplyShape;
 import yier.bubu.redis.execution.api.ReplyShapes;
@@ -145,11 +146,13 @@ public class DbRepliesTest {
     private static List<String> render(PreparedCommand prepared) {
         List<String> events = new ArrayList<>();
         RedisReplyWriter writer = recordingWriter(events);
+        CommandResult result;
         try (ByteArrayExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("TEST", List.of());
              CommandExecutionContext context = CommandExecutionContext.forRequest(
-                     session(), writer, request)) {
-            prepared.execute(context);
+                     session(), request)) {
+            result = prepared.execute(context);
         }
+        RedisReplyRenderer.render(result.reply(), writer);
         return events;
     }
 

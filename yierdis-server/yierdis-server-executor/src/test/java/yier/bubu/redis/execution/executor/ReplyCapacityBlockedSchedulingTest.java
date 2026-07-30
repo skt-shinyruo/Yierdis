@@ -5,6 +5,7 @@ import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.execution.api.CapacityRegistration;
 import yier.bubu.redis.execution.api.CommandExecutionContext;
+import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.ExecutionReply;
 import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.ReplyCapacityUnavailableException;
@@ -12,6 +13,7 @@ import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.ReplyReservationSink;
 import yier.bubu.redis.execution.api.ReplyReservationResult;
 import yier.bubu.redis.execution.api.ReplyShapes;
+import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.ValidationResult;
 
 import java.nio.charset.StandardCharsets;
@@ -271,8 +273,8 @@ public class ReplyCapacityBlockedSchedulingTest {
             return ExecutorCoreTestSupport.fixed(
                     ReplyShapes.simpleString(command),
                     context -> {
-                        context.reply().simpleString(command);
                         completed.add(command);
+                        return CommandResult.reply(RedisReplies.simpleString(command));
                     }
             );
         };
@@ -315,7 +317,7 @@ public class ReplyCapacityBlockedSchedulingTest {
             private boolean closed;
 
             @Override
-            public yier.bubu.redis.execution.api.ReplyShape replyShape() {
+            public yier.bubu.redis.execution.api.ReplyShape reservationShape() {
                 return ReplyShapes.bulkString(4096, 0L);
             }
 
@@ -325,9 +327,9 @@ public class ReplyCapacityBlockedSchedulingTest {
             }
 
             @Override
-            public void execute(CommandExecutionContext context) {
+            public CommandResult execute(CommandExecutionContext context) {
                 executes.incrementAndGet();
-                context.reply().simpleString("OK");
+                return CommandResult.reply(RedisReplies.simpleString("OK"));
             }
 
             @Override

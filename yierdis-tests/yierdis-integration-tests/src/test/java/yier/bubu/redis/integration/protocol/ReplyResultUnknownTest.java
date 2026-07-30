@@ -3,6 +3,7 @@ package yier.bubu.redis.app.server;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.execution.api.CommandExecutionContext;
+import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.ReplyShape;
 import yier.bubu.redis.execution.api.ValidationResult;
@@ -22,8 +23,8 @@ public class ReplyResultUnknownTest {
                     PreparedCommand prepared = delegate.prepare(session, request);
                     return new PreparedCommand() {
                         @Override
-                        public ReplyShape replyShape() {
-                            return prepared.replyShape();
+                        public ReplyShape reservationShape() {
+                            return prepared.reservationShape();
                         }
 
                         @Override
@@ -32,14 +33,15 @@ public class ReplyResultUnknownTest {
                         }
 
                         @Override
-                        public void execute(CommandExecutionContext context) {
-                            prepared.execute(context);
+                        public CommandResult execute(CommandExecutionContext context) {
+                            CommandResult result = prepared.execute(context);
                             if (failAfterFirstCommand.compareAndSet(true, false)) {
                                 throw new PostCommitMutationException(
                                         "injected post-commit failure",
                                         new IllegalStateException("injected cause")
                                 );
                             }
+                            return result;
                         }
 
                         @Override

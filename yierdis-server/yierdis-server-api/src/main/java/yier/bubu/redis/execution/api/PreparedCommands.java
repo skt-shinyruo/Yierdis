@@ -68,7 +68,7 @@ public final class PreparedCommands {
             private AutoCloseable owned = owner;
 
             @Override
-            public ReplyShape replyShape() {
+            public ReplyShape reservationShape() {
                 return shape;
             }
 
@@ -80,17 +80,12 @@ public final class PreparedCommands {
             }
 
             @Override
-            public void execute(CommandExecutionContext context) {
+            public CommandResult execute(CommandExecutionContext context) {
                 CommandExecutionContext executionContext =
                         Objects.requireNonNull(context, "context");
-                CommandResult result = Objects.requireNonNull(
+                return Objects.requireNonNull(
                         execution.apply(executionContext),
                         "action returned null");
-                RedisReplyWriter reply = executionContext.reply();
-                RedisReplyRenderer.render(result.reply(), reply);
-                if (result.closeAfterReply()) {
-                    reply.requestCloseAfterReply();
-                }
             }
 
             @Override

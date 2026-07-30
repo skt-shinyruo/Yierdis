@@ -57,6 +57,17 @@ public class ReplyShapeTest {
     }
 
     @Test
+    public void aggregateRejectsNestedMaximumReservation() {
+        Assert.assertThrows(IllegalArgumentException.class,
+                () -> ReplyShapes.array(List.of(ReplyShapes.maximum())));
+        Assert.assertThrows(IllegalArgumentException.class,
+                () -> new ReplyShape.Aggregate(
+                        ReplyShape.AggregateKind.ARRAY,
+                        List.of(ReplyShapes.maximum()),
+                        0L));
+    }
+
+    @Test
     public void errorFactoryCapturesTheNormalizedRedisErrorPayload() {
         ReplyShape.Error error = (ReplyShape.Error) ReplyShapes.error("wrong");
 

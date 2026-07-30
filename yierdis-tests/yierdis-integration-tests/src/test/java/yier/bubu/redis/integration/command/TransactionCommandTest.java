@@ -16,6 +16,7 @@ import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
 import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyError;
+import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplyNull;
 import yier.bubu.redis.testutil.ReplyObject;
 import yier.bubu.redis.testutil.ReplySimpleString;
@@ -49,6 +50,31 @@ public class TransactionCommandTest {
                 Assert.assertEquals("v", ((ReplyBulkString) exec.values().get(1)).asString());
 
                 Assert.assertEquals("v", ((ReplyBulkString) client.execute(Arrays.asList(b("GET"), b("k")))).asString());
+            }
+        });
+    }
+
+    @Test
+    public void execKeepsStreamedChildAliveUntilTheAggregateIsRendered() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            TestSession session = new TestSession();
+            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+                List<byte[]> push = List.of(
+                        b("RPUSH"), b("streamed:list"), b("one"), b("two"));
+                ReplySimpleString pushQueued = (ReplySimpleString) client.execute(push);
+                Assert.assertEquals("QUEUED", pushQueued.value());
+                List<byte[]> rangeRequest = List.of(
+                        b("LRANGE"), b("streamed:list"), b("0"), b("-1"));
+                ReplySimpleString rangeQueued = (ReplySimpleString) client.execute(rangeRequest);
+                Assert.assertEquals("QUEUED", rangeQueued.value());
+
+                ReplyArray exec = (ReplyArray) client.execute(List.of(b("EXEC")));
+                Assert.assertEquals(2L, ((ReplyInteger) exec.values().get(0)).value());
+                ReplyArray range = (ReplyArray) exec.values().get(1);
+                Assert.assertEquals("one", ((ReplyBulkString) range.values().get(0)).asString());
+                Assert.assertEquals("two", ((ReplyBulkString) range.values().get(1)).asString());
             }
         });
     }

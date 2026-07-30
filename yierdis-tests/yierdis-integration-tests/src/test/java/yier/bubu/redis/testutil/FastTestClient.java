@@ -4,9 +4,11 @@ import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandExecutionContext;
+import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.RedisReplyRenderer;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.execution.api.ValidationResult;
@@ -18,9 +20,9 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * 测试辅助：以协议无关的 {@link ExecutionRequest}/{@link yier.bubu.redis.execution.api.RedisReplyWriter} 语义执行命令，并捕获 reply 供断言使用。
+ * 测试辅助：直接执行 {@link PreparedCommand}，再通过语义 renderer 捕获 {@link CommandResult} 供断言使用。
  * <p>
- * 说明：对外协议已切换为 RESP，因此 core 单测不再依赖任何 wire codec/对象模型。
+ * 该路径不经过执行器的容量预留和网络协议编码，因此只用于验证命令语义。
  */
 public final class FastTestClient implements AutoCloseable {
     private final CommandDispatcher dispatcher;
@@ -50,8 +52,13 @@ public final class FastTestClient implements AutoCloseable {
                     if (prepared.validateBeforeExecute() == ValidationResult.STALE) {
                         continue;
                     }
-                    try (CommandExecutionContext execution = CommandExecutionContext.forRequest(session, writer, request)) {
-                        prepared.execute(execution);
+                    CommandResult result;
+                    try (CommandExecutionContext execution = CommandExecutionContext.forRequest(session, request)) {
+                        result = prepared.execute(execution);
+                    }
+                    RedisReplyRenderer.render(result.reply(), writer);
+                    if (result.closeAfterReply()) {
+                        writer.requestCloseAfterReply();
                     }
                     return writer.root();
                 }
@@ -63,7 +70,6 @@ public final class FastTestClient implements AutoCloseable {
 
     @Override
     public void close() {
-        // no-op
     }
 
     private static final class CapturingReplyWriter implements RedisReplyWriter {
@@ -265,7 +271,7 @@ public final class FastTestClient implements AutoCloseable {
             for (; ; ) {
                 Container c = stack.peek();
                 if (c == null) {
-                    // Should not happen, but keep it robust.
+                    // 防御异常的容器状态，避免后续回复悄悄覆盖已经捕获的根节点。
                     if (root != null) {
                         throw new IllegalStateException("reply already finished");
                     }

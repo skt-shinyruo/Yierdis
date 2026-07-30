@@ -9,8 +9,10 @@ import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandExecutionContext;
+import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.RedisReplyRenderer;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.ReplyCapacityUnavailableException;
 import yier.bubu.redis.execution.api.ReplyPlan;
@@ -296,10 +298,7 @@ public class ReplyPreflightCommandTest {
             Assert.assertTrue(session.transaction().active());
             Assert.assertEquals(1, session.transaction().size());
             Assert.assertNull(db.reads().strings().getStringBytes(b("queued")));
-            Assert.assertEquals(
-                    REPLY_SIZER.plan(session, ReplyShapes.array(List.of(ReplyShapes.simpleString("OK")))),
-                    capacity.reservedPlan()
-            );
+            Assert.assertEquals(ReplyPlan.maximum(), capacity.reservedPlan());
             session.discardTransaction();
         });
     }
@@ -567,10 +566,15 @@ public class ReplyPreflightCommandTest {
         try {
             try (PreparedCommand prepared = dispatcher.prepare(session, request)) {
                 Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
-                ReplyPlan plan = REPLY_SIZER.plan(session, prepared.replyShape());
+                ReplyPlan plan = REPLY_SIZER.plan(session, prepared.reservationShape());
                 capacity.reserve(plan);
-                try (CommandExecutionContext execution = CommandExecutionContext.forRequest(session, writer, request)) {
-                    prepared.execute(execution);
+                CommandResult result;
+                try (CommandExecutionContext execution = CommandExecutionContext.forRequest(session, request)) {
+                    result = prepared.execute(execution);
+                }
+                RedisReplyRenderer.render(result.reply(), writer);
+                if (result.closeAfterReply()) {
+                    writer.requestCloseAfterReply();
                 }
                 return plan;
             }

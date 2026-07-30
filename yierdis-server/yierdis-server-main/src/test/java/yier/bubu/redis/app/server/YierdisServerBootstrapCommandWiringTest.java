@@ -10,10 +10,12 @@ import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.command.api.CommandArgs;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandExecutionContext;
+import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.RedisReplyRenderer;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.RedisReply;
@@ -236,6 +238,31 @@ public class YierdisServerBootstrapCommandWiringTest {
                 Assert.assertEquals("OK", asString(roundTrip(out, in, "SET", "k", "v")));
                 Assert.assertEquals("v", asString(roundTrip(out, in, "GET", "k")));
             }
+        }
+    }
+
+    @Test
+    public void execWrongTypeElementFitsTheBoundedReplyAndKeepsTheConnectionUsable() throws Exception {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
+                "--port", "0",
+                "--maxmemoryBytes", "0"
+        ); Socket socket = new Socket("127.0.0.1", server.port())) {
+            socket.setSoTimeout(2000);
+            OutputStream out = socket.getOutputStream();
+            InputStream in = socket.getInputStream();
+
+            Assert.assertEquals("OK", asString(roundTrip(out, in, "SET", "tx:scalar", "scalar")));
+            Assert.assertEquals("OK", asString(roundTrip(out, in, "MULTI")));
+            Assert.assertEquals("QUEUED", asString(roundTrip(out, in, "LPUSH", "tx:scalar", "value")));
+
+            List<Object> exec = respArray(roundTrip(out, in, "EXEC"));
+            Assert.assertEquals(1, exec.size());
+            Assert.assertEquals(
+                    new RespError("WRONGTYPE Operation against a key holding the wrong kind of value"),
+                    exec.get(0)
+            );
+            Assert.assertEquals("scalar", asString(roundTrip(out, in, "GET", "tx:scalar")));
+            Assert.assertEquals("PONG", asString(roundTrip(out, in, "PING")));
         }
     }
 
@@ -741,8 +768,13 @@ public class YierdisServerBootstrapCommandWiringTest {
     ) {
         try (PreparedCommand prepared = dispatcher.prepare(session, request)) {
             Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
-            try (CommandExecutionContext context = CommandExecutionContext.forRequest(session, reply, request)) {
-                prepared.execute(context);
+            CommandResult result;
+            try (CommandExecutionContext context = CommandExecutionContext.forRequest(session, request)) {
+                result = prepared.execute(context);
+            }
+            RedisReplyRenderer.render(result.reply(), reply);
+            if (result.closeAfterReply()) {
+                reply.requestCloseAfterReply();
             }
         }
     }

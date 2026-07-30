@@ -145,6 +145,11 @@ public sealed interface ReplyShape permits
             Objects.requireNonNull(kind, "kind");
             elements = List.copyOf(Objects.requireNonNull(elements, "elements"));
             requireNonNegative(retainedSourceBytes, "retainedSourceBytes");
+            for (ReplyShape element : elements) {
+                if (element instanceof Maximum) {
+                    throw new IllegalArgumentException("maximum reservation must be top-level");
+                }
+            }
         }
     }
 

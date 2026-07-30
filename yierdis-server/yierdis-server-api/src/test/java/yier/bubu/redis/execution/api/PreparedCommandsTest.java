@@ -1,32 +1,31 @@
 package yier.bubu.redis.execution.api;
 
-import java.io.ByteArrayOutputStream;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.bytes.BytesSlice;
 
 public class PreparedCommandsTest {
     @Test
-    public void readyReplyRendersUsingItsOwnShape() {
-        PreparedCommand prepared = PreparedCommands.ready(RedisReplies.simpleString("OK"));
+    public void readyReplyReturnsUsingItsOwnShape() {
+        RedisReply reply = RedisReplies.simpleString("OK");
+        PreparedCommand prepared = PreparedCommands.ready(reply);
 
-        Assert.assertEquals(ReplyShapes.simpleString("OK"), prepared.replyShape());
+        Assert.assertEquals(ReplyShapes.simpleString("OK"), prepared.reservationShape());
         Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
-        Assert.assertEquals(List.of("simple:OK"), executeWithRecordingWriter(prepared).events());
+        CommandResult result = execute(prepared);
+        Assert.assertSame(reply, result.reply());
+        Assert.assertFalse(result.closeAfterReply());
     }
 
     @Test
-    public void readyResultRequestsCloseAfterRendering() {
-        PreparedCommand prepared = PreparedCommands.ready(
-                CommandResult.closeAfterReply(RedisReplies.simpleString("BYE")));
+    public void readyResultReturnsItsCloseAfterReplyFlag() {
+        CommandResult readyResult = CommandResult.closeAfterReply(
+                RedisReplies.simpleString("BYE"));
+        PreparedCommand prepared = PreparedCommands.ready(readyResult);
 
-        Assert.assertEquals(ReplyShapes.simpleString("BYE"), prepared.replyShape());
-        Assert.assertEquals(List.of("simple:BYE", "close"),
-                executeWithRecordingWriter(prepared).events());
+        Assert.assertEquals(ReplyShapes.simpleString("BYE"), prepared.reservationShape());
+        Assert.assertSame(readyResult, execute(prepared));
     }
 
     @Test
@@ -38,20 +37,20 @@ public class PreparedCommandsTest {
             return CommandResult.reply(RedisReplies.integer(7));
         });
 
-        Assert.assertSame(reservationShape, prepared.replyShape());
+        Assert.assertSame(reservationShape, prepared.reservationShape());
         Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
-        Assert.assertEquals(List.of("integer:7"), executeWithRecordingWriter(prepared).events());
+        Assert.assertEquals(RedisReplies.integer(7), execute(prepared).reply());
         Assert.assertEquals(1, executed.get());
     }
 
     @Test
-    public void ownedRendersAndClosesExactlyOnce() {
+    public void ownedReturnsAndClosesExactlyOnce() {
         AtomicInteger closed = new AtomicInteger();
         PreparedCommand prepared = PreparedCommands.owned(
                 CommandResult.reply(RedisReplies.integer(2)),
                 closed::incrementAndGet);
 
-        Assert.assertEquals(List.of("integer:2"), executeWithRecordingWriter(prepared).events());
+        Assert.assertEquals(RedisReplies.integer(2), execute(prepared).reply());
         prepared.close();
         prepared.close();
 
@@ -77,7 +76,7 @@ public class PreparedCommandsTest {
         );
 
         Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
-        Assert.assertEquals(List.of("integer:3"), executeWithRecordingWriter(prepared).events());
+        Assert.assertEquals(RedisReplies.integer(3), execute(prepared).reply());
         prepared.close();
         prepared.close();
 
@@ -107,15 +106,12 @@ public class PreparedCommandsTest {
     }
 
     @Test
-    public void nullActionResultFailsBeforeRendering() {
+    public void nullActionResultFails() {
         PreparedCommand prepared = PreparedCommands.action(
                 ReplyShapes.integerUpperBound(),
                 context -> null);
-        RecordingWriter writer = new RecordingWriter();
-
         Assert.assertThrows(NullPointerException.class,
-                () -> executeWithRecordingWriter(prepared, writer));
-        Assert.assertEquals(List.of(), writer.events());
+                () -> execute(prepared));
     }
 
     @Test
@@ -133,7 +129,7 @@ public class PreparedCommandsTest {
 
         IllegalArgumentException actual = Assert.assertThrows(
                 IllegalArgumentException.class,
-                () -> executeWithRecordingWriter(prepared));
+                () -> execute(prepared));
         Assert.assertSame(failure, actual);
         Assert.assertEquals(0, closed.get());
 
@@ -177,144 +173,12 @@ public class PreparedCommandsTest {
         Assert.assertEquals(1, closeAttempts.get());
     }
 
-    private static RecordingWriter executeWithRecordingWriter(PreparedCommand prepared) {
-        RecordingWriter writer = new RecordingWriter();
-        executeWithRecordingWriter(prepared, writer);
-        return writer;
-    }
-
-    private static void executeWithRecordingWriter(
-            PreparedCommand prepared,
-            RecordingWriter writer
-    ) {
+    private static CommandResult execute(PreparedCommand prepared) {
         ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("TEST", List.of());
         try (request;
              CommandExecutionContext context = CommandExecutionContext.forRequest(
-                     new TestSession(), writer, request)) {
-            prepared.execute(context);
-        }
-    }
-
-    private static final class RecordingWriter implements RedisReplyWriter {
-        private final List<String> events = new ArrayList<>();
-
-        List<String> events() {
-            return List.copyOf(events);
-        }
-
-        @Override
-        public void requestCloseAfterReply() {
-            events.add("close");
-        }
-
-        @Override
-        public boolean closeAfterReplyRequested() {
-            return events.contains("close");
-        }
-
-        @Override
-        public void simpleString(String value) {
-            events.add("simple:" + value);
-        }
-
-        @Override
-        public void error(String message) {
-            events.add("error:" + message);
-        }
-
-        @Override
-        public void integer(long value) {
-            events.add("integer:" + value);
-        }
-
-        @Override
-        public void booleanValue(boolean value) {
-            events.add("boolean:" + value);
-        }
-
-        @Override
-        public void doubleValue(double value) {
-            events.add("double:" + value);
-        }
-
-        @Override
-        public void bigNumberAscii(String value) {
-            events.add("big-number:" + value);
-        }
-
-        @Override
-        public void verbatimString(String format, byte[] data) {
-            events.add("verbatim:" + format + ':'
-                    + new String(data, StandardCharsets.US_ASCII));
-        }
-
-        @Override
-        public void blobError(String message) {
-            events.add("blob-error:" + message);
-        }
-
-        @Override
-        public void nullValue() {
-            events.add("null");
-        }
-
-        @Override
-        public void nullArray() {
-            events.add("null-array");
-        }
-
-        @Override
-        public void arrayHeader(int count) {
-            events.add("array:" + count);
-        }
-
-        @Override
-        public void emptyArray() {
-            events.add("empty-array");
-        }
-
-        @Override
-        public void mapHeader(int pairs) {
-            events.add("map:" + pairs);
-        }
-
-        @Override
-        public void setHeader(int count) {
-            events.add("set:" + count);
-        }
-
-        @Override
-        public void pushHeader(int count) {
-            events.add("push:" + count);
-        }
-
-        @Override
-        public void attributeHeader(int pairs) {
-            events.add("attribute:" + pairs);
-        }
-
-        @Override
-        public void bulkString(byte[] data) {
-            events.add(data == null
-                    ? "bulk:null"
-                    : "bulk:" + new String(data, StandardCharsets.US_ASCII));
-        }
-
-        @Override
-        public void bulkString(byte[] data, int off, int len) {
-            events.add("bulk:" + new String(data, off, len, StandardCharsets.US_ASCII));
-        }
-
-        @Override
-        public void bulkString(BytesSlice slice) {
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            slice.writeTo(bytes::write);
-            events.add("bulk:" + bytes.toString(StandardCharsets.US_ASCII));
-        }
-
-        @Override
-        public void bulkStringLongAscii(long value) {
-            events.add("bulk:" + value);
+                     new TestSession(), request)) {
+            return prepared.execute(context);
         }
     }
 

@@ -5,9 +5,9 @@ import org.junit.Test;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandExecutionContext;
+import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.PreparedCommand;
-import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.ValidationResult;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
@@ -68,7 +68,6 @@ public class CommandVariantCoverageTest {
     public void quitRequestsCloseAfterReply() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            boolean[] closeAfterReply = new boolean[1];
             yier.bubu.redis.execution.api.TransactionState transaction =
                     (yier.bubu.redis.execution.api.TransactionState) java.lang.reflect.Proxy.newProxyInstance(
                             yier.bubu.redis.execution.api.TransactionState.class.getClassLoader(),
@@ -78,27 +77,14 @@ public class CommandVariantCoverageTest {
             CommandSession session = (CommandSession) java.lang.reflect.Proxy.newProxyInstance(
                     CommandSession.class.getClassLoader(),
                     new Class<?>[]{CommandSession.class},
-                    (proxy, method, arguments) -> method.getName().equals("transaction") ? transaction : null
-            );
-            RedisReplyWriter writer = (RedisReplyWriter) java.lang.reflect.Proxy.newProxyInstance(
-                    RedisReplyWriter.class.getClassLoader(),
-                    new Class<?>[]{RedisReplyWriter.class},
-                    (proxy, method, arguments) -> {
-                        if (method.getName().equals("requestCloseAfterReply")) {
-                            closeAfterReply[0] = true;
-                        }
-                        if (method.getName().equals("closeAfterReplyRequested")) {
-                            return closeAfterReply[0];
-                        }
-                        return null;
-                    }
+                            (proxy, method, arguments) -> method.getName().equals("transaction") ? transaction : null
             );
             try (ByteArrayExecutionRequest request = ByteArrayExecutionRequest.copyOf(cmd("QUIT"));
                     PreparedCommand prepared = dispatcher.prepare(session, request);
-                    CommandExecutionContext execution = CommandExecutionContext.forRequest(session, writer, request)) {
+                    CommandExecutionContext execution = CommandExecutionContext.forRequest(session, request)) {
                 Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
-                prepared.execute(execution);
-                Assert.assertTrue(closeAfterReply[0]);
+                CommandResult result = prepared.execute(execution);
+                Assert.assertTrue(result.closeAfterReply());
             }
         });
     }

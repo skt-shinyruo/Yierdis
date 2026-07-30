@@ -30,7 +30,7 @@ public class CoreContractSmokeTest {
             Assert.assertFalse(Modifier.isPublic(constructor.getModifiers()));
         }
         Method factory = CommandExecutionContext.class.getMethod(
-                "forRequest", CommandSession.class, RedisReplyWriter.class, ExecutionRequest.class);
+                "forRequest", CommandSession.class, ExecutionRequest.class);
         Assert.assertTrue(Modifier.isPublic(factory.getModifiers()));
         Assert.assertTrue(Modifier.isStatic(factory.getModifiers()));
 
@@ -44,14 +44,12 @@ public class CoreContractSmokeTest {
 
     @Test
     public void executionContextExposesOneScopedMutationBorrow() {
-        RedisReplyWriter writer = noopWriter();
         NarrowSession session = new NarrowSession();
         ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("PING", List.of());
 
         try (CommandExecutionContext context = CommandExecutionContext.forRequest(
-                session, writer, request)) {
+                session, request)) {
             Assert.assertSame(session, context.session());
-            Assert.assertSame(writer, context.reply());
             Assert.assertTrue(context.mutationContext().hasCommandRecord());
             Assert.assertSame(request, context.mutationContext().commandRecord());
         } finally {
@@ -60,15 +58,24 @@ public class CoreContractSmokeTest {
     }
 
     @Test
-    public void preparedCommandSeparatesShapeValidationExecutionAndCleanup() {
+    public void preparedExecutionReturnsACommandResultWithoutAWriterContext() throws Exception {
         Assert.assertTrue(AutoCloseable.class.isAssignableFrom(PreparedCommand.class));
         Assert.assertArrayEquals(
-                new String[]{"close", "execute", "replyShape", "validateBeforeExecute"},
+                new String[]{"close", "execute", "reservationShape", "validateBeforeExecute"},
                 java.util.Arrays.stream(PreparedCommand.class.getDeclaredMethods())
                         .map(Method::getName)
                         .sorted()
                         .toArray(String[]::new)
         );
+        Assert.assertEquals(ReplyShape.class,
+                PreparedCommand.class.getMethod("reservationShape").getReturnType());
+        Assert.assertEquals(CommandResult.class,
+                PreparedCommand.class.getMethod(
+                        "execute", CommandExecutionContext.class).getReturnType());
+        Assert.assertThrows(NoSuchMethodException.class,
+                () -> PreparedCommand.class.getMethod("replyShape"));
+        Assert.assertThrows(NoSuchMethodException.class,
+                () -> CommandExecutionContext.class.getMethod("reply"));
         Assert.assertArrayEquals(
                 new ValidationResult[]{ValidationResult.VALID, ValidationResult.STALE},
                 ValidationResult.values()
@@ -96,102 +103,6 @@ public class CoreContractSmokeTest {
                         .map(Class::getSimpleName)
                         .anyMatch(legacyNestedTypes::contains)
         );
-    }
-
-    private static RedisReplyWriter noopWriter() {
-        return new RedisReplyWriter() {
-            private boolean closeAfter;
-
-            @Override
-            public void requestCloseAfterReply() {
-                closeAfter = true;
-            }
-
-            @Override
-            public boolean closeAfterReplyRequested() {
-                return closeAfter;
-            }
-
-            @Override
-            public void simpleString(String value) {
-            }
-
-            @Override
-            public void error(String message) {
-            }
-
-            @Override
-            public void integer(long value) {
-            }
-
-            @Override
-            public void booleanValue(boolean value) {
-            }
-
-            @Override
-            public void doubleValue(double value) {
-            }
-
-            @Override
-            public void bigNumberAscii(String value) {
-            }
-
-            @Override
-            public void verbatimString(String format, byte[] data) {
-            }
-
-            @Override
-            public void blobError(String message) {
-            }
-
-            @Override
-            public void nullValue() {
-            }
-
-            @Override
-            public void nullArray() {
-            }
-
-            @Override
-            public void arrayHeader(int count) {
-            }
-
-            @Override
-            public void emptyArray() {
-            }
-
-            @Override
-            public void mapHeader(int pairs) {
-            }
-
-            @Override
-            public void setHeader(int count) {
-            }
-
-            @Override
-            public void pushHeader(int count) {
-            }
-
-            @Override
-            public void attributeHeader(int pairs) {
-            }
-
-            @Override
-            public void bulkString(byte[] data) {
-            }
-
-            @Override
-            public void bulkString(byte[] data, int off, int len) {
-            }
-
-            @Override
-            public void bulkString(yier.bubu.redis.bytes.BytesSlice slice) {
-            }
-
-            @Override
-            public void bulkStringLongAscii(long value) {
-            }
-        };
     }
 
     private static final class NarrowSession implements CommandSession {

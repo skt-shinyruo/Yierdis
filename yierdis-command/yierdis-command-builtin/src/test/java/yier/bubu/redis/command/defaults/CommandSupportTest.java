@@ -12,6 +12,7 @@ import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.RedisReplies;
+import yier.bubu.redis.execution.api.RedisReplyRenderer;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.execution.api.ValidationResult;
@@ -91,10 +92,12 @@ public class CommandSupportTest {
                     }
                     throw new UnsupportedOperationException("unexpected method: " + method.getName());
                 });
+        CommandResult result;
         try (ByteArrayExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("TEST", List.of());
-             CommandExecutionContext context = CommandExecutionContext.forRequest(session(), writer, request)) {
-            prepared.execute(context);
+             CommandExecutionContext context = CommandExecutionContext.forRequest(session(), request)) {
+            result = prepared.execute(context);
         }
+        RedisReplyRenderer.render(result.reply(), writer);
         return events;
     }
 

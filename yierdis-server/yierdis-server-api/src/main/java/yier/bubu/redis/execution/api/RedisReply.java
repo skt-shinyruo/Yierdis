@@ -190,6 +190,11 @@ public sealed interface RedisReply permits
                 && (copied.size() & 1) != 0) {
             throw new IllegalArgumentException(kind + " requires field/value pairs");
         }
+        for (RedisReply element : copied) {
+            if (element instanceof ControlError) {
+                throw new IllegalArgumentException("control error must be a top-level reply");
+            }
+        }
         return copied;
     }
 

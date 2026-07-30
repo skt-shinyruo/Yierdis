@@ -2,8 +2,10 @@ package yier.bubu.redis.execution.executor;
 
 import yier.bubu.redis.common.command.ResultUnknownException;
 import yier.bubu.redis.execution.api.CommandExecutionContext;
+import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.ExecutionReply;
 import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.RedisReplyRenderer;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.api.ReplyReservationResult;
@@ -153,7 +155,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
                         "command engine returned null prepared command"
                 );
                 task.replyPlan = Objects.requireNonNull(
-                        replySizer.plan(connection.session(), task.prepared.replyShape()),
+                        replySizer.plan(connection.session(), task.prepared.reservationShape()),
                         "reply sizer returned null plan"
                 );
             }
@@ -181,18 +183,24 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
                 return ExecutionAttempt.REPREPARE;
             }
 
-            RedisReplyWriter writer = replyWriterFactory.newWriter(connection.session(), task.reply.sink());
+            CommandResult result;
             try (CommandExecutionContext execution = CommandExecutionContext.forRequest(
-                    connection.session(), writer, task.request)) {
-                task.prepared.execute(execution);
+                    connection.session(), task.request)) {
+                result = Objects.requireNonNull(
+                        task.prepared.execute(execution),
+                        "prepared command returned null result"
+                );
                 executed = true;
             }
-            if (writer.closeAfterReplyRequested()) {
+            RedisReplyWriter writer = replyWriterFactory.newWriter(
+                    connection.session(), task.reply.sink());
+            RedisReplyRenderer.render(result.reply(), writer);
+            if (result.closeAfterReply()) {
                 context.recordCloseAfterReply();
                 closeAfterReply.increment();
                 connection.markClosing();
             }
-            task.reply.markReady(writer.closeAfterReplyRequested());
+            task.reply.markReady(result.closeAfterReply());
             commandsExecuted.increment();
             terminal = true;
             return ExecutionAttempt.COMPLETED;
@@ -202,7 +210,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
                 commandsExecuted.increment();
             }
             if (executed || isResultUnknownFailure(failure)) {
-                closeResultUnknown(connection, context, task.reply);
+                closeResultUnknown(connection, context, task.reply, failure);
                 return ExecutionAttempt.CONNECTION_CLOSED;
             }
             handleReplyExecutionFailure(connection, context, task.reply);
@@ -309,18 +317,27 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
     private void closeResultUnknown(
             C connection,
             ExecutionConnectionContext context,
-            ExecutionReply reply
+            ExecutionReply reply,
+            Throwable primaryFailure
     ) {
-        try {
+        runCleanupSuppressing(primaryFailure, () -> {
             if (connection.markClosing()) {
                 backpressureController.disableAutoRead(connection);
             }
-        } catch (Throwable ignored) {
-            // 结果可见性未知时，关闭 transport 仍优先于 closing 指标更新。
+        });
+        runCleanupSuppressing(primaryFailure, reply::markResultUnknown);
+        runCleanupSuppressing(primaryFailure, reply::cancel);
+        runCleanupSuppressing(primaryFailure, () -> ioAdapter.closeConnection(connection));
+    }
+
+    private static void runCleanupSuppressing(Throwable primaryFailure, Runnable cleanup) {
+        try {
+            cleanup.run();
+        } catch (Throwable cleanupFailure) {
+            if (cleanupFailure != primaryFailure) {
+                primaryFailure.addSuppressed(cleanupFailure);
+            }
         }
-        reply.markResultUnknown();
-        cancelReply(reply);
-        closeTransport(connection);
     }
 
     private void closeOversizedReply(

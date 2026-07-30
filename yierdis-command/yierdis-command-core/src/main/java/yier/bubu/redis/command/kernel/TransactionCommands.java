@@ -11,6 +11,7 @@ import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
+import yier.bubu.redis.common.command.ResultUnknownException;
 import yier.bubu.redis.execution.api.CommandExecutionContext;
 import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.CommandSession;
@@ -18,12 +19,13 @@ import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.PreparedCommands;
 import yier.bubu.redis.execution.api.RedisReplies;
+import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.execution.api.ReplyShape;
 import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.execution.api.ValidationResult;
 
-/** Transaction control commands and the prepared EXEC reply envelope. */
+/** 事务控制命令以及 EXEC 的延迟回复所有权边界。 */
 final class TransactionCommands implements CommandModule {
     private static final String EXEC_ABORT = "EXECABORT Transaction discarded because of previous errors.";
 
@@ -108,18 +110,19 @@ final class TransactionCommands implements CommandModule {
 
     private PreparedCommand preparedExactExec(TransactionState tx, CommandSession session) {
         ArrayList<PreparedCommand> children = new ArrayList<>(tx.size());
-        ArrayList<ReplyShape> shapes = new ArrayList<>(tx.size());
         try {
             tx.forEachQueued(request -> {
                 PreparedCommand child = dispatcher.prepareReplay(session, request);
-                children.add(child);
-                shapes.add(child.replyShape());
+                addOwnedChild(children, child);
             });
+            ReplyShape reservationShape = children.isEmpty()
+                    ? ReplyShapes.array(List.of())
+                    : ReplyShapes.maximum();
+            return new PreparedExec(tx, dispatcher, session, children, reservationShape, false);
         } catch (RuntimeException | Error failure) {
             closeChildrenReverse(children, failure);
             throw failure;
         }
-        return new PreparedExec(tx, dispatcher, session, children, ReplyShapes.array(shapes), false);
     }
 
     private PreparedCommand preparedDynamicExec(TransactionState tx, CommandSession session) {
@@ -165,6 +168,19 @@ final class TransactionCommands implements CommandModule {
         }
     }
 
+    private static void addOwnedChild(
+            ArrayList<PreparedCommand> children,
+            PreparedCommand child
+    ) {
+        try {
+            children.add(child);
+        } catch (RuntimeException | Error failure) {
+            // prepareReplay 已转移 child 所有权；发布到清理列表失败时必须在当前栈帧归还。
+            closeSuppressing(failure, child::close);
+            throw failure;
+        }
+    }
+
     private static void rethrow(Throwable failure) {
         if (failure instanceof RuntimeException runtime) {
             throw runtime;
@@ -177,8 +193,10 @@ final class TransactionCommands implements CommandModule {
         private final CommandDispatcher dispatcher;
         private final CommandSession session;
         private final ArrayList<PreparedCommand> children;
-        private final ReplyShape replyShape;
+        private final ReplyShape reservationShape;
         private final boolean prepareDuringExecution;
+        private List<ExecutionRequest> drainedRequests = List.of();
+        private boolean executed;
         private boolean closed;
 
         private PreparedExec(
@@ -186,20 +204,20 @@ final class TransactionCommands implements CommandModule {
                 CommandDispatcher dispatcher,
                 CommandSession session,
                 ArrayList<PreparedCommand> children,
-                ReplyShape replyShape,
+                ReplyShape reservationShape,
                 boolean prepareDuringExecution
         ) {
             this.tx = Objects.requireNonNull(tx, "tx");
             this.dispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
             this.session = Objects.requireNonNull(session, "session");
             this.children = Objects.requireNonNull(children, "children");
-            this.replyShape = Objects.requireNonNull(replyShape, "replyShape");
+            this.reservationShape = Objects.requireNonNull(reservationShape, "reservationShape");
             this.prepareDuringExecution = prepareDuringExecution;
         }
 
         @Override
-        public ReplyShape replyShape() {
-            return replyShape;
+        public ReplyShape reservationShape() {
+            return reservationShape;
         }
 
         @Override
@@ -216,40 +234,50 @@ final class TransactionCommands implements CommandModule {
         }
 
         @Override
-        public void execute(CommandExecutionContext context) {
-            List<ExecutionRequest> queued = tx.drain();
-            Throwable primary = null;
-            int next = 0;
+        public CommandResult execute(CommandExecutionContext context) {
+            Objects.requireNonNull(context, "context");
+            if (closed || executed) {
+                throw new IllegalStateException("prepared EXEC is no longer executable");
+            }
+            executed = true;
+            boolean childExecutionStarted = false;
             try {
+                List<ExecutionRequest> queued = Objects.requireNonNull(
+                        tx.drain(), "transaction drain returned null");
+                drainedRequests = queued;
                 if (!prepareDuringExecution && queued.size() != children.size()) {
                     throw new IllegalStateException("transaction queue changed after EXEC preparation");
                 }
-                context.reply().arrayHeader(queued.size());
+                ArrayList<RedisReply> replies = new ArrayList<>(queued.size());
+                boolean closeAfterReply = false;
                 for (int index = 0; index < queued.size(); index++) {
                     ExecutionRequest request = queued.get(index);
-                    PreparedCommand child = null;
-                    try {
-                        child = prepareDuringExecution
-                                ? prepareCurrentChild(request)
-                                : children.get(index);
-                        executeChild(context, request, child);
-                    } catch (RuntimeException | Error failure) {
-                        primary = failure;
-                        closeChild(index, child, primary);
-                        closeRequest(request, primary);
-                        next = index + 1;
-                        throw failure;
+                    PreparedCommand child = prepareDuringExecution
+                            ? prepareCurrentChild(request)
+                            : children.get(index);
+                    if (prepareDuringExecution) {
+                        addOwnedChild(children, child);
                     }
-                    closeChild(index, child, null);
-                    next = index + 1;
-                    closeRequest(request, null);
+                    childExecutionStarted = true;
+                    CommandResult result = executeChild(request, child);
+                    RedisReply reply = result.reply();
+                    if (reply instanceof RedisReply.ControlError controlError) {
+                        reply = RedisReplies.error(controlError.message());
+                    }
+                    replies.add(reply);
+                    closeAfterReply |= result.closeAfterReply();
                 }
+                RedisReply aggregate = RedisReplies.array(replies);
+                return closeAfterReply
+                        ? CommandResult.closeAfterReply(aggregate)
+                        : CommandResult.reply(aggregate);
             } catch (RuntimeException | Error failure) {
-                primary = failure;
-                throw failure;
-            } finally {
-                closeQueuedTail(queued, next, primary);
-                closeChildrenFrom(next, primary);
+                Throwable primary = childExecutionStarted
+                        ? resultUnknown(failure)
+                        : failure;
+                closeOwnedReverse(primary);
+                rethrow(primary);
+                throw new AssertionError("unreachable");
             }
         }
 
@@ -270,15 +298,13 @@ final class TransactionCommands implements CommandModule {
             }
         }
 
-        private static void executeChild(
-                CommandExecutionContext context,
-                ExecutionRequest request,
-                PreparedCommand child
-        ) {
+        private CommandResult executeChild(ExecutionRequest request, PreparedCommand child) {
             try (CommandExecutionContext childContext = CommandExecutionContext.forRequest(
-                    context.session(), context.reply(), request
+                    session, request
             )) {
-                child.execute(childContext);
+                return Objects.requireNonNull(
+                        child.execute(childContext),
+                        "transaction child returned null");
             }
         }
 
@@ -288,36 +314,54 @@ final class TransactionCommands implements CommandModule {
                 return;
             }
             closed = true;
-            closeChildrenReverse(children, null);
+            closeOwnedReverse(null);
         }
 
-        private void closeChild(int index, PreparedCommand child, Throwable primary) {
-            if (!prepareDuringExecution && index < children.size() && children.get(index) == child) {
-                children.set(index, null);
-            }
-            if (child != null) {
-                closeSuppressing(primary, child::close);
-            }
-        }
-
-        private static void closeRequest(ExecutionRequest request, Throwable primary) {
-            closeSuppressing(primary, request::close);
-        }
-
-        private void closeChildrenFrom(int start, Throwable primary) {
-            for (int index = Math.max(0, start); index < children.size(); index++) {
-                PreparedCommand child = children.get(index);
-                if (child != null) {
-                    children.set(index, null);
-                    closeSuppressing(primary, child::close);
+        private void closeOwnedReverse(Throwable primary) {
+            // child 回复可能仍引用其 owner；按队列索引逆序，并在同一索引上先关 child 再归还 request。
+            Throwable failure = primary;
+            int count = Math.max(children.size(), drainedRequests.size());
+            for (int index = count - 1; index >= 0; index--) {
+                if (index < children.size()) {
+                    PreparedCommand child = children.get(index);
+                    if (child != null) {
+                        failure = closeAccumulating(failure, child::close);
+                    }
+                }
+                if (index < drainedRequests.size()) {
+                    ExecutionRequest request = drainedRequests.get(index);
+                    if (request != null) {
+                        failure = closeAccumulating(failure, request::close);
+                    }
                 }
             }
+            children.clear();
+            drainedRequests = List.of();
+            if (primary == null && failure != null) {
+                rethrow(failure);
+            }
         }
 
-        private static void closeQueuedTail(List<ExecutionRequest> requests, int from, Throwable primary) {
-            for (int index = Math.max(0, from); index < requests.size(); index++) {
-                closeRequest(requests.get(index), primary);
+        private static Throwable closeAccumulating(Throwable primary, Runnable close) {
+            try {
+                close.run();
+            } catch (RuntimeException | Error closeFailure) {
+                if (primary == null) {
+                    return closeFailure;
+                }
+                if (primary != closeFailure) {
+                    primary.addSuppressed(closeFailure);
+                }
             }
+            return primary;
+        }
+
+        private static Throwable resultUnknown(Throwable failure) {
+            if (failure instanceof ResultUnknownException) {
+                return failure;
+            }
+            return new ResultUnknownException(
+                    "transaction child result may already be visible", failure);
         }
     }
 }

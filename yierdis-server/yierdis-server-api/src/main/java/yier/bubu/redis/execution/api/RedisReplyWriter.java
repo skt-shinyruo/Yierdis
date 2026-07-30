@@ -1,16 +1,20 @@
 package yier.bubu.redis.execution.api;
 
 /**
- * Redis command reply model used by the command layer.
+ * 把命令返回的语义回复编码到执行器已预留的 reply sink。
  * <p>
- * This interface is not a generic protocol writer. It exposes the Redis reply shapes that command
- * handlers produce, including RESP2-compatible scalars and the RESP3/Redis aggregate forms used by
- * HELLO, INFO/STATS, and collection replies. Protocol implementations encode these shapes into the
- * active wire format without making command handlers depend on protocol packages.
+ * 该接口不是命令实现 API。命令通过 {@link RedisReply} 描述结果，执行器统一调用
+ * {@link RedisReplyRenderer}，协议实现再按当前 RESP 版本编码各类标量与聚合回复。
  */
 public interface RedisReplyWriter extends ReplySink {
+    /**
+     * 请求在当前控制回复写完后关闭连接；普通命令的关闭语义由 {@link CommandResult} 携带。
+     */
     void requestCloseAfterReply();
 
+    /**
+     * 返回协议或执行器控制路径是否已请求在当前回复后关闭连接。
+     */
     boolean closeAfterReplyRequested();
 
     /**

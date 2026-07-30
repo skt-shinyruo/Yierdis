@@ -8,8 +8,10 @@ import io.netty.util.concurrent.EventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.execution.api.CommandExecutionContext;
+import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.ReferenceCountedRequestMemoryLease;
 import yier.bubu.redis.execution.api.ReplyShape;
 import yier.bubu.redis.execution.api.ReplyShapes;
@@ -461,7 +463,7 @@ public class RespIngressLifecycleIntegrationTest {
     private static PreparedCommand okPrepared(AtomicInteger executions) {
         return new PreparedCommand() {
             @Override
-            public ReplyShape replyShape() {
+            public ReplyShape reservationShape() {
                 return ReplyShapes.simpleString("OK");
             }
 
@@ -471,9 +473,9 @@ public class RespIngressLifecycleIntegrationTest {
             }
 
             @Override
-            public void execute(CommandExecutionContext context) {
+            public CommandResult execute(CommandExecutionContext context) {
                 executions.incrementAndGet();
-                context.reply().simpleString("OK");
+                return CommandResult.reply(RedisReplies.simpleString("OK"));
             }
 
             @Override

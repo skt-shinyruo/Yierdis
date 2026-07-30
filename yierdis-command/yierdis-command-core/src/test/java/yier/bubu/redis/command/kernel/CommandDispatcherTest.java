@@ -13,15 +13,18 @@ import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.common.command.MutationContext;
+import yier.bubu.redis.common.command.ResultUnknownException;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandExecutionContext;
+import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.PreparedCommands;
 import yier.bubu.redis.execution.api.RedisReplies;
-import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.RedisReply;
+import yier.bubu.redis.execution.api.ReplySink;
 import yier.bubu.redis.execution.api.ReplyShape;
 import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.execution.api.TransactionState;
@@ -35,6 +38,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 public class CommandDispatcherTest {
     @Test
@@ -49,7 +53,7 @@ public class CommandDispatcherTest {
 
         try (ExecutionRequest request = request("LOCAL");
              PreparedCommand prepared = dispatcher.prepare(session, request)) {
-            CapturingReplyWriter reply = execute(prepared, session, request);
+            CapturedReply reply = execute(prepared, session, request);
             Assert.assertEquals("LOCAL_OK", reply.simpleString());
             Assert.assertNull(reply.error());
         }
@@ -66,7 +70,7 @@ public class CommandDispatcherTest {
                     (request, preparation) -> prepared(ReplyShapes.simpleString("OK"), context -> {
                         Assert.assertSame(request.request(), context.mutationContext().commandRecord());
                         successfulContext.set(context.mutationContext());
-                        context.reply().simpleString("OK");
+                        return CommandResult.reply(RedisReplies.simpleString("OK"));
                     })
             ));
             registration.register(new CommandDefinition<>(
@@ -81,12 +85,12 @@ public class CommandDispatcherTest {
         });
         RecordingSession session = new RecordingSession(false);
 
-        executePrepared(dispatcher, session, request("SCOPED"), new CapturingReplyWriter());
+        executePrepared(dispatcher, session, request("SCOPED"));
         Assert.assertFalse(successfulContext.get().hasCommandRecord());
 
         Assert.assertThrows(
                 IllegalStateException.class,
-                () -> executePrepared(dispatcher, session, request("FAIL"), new CapturingReplyWriter())
+                () -> executePrepared(dispatcher, session, request("FAIL"))
         );
         Assert.assertFalse(failedContext.get().hasCommandRecord());
     }
@@ -101,16 +105,17 @@ public class CommandDispatcherTest {
                         (request, preparation) -> prepared(ReplyShapes.simpleString("OK"), context -> {
                             Assert.assertSame(request.request(), context.mutationContext().commandRecord());
                             replayContext.set(context.mutationContext());
-                            context.reply().simpleString("OK");
+                            return CommandResult.reply(RedisReplies.simpleString("OK"));
                         })
                 )
         ));
         TrackingTransactionState transaction = transactionWith("SCOPED");
 
         PreparedCommand exec = prepare(dispatcher, new TrackingSession(transaction), "EXEC");
-        executeWithWriter(exec, transaction);
+        executeResult(exec, transaction);
 
         Assert.assertFalse(replayContext.get().hasCommandRecord());
+        exec.close();
     }
 
     @Test
@@ -121,7 +126,8 @@ public class CommandDispatcherTest {
                         CommandParsers.args(),
                         (request, preparation) -> prepared(
                                 ReplyShapes.simpleString("DB_" + preparation.session().dbIndex()),
-                                context -> context.reply().simpleString("DB_" + context.session().dbIndex())
+                                context -> CommandResult.reply(RedisReplies.simpleString(
+                                        "DB_" + context.session().dbIndex()))
                         )
                 )
         ));
@@ -130,7 +136,7 @@ public class CommandDispatcherTest {
 
         try (ExecutionRequest request = request("LOCAL");
              PreparedCommand prepared = dispatcher.prepare(session, request)) {
-            CapturingReplyWriter reply = execute(prepared, session, request);
+            CapturedReply reply = execute(prepared, session, request);
             Assert.assertEquals("DB_7", reply.simpleString());
             Assert.assertNull(reply.error());
         }
@@ -159,7 +165,7 @@ public class CommandDispatcherTest {
             try (ExecutionRequest request = testCase.request();
                  PreparedCommand prepared = dispatcher.prepare(session, request)) {
                 Assert.assertFalse(testCase.expectedReply(), session.tx.aborted());
-                CapturingReplyWriter reply = execute(prepared, session, request);
+                CapturedReply reply = execute(prepared, session, request);
                 Assert.assertEquals(testCase.expectedReply(), reply.error());
                 Assert.assertTrue(testCase.expectedReply(), session.tx.aborted());
                 Assert.assertEquals(testCase.expectedReply(), 0, parses.get());
@@ -184,7 +190,7 @@ public class CommandDispatcherTest {
         try (ExecutionRequest request = request("STRICT");
              PreparedCommand prepared = dispatcher.prepare(session, request)) {
             Assert.assertFalse(session.tx.aborted());
-            CapturingReplyWriter reply = execute(prepared, session, request);
+            CapturedReply reply = execute(prepared, session, request);
             Assert.assertEquals("ERR injected parse failure", reply.error());
             Assert.assertTrue(session.tx.aborted());
             Assert.assertEquals(1, parses.get());
@@ -208,7 +214,7 @@ public class CommandDispatcherTest {
             Assert.assertEquals(0, prepares.get());
             Assert.assertEquals(0, session.tx.enqueueCalls);
 
-            CapturingReplyWriter reply = execute(prepared, session, request);
+            CapturedReply reply = execute(prepared, session, request);
 
             Assert.assertEquals("QUEUED", reply.simpleString());
             Assert.assertEquals(1, session.tx.enqueueCalls);
@@ -253,7 +259,7 @@ public class CommandDispatcherTest {
         try (ExecutionRequest request = request("FORBIDDEN");
              PreparedCommand prepared = dispatcher.prepare(session, request)) {
             Assert.assertFalse(session.tx.aborted());
-            CapturingReplyWriter reply = execute(prepared, session, request);
+            CapturedReply reply = execute(prepared, session, request);
             Assert.assertEquals("ERR FORBIDDEN is not allowed in MULTI", reply.error());
             Assert.assertTrue(session.tx.aborted());
             Assert.assertEquals(0, parses.get());
@@ -414,7 +420,7 @@ public class CommandDispatcherTest {
         try (ExecutionRequest request = request("WRITE");
              PreparedCommand prepared = queueDispatcher.prepare(activeSession, request);
              CommandExecutionContext context = CommandExecutionContext.forRequest(
-                     activeSession, new CapturingReplyWriter(), request)) {
+                     activeSession, request)) {
             Assert.assertSame(enqueueFailure, Assert.assertThrows(
                     IllegalStateException.class,
                     () -> prepared.execute(context)
@@ -471,37 +477,103 @@ public class CommandDispatcherTest {
     }
 
     @Test
-    public void multiChildExecUsesTheWriterBridgeAndClosesEveryOwnerOnce() {
+    public void multiChildExecReturnsRepliesInOrderAndRetainsEveryOwnerUntilClose() {
         TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
-        TrackingPrepared first = writingChild(
-                ReplyShapes.bulkString(3, 0), out -> out.bulkString(bytes("one")));
-        TrackingPrepared second = writingChild(
-                ReplyShapes.integer(2), out -> out.integer(2));
+        TrackingPrepared first = resultChild(CommandResult.reply(RedisReplies.simpleString("one")));
+        TrackingPrepared second = resultChild(CommandResult.reply(RedisReplies.integer(2)));
         PreparedCommand exec = prepareExec(tx, first, second);
 
-        Assert.assertEquals(ReplyShapes.maximum(), exec.replyShape());
-        EventReplyWriter out = executeWithWriter(exec, tx);
-        Assert.assertEquals(List.of("array:2", "bulk:one", "integer:2"), out.events());
+        Assert.assertEquals(ReplyShapes.maximum(), exec.reservationShape());
+        CommandResult result = executeResult(exec, tx);
+        RedisReply.Aggregate aggregate = aggregate(result);
+        Assert.assertEquals(ReplyShape.AggregateKind.ARRAY, aggregate.kind());
+        Assert.assertEquals("one", ((RedisReply.SimpleString) aggregate.elements().get(0)).value());
+        Assert.assertEquals(2L, ((RedisReply.IntegerValue) aggregate.elements().get(1)).value());
+        Assert.assertFalse(result.closeAfterReply());
+        Assert.assertEquals(0, first.closeCount());
+        Assert.assertEquals(0, second.closeCount());
+        Assert.assertEquals(0, tx.request(0).closeCount());
+        Assert.assertEquals(0, tx.request(1).closeCount());
+        Assert.assertThrows(IllegalStateException.class, () -> executeResult(exec, tx));
+
+        exec.close();
         Assert.assertEquals(1, first.closeCount());
         Assert.assertEquals(1, second.closeCount());
         Assert.assertEquals(1, tx.request(0).closeCount());
         Assert.assertEquals(1, tx.request(1).closeCount());
-
         exec.close();
         Assert.assertEquals(1, first.closeCount());
         Assert.assertEquals(1, second.closeCount());
     }
 
     @Test
-    public void singleChildExecUsesExactShapeAndClosesStaleChildBeforeRepreparing() {
+    public void execConvertsChildControlErrorsAndOrsCloseAfterReply() {
+        TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
+        TrackingPrepared first = resultChild(CommandResult.controlError("WRONGTYPE injected"));
+        TrackingPrepared second = resultChild(CommandResult.closeAfterReply(
+                RedisReplies.simpleString("BYE")));
+        PreparedCommand exec = prepareExec(tx, first, second);
+
+        CommandResult result = executeResult(exec, tx);
+        RedisReply.Aggregate aggregate = aggregate(result);
+        Assert.assertTrue(result.closeAfterReply());
+        Assert.assertTrue(aggregate.elements().get(0) instanceof RedisReply.Error);
+        Assert.assertFalse(aggregate.elements().get(0) instanceof RedisReply.ControlError);
+        Assert.assertEquals(
+                "WRONGTYPE injected",
+                ((RedisReply.Error) aggregate.elements().get(0)).message());
+        Assert.assertEquals("BYE", ((RedisReply.SimpleString) aggregate.elements().get(1)).value());
+
+        exec.close();
+    }
+
+    @Test
+    public void streamedChildSourceRemainsOpenThroughEmissionAndClosesWithExec() {
+        TrackingSource source = new TrackingSource(bytes("one"));
+        RedisReply streamed = RedisReplies.bulkString(3, 3, source::emit);
+        TrackingPrepared child = resultChild(CommandResult.reply(streamed));
+        child.onClose = source::close;
+        TrackingTransactionState tx = transactionWith("FIRST");
+        CommandDispatcher dispatcher = transactionDispatcher(registration -> registration.register(spec(
+                "FIRST", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
+                args -> session -> child
+        )));
+        PreparedCommand exec = prepare(dispatcher, new TrackingSession(tx), "EXEC");
+
+        CommandResult result = executeResult(exec, tx);
+        RedisReply.BulkString bulk = (RedisReply.BulkString) aggregate(result).elements().get(0);
+        CapturingBulkSink sink = new CapturingBulkSink();
+        bulk.emitter().emit(sink);
+        Assert.assertEquals("one", new String(sink.bytes(), StandardCharsets.UTF_8));
+        Assert.assertEquals(0, source.closeCount());
+        Assert.assertEquals(0, child.closeCount());
+        Assert.assertEquals(0, tx.request(0).closeCount());
+
+        exec.close();
+        Assert.assertEquals(1, source.closeCount());
+        Assert.assertEquals(1, child.closeCount());
+        Assert.assertEquals(1, tx.request(0).closeCount());
+    }
+
+    @Test
+    public void emptyExecKeepsItsExactEmptyArrayReservation() {
+        TrackingTransactionState tx = transactionWith();
+        CommandDispatcher dispatcher = transactionDispatcher(registration -> { });
+        PreparedCommand exec = prepare(dispatcher, new TrackingSession(tx), "EXEC");
+
+        Assert.assertEquals(ReplyShapes.array(List.of()), exec.reservationShape());
+        Assert.assertTrue(aggregate(executeResult(exec, tx)).elements().isEmpty());
+        exec.close();
+    }
+
+    @Test
+    public void singleChildExecUsesMaximumReservationAndClosesStaleChildBeforeRepreparing() {
         TrackingTransactionState tx = transactionWith("FIRST");
         List<String> lifecycle = new ArrayList<>();
-        ReplyShape staleShape = ReplyShapes.simpleString("OLD");
-        TrackingPrepared stale = writingChild(staleShape, out -> out.simpleString("OLD"));
+        TrackingPrepared stale = resultChild(CommandResult.reply(RedisReplies.simpleString("OLD")));
         stale.stale = true;
         stale.onClose = () -> lifecycle.add("close:stale");
-        ReplyShape currentShape = ReplyShapes.simpleString("NEW");
-        TrackingPrepared current = writingChild(currentShape, out -> out.simpleString("NEW"));
+        TrackingPrepared current = resultChild(CommandResult.reply(RedisReplies.simpleString("NEW")));
         current.onClose = () -> lifecycle.add("close:current");
         AtomicInteger preparations = new AtomicInteger();
         CommandDispatcher dispatcher = transactionDispatcher(registration -> registration.register(spec(
@@ -515,17 +587,25 @@ public class CommandDispatcherTest {
         TrackingSession session = new TrackingSession(tx);
 
         PreparedCommand staleExec = prepare(dispatcher, session, "EXEC");
-        Assert.assertEquals(ReplyShapes.array(List.of(staleShape)), staleExec.replyShape());
+        Assert.assertEquals(ReplyShapes.maximum(), staleExec.reservationShape());
         Assert.assertEquals(ValidationResult.STALE, staleExec.validateBeforeExecute());
         staleExec.close();
 
         PreparedCommand currentExec = prepare(dispatcher, session, "EXEC");
-        Assert.assertEquals(ReplyShapes.array(List.of(currentShape)), currentExec.replyShape());
-        EventReplyWriter out = executeWithWriter(currentExec, session, trackingRequest("EXEC"));
+        Assert.assertEquals(ReplyShapes.maximum(), currentExec.reservationShape());
+        CommandResult result = executeResult(currentExec, session, trackingRequest("EXEC"));
 
-        Assert.assertEquals(List.of("array:1", "simple:NEW"), out.events());
-        Assert.assertEquals(List.of("prepare:1", "close:stale", "prepare:2", "close:current"), lifecycle);
+        Assert.assertEquals(
+                "NEW",
+                ((RedisReply.SimpleString) aggregate(result).elements().get(0)).value());
+        Assert.assertEquals(List.of("prepare:1", "close:stale", "prepare:2"), lifecycle);
         Assert.assertEquals(1, stale.closeCount());
+        Assert.assertEquals(0, current.closeCount());
+        Assert.assertEquals(0, tx.request(0).closeCount());
+
+        currentExec.close();
+        Assert.assertEquals(List.of(
+                "prepare:1", "close:stale", "prepare:2", "close:current"), lifecycle);
         Assert.assertEquals(1, current.closeCount());
         Assert.assertEquals(1, tx.request(0).closeCount());
     }
@@ -534,11 +614,11 @@ public class CommandDispatcherTest {
     public void dynamicExecClosesStaleChildBeforeRepreparingTheSameRequest() {
         TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
         List<String> lifecycle = new ArrayList<>();
-        TrackingPrepared stale = writingChild(ReplyShapes.simpleString("OLD"), out -> out.simpleString("OLD"));
+        TrackingPrepared stale = resultChild(CommandResult.reply(RedisReplies.simpleString("OLD")));
         stale.stale = true;
         stale.onClose = () -> lifecycle.add("close:stale");
-        TrackingPrepared current = writingChild(ReplyShapes.simpleString("NEW"), out -> out.simpleString("NEW"));
-        TrackingPrepared second = writingChild(ReplyShapes.integer(2), out -> out.integer(2));
+        TrackingPrepared current = resultChild(CommandResult.reply(RedisReplies.simpleString("NEW")));
+        TrackingPrepared second = resultChild(CommandResult.reply(RedisReplies.integer(2)));
         AtomicInteger firstPreparations = new AtomicInteger();
         CommandDispatcher dispatcher = transactionDispatcher(registration -> {
             registration.register(spec("FIRST", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
@@ -556,13 +636,21 @@ public class CommandDispatcherTest {
         TrackingSession session = new TrackingSession(tx);
         PreparedCommand exec = prepare(dispatcher, session, "EXEC");
 
-        EventReplyWriter out = executeWithWriter(exec, session, trackingRequest("EXEC"));
-        Assert.assertEquals(List.of("array:2", "simple:NEW", "integer:2"), out.events());
+        RedisReply.Aggregate result = aggregate(executeResult(
+                exec, session, trackingRequest("EXEC")));
+        Assert.assertEquals("NEW", ((RedisReply.SimpleString) result.elements().get(0)).value());
+        Assert.assertEquals(2L, ((RedisReply.IntegerValue) result.elements().get(1)).value());
         Assert.assertEquals(1, stale.closeCount());
-        Assert.assertEquals(1, current.closeCount());
-        Assert.assertEquals(1, second.closeCount());
+        Assert.assertEquals(0, current.closeCount());
+        Assert.assertEquals(0, second.closeCount());
         Assert.assertEquals(2, firstPreparations.get());
         Assert.assertTrue(lifecycle.indexOf("close:stale") < lifecycle.indexOf("prepare:first:2"));
+
+        exec.close();
+        Assert.assertEquals(1, current.closeCount());
+        Assert.assertEquals(1, second.closeCount());
+        Assert.assertEquals(1, tx.request(0).closeCount());
+        Assert.assertEquals(1, tx.request(1).closeCount());
     }
 
     @Test
@@ -570,7 +658,7 @@ public class CommandDispatcherTest {
         TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
         IllegalStateException parseFailure = new IllegalStateException("parse failure");
         AtomicInteger secondPreparations = new AtomicInteger();
-        TrackingPrepared second = writingChild(ReplyShapes.simpleString("TWO"), out -> out.simpleString("TWO"));
+        TrackingPrepared second = resultChild(CommandResult.reply(RedisReplies.simpleString("TWO")));
         CommandDispatcher dispatcher = transactionDispatcher(registration -> {
             registration.register(spec("FIRST", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
                     args -> {
@@ -586,7 +674,7 @@ public class CommandDispatcherTest {
         PreparedCommand exec = prepare(dispatcher, new TrackingSession(tx), "EXEC");
         IllegalStateException thrown = Assert.assertThrows(
                 IllegalStateException.class,
-                () -> executeWithWriter(exec, tx)
+                () -> executeResult(exec, tx)
         );
 
         Assert.assertSame(parseFailure, thrown);
@@ -601,7 +689,7 @@ public class CommandDispatcherTest {
         TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
         IllegalStateException prepareFailure = new IllegalStateException("prepare failure");
         AtomicInteger secondPreparations = new AtomicInteger();
-        TrackingPrepared second = writingChild(ReplyShapes.simpleString("TWO"), out -> out.simpleString("TWO"));
+        TrackingPrepared second = resultChild(CommandResult.reply(RedisReplies.simpleString("TWO")));
         CommandDispatcher dispatcher = transactionDispatcher(registration -> {
             registration.register(spec("FIRST", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
                     args -> session -> {
@@ -617,7 +705,7 @@ public class CommandDispatcherTest {
         PreparedCommand exec = prepare(dispatcher, new TrackingSession(tx), "EXEC");
         IllegalStateException thrown = Assert.assertThrows(
                 IllegalStateException.class,
-                () -> executeWithWriter(exec, tx)
+                () -> executeResult(exec, tx)
         );
 
         Assert.assertSame(prepareFailure, thrown);
@@ -632,15 +720,15 @@ public class CommandDispatcherTest {
         TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
         IllegalStateException validationFailure = new IllegalStateException("validation failure");
         IllegalStateException closeFailure = new IllegalStateException("validation cleanup failure");
-        TrackingPrepared first = writingChild(ReplyShapes.simpleString("ONE"), out -> out.simpleString("ONE"));
+        TrackingPrepared first = resultChild(CommandResult.reply(RedisReplies.simpleString("ONE")));
         first.validationFailure = validationFailure;
         first.closeFailure = closeFailure;
-        TrackingPrepared second = writingChild(ReplyShapes.simpleString("TWO"), out -> out.simpleString("TWO"));
+        TrackingPrepared second = resultChild(CommandResult.reply(RedisReplies.simpleString("TWO")));
         PreparedCommand exec = prepareExec(tx, first, second);
 
         IllegalStateException thrown = Assert.assertThrows(
                 IllegalStateException.class,
-                () -> executeWithWriter(exec, tx)
+                () -> executeResult(exec, tx)
         );
 
         Assert.assertSame(validationFailure, thrown);
@@ -652,22 +740,22 @@ public class CommandDispatcherTest {
     }
 
     @Test
-    public void execFailureClosesTheRemainingQueuedRequestsAndSuppressesCloseFailures() {
+    public void childExecutionFailureBecomesResultUnknownAndSuppressesCleanupFailures() {
         TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
         IllegalStateException executionFailure = new IllegalStateException("execute failure");
-        TrackingPrepared first = writingChild(ReplyShapes.simpleString("ONE"), out -> {
+        TrackingPrepared first = executingChild(ReplyShapes.simpleString("ONE"), context -> {
             throw executionFailure;
         });
-        TrackingPrepared second = writingChild(ReplyShapes.simpleString("TWO"), out -> out.simpleString("TWO"));
+        TrackingPrepared second = resultChild(CommandResult.reply(RedisReplies.simpleString("TWO")));
         IllegalStateException closeFailure = new IllegalStateException("tail close failure");
         tx.request(1).closeFailure = closeFailure;
         PreparedCommand exec = prepareExec(tx, first, second);
 
-        IllegalStateException thrown = Assert.assertThrows(
-                IllegalStateException.class,
-                () -> executeWithWriter(exec, tx)
+        ResultUnknownException thrown = Assert.assertThrows(
+                ResultUnknownException.class,
+                () -> executeResult(exec, tx)
         );
-        Assert.assertSame(executionFailure, thrown);
+        Assert.assertSame(executionFailure, thrown.getCause());
         Assert.assertEquals(1, first.closeCount());
         Assert.assertEquals(0, second.closeCount());
         Assert.assertEquals(1, tx.request(0).closeCount());
@@ -676,20 +764,27 @@ public class CommandDispatcherTest {
     }
 
     @Test
-    public void currentRequestCloseFailureDoesNotCloseThatRequestTwice() {
+    public void childResultUnknownEscapesUnchangedAndCleansOwnedResources() {
         TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
-        IllegalStateException closeFailure = new IllegalStateException("current request close failure");
-        tx.request(0).closeFailure = closeFailure;
-        TrackingPrepared first = writingChild(ReplyShapes.simpleString("ONE"), out -> out.simpleString("ONE"));
-        TrackingPrepared second = writingChild(ReplyShapes.simpleString("TWO"), out -> out.simpleString("TWO"));
+        List<String> lifecycle = new ArrayList<>();
+        ResultUnknownException resultUnknown = new ResultUnknownException("injected result unknown");
+        TrackingPrepared first = executingChild(ReplyShapes.simpleString("ONE"), context -> {
+            throw resultUnknown;
+        });
+        first.onClose = () -> lifecycle.add("child:first");
+        TrackingPrepared second = resultChild(CommandResult.reply(RedisReplies.simpleString("TWO")));
+        tx.request(0).onClose = () -> lifecycle.add("request:first");
+        tx.request(1).onClose = () -> lifecycle.add("request:second");
         PreparedCommand exec = prepareExec(tx, first, second);
 
-        IllegalStateException thrown = Assert.assertThrows(
-                IllegalStateException.class,
-                () -> executeWithWriter(exec, tx)
+        ResultUnknownException thrown = Assert.assertThrows(
+                ResultUnknownException.class,
+                () -> executeResult(exec, tx)
         );
 
-        Assert.assertSame(closeFailure, thrown);
+        Assert.assertSame(resultUnknown, thrown);
+        Assert.assertEquals(
+                List.of("request:second", "child:first", "request:first"), lifecycle);
         Assert.assertEquals(1, first.closeCount());
         Assert.assertEquals(0, second.closeCount());
         Assert.assertEquals(1, tx.request(0).closeCount());
@@ -697,43 +792,127 @@ public class CommandDispatcherTest {
     }
 
     @Test
-    public void retainedChildCloseRethrowingPrimaryDoesNotStopRequestCleanup() {
-        TrackingTransactionState tx = transactionWith("FIRST");
-        IllegalStateException executionFailure = new IllegalStateException("execute and close failure");
-        TrackingPrepared child = writingChild(ReplyShapes.simpleString("ONE"), out -> {
+    public void failedExecCleanupIsReverseAndLaterCloseDoesNotCloseOwnersAgain() {
+        TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
+        List<String> lifecycle = new ArrayList<>();
+        IllegalStateException executionFailure = new IllegalStateException("second execute failure");
+        TrackingPrepared first = resultChild(CommandResult.reply(RedisReplies.simpleString("ONE")));
+        first.onClose = () -> lifecycle.add("child:first");
+        TrackingPrepared second = executingChild(ReplyShapes.simpleString("TWO"), context -> {
             throw executionFailure;
         });
-        child.closeFailure = executionFailure;
-        CommandDispatcher dispatcher = transactionDispatcher(registration -> registration.register(spec(
-                "FIRST", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
-                args -> session -> child
-        )));
+        second.onClose = () -> lifecycle.add("child:second");
+        tx.request(0).onClose = () -> lifecycle.add("request:first");
+        tx.request(1).onClose = () -> lifecycle.add("request:second");
+        PreparedCommand exec = prepareExec(tx, first, second);
+
+        ResultUnknownException thrown = Assert.assertThrows(
+                ResultUnknownException.class,
+                () -> executeResult(exec, tx)
+        );
+
+        Assert.assertSame(executionFailure, thrown.getCause());
+        Assert.assertEquals(List.of(
+                "child:second", "request:second", "child:first", "request:first"), lifecycle);
+        Assert.assertEquals(1, first.closeCount());
+        Assert.assertEquals(1, second.closeCount());
+        Assert.assertEquals(1, tx.request(0).closeCount());
+        Assert.assertEquals(1, tx.request(1).closeCount());
+
+        exec.close();
+        exec.close();
+        Assert.assertEquals(List.of(
+                "child:second", "request:second", "child:first", "request:first"), lifecycle);
+        Assert.assertEquals(1, first.closeCount());
+        Assert.assertEquals(1, second.closeCount());
+        Assert.assertEquals(1, tx.request(0).closeCount());
+        Assert.assertEquals(1, tx.request(1).closeCount());
+    }
+
+    @Test
+    public void completedChildAndUnconsumedTailCloseWhenLaterPreparationFails() {
+        TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
+        IllegalStateException prepareFailure = new IllegalStateException("second prepare failure");
+        TrackingPrepared first = resultChild(CommandResult.reply(RedisReplies.simpleString("ONE")));
+        CommandDispatcher dispatcher = transactionDispatcher(registration -> {
+            registration.register(spec("FIRST", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
+                    args -> session -> first));
+            registration.register(spec("SECOND", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
+                    args -> session -> {
+                        throw prepareFailure;
+                    }));
+        });
         PreparedCommand exec = prepare(dispatcher, new TrackingSession(tx), "EXEC");
+
+        ResultUnknownException thrown = Assert.assertThrows(
+                ResultUnknownException.class,
+                () -> executeResult(exec, tx)
+        );
+
+        Assert.assertSame(prepareFailure, thrown.getCause());
+        Assert.assertEquals(1, first.closeCount());
+        Assert.assertEquals(1, tx.request(0).closeCount());
+        Assert.assertEquals(1, tx.request(1).closeCount());
+    }
+
+    @Test
+    public void execCloseIsReverseExhaustiveAndSuppressesLaterFailures() {
+        TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
+        List<String> lifecycle = new ArrayList<>();
+        IllegalStateException secondChildFailure = new IllegalStateException("second child close");
+        IllegalStateException secondRequestFailure = new IllegalStateException("second request close");
+        IllegalStateException firstChildFailure = new IllegalStateException("first child close");
+        IllegalStateException firstRequestFailure = new IllegalStateException("first request close");
+        TrackingPrepared first = resultChild(CommandResult.reply(RedisReplies.simpleString("ONE")));
+        first.onClose = () -> lifecycle.add("child:first");
+        first.closeFailure = firstChildFailure;
+        TrackingPrepared second = resultChild(CommandResult.reply(RedisReplies.simpleString("TWO")));
+        second.onClose = () -> lifecycle.add("child:second");
+        second.closeFailure = secondChildFailure;
+        tx.request(0).onClose = () -> lifecycle.add("request:first");
+        tx.request(0).closeFailure = firstRequestFailure;
+        tx.request(1).onClose = () -> lifecycle.add("request:second");
+        tx.request(1).closeFailure = secondRequestFailure;
+        PreparedCommand exec = prepareExec(tx, first, second);
+        executeResult(exec, tx);
 
         IllegalStateException thrown = Assert.assertThrows(
                 IllegalStateException.class,
-                () -> executeWithWriter(exec, tx)
+                exec::close
         );
 
-        Assert.assertSame(executionFailure, thrown);
-        Assert.assertEquals(1, child.closeCount());
+        Assert.assertSame(secondChildFailure, thrown);
+        Assert.assertArrayEquals(
+                new Throwable[]{secondRequestFailure, firstChildFailure, firstRequestFailure},
+                thrown.getSuppressed());
+        Assert.assertEquals(List.of(
+                "child:second", "request:second", "child:first", "request:first"), lifecycle);
+        Assert.assertEquals(1, first.closeCount());
+        Assert.assertEquals(1, second.closeCount());
         Assert.assertEquals(1, tx.request(0).closeCount());
+        Assert.assertEquals(1, tx.request(1).closeCount());
+        exec.close();
+        Assert.assertEquals(1, first.closeCount());
+        Assert.assertEquals(1, second.closeCount());
     }
 
     @Test
     public void exactPreparationFailureContinuesClosingRetainedChildrenWhenCloseRethrowsPrimary() {
-        TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
+        TrackingTransactionState tx = transactionWith("FIRST", "SECOND", "THIRD");
         tx.reportedSize = 1;
-        IllegalStateException preparationFailure = new IllegalStateException("reply shape failure");
-        TrackingPrepared first = writingChild(ReplyShapes.simpleString("ONE"), out -> out.simpleString("ONE"));
-        TrackingPrepared second = writingChild(ReplyShapes.simpleString("TWO"), out -> out.simpleString("TWO"));
-        second.replyShapeFailure = preparationFailure;
+        IllegalStateException preparationFailure = new IllegalStateException("prepare failure");
+        TrackingPrepared first = resultChild(CommandResult.reply(RedisReplies.simpleString("ONE")));
+        TrackingPrepared second = resultChild(CommandResult.reply(RedisReplies.simpleString("TWO")));
         second.closeFailure = preparationFailure;
         CommandDispatcher dispatcher = transactionDispatcher(registration -> {
             registration.register(spec("FIRST", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
                     args -> session -> first));
             registration.register(spec("SECOND", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
                     args -> session -> second));
+            registration.register(spec("THIRD", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
+                    args -> session -> {
+                        throw preparationFailure;
+                    }));
         });
 
         IllegalStateException thrown = Assert.assertThrows(
@@ -747,6 +926,7 @@ public class CommandDispatcherTest {
         tx.discard();
         Assert.assertEquals(1, tx.request(0).closeCount());
         Assert.assertEquals(1, tx.request(1).closeCount());
+        Assert.assertEquals(1, tx.request(2).closeCount());
     }
 
     private static CommandDispatcher transactionDispatcher(CommandModuleAction module) {
@@ -784,25 +964,38 @@ public class CommandDispatcherTest {
         return new TrackingRequest(ByteArrayExecutionRequest.fromUtf8(command, List.of()));
     }
 
-    private static TrackingPrepared writingChild(ReplyShape shape, Consumer<RedisReplyWriter> writing) {
-        return new TrackingPrepared(shape, writing);
+    private static TrackingPrepared resultChild(CommandResult result) {
+        return executingChild(result.reply().shape(), context -> result);
     }
 
-    private static EventReplyWriter executeWithWriter(PreparedCommand command, TrackingTransactionState tx) {
-        return executeWithWriter(command, new TrackingSession(tx), trackingRequest("EXEC"));
+    private static TrackingPrepared executingChild(
+            ReplyShape shape,
+            Function<CommandExecutionContext, CommandResult> execution
+    ) {
+        return new TrackingPrepared(shape, execution);
     }
 
-    private static EventReplyWriter executeWithWriter(
+    private static CommandResult executeResult(
+            PreparedCommand command,
+            TrackingTransactionState tx
+    ) {
+        return executeResult(command, new TrackingSession(tx), trackingRequest("EXEC"));
+    }
+
+    private static CommandResult executeResult(
             PreparedCommand command,
             CommandSession session,
             ExecutionRequest request
     ) {
         Assert.assertEquals(ValidationResult.VALID, command.validateBeforeExecute());
-        EventReplyWriter out = new EventReplyWriter();
-        try (request; CommandExecutionContext context = CommandExecutionContext.forRequest(session, out, request)) {
-            command.execute(context);
+        try (request; CommandExecutionContext context = CommandExecutionContext.forRequest(session, request)) {
+            return command.execute(context);
         }
-        return out;
+    }
+
+    private static RedisReply.Aggregate aggregate(CommandResult result) {
+        Assert.assertTrue(result.reply() instanceof RedisReply.Aggregate);
+        return (RedisReply.Aggregate) result.reply();
     }
 
     private static byte[] bytes(String value) {
@@ -868,11 +1061,16 @@ public class CommandDispatcherTest {
         );
     }
 
-    private static PreparedCommand prepared(ReplyShape shape, Consumer<CommandExecutionContext> execution) {
+    private static PreparedCommand prepared(
+            ReplyShape shape,
+            Function<CommandExecutionContext, CommandResult> execution
+    ) {
         return new PreparedCommand() {
-            @Override public ReplyShape replyShape() { return shape; }
+            @Override public ReplyShape reservationShape() { return shape; }
             @Override public ValidationResult validateBeforeExecute() { return ValidationResult.VALID; }
-            @Override public void execute(CommandExecutionContext context) { execution.accept(context); }
+            @Override public CommandResult execute(CommandExecutionContext context) {
+                return execution.apply(context);
+            }
             @Override public void close() { }
         };
     }
@@ -880,13 +1078,12 @@ public class CommandDispatcherTest {
     private static void executePrepared(
             CommandDispatcher dispatcher,
             CommandSession session,
-            ExecutionRequest request,
-            RedisReplyWriter reply
+            ExecutionRequest request
     ) {
         try (request;
              PreparedCommand prepared = dispatcher.prepare(session, request)) {
             Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
-            try (CommandExecutionContext context = CommandExecutionContext.forRequest(session, reply, request)) {
+            try (CommandExecutionContext context = CommandExecutionContext.forRequest(session, request)) {
                 prepared.execute(context);
             }
         }
@@ -895,7 +1092,7 @@ public class CommandDispatcherTest {
     private static PreparedCommand throwingClose(RuntimeException failure) {
         return new PreparedCommand() {
             @Override
-            public ReplyShape replyShape() {
+            public ReplyShape reservationShape() {
                 return ReplyShapes.simpleString("OK");
             }
 
@@ -905,8 +1102,8 @@ public class CommandDispatcherTest {
             }
 
             @Override
-            public void execute(CommandExecutionContext context) {
-                context.reply().simpleString("OK");
+            public CommandResult execute(CommandExecutionContext context) {
+                return CommandResult.reply(RedisReplies.simpleString("OK"));
             }
 
             @Override
@@ -916,17 +1113,15 @@ public class CommandDispatcherTest {
         };
     }
 
-    private static CapturingReplyWriter execute(
+    private static CapturedReply execute(
             PreparedCommand prepared,
             CommandSession session,
             ExecutionRequest request
     ) {
         Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
-        CapturingReplyWriter reply = new CapturingReplyWriter();
-        try (CommandExecutionContext context = CommandExecutionContext.forRequest(session, reply, request)) {
-            prepared.execute(context);
+        try (CommandExecutionContext context = CommandExecutionContext.forRequest(session, request)) {
+            return new CapturedReply(prepared.execute(context));
         }
-        return reply;
     }
 
     private static ExecutionRequest request(String... argv) {
@@ -938,6 +1133,24 @@ public class CommandDispatcherTest {
     }
 
     private record ValidationCase(ExecutionRequest request, String expectedReply) {
+    }
+
+    private record CapturedReply(CommandResult result) {
+        private String simpleString() {
+            return result.reply() instanceof RedisReply.SimpleString reply
+                    ? reply.value()
+                    : null;
+        }
+
+        private String error() {
+            if (result.reply() instanceof RedisReply.Error reply) {
+                return reply.message();
+            }
+            if (result.reply() instanceof RedisReply.ControlError reply) {
+                return reply.message();
+            }
+            return null;
+        }
     }
 
     @FunctionalInterface
@@ -1008,6 +1221,7 @@ public class CommandDispatcherTest {
         private final ExecutionRequest delegate;
         private int closeCount;
         private RuntimeException closeFailure;
+        private Runnable onClose = () -> { };
 
         private TrackingRequest(ExecutionRequest delegate) {
             this.delegate = delegate;
@@ -1027,6 +1241,7 @@ public class CommandDispatcherTest {
         @Override public TrackingRequest retain() { return new TrackingRequest(delegate.retain()); }
         @Override public void close() {
             closeCount++;
+            onClose.run();
             delegate.close();
             if (closeFailure != null) {
                 throw closeFailure;
@@ -1038,23 +1253,22 @@ public class CommandDispatcherTest {
 
     private static final class TrackingPrepared implements PreparedCommand {
         private final ReplyShape shape;
-        private final Consumer<RedisReplyWriter> writing;
+        private final Function<CommandExecutionContext, CommandResult> execution;
         private boolean stale;
-        private RuntimeException replyShapeFailure;
         private RuntimeException validationFailure;
         private RuntimeException closeFailure;
         private Runnable onClose = () -> { };
         private int closeCount;
 
-        private TrackingPrepared(ReplyShape shape, Consumer<RedisReplyWriter> writing) {
+        private TrackingPrepared(
+                ReplyShape shape,
+                Function<CommandExecutionContext, CommandResult> execution
+        ) {
             this.shape = shape;
-            this.writing = writing;
+            this.execution = execution;
         }
 
-        @Override public ReplyShape replyShape() {
-            if (replyShapeFailure != null) {
-                throw replyShapeFailure;
-            }
+        @Override public ReplyShape reservationShape() {
             return shape;
         }
         @Override public ValidationResult validateBeforeExecute() {
@@ -1063,7 +1277,9 @@ public class CommandDispatcherTest {
             }
             return stale ? ValidationResult.STALE : ValidationResult.VALID;
         }
-        @Override public void execute(CommandExecutionContext context) { writing.accept(context.reply()); }
+        @Override public CommandResult execute(CommandExecutionContext context) {
+            return execution.apply(context);
+        }
         @Override public void close() {
             closeCount++;
             onClose.run();
@@ -1205,166 +1421,54 @@ public class CommandDispatcherTest {
         }
     }
 
-    private static final class CapturingReplyWriter implements RedisReplyWriter {
-        private String simpleString;
-        private String error;
+    private static final class TrackingSource implements AutoCloseable {
+        private final byte[] value;
+        private int closeCount;
 
-        private String simpleString() {
-            return simpleString;
+        private TrackingSource(byte[] value) {
+            this.value = value;
         }
 
-        private String error() {
-            return error;
-        }
-
-        @Override
-        public void requestCloseAfterReply() {
+        private void emit(ReplySink sink) {
+            Assert.assertEquals(0, closeCount);
+            sink.bulkString(value);
         }
 
         @Override
-        public boolean closeAfterReplyRequested() {
-            return false;
+        public void close() {
+            closeCount++;
         }
 
-        @Override
-        public void simpleString(String value) {
-            simpleString = value;
+        private int closeCount() {
+            return closeCount;
         }
+    }
 
-        @Override
-        public void error(String message) {
-            error = message;
-        }
-
-        @Override
-        public void integer(long value) {
-            throw unsupported();
-        }
-
-        @Override
-        public void booleanValue(boolean value) {
-            throw unsupported();
-        }
-
-        @Override
-        public void doubleValue(double value) {
-            throw unsupported();
-        }
-
-        @Override
-        public void bigNumberAscii(String value) {
-            throw unsupported();
-        }
-
-        @Override
-        public void verbatimString(String format, byte[] data) {
-            throw unsupported();
-        }
-
-        @Override
-        public void blobError(String message) {
-            throw unsupported();
-        }
-
-        @Override
-        public void nullValue() {
-            throw unsupported();
-        }
-
-        @Override
-        public void nullArray() {
-            throw unsupported();
-        }
-
-        @Override
-        public void arrayHeader(int count) {
-            throw unsupported();
-        }
-
-        @Override
-        public void emptyArray() {
-            throw unsupported();
-        }
-
-        @Override
-        public void mapHeader(int pairs) {
-            throw unsupported();
-        }
-
-        @Override
-        public void setHeader(int count) {
-            throw unsupported();
-        }
-
-        @Override
-        public void pushHeader(int count) {
-            throw unsupported();
-        }
-
-        @Override
-        public void attributeHeader(int pairs) {
-            throw unsupported();
-        }
+    private static final class CapturingBulkSink implements ReplySink {
+        private byte[] bytes;
 
         @Override
         public void bulkString(byte[] data) {
-            throw unsupported();
+            bytes = data.clone();
         }
 
         @Override
         public void bulkString(byte[] data, int off, int len) {
-            throw unsupported();
+            bytes = java.util.Arrays.copyOfRange(data, off, off + len);
         }
 
         @Override
         public void bulkString(BytesSlice slice) {
-            throw unsupported();
+            throw new UnsupportedOperationException("slice emission is not used by this test");
         }
 
         @Override
         public void bulkStringLongAscii(long value) {
-            throw unsupported();
+            bytes = Long.toString(value).getBytes(StandardCharsets.US_ASCII);
         }
 
-        private UnsupportedOperationException unsupported() {
-            return new UnsupportedOperationException("reply shape not used by this test");
-        }
-    }
-
-    private static final class EventReplyWriter implements RedisReplyWriter {
-        private final ArrayList<String> events = new ArrayList<>();
-
-        private List<String> events() { return List.copyOf(events); }
-
-        @Override public void requestCloseAfterReply() { }
-        @Override public boolean closeAfterReplyRequested() { return false; }
-        @Override public void simpleString(String value) { events.add("simple:" + value); }
-        @Override public void error(String message) { events.add("error:" + message); }
-        @Override public void integer(long value) { events.add("integer:" + value); }
-        @Override public void booleanValue(boolean value) { throw unsupported(); }
-        @Override public void doubleValue(double value) { throw unsupported(); }
-        @Override public void bigNumberAscii(String value) { throw unsupported(); }
-        @Override public void verbatimString(String format, byte[] data) { throw unsupported(); }
-        @Override public void blobError(String message) { throw unsupported(); }
-        @Override public void nullValue() { throw unsupported(); }
-        @Override public void nullArray() { throw unsupported(); }
-        @Override public void arrayHeader(int count) { events.add("array:" + count); }
-        @Override public void emptyArray() { events.add("array:0"); }
-        @Override public void mapHeader(int pairs) { throw unsupported(); }
-        @Override public void setHeader(int count) { throw unsupported(); }
-        @Override public void pushHeader(int count) { throw unsupported(); }
-        @Override public void attributeHeader(int pairs) { throw unsupported(); }
-        @Override public void bulkString(byte[] data) {
-            events.add("bulk:" + new String(data, StandardCharsets.UTF_8));
-        }
-        @Override public void bulkString(byte[] data, int off, int len) {
-            events.add("bulk:" + new String(data, off, len, StandardCharsets.UTF_8));
-        }
-        @Override public void bulkString(BytesSlice slice) { throw unsupported(); }
-        @Override public void bulkStringLongAscii(long value) { throw unsupported(); }
-
-        private UnsupportedOperationException unsupported() {
-            return new UnsupportedOperationException("reply shape not used by this test");
+        private byte[] bytes() {
+            return bytes;
         }
     }
 }

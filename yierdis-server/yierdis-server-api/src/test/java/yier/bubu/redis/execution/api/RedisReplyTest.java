@@ -228,6 +228,20 @@ public class RedisReplyTest {
     }
 
     @Test
+    public void aggregatesRejectControlErrors() {
+        RedisReply controlError = RedisReplies.controlError("OOM rejected");
+
+        assertIllegalArgument(() -> RedisReplies.array(List.of(controlError)));
+        assertIllegalArgument(() -> RedisReplies.map(List.of(RedisReplies.integer(1), controlError)));
+        assertIllegalArgument(() -> RedisReplies.set(List.of(controlError)));
+        assertIllegalArgument(() -> RedisReplies.push(List.of(controlError)));
+        assertIllegalArgument(() -> RedisReplies.attribute(List.of(RedisReplies.integer(1), controlError)));
+        assertIllegalArgument(() -> new RedisReply.Aggregate(
+                ReplyShape.AggregateKind.ARRAY,
+                List.of(controlError)));
+    }
+
+    @Test
     public void commandResultFactoriesSetOnlyTheRequestedCloseFlag() {
         RedisReply ok = RedisReplies.simpleString("OK");
         CommandResult ordinary = CommandResult.reply(ok);
