@@ -13,7 +13,11 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
- * Engine-owned per-connection command session state.
+ * 与一条执行连接绑定的命令会话状态。
+ *
+ * <p>实例持有 DB 选择、客户端元数据、认证状态、RESP 版本以及事务队列中 retain 的请求。
+ * 连接关闭路径必须调用 {@link #discardTransaction()} 归还尚未重放的请求；生产组装会优先在 command owner
+ * 上执行该清理，并在 owner 已退出时同步兜底。连接统计由外部 supplier 提供，不属于本实例拥有的状态。</p>
  */
 public final class EngineSession implements CommandSession {
     private static final AtomicLong NEXT_CLIENT_ID = new AtomicLong(1);

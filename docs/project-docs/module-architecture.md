@@ -173,7 +173,7 @@ command owns parsing and command semantics, not Netty.
 
 这里放内建命令实现，例如 `StringCommands`。它们实现的是命令语义，不是协议编码；handler 产生 `CommandInvocation`，准备后执行得到 `CommandResult`，真正的 DB 写入会通过 `DbWrites` 进入 `YierdisStringOps` 和 `YierdisDbMutationExecutor`。
 
-命令只构造语义 `RedisReply`。bulk、byte sequence 和 byte map 结果可携带流式 emitter 及 retained source ownership，直到执行器中的 `RedisReplyRenderer` 消费完结果；命令不会直接调用 `RedisReplyWriter`。`QUIT` 的连接关闭语义同样由 `CommandResult.closeAfterReply(...)` 携带。
+命令只构造语义 `RedisReply`。bulk、byte sequence 和 byte map 结果携带流式 emitter 与 retained source byte 计费信息，实际 source 由对应 `PreparedCommand` 持有；执行器中的 `RedisReplyRenderer` 同步消费结果后，executor 才关闭 prepared command。命令不会直接调用 `RedisReplyWriter`，`QUIT` 的连接关闭语义同样由 `CommandResult.closeAfterReply(...)` 携带。
 
 `yierdis-command-builtin` 不直接依赖 `yierdis-command-core`。它通过 `yierdis-command-api` 暴露 command module / command spec，最终由 `yierdis-server-main` 把 builtin module 和 command core 组装到一起。
 

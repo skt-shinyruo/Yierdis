@@ -34,17 +34,17 @@ The following reply limits are hard startup-validated capacities. A request cann
 | `--replyPerConnectionCapacityBytes` | `134217728` | Total admitted RESP reply capacity for one connection. |
 | `--replyMaxTotalBytes` | `67108864` | Maximum charge for one top-level reply, including retained source bytes. |
 | `--replyChunkPayloadBytes` | `65536` | Fixed payload capacity of a reply chunk. |
-| `--replyControlReservationBytes` | `4096` | Per-request control allowance before streamed chunks are needed. |
+| `--replyControlReservationBytes` | `4096` | Per-reply-slot reservation kept available for a bounded control/error reply before any business reply bytes are written. |
 | `--replyDrainTimeoutMillis` | `5000` | Graceful reply-drain deadline during shutdown. |
 
 The server rejects invalid ordering at startup: control reservation must cover the fixed reply overhead plus the largest normalized scalar error frame (`1539` bytes minimum), control reservation must not exceed one-reply capacity, one-reply capacity must not exceed the per-connection capacity, and the per-connection capacity must not exceed the global capacity. The control allowance, one chunk, and fixed overhead must also fit the one-reply limit. Treat a startup validation failure as a configuration error, not as a runtime backpressure signal.
 
 `OutboundMemoryBudget` accounts two different values:
 
-- `reserved` is capacity admitted to reply slots and their retained sources.
+- `reserved` is capacity charged to reply slots for encoded output plus retained-source bytes; the DB source object remains owned by its `PreparedCommand` through synchronous rendering.
 - `allocated` is actual chunk buffer capacity currently materialized from that reservation.
 
-Both gauges are bounded by the same hard admission hierarchy. Slot, source, chunk, write future, listener, and queue ownership remain associated with one reply slot until exactly one terminal cleanup owner releases them. `--clientOutputBufferLimitBytes` and its grace interval remain slow-client policy controls; they are not replacements for the hard reply admission limits above.
+Both gauges are bounded by the same hard admission hierarchy. A DB streamed source is owned by its `PreparedCommand` and is closed after synchronous rendering; its retained-source byte charge remains in the reply-slot lease until terminal slot cleanup. Slot, chunk, write-future, listener, queue, and any resource explicitly transferred to the reply sink remain associated with one reply slot until exactly one terminal cleanup owner releases them. `--clientOutputBufferLimitBytes` and its grace interval remain slow-client policy controls; they are not replacements for the hard reply admission limits above.
 
 Ingress has its own global bound. `--protocolGlobalInFlightBytes` limits admitted parsed request ownership. A positive value is used exactly; `0` derives a bounded value from `--executorQueueMaxBytes` and is not an unlimited mode. The protocol parser also enforces `--protocolMaxBulkBytes`, `--protocolMaxArgs`, `--protocolMaxLineBytes`, and `--protocolMaxCommandBytes` before a request reaches the executor.
 
@@ -54,7 +54,7 @@ The commit-stream is an independent bounded admission domain. Its reserved event
 
 Every input origin receives a receive-order reply slot: normal commands, BUSY rejection, protocol errors, internal failures, and close-after-reply commands such as `QUIT`. A ready later reply waits behind an earlier slot. Reply bytes are chunked by the bounded egress owner, not written by command handlers.
 
-Commands declare a reply plan before a mutation when the reply shape can be measured safely. An exact-limit preflight failure occurs before the mutation and leaves the database unchanged. Aggregate reply sources are owned and replayable rather than copied into an unbounded detached list.
+Commands declare a reply plan before a mutation when the reply shape can be measured safely. An exact-limit preflight failure occurs before the mutation and leaves the database unchanged. Aggregate reply sources remain owned by their `PreparedCommand` through planning and synchronous rendering rather than being copied into an unbounded detached list.
 
 The executor scheduling policy controls what happens when reply capacity blocks a head:
 

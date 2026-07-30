@@ -10,11 +10,13 @@ import yier.bubu.redis.command.api.CommandInvocation;
 import yier.bubu.redis.command.api.CommandParseException;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.ServerInfoProvider;
+import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.api.YierdisDbRouter;
 import yier.bubu.redis.command.defaults.DefaultCommandModules;
 import yier.bubu.redis.command.kernel.CommandRegistries;
 import yier.bubu.redis.command.kernel.CommandRegistry;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
+import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.DbIndexSession;
 import yier.bubu.redis.storage.api.DbEngine;
 
@@ -26,9 +28,11 @@ public class CommandParseIsolationTest {
     public void everyDefaultCommandHandlerParsesWithoutRuntimeServices() throws Exception {
         AtomicInteger routerCalls = new AtomicInteger();
         AtomicInteger providerCalls = new AtomicInteger();
+        AtomicInteger governorCalls = new AtomicInteger();
         YierdisDbRouter router = throwingRouter(routerCalls);
         ServerInfoProvider provider = throwingProvider(providerCalls);
-        CommandRegistry registry = CommandRegistries.from(DefaultCommandModules.create(router, provider));
+        SlowCommandGovernor governor = throwingGovernor(governorCalls);
+        CommandRegistry registry = CommandRegistries.from(DefaultCommandModules.create(router, provider, governor));
         List<ParseCase> fixtures = validParseCases();
         Set<String> fixtureNames = fixtures.stream()
                 .map(ParseCase::commandName)
@@ -46,13 +50,15 @@ public class CommandParseIsolationTest {
 
         Assert.assertEquals(0, routerCalls.get());
         Assert.assertEquals(0, providerCalls.get());
+        Assert.assertEquals(0, governorCalls.get());
     }
 
     @Test
     public void stringCommandHandlersRejectInvalidUserInputBeforePreparation() {
         CommandRegistry registry = CommandRegistries.from(DefaultCommandModules.create(
                 throwingRouter(new AtomicInteger()),
-                throwingProvider(new AtomicInteger())
+                throwingProvider(new AtomicInteger()),
+                throwingGovernor(new AtomicInteger())
         ));
 
         for (CommandArgs invalid : new CommandArgs[]{
@@ -72,7 +78,8 @@ public class CommandParseIsolationTest {
     public void keyspaceCommandHandlersRejectInvalidUserInputBeforePreparation() {
         CommandRegistry registry = CommandRegistries.from(DefaultCommandModules.create(
                 throwingRouter(new AtomicInteger()),
-                throwingProvider(new AtomicInteger())
+                throwingProvider(new AtomicInteger()),
+                throwingGovernor(new AtomicInteger())
         ));
 
         for (CommandArgs invalid : new CommandArgs[]{
@@ -100,7 +107,8 @@ public class CommandParseIsolationTest {
     public void collectionCommandHandlersRejectInvalidUserInputBeforePreparation() {
         CommandRegistry registry = CommandRegistries.from(DefaultCommandModules.create(
                 throwingRouter(new AtomicInteger()),
-                throwingProvider(new AtomicInteger())
+                throwingProvider(new AtomicInteger()),
+                throwingGovernor(new AtomicInteger())
         ));
 
         for (CommandArgs invalid : new CommandArgs[]{
@@ -128,7 +136,8 @@ public class CommandParseIsolationTest {
     public void sortedSetHandlersRejectInvalidUserInputBeforePreparation() {
         CommandRegistry registry = CommandRegistries.from(DefaultCommandModules.create(
                 throwingRouter(new AtomicInteger()),
-                throwingProvider(new AtomicInteger())
+                throwingProvider(new AtomicInteger()),
+                throwingGovernor(new AtomicInteger())
         ));
 
         for (CommandArgs invalid : new CommandArgs[]{
@@ -181,7 +190,7 @@ public class CommandParseIsolationTest {
                 parseCase("AUTH", "AUTH", "password"),
                 parseCase("FLUSHDB", "FLUSHDB", "SYNC"),
                 parseCase("TYPE", "TYPE", "k"),
-                parseCase("MEMORY", "MEMORY", "USAGE", "k"),
+                parseCase("MEMORY", "MEMORY", "STATS"),
                 parseCase("OBJECT", "OBJECT", "ENCODING", "k"),
                 parseCase("KEYS", "KEYS", "*"),
                 parseCase("SCAN", "SCAN", "0", "MATCH", "k*", "COUNT", "10"),
@@ -276,6 +285,22 @@ public class CommandParseIsolationTest {
             ) {
                 calls.incrementAndGet();
                 throw new AssertionError("parser accessed server info provider");
+            }
+        };
+    }
+
+    private static SlowCommandGovernor throwingGovernor(AtomicInteger calls) {
+        return new SlowCommandGovernor() {
+            @Override
+            public long keysTimeBudgetNanos(CommandSession session) {
+                calls.incrementAndGet();
+                throw new AssertionError("parser accessed slow command governor");
+            }
+
+            @Override
+            public int keysMaxResults(CommandSession session) {
+                calls.incrementAndGet();
+                throw new AssertionError("parser accessed slow command governor");
             }
         };
     }

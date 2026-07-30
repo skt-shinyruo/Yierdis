@@ -614,11 +614,15 @@ public class ArchitectureBoundaryTest {
         int scanned = scanProductionMainForForbiddenText(
                 repoRoot,
                 offenders,
-                "CommandDefinition<", " CommandParser<", " CommandPreparer<", "CommandParsers.",
-                "CommandParseResult<", "CommandParseError.", "ArgReader ",
-                "CommandPreparationContext ", "LegacyCommandAdapter",
-                "YierdisFastCommandProcessor", "DefaultYierdisEngine", "YierdisEngine",
                 "FNV64", "Entry[] table", "resizeThreshold"
+        );
+        scanned += scanProductionMainForForbiddenRegexExcluding(
+                repoRoot,
+                offenders,
+                List.of(),
+                "\\b(?:CommandDefinition|CommandParser|CommandPreparer|CommandParsers|"
+                        + "CommandParseResult|CommandParseError|ArgReader|CommandPreparationContext|"
+                        + "LegacyCommandAdapter|YierdisFastCommandProcessor|DefaultYierdisEngine|YierdisEngine)\\b"
         );
         Assert.assertTrue("架构护栏未扫描到 production Java", scanned > 0);
 
@@ -638,23 +642,41 @@ public class ArchitectureBoundaryTest {
                 " foldAsciiCase(int ", " longAt(int ",
                 " positiveLongAt(int ", " nonNegativeLongAt(int "
         );
-        for (String file : List.of("ServerCommandModule.java", "NettyServerInfoProvider.java")) {
-            scanFileForForbiddenText(
-                    repoRoot,
-                    repoRoot.resolve("yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server")
-                            .resolve(file),
-                    offenders,
-                    "RedisReplyWriter",
-                    " foldAsciiCase(int ", " longAt(int ",
-                    " positiveLongAt(int ", " nonNegativeLongAt(int "
-            );
-        }
+        Path serverMain = repoRoot.resolve("yierdis-server/yierdis-server-main/src/main/java").normalize();
+        scanForForbiddenTextExcluding(
+                repoRoot,
+                serverMain,
+                offenders,
+                List.of(
+                        serverMain.resolve("yier/bubu/redis/app/server/NettyExecutionRequestIngress.java"),
+                        serverMain.resolve("yier/bubu/redis/app/server/YierdisServerBootstrap.java"),
+                        serverMain.resolve("yier/bubu/redis/app/server/YierdisServerChannelInitializer.java")
+                ),
+                "RedisReplyWriter"
+        );
 
         Path commandArgsFile = commandApi.resolve("CommandArgs.java");
         String commandArgsSource = Files.readString(commandArgsFile, StandardCharsets.UTF_8);
         Assert.assertTrue(commandArgsSource.contains("public final class CommandArgs"));
-        Assert.assertTrue(commandArgsSource.contains("private static int foldAsciiCase(int value)"));
-        Assert.assertTrue(commandArgsSource.contains("public long longAt(int index)"));
+        for (String helperDeclaration : List.of(
+                "public boolean is(int index, String asciiLiteral)",
+                "public long longAt(int index)",
+                "public long nonNegativeLongAt(int index)",
+                "public long positiveLongAt(int index)",
+                "public int intClampedAt(int index)",
+                "private static int foldAsciiCase(int value)"
+        )) {
+            Assert.assertEquals("CommandArgs helper must have exactly one implementation: " + helperDeclaration,
+                    1L, Pattern.compile(Pattern.quote(helperDeclaration)).matcher(commandArgsSource).results().count());
+        }
+        scanProductionMainForForbiddenRegexExcluding(
+                repoRoot,
+                offenders,
+                List.of(commandArgsFile),
+                "\\b(?:long|int)\\s+\\w+\\s*\\([^)]*\\bCommandArgs\\b[^)]*\\)",
+                "\\bboolean\\s+\\w+\\s*\\([^)]*\\bCommandArgs\\b[^)]*\\bString\\b[^)]*\\)",
+                "\\bfoldAsciiCase\\s*\\("
+        );
 
         Path executorSupport = repoRoot.resolve(
                 "yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorExecutionSupport.java");
@@ -3670,6 +3692,39 @@ public class ArchitectureBoundaryTest {
                         try {
                             scanned[0]++;
                             scanFileForForbiddenText(repoRoot, path, offenders, forbiddenSnippets);
+                        } catch (IOException failure) {
+                            throw new RuntimeException(failure);
+                        }
+                    });
+        }
+        return scanned[0];
+    }
+
+    private static int scanProductionMainForForbiddenRegexExcluding(
+            Path repoRoot,
+            List<String> offenders,
+            List<Path> allowedFiles,
+            String... forbiddenPatterns
+    ) throws IOException {
+        List<Path> normalizedAllowed = allowedFiles == null
+                ? List.of()
+                : allowedFiles.stream().map(Path::normalize).toList();
+        List<Pattern> patterns = Stream.of(forbiddenPatterns).map(Pattern::compile).toList();
+        int[] scanned = new int[]{0};
+        try (Stream<Path> paths = Files.walk(repoRoot)) {
+            paths.filter(path -> path != null && path.toString().endsWith(".java"))
+                    .filter(path -> path.toString().contains("/src/main/java/"))
+                    .filter(path -> !normalizedAllowed.contains(path.normalize()))
+                    .sorted()
+                    .forEach(path -> {
+                        try {
+                            scanned[0]++;
+                            String source = Files.readString(path, StandardCharsets.UTF_8);
+                            for (Pattern pattern : patterns) {
+                                if (pattern.matcher(source).find()) {
+                                    offenders.add(relativePath(repoRoot, path) + " -> /" + pattern + "/");
+                                }
+                            }
                         } catch (IOException failure) {
                             throw new RuntimeException(failure);
                         }

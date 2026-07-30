@@ -166,19 +166,19 @@ Netty ByteBuf
 
 `EXEC` 重放每条 retained request 时调用同一个 `CommandDispatcher.prepareReplay(...)`。该入口只跳过再次排队，仍复用查表、arity、handler parse、invocation prepare、prepared validation、execution context 和 DB mutation path。子命令返回的 `RedisReply` 被收集成外层数组，executor 最终只调用一次 `RedisReplyRenderer`。
 
-streamed child 的 owner 会一直保留到整个 `EXEC` 聚合回复渲染结束；随后外层 prepared command 按逆序关闭 children 与 drained requests。详细状态机见 [`transaction-and-replay.md`](./transaction-and-replay.md)。
+持有 streamed source 的 child `PreparedCommand` 会一直保留到整个 `EXEC` 聚合回复渲染结束；随后外层 prepared command 按逆序关闭 children 与 drained requests。child 返回的 `ControlError` 会先降为可嵌套的普通 `Error`，因为 control reservation 只适用于顶层回复。详细状态机见 [`transaction-and-replay.md`](./transaction-and-replay.md)。
 
 ## QUIT、错误和关闭
 
 `QUIT` 的关闭语义属于结果而不是 writer side effect：其 handler 返回 `CommandResult.closeAfterReply(SimpleString("OK"))`。executor 先渲染 `OK`，再依据 result flag 标记连接 closing 并把同一 flag 交给有序 reply slot；Netty reply sequencer 在该回复写完后关闭 transport。`EXEC` 中若子结果请求关闭，外层结果会传播该 flag。
 
-普通 command handler 不调用 `RedisReplyWriter.requestCloseAfterReply()`。writer 上的 control methods 只服务 executor/protocol 的 terminal failure 路径。
+普通 command handler 不直接调用 `RedisReplyWriter`。预期的执行期命令错误可返回顶层 `ControlError`，renderer 会调用 `controlError(...)` 切换到当前槽位的 control reservation；该方法本身不请求关闭连接。`requestCloseAfterReply()`、`protocolError()` 和 `internalError()` 留给 executor/ingress 的控制路径，普通命令的关闭语义仍由 `CommandResult` 携带。
 
 错误大致分为：
 
 - frame 级 protocol error：由 decoder/ingress 使用 reply slot 回写并关闭；
 - admission reject：由 ingress/executor 边界处理；
-- command error：由 `CommandDispatcher` 或 `CommandResult` 表达成语义 `RedisReply.Error`；
+- command error：parse/prepare 错误由 `CommandDispatcher` 表达为普通 `RedisReply.Error`；回复预留后的可预期执行期错误由 `CommandResult.controlError(...)` 表达为顶层 `RedisReply.ControlError`，`EXEC` 会在聚合前将 child control error 转为普通 `Error`；
 - execute 后结果未知或渲染失败：executor 取消 reply ownership 并关闭 transport，不能伪造一个确定的 command error。
 
 背压同时受单连接 pending、pending bytes、全局 queue slot、queued bytes、reply capacity 和 channel writability 影响。`NettyExecutionIoAdapter` 与 reply gate 负责有序 flush 和 close-after-reply。
