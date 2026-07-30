@@ -6,9 +6,9 @@
 
 Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 KV server。它对外暴露 Redis RESP TCP 协议，RESP2 是默认 wire target，`HELLO 3` 可以协商基础 RESP3 replies；对内把网络、协议、执行、命令、DB、memory runtime 和启动装配拆成独立模块。
 
-读源码时最重要的定位是：它不是 Redis drop-in replacement，而是一个刻意限定在单机内存边界内的 Redis 风格系统实现。代码重点不是“兼容所有 Redis 行为”，而是展示一次请求如何穿过 RESP/Netty、执行器、命令处理器、DB 能力接口和 native-memory-backed 数据结构。
+读源码时最重要的定位是：它不是 Redis drop-in replacement，而是一个刻意限定在单机内存边界内的 Redis 风格系统实现。代码重点不是“兼容所有 Redis 行为”，而是展示一次请求如何穿过 RESP/Netty、执行器、命令分发、DB 能力接口和 native-memory-backed 数据结构。
 
-它也不是普通 `Map` 服务。普通 `Map` 只能解释 key/value 存取，解释不了 RESP wire format、连接级 session、事务 replay、TTL 和 maxmemory 的写路径约束、reply writer 语义、owner thread、backpressure、native handle lifetime 和 introspection。读代码时应该把它看成一个边界清楚的系统样本：网络、协议、执行、命令、DB、memory runtime 和启动组装各有自己的职责。
+它也不是普通 `Map` 服务。普通 `Map` 只能解释 key/value 存取，解释不了 RESP wire format、连接级 session、事务 replay、TTL 和 maxmemory 的写路径约束、语义回复及其资源所有权、owner thread、backpressure、native handle lifetime 和 introspection。读代码时应该把它看成一个边界清楚的系统样本：网络、协议、执行、命令、DB、memory runtime 和启动组装各有自己的职责。
 
 ## 能力边界
 
@@ -29,13 +29,14 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 
 - Netty I/O 线程负责收包、解码、提交和写回，不直接修改 DB。
 - `CommandExecutor` 负责排队、背压预算和 owner-thread 命令执行。
-- engine 和 command processor 负责把统一执行请求路由到命令实现。
+- `CommandDispatcher` 负责请求检查、registry 查找、事务策略和命令分发；`CommandSpec` handler 只解析 `CommandArgs`，再由 `CommandInvocation` 按连接 session 准备命令。
+- `PreparedCommand` 暴露回复预留形状，在预留后完成校验和执行，并返回 `CommandResult`；执行器随后通过 `RedisReplyRenderer` 集中渲染语义回复。
 - DB 层通过能力接口暴露读写语义，内存实现持有 keyspace、expires、数据族和内存账本。
 - JDK FFM runtime 支撑默认 native-memory path，并参与 maxmemory 相关约束。
 
 读源码前先建立三条心智模型：
 
-- 请求不是“方法调用”，而是一段从 RESP bytes 到 `ExecutionRequest`、executor、command handler、DB、`RedisReplyWriter` 再回到 RESP bytes 的链路。
+- 请求不是“方法调用”，而是一段从 RESP bytes 到 `ExecutionRequest`、`CommandExecutor`、`CommandDispatcher`、command handler、DB、`CommandResult`、`RedisReplyRenderer` 再回到 RESP bytes 的链路。
 - DB 不是一张大表，而是 keyspace、entry metadata、value roots、TTL index、memory ledger 和 native handles 共同维护的生命周期边界。
 - native memory 不是旁路优化，而是当前默认数据路径的一部分；但它不等于零拷贝，copy 边界需要按接口 ownership 和 lifetime 判断。
 
@@ -48,13 +49,13 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 | `yierdis-memory/yierdis-memory-ffm` | JDK FFM allocator/runtime、native segment 管理和 stable handle 支撑。 |
 | `yierdis-networking/yierdis-networking-resp` | RESP reply model、`RespReplyWriter` 和 inline command parsing。 |
 | `yierdis-networking/yierdis-networking-netty` | Netty decoder、带 admission lease 的 `RetainedRespExecutionRequest`、channel handler、protocol error 和 TCP write-back。 |
-| `yierdis-server/yierdis-server-api` | `ExecutionRequest`、`ByteArrayExecutionRequest`、`RedisReplyWriter` 等执行层公共契约。 |
-| `yierdis-server/yierdis-server-core` | engine、execution context 和 server-side command dispatch glue。 |
-| `yierdis-server/yierdis-server-executor` | `CommandExecutor`、队列、背压和执行线程模型。 |
+| `yierdis-server/yierdis-server-api` | `ExecutionRequest`、`PreparedCommand`、`CommandResult`、语义 `RedisReply`、`RedisReplyRenderer` 和渲染端口 `RedisReplyWriter` 等执行层公共契约。 |
+| `yierdis-server/yierdis-server-core` | `EngineSession` 连接会话状态 owner；不拥有命令解析、分发或渲染。 |
+| `yierdis-server/yierdis-server-executor` | `CommandExecutor`、队列、背压、回复预留和集中执行/渲染。 |
 | `yierdis-server/yierdis-server-runtime` | `YierdisInstance`、多 DB 装配、runtime config、maxmemory governor 和 maintenance。 |
-| `yierdis-server/yierdis-server-main` | `main()`、CLI 参数、server bootstrap、Netty pipeline 装配。 |
-| `yierdis-command/yierdis-command-api` | 命令接口、metadata、参数和结果契约。 |
-| `yierdis-command/yierdis-command-core` | command registry、command processor、分发和通用校验。 |
+| `yierdis-server/yierdis-server-main` | `main()`、CLI 参数、server bootstrap、`CommandDispatcher` 和 Netty pipeline 装配。 |
+| `yierdis-command/yierdis-command-api` | `CommandSpec`、`CommandSyntax`、`CommandArgs`、`CommandInvocation` 等命令契约。 |
+| `yierdis-command/yierdis-command-core` | `CommandRegistry`、`CommandDispatcher`、事务排队预检与 replay。 |
 | `yierdis-command/yierdis-command-builtin` | Redis 风格内置命令实现。 |
 | `yierdis-db/yierdis-db-api` | DB 能力接口、reads/writes view 和数据层契约。 |
 | `yierdis-db/yierdis-db-memory` | 单机内存 DB、数据族 ops、TTL、maxmemory、native-backed keyspace/value paths。 |
@@ -66,31 +67,32 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 
 ## 请求主链概览
 
-一次 RESP 请求的主链可以先按这些术语记：
+一次 RESP 请求进入执行器后，命令主链固定为：
 
 ```text
-Netty inbound bytes
-  -> RespRequestDecoder
-  -> RetainedRespExecutionRequest / ExecutionRequest
-  -> CommandExecutor
-  -> engine
-  -> command processor
-  -> DB
-  -> RedisReplyWriter
-  -> RespReplyWriter
-  -> Netty write-back
+CommandExecutor
+  -> CommandDispatcher.prepare(session, request)
+  -> CommandSpec.handler().parse(CommandArgs)
+  -> CommandInvocation.prepare(session)
+  -> PreparedCommand
+  -> reserve -> validate -> execute(context)
+  -> CommandResult -> RedisReplyRenderer
 ```
 
-这条链的边界含义是：
+它的外侧是 `Netty inbound bytes -> RespRequestDecoder -> RetainedRespExecutionRequest / ExecutionRequest`，渲染后则经 `RedisReplyWriter / RespReplyWriter -> Netty write-back` 回到客户端。这些边界的含义是：
 
 - `RespRequestDecoder` 在分配前执行 ingress admission，并直接构造执行请求。
 - `RetainedRespExecutionRequest` 是网络主链的字节参数请求实现，持有可跨线程释放的 memory lease。
 - `ByteArrayExecutionRequest` 是 heap 输入和 retained snapshot 使用的执行请求实现。
 - `ExecutionRequest` 是 server/command 层之间的统一请求契约。
 - `CommandExecutor` 把请求从 I/O 线程切到执行线程，并施加队列和背压约束。
-- engine 持有执行上下文和命令入口，command processor 做命令解析、校验和分发。
-- DB 通过 API 暴露读写能力，具体内存实现完成 key 和 value 操作。
-- `RedisReplyWriter` 是命令层写 reply 的抽象，`RespReplyWriter` 把抽象 reply 编成 RESP，最后由 Netty write-back 发回客户端。
+- `CommandDispatcher` 完成命令名、null、arity 和事务策略检查；普通命令依次解析 `CommandArgs` 并按 `CommandSession` 准备为 `PreparedCommand`。
+- 事务中的 queueable 命令只调用 handler 解析做 preflight，不提前执行 session/DB 准备；排队动作在回复预留成功后保留请求。`EXEC` 通过 dispatcher replay 重新准备子命令，并负责关闭子 `PreparedCommand` 和 retained request。
+- 执行器按 `PreparedCommand.reservationShape()` 预留容量，校验仍有效后用 `CommandExecutionContext` 执行。准备和执行阶段通过 DB API 完成真实读写。
+- 命令返回 `CommandResult`，其中 `RedisReply` 描述语义回复；bulk、byte sequence 和 byte map 可以持有语义流式 source/emitter，相关 owner 保持到 renderer 消费完成后才关闭。
+- `QUIT` 不接触 writer，而是通过 `CommandResult.closeAfterReply(...)` 携带关闭意图；执行器在结果渲染并发布后关闭连接。
+- `RedisReplyWriter` 只是 `RedisReplyRenderer` 面向 RESP 编码器的输出端口。`RespReplyWriter` 按 session 的 RESP 版本编码，最后由 Netty write-back 发回客户端。
+- `EngineSession` 只拥有每条连接的 DB 选择、客户端 metadata、认证、RESP 版本和事务队列等 session 状态，不参与命令解析、分发、执行或渲染。
 
 逐行追请求时看 [`request-execution-flow.md`](./request-execution-flow.md)。
 
@@ -119,8 +121,10 @@ DB 内部读 [`db-internals.md`](./db-internals.md)，FFM runtime 和 native-mem
 - `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java`
 - `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RetainedRespExecutionRequest.java`
 - `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java`
-- `yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/DefaultYierdisEngine.java`
-- `yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/ServerCommandComposition.java`
+- `yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java`
+- `yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java`
+- `yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java`
 - `yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
 - `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`

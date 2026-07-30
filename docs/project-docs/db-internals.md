@@ -136,7 +136,7 @@ command
 
 命令层完成 reply preflight 后调用一次 `KeyWindow.emitTo(...)`。它按同一起始游标和 slot 范围同步重放扫描，逐个构造指向 allocator-backed `KEY_BYTES` 的 `NativeBytesSlice`；slice 写入 `BulkStringSink` 时才打开短生命周期只读 view/pin，写完立即关闭，而不是把每个 key 复制成长期存活的 Java `byte[]`。replay 还会核对匹配数量、额外匹配和结束游标，防止 discovery 与输出看到不一致的窗口。
 
-`KeyWindow` 自身不逐 key 持有 retained pin；它持有的是 scan epoch。`emitTo(...)` 只保证 sink 在调用期间同步消费 slice，随后命令层把 window 的 close 所有权转交给 `RedisReplyWriter`：同步 writer 当场关闭，网络 writer 则由 reply slot/source cleanup 在回复生命周期结束时关闭。`close()` 最终释放 epoch，使 quarantine 中已不可达的 key allocation 可以回收。这个边界既避免预先复制整页 key，也要求任何新增 writer 保持 `BulkStringSink` 的同步消费和 reply source 的确定性关闭语义。
+`KeyWindow` 自身不逐 key 持有 retained pin；它持有的是 scan epoch。命令层把 window 包装成流式 `RedisReply`，并通过 `PreparedCommands.owned(...)` 把 close 所有权留在 `PreparedCommand`。中央 renderer 同步调用 `emitTo(...)`，返回后 executor 才关闭 prepared owner；window 不会转移给 writer 或 reply slot。`close()` 最终释放 epoch，使 quarantine 中已不可达的 key allocation 可以回收。这个边界既避免预先复制整页 key，也要求新增 semantic emitter 保持 `BulkStringSink` 的同步消费和 source 的确定性关闭语义。
 
 ## 写路径
 

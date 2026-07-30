@@ -18,7 +18,7 @@ ByteBuf fragments
   -> RespRequestDecoder
   -> retained heap argv + RequestMemoryLease
   -> ExecutionRequest
-  -> executor / fast command handler
+  -> CommandExecutor / CommandDispatcher
 ```
 
 请求跨过 decoder 生命周期前会 materialize 成稳定 heap argv；这是 ownership 和 admission
@@ -27,7 +27,8 @@ ByteBuf fragments
 ## 回复路径
 
 ```text
-command / storage result
+CommandResult / RedisReply
+  -> RedisReplyRenderer
   -> RedisReplyWriter
   -> RespReplyWriter
   -> ReplyReservationSink
@@ -51,7 +52,8 @@ command / storage result
 
 - request lease 覆盖请求排队和执行生命周期。
 - reply plan 在生成受控回复字节前申请容量。
-- `ReplySlot` 持有 chunk、source owner 和 outbound lease，直到写回或终止清理完成。
+- streaming source owner 由 `PreparedCommand` 保留到同步 renderer 返回；它不会转移给 writer 或 `ReplySlot`。
+- `ReplySlot` 持有编码后的 chunk 和 outbound lease，直到写回或终止清理完成。
 - `BytesView` / `BytesSlice` 不得代替这些 retained owner 跨队列保存。
 
 ## 验证入口

@@ -6,24 +6,23 @@ import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 
 public class CommandSyntaxTest {
     @Test
-    public void arityValidatesAndEmitsMetadataFromOneObject() {
+    public void arityValidatesAndEmitsMetadataFromOneObject() throws Exception {
         CommandArity exact = CommandArity.exact(2);
         Assert.assertEquals(2, exact.redisMetadataArity());
-        Assert.assertNull(exact.validate("get", ArgReader.of(request("GET", "k"))));
-        Assert.assertNotNull(exact.validate("get", ArgReader.of(request("GET"))));
+        Assert.assertThrows(CommandParseException.class,
+                () -> exact.validate("get", CommandArgs.of(request("GET"))));
+        exact.validate("get", CommandArgs.of(request("GET", "k")));
 
         CommandArity oneOf = CommandArity.oneOf(2, 4);
         Assert.assertEquals(-2, oneOf.redisMetadataArity());
-        Assert.assertNull(oneOf.validate("bitcount", ArgReader.of(request("BITCOUNT", "k"))));
-        Assert.assertNull(oneOf.validate("bitcount", ArgReader.of(request("BITCOUNT", "k", "0", "1"))));
+        oneOf.validate("bitcount", CommandArgs.of(request("BITCOUNT", "k")));
+        oneOf.validate("bitcount", CommandArgs.of(request("BITCOUNT", "k", "0", "1")));
     }
 
     @Test
-    public void registrationTakesSpecsAndLegacyDefinitionsWithoutSeparateNames() throws Exception {
+    public void registrationTakesOnlySpecs() throws Exception {
         Assert.assertNotNull(CommandModule.Registration.class.getMethod(
                 "register", CommandSpec.class));
-        Assert.assertNotNull(CommandModule.Registration.class.getMethod(
-                "register", CommandDefinition.class));
         java.util.List<Class<?>> registrationTypes = new java.util.ArrayList<>();
         for (java.lang.reflect.Method method : CommandModule.Registration.class.getMethods()) {
             if (method.getName().equals("register")) {
@@ -31,25 +30,7 @@ public class CommandSyntaxTest {
                 registrationTypes.add(method.getParameterTypes()[0]);
             }
         }
-        Assert.assertEquals(2, registrationTypes.size());
-        Assert.assertEquals(
-                java.util.Set.of(CommandSpec.class, CommandDefinition.class),
-                java.util.Set.copyOf(registrationTypes)
-        );
-    }
-
-    @Test
-    public void commandParsersExposeOnlyTheArgumentReaderFactory() {
-        java.util.List<String> publicStaticSignatures = java.util.Arrays.stream(
-                        CommandParsers.class.getDeclaredMethods()
-                )
-                .filter(method -> java.lang.reflect.Modifier.isPublic(method.getModifiers()))
-                .filter(method -> java.lang.reflect.Modifier.isStatic(method.getModifiers()))
-                .map(method -> method.getName() + java.util.Arrays.toString(method.getParameterTypes()))
-                .sorted()
-                .toList();
-
-        Assert.assertEquals(java.util.List.of("args[]"), publicStaticSignatures);
+        Assert.assertEquals(java.util.List.of(CommandSpec.class), registrationTypes);
     }
 
     private static ByteArrayExecutionRequest request(String... args) {

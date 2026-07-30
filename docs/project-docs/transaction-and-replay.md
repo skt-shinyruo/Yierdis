@@ -1,146 +1,182 @@
 # 事务与重放
 
-本文只解释 `MULTI/EXEC/DISCARD` 相关逻辑：session 状态、请求保留、重放、abort 和验证路径。
+本文只解释 `MULTI/EXEC/DISCARD`：连接 session 状态、入队 preflight、retained request、重放、semantic streamed reply owner、abort 和清理。
 
-## 事务状态属于哪里
-
-事务状态不是 command-kernel 自己持有的全局结构，而是连接级 session capability 状态的一部分。
-
-生产实现里，`EngineSession` 持有一个私有的 `DefaultTransactionState`，并通过 `TransactionSession` / `TransactionState` 接口暴露给命令层。这个状态同时保存：
-
-- `active`：当前是否处于 `MULTI` 中
-- `aborted`：事务是否已经因为前置错误而失效
-- `queue`：排队且由事务独立拥有的 retained `ExecutionRequest`
-- `queuedBytes`：当前队列累计保留字节
-- `maxQueuedCommands` / `maxQueuedBytes`：队列上限
-
-这意味着事务是严格的连接态：
-
-- 它跟随 `EngineSession`
-- 它跨多条命令持续存在
-- 它不属于某个 DB、某个 handler，也不属于 executor 全局
-
-所以文档里看到的“事务”首先应理解成 session 状态机，而不是 command processor 里的临时列表。
-
-## 为什么队列里保存的是 retained `ExecutionRequest`
-
-入队时保存的不是当前 owner 必须关闭的同一个请求对象，也不是另一套内部 IR，而是 `request.retain()` 返回的独立所有权视图。生产网络请求的 retained view 共享不可变 argv 和 reference-counted request-memory lease；`ExecutionRequest` 的默认实现才会退化为 heap copy。
-
-原因有两个：
-
-1. 当前 owner 持有的 `ExecutionRequest` 生命周期跟着本次 submit / prepare 走，命令结束后会被关闭；事务队列必须拥有自己可关闭的一份 retain。
-2. replay 需要复用同一条命令执行链。保存稳定的 `ExecutionRequest` 视图，就能让 `EXEC` 后的命令继续走 `DefaultYierdisEngine` 和 `YierdisFastCommandProcessor`，而不是走另一套解释器。
-
-`EngineSession.DefaultTransactionState.tryEnqueue(...)` 还会同时记录 `queuedBytes`，因此 transaction queue 的容量限制不是只看命令条数，也看 retained request 保留的字节数。
-
-## `ExecutionRecord` 属于 change-event 记录
-
-`ExecutionRecord` 把 `dbIndex` 和 `CommandRecordView` 绑成一个 record。公开的 `ExecutionRequest` 构造入口会把负的 `dbIndex` 归零并复制成 `ByteArrayExecutionRequest`；runtime sink 的 `borrowed(...)` 入口则保留 callback-scoped 只读视图，不额外复制。
-
-它是 change-event API 的载体，`YierdisChangeEvent` 直接包着该 record。事务队列本身保存 retained `ExecutionRequest`，不通过 `ExecutionRecord` replay。
-
-## `MULTI` 之后的入队流程
-
-`MULTI` 自身只做一件事：把 `TransactionState.active` 置为 true，并清空之前残留的 queue / aborted 状态。
-
-进入 `MULTI` 之后，普通命令的主线变成：
+普通执行的 canonical command path 是：
 
 ```text
-YierdisFastCommandProcessor.prepare(...)
-  -> TransactionQueuePolicy.queueIfNeeded(...)
-     -> registry lookup
-     -> CommandSyntax.transactionPolicy() check
-     -> definition.parse(request)
-     -> tx.tryEnqueue(request)
-     -> prepared QUEUED reply
+CommandExecutor
+  -> CommandDispatcher.prepare(session, request)
+  -> CommandSpec.handler().parse(CommandArgs)
+  -> CommandInvocation.prepare(session)
+  -> PreparedCommand
+  -> reserve -> validate -> execute(context)
+  -> CommandResult -> RedisReplyRenderer
 ```
 
-这里有几个容易误解的点：
+transaction replay 把 dispatcher 入口替换为 `prepareReplay(...)` 以关闭再次排队，并复用查表、parse、invocation prepare、validation 和 execute；child 不单独 reserve 或 render，外层 `PreparedExec` 统一预留并在聚合后交给 renderer。下面的 queue path 是 transaction active 时的 preflight 分支：它在 handler parse 后暂停，不调用 invocation prepare；`EXEC` 才让 retained request 进入上述 child replay 路径。
 
-- 命令不会在 `QUEUED` 时执行 handler
-- 参数解析不会推迟到 `EXEC` 再做，而是在入队前先跑一遍
-- queue 中保存的是独立拥有、最终必须关闭的 retained request view
+## 事务状态属于连接 session
 
-如果前置校验失败，事务会被标记为 aborted：
+事务不是 command-kernel 的全局结构，也不属于 DB 或 executor。生产实现中，`NettyExecutionConnection` 拥有一个 `EngineSession`；`EngineSession` 只是具体的每连接 `CommandSession` owner，其中的 `DefaultTransactionState` 通过 `TransactionState` 接口暴露给 command layer。
 
-- unknown command
-- `TransactionPolicy.DISALLOWED_IN_MULTI`
-- parse error
-- queue size / queued bytes 超限
+transaction state 保存：
 
-所以事务排队不是“先收进去，之后再统一报错”，而是“入队前先做一遍最小执行资格检查”。
+- `active`：是否已经执行 `MULTI`；
+- `aborted`：是否因排队前错误或 queue limit 失效；
+- `queue`：transaction 自己拥有的 retained `ExecutionRequest`；
+- `queuedBytes`：所有 queued request 的 retained bytes；
+- `maxQueuedCommands` 与 `maxQueuedBytes`：连接级队列上限。
 
-## `EXEC` 的 replay 主链
+`EngineSession` 不拥有 `CommandDispatcher`、DB、executor 或 renderer。它只承载跨请求持续存在的连接状态；命令重放仍由 dispatcher 与 executor 完成。
 
-`EXEC` 自己不解释队列中的命令。它会准备一个 `PreparedExec`，由该对象在执行阶段：
+## 为什么保存 retained `ExecutionRequest`
 
-1. 检查当前是否 `active`
-2. 检查事务是否 `aborted`
-3. `tx.drain()` 取出队列并重置 transaction state
-4. 写出 `arrayHeader(queued.size())`
-5. 逐条通过同一个 processor replay `ExecutionRequest`
+入队保存的不是当前 executor task 最终要关闭的同一个 owner，也不是另一套 transaction IR，而是 `request.retain()` 返回的独立所有权视图。
 
-replay 的核心可以简化成：
+这样做有两个原因：
+
+1. 当前 task 在返回 `QUEUED` 后会关闭自己的 request owner，transaction queue 必须拥有可独立关闭的 view；
+2. `EXEC` 要复用普通命令链。保留 `ExecutionRequest` 就能再次走 lookup、arity、handler parse、invocation prepare 和 prepared execution。
+
+生产网络 request 的 retained view 共享不可变 argv 与 reference-counted request-memory lease；heap request 可以通过自身实现提供稳定副本。transaction state 只依赖 `ExecutionRequest.retain()` 和 `retainedBytes()` 合同。
+
+`ExecutionRecord` 属于 change-event API，它把 DB index 与 command record view 绑定起来；transaction queue 不保存 `ExecutionRecord`，也不使用它 replay。
+
+## `MULTI` 和入队 preflight
+
+`MULTI` 的 handler parse 不访问 session。其 invocation 在 prepare 时检查当前 transaction 是否已 active；正常时返回一个 prepared action。只有 executor 完成 reply reservation 并执行该 action，`tx.begin()` 才清理旧状态、设置 active 并返回 `OK`。
+
+之后 queueable command 的主线是：
 
 ```text
-for (ExecutionRequest queuedRequest : tx.drain()) {
-  try (queuedRequest;
-       PreparedCommand child = processor.prepareQueued(queuedRequest, preparationContext);
-       CommandExecutionContext childContext = CommandExecutionContext.forRequest(session, reply, queuedRequest)) {
-    child.execute(childContext);
-  }
-}
+CommandExecutor
+  -> CommandDispatcher.prepare(session, request)
+     -> command name / null checks
+     -> CommandRegistry lookup
+     -> CommandArity.validate
+     -> TransactionPolicy.QUEUEABLE
+     -> CommandSpec.handler().parse(CommandArgs)
+     -> queued PreparedCommand
+  -> reserve -> validate -> execute(context)
+     -> TransactionState.tryEnqueue(request)
+     -> CommandResult(QUEUED or queue-full error)
+  -> RedisReplyRenderer
 ```
 
-这说明 replay 仍然走同一条执行链：
+这里有四个关键边界：
 
-- 同一个 `YierdisFastCommandProcessor`
-- 同一个 `CommandRegistry`
-- 同一个 `CommandDefinition.parse(...)`
-- 同一个 `CommandPreparer` / `PreparedCommand`
-- 同一个请求级 `MutationContext`
+- preflight 复用普通执行的 registry、arity 和 handler parse；
+- parse 只解释 argv，不调用 session、DB router 或任何 provider；
+- preflight 成功后不会调用 `CommandInvocation.prepare(session)`，所以不会读取 DB、准备 mutation 或创建 reply source；
+- `tryEnqueue` 是 session mutation，必须等 executor 预留回复容量后在 queued prepared action 中发生。
 
-也正因为如此，wrongtype、业务错误、mutation event、DB side effect 的行为都和非事务执行保持同源；`EXEC` 不是一个特殊的小型解释器。
+下列前置错误会返回 error，并在该 error action 执行时标记 transaction aborted：
+
+- empty 或 unknown command；
+- illegal null bulk argument；
+- wrong arity 或 handler parse error；
+- `TransactionPolicy.DISALLOWED_IN_MULTI`。
+
+queue 条数或字节超限由 `TransactionState.tryEnqueue(...)` 返回 `ERR Transaction queue is full` 并标记 aborted。`TRANSACTION_CONTROL` 命令不进入 queueable 分支；`MULTI/EXEC/DISCARD` 立即走各自 invocation。
+
+## `EXEC` prepare 的两种策略
+
+`EXEC` invocation 先查看 transaction state：
+
+- 未 active：返回 `ERR EXEC without MULTI`；
+- 已 aborted：准备一个 error action，执行时 `discard()`，返回 `EXECABORT Transaction discarded because of previous errors.`；
+- active 且未 aborted：创建 transaction-owned `PreparedExec`。
+
+`PreparedExec` 根据 queue size 使用两种准备策略：
+
+- `0` 或 `1` 个 child：在外层 prepare 阶段遍历 queue，调用 `CommandDispatcher.prepareReplay(session, request)`，提前持有 child prepared command；空队列可给出精确空 array shape，单 child 使用 maximum reservation；
+- 多个 child：外层先使用 maximum reservation，drain 后在 execute 阶段逐条 prepare。这样后一个 child 能观察前一个 child 的顺序 side effect，而不会在执行前把整个 transaction 的 state-dependent read 固化。
+
+对于提前准备的 child，外层 `validateBeforeExecute()` 会逐个检查；任一 `STALE` 都让 executor 关闭整个外层对象并重新 prepare，此时 queue 尚未 drain。动态策略则为每个当前 child 循环 prepare/validate，直到不再 stale。
+
+## replay 主链
+
+容量预留和 validation 成功后，`PreparedExec.execute(...)` 执行：
+
+1. `tx.drain()` 取出 retained requests，同时重置 active、aborted 和 queue accounting；
+2. 对每个 request 取得或动态创建 child `PreparedCommand`；
+3. 每个 child 都使用独立的 `CommandExecutionContext.forRequest(session, request)`；
+4. child execute 返回 `CommandResult`，外层收集其中的语义 `RedisReply`；
+5. child 的顶层 `ControlError` 转成可放入 `EXEC` array 的普通 error；
+6. 所有 child reply 聚合为一个 `RedisReply.Aggregate(ARRAY, ...)`；
+7. 所有 child 的 `closeAfterReply` flag 做 OR，并放到外层 `CommandResult`；
+8. 外层 executor 调用一次 `RedisReplyRenderer` 渲染整个 array。
+
+`CommandDispatcher.prepareReplay(...)` 只关闭“再次排队”的 transaction policy。每个 replay request 仍复用：
+
+- 空命令、null argument 与 name 安全检查；
+- 同一个 `CommandRegistry` 与 `CommandSpec`；
+- 同一个 `CommandArity` 和 `handler.parse(CommandArgs)`；
+- `CommandInvocation.prepare(session)`；
+- `PreparedCommand` validation/execution 语义；reply reservation 由外层 `PreparedExec` 统一拥有；
+- 请求级 `MutationContext` 与 DB commit path。
+
+所以 `EXEC` 没有第二套命令解释器，也没有 child reply writer。child 产生 semantic results，只有外层 executor 的 renderer 接触 `RedisReplyWriter`。
+
+## streamed child reply 的所有权
+
+child invocation 可能从 DB 取得 `ByteValue`、`ByteSequenceSource`、`ByteMapSource` 或 `CollectionScanWindow`。这类 source 由 child `PreparedCommand` 通过 `PreparedCommands.owned(...)` 持有；其 semantic `RedisReply` 的 emitter 在 source 存活期间有效。
+
+`PreparedExec` 持有所有 child prepared commands，并在 execute 后继续存活。executor 先渲染外层 aggregate；renderer 递归访问 child reply 并同步调用 source emitter。只有渲染成功或 task 进入 terminal cleanup 后，外层 `close()` 才按 queue index 逆序执行：同一索引先关闭 child owner，再关闭 drained request。
+
+因此 native pin 不会在 aggregate render 前释放，也不会被转交给 Netty event loop。`TransactionCommandTest.execKeepsStreamedChildAliveUntilTheAggregateIsRendered` 保护这一所有权边界。
+
+## `QUIT` 在 transaction 中的传播
+
+`QUIT` 是 queueable command。普通执行时它返回 `CommandResult.closeAfterReply(SimpleString("OK"))`；在 transaction replay 中 child result 的 close flag 被 OR 到外层 `EXEC` result。
+
+renderer 先输出完整的 `EXEC` array，executor 再根据外层 result flag 标记 connection closing，并把 close-after-reply 交给有序 reply slot。关闭不是 child handler 对 writer 的 side effect，transaction code 也不直接操作 transport。
 
 ## `DISCARD`、abort 和错误路径
 
-`DISCARD` 的语义很直接：丢弃 queue，清掉 `active` 和 `aborted`，回 `OK`。
+`DISCARD` 未处于 transaction 时返回 `ERR DISCARD without MULTI`。active 时，它返回 prepared action；reply reservation 成功并执行后，`tx.discard()` 关闭所有 queued request、清空 accounting，并返回 `OK`。
 
-但真正值得文档化的是 abort 路径：
+其他控制错误包括：
 
-- `MULTI` 嵌套：`ERR MULTI calls can not be nested`
-- `DISCARD` 不在事务里：`ERR DISCARD without MULTI`
-- `EXEC` 不在事务里：`ERR EXEC without MULTI`
-- `MULTI` 中的 unknown command / parse error / disallowed-in-multi：立即回错，并标记 transaction aborted
-- aborted 之后执行 `EXEC`：先 `discard()`，再回 `EXECABORT Transaction discarded because of previous errors.`
+- nested `MULTI`：`ERR MULTI calls can not be nested`；
+- `EXEC` without `MULTI`：`ERR EXEC without MULTI`；
+- aborted `EXEC`：discard 后返回 `EXECABORT Transaction discarded because of previous errors.`。
 
-还有一条容易漏掉的关闭路径：连接进入 closing 状态时，`NettyExecutionConnection` 会丢弃事务状态，避免 retained request 和 ingress lease 长期滞留在队列里。`TransactionQueueCleanupTest` 专门保护这个回归点。
+若 child execution 尚未开始，prepare/ownership failure 可以作为普通 executor failure 清理。若任何 child 已开始执行后发生异常，前面 mutation 是否可见已无法由客户端确认，`PreparedExec` 将 failure 提升为 `ResultUnknownException`；executor 会 mark result unknown、取消 reply 并关闭 transport，不伪造 transaction error array。
 
-## 队列限制和配置边界
+外层关闭会尽力回收所有 child 与 drained request，后一个 close failure 作为 suppressed failure 保留，不能中断其余 ownership cleanup。
 
-`EngineSession.DefaultTransactionState.tryEnqueue(...)` 同时受两类限制：
+## queue limits
 
-- `maxQueuedCommands`
-- `maxQueuedBytes`
+`EngineSession.DefaultTransactionState.tryEnqueue(...)` 同时限制：
+
+- `maxQueuedCommands`；
+- `maxQueuedBytes`。
 
 顺序是：
 
-1. 如果条数已满，直接返回 `ERR Transaction queue is full`
-2. 先用 `request.retainedBytes()` 做一次预估检查
-3. 再执行 `request.retain()` 取得队列自己的所有权
-4. 用 retained view 的 `retainedBytes()` 再做一次真实检查
-5. 通过后入队并累加 `queuedBytes`
+1. 检查 command count；
+2. 用原 request 的 `retainedBytes()` 做一次估算；
+3. 调用 `request.retain()` 取得 queue owner；
+4. 用 retained view 的 `retainedBytes()` 再做真实检查；
+5. 成功后加入 queue 并累加 `queuedBytes`；
+6. count 或 estimated-bytes 在 retain 前失败时直接标记 aborted；真实 retained-bytes 检查失败时先关闭临时 retained view，再返回统一的 queue-full error。
 
-无论是条数超限还是字节超限，当前实现都复用同一条错误文案：`ERR Transaction queue is full`，并标记 transaction aborted。
+上限从 server config 传入每个 `EngineSession`，不是 CLI 或 command module 自己维护的第二套限制。
 
-这些限制不是 CLI 自己发明的。`EngineSession` 构造时就接收上限参数，server wiring 和测试客户端都复用同一套 `TransactionState` 约束。
+## connection close 与清理
+
+`NettyExecutionConnection.markClosing()` 在第一次进入 closing 时把 `session.discardTransaction()` 调度到 command owner。这样 queued request 的 retain 通常在 owner thread 归还，避免 transport event loop 与 DB/source 生命周期交叉。
+
+如果 owner 调度已经失败，连接层会同步执行 discard 作为兜底；`DefaultTransactionState` 的同步和幂等清理避免重复释放。server shutdown、`QUIT`、protocol terminal error 和 transport failure 最终都收敛到同一 transaction cleanup。
 
 ## 相关测试
 
-- `EngineSessionTest`：事务队列拥有关系、queue size / bytes 限制、drain / discard 行为
-- `YierdisFastCommandProcessorPolicyTest`：`MULTI` 入队、abort、`EXECABORT`、replay 和 change event
-- `YierdisServerBootstrapCommandWiringTest`：server wiring 把 transaction queue 限制正确接进连接
-- `TransactionQueueCleanupTest`：连接 closing 必须清空事务状态
-- `TransactionQueueLimitTest`：CLI / 客户端视角下的队列限制表现
-
-命令查表、parser 复用和 transaction queue policy 的更细分发逻辑见 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)。
+- `EngineSessionTest`：begin、retain、count/bytes limit、drain、discard 和 close；
+- `CommandDispatcherTest`：transaction preflight、aborting error、queue action、replay validation 与 child cleanup；
+- `TransactionCommandTest`：客户端语义、顺序 replay、streamed child owner 和 parse failures；
+- `ReplyPreflightCommandTest`：`EXEC` maximum reservation、capacity rejection 和 state-dependent child；
+- `TransactionQueueCleanupTest`：connection closing 清空 transaction state；
+- `TransactionQueueLimitTest`：server/CLI 视角的 queue limits；
+- `CommandParseIsolationTest`、`ServerCommandParseIsolationTest`：排队前 handler parse 不访问运行时 service。

@@ -54,7 +54,6 @@ public class CommandBuiltinDbAccessBoundaryTest {
         Path mainRoot = mainSourceRoot();
         List<String> offenders = new ArrayList<>();
         List<String> forbidden = List.of(
-                legacy("Command", "Spec"),
                 legacy("Command", "Context"),
                 legacy("Reply", "Plans"),
                 "require" + "Reply",

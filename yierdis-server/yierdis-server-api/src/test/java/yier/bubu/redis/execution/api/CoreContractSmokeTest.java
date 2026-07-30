@@ -9,22 +9,6 @@ import java.util.List;
 
 public class CoreContractSmokeTest {
     @Test
-    public void preparationContextContainsOnlyTheCompleteCommandSession() {
-        NarrowSession session = new NarrowSession();
-
-        CommandPreparationContext context = new CommandPreparationContext(session);
-
-        Assert.assertTrue(CommandPreparationContext.class.isRecord());
-        Assert.assertArrayEquals(
-                new Class<?>[]{CommandSession.class},
-                java.util.Arrays.stream(CommandPreparationContext.class.getRecordComponents())
-                        .map(java.lang.reflect.RecordComponent::getType)
-                        .toArray(Class<?>[]::new)
-        );
-        Assert.assertSame(session, context.session());
-    }
-
-    @Test
     public void executionContextHasNoPublicConstructorAndOneRequestFactory() throws Exception {
         for (var constructor : CommandExecutionContext.class.getDeclaredConstructors()) {
             Assert.assertFalse(Modifier.isPublic(constructor.getModifiers()));

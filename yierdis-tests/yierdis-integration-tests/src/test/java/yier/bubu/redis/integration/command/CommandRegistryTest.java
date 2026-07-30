@@ -2,9 +2,8 @@ package yier.bubu.redis.integration.command;
 
 import yier.bubu.redis.command.kernel.CommandRegistry;
 import yier.bubu.redis.command.api.CommandArity;
-import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
-import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import org.junit.Assert;
@@ -47,7 +46,7 @@ public class CommandRegistryTest {
     }
 
     @Test
-    public void resizingAndProbingDoesNotBreakLookup() {
+    public void manyRegistrationsRemainAvailableForLookup() {
         CommandRegistry registry = new CommandRegistry();
 
         String[] names = new String[]{
@@ -90,15 +89,14 @@ public class CommandRegistryTest {
     }
 
     private static void registerNoop(CommandRegistry registry, String name) {
-        registry.register(new CommandDefinition<>(
+        registry.register(new CommandSpec(
                 new CommandSyntax(
                         name,
                         CommandArity.exact(1),
                         CommandKeySpec.NONE,
                         TransactionPolicy.QUEUEABLE
                 ),
-                CommandParsers.args(),
-                (request, context) -> TestPreparedCommands.simpleString("OK")
+                args -> session -> TestPreparedCommands.simpleString("OK")
         ));
     }
 

@@ -4,7 +4,7 @@
 
 ## 协议定位
 
-Yierdis 的公开网络入口是 Redis RESP 风格的 TCP 协议。协议层负责把线上字节解析成 argv，再交给命令层；命令层负责语义执行，并通过 `RedisReplyWriter` 写出回复。两层之间的边界是 `ExecutionRequest` 和 `RedisReplyWriter`，不是 RESP 字节。
+Yierdis 的公开网络入口是 Redis RESP 风格的 TCP 协议。协议层负责把线上字节解析成 argv，再交给命令层；命令层返回 `CommandResult` 和其中的语义 `RedisReply`，不直接编码 RESP。两层之间的边界是 `ExecutionRequest`、`CommandResult` 和 `RedisReply`，不是 RESP 字节或 writer 调用。
 
 请求进入系统的主路径是：
 
@@ -12,7 +12,8 @@ Yierdis 的公开网络入口是 Redis RESP 风格的 TCP 协议。协议层负�
 Netty ByteBuf
   -> RespRequestDecoder
   -> RetainedRespExecutionRequest / ExecutionRequest
-  -> command processor
+  -> CommandExecutor
+  -> CommandDispatcher.prepare(session, request)
 ```
 
 `RespRequestDecoder` 只处理 RESP / inline 字节、协议上限、ingress admission 和协议错误；它直接产出传输无关的 `ExecutionRequest`。因此同一个命令实现不需要知道请求来自 RESP array 还是 inline command，也不需要自己拼 RESP 回包。
@@ -66,7 +67,7 @@ HELLO 2 SETNAME <name>
 HELLO 3 SETNAME <name>
 ```
 
-`HELLO 2` 把连接设置为 RESP2 回包；`HELLO 3` 把连接切到基础 RESP3 reply encoding。切换成功后，`EngineSession.respVersion()` 会记录当前版本，后续 `RespReplyWriter` 根据 session 版本把同一组 `RedisReplyWriter` 语义编码成不同 RESP 形态。
+`HELLO 2` 把连接设置为 RESP2 回包；`HELLO 3` 把连接切到基础 RESP3 reply encoding。切换成功后，作为连接 session owner 的 `EngineSession` 会记录当前版本。命令执行返回语义 `RedisReply` 后，executor 按更新后的 session 版本创建 `RespReplyWriter`，再由中央 renderer 编码成相应 RESP 形态。
 
 `HELLO` 返回 5 个字段：`server`、`version`、`proto`、`mode`、`role`。在 RESP2 下这个 reply 是 flat array；在 RESP3 下是 map。例如 `HELLO 3` 成功后，响应包含 `proto: 3`，并且后续 map、null、bool、double 等语义会使用 RESP3 基础编码。
 
@@ -77,40 +78,40 @@ HELLO 3 SETNAME <name>
 - `HELLO` 在 `MULTI` 中被禁止；
 - RESP3 协商只表示回包编码切换，不表示完整 Redis RESP3 客户端生态兼容。
 
-## RedisReplyWriter 到 RESP 回包
+## RedisReply 到 RESP 回包
 
-`RedisReplyWriter` 是 Redis command reply model 的权威来源。命令实现调用 `simpleString`、`integer`、`bulkString`、`arrayHeader`、`mapHeader`、`nullValue`、`error` 等语义 API；RESP writer 只负责把这些 Redis reply 形状编码成线上 bytes。
+`RedisReply` 是命令结果的语义模型，`RedisReplyRenderer` 是唯一的命令结果遍历点。命令实现只构造 `SimpleString`、`IntegerValue`、`BulkString`、`Aggregate`、`NullValue`、`Error` 等变体；renderer 再调用 `RedisReplyWriter`。因此 `RedisReplyWriter` 只作为 renderer 面向 RESP encoder 的端口，不是命令 API。ingress admission 或协议错误属于命令管线之外的控制回复，仍由网络边界直接编码。
 
 RESP2 下的典型映射是：
 
-| `RedisReplyWriter` 语义 | RESP2 编码 |
+| `RedisReply` 语义 | RESP2 编码 |
 | --- | --- |
-| `simpleString("OK")` | `+OK\r\n` |
-| `integer(1)` | `:1\r\n` |
-| `bulkString(bytes)` | `$<len>\r\n<body>\r\n` |
-| `nullValue()` | `$-1\r\n` |
-| `nullArray()` | `*-1\r\n` |
-| `arrayHeader(n)` | `*<n>\r\n` |
-| `mapHeader(pairs)` | flat array，长度为 `pairs * 2` |
-| `setHeader(n)` / `pushHeader(n)` | array |
-| `booleanValue(true/false)` | integer `1` / `0` |
-| `doubleValue(v)` | bulk string |
-| `error(message)` | `-ERR ...\r\n` 或已有 Redis error prefix |
+| `SimpleString("OK")` | `+OK\r\n` |
+| `IntegerValue(1)` | `:1\r\n` |
+| `BulkString(...)` | `$<len>\r\n<body>\r\n` |
+| `NullValue` | `$-1\r\n` |
+| `NullArray` | `*-1\r\n` |
+| `Aggregate(ARRAY, ...)` | `*<n>\r\n` |
+| `Aggregate(MAP, ...)` | flat array，长度为 field/value 元素数 |
+| `Aggregate(SET/PUSH, ...)` | array |
+| `BooleanValue(true/false)` | integer `1` / `0` |
+| `DoubleValue(v)` | bulk string |
+| `Error(message)` | `-ERR ...\r\n` 或已有 Redis error prefix |
 
 RESP3 下，已有专属形态的语义会换成 RESP3 编码：
 
-| `RedisReplyWriter` 语义 | RESP3 编码 |
+| `RedisReply` 语义 | RESP3 编码 |
 | --- | --- |
-| `nullValue()` / `nullArray()` | `_\r\n` |
-| `mapHeader(pairs)` | `%<pairs>\r\n` |
-| `setHeader(n)` | `~<n>\r\n` |
-| `pushHeader(n)` | `><n>\r\n` |
-| `attributeHeader(pairs)` | `|<pairs>\r\n` |
-| `booleanValue(true/false)` | `#t\r\n` / `#f\r\n` |
-| `doubleValue(v)` | `,<value>\r\n` |
-| `bigNumberAscii(v)` | `(<value>\r\n` |
-| `verbatimString(format, data)` | `=<len>\r\n<format>:<data>\r\n` |
-| `blobError(message)` | `!<len>\r\n<message>\r\n` |
+| `NullValue` / `NullArray` | `_\r\n` |
+| `Aggregate(MAP, ...)` | `%<pairs>\r\n` |
+| `Aggregate(SET, ...)` | `~<n>\r\n` |
+| `Aggregate(PUSH, ...)` | `><n>\r\n` |
+| `Aggregate(ATTRIBUTE, ...)` | `|<pairs>\r\n` |
+| `BooleanValue(true/false)` | `#t\r\n` / `#f\r\n` |
+| `DoubleValue(v)` | `,<value>\r\n` |
+| `BigNumber(v)` | `(<value>\r\n` |
+| `VerbatimString(format, data)` | `=<len>\r\n<format>:<data>\r\n` |
+| `BlobError(message)` | `!<len>\r\n<message>\r\n` |
 
 没有 RESP3 专属形态的语义仍使用通用表达，例如 simple string、integer、bulk string 和 array。
 

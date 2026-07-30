@@ -101,7 +101,7 @@ Graceful shutdown is an ownership protocol, not merely a listener close:
 3. Ask the executor to reject new work, cancel non-started or capacity-waiting replies, and drain already-started owners.
 4. Let each connection sequencer flush READY heads in receive order; close after the final ordered reply when required.
 5. Wait up to `--replyDrainTimeoutMillis` for reply and child-channel drain. On timeout, force-close remaining children, preserve diagnostics, and report shutdown failure.
-6. Only after child ownership drains, close ingress and outbound budgets, engine/runtime resources, and Netty groups.
+6. Only after child ownership drains, close ingress and outbound budgets, instance runtime resources, and Netty groups.
 
 A timeout is not a successful close. `yierdis_reply_shutdown_timeouts`, live children, reserved/allocated bytes, and active slot counts are the first diagnostics. Retrying shutdown after a timeout must not hide the original failure or claim that active leases were safely drained.
 

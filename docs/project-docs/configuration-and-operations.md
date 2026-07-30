@@ -27,7 +27,7 @@ argv
 2. 将 `YierdisServerRuntimeConfig` 映射成 `YierdisInstanceConfig`。
 3. 创建 `YierdisInstance`，并取得 runtime access、maintenance 和 observability。
 4. 创建 `NettyServerInfoProvider`，绑定 instance observability。
-5. 创建 `DefaultYierdisEngine` 和命令模块。
+5. 由 `ServerCommandComposition` 注册命令模块并创建 `CommandDispatcher`。
 6. 创建单线程 `DefaultEventExecutorGroup(1)` 与 `CommandExecutor`。
 7. `executor.start()` 在 owner thread 上绑定 runtime。
 8. 按需在 Netty worker event loop 上调度 maintenance tick，但 DB 逻辑仍通过 `executeMaintenance(...)` 回到 owner thread。
@@ -234,7 +234,7 @@ java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SN
 
 `YierdisServerBootstrap.start(config)` 使用 `ok` 标记，启动任一步失败都会调用 `close()` 做清理。
 
-关闭是 best-effort，顺序大致是：server channel、cleanup future、executor graceful shutdown、engine、instance runtime access、command group、boss group、worker group。runtime access 的关闭会通过 `executor.executeOwnerTask(runtimeAccess::close)` 回到 owner thread，避免在错误线程释放已绑定 DB runtime。
+关闭是 best-effort，顺序大致是：server channel、child input、cleanup future、executor graceful shutdown、child reply drain、ingress/outbound budget、instance runtime access、command group、boss group、worker group。runtime access 的关闭会通过 `executor.executeOwnerTask(runtimeAccess::close)` 回到 owner thread，避免在错误线程释放已绑定 DB runtime。
 
 脚本层关闭逻辑也要按真实进程处理：只有 `scripts/smoke.sh` 拥有它启动的临时 server，并用 trap 清理；connect-only benchmark 不拥有也不停止目标 Yierdis。
 

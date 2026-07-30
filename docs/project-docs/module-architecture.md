@@ -139,13 +139,23 @@ protocol owns wire shape and reply encoding, not DB semantics.
 
 ## execution 和 server 车道
 
-`yierdis-server-api` 定义执行契约，例如 `ExecutionRequest`、`RedisReplyWriter` 和 `Session`。它是 command 和 protocol 之间的稳定接口层。
+`yierdis-server-api` 定义执行契约，例如 `ExecutionRequest`、`CommandSession`、`PreparedCommand`、`CommandResult`、`RedisReply` 和 `RedisReplyRenderer`。`RedisReplyWriter` 只作为 renderer 面向 RESP 编码实现的输出端口；命令实现不依赖它。
 
-`yierdis-server-core` 提供 `DefaultYierdisEngine` 之类的执行入口。
+`yierdis-server-core` 当前只提供 `EngineSession`。它是每条连接的 command session owner，持有 DB 选择、客户端 metadata、认证、RESP 协商和事务队列状态，不拥有命令解析、分发、执行或回复渲染。
 
-`yierdis-server-executor` 负责队列、预算、背压和 owner thread 调度。
+`yierdis-server-executor` 负责队列、预算、背压、owner thread 调度、回复容量预留和结果集中渲染。它执行的主链是：
 
-`yierdis-server-main` 负责最终组装，是真正的 composition root。生产启动路径在这里选择默认 DB backend：按 maxmemory scope 构造 `YierdisDbEngineFactory`，global scope 额外构造 instance-level `YierdisFfmMemoryRuntime("instance")`，再通过 `YierdisInstanceConfig` 注入 runtime。
+```text
+CommandExecutor
+  -> CommandDispatcher.prepare(session, request)
+  -> CommandSpec.handler().parse(CommandArgs)
+  -> CommandInvocation.prepare(session)
+  -> PreparedCommand
+  -> reserve -> validate -> execute(context)
+  -> CommandResult -> RedisReplyRenderer
+```
+
+`yierdis-server-main` 负责最终组装，是真正的 composition root。`ServerCommandComposition` 在这里把 builtin、server commands、registry 和 `CommandDispatcher` 组装到一起，bootstrap 再把 `dispatcher::prepare` 接到 `CommandExecutor`。生产启动路径也在这里选择默认 DB backend：按 maxmemory scope 构造 `YierdisDbEngineFactory`，global scope 额外构造 instance-level `YierdisFfmMemoryRuntime("instance")`，再通过 `YierdisInstanceConfig` 注入 runtime。
 
 `YierdisInstance.create(config)` 是 strict runtime 入口，要求调用方已经提供 `DbEngineFactory` 或 `EngineFactoryBinding`。embedded/test 同样显式组装这些依赖；runtime 本身不选择默认 DB backend。
 
@@ -155,11 +165,15 @@ command owns parsing and command semantics, not Netty.
 
 ### `yierdis-command-core`
 
-这里放命令注册、查表、解析和分发的核心实现。它应该只看执行契约和 DB 能力接口，不应该知道 Netty pipeline。
+这里放 `CommandRegistry`、`CommandDispatcher` 和事务控制命令。registry 在 composition 阶段接收 `CommandSpec`，sealed 后只读查表；dispatcher 负责请求检查、arity、事务策略、handler 解析和 invocation 准备，不知道 Netty pipeline。
+
+事务 active 时，queueable 命令只调用 `CommandSpec.handler().parse(CommandArgs)` 做 preflight，不调用 `CommandInvocation.prepare(session)`；回复容量预留成功后才 retain 请求并入队。`EXEC` replay 再经同一 dispatcher 准备子 `PreparedCommand`，并拥有这些子命令及 retained requests 的关闭责任。
 
 ### `yierdis-command-builtin`
 
-这里放内建命令实现，例如 `StringCommands`。它们实现的是命令语义，不是协议编码；真正的 DB 写入会通过 `DbWrites` 进入 `YierdisStringOps` 和 `YierdisDbMutationExecutor`。
+这里放内建命令实现，例如 `StringCommands`。它们实现的是命令语义，不是协议编码；handler 产生 `CommandInvocation`，准备后执行得到 `CommandResult`，真正的 DB 写入会通过 `DbWrites` 进入 `YierdisStringOps` 和 `YierdisDbMutationExecutor`。
+
+命令只构造语义 `RedisReply`。bulk、byte sequence 和 byte map 结果可携带流式 emitter 及 retained source ownership，直到执行器中的 `RedisReplyRenderer` 消费完结果；命令不会直接调用 `RedisReplyWriter`。`QUIT` 的连接关闭语义同样由 `CommandResult.closeAfterReply(...)` 携带。
 
 `yierdis-command-builtin` 不直接依赖 `yierdis-command-core`。它通过 `yierdis-command-api` 暴露 command module / command spec，最终由 `yierdis-server-main` 把 builtin module 和 command core 组装到一起。
 
@@ -188,8 +202,10 @@ architecture tests protect dependency direction.
 它们主要防几类退化：
 
 - command 模块不能直接依赖 storage implementation
+- command 实现不能直接依赖 `RedisReplyWriter`，回复必须由 `CommandResult` 进入集中 renderer
 - storage 不能反向依赖 command / server
 - server-main 可以组装各层，但其它层不能依赖 app server
+- `CommandDispatcher` 由 server-main composition root 持有，`EngineSession` 只保留连接 session 职责
 - RESP 仍然是唯一 active public protocol lane
 
 ## 改模块边界前先看什么

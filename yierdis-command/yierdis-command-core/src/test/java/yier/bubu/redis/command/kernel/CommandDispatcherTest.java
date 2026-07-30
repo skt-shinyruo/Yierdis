@@ -3,12 +3,11 @@ package yier.bubu.redis.command.kernel;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.command.api.CommandArgs;
 import yier.bubu.redis.command.api.CommandArity;
-import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandHandler;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandParseException;
-import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
@@ -35,6 +34,7 @@ import yier.bubu.redis.storage.api.YierdisCommandException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -64,20 +64,18 @@ public class CommandDispatcherTest {
         AtomicReference<MutationContext> successfulContext = new AtomicReference<>();
         AtomicReference<MutationContext> failedContext = new AtomicReference<>();
         CommandDispatcher dispatcher = CommandRegistries.dispatcher(registration -> {
-            registration.register(new CommandDefinition<>(
+            registration.register(new CommandSpec(
                     syntax("SCOPED"),
-                    CommandParsers.args(),
-                    (request, preparation) -> prepared(ReplyShapes.simpleString("OK"), context -> {
-                        Assert.assertSame(request.request(), context.mutationContext().commandRecord());
+                    args -> session -> prepared(ReplyShapes.simpleString("OK"), context -> {
+                        Assert.assertSame(args.request(), context.mutationContext().commandRecord());
                         successfulContext.set(context.mutationContext());
                         return CommandResult.reply(RedisReplies.simpleString("OK"));
                     })
             ));
-            registration.register(new CommandDefinition<>(
+            registration.register(new CommandSpec(
                     syntax("FAIL"),
-                    CommandParsers.args(),
-                    (request, preparation) -> prepared(ReplyShapes.simpleString("OK"), context -> {
-                        Assert.assertSame(request.request(), context.mutationContext().commandRecord());
+                    args -> session -> prepared(ReplyShapes.simpleString("OK"), context -> {
+                        Assert.assertSame(args.request(), context.mutationContext().commandRecord());
                         failedContext.set(context.mutationContext());
                         throw new IllegalStateException("injected");
                     })
@@ -99,11 +97,10 @@ public class CommandDispatcherTest {
     public void transactionReplayUsesTheQueuedRequestAsItsCurrentMutationRecord() {
         AtomicReference<MutationContext> replayContext = new AtomicReference<>();
         CommandDispatcher dispatcher = CommandRegistries.dispatcher(registration -> registration.register(
-                new CommandDefinition<>(
+                new CommandSpec(
                         syntax("SCOPED"),
-                        CommandParsers.args(),
-                        (request, preparation) -> prepared(ReplyShapes.simpleString("OK"), context -> {
-                            Assert.assertSame(request.request(), context.mutationContext().commandRecord());
+                        args -> session -> prepared(ReplyShapes.simpleString("OK"), context -> {
+                            Assert.assertSame(args.request(), context.mutationContext().commandRecord());
                             replayContext.set(context.mutationContext());
                             return CommandResult.reply(RedisReplies.simpleString("OK"));
                         })
@@ -121,11 +118,10 @@ public class CommandDispatcherTest {
     @Test
     public void dispatcherPreparationAcceptsCompleteCommandSession() {
         CommandDispatcher dispatcher = CommandRegistries.dispatcher(registration -> registration.register(
-                new CommandDefinition<>(
+                new CommandSpec(
                         syntax("LOCAL"),
-                        CommandParsers.args(),
-                        (request, preparation) -> prepared(
-                                ReplyShapes.simpleString("DB_" + preparation.session().dbIndex()),
+                        args -> session -> prepared(
+                                ReplyShapes.simpleString("DB_" + session.dbIndex()),
                                 context -> CommandResult.reply(RedisReplies.simpleString(
                                         "DB_" + context.session().dbIndex()))
                         )
@@ -283,6 +279,23 @@ public class CommandDispatcherTest {
             Assert.assertEquals(1, prepares.get());
             Assert.assertEquals(0, session.tx.enqueueCalls);
             Assert.assertEquals("OK", execute(prepared, session, request).simpleString());
+        }
+    }
+
+    @Test
+    public void everyTransactionControlHandlerParsesWithoutSessionAccess() throws Exception {
+        CommandRegistry registry = new CommandRegistry();
+        CommandDispatcher dispatcher = new CommandDispatcher(registry);
+        new TransactionCommands(dispatcher).register(registry);
+        registry.seal();
+
+        Assert.assertEquals(Set.of("MULTI", "DISCARD", "EXEC"),
+                Set.of(registry.upperNamesSorted()));
+        for (String name : registry.upperNamesSorted()) {
+            try (ExecutionRequest request = request(name)) {
+                CommandSpec spec = registry.specByUpperName(name);
+                Assert.assertNotNull(name, spec.handler().parse(CommandArgs.of(request)));
+            }
         }
     }
 

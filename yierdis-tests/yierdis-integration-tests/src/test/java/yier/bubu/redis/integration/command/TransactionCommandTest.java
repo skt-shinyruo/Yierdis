@@ -2,9 +2,8 @@ package yier.bubu.redis.integration.command;
 
 import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.command.api.CommandArity;
-import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
-import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import org.junit.Assert;
@@ -149,11 +148,10 @@ public class TransactionCommandTest {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(
                     db,
-                    registration -> registration.register(new CommandDefinition<>(
+                    registration -> registration.register(new CommandSpec(
                             new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
                                     TransactionPolicy.DISALLOWED_IN_MULTI),
-                            CommandParsers.args(),
-                            (cmd, context) -> TestPreparedCommands.simpleString("HELLO")
+                            args -> session -> TestPreparedCommands.simpleString("HELLO")
                     ))
             );
             TestSession session = new TestSession();
@@ -176,11 +174,10 @@ public class TransactionCommandTest {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(
                     db,
-                    registration -> registration.register(new CommandDefinition<>(
+                    registration -> registration.register(new CommandSpec(
                             new CommandSyntax("STRICT", CommandArity.exact(2), CommandKeySpec.NONE,
                                     TransactionPolicy.QUEUEABLE),
-                            CommandParsers.args(),
-                            (args, context) -> TestPreparedCommands.simpleString("OK")
+                            args -> session -> TestPreparedCommands.simpleString("OK")
                     ))
             );
             TestSession session = new TestSession();

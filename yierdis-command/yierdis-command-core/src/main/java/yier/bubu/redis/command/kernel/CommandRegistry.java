@@ -1,6 +1,5 @@
 package yier.bubu.redis.command.kernel;
 
-import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandSpec;
 
@@ -24,11 +23,6 @@ public final class CommandRegistry implements CommandModule.Registration {
         }
     }
 
-    @Override
-    public void register(CommandDefinition<?> definition) {
-        register(LegacyCommandAdapter.adapt(Objects.requireNonNull(definition, "definition")));
-    }
-
     public void seal() {
         if (sealedSpecs == null) {
             sealedSpecs = Map.copyOf(mutableSpecs);
@@ -44,12 +38,6 @@ public final class CommandRegistry implements CommandModule.Registration {
     public boolean containsUpperName(String nameUpper) {
         String normalized = normalizeMetadataName(nameUpper);
         return normalized != null && specs().containsKey(normalized);
-    }
-
-    @Override
-    public CommandDefinition<?> definitionByUpperName(String nameUpper) {
-        CommandSpec spec = specByUpperName(nameUpper);
-        return spec == null ? null : LegacyCommandAdapter.definitionOf(spec);
     }
 
     @Override

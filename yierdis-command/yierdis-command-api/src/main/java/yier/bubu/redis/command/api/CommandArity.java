@@ -67,10 +67,6 @@ public final class CommandArity {
         }
     }
 
-    CommandParseError validate(String commandLower, ArgReader args) {
-        return accepts(args.argc()) ? null : CommandParseError.wrongArity(commandLower);
-    }
-
     private boolean accepts(int argc) {
         return switch (kind) {
             case EXACT -> argc == first;

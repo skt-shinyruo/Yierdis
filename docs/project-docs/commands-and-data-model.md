@@ -1,89 +1,114 @@
 # 命令层与数据模型
 
-本文说明命令层如何注册、解析和分发命令，以及命令语义如何映射到 DB 能力、逻辑类型和内部编码。
+本文说明命令层如何注册、解析和执行命令，以及命令语义如何映射到 DB capability、逻辑类型和内部编码。
 
 ## 命令层职责
 
-命令层位于协议和 DB 之间。它接收传输无关的 `ExecutionRequest`，选择对应命令，解析参数，调用 DB capability，并通过 `RedisReplyWriter` 写回语义结果。
-
-主路径可以简化成：
+命令层位于协议和 DB 之间。它接收 transport-neutral 的 `ExecutionRequest`，选择 `CommandSpec`，用 `CommandArgs` 解析参数，通过 invocation 准备 DB 操作，最后返回语义 `CommandResult`。
 
 ```text
-ExecutionRequest
-  -> YierdisFastCommandProcessor
-  -> CommandRegistry
-  -> CommandDefinition<ArgReader> / typed CommandDefinition<T>
-  -> CommandPreparationContext / PreparedCommand
-  -> CommandExecutionContext
-  -> CommandSupport
-  -> DbReads / DbWrites / DbEngine
-  -> typed ops
+CommandExecutor
+  -> CommandDispatcher.prepare(session, request)
+  -> CommandSpec.handler().parse(CommandArgs)
+  -> CommandInvocation.prepare(session)
+  -> PreparedCommand
+  -> reserve -> validate -> execute(context)
+  -> CommandResult -> RedisReplyRenderer
 ```
 
-命令层不直接解析 RESP 字节，也不直接管理 allocator、entry table 或具体 value root。它负责 Redis 风格最小子集的命令语义：已经实现的命令尽量采用 Redis 风格参数、错误和返回值；未实现的 Redis 能力不在这里隐式承诺。
+命令层不解析 RESP bytes，不直接管理 allocator、entry table 或 value root，也不写 reply sink。`RedisReplyWriter` 只存在于 executor 调用的 `RedisReplyRenderer` 一侧，是 renderer 的 RESP-facing port；command implementation 只构造 `RedisReply`。
 
 ## 分发与事务专题入口
 
-本页只保留命令抽象、命令家族和逻辑类型模型。
+本页保留命令抽象、命令家族、streamed result 和逻辑类型模型。
 
-- 如果你要追 `CommandRegistry`、`CommandDefinition`、`ArgReader`、parse error、unknown command 或事务排队，请看 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)。
-- 如果你要追 `MULTI/EXEC/DISCARD`、队列快照、abort、replay 和 queue limit，请看 [`transaction-and-replay.md`](./transaction-and-replay.md)。
+- 查表、`CommandArgs`、parse error、unknown command 和 transaction preflight 见 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)；
+- `MULTI/EXEC/DISCARD`、retained request、abort、replay 和 queue limit 见 [`transaction-and-replay.md`](./transaction-and-replay.md)；
+- 从 Netty 到 renderer 的完整主路径见 [`request-execution-flow.md`](./request-execution-flow.md)。
 
-## CommandRegistry 和 CommandDefinition
+## `CommandRegistry`、`CommandSpec` 和 handler
 
-composition root 创建 `CommandRegistry` 和 `YierdisFastCommandProcessor`，再注册 `TransactionCommands` 与注入的 `CommandModule`。生产默认模块来自 `DefaultCommandModules`，server runtime 还会补充 `ServerCommandModule`。
+`ServerCommandComposition` 通过 `CommandRegistries.dispatcher(...)` 创建 `CommandRegistry` 与 `CommandDispatcher`。事务控制命令先注册，随后注册 `DefaultCommandModules` 和 `ServerCommandModule`，最后 seal registry。
 
-`CommandRegistry` 是命令名到 `CommandDefinition` 的查找表。处理器读取 `argv[0]` 后，按 ASCII case-insensitive 方式查找注册项；找不到时返回 unknown command。
+`CommandRegistry` 是 upper-case command name 到 `CommandSpec` 的单一映射。`CommandSpec` 包含：
 
-`CommandDefinition<T>` 是单条命令的统一注册形状，包含：
+- `CommandSyntax`：name、`CommandArity`、`CommandKeySpec` 和 `TransactionPolicy`；
+- `CommandHandler`：`parse(CommandArgs)`，成功时返回 `CommandInvocation`。
 
-- `CommandSyntax`：保存命令名、`CommandArity`、`CommandKeySpec` 和 `TransactionPolicy`；
-- `CommandParser<T>`：把 `ArgReader` 解析成 `T`；
-- `CommandPreparer<T>`：把解析结果准备成带 `ReplyShape` 的 `PreparedCommand`。
+dispatcher 先做命令名、null argument、lookup 和 arity 检查，再调用 handler。handler 只读取 argv 并生成不可变的解析结果；它不能读取 session、路由 DB 或调用 server provider。这个限制让普通执行与 `MULTI` 入队 preflight 复用同一个 parse 行为。
 
-简单命令通常使用 `CommandParsers.args()`，让 preparer 直接接收 `ArgReader`；更复杂的命令使用 typed parsed object，把参数形状和业务准备分开。`args.request()` 是需要 retained 参数、slice、bulk traversal 或 request snapshot 时的底层逃生口，不是默认 parser 形状。
+`CommandInvocation.prepare(CommandSession)` 是参数解析与状态访问之间的边界。它可以根据当前 DB index 和连接状态：
 
-完整的分发表构建、`YierdisFastCommandProcessor.prepare(...)` 主流程和事务入队前复用校验，不在本页展开，统一见 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)。
+- 准备带 validation 的 mutation；
+- 执行只读查询并取得有所有权的 result source；
+- 返回固定语义回复；
+- 构造在执行阶段调用 DB capability 的 action。
+
+无论哪种分支，最终都返回 `PreparedCommand`，由 executor 负责容量预留、validation、execution、render 和 close。
 
 ## 参数解析和错误
 
-参数解析集中在 command API 的几个小组件里：
+参数处理集中在两个层次：
 
-- `ArgReader` 包住 `ExecutionRequest`，提供 `argc()`、`bytes(index)`、`is(index, literal)`、`longAt(...)`、`positiveLongAt(...)` 等读取能力，并尽量直接基于 argv bytes 做 ASCII 比较。
-- `CommandArity` 表达参数个数规则，包括 exact、min、range、one-of 和 pair-tail。pair-tail 用于 `HSET field value ...`、`ZADD score member ...` 这类尾部成对参数。
-- `CommandParsers.args()` 是 `ArgReader` identity parser；需要 typed value 时由命令家族提供自己的 `CommandParser<T>`。
-- `CommandParseError` 集中表达 wrong arity、syntax、integer out of range 和自定义错误，并转换成 Redis 风格 reply 文案。
+- `CommandArity` 表达 exact、min、range、one-of 和 pair-tail 等 argc 规则；
+- `CommandArgs` 提供 argv shape、`BytesSlice`、byte array、ASCII literal、UTF-8 和整数读取。
 
-`CommandDefinition.parse(...)` 先运行 arity 校验，再返回 parser 的结果。解析失败时，处理器准备一个 error command；解析成功时，preparer 才会运行。这个约束同样用于事务入队：`MULTI` 状态下，普通命令会先 lookup definition、检查事务策略、运行 parser，通过后才 retain `ExecutionRequest` 并返回 `QUEUED`。
+wrong arity 由 dispatcher 在 handler 前统一生成。命令特有的 option、subcommand、cursor、score 和 integer 约束由 handler 检查，并抛出带最终 Redis error message 的 `CommandParseException`。
 
-这里保留的是 parser 抽象和错误模型；真正的分支顺序、unknown command、change observer gate 和错误翻译，见 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)。
+parse 阶段只产生 `CommandInvocation`，不会访问 DB，也不会创建 reply source。对于 `MULTI` 中的 queueable command，dispatcher 会运行同一个 handler parse；成功后只 retain request 并返回 `QUEUED`，invocation 要到 `EXEC` replay 才 prepare。
 
-## 准备、执行上下文和 RedisReplyWriter
+## 准备、执行和语义结果
 
-命令分成两个明确阶段：
+`PreparedCommand` 把执行前和执行后的责任分开：
 
-- `CommandPreparationContext` 只提供 `CommandSession`。preparer 在 reply capacity 预留前完成参数校验、只读查询、mutation prepare 和 `ReplyShape` 计算。
-- `CommandExecutionContext` 在 capacity 预留成功后创建，提供同一个 `CommandSession`、`RedisReplyWriter` 和请求级 `MutationContext`。`PreparedCommand.execute(...)` 在这个阶段执行一次。
+- `reservationShape()` 给出 encoded reply 与 retained source 的容量上界；
+- `validateBeforeExecute()` 检查 prepare 时观察的状态是否仍可执行；
+- `execute(CommandExecutionContext)` 在容量已预留时提交动作，返回 `CommandResult`；
+- `close()` 归还 mutation、DB source、retained request 或其他 owner。
 
-`CommandSession` 聚合当前 DB index、transaction、client metadata、connection stats 和 protocol negotiation 能力。准备阶段不能写 reply；执行阶段则在已经预留的形状内写 reply，并把 mutation record 显式传给 DB 写视图。
+`CommandExecutionContext` 只包含当前 `CommandSession` 与请求级 `MutationContext`。它没有 reply writer。`CommandResult` 则包含语义 `RedisReply` 和 `closeAfterReply` flag。
 
-`RedisReplyWriter` 是命令层唯一的 Redis reply 语义模型。命令 handler 写的是 `simpleString`、`bulkString`、`integer`、`arrayHeader`、`mapHeader`、`nullValue`、`error` 等 Redis reply 形状，不写 `+OK\r\n`、`$-1\r\n` 这类协议字节。RESP2 / RESP3 的差异由协议 writer 根据连接版本处理。
-
-`CommandSupport` 是内置命令的公共工具箱。参数读取统一由 `ArgReader` 完成；`CommandSupport` 负责选择当前 DB、创建 preparation/execution 对应的 DB view、复用 scratch buffer，并把 DB 返回的 bulk-string 序列适配到 `PreparedCommand` 和 `RedisReplyWriter`。
-
-集合读命令通常按这个顺序写回：
+executor 的固定顺序是：
 
 ```text
-read DB result
-  -> out.arrayHeader(...) / out.mapHeader(...)
-  -> result.emitTo(new BulkStringReplyAdapter(out))
+PreparedCommand
+  -> reserve reservationShape
+  -> validateBeforeExecute
+  -> execute(CommandExecutionContext)
+  -> CommandResult
+  -> RedisReplyRenderer.render(reply, RedisReplyWriter)
+  -> close PreparedCommand
 ```
 
-这让 DB/value/off-heap 代码不依赖 RESP，也避免命令层为了回包提前复制完整集合结果。
+RESP2 / RESP3 的标量与 aggregate 编码由协议 writer 根据 session version 处理。`QUIT` 也不调用 writer；它返回 `CommandResult.closeAfterReply(...)`，由 executor 和 ordered reply slot 完成关闭。
+
+## `CommandSupport` 与 DB capability
+
+`CommandSupport` 是 built-in command 的公共边界。它持有 `YierdisDbRouter`、可选 `ServerInfoProvider` 和 `SlowCommandGovernor`，并提供两种 DB 视图：
+
+- `commandDb(CommandSession)`：prepare 阶段的 DB 选择，不带 mutation context；
+- `commandDb(CommandExecutionContext)`：execute 阶段的 DB 选择，显式携带当前 request 的 mutation context。
+
+`CommandSupport.preparedMutation(...)` 把 `PreparedMutation.isCurrent()` 接到 validation，把 mutation owner 交给 `PreparedCommand`，并在 execute 中把 expected DB error 转成 control result。命令家族依赖 `DbReads`、`DbWrites`、`DbEngine` 和 typed ops，不触碰 native handle 或 RESP bytes。
+
+## semantic streamed reply source
+
+只读 DB API 不必先复制完整 payload。它们可以返回：
+
+- `ByteValue`：单个 bulk-string 或 null；
+- `ByteSequenceSource`：bulk-string sequence；
+- `ByteMapSource`：field/value pairs；
+- `CollectionScanWindow`：带 cursor 的一次 scan window。
+
+`DbReplies` 把这些 source 转成 `RedisReply.BulkString`、`ByteSequence` 或 `ByteMap`。语义 reply 记录 element count、payload lengths、retained source bytes 和同步 emitter；`PreparedCommands.owned(...)` 让 prepared command 持有 source。
+
+executor 先把 source 的 retained memory 纳入 reply preflight，再执行并交给 renderer。renderer 在 command owner thread 同步调用 emitter；渲染完成后 executor 关闭 prepared command，source 才 unpin 或释放。source ownership 不会转移给 `RedisReplyWriter` 或 Netty event loop。
+
+`EXEC` 的 streamed child 也遵守这一规则：child prepared command 持有 source，外层 transaction prepared command 持有 child，直到整个 aggregate 被 renderer 消费完才逆序关闭。
 
 ## 命令家族总览
 
-当前命令语义是 Redis-style minimum subset where implemented。具体支持情况以 `CommandRegistry`、内置命令模块和对应测试为准；不要把文档表格当作完整 Redis command reference。
+当前命令语义是已实现范围内的 Redis-style minimum subset。准确支持面以生产注册和测试为准，表格不承诺完整 Redis command set。
 
 | 家族 | 主要模块 | 代表命令 |
 | --- | --- | --- |
@@ -97,11 +122,11 @@ read DB result
 | zset | `ZSetCommands` | `ZADD`、`ZRANGE`、`ZREVRANGE`、`ZRANGEBYSCORE`、`ZREVRANGEBYSCORE`、`ZREMRANGEBYSCORE`、`ZREMRANGEBYRANK`、`ZREM`、`ZSCAN` |
 | transaction | `TransactionCommands` | `MULTI`、`EXEC`、`DISCARD` |
 
-connection/server 命令更多操作连接态、握手兼容、server runtime 信息和执行框架；数据结构命令则通过 DB capability 修改或读取逻辑类型。
+connection/server 命令主要操作连接态、协议协商和 runtime 信息；数据结构命令通过 DB capability 读取或修改逻辑类型。
 
 ## HSCAN、SSCAN 和 ZSCAN
 
-集合扫描命令复用 `CollectionScanCommandSupport` 的参数解析和回复写入：
+集合扫描命令复用 `CollectionScanCommandSupport` 的参数规则：
 
 ```text
 HSCAN key cursor [MATCH pattern] [COUNT count] [NOVALUES]
@@ -109,44 +134,44 @@ SSCAN key cursor [MATCH pattern] [COUNT count]
 ZSCAN key cursor [MATCH pattern] [COUNT count]
 ```
 
-`cursor` 应传入上一页返回的非负十进制游标；`0` 表示开始一次迭代，返回 `0` 表示本轮迭代结束。`MATCH` 使用 glob pattern，只匹配 hash field、set member 或 zset member，不匹配 hash value 或 zset score。`COUNT` 默认为 10，参数必须在 `1..Integer.MAX_VALUE` 内。选项可以按任意顺序出现；`NOVALUES` 只对 `HSCAN` 有效，启用后只返回 field。
+`cursor` 是非负十进制值；`0` 开始迭代，返回 `0` 表示本轮结束。`MATCH` 只匹配 field/member，不匹配 hash value 或 zset score。`COUNT` 默认为 10，范围是 `1..Integer.MAX_VALUE`。option 可以换序；`NOVALUES` 只适用于 `HSCAN`。
 
-三条命令都返回两元素数组：第一个元素是 bulk string 形式的下一游标，第二个元素是 bulk string 数组。元素数组的形状分别是：
+三条命令都返回两元素 array：下一 cursor 和元素 sequence。元素形状分别为：
 
-- `HSCAN`：默认按 `field, value, ...` 交替排列；`NOVALUES` 模式只包含 field。
-- `SSCAN`：`member, ...`。
-- `ZSCAN`：按 `member, score, ...` 交替排列，score 使用 Redis 风格十进制文本。
+- `HSCAN`：`field, value, ...`，`NOVALUES` 时只有 field；
+- `SSCAN`：`member, ...`；
+- `ZSCAN`：`member, score, ...`。
 
-不存在的 key 返回游标 `0` 和空元素数组；存在但类型不匹配的 key 返回 `WRONGTYPE`。
+不存在的 key 返回 cursor `0` 与空 sequence，类型不匹配返回 `WRONGTYPE`。`COUNT` 是工作量 hint，不是精确页大小。
 
-`COUNT` 是工作量和期望返回量的 hint，不是精确页大小。具体行为取决于内部编码：
+- `HASH_PACKED`、`SET_INTSET`、`ZSET_PACKED` 的 compact 分支在初始 cursor 上过滤并物化当前稳定 heap window，通常一次返回并终止；
+- `HASH_HT`、`SET_HT`、`ZSET_SKIPLIST` member table 的 dictionary 分支按物理 slot 有界扫描，空槽与 `MATCH` 过滤会使实际返回少于 count，甚至为空但 cursor 非零。
 
-- `HASH_PACKED`、`SET_INTSET`、`ZSET_PACKED` 属于 compact 分支。游标为 `0` 时会过滤并物化全部匹配元素，一次返回且下一游标为 `0`，即使 `COUNT 1` 也可能返回整个集合；传入非零游标时返回空的终止页。这样可以避免 packed 数组删除、hash field 移位或 zset 改分重排破坏位置游标。
-- `HASH_HT`、`SET_HT` 以及 `ZSET_SKIPLIST` 的 member table 属于字典分支。实现按物理 slot 做有界扫描，单次匹配的逻辑 field/member 数为 `min(COUNT, 1024)`；slot budget、空槽和 `MATCH` 过滤都可能让实际返回量更少，甚至返回空数组但下一游标仍非零。`HSCAN` 和 `ZSCAN` 的 field/member 与附属 value/score 仍作为一组计入这个逻辑条目上限。
+dictionary window 只 pin 被选中的 native payload，并把延迟回收量放进 `retainedSourceBytes`。renderer 发射 window 后，executor 关闭它并 unpin。compact window 使用稳定 heap byte arrays，也参与 reply admission。
 
-字典分支不会复制整个集合。一次扫描只 pin 已选中的 native field/member/value handle，并把这些 pin 可能延迟回收的 native payload 纳入 reply retained-memory 预检；元素同步写入 `RedisReplyWriter` 后窗口立即关闭并 unpin。compact 分支则用稳定的 heap byte arrays 构造本页窗口，同样把窗口保留量计入 reply admission。
+这些 cursor 提供 Redis 风格弱一致迭代，不是快照或稳定顺序。并发新增、删除、rehash 和编码切换会影响可见元素，调用方应允许重复并自行去重；cursor 不能跨 DB、key 删除重建或集合生命周期长期保存。
 
-这些游标提供的是 Redis 风格弱一致迭代，不是快照，也没有稳定顺序。迭代期间新增的元素可能出现也可能不出现，已经返回的元素可能因 rehash 或结构代变化再次出现，调用方应自行去重；删除或改分会影响后续可见结果。generation-aware 游标以可推进、可终止为目标，并在 generation token 未回绕时避免遗漏整个迭代期间始终存在的元素，但不能作为跨 DB、跨 key 删除重建或跨集合生命周期长期保存的书签。
+## `StringCommands` 主路线
 
-## `StringCommands` 的主路线
+`SET`、`GET`、`APPEND`、`INCR` 等命令先由 handler 解析 argv，再由 invocation 或 prepared action 使用 typed string ops。
 
-`StringCommands` 是 string / bitmap 家族的主入口。`SET`、`GET`、`APPEND`、`INCR` 这类命令不是各自独立地直连 DB，而是先走 `CommandSupport` 再走 typed ops / `DbEngine`，让 wrong-type、NX/XX/EX/PX/KEEPTTL 和整数分支都收敛到同一条命令语义里。
+- `SET` 在 prepare 阶段创建 `PreparedMutation` 与 preview reply，executor 预留和 validation 后才 commit；
+- `GET` 在 prepare 阶段取得 `ByteValue`，用 semantic bulk reply 引用 source，渲染后释放；
+- `APPEND`、`SETBIT` 等已知 reply 上界的动作在 execute 阶段访问 write ops，并返回 integer/control result。
 
-bitmap 只是 string bytes 的一种视图，因此 `SETBIT`、`GETBIT`、`BITCOUNT` 和普通 string 命令共享 `ValueType.STRING` 及其 wrong-type 约束。写路径最终仍会经过 `YierdisDbMutationExecutor`、`YierdisDbKeyLifecycle` 和对应的 TTL / memory 账本；读路径则通过 `RedisReplyWriter` 把结果写回，而不是直接拼 RESP bytes。
-
-如果要改 `StringCommands`，优先看 string 家族测试、`StringWriteOps` / `StringReadOps`、`commands-and-data-model.md` 的逻辑类型映射，以及 [`request-execution-flow.md`](./request-execution-flow.md) 里的 `SET` 主链。
+bitmap 是 string bytes 的一种视图，因此 `SETBIT`、`GETBIT`、`BITCOUNT` 与普通 string 命令共享 `ValueType.STRING` 和 wrong-type 约束。写路径仍经过 DB mutation、TTL 和 memory ledger；读路径返回 `RedisReply`，不直接编码 RESP。
 
 ## 逻辑类型和内部编码
 
-用户看到的是逻辑类型，DB 记录的是逻辑类型加内部编码。逻辑类型由 `ValueType` 表达，当前包括：
+用户看到逻辑类型，DB 记录逻辑类型与内部编码。`ValueType` 当前包括：
 
-- `STRING`
-- `LIST`
-- `SET`
-- `HASH`
-- `ZSET`
+- `STRING`；
+- `LIST`；
+- `SET`；
+- `HASH`；
+- `ZSET`。
 
-内部编码由 `ValueEncoding` 表达，常见映射是：
+`ValueEncoding` 的常见映射是：
 
 | 逻辑类型 | 内部编码 |
 | --- | --- |
@@ -156,47 +181,45 @@ bitmap 只是 string bytes 的一种视图，因此 `SETBIT`、`GETBIT`、`BITCO
 | set | `SET_INTSET`、`SET_HT` |
 | zset | `ZSET_PACKED`、`ZSET_SKIPLIST` |
 
-`OBJECT ENCODING key` 会把这些内部编码格式化成更熟悉的 Redis 风格名称，例如 `int`、`embstr`、`raw`、`listpack`、`hashtable`、`intset`、`quicklist`、`skiplist`。
+`OBJECT ENCODING key` 把内部编码格式化为 Redis 风格名称，如 `int`、`embstr`、`raw`、`listpack`、`hashtable`、`intset`、`quicklist` 和 `skiplist`。
 
-编码切换由 value 层和 DB 层决定，不由命令 handler 手工选择。典型阈值包括：
+编码选择与升级由 value/DB 层拥有：
 
-- hash packed 到 hashtable：entry 数量或 field/value 字节大小超过阈值；
-- list packed 到 quicklist：紧凑块大小超过阈值；
-- set intset 到 hashtable：出现非整数 member 或元素数量超过阈值；
-- zset packed 到 skiplist：entry 数量或 member 字节大小超过阈值；
-- string int/embstr/raw：根据是否可解析为 long 和字符串长度选择。
+- hash 根据 entry 数或 field/value 长度从 packed 升为 hashtable；
+- list 根据 compact block 约束从 packed 升为 quicklist；
+- set 遇到非整数 member 或超过阈值时从 intset 升为 hashtable；
+- zset 根据 entry 数或 member 长度从 packed 升为 skiplist；
+- string 根据整数可解析性和长度选择 int、embstr 或 raw。
 
-命令层只通过 `DbReads`、`DbWrites`、`DbEngine` 和 typed ops 操作这些逻辑类型。allocator handle、entry table、native object kind 和 off-heap payload 细节属于 DB/value 层。
+命令 handler 不手工选择编码。allocator handle、entry table、native object kind 和 off-heap payload 都属于 DB/value 层。
 
-## HLL、bitmap 和 string 的关系
+## HLL、bitmap 和 string
 
-bitmap 没有独立逻辑类型。`SETBIT`、`GETBIT`、`BITCOUNT` 操作的是 string bytes，因此它们和 `GET`、`STRLEN`、`APPEND` 等命令共享 `ValueType.STRING`。当一个 key 不是 string 时，bitmap 命令也会遵守同一类 wrongtype 约束。
+bitmap 没有独立逻辑类型，始终操作 string bytes。
 
-HLL 也没有独立 `ValueType`。命令层有 `HllCommands`，DB 层有 `YierdisHllOps`，但底层对象仍然是 `ValueType.STRING`。是否是 HLL payload 由 `YierdisHyperLogLog` 的格式约定判断。
+HLL 也没有独立 `ValueType`。命令层由 `HllCommands` 表达语义，DB 层由 HLL typed ops 处理，但底层对象仍是 `ValueType.STRING`；payload 是否为有效 HLL 由其格式约定判断。
 
-这种设计让 Redis 风格命令家族可以单独存在，同时避免类型系统为 bitmap 和 HLL 再扩出额外主类型。
+这允许命令家族独立演进，同时避免在主类型系统里为 bitmap 和 HLL 增加额外逻辑类型。
 
 ## 事务中的命令语义
 
-事务是连接级状态，由 `TransactionCommands` 和 command processor 协作实现。
+事务状态属于每连接 `CommandSession`。生产中的 `EngineSession` 只作为该连接 session 的具体 owner，并在其 `TransactionState` 中保存 active、aborted、retained request queue 和 queue limits。
 
-`MULTI` 开启事务后，大多数普通命令不会立即执行。处理器会先查 `CommandRegistry`，检查对应 `CommandSyntax.transactionPolicy()`，并运行同一套 `CommandDefinition.parse(...)`。解析通过后，事务队列会 retain 当前 `ExecutionRequest`，客户端收到 `QUEUED`。
+`MULTI` 后，queueable command 仍经过 registry、arity、transaction policy 和 handler parse；通过后才在 reply reservation 后 retain `ExecutionRequest` 并返回 `QUEUED`。DB preparation 与 execution 不发生在排队阶段。
 
-`EXEC` 回放已入队的请求，按队列顺序调用同一个命令处理器执行；`DISCARD` 清空队列并退出事务。事务控制命令本身有特殊策略，例如 `HELLO` 这类连接协议协商命令在 `MULTI` 中被禁止。
+`EXEC` 对 retained requests 调用同一个 dispatcher replay path，逐条得到 child `CommandResult`，聚合 `RedisReply` 后交回 executor 的单一 renderer。`DISCARD` 关闭队列并退出 transaction。
 
-这里的事务语义是 Redis 风格最小子集：它提供连接级队列和顺序回放，但不应被理解成完整 Redis 事务生态、Lua、watch 或集群语义。
-
-本页只解释事务在 command model 里的位置。`TransactionState` 的所有权、为什么队列里保存 retained `ExecutionRequest`、`EXEC` 如何 replay、abort/cleanup/queue limit 如何收敛，都放在 [`transaction-and-replay.md`](./transaction-and-replay.md)。
+该实现是 Redis-style 的连接级排队与顺序重放，不隐含 `WATCH`、Lua 或 cluster transaction 语义。
 
 ## 新增命令时的路线
 
-新增命令时优先沿着现有命令层边界走：
+1. 确认命令 family，或实现新的 `CommandModule`。
+2. 注册 `CommandSpec(CommandSyntax, CommandHandler)`，补齐 arity、key spec 和 transaction policy。
+3. 在 `handler.parse(CommandArgs)` 中完成纯 argv 解析；错误抛 `CommandParseException`，不得访问 session 或 DB。
+4. 返回 `CommandInvocation`，在 `prepare(session)` 中取得当前 DB、准备 mutation/source，并构造 `PreparedCommand`。
+5. 为 prepared command 给出真实 reservation shape；可变 preview 接上 validation，可见 mutation 留在 execute。
+6. execute 返回 `CommandResult` 与语义 `RedisReply`；不要引用或调用 `RedisReplyWriter`。
+7. streamed source 使用 `PreparedCommands.owned(...)` 或 `ownedAction(...)` 明确生命周期与 retained memory charge。
+8. 补 handler parse-isolation、dispatcher、reply preflight、命令 family 和错误路径测试；server-only command 还应覆盖 server composition。
 
-1. 确认命令属于哪个 family，或是否需要新的 `CommandModule`。
-2. 在模块中注册 `CommandDefinition`，补齐 `CommandSyntax`、parser、preparer 和 transaction policy。
-3. 用 `ArgReader`、`CommandArity`、`CommandParsers`、`CommandParseError` 表达参数规则和错误，不在 handler 里散落重复校验。
-4. 在 preparation 阶段计算 `ReplyShape`，在 `CommandExecutionContext` 中通过 `RedisReplyWriter` 写出同一形状。
-5. 通过 `CommandSupport` 取得 DB capability，让 preparer / prepared command 调用 typed ops，不直接触碰 value root、allocator handle 或 RESP 字节。
-6. 补命令家族测试、错误路径测试；如果新增 server-only 行为，再补 server-main 组装或协议集成测试。
-
-如果命令会暴露内部编码或 memory 信息，还需要同时检查 `OBJECT ENCODING`、`MEMORY USAGE`、`MEMORY STATS` 等 introspection 行为是否仍然一致。
+若命令暴露 encoding 或 memory 信息，还要同步检查 `OBJECT ENCODING`、`MEMORY USAGE` 和 `MEMORY STATS` 的行为。

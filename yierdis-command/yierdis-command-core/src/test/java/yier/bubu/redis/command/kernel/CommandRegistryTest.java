@@ -3,9 +3,7 @@ package yier.bubu.redis.command.kernel;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.api.CommandArity;
-import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
-import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
@@ -52,23 +50,6 @@ public class CommandRegistryTest {
         Assert.assertThrows(IllegalStateException.class, () -> registry.specByUpperName("PING"));
         Assert.assertThrows(IllegalStateException.class, () -> registry.containsUpperName("PING"));
         Assert.assertThrows(IllegalStateException.class, registry::upperNamesSorted);
-    }
-
-    @Test
-    public void legacyDefinitionsKeepTheirMetadataIdentityAfterAdaptation() {
-        CommandRegistry registry = new CommandRegistry();
-        CommandDefinition<?> definition = new CommandDefinition<>(
-                syntax("LEGACY", CommandArity.exact(1), TransactionPolicy.QUEUEABLE),
-                CommandParsers.args(),
-                (args, context) -> PreparedCommands.ready(
-                        RedisReplies.simpleString("OK")
-                )
-        );
-        registry.register(definition);
-        registry.seal();
-
-        Assert.assertSame(definition, registry.definitionByUpperName(" legacy "));
-        Assert.assertSame(definition.syntax(), registry.specByUpperName("LEGACY").syntax());
     }
 
     private static CommandSpec spec(String name) {

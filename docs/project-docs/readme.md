@@ -25,6 +25,22 @@
 
 部署、容量调参、事故排查或发布验收前，先读 [`production-hardening-operations.md`](./production-hardening-operations.md)。它统一说明 ingress、commit-stream、maxmemory 和有界回复的容量口径，result-unknown 关闭语义、graceful shutdown、soak 和四命令性能门槛。
 
+## 核心命令链路基准
+
+所有涉及命令执行的专题文档都应以当前唯一链路为准：
+
+```text
+CommandExecutor
+  -> CommandDispatcher.prepare(session, request)
+  -> CommandSpec.handler().parse(CommandArgs)
+  -> CommandInvocation.prepare(session)
+  -> PreparedCommand
+  -> reserve -> validate -> execute(context)
+  -> CommandResult -> RedisReplyRenderer
+```
+
+事务 queueable 命令在 parse 阶段做 preflight，`EXEC` replay 负责子 `PreparedCommand` 和 retained request 的所有权；语义流式 source 由结果持有到 renderer 消费完成，`QUIT` 通过 `CommandResult` 表达 reply 后关闭。`EngineSession` 只拥有连接 session 状态，`RedisReplyWriter` 只作为 renderer 的 RESP-facing 端口。
+
 ## 推荐第一轮阅读
 
 1. [`project-overview.md`](./project-overview.md)

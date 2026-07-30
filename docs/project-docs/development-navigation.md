@@ -13,6 +13,18 @@
 5. 写路径必须经过 mutation executor、memory ledger、TTL/key lifecycle，不要直接改 root/value 结构。
 6. 新命令、新 DB API、新 native/internal 结构要同步补真实测试，并更新受影响的专题文档。
 
+命令主线固定为：
+
+```text
+CommandExecutor
+  -> CommandDispatcher.prepare(session, request)
+  -> CommandSpec.handler().parse(CommandArgs)
+  -> CommandInvocation.prepare(session)
+  -> PreparedCommand
+  -> reserve -> validate -> execute(context)
+  -> CommandResult -> RedisReplyRenderer
+```
+
 ## 改协议
 
 先打开：
@@ -28,7 +40,7 @@
 - 请求边界看 [`protocol-reference.md`](./protocol-reference.md) 和 [`request-execution-flow.md`](./request-execution-flow.md)。
 - bytes 零拷贝和 materialize 边界看 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)。
 - Netty 适配层设计和 fast-path 看 [`netty-adapter-design.md`](./netty-adapter-design.md)。
-- 如果是 `HELLO 2/3` 或回包类型差异，继续看 `RespReplyWriterFactory`、`ProtocolNegotiationSession`、`EngineSession` 和 `RespHandshakeIntegrationTest`。
+- 如果是 `HELLO 2/3` 或回包类型差异，继续看 `RespReplyWriterFactory`、`ProtocolNegotiationSession`、作为连接 session owner 的 `EngineSession` 和 `RespHandshakeIntegrationTest`。
 
 测试优先级：
 
@@ -43,12 +55,13 @@
 
 先打开：
 
-- [`CommandDefinition.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandDefinition.java)
+- [`CommandSpec.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandSpec.java)
 - [`CommandSyntax.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandSyntax.java)
-- [`ArgReader.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/ArgReader.java)
-- [`CommandParsers.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandParsers.java)
+- [`CommandArgs.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandArgs.java)
+- [`CommandInvocation.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandInvocation.java)
+- [`PreparedCommand.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/PreparedCommand.java)
 - [`CommandRegistry.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java)
-- [`YierdisFastCommandProcessor.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java)
+- [`CommandDispatcher.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java)
 - [`CommandSupport.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java)
 - 对应家族的 `*Commands.java`
 - 需要 server 观测或握手状态时，再看 [`ServerCommandModule.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/ServerCommandModule.java)
@@ -57,7 +70,8 @@
 
 - 命令设计和数据模型看 [`commands-and-data-model.md`](./commands-and-data-model.md)。
 - 主请求链看 [`request-execution-flow.md`](./request-execution-flow.md)。
-- 新增 option/subcommand 时要补对应成功路径和错误路径测试；server-only 命令还要补 server-main 组装或协议集成测试。
+- handler 的 `parse(CommandArgs)` 必须保持 session-free，不得访问 DB router 或 server provider；DB/session 工作放在 `CommandInvocation.prepare(session)` 或 `PreparedCommand.execute(context)`。
+- 新增 option/subcommand 时要补对应成功路径和错误路径测试；每个新注册名还必须给 parse-isolation fixture，server-only 命令要补 server-main 组装或协议集成测试。
 
 测试优先级：
 
@@ -65,7 +79,30 @@
 - `CommandErrorTest`
 - `CommandVariantCoverageTest`
 - `CommandRegistryGuardTest`
-- server-only 命令再跑 `YierdisServerBootstrapCommandWiringTest` 和相关协议集成测试
+- `CommandDispatcherTest`
+- 默认命令跑 `CommandParseIsolationTest`，server-only 命令再跑 `ServerCommandParseIsolationTest`、`YierdisServerBootstrapCommandWiringTest` 和相关协议集成测试
+
+## 改 transaction / replay
+
+先打开：
+
+- [`CommandDispatcher.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java)
+- [`TransactionCommands.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/TransactionCommands.java)
+- [`TransactionState.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/TransactionState.java)
+- [`EngineSession.java`](../../yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java)
+
+可排队命令在 `MULTI` 中只运行 handler parse 做 preflight；`QUEUED` action 在回复容量预留后才调用
+`TransactionState.tryEnqueue(request)`，由 transaction state 取得 retained request 所有权，不会提前运行
+invocation prepare。`EXEC` 由 `TransactionCommands` drain 队列，通过同一 dispatcher 的 replay 入口依次
+prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都归 `PreparedExec` 所有并由它关闭。
+`EngineSession` 只实现连接级事务状态，不执行 replay。
+
+测试优先级：
+
+- `CommandDispatcherTest`
+- `TransactionCommandTest`
+- `TransactionQueueCleanupTest`
+- `ReplyPreflightCommandTest`
 
 ## 改 string / bitmap / HLL
 
@@ -201,12 +238,15 @@
 - [`CommandExecutorSubmitter.java`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorSubmitter.java)
 - [`CommandExecutorDrainLoop.java`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorDrainLoop.java)
 - [`CommandExecutorExecutionSupport.java`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorExecutionSupport.java)
+- [`RedisReplyRenderer.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/RedisReplyRenderer.java)
 - [`YierdisServerRuntimeConfig.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/args/YierdisServerRuntimeConfig.java)
 
 继续追：
 
 - 执行线程、队列、调度、公平性和背压看 [`executor-and-backpressure.md`](./executor-and-backpressure.md)。
 - 请求主链和 owner thread 看 [`request-execution-flow.md`](./request-execution-flow.md)。
+- execution support 必须按 prepare -> reserve -> validate -> execute -> render 排序，并在 renderer 消费完语义流 source 后再关闭 `PreparedCommand`。
+- `QUIT` 等关闭意图来自 `CommandResult.closeAfterReply`，由 executor 标记 reply slot，不从 writer 的隐藏状态推导。
 - runtime 配置入口看 [`configuration-and-operations.md`](./configuration-and-operations.md)。
 
 测试优先级：
@@ -215,6 +255,7 @@
 - `CommandExecutorBackpressureTest`
 - `CommandExecutorFairSchedulingTest`
 - `ExecutionConnectionContextTest`
+- `RedisReplyRendererTest`
 - `YierdisServerBootstrapCommandWiringTest`
 - `NettyExecutionAdapterIntegrationTest`
 
@@ -261,14 +302,15 @@
 
 继续追：
 
-- 请求主链和 engine/session 边界看 [`request-execution-flow.md`](./request-execution-flow.md)。
+- 请求主链和 command/session 边界看 [`request-execution-flow.md`](./request-execution-flow.md)。
 - 命令 record scope 和 DB commit publication 的顺序看 [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)。
 - expire / eviction synthetic delete 的 DB lifecycle 看 [`db-internals.md`](./db-internals.md)。
 
 测试优先级：
 
-- `YierdisFastCommandProcessorPolicyTest`
-- `YierdisFastCommandProcessorArchitectureTest`
+- `CommandDispatcherTest`
+- `CommandPipelineArchitectureTest`
+- `CommandParseIsolationTest`
 - `DbCommitPublisherTest`
 - `CommitStreamTest`
 - `CommitStreamShutdownTest`

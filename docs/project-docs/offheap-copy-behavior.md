@@ -32,7 +32,7 @@ collection 写入也类似：root record 和 payload internals 都是 allocator-
 - `MEMORY` / `OBJECT` 类命令需要构造诊断输出。
 - 返回 `List<byte[]>` 的 collection read API，例如非流式聚合结果。
 
-当前 string `GET` 路径可以通过 `BytesSlice` / `BulkStringSink` 接到 reply writer。native slice 只在同步 `writeTo` 期间 pin allocator handle；它不是可被长期持有的 allocator view。
+当前 string `GET` 路径可以通过 `BytesSlice` / `BulkStringSink` 包装成流式 `RedisReply`，再由中央 renderer 写入协议端口。native slice 只在同步 `writeTo` 期间 pin allocator handle；它不是可被长期持有的 allocator view。
 
 keyspace 也是同理：key bytes 持久化为 `KEY_BYTES` native object，但只要外部接口要 `byte[]`，就会通过 allocator resolve view 读取并复制出来。
 

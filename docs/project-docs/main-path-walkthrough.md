@@ -23,11 +23,12 @@ YierdisServer
   -> RetainedRespExecutionRequest
   -> NettyExecutionRequestIngress
   -> CommandExecutor
-  -> DefaultYierdisEngine
-  -> YierdisFastCommandProcessor
-  -> StringCommands
-  -> YierdisStringOps
-  -> YierdisDbMutationExecutor
+  -> CommandDispatcher.prepare(session, request)
+  -> CommandSpec.handler().parse(CommandArgs)
+  -> CommandInvocation.prepare(session)
+  -> PreparedCommand
+  -> reserve -> validate -> execute(context)
+  -> CommandResult -> RedisReplyRenderer
   -> RedisReplyWriter
   -> RespReplyWriter
   -> NettyExecutionIoAdapter
@@ -51,14 +52,15 @@ YierdisServer
 
 再看 [`YierdisServerBootstrap.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java)。
 
-它负责把实例、engine、executor、Netty group 和 server channel 组起来。读它时重点盯住：
+它负责把实例、dispatcher、executor、Netty group 和 server channel 组起来。读它时重点盯住：
 
 - `YierdisInstance`
-- `DefaultYierdisEngine`
+- `CommandDispatcher`
 - `CommandExecutor`
 - `YierdisServerChannelInitializer`
 
-`YierdisServerBootstrap` 是接线中心，不是命令语义中心。
+`YierdisServerBootstrap` 是接线中心：它通过 `ServerCommandComposition` 组装并封闭命令注册表，把
+`CommandDispatcher::prepare` 接到 executor 的 transport-neutral `CommandExecutionEngine` 边界；这里不实现命令语义。
 
 ## 3. 实例和多 DB
 
@@ -80,7 +82,7 @@ YierdisServer
 这里会建立连接根对象，并把状态分成三块：
 
 - Netty `Channel`
-- `EngineSession`
+- `EngineSession`，只拥有连接级 DB index、RESP version、事务队列和 client metadata
 - `ExecutionConnectionContext`
 
 pipeline 的关键点是 `RespRequestDecoder`。它在完成 ingress admission 后把 RESP bytes 直接变成带 lease 的 `ExecutionRequest`，再交给提交层。
@@ -101,22 +103,42 @@ pipeline 的关键点是 `RespRequestDecoder`。它在完成 ingress admission �
 
 看 [`NettyExecutionRequestIngress.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionRequestIngress.java) 和 [`CommandExecutor.java`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java)。
 
-`NettyExecutionRequestIngress` 只处理 reply slot 与 executor admission，不执行命令。`CommandExecutor` 负责：
+`NettyExecutionRequestIngress` 只处理 reply slot 与 executor admission，不执行命令。`CommandExecutor` 在
+owner thread 上负责：
 
 - 排队
 - 背压
 - owner thread drain
+- 驱动 prepare、回复容量预留、validate、execute 和集中渲染
 - 释放 request 生命周期
 
-这里最容易读错的点是：executor 不是命令层，它只是调度层。
+这里最容易读错的点是：executor 统一编排执行生命周期，但命令查找、参数语义和 DB 操作仍分别属于
+dispatcher、handler 和 DB 层。
 
-## 7. Engine 到命令层
+## 7. Dispatcher 到命令层
 
-看 [`DefaultYierdisEngine.java`](../../yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/DefaultYierdisEngine.java) 和 [`YierdisFastCommandProcessor.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java)。
+看 [`CommandDispatcher.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java)、[`CommandSpec.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandSpec.java)、[`CommandArgs.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandArgs.java) 和 [`PreparedCommand.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/PreparedCommand.java)。
 
-`DefaultYierdisEngine` 接住调度合同，把 `Session + ExecutionRequest + RedisReplyWriter` 送进命令层。
+最终命令流固定为：
 
-`YierdisFastCommandProcessor` 才是命令分发入口，它会查找具体 `CommandDefinition`，解析参数并准备 `PreparedCommand`。
+```text
+CommandExecutor
+  -> CommandDispatcher.prepare(session, request)
+  -> CommandSpec.handler().parse(CommandArgs)
+  -> CommandInvocation.prepare(session)
+  -> PreparedCommand
+  -> reserve -> validate -> execute(context)
+  -> CommandResult -> RedisReplyRenderer
+```
+
+`CommandDispatcher` 统一处理空命令、unknown command、arity、事务策略和预期命令错误。handler 的
+`parse(CommandArgs)` 只解释 argv，不读取 DB、provider 或 session；得到的 `CommandInvocation` 才在
+`prepare(session)` 阶段访问连接和 DB 能力。`CommandParseIsolationTest` 用全部默认命令的 fixture 集合锁住
+这条边界，`ServerCommandParseIsolationTest` 同样覆盖 `HELLO`、`INFO` 和 `STATS`。
+
+在 `MULTI` 中，可排队命令只运行 handler parse 做 preflight，不运行 invocation prepare；真正的
+`EXEC` 由 `TransactionCommands` 通过同一 `CommandDispatcher.prepareReplay(...)` 重放队列，并负责释放
+队列中保留的 request 和每个 child prepared command。
 
 ## 8. PING 路径
 
@@ -125,9 +147,10 @@ pipeline 的关键点是 `RespRequestDecoder`。它在完成 ingress admission �
 如果只追主路径，`PING` 的重点是：
 
 - `CommandExecutor` 把请求送到 owner thread
-- `DefaultYierdisEngine` 接管执行
-- `YierdisFastCommandProcessor` 找到对应 command implementation
-- `RedisReplyWriter` 写出 `PONG`
+- `CommandDispatcher` 找到 `PING` 的 `CommandSpec`
+- handler parse 返回 invocation，invocation prepare 返回 `PreparedCommand`
+- executor 在预留和校验后得到包含 `PONG` 的 `CommandResult`
+- `RedisReplyRenderer` 把语义回复写到 RESP-facing `RedisReplyWriter`
 
 ## 9. SET 路径
 
@@ -141,22 +164,25 @@ pipeline 的关键点是 `RespRequestDecoder`。它在完成 ingress admission �
 
 ## 10. 回包写出
 
-最后看 [`RedisReplyWriter.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/RedisReplyWriter.java)、[`RespReplyWriter.java`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java) 和 [`NettyExecutionIoAdapter.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionIoAdapter.java)。
+最后看 [`CommandResult.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/CommandResult.java)、[`RedisReplyRenderer.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/RedisReplyRenderer.java)、[`RedisReplyWriter.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/RedisReplyWriter.java)、[`RespReplyWriter.java`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java) 和 [`NettyExecutionIoAdapter.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionIoAdapter.java)。
 
 这里的核心是：
 
-- 命令层写语义
-- RESP 层做协议编码
+- 命令层返回 `CommandResult` 和 transport-neutral `RedisReply` 语义
+- executor 用 `RedisReplyRenderer` 集中消费回复；bulk、sequence 和 map 可以通过语义 emitter 流式读取仍由 `PreparedCommand` 持有的 source
+- `RedisReplyWriter` 只是 renderer 面向 RESP 编码器的端口，`RespReplyWriter` 负责 RESP2/RESP3 编码
 - Netty 层做最终 flush
 
-这三层不要混写。
+`PreparedCommand` 必须活到 renderer 消费完结果后再关闭。`QUIT` 也不再通过 writer 的隐式控制状态关连接，
+而是返回 `CommandResult.closeAfterReply(...)`，由 executor 把关闭标记交给 reply sequencer。
 
 ## 容易读错的边界
 
 - `YierdisServerBootstrap` 是组装层，不是命令层
 - `NettyExecutionRequestIngress` 只做 admission/publish，不执行命令
-- `CommandExecutor` 只调度，不解析命令
-- `DefaultYierdisEngine` 是执行入口，不是 DB 实现
+- `CommandExecutor` 编排 prepare 到 render，但不实现命令语义
+- `EngineSession` 只拥有连接 session 状态，不转发命令执行
+- `CommandDispatcher` 处理查表、解析入口和事务策略，不编码 RESP
 - `StringCommands` 负责命令语义，不负责 RESP 编码
 - `YierdisDbMutationExecutor` 负责写入预算和提交，不负责网络回包
 

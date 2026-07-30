@@ -13,7 +13,7 @@ Yierdis 把“收包”和“执行命令”分开：Netty I/O 线程只解析�
 - `ExecutorBacklogBudget`：全局 backlog 预算，限制 queue capacity 和 queued bytes，并给全局背压提供高低水位。
 - `ExecutorTaskQueue`：调度队列，支持 `GLOBAL` 和 `FAIR`。
 - `CommandExecutorDrainLoop`：cooperative drain loop，真正 poll task 并执行命令。
-- `CommandExecutorExecutionSupport`：把 executor 任务接到 `CommandExecutionEngine`、`RedisReplyWriterFactory` 和 I/O adapter。
+- `CommandExecutorExecutionSupport`：把 executor 任务接到生产环境中的 `CommandDispatcher` 准备入口、`RedisReplyRenderer`、`RedisReplyWriterFactory` 和 I/O adapter。
 - `ExecutorBackpressureController`：统一执行 `autoRead` disable/enable 和 global recovery。
 - `ExecutionConnectionContext`：每个连接的 executor 状态，包括 pending count、pending bytes、closing、fair queue state 和统计。
 - `NettyExecutionConnection`：Netty channel 到 executor connection 的 adapter，挂载 `EngineSession` 和 `ExecutionConnectionContext`。
@@ -87,28 +87,29 @@ admission 时先 reserve slot，再 reserve queued bytes；尚未 publish 的 ad
 单个 task 执行的大致顺序是：
 
 1. 检查连接是否 active / closing。
-2. 调用 command engine 准备 `PreparedCommand`，并根据 `ReplyShape` 生成 reply plan。
+2. 通过 `CommandDispatcher.prepare(session, request)` 准备 `PreparedCommand`，并根据 reservation shape 生成 reply plan。
 3. 尝试预留 reply capacity；暂时不足时保留 prepared state 并等待容量回调。
 4. 调用 `validateBeforeExecute()`；stale 时关闭并重新 prepare。
-5. 创建 `RedisReplyWriter` 和 `CommandExecutionContext`，执行 prepared command。
-6. 标记 reply ready；如需 close-after-reply，flush 后关闭连接。
+5. 创建不含 writer 的 `CommandExecutionContext`，执行 prepared command并取得 `CommandResult`。
+6. 执行成功后创建 `RedisReplyWriter`，由 `RedisReplyRenderer` 渲染 `CommandResult.reply()`；`closeAfterReply` 为真时先把连接标为 closing，再把 reply 标为 ready。
 7. 终态 finally 中释放 prepared command、request、backlog budget 和 connection pending 状态。
 
 drain loop 使用 batched flush：单条命令通常只 `write`，tick 结束时统一 flush，减少高频命令下的 flush 次数。
 
 ## 执行支持和回包写出
 
-`CommandExecutorExecutionSupport` 是 executor 与 command engine 的连接层。它负责：
+`CommandExecutorExecutionSupport` 是 executor 与命令准备、语义结果和 I/O adapter 的连接层。生产环境把 `CommandDispatcher::prepare` 作为窄的 `CommandExecutionEngine` 端口注入；这个端口只隔离 executor 与 command-core，不再承载另一套 engine 实现。它负责：
 
 - 通过 I/O adapter 检查 channel active/writable、分配 output、write/flush/close。
 - 从 `ExecutionConnection` 获取 `EngineSession`。
-- 调用 `CommandExecutionEngine.prepare(session, request)`，并按 `ReplyShape` 规划/预留容量。
-- 容量成功后通过 `RedisReplyWriterFactory` 创建 writer 和请求级执行上下文，校验并执行 `PreparedCommand`。
+- 调用 `CommandDispatcher.prepare(session, request)`，并按 `PreparedCommand.reservationShape()` 规划/预留容量。
+- 容量成功后建立请求级执行上下文，校验并执行 `PreparedCommand`，得到一个 `CommandResult`。
+- 执行成功后才通过 `RedisReplyWriterFactory` 创建 writer，并由 `RedisReplyRenderer` 完成唯一一次命令结果渲染。
 - 命令结束后释放 `ExecutorBacklogBudget` 中的 slot/queued bytes。
 - 更新 `ExecutionConnectionContext.recordCommandFinished(...)`。
 - 在连接 pending、本地 bytes 和全局 backlog 都恢复后尝试恢复 `autoRead`。
 
-`NettyExecutionConnection` 把 Netty `Channel`、`EngineSession` 和 `ExecutionConnectionContext` 绑在一起。事务、连接统计和 close-after-reply 都通过这个 connection root 传递，executor core 因此不需要直接依赖 Netty class。
+`NettyExecutionConnection` 把 Netty `Channel`、`EngineSession` 和 `ExecutionConnectionContext` 绑在一起。`EngineSession` 只拥有当前连接的 DB index、协议、事务、客户端元数据和连接统计；命令查找与执行语义由 dispatcher/prepared command 负责。事务、连接统计和 close-after-reply 都通过这个 connection root 传递，executor core 因此不需要直接依赖 Netty class。
 
 `getOrCreate(...)` 通过 channel attr 保证同一条连接只拿到一个 root；`markClosing()` 会先把 `ExecutionConnectionContext` 置为 closing，再丢弃 `EngineSession` 里的事务状态，所以 `QUIT`、channel close 或 close-after-reply 不会留下继续排队的 snapshot。FAIR 调度也把它当作 per-connection key，而不是直接用 `Channel`。
 
@@ -144,7 +145,7 @@ drain loop 使用 batched flush：单条命令通常只 `write`，tick 结束时
 
 `close-after-reply` 则是同一条链上的最后一步：
 
-- 命令显式 `requestCloseAfterReply()`，或 executor-thread 失败后补写 internal error 时，连接会先被标记为 `closing`
+- 命令返回 `CommandResult.closeAfterReply(...)`，或 executor-thread 失败后补写 internal error 时，连接会先被标记为 `closing`
 - I/O adapter 仍然先写出 buffered reply，并在 flush 后真正关闭 transport
 - 因为 `closing` 已经置位，这条连接不会再进入 `autoRead` 恢复路径
 

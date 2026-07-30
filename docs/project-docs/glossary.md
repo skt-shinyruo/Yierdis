@@ -16,9 +16,21 @@
 
 `dbIndex` + `CommandRecordView` 的 change-event 记录。公开构造入口会归一化 `dbIndex` 并复制 `ExecutionRequest`；runtime 的 `borrowed(...)` 入口交付 callback-scoped view。事务 replay 不使用该类型。详见 [`transaction-and-replay.md`](./transaction-and-replay.md) 和 [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)。
 
+### `RedisReply`
+
+命令结果中的协议无关语义回复。标量和普通 aggregate 直接保存值；bulk、byte sequence 和 byte map 保存长度、retained source bytes 与 emitter，由 owner 保持资源有效直到渲染完成。详见 [`commands-and-data-model.md`](./commands-and-data-model.md)。
+
+### `CommandResult`
+
+一次命令执行的完整结果，由 `RedisReply` 和 `closeAfterReply` 组成。`QUIT` 通过 `CommandResult.closeAfterReply(...)` 表达“回复发布后关闭”，而不是直接操作 writer 或连接。
+
+### `RedisReplyRenderer`
+
+执行器中唯一把 `RedisReply` 展开为 RESP-facing 写操作的组件。它递归渲染 aggregate，并消费 bulk、byte sequence、byte map 的语义流式 emitter。
+
 ### `RedisReplyWriter`
 
-命令层唯一的 Redis reply 语义出口。handler 只调用 `simpleString`、`bulkString`、`integer`、`arrayHeader`、`mapHeader`、`error` 等 Redis reply 语义方法，不拼 RESP bytes。详见 [`commands-and-data-model.md`](./commands-and-data-model.md)。
+`RedisReplyRenderer` 面向 RESP 编码实现的输出端口，不是命令实现 API。命令返回 `CommandResult`，不调用 `simpleString`、`bulkString`、`arrayHeader` 等 writer 方法。
 
 ### `RespReplyWriter`
 
@@ -26,23 +38,57 @@
 
 ## Command Layer
 
-### `CommandDefinition`
+命令执行主链固定为：
 
-命令最终注册单元，由 `CommandSyntax`、`CommandParser<T>` 和 `CommandPreparer<T>` 组成。syntax 保存名称、arity、key metadata 和 `TransactionPolicy`；preparer 返回 `PreparedCommand`。详见 [`commands-and-data-model.md`](./commands-and-data-model.md)。
+```text
+CommandExecutor
+  -> CommandDispatcher.prepare(session, request)
+  -> CommandSpec.handler().parse(CommandArgs)
+  -> CommandInvocation.prepare(session)
+  -> PreparedCommand
+  -> reserve -> validate -> execute(context)
+  -> CommandResult -> RedisReplyRenderer
+```
+
+### `CommandArgs`
+
+`ExecutionRequest` 的统一命令参数视图，集中提供 argv bytes、ASCII option 比较和整数解析。handler 的解析阶段只依赖该类型，不访问 session、DB router 或 server provider。
+
+### `CommandSpec`
+
+命令最终注册单元，由 `CommandSyntax` 和 `CommandHandler` 组成。syntax 保存名称、arity、key metadata 和 `TransactionPolicy`；handler 的 `parse(CommandArgs)` 返回 `CommandInvocation`。
 
 ### `CommandRegistry`
 
-命令名到 `CommandDefinition<?>` 的注册表。`YierdisFastCommandProcessor` 通过它做 unknown command 判断和分发。详见 [`core-logic-index.md`](./core-logic-index.md)。
+命令名到 `CommandSpec` 的注册表。composition 阶段注册，sealed 后由 `CommandDispatcher` 只读查找。详见 [`core-logic-index.md`](./core-logic-index.md)。
 
-### `CommandPreparationContext` / `CommandExecutionContext`
+### `CommandDispatcher`
 
-准备上下文只暴露 `CommandSession`，供 reply capacity 预留前的解析、读取和 mutation prepare 使用；执行上下文在预留成功后增加 `RedisReplyWriter` 与请求级 `MutationContext`，并在关闭时释放 mutation record。
+执行请求到命令契约的统一入口。它检查命令名、null、arity 和事务策略，调用 `CommandSpec.handler().parse(CommandArgs)`，再调用 `CommandInvocation.prepare(session)` 返回 `PreparedCommand`。
+
+事务 active 时，queueable 命令只运行 handler parse 做 preflight，不提前 prepare；容量预留成功后事务队列 retain 原 `ExecutionRequest`。`EXEC` replay 通过同一 dispatcher 准备子 `PreparedCommand`，并负责关闭子命令和 retained requests。
+
+### `CommandInvocation`
+
+解析成功后的命令调用描述。它通过 `prepare(CommandSession)` 读取连接 session，并把命令准备成容量预留前可持有资源的 `PreparedCommand`。
+
+### `PreparedCommand`
+
+容量预留前完成读取和准备、预留后执行一次的工作单元。它提供 `reservationShape()`、`validateBeforeExecute()` 和 `execute(CommandExecutionContext)`；若校验结果为 stale，执行器关闭并重新准备。其回复引用的资源必须保留到 `RedisReplyRenderer` 消费完成。
+
+### `CommandExecutionContext`
+
+回复容量预留成功后创建的一次命令执行作用域，只包含 `CommandSession` 和请求级 `MutationContext`；关闭时释放 mutation record。回复不通过该上下文写出，而由 `PreparedCommand.execute(...)` 返回 `CommandResult`。
 
 ### command variant
 
 同一个 command 的 option、subcommand 或重要语义分支，例如 `SET / NX`、`SCAN / MATCH`、`MEMORY / STATS`。这些分支应由对应命令家族测试覆盖，测试选择看 [`testing-and-debugging.md`](./testing-and-debugging.md)。
 
-## Engine / Runtime
+## Session / Runtime
+
+### `EngineSession`
+
+每条连接的 `CommandSession` owner，持有 DB index、client metadata、认证状态、RESP version、connection stats view 和事务队列。名称中的 Engine 只是保留的包/类型名；它不拥有命令解析、分发、执行或回复渲染。
 
 ### `DbEngine`
 

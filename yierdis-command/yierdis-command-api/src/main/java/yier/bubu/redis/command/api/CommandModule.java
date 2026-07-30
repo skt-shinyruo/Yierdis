@@ -1,10 +1,9 @@
 package yier.bubu.redis.command.api;
 
 /**
- * Extension point for registering additional commands into a processor.
- * <p>
- * Modules are applied at processor construction time and are intended for
- * composition-root concerns such as server-local command additions.
+ * 在 composition root 构建命令表时注册一组 {@link CommandSpec}。
+ *
+ * <p>模块只参与启动期组合；registry sealed 后不能继续注册。</p>
  */
 @FunctionalInterface
 public interface CommandModule {
@@ -13,13 +12,9 @@ public interface CommandModule {
     interface Registration {
         void register(CommandSpec spec);
 
-        void register(CommandDefinition<?> definition);
-
         int commandCount();
 
         boolean containsUpperName(String nameUpper);
-
-        CommandDefinition<?> definitionByUpperName(String nameUpper);
 
         CommandSpec specByUpperName(String nameUpper);
 

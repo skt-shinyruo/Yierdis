@@ -60,15 +60,16 @@ DB API 的很多 read ops 接受 `BytesView`，例如 `StringReadOps`、`TtlRead
 
 集合读路径大量使用 `BulkStringSink`。这个 storage API 中的协议无关输出端口支持 `bulkString(byte[])`、`bulkString(byte[], off, len)`、`bulkString(BytesSlice)`、`bulkStringLongAscii(long)` 和 null bulk；`LRANGE`、`HGETALL`、`SMEMBERS`、`ZRANGE` 等可以逐项 emit 到 sink，避免先组装完整 `List<byte[]>` 再交给协议层。
 
-## RedisReplyWriter 和 Netty 写回
+## 语义回复和 Netty 写回
 
-execution 层使用 `RedisReplyWriterFactory` 为每条命令创建 `RedisReplyWriter`。当前 Netty 生产路径先为回复注册 slot 和 reservation，再由 sink 按固定上限分配 `ByteBuf` chunk。
+命令层把 storage source 包装成 `RedisReply.BulkString`、`ByteSequence` 或 `ByteMap`，并把 source owner 挂在 `PreparedCommand` 上。executor 先按 reply shape 完成 slot reservation，执行得到 `CommandResult` 后才创建 `RedisReplyWriter`；`RedisReplyRenderer` 随后同步运行 payload emitter。当前 Netty sink 按固定上限分配 `ByteBuf` chunk，renderer 返回后 prepared owner 才会关闭。
 
 写回路径大致是：
 
 ```text
-CommandExecutor / fast command handler
-  -> RedisReplyWriterFactory
+CommandResult / RedisReply
+  -> RedisReplyRenderer
+  -> RedisReplyWriterFactory / RedisReplyWriter
   -> RespReplyWriter
   -> ReplyReservationSink
   -> BoundedChunkedReplySink
@@ -77,7 +78,7 @@ CommandExecutor / fast command handler
   -> channel.write(...)
 ```
 
-`RedisReplyWriter.bulkString(BytesSlice)` 和 `BulkStringSink.bulkString(BytesSlice)` 是关键入口。heap `byte[]` 仍然可用，但不是唯一形状；native string、collection range 和 computed ASCII number 都可以按更合适的方式写出。reply reservation、Netty ownership 和顺序写回的细节见 [`netty-adapter-design.md`](./netty-adapter-design.md)。
+`RedisReply` 的 payload emitter 和 `BulkStringSink.bulkString(BytesSlice)` 是关键入口。heap `byte[]` 仍然可用，但不是唯一形状；native string、collection range 和 computed ASCII number 都可以在中央 renderer 调用期间流式写出。reply reservation、source ownership、Netty ownership 和顺序写回的细节见 [`netty-adapter-design.md`](./netty-adapter-design.md)。
 
 ## 流式路径和 materialization fallback
 

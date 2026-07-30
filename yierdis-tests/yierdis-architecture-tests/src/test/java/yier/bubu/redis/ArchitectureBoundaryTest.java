@@ -481,50 +481,14 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
-    public void migratedCommandsDoNotWriteSyntaxErrorsDirectly() throws IOException {
+    public void commandHandlersDoNotWriteSyntaxErrorsDirectly() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录", repoRoot);
 
         List<String> offenders = new ArrayList<>();
-        scanMethodForForbiddenText(
+        scanForForbiddenText(
                 repoRoot,
-                commandDefaultsFile(repoRoot, "StringCommands.java"),
-                "parseSet(ArgReader args)",
-                offenders,
-                "out.error(\"ERR syntax error\")"
-        );
-        scanMethodForForbiddenText(
-                repoRoot,
-                commandDefaultsFile(repoRoot, "StringCommands.java"),
-                "set(SetArgs args, CommandPreparationContext context)",
-                offenders,
-                "out.error(\"ERR syntax error\")"
-        );
-        scanMethodForForbiddenText(
-                repoRoot,
-                commandDefaultsFile(repoRoot, "KeyCommands.java"),
-                "parseScan(ArgReader args)",
-                offenders,
-                "out.error(\"ERR syntax error\")"
-        );
-        scanMethodForForbiddenText(
-                repoRoot,
-                commandDefaultsFile(repoRoot, "KeyCommands.java"),
-                "scan(ScanArgs args, CommandPreparationContext context)",
-                offenders,
-                "out.error(\"ERR syntax error\")"
-        );
-        scanMethodForForbiddenText(
-                repoRoot,
-                commandDefaultsFile(repoRoot, "ZSetCommands.java"),
-                "parseZRange(ArgReader args)",
-                offenders,
-                "out.error(\"ERR syntax error\")"
-        );
-        scanMethodForForbiddenText(
-                repoRoot,
-                commandDefaultsFile(repoRoot, "ZSetCommands.java"),
-                "parseZRangeByScore(ArgReader args, boolean reverse)",
+                commandDefaultsMain(repoRoot),
                 offenders,
                 "out.error(\"ERR syntax error\")"
         );
@@ -617,58 +581,100 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
-    public void productionCommandsMustRegisterTypedCommandDefinitions() throws IOException {
+    public void productionCommandsUseOnlyTheFinalCommandPipeline() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
 
-        String deletedDescriptor = "Command" + "Descriptor";
-        Path deletedDescriptorFile = commandApiMain(repoRoot)
-                .resolve("yier/bubu/redis/command/api/" + deletedDescriptor + ".java");
-        Assert.assertFalse("retired command metadata contract must stay deleted", Files.exists(deletedDescriptorFile));
-        Path definitionFile = commandApiMain(repoRoot)
-                .resolve("yier/bubu/redis/command/api/CommandDefinition.java");
-        Assert.assertTrue("command registration must use CommandDefinition", Files.isRegularFile(definitionFile));
-        String[] retiredCommandApis = {
-                deletedDescriptor,
-                "registerDisallowed" + "InMulti",
-                "isTransaction" + "Control"
-        };
+        Path commandApi = commandApiMain(repoRoot).resolve("yier/bubu/redis/command/api");
+        for (String deleted : List.of(
+                "CommandDefinition.java", "CommandParser.java", "CommandPreparer.java",
+                "CommandParsers.java", "CommandParseResult.java", "CommandParseError.java",
+                "ArgReader.java"
+        )) {
+            Assert.assertFalse("legacy command API must stay deleted: " + deleted,
+                    Files.exists(commandApi.resolve(deleted)));
+        }
+        Path executionApi = repoRoot.resolve(
+                "yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api");
+        Assert.assertFalse(Files.exists(executionApi.resolve("CommandPreparationContext.java")));
+
+        Path commandKernel = commandKernelMain(repoRoot).resolve("yier/bubu/redis/command/kernel");
+        for (String deleted : List.of(
+                "LegacyCommandAdapter.java", "PreparedCommands.java", "YierdisFastCommandProcessor.java"
+        )) {
+            Assert.assertFalse("legacy command kernel file must stay deleted: " + deleted,
+                    Files.exists(commandKernel.resolve(deleted)));
+        }
+        Path enginePackage = engineRoot(repoRoot)
+                .resolve("src/main/java/yier/bubu/redis/execution/engine");
+        Assert.assertFalse(Files.exists(enginePackage.resolve("YierdisEngine.java")));
+        Assert.assertFalse(Files.exists(enginePackage.resolve("DefaultYierdisEngine.java")));
 
         List<String> offenders = new ArrayList<>();
-        scanCommandMainForForbiddenText(
+        int scanned = scanProductionMainForForbiddenText(
                 repoRoot,
                 offenders,
-                "CommandModule.Handler",
-                "new Command" + "Spec(",
-                "register(String name, Handler"
+                "CommandDefinition<", " CommandParser<", " CommandPreparer<", "CommandParsers.",
+                "CommandParseResult<", "CommandParseError.", "ArgReader ",
+                "CommandPreparationContext ", "LegacyCommandAdapter",
+                "YierdisFastCommandProcessor", "DefaultYierdisEngine", "YierdisEngine",
+                "FNV64", "Entry[] table", "resizeThreshold"
         );
-        scanCommandMainForForbiddenText(repoRoot, offenders, retiredCommandApis);
-        scanFilesMatchingRegex(
+        Assert.assertTrue("架构护栏未扫描到 production Java", scanned > 0);
+
+        scanForForbiddenText(
                 repoRoot,
-                commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command"),
+                commandDefaultsMain(repoRoot),
                 offenders,
-                "registration\\.register\\(\\s*\"[A-Z0-9_]+\"\\s*,\\s*this::"
-        );
-        scanFilesMatchingRegex(
-                repoRoot,
-                commandKernelMain(repoRoot).resolve("yier/bubu/redis/command"),
-                offenders,
-                "registration\\.register\\(\\s*\"[A-Z0-9_]+\"\\s*,\\s*this::"
-        );
-        scanFilesMatchingRegex(
-                repoRoot,
-                repoRoot.resolve("yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server").normalize(),
-                offenders,
-                "registration\\.register\\(\\s*\"[A-Z0-9_]+\"\\s*,\\s*this::"
+                "RedisReplyWriter",
+                " foldAsciiCase(int ", " longAt(int ",
+                " positiveLongAt(int ", " nonNegativeLongAt(int "
         );
         scanForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-server/yierdis-server-main/src/main/java").normalize(),
+                commandKernelMain(repoRoot),
                 offenders,
-                retiredCommandApis
+                "RedisReplyWriter",
+                " foldAsciiCase(int ", " longAt(int ",
+                " positiveLongAt(int ", " nonNegativeLongAt(int "
+        );
+        for (String file : List.of("ServerCommandModule.java", "NettyServerInfoProvider.java")) {
+            scanFileForForbiddenText(
+                    repoRoot,
+                    repoRoot.resolve("yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server")
+                            .resolve(file),
+                    offenders,
+                    "RedisReplyWriter",
+                    " foldAsciiCase(int ", " longAt(int ",
+                    " positiveLongAt(int ", " nonNegativeLongAt(int "
+            );
+        }
+
+        Path commandArgsFile = commandApi.resolve("CommandArgs.java");
+        String commandArgsSource = Files.readString(commandArgsFile, StandardCharsets.UTF_8);
+        Assert.assertTrue(commandArgsSource.contains("public final class CommandArgs"));
+        Assert.assertTrue(commandArgsSource.contains("private static int foldAsciiCase(int value)"));
+        Assert.assertTrue(commandArgsSource.contains("public long longAt(int index)"));
+
+        Path executorSupport = repoRoot.resolve(
+                "yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorExecutionSupport.java");
+        assertFileContainsAllText(
+                repoRoot,
+                executorSupport,
+                offenders,
+                "RedisReplyRenderer.render(result.reply(), writer)"
+        );
+        Path serverComposition = repoRoot.resolve(
+                "yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/ServerCommandComposition.java");
+        assertFileContainsAllText(
+                repoRoot,
+                serverComposition,
+                offenders,
+                "CommandDispatcher"
         );
 
-        Assert.assertTrue("legacy command registration remains:\n" + String.join("\n", offenders), offenders.isEmpty());
+        Assert.assertTrue("final command pipeline boundary violation:\n" + String.join("\n", offenders),
+                offenders.isEmpty());
     }
 
     @Test
@@ -711,12 +717,11 @@ public class ArchitectureBoundaryTest {
                 "CommandSupport.wrongArity(out, \"ttl\");",
                 "CommandSupport.wrongArity(out, \"pttl\");"
         );
-        scanMethodForForbiddenText(
+        scanFileForForbiddenText(
                 repoRoot,
                 commandDefaultsFile(repoRoot, "KeyCommands.java"),
-                "private PreparedCommand memory(",
                 knownDuplicates,
-                "if (request.argc() < 2)"
+                "if (args.argc() < 2)"
         );
         scanFileForForbiddenText(
                 repoRoot,
@@ -1420,8 +1425,9 @@ public class ArchitectureBoundaryTest {
 
         String redisReplyWriter = Files.readString(redisReplyWriterFile, StandardCharsets.UTF_8);
         Assert.assertTrue(
-                "RedisReplyWriter must be documented as a Redis command reply model, not a generic protocol abstraction",
-                redisReplyWriter.contains("Redis command reply model")
+                "RedisReplyWriter must document central semantic rendering and result-owned close behavior",
+                redisReplyWriter.contains("RedisReplyRenderer")
+                        && redisReplyWriter.contains("CommandResult")
         );
         Assert.assertTrue(
                 "RedisReplyWriter must own RESP3/Redis-shaped aggregate reply methods",
@@ -3615,6 +3621,28 @@ public class ArchitectureBoundaryTest {
         scanned += scanForForbiddenText(repoRoot, commandKernelMain(repoRoot), offenders, forbiddenSnippets);
         scanned += scanForForbiddenText(repoRoot, commandDefaultsMain(repoRoot), offenders, forbiddenSnippets);
         return scanned;
+    }
+
+    private static int scanProductionMainForForbiddenText(
+            Path repoRoot,
+            List<String> offenders,
+            String... forbiddenSnippets
+    ) throws IOException {
+        int[] scanned = new int[]{0};
+        try (Stream<Path> paths = Files.walk(repoRoot)) {
+            paths.filter(path -> path != null && path.toString().endsWith(".java"))
+                    .filter(path -> path.toString().contains("/src/main/java/"))
+                    .sorted()
+                    .forEach(path -> {
+                        try {
+                            scanned[0]++;
+                            scanFileForForbiddenText(repoRoot, path, offenders, forbiddenSnippets);
+                        } catch (IOException failure) {
+                            throw new RuntimeException(failure);
+                        }
+                    });
+        }
+        return scanned[0];
     }
 
     private static void assertPackageDeclaration(Path repoRoot, Path file, String expectedDeclaration) throws IOException {

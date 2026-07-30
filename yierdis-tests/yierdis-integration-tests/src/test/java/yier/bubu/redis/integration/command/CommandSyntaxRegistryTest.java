@@ -3,9 +3,7 @@ package yier.bubu.redis.integration.command;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.api.CommandArity;
-import yier.bubu.redis.command.api.CommandDefinition;
 import yier.bubu.redis.command.api.CommandKeySpec;
-import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
@@ -55,15 +53,14 @@ public class CommandSyntaxRegistryTest {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandDispatchers.forDb(
                     db,
-                    registration -> registration.register(new CommandDefinition<>(
+                    registration -> registration.register(new CommandSpec(
                             new CommandSyntax(
                                     "HELLO",
                                     CommandArity.exact(7),
                                     new CommandKeySpec(2, 2, 1),
                                     TransactionPolicy.QUEUEABLE
                             ),
-                            CommandParsers.args(),
-                            (cmd, context) -> TestPreparedCommands.simpleString("OK")
+                            args -> session -> TestPreparedCommands.simpleString("OK")
                     ))
             );
 
@@ -87,17 +84,15 @@ public class CommandSyntaxRegistryTest {
             CommandDispatcher dispatcher = TestCommandDispatchers.forDb(
                     db,
                     registration -> {
-                        registration.register(new CommandDefinition<>(
+                        registration.register(new CommandSpec(
                                 new CommandSyntax("INFO", CommandArity.min(1), CommandKeySpec.NONE,
                                         TransactionPolicy.QUEUEABLE),
-                                CommandParsers.args(),
-                                (cmd, context) -> TestPreparedCommands.simpleString("OK")
+                                args -> session -> TestPreparedCommands.simpleString("OK")
                         ));
-                        registration.register(new CommandDefinition<>(
+                        registration.register(new CommandSpec(
                                 new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
                                         TransactionPolicy.DISALLOWED_IN_MULTI),
-                                CommandParsers.args(),
-                                (cmd, context) -> TestPreparedCommands.simpleString("OK")
+                                args -> session -> TestPreparedCommands.simpleString("OK")
                         ));
                     }
             );

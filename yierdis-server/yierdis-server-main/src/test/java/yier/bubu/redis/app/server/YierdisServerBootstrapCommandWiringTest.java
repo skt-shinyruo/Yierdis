@@ -197,7 +197,6 @@ public class YierdisServerBootstrapCommandWiringTest {
         for (Path sourcePath : List.of(serverSource("ServerCommandModule.java"),
                 serverSource("NettyServerInfoProvider.java"))) {
             String source = Files.readString(sourcePath, StandardCharsets.UTF_8);
-            Assert.assertFalse(source.contains("CommandPreparationContext"));
             Assert.assertFalse(source.contains("RedisReplyWriter"));
             Assert.assertFalse(source.contains("CommandExecutionContext"));
             Assert.assertFalse(source.contains("ReplyShapes.maximum()"));

@@ -1,6 +1,6 @@
 # 请求执行链路
 
-本文解释一条客户端请求在 Yierdis 里的运行路径：从 Netty 收到 RESP bytes，到命令进入 owner thread，再到 DB 读写和 RESP 回包写出。
+本文解释一条客户端请求在 Yierdis 里的运行路径：从 Netty 收到 RESP bytes，到命令进入 owner thread，再到 DB 读写、语义结果渲染和有序回包。
 
 ## 一张主链图
 
@@ -8,132 +8,114 @@
 flowchart LR
   client["client RESP bytes"]
   decoder["RespRequestDecoder"]
-  registered["RegisteredRespMessage / ReplySlot"]
+  request["ExecutionRequest / ReplySlot"]
   ingress["NettyExecutionRequestIngress"]
   executor["CommandExecutor"]
-  engine["DefaultYierdisEngine"]
-  processor["YierdisFastCommandProcessor"]
-  command["CommandDefinition + PreparedCommand"]
+  dispatcher["CommandDispatcher.prepare"]
+  spec["CommandSpec.handler.parse(CommandArgs)"]
+  invocation["CommandInvocation.prepare"]
+  prepared["PreparedCommand"]
   db["DbEngine / DbReads / DbWrites"]
-  memory["yierdis-db-memory"]
-  reply["RedisReplyWriter"]
-  respReply["RespReplyWriter"]
-  io["NettyExecutionIoAdapter"]
-  flush["transport flush"]
+  result["CommandResult / RedisReply"]
+  renderer["RedisReplyRenderer"]
+  writer["RedisReplyWriter"]
+  io["reply slot / Netty transport"]
 
-  client --> decoder --> registered --> ingress --> executor
-  executor --> engine --> processor --> command --> db --> memory --> reply --> respReply --> io --> flush
+  client --> decoder --> request --> ingress --> executor
+  executor --> dispatcher --> spec --> invocation --> prepared
+  prepared --> db --> result --> renderer --> writer --> io
 ```
 
-这条链最重要的边界是：
+命令执行部分统一为：
 
-- protocol 只负责 wire shape 和 reply encoding，不负责 DB 语义；
-- command 只负责 parsing 和 command semantics，不负责 Netty；
-- executor 只负责提交、排队、背压和 owner thread 调度；
-- DB 负责 storage behavior，不直接理解 RESP；
-- server-main 负责最终组装。
+```text
+CommandExecutor
+  -> CommandDispatcher.prepare(session, request)
+  -> CommandSpec.handler().parse(CommandArgs)
+  -> CommandInvocation.prepare(session)
+  -> PreparedCommand
+  -> reserve -> validate -> execute(context)
+  -> CommandResult -> RedisReplyRenderer
+```
+
+这条链的边界是：
+
+- protocol 负责 wire shape、RESP 版本和编码，不负责 DB 语义；
+- command 负责查表、参数解析和命令语义，不接触 Netty 或 reply sink；
+- executor 负责提交、排队、owner-thread 调度、回复预留、执行和统一渲染；
+- DB 负责 storage behavior，不理解 RESP；
+- server-main 是 composition root，拥有 `CommandDispatcher` 与 executor 的最终组装；
+- `RedisReplyWriter` 只是 `RedisReplyRenderer` 面向 RESP 的输出端口，不是 command handler API。
 
 ## 启动和连接状态
 
 `YierdisServer.main(...)` 只做启动参数解析、FFM 可用性检查和 `YierdisServerBootstrap.start(...)`。
 
-`YierdisServerBootstrap` 是 composition root。它会按顺序创建：
+`YierdisServerBootstrap` 是 composition root。它创建 `YierdisInstance`，通过 `ServerCommandComposition` 创建并注册默认命令、事务命令和 server-only 命令的 `CommandDispatcher`，再把 `dispatcher::prepare` 作为 `CommandExecutionEngine` 交给 `CommandExecutor`。之后才创建 Netty groups 和 `ServerBootstrap`。
 
-1. `YierdisInstance`
-2. `DefaultYierdisEngine`
-3. `CommandExecutor`
-4. Netty boss / worker / command group
-5. `ServerBootstrap`
+真正接收请求之前，owner thread 已由 `executor.start()` 绑定。DB 访问和命令执行留在该线程，Netty I/O 线程只做协议适配与提交。
 
-真正接收请求之前，owner thread 已经由 `executor.start()` 绑定好。这样 DB 访问线程、命令执行线程和 Netty I/O 线程就不会混在一起。
+每个连接由 `YierdisServerChannelInitializer` 初始化出 `NettyExecutionConnection`，其中三类状态彼此独立：
 
-每个连接由 `YierdisServerChannelInitializer` 初始化出 `NettyExecutionConnection`，它把三类状态拆开：
+- `Channel`：真实 transport；
+- `EngineSession`：具体的每连接 `CommandSession`，只持有 DB index、transaction、client metadata、认证状态、RESP version，并借用连接统计视图；
+- `ExecutionConnectionContext`：pending、pending bytes、closing、backpressure 和调度状态。
 
-- `Channel`：真实 transport
-- `EngineSession`：DB index、transaction、client state、RESP version
-- `ExecutionConnectionContext`：pending、pending bytes、closing、backpressure、调度状态
+`EngineSession` 只是连接 session 状态的 owner，不是命令执行引擎，也不拥有 dispatcher、DB 或 reply writer。`NettyExecutionConnection` 才是 `Channel`、session 和 executor connection context 的连接 root。
 
-`NettyExecutionConnection` 是这三类状态的唯一连接 root。`getOrCreate(channel, txMaxCommands, txMaxBytes)` 会把一个 `EngineSession` 和一个 `ExecutionConnectionContext` 绑到同一个 `Channel.attr(...)` 上，重复初始化会复用同一个实例；`markClosing()` 会先把连接标成 closing，再丢弃事务，避免 `QUIT` 或 close-after-reply 之后继续保留 queued request lease。
-
-`YierdisServerBootstrap` 的组装和关闭顺序也在这条链里固定下来：先创建 `YierdisInstance`、engine 和 executor，再创建 Netty groups 和 `ServerBootstrap`；关闭时则反向释放 server、event loop、executor 和 runtime owned resources，避免半初始化状态泄漏。
-
-`YierdisServerChannelInitializer` 的 pipeline 只做连接级装配，不承载命令语义。顺序是 read credit/accounting -> decode -> protocol error reply -> fast command handler。连接级 close 和 protocol error 也在这条 pipeline 上闭环，而不是让 handler 自己猜测 channel 生命周期。
+`NettyExecutionConnection.markClosing()` 会先标记 executor connection context，再把事务清理调度到 command owner；owner 已退出时才同步兜底清理。这样 `QUIT`、协议错误或 transport close 都不会把 retained transaction requests 留在队列里。
 
 ## Netty pipeline
 
-连接上的 pipeline 负责把网络数据推进到请求模型，再推进到 executor 提交点。
+连接 pipeline 把网络数据推进到请求模型，再推进到 executor admission：
 
-关键节点是：
+- `RespRequestDecoder` 解析 RESP array 或 inline command，执行 bulk、argc、line 和 command-bytes 入口限制，并通过 reply gate 产出带 `ReplySlot` 的 `RegisteredRespMessage`；
+- `NettyExecutionRequestIngress` 接收其中的 `ExecutionRequest` 或 `RespProtocolError`，保持回复顺序，完成 executor admission 或协议错误回包；
+- I/O 线程不调用 command handler，也不访问 DB。
 
-- `RespRequestDecoder`：从 `ByteBuf` 解析 RESP array 或 inline command，执行 bulk/argc/line/command-bytes 四类入口限制，并通过 reply gate 产出带 `ReplySlot` 的 `RegisteredRespMessage`
-- `NettyExecutionRequestIngress`：接收其中的 `ExecutionRequest` 或 `RespProtocolError`，保持 reply 顺序，完成 executor admission 或协议错误回包
+`RespRequestDecoder` 在 argv 与 payload 分配前完成 ingress admission，随后构造不可变的 `RetainedRespExecutionRequest`。每个请求持有脱离 Netty DTO 的 reference-counted request-memory lease；RESP array 中的 null bulk string 会原样保留，合法性由 `CommandDispatcher` 判断。
 
-这条路径里，I/O 线程不执行命令，只做协议适配和提交。
+`RetainedRespExecutionRequest` 是网络主链实现；`ByteArrayExecutionRequest` 用于 heap 输入、显式复制和测试。普通执行与事务重放都只依赖 `ExecutionRequest`。
 
-## RESP 到 ExecutionRequest
+## 提交、admission 和背压
 
-`RespRequestDecoder` 是协议和执行层之间的直接边界。它在 argv 与 payload 分配前完成 ingress admission，构造不可变的 `RetainedRespExecutionRequest`，并将它作为 `ExecutionRequest` 交给后续层。每个请求持有脱离 Netty 对象的 reference-counted request-memory lease；RESP array 里的 null bulk string 会原样保留为 null argv 元素，命令是否合法仍由后面的 command-kernel 决定。
+`NettyExecutionRequestIngress` 先调用 `executor.tryAcquire(...)` 预留 backlog，再通过 `ExecutorAdmission.publish(request, replySlot)` 转移请求和回复槽所有权。
 
-这里的意义有三个：
+- `Acquired`：publish 后 ownership 转给 executor；
+- `Unavailable`：queue slot 或 bytes budget 暂时不足，submission 留在连接 pending queue，暂停输入并等待 `onAdmissionAvailable(...)`；
+- `REQUEST_TOO_LARGE`：当前请求永远无法装入 configured bytes budget，当前 slot 返回对应错误；
+- closing、not-running 或 publish invariant failure：清理 ownership 并终止连接，不破坏已有 reply 顺序；
+- 协议错误和 ingress 内部错误使用已经注册的 reply slot 完成 terminal 回包。
 
-1. 命令层只认识 `ExecutionRequest`，不会看到 RESP DTO。
-2. 请求 lease 会一直保留到 executor、事务队列或最后一个 retained view 释放。
-3. 事务 replay 和普通执行共享同一个请求模型。
+更细的提交预算和背压关系见 [`executor-and-backpressure.md`](./executor-and-backpressure.md)。
 
-`RetainedRespExecutionRequest` 是网络主链的具体实现；`ByteArrayExecutionRequest` 用于 heap 输入、显式 copy 和事务 snapshot。主线语义始终是 `ExecutionRequest`。
+## owner thread 上的统一执行
 
-## 提交到 CommandExecutor
+`CommandExecutor` drain 到任务后按以下顺序处理：
 
-`NettyExecutionRequestIngress` 不做命令执行，只为请求取得 executor admission 并把 request/reply slot 的所有权一起发布给 `CommandExecutor`。
+1. 调用 `CommandDispatcher.prepare(connection.session(), request)`；
+2. 根据 `PreparedCommand.reservationShape()` 生成 reply plan；
+3. 让 reply slot 预留 encoded bytes 与 retained source bytes；
+4. 若容量暂时不可用，保留同一个 prepared command，暂停该连接输入并等待恢复；
+5. 容量成功后调用 `validateBeforeExecute()`；若结果为 `STALE`，关闭旧对象并重新 prepare；
+6. 创建仅含 session 与请求级 `MutationContext` 的 `CommandExecutionContext`，执行一次 `PreparedCommand.execute(context)`；
+7. 得到 `CommandResult` 后创建 `RedisReplyWriter`，由 `RedisReplyRenderer` 同步渲染其中的 `RedisReply`；
+8. 根据 `CommandResult.closeAfterReply()` 标记连接与 reply slot，最后关闭 prepared command 和 request。
 
-`CommandExecutor` 负责：
+容量预留发生在可见 mutation 前。command handler 不写 reply bytes，executor 也不解释具体 Redis 命令；两者通过 `PreparedCommand`、`ReplyShape` 和 `CommandResult` 连接。
 
-- 检查连接和全局预算
-- 记录 pending / pending bytes
-- 在高水位时关闭输入
-- 将请求排队到 owner thread
+## 命令查表、解析和准备
 
-如果容量暂时不足，ingress 会保留 pending submission、暂停输入并通过 `onAdmissionAvailable(...)` 等待恢复；请求不会越过预算进入命令层。
+`CommandDispatcher` 是 command-kernel 的单一入口。它负责空命令与 null argument 检查、命令名 ASCII 大写归一、`CommandRegistry` 查表、arity、transaction policy 和预期命令异常翻译。
 
-## Admission 等待和终止拒绝
+查到的 `CommandSpec` 只有两部分：
 
-`NettyExecutionRequestIngress` 使用两阶段 admission，不负责执行业务命令：先 `executor.tryAcquire(...)` 预留 backlog，再由 `ExecutorAdmission.publish(request, replySlot)` 转移所有权。
+- `CommandSyntax`：命令名、arity、key spec 和 transaction policy；
+- `CommandHandler`：`parse(CommandArgs)` 返回 transport-neutral 的 `CommandInvocation`。
 
-更具体地说：
+`CommandArgs` 集中提供 argv、ASCII literal 和整数读取。parse 阶段只解释请求参数；`CommandInvocation.prepare(session)` 才读取连接 session、访问 DB、准备 mutation 或取得需要延迟释放的 reply source，并返回 `PreparedCommand`。
 
-- `Acquired`：publish 后 request 和 reply slot ownership 转给 executor；
-- `Unavailable`：queue slot 或 bytes budget 暂时不足，submission 留在连接级 pending queue，恢复容量后重试；
-- `REQUEST_TOO_LARGE`：请求永远不可能装入 configured bytes budget，当前 slot 回 `ERR request exceeds executor queue byte limit`；
-- closing / not-running / publish invariant failure：清理 ownership 并终止连接，不把无法确认顺序的 busy reply 插入流中；
-- `exceptionCaught(...)` 的内部错误使用 terminal reply slot 回 `ERR internal error` 并 close-after-reply。
-
-这就是“Netty I/O 线程只提交、不执行业务命令”的实际落点。更细的提交预算和背压关系见 [`executor-and-backpressure.md`](./executor-and-backpressure.md)；命令进入 processor 之后的查表和 parse 细节见 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)。
-
-## owner thread 执行
-
-owner thread 是 DB 访问的真实边界。`CommandExecutor` 在这个线程上 drain 队列，然后调用 `DefaultYierdisEngine.prepare(...)`。
-
-executor 在准备阶段交给 engine 的只有两样东西：
-
-- `CommandSession`
-- `ExecutionRequest`
-
-engine 返回带 `ReplyShape` 的 `PreparedCommand`。executor 据此预留 reply capacity，校验 prepared state 仍有效，再创建 `RedisReplyWriter` 和 `CommandExecutionContext` 执行；它不解释具体命令语义。
-
-## Engine 和命令分发
-
-`DefaultYierdisEngine` 是 engine 实现入口。它用 `CommandSession` 和请求构造 `CommandPreparationContext`，再委托 `YierdisFastCommandProcessor`。`CommandSession` 已经聚合命令所需的 DB index、client metadata、transaction、connection stats 和 protocol negotiation 能力；细节见 [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)。
-
-`YierdisFastCommandProcessor` 负责：
-
-- 通过 `CommandRegistry` 找到 `CommandDefinition<?>`
-- 解析参数
-- 调用 `CommandPreparer` 生成 `PreparedCommand`
-- 让命令准备/执行把读写请求导向 `DbEngine / DbReads / DbWrites`
-
-命令层本身不碰 Netty，只通过 DB 能力接口做真实存取。
-
-如果你在追 `CommandRegistry`、`CommandDefinition`、`ArgReader`、parse error、unknown command 或 transaction policy，直接读 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md) 会更准确；本页只保留请求主链视角。
+更完整的分支顺序见 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)。
 
 ## PING 最短路径
 
@@ -142,54 +124,61 @@ engine 返回带 `ReplyShape` 的 `PreparedCommand`。executor 据此预留 repl
 ```text
 Netty ByteBuf
   -> RespRequestDecoder
-  -> RetainedRespExecutionRequest / ExecutionRequest
+  -> RetainedRespExecutionRequest
   -> NettyExecutionRequestIngress
   -> CommandExecutor
-  -> DefaultYierdisEngine
-  -> YierdisFastCommandProcessor
-  -> CommandDefinition<ArgReader>
+  -> CommandDispatcher.prepare(session, request)
+  -> PING CommandSpec.handler().parse(CommandArgs)
+  -> CommandInvocation.prepare(session)
   -> PreparedCommand
-  -> reply capacity reservation
-  -> CommandExecutionContext
-  -> RedisReplyWriter
-  -> RespReplyWriter
-  -> NettyExecutionIoAdapter
+  -> reserve -> validate -> execute(context)
+  -> CommandResult(SimpleString)
+  -> RedisReplyRenderer
+  -> RedisReplyWriter / ReplySlot
+  -> Netty transport
 ```
 
-它不访问 DB，主要验证协议适配、提交、owner thread 切换和回包链路。
+无 message 的 `PING` 不访问 DB，主要验证协议适配、提交、owner-thread 切换和统一渲染。
 
 ## SET 写路径
 
-`SET` 把命令解析、DB 路由、内存预算和 TTL 一起串起来。
+`SET` 把参数解析、DB 路由、memory ledger 和 TTL 串在一起：
 
-主流程是：
+1. `StringCommands` 的 handler 使用 `CommandArgs` 解析 `NX/XX/GET/EX/PX/EXAT/PXAT/KEEPTTL`，得到不可变参数并返回 invocation；
+2. invocation 根据 session 选择 DB，调用 typed write ops 准备 mutation，并从 preview 构造语义 `RedisReply` 与 reservation shape；
+3. executor 预留回复容量并验证 mutation 仍为 current；
+4. `PreparedCommand.execute(...)` 用请求级 `MutationContext` 提交 mutation，返回 `CommandResult`；
+5. executor 统一渲染结果，随后关闭 prepared mutation owner。
 
-1. `StringCommands.parseSet(...)` 解析 `NX/XX/GET/EX/PX/EXAT/PXAT/KEEPTTL`
-2. `StringCommands.set(...)` 通过 `YierdisStringOps` 准备 mutation 和 reply shape
-3. executor 预留 reply capacity 后执行 prepared mutation
-4. `YierdisDbMutationExecutor` 负责 reserve / prepare / commit / abort
-5. `YierdisDbKeyLifecycle` 维护 keyspace、TTL、旧值释放和访问元数据
+可见性提交仍由 `YierdisDbMutationExecutor` 与 `YierdisDbKeyLifecycle` 维护 storage、TTL、旧值释放和 change-event reservation；命令层不直接操作 allocator。
 
-这说明 `SET` 不只是“改一个值”，它还会触发 memory ledger、TTL 和 entry 记录更新。
+## 语义 streamed reply 的所有权
+
+`GET`、`HGETALL`、`LRANGE`、`SMEMBERS` 和 scan 等读命令可能从 DB 获得 `ByteValue`、`ByteSequenceSource`、`ByteMapSource` 或 `CollectionScanWindow`。这些 source 可以持有 native pin，不能在 prepare 返回时提前关闭。
+
+命令层通过 `DbReplies` 把 source 包装为带 payload length、retained source bytes 和 emitter 的 `RedisReply`，再用 `PreparedCommands.owned(...)` 让 `PreparedCommand` 持有 source。executor 先根据 reply shape 做预留；执行返回语义结果后，`RedisReplyRenderer` 同步调用 emitter 写入 `RedisReplyWriter`；只有渲染结束后 executor 才关闭 prepared command，从而在 command owner thread 归还 source。
+
+这里的职责分配是：DB 创建并定义 source 生命周期，prepared command 拥有 source，`RedisReply` 只描述如何同步发射语义 payload，renderer 消费它，`RedisReplyWriter` 只负责 RESP-facing 输出。
 
 ## 事务和 replay
 
-事务保存的是独立拥有的 retained `ExecutionRequest`，不是另一套命令 IR。
+事务队列保存的是自己拥有的 retained `ExecutionRequest`，不是另一套命令 IR。`MULTI` 中的 queueable 命令会先经过同一个 registry lookup、arity 校验和 `handler.parse(CommandArgs)`；只有这些 preflight 成功，排队用的 prepared action 才会在 reply reservation 后调用 `TransactionState.tryEnqueue(request)` 并返回 `QUEUED`。此时不会调用 invocation 的 `prepare(session)`，也不会访问 DB。
 
-入队时，`request.retain()` 为事务队列创建独立所有权视图；网络实现共享不可变 argv 和 reference-counted request-memory lease，因此当前 executor owner 关闭后仍能安全 replay。`EXEC` 之后的重放仍然走同一套 `YierdisFastCommandProcessor`、`CommandDefinition.parse(...)`、`PreparedCommand` 和 DB 访问路径。
+`EXEC` 重放每条 retained request 时调用同一个 `CommandDispatcher.prepareReplay(...)`。该入口只跳过再次排队，仍复用查表、arity、handler parse、invocation prepare、prepared validation、execution context 和 DB mutation path。子命令返回的 `RedisReply` 被收集成外层数组，executor 最终只调用一次 `RedisReplyRenderer`。
 
-## replay 仍然走同一条执行链
+streamed child 的 owner 会一直保留到整个 `EXEC` 聚合回复渲染结束；随后外层 prepared command 按逆序关闭 children 与 drained requests。详细状态机见 [`transaction-and-replay.md`](./transaction-and-replay.md)。
 
-事务重放不会走另一套“内部命令执行器”。触发 replay 的 `EXEC` 请求仍先经过 `DefaultYierdisEngine`，而队列里的 retained requests 会逐条重新进入同一个 `YierdisFastCommandProcessor` 和原始 command path。
+## QUIT、错误和关闭
 
-当前实现里，`EXEC` 会把事务队列里的 retained `ExecutionRequest` 按顺序重新喂回同一个 processor；查表、parse、prepare、validation、mutation context 和 reply writer 都复用普通请求的边界。更完整的状态机、abort 和 queue limit 细节见 [`transaction-and-replay.md`](./transaction-and-replay.md)。
+`QUIT` 的关闭语义属于结果而不是 writer side effect：其 handler 返回 `CommandResult.closeAfterReply(SimpleString("OK"))`。executor 先渲染 `OK`，再依据 result flag 标记连接 closing 并把同一 flag 交给有序 reply slot；Netty reply sequencer 在该回复写完后关闭 transport。`EXEC` 中若子结果请求关闭，外层结果会传播该 flag。
 
-## 错误、关闭和背压
+普通 command handler 不调用 `RedisReplyWriter.requestCloseAfterReply()`。writer 上的 control methods 只服务 executor/protocol 的 terminal failure 路径。
 
-错误处理分三类：
+错误大致分为：
 
-- protocol error：在协议层回写
-- submit reject：在 handler 层直接返回 busy/error
-- runtime error：标记连接 closing，再尽快回写并关闭
+- frame 级 protocol error：由 decoder/ingress 使用 reply slot 回写并关闭；
+- admission reject：由 ingress/executor 边界处理；
+- command error：由 `CommandDispatcher` 或 `CommandResult` 表达成语义 `RedisReply.Error`；
+- execute 后结果未知或渲染失败：executor 取消 reply ownership 并关闭 transport，不能伪造一个确定的 command error。
 
-背压同时受单连接 pending、pending bytes、全局 queue slot、queued bytes 和 channel writability 影响。`NettyExecutionIoAdapter` 负责把 buffered reply 写回 transport，必要时触发 flush 和 close-after-reply。
+背压同时受单连接 pending、pending bytes、全局 queue slot、queued bytes、reply capacity 和 channel writability 影响。`NettyExecutionIoAdapter` 与 reply gate 负责有序 flush 和 close-after-reply。

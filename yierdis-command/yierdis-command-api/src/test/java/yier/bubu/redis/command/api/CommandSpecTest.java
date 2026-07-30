@@ -65,11 +65,10 @@ public class CommandSpecTest {
     }
 
     @Test
-    public void registrationExposesDirectSpecsAndTheLegacyDefinitionBridge() {
+    public void registrationExposesOnlyDirectSpecs() {
         Assert.assertTrue(hasMethod("register", void.class, CommandSpec.class));
-        Assert.assertTrue(hasMethod("register", void.class, CommandDefinition.class));
         Assert.assertTrue(hasMethod("specByUpperName", CommandSpec.class, String.class));
-        Assert.assertEquals(2, Arrays.stream(CommandModule.Registration.class.getDeclaredMethods())
+        Assert.assertEquals(1, Arrays.stream(CommandModule.Registration.class.getDeclaredMethods())
                 .filter(method -> method.getName().equals("register"))
                 .count());
     }

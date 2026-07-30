@@ -22,10 +22,6 @@ public final class CommandSupport {
     private final ServerInfoProvider infoProvider;
     private final SlowCommandGovernor slowGovernor;
 
-    CommandSupport(YierdisDbRouter dbRouter, ServerInfoProvider infoProvider) {
-        this(dbRouter, infoProvider, SlowCommandGovernor.DEFAULT);
-    }
-
     CommandSupport(YierdisDbRouter dbRouter, ServerInfoProvider infoProvider, SlowCommandGovernor slowGovernor) {
         this.dbRouter = Objects.requireNonNull(dbRouter, "dbRouter");
         this.infoProvider = infoProvider;

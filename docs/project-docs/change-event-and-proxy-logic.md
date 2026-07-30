@@ -26,17 +26,19 @@
 
 ## Command Session Contract
 
-executor 和 engine 之间直接使用 `CommandSession`。这个接口聚合命令所需的连接能力，避免命令层接收一个弱 marker session 后再做运行时收窄。
+executor 和 dispatcher 之间直接使用 `CommandSession`。这个接口聚合命令所需的连接能力，避免命令层接收一个弱 marker session 后再做运行时收窄。生产环境把 `CommandDispatcher::prepare` 注入 executor 的窄准备端口，不再存在独立 command engine 对象。
 
 ```text
 CommandExecutorExecutionSupport
-  -> CommandExecutionEngine.prepare(commandSession, request)
-  -> DefaultYierdisEngine.prepare(...)
-  -> CommandPreparationContext
-  -> YierdisFastCommandProcessor
+  -> CommandDispatcher.prepare(commandSession, request)
+  -> CommandSpec.handler().parse(CommandArgs)
+  -> CommandInvocation.prepare(commandSession)
   -> PreparedCommand
   -> reply capacity reservation
-  -> CommandExecutionContext.forRequest(commandSession, writer, request)
+  -> validateBeforeExecute()
+  -> CommandExecutionContext.forRequest(commandSession, request)
+  -> PreparedCommand.execute(context)
+  -> CommandResult -> RedisReplyRenderer
 ```
 
 `CommandSession` 同时提供这些能力：
@@ -47,13 +49,14 @@ CommandExecutorExecutionSupport
 - `ConnectionStatsSession`
 - `ProtocolNegotiationSession`
 
-类型边界保证 engine 收到的 session 已具备全部能力。准备阶段只暴露 session；reply capacity 预留成功后，`CommandExecutionContext` 再加入 writer 和请求级 `MutationContext`。
+类型边界保证 dispatcher 收到的 session 已具备全部能力。准备阶段只暴露 session；reply capacity 预留成功后，`CommandExecutionContext` 再加入请求级 `MutationContext`，但不暴露 writer。`EngineSession` 只是这些连接状态的生产 owner，不负责命令查找、解析或回包。
 
 源码入口：
 
-- `DefaultYierdisEngine.prepare(...)`
+- `CommandDispatcher.prepare(...)`
+- `CommandSpec`
+- `CommandInvocation`
 - `CommandSession`
-- `CommandPreparationContext`
 - `CommandExecutionContext`
 - `EngineSession`
 
@@ -129,8 +132,9 @@ change event 是 DB 提交事实的有界、顺序化视图。它适合作为 AO
 用户命令路径：
 
 ```text
-DefaultYierdisEngine.prepare(...)
-  -> YierdisFastCommandProcessor.prepare(...)
+CommandDispatcher.prepare(...)
+  -> CommandSpec.handler().parse(CommandArgs)
+  -> CommandInvocation.prepare(session)
   -> PreparedCommand
   -> reply capacity reservation
   -> CommandExecutionContext.forRequest(...)
@@ -177,12 +181,12 @@ commit stream 是 in-process fixed ring，不是 durable log：它不提供 AOF�
 
 | 主题 | 关注点 | 测试入口 |
 | --- | --- | --- |
-| command record scope | engine 为每次实际执行建立并关闭 owner-thread command record | `DefaultYierdisEngineTest`, engine/session contract tests |
+| command record scope | executor 为每次实际执行建立并关闭请求级 `MutationContext`，EXEC child 另建自己的作用域 | `CommandExecutorTest`, `CommandDispatcherTest`, `MutationContextTest` |
 | DB commit reservation | reservation 在可见性前完成，发布后才递送，post-commit failure 不被取消 | `DbCommitPublisherTest`, DB mutation tests |
 | commit stream | ring capacity、顺序、borrowed callback view、sink failure 和 shutdown ownership | `CommitStreamTest`, `CommitStreamShutdownTest`, `CommitStreamIntegrationTest` |
 | DB synthetic event | expire cleanup / eviction 删除 key 时只在实际 commit 后发布对应 kind | `ExpireIndexTest`, `YierdisDbConstructionTest`, maxmemory 相关测试 |
 | DB routing | `SELECT`、session DB index 和 router 选择一致 | connection command tests, embedded/runtime DB routing tests |
-| session capabilities | engine 要求显式 command session capability | engine/session contract tests |
+| session capabilities | dispatcher 使用显式 `CommandSession` capability；`EngineSession` 只拥有连接状态 | `CommandDispatcherTest`, `EngineSessionTest` |
 | observability provider | `INFO` / `STATS` / global `MEMORY STATS` 通过 provider 汇总 server/runtime 统计 | `YierdisServerBootstrapCommandWiringTest`, `MemoryStatsCommandTest` |
 
 同时检查架构边界：command-builtin 不应依赖 command-kernel internal；command-core 不应 import runtime sink 或 DB commit implementation；DB API 只暴露 publisher port；runtime 持有 stream worker；server-main 是把这些接口接起来的 composition root。

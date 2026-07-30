@@ -15,7 +15,7 @@ Yierdis 的测试大致分成七层：
 | 层 | 主要目的 | 常见测试 |
 | --- | --- | --- |
 | API contract | 稳定接口和边界语义 | `ExecutionRequestContractTest`, `CommandContractTest`, `DbEngineFactoryPolicyContractTest` |
-| command / integration | 命令参数、回包、Redis 兼容语义 | `CommandProcessorTest`, `StringCommandTest`, `CommandErrorTest`, `CommandVariantCoverageTest` |
+| command / integration | 命令注册、parse 隔离、参数、回包和 Redis 兼容语义 | `CommandDispatcherTest`, `CommandParseIsolationTest`, `StringCommandTest`, `CommandErrorTest` |
 | DB direct ops | 绕开 command 层验证 DB API | `StringDirectOpsTest`, `CollectionDirectOpsTest`, `TtlLifecycleDirectOpsTest` |
 | native/internal | handle、allocator、keyspace、root/value、ledger | `NativeHandleTest`, `YierdisStableNativeAllocatorTest`, `StringRootTest`, `MemoryLedgerContractTest` |
 | executor / server | owner thread、队列、背压、Netty 适配 | `CommandExecutorTest`, `CommandExecutorBackpressureTest`, `RespProtocolIntegrationTest` |
@@ -48,7 +48,26 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests/yierdis-integration-tests -am -Dtest=StringCommandTest,BitmapCommandTest,CommandErrorTest,CommandVariantCoverageTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-新增命令或新增 option/subcommand 时，优先补最窄的命令家族测试和错误测试；server-only 命令还要补 server-main 组装或协议集成测试。排障顺序：先看 `CommandRegistry` 是否注册，`CommandDefinition.syntax()` 的 arity/key metadata 是否正确，再看 `YierdisFastCommandProcessor` 是否进入事务队列、错误路径或实际 preparer。
+新增命令或新增 option/subcommand 时，优先补最窄的命令家族测试和错误测试；server-only 命令还要补
+server-main 组装或协议集成测试。
+
+最终命令流固定为：
+
+```text
+CommandExecutor
+  -> CommandDispatcher.prepare(session, request)
+  -> CommandSpec.handler().parse(CommandArgs)
+  -> CommandInvocation.prepare(session)
+  -> PreparedCommand
+  -> reserve -> validate -> execute(context)
+  -> CommandResult -> RedisReplyRenderer
+```
+
+新增注册名还要补 parse-isolation fixture。默认命令由 `CommandParseIsolationTest` 保证 fixture 名称集合与
+`DefaultCommandModules` 的全部注册完全相等，并用会抛异常的 router/provider 证明 parse 不访问服务；
+`ServerCommandParseIsolationTest` 对 `HELLO`、`INFO`、`STATS` 做同样检查。排障顺序：先看
+`CommandRegistry` 是否注册，再看 `CommandSpec.syntax()` 的 arity/key metadata，然后区分 handler parse、
+`CommandInvocation.prepare(session)` 和 `PreparedCommand.execute(context)` 三个阶段。
 
 ## 改 DB 或数据结构时
 
@@ -71,10 +90,16 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 先跑事务状态和 replay 相关测试：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server-core,yierdis-server/yierdis-server-api -am -Dtest=EngineSessionTest,TransactionCommandTest,TransactionQueueCleanupTest,YierdisFastCommandProcessorPolicyTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-command/yierdis-command-core,yierdis-server/yierdis-server-core,yierdis-server/yierdis-server-main,yierdis-tests/yierdis-integration-tests -am -Dtest=CommandDispatcherTest,EngineSessionTest,TransactionCommandTest,TransactionQueueCleanupTest,ReplyPreflightCommandTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-排障顺序：`TransactionState` -> `EngineSession.DefaultTransactionState.tryEnqueue(...)` -> `ExecutionRequest.retain()` -> `EXEC` replay。`ExecutionRecord` 只属于 change-event API，不是事务队列载体。事务与 replay 的完整主线看 [`transaction-and-replay.md`](./transaction-and-replay.md)。
+排障顺序：`CommandDispatcher` 的 handler-parse preflight ->
+`EngineSession.DefaultTransactionState.tryEnqueue(...)` -> retained `ExecutionRequest` ->
+`TransactionCommands` drain -> `CommandDispatcher.prepareReplay(...)` -> child execute 和聚合结果。入队前不运行
+`CommandInvocation.prepare(session)`；drain 后的 `PreparedExec` 拥有并最终关闭队列 request 与 child
+`PreparedCommand`。
+`ExecutionRecord` 只属于 change-event API，不是事务队列载体。事务与 replay 的完整主线看
+[`transaction-and-replay.md`](./transaction-and-replay.md)。
 
 ## 改 TTL / expiration 时
 
@@ -126,7 +151,10 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server-main -am -Dtest=YierdisServerBootstrapCommandWiringTest,NettyExecutionAdapterIntegrationTest,ClosingSkipSideEffectsIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-排障顺序：submitter 接收请求 -> backlog budget -> scheduling policy -> drain loop -> execution support -> IO adapter 写回。详细模型看 [`executor-and-backpressure.md`](./executor-and-backpressure.md)。
+排障顺序：submitter 接收请求 -> backlog budget -> scheduling policy -> drain loop -> dispatcher prepare -> reply
+reserve -> validate -> execute -> `CommandResult` -> `RedisReplyRenderer` -> IO adapter 写回。语义 bulk / sequence /
+map source 必须在 renderer 消费完成后、`PreparedCommand` 关闭前仍然有效；`QUIT` 关闭来自
+`CommandResult.closeAfterReply`。详细模型看 [`executor-and-backpressure.md`](./executor-and-backpressure.md)。
 
 ## 改 CLI / bench 时
 
@@ -156,7 +184,9 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 当改动可能触碰协议边界、command/internal 边界或 runtime 访问约束时，优先补护栏测试：
 
-- `ArchitectureBoundaryTest`：检查网络层直接以 `ExecutionRequest` 为边界，必要时连同 `RespRequestDecoderTest` 一起跑。
+- `ArchitectureBoundaryTest`：检查旧命令文件保持删除、`CommandArgs` 是唯一参数 helper、命令层不直接使用 `RedisReplyWriter`、executor 集中渲染，并检查 server composition 持有 `CommandDispatcher`；网络边界改动再连同 `RespRequestDecoderTest` 一起跑。
+- `CommandPipelineArchitectureTest`：逐个检查 builtin 命令家族只注册 `CommandSpec`，不恢复旧参数/回复合同或直接 writer 调用。
+- `CommandParseIsolationTest` / `ServerCommandParseIsolationTest`：检查全部生产注册都有 parse-only fixture，parse 不访问 DB router 或 provider。
 - `YierdisDbArchitectureGuardTest`：检查 command/runtime 不能直接依赖 DB internal，必要时连同 `DbEngineReadWriteBoundaryTest` 一起跑。
 - `ArchitectureDependencyRuleTest`：检查 Maven/module 依赖方向没有回退。
 
@@ -166,9 +196,11 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 | 现象 | 先看哪里 | 常用测试 |
 | --- | --- | --- |
-| unknown command 或 arity 不对 | `CommandRegistry`, `CommandDefinition`, command preparer | `CommandRegistryGuardTest`, `CommandErrorTest` |
-| 事务里行为不同 | `YierdisFastCommandProcessor`, `TransactionState` | `TransactionCommandTest`, `TransactionQueueCleanupTest` |
-| RESP 回包形状不对 | `RedisReplyWriter`, `RespReplyWriter` | `RespReplyWriterTest`, `RespProtocolIntegrationTest` |
+| unknown command 或 arity 不对 | `CommandRegistry`, `CommandSpec`, `CommandArgs`, `CommandDispatcher` | `CommandRegistryGuardTest`, `CommandDispatcherTest`, `CommandErrorTest` |
+| parse 阶段意外访问 DB/provider | command handler、`CommandArgs` | `CommandParseIsolationTest`, `ServerCommandParseIsolationTest` |
+| 事务里行为不同 | `CommandDispatcher`, `TransactionCommands`, `TransactionState` | `CommandDispatcherTest`, `TransactionCommandTest`, `TransactionQueueCleanupTest` |
+| RESP 回包形状不对 | `CommandResult`, `RedisReplyRenderer`, `RespReplyWriter` | `RedisReplyRendererTest`, `RespReplyWriterTest`, `RespProtocolIntegrationTest` |
+| `QUIT` 回复后未关闭 | `CommandResult.closeAfterReply`, reply slot / sequencer | `CommandExecutorTest`, `RespProtocolIntegrationTest` |
 | TTL 不准或过期 key 仍可见 | `YierdisExpireIndex`, lifecycle cleanup | `TtlLifecycleDirectOpsTest`, `ExpireIndexTest` |
 | maxmemory 多回包或错误回包 | `YierdisDbMemoryLedger`, mutation executor | `MaxmemoryEvictionTest`, `MaxmemoryDoubleReplyRegressionTest` |
 | off-heap 泄漏 | root/value release, blob store, native handle graph | `OffHeapLeakRegressionTest`, `NativeStorageRegressionTest` |
