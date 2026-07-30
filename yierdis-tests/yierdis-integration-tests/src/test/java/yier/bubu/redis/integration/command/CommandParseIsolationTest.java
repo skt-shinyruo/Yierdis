@@ -1,6 +1,7 @@
 package yier.bubu.redis.integration.command;
 
 import java.util.Map;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Assert;
 import org.junit.Test;
@@ -20,6 +21,9 @@ import yier.bubu.redis.storage.api.DbEngine;
 import static java.util.Map.entry;
 
 public class CommandParseIsolationTest {
+    private record ParseCase(String commandName, CommandArgs args) {
+    }
+
     @Test
     public void stringCommandParsersDoNotAccessRuntimeServices() throws Exception {
         AtomicInteger routerCalls = new AtomicInteger();
@@ -69,6 +73,69 @@ public class CommandParseIsolationTest {
         }
     }
 
+    @Test
+    public void keyspaceCommandParsersDoNotAccessRuntimeServices() throws Exception {
+        AtomicInteger routerCalls = new AtomicInteger();
+        AtomicInteger providerCalls = new AtomicInteger();
+        CommandRegistry registry = CommandRegistries.from(DefaultCommandModules.create(
+                throwingRouter(routerCalls),
+                throwingProvider(providerCalls)
+        ));
+
+        for (ParseCase command : List.of(
+                parseCase("TYPE", "TYPE", "k"),
+                parseCase("MEMORY", "MEMORY", "USAGE", "k"),
+                parseCase("MEMORY", "MEMORY", "STATS"),
+                parseCase("OBJECT", "OBJECT", "ENCODING", "k"),
+                parseCase("KEYS", "KEYS", "*"),
+                parseCase("SCAN", "SCAN", "0", "MATCH", "k*", "COUNT", "10"),
+                parseCase("DEL", "DEL", "a", "b"),
+                parseCase("EXISTS", "EXISTS", "a", "b"),
+                parseCase("EXPIRE", "EXPIRE", "k", "10"),
+                parseCase("PEXPIRE", "PEXPIRE", "k", "10"),
+                parseCase("EXPIREAT", "EXPIREAT", "k", "10"),
+                parseCase("PEXPIREAT", "PEXPIREAT", "k", "10"),
+                parseCase("PERSIST", "PERSIST", "k"),
+                parseCase("TTL", "TTL", "k"),
+                parseCase("PTTL", "PTTL", "k")
+        )) {
+            CommandSpec spec = registry.specByUpperName(command.commandName());
+            Assert.assertNotNull(command.commandName(), spec);
+            Assert.assertNotNull(command.commandName(), spec.handler().parse(command.args()));
+        }
+
+        Assert.assertEquals(0, routerCalls.get());
+        Assert.assertEquals(0, providerCalls.get());
+    }
+
+    @Test
+    public void keyspaceCommandParsersRejectInvalidUserInputBeforePreparation() {
+        CommandRegistry registry = CommandRegistries.from(DefaultCommandModules.create(
+                throwingRouter(new AtomicInteger()),
+                throwingProvider(new AtomicInteger())
+        ));
+
+        for (CommandArgs invalid : new CommandArgs[]{
+                argv("MEMORY", "USAGE"),
+                argv("MEMORY", "STATS", "extra"),
+                argv("MEMORY", "UNKNOWN"),
+                argv("OBJECT", "ENCODING"),
+                argv("OBJECT", "UNKNOWN", "k"),
+                argv("SCAN", "-1"),
+                argv("SCAN", "9223372036854775808"),
+                argv("SCAN", "0", "MATCH"),
+                argv("SCAN", "0", "COUNT"),
+                argv("SCAN", "0", "COUNT", "0"),
+                argv("SCAN", "0", "COUNT", "2147483648"),
+                argv("EXPIRE", "k", "not-a-number"),
+                argv("PEXPIRE", "k", "not-a-number"),
+                argv("EXPIREAT", "k", "not-a-number"),
+                argv("PEXPIREAT", "k", "not-a-number")
+        }) {
+            assertParseFailure(registry, invalid);
+        }
+    }
+
     private static void assertParseFailure(CommandRegistry registry, CommandArgs args) {
         try {
             CommandSpec spec = registry.specByUpperName(args.utf8(0));
@@ -83,6 +150,10 @@ public class CommandParseIsolationTest {
     private static CommandArgs argv(String... values) {
         return CommandArgs.of(ByteArrayExecutionRequest.fromUtf8(values[0], java.util.List.of(
                 java.util.Arrays.copyOfRange(values, 1, values.length))));
+    }
+
+    private static ParseCase parseCase(String commandName, String... values) {
+        return new ParseCase(commandName, argv(values));
     }
 
     private static YierdisDbRouter throwingRouter(AtomicInteger calls) {

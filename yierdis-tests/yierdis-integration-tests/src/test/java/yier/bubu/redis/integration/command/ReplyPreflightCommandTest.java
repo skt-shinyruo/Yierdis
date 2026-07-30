@@ -1,9 +1,11 @@
 package yier.bubu.redis.integration.command;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandExecutionContext;
@@ -17,7 +19,16 @@ import yier.bubu.redis.execution.api.ValidationResult;
 import yier.bubu.redis.execution.engine.EngineSession;
 import yier.bubu.redis.protocol.resp.RespReplySizer;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
+import yier.bubu.redis.storage.api.DbEngine;
+import yier.bubu.redis.storage.api.DbReads;
+import yier.bubu.redis.storage.api.KeyspaceReadOps;
+import yier.bubu.redis.storage.api.ScanCursorV2;
+import yier.bubu.redis.storage.api.ValueType;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
+import yier.bubu.redis.storage.api.result.KeyScanWindow;
+import yier.bubu.redis.storage.api.result.PayloadLengthSink;
 import yier.bubu.redis.testutil.FastTestClient;
+import yier.bubu.redis.testutil.ReplyArray;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestBytes.cmd;
@@ -197,6 +208,24 @@ public class ReplyPreflightCommandTest {
     }
 
     @Test
+    public void staleKeyScanWindowClosesBeforeTheSameRequestIsPreparedAgain() {
+        forEachDb(db -> {
+            AtomicInteger firstWindowCloses = new AtomicInteger();
+            AtomicInteger scanCalls = new AtomicInteger();
+            KeyspaceReadOps keyspace = staleFirstScan(db.reads().keyspace(), scanCalls, firstWindowCloses);
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(withKeyspaceReads(db, keyspace));
+
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
+                ReplyArray reply = (ReplyArray) client.execute(cmd("SCAN", "0"));
+                Assert.assertNotNull(reply.values());
+            }
+
+            Assert.assertEquals(2, scanCalls.get());
+            Assert.assertEquals(1, firstWindowCloses.get());
+        });
+    }
+
+    @Test
     public void collectionScanReservesItsNestedShapeAndMaterializedWindow() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
@@ -313,6 +342,176 @@ public class ReplyPreflightCommandTest {
                 REPLY_SIZER.plan(session, ReplyShapes.bulkString(payloadLength, plan.retainedSourceBytes())),
                 plan
         );
+    }
+
+    private static DbEngine withKeyspaceReads(DbEngine delegate, KeyspaceReadOps keyspace) {
+        return new DbEngine() {
+            @Override
+            public DbReads reads() {
+                DbReads reads = delegate.reads();
+                return new DbReads() {
+                    @Override
+                    public yier.bubu.redis.storage.api.StringReadOps strings() {
+                        return reads.strings();
+                    }
+
+                    @Override
+                    public yier.bubu.redis.storage.api.HashReadOps hashes() {
+                        return reads.hashes();
+                    }
+
+                    @Override
+                    public yier.bubu.redis.storage.api.ListReadOps lists() {
+                        return reads.lists();
+                    }
+
+                    @Override
+                    public yier.bubu.redis.storage.api.SetReadOps sets() {
+                        return reads.sets();
+                    }
+
+                    @Override
+                    public yier.bubu.redis.storage.api.ZSetReadOps zsets() {
+                        return reads.zsets();
+                    }
+
+                    @Override
+                    public yier.bubu.redis.storage.api.HllReadOps hll() {
+                        return reads.hll();
+                    }
+
+                    @Override
+                    public KeyspaceReadOps keyspace() {
+                        return keyspace;
+                    }
+
+                    @Override
+                    public yier.bubu.redis.storage.api.TtlReadOps ttl() {
+                        return reads.ttl();
+                    }
+                };
+            }
+
+            @Override
+            public yier.bubu.redis.storage.api.DbWrites writes() {
+                return delegate.writes();
+            }
+
+            @Override
+            public yier.bubu.redis.storage.api.ExpirationManager expiration() {
+                return delegate.expiration();
+            }
+
+            @Override
+            public yier.bubu.redis.storage.api.MemoryOps memory() {
+                return delegate.memory();
+            }
+
+            @Override
+            public yier.bubu.redis.storage.api.DbLifecycleOps lifecycle() {
+                return delegate.lifecycle();
+            }
+
+            @Override
+            public yier.bubu.redis.storage.api.DbHealthSnapshot health() {
+                return delegate.health();
+            }
+        };
+    }
+
+    private static KeyspaceReadOps staleFirstScan(
+            KeyspaceReadOps delegate,
+            AtomicInteger scanCalls,
+            AtomicInteger firstWindowCloses
+    ) {
+        return new KeyspaceReadOps() {
+            @Override
+            public ValueType typeOf(BytesView keyView) {
+                return delegate.typeOf(keyView);
+            }
+
+            @Override
+            public boolean existsKey(BytesView keyView) {
+                return delegate.existsKey(keyView);
+            }
+
+            @Override
+            public KeyScanWindow keys(byte[] globPattern, int maxMatches, long timeBudgetNanos) {
+                return delegate.keys(globPattern, maxMatches, timeBudgetNanos);
+            }
+
+            @Override
+            public KeyScanWindow scan(ScanCursorV2 cursor, byte[] globPattern, int count) {
+                int call = scanCalls.incrementAndGet();
+                if (call == 2) {
+                    Assert.assertEquals("stale window must close before reprepare", 1, firstWindowCloses.get());
+                }
+                KeyScanWindow window = delegate.scan(cursor, globPattern, count);
+                return call == 1 ? staleAfterPreparation(window, firstWindowCloses) : window;
+            }
+        };
+    }
+
+    private static KeyScanWindow staleAfterPreparation(KeyScanWindow delegate, AtomicInteger closes) {
+        return new KeyScanWindow() {
+            private int currentChecks;
+            private boolean closed;
+
+            @Override
+            public ScanCursorV2 nextCursor() {
+                return delegate.nextCursor();
+            }
+
+            @Override
+            public long inspectedSlots() {
+                return delegate.inspectedSlots();
+            }
+
+            @Override
+            public long tableGeneration() {
+                return delegate.tableGeneration();
+            }
+
+            @Override
+            public long expiryEvaluationMillis() {
+                return delegate.expiryEvaluationMillis();
+            }
+
+            @Override
+            public boolean current() {
+                return ++currentChecks == 1 && delegate.current();
+            }
+
+            @Override
+            public int elementCount() {
+                return delegate.elementCount();
+            }
+
+            @Override
+            public long retainedMemoryBytes() {
+                return delegate.retainedMemoryBytes();
+            }
+
+            @Override
+            public void visitElementLengths(PayloadLengthSink out) {
+                delegate.visitElementLengths(out);
+            }
+
+            @Override
+            public void emitTo(ByteValueSink out) {
+                delegate.emitTo(out);
+            }
+
+            @Override
+            public void close() {
+                if (closed) {
+                    return;
+                }
+                closed = true;
+                closes.incrementAndGet();
+                delegate.close();
+            }
+        };
     }
 
     private static void assertAggregatePreflight(

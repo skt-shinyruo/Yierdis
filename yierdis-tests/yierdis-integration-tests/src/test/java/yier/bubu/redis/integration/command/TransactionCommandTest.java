@@ -257,6 +257,43 @@ public class TransactionCommandTest {
     }
 
     @Test
+    public void keyspaceParseErrorsInsideMultiAbortBeforeExec() {
+        forEachDb(db -> {
+            for (List<byte[]> invalid : List.of(
+                    Arrays.asList(b("MEMORY"), b("USAGE")),
+                    Arrays.asList(b("MEMORY"), b("STATS"), b("extra")),
+                    Arrays.asList(b("OBJECT"), b("ENCODING")),
+                    Arrays.asList(b("SCAN"), b("-1")),
+                    Arrays.asList(b("SCAN"), b("0"), b("MATCH")),
+                    Arrays.asList(b("SCAN"), b("0"), b("COUNT")),
+                    Arrays.asList(b("SCAN"), b("0"), b("COUNT"), b("0")),
+                    Arrays.asList(b("EXPIRE"), b("k"), b("nope")),
+                    Arrays.asList(b("PEXPIRE"), b("k"), b("nope")),
+                    Arrays.asList(b("EXPIREAT"), b("k"), b("nope")),
+                    Arrays.asList(b("PEXPIREAT"), b("k"), b("nope"))
+            )) {
+                CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+                TestSession session = new TestSession();
+                try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+                    Assert.assertEquals(
+                            "OK",
+                            ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value()
+                    );
+                    Assert.assertTrue(client.execute(invalid) instanceof ReplyError);
+                    Assert.assertEquals(0, session.transactionState().size());
+
+                    ReplyObject exec = client.execute(Arrays.asList(b("EXEC")));
+                    Assert.assertTrue(exec instanceof ReplyError);
+                    Assert.assertEquals(
+                            "EXECABORT Transaction discarded because of previous errors.",
+                            ((ReplyError) exec).message()
+                    );
+                }
+            }
+        });
+    }
+
+    @Test
     public void nullBulkStringInsideMultiAbortsBeforeExec() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);

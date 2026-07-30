@@ -22,7 +22,7 @@ public final class DbReplies {
                 sink -> source.emitTo(new BulkStringReplyAdapter(sink)));
     }
 
-    static RedisReply sequence(ByteSequenceSource source) {
+    public static RedisReply sequence(ByteSequenceSource source) {
         ByteSequenceSource values = Objects.requireNonNull(source, "source");
         return RedisReplies.sequence(
                 values.elementCount(),

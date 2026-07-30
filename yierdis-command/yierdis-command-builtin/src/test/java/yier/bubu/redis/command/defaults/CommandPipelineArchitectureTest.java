@@ -36,6 +36,21 @@ public class CommandPipelineArchitectureTest {
         Assert.assertEquals(9, occurrences(source, "new CommandSpec("));
     }
 
+    @Test
+    public void keyspaceCommandsUseDirectSemanticPipeline() throws IOException {
+        String source = Files.readString(mainSourceRoot().resolve("keyspace/KeyCommands.java"));
+
+        for (String forbidden : List.of(
+                "CommandDefinition", "CommandParsers", "ArgReader",
+                "CommandParseResult", "CommandParseError", "CommandPreparationContext",
+                "RedisReplyWriter", "BulkStringReplyAdapter", ".reply()", "new PreparedCommand",
+                "sliceResetFromRequest", "clearScratch"
+        )) {
+            Assert.assertFalse("legacy command path remains: " + forbidden, source.contains(forbidden));
+        }
+        Assert.assertEquals(14, occurrences(source, "new CommandSpec("));
+    }
+
     private static int occurrences(String source, String needle) {
         int count = 0;
         int offset = 0;
