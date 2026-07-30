@@ -59,6 +59,21 @@ public class CommandPipelineArchitectureTest {
         assertDirectPipeline("CollectionScanCommandSupport.java", 0);
     }
 
+    @Test
+    public void sortedSetAndHllCommandsUseDirectSemanticPipeline() throws IOException {
+        assertDirectPipeline("zset/ZSetCommands.java", 9);
+        assertDirectPipeline("hll/HllCommands.java", 3);
+
+        String support = Files.readString(mainSourceRoot().resolve("CommandSupport.java"));
+        for (String forbidden : List.of(
+                "ByteArraySliceList", "argvScratch", "sliceResetFromRequest", "clearScratch",
+                "parseScoreBound", "ScoreBound"
+        )) {
+            Assert.assertFalse("CommandSupport retains final-family scratch: " + forbidden,
+                    support.contains(forbidden));
+        }
+    }
+
     private static void assertDirectPipeline(String relativePath, int expectedSpecs) throws IOException {
         String source = Files.readString(mainSourceRoot().resolve(relativePath));
         for (String forbidden : List.of(

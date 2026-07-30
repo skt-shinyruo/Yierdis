@@ -2,7 +2,12 @@ package yier.bubu.redis.integration.command;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.command.defaults.DefaultCommandModules;
+import yier.bubu.redis.command.kernel.CommandRegistries;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
+import yier.bubu.redis.storage.api.DbEngine;
+import yier.bubu.redis.storage.api.DbReads;
+import yier.bubu.redis.storage.api.ZSetReadOps;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
 import yier.bubu.redis.testutil.ReplyBulkString;
@@ -12,8 +17,11 @@ import yier.bubu.redis.testutil.ReplyObject;
 import yier.bubu.redis.testutil.ReplySimpleString;
 
 import java.io.IOException;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
@@ -50,6 +58,35 @@ public class ZSetCommandTest {
                 client.close();
             }
         });
+    }
+
+    @Test
+    public void zrevrangeParsesRanksBeforeOptions() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
+                ReplyError error = (ReplyError) client.execute(
+                        List.of(b("ZREVRANGE"), b("z"), b("bad"), b("-1"), b("UNKNOWN")));
+
+                Assert.assertEquals("ERR value is not an integer or out of range", error.message());
+            }
+        });
+    }
+
+    @Test
+    public void oversizedRangePreparationRemainsACommandError() {
+        CommandDispatcher dispatcher = oversizedRangeDispatcher();
+        try (FastTestClient client = new FastTestClient(dispatcher)) {
+            for (List<byte[]> command : List.of(
+                    List.of(b("ZRANGE"), b("z"), b("0"), b("-1"), b("WITHSCORES")),
+                    List.of(b("ZRANGEBYSCORE"), b("z"), b("-inf"), b("+inf"), b("WITHSCORES"))
+            )) {
+                ReplyError error = (ReplyError) client.execute(command);
+                Assert.assertEquals("ERR response is too large", error.message());
+            }
+
+            Assert.assertEquals("PONG", ((ReplySimpleString) client.execute(List.of(b("PING")))).value());
+        }
     }
 
     @Test
@@ -448,6 +485,32 @@ public class ZSetCommandTest {
 
             }
         });
+    }
+
+    private static CommandDispatcher oversizedRangeDispatcher() {
+        ZSetReadOps zsets = interfaceProxy(ZSetReadOps.class, (proxy, method, args) -> {
+            throw new IllegalArgumentException("response is too large");
+        });
+        DbReads reads = interfaceProxy(DbReads.class, (proxy, method, args) -> {
+            if ("zsets".equals(method.getName())) {
+                return zsets;
+            }
+            throw new AssertionError("unexpected DB read: " + method.getName());
+        });
+        DbEngine engine = interfaceProxy(DbEngine.class, (proxy, method, args) -> {
+            if ("reads".equals(method.getName())) {
+                return reads;
+            }
+            throw new AssertionError("unexpected DB access: " + method.getName());
+        });
+        return CommandRegistries.dispatcher(DefaultCommandModules.create(engine));
+    }
+
+    private static <T> T interfaceProxy(Class<T> type, InvocationHandler handler) {
+        return type.cast(Proxy.newProxyInstance(
+                type.getClassLoader(),
+                new Class<?>[]{type},
+                handler));
     }
 
     @Test

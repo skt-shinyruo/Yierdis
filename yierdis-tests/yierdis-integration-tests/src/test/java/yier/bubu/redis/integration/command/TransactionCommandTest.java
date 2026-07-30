@@ -29,6 +29,9 @@ import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class TransactionCommandTest {
+    private record InvalidCommand(List<byte[]> args, String message) {
+    }
+
     @Test
     public void multiQueuesAndExecAppliesInOrder() {
         forEachDb(db -> {
@@ -328,6 +331,51 @@ public class TransactionCommandTest {
     }
 
     @Test
+    public void sortedSetAndHllParseErrorsInsideMultiAbortBeforeExec() {
+        forEachDb(db -> {
+            for (InvalidCommand invalid : List.of(
+                    invalid("ERR value is not a valid float", "ZADD", "z", "NaN", "member"),
+                    invalid("ERR value is not a valid float", "ZADD", "z", "Infinity", "member"),
+                    invalid("ERR value is not a valid float", "ZADD", "z", "bad", "member"),
+                    invalid("ERR value is not an integer or out of range", "ZRANGE", "z", "bad", "-1"),
+                    invalid("ERR syntax error", "ZRANGE", "z", "0", "-1", "WITHSCORES", "WITHSCORES"),
+                    invalid("ERR syntax error", "ZREVRANGE", "z", "0", "-1", "UNKNOWN"),
+                    invalid("ERR value is not an integer or out of range",
+                            "ZREVRANGE", "z", "bad", "-1", "UNKNOWN"),
+                    invalid("ERR min or max is not a float", "ZRANGEBYSCORE", "z", "bad", "+inf"),
+                    invalid("ERR value is not an integer or out of range",
+                            "ZRANGEBYSCORE", "z", "-inf", "+inf", "LIMIT", "bad", "1"),
+                    invalid("ERR min or max is not a float", "ZREMRANGEBYSCORE", "z", "-inf", "bad"),
+                    invalid("ERR value is not an integer or out of range", "ZREMRANGEBYRANK", "z", "bad", "-1"),
+                    invalid("ERR value is not an integer or out of range", "ZSCAN", "z", "-1"),
+                    invalid("ERR syntax error", "ZSCAN", "z", "0", "MATCH"),
+                    invalid("ERR value is not an integer or out of range", "ZSCAN", "z", "0", "COUNT", "0"),
+                    invalid("ERR wrong number of arguments for 'pfadd' command", "PFADD", "h"),
+                    invalid("ERR wrong number of arguments for 'pfcount' command", "PFCOUNT"),
+                    invalid("ERR wrong number of arguments for 'pfmerge' command", "PFMERGE", "dest")
+            )) {
+                CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+                TestSession session = new TestSession();
+                try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+                    Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+
+                    ReplyObject failure = client.execute(invalid.args());
+                    Assert.assertTrue(failure instanceof ReplyError);
+                    Assert.assertEquals(invalid.message(), ((ReplyError) failure).message());
+                    Assert.assertEquals(0, session.transactionState().size());
+
+                    ReplyObject exec = client.execute(List.of(b("EXEC")));
+                    Assert.assertTrue(exec instanceof ReplyError);
+                    Assert.assertEquals(
+                            "EXECABORT Transaction discarded because of previous errors.",
+                            ((ReplyError) exec).message()
+                    );
+                }
+            }
+        });
+    }
+
+    @Test
     public void nullBulkStringInsideMultiAbortsBeforeExec() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
@@ -415,6 +463,14 @@ public class TransactionCommandTest {
                 Assert.assertTrue(client.execute(List.of(b("GET"), b("k"))) instanceof ReplyNull);
             }
         });
+    }
+
+    private static InvalidCommand invalid(String message, String... args) {
+        List<byte[]> encoded = new ArrayList<>(args.length);
+        for (String arg : args) {
+            encoded.add(b(arg));
+        }
+        return new InvalidCommand(List.copyOf(encoded), message);
     }
 
     private static final class TestSession implements yier.bubu.redis.execution.api.CommandSession {

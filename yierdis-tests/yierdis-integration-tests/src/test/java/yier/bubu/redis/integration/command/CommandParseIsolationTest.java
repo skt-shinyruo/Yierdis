@@ -201,6 +201,64 @@ public class CommandParseIsolationTest {
         }
     }
 
+    @Test
+    public void sortedSetAndHllParsersDoNotAccessRuntimeServices() throws Exception {
+        AtomicInteger routerCalls = new AtomicInteger();
+        AtomicInteger providerCalls = new AtomicInteger();
+        CommandRegistry registry = CommandRegistries.from(DefaultCommandModules.create(
+                throwingRouter(routerCalls),
+                throwingProvider(providerCalls)
+        ));
+
+        for (ParseCase command : List.of(
+                parseCase("ZADD", "ZADD", "z", "1.5", "member"),
+                parseCase("ZRANGE", "ZRANGE", "z", "0", "-1", "WITHSCORES", "REV"),
+                parseCase("ZREVRANGE", "ZREVRANGE", "z", "0", "-1", "WITHSCORES"),
+                parseCase("ZRANGEBYSCORE", "ZRANGEBYSCORE", "z", "-inf", "+inf", "WITHSCORES", "LIMIT", "0", "10"),
+                parseCase("ZREVRANGEBYSCORE", "ZREVRANGEBYSCORE", "z", "+inf", "-inf", "LIMIT", "0", "10"),
+                parseCase("ZREMRANGEBYSCORE", "ZREMRANGEBYSCORE", "z", "(1", "2"),
+                parseCase("ZREMRANGEBYRANK", "ZREMRANGEBYRANK", "z", "0", "-1"),
+                parseCase("ZREM", "ZREM", "z", "member"),
+                parseCase("ZSCAN", "ZSCAN", "z", "0", "MATCH", "m*", "COUNT", "10"),
+                parseCase("PFADD", "PFADD", "h", "value"),
+                parseCase("PFCOUNT", "PFCOUNT", "h1", "h2"),
+                parseCase("PFMERGE", "PFMERGE", "dest", "source")
+        )) {
+            CommandSpec spec = registry.specByUpperName(command.commandName());
+            Assert.assertNotNull(command.commandName(), spec);
+            Assert.assertNotNull(command.commandName(), spec.handler().parse(command.args()));
+        }
+
+        Assert.assertEquals(0, routerCalls.get());
+        Assert.assertEquals(0, providerCalls.get());
+    }
+
+    @Test
+    public void sortedSetParsersRejectInvalidUserInputBeforePreparation() {
+        CommandRegistry registry = CommandRegistries.from(DefaultCommandModules.create(
+                throwingRouter(new AtomicInteger()),
+                throwingProvider(new AtomicInteger())
+        ));
+
+        for (CommandArgs invalid : new CommandArgs[]{
+                argv("ZADD", "z", "NaN", "member"),
+                argv("ZADD", "z", "Infinity", "member"),
+                argv("ZADD", "z", "not-a-score", "member"),
+                argv("ZRANGE", "z", "rank", "-1"),
+                argv("ZRANGE", "z", "0", "-1", "WITHSCORES", "WITHSCORES"),
+                argv("ZREVRANGE", "z", "0", "-1", "UNKNOWN"),
+                argv("ZRANGEBYSCORE", "z", "bad", "+inf"),
+                argv("ZRANGEBYSCORE", "z", "-inf", "+inf", "LIMIT", "bad", "1"),
+                argv("ZREMRANGEBYSCORE", "z", "-inf", "bad"),
+                argv("ZREMRANGEBYRANK", "z", "bad", "-1"),
+                argv("ZSCAN", "z", "-1"),
+                argv("ZSCAN", "z", "0", "MATCH"),
+                argv("ZSCAN", "z", "0", "COUNT", "0")
+        }) {
+            assertParseFailure(registry, invalid);
+        }
+    }
+
     private static void assertParseFailure(CommandRegistry registry, CommandArgs args) {
         try {
             CommandSpec spec = registry.specByUpperName(args.utf8(0));

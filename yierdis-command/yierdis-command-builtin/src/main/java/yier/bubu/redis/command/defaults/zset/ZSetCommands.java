@@ -1,28 +1,35 @@
 package yier.bubu.redis.command.defaults.zset;
 
+import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Objects;
-import yier.bubu.redis.command.api.ArgReader;
+import java.util.function.Supplier;
 import yier.bubu.redis.command.api.CommandArgs;
 import yier.bubu.redis.command.api.CommandArity;
-import yier.bubu.redis.command.api.CommandDefinition;
+import yier.bubu.redis.command.api.CommandInvocation;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
-import yier.bubu.redis.command.api.CommandParseError;
 import yier.bubu.redis.command.api.CommandParseException;
-import yier.bubu.redis.command.api.CommandParseResult;
-import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.defaults.CollectionScanCommandSupport;
 import yier.bubu.redis.command.defaults.CommandSupport;
-import yier.bubu.redis.execution.api.CommandPreparationContext;
-import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.command.defaults.DbReplies;
+import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.PreparedCommand;
+import yier.bubu.redis.execution.api.PreparedCommands;
+import yier.bubu.redis.execution.api.RedisReplies;
+import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.execution.api.ReplyShapes;
+import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
 
 public final class ZSetCommands implements CommandModule {
+    private static final String SYNTAX_ERROR = "ERR syntax error";
+    private static final String SCORE_ERROR = "ERR value is not a valid float";
+    private static final String SCORE_BOUND_ERROR = "ERR min or max is not a float";
     private static final CommandKeySpec KEY = new CommandKeySpec(1, 1, 1);
 
     private final CommandSupport support;
@@ -34,277 +41,280 @@ public final class ZSetCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register(new CommandDefinition<>(syntax("ZADD", CommandArity.pairTail(4, 2)),
-                CommandParsers.args(), this::zadd));
-        registration.register(new CommandDefinition<>(syntax("ZRANGE", CommandArity.range(4, 6)),
-                this::parseZRange, this::zrange));
-        registration.register(new CommandDefinition<>(syntax("ZREVRANGE", CommandArity.oneOf(4, 5)),
-                this::parseZRevRange, this::zrange));
-        registration.register(new CommandDefinition<>(syntax("ZRANGEBYSCORE", CommandArity.min(4)),
-                args -> parseZRangeByScore(args, false), this::zrangebyscore));
-        registration.register(new CommandDefinition<>(syntax("ZREVRANGEBYSCORE", CommandArity.min(4)),
-                args -> parseZRangeByScore(args, true), this::zrevrangebyscore));
-        registration.register(new CommandDefinition<>(syntax("ZREMRANGEBYSCORE", CommandArity.exact(4)),
-                this::parseZRemRangeByScore, this::zremrangebyscore));
-        registration.register(new CommandDefinition<>(syntax("ZREMRANGEBYRANK", CommandArity.exact(4)),
-                this::parseZRemRangeByRank, this::zremrangebyrank));
-        registration.register(new CommandDefinition<>(syntax("ZREM", CommandArity.min(3)),
-                CommandParsers.args(), this::zrem));
-        registration.register(new CommandDefinition<>(syntax("ZSCAN", CommandArity.min(3)),
-                this::parseZScan, this::zscan));
+        registration.register(new CommandSpec(syntax("ZADD", CommandArity.pairTail(4, 2)), this::zadd));
+        registration.register(new CommandSpec(syntax("ZRANGE", CommandArity.range(4, 6)), this::zrange));
+        registration.register(new CommandSpec(syntax("ZREVRANGE", CommandArity.oneOf(4, 5)), this::zrevrange));
+        registration.register(new CommandSpec(syntax("ZRANGEBYSCORE", CommandArity.min(4)),
+                args -> zrangeByScore(args, false)));
+        registration.register(new CommandSpec(syntax("ZREVRANGEBYSCORE", CommandArity.min(4)),
+                args -> zrangeByScore(args, true)));
+        registration.register(new CommandSpec(syntax("ZREMRANGEBYSCORE", CommandArity.exact(4)),
+                this::zremrangebyscore));
+        registration.register(new CommandSpec(syntax("ZREMRANGEBYRANK", CommandArity.exact(4)),
+                this::zremrangebyrank));
+        registration.register(new CommandSpec(syntax("ZREM", CommandArity.min(3)), this::zrem));
+        registration.register(new CommandSpec(syntax("ZSCAN", CommandArity.min(3)), this::zscan));
     }
 
     private static CommandSyntax syntax(String nameUpper, CommandArity arity) {
         return new CommandSyntax(nameUpper, arity, KEY, TransactionPolicy.QUEUEABLE);
     }
 
-    private CommandParseResult<CollectionScanCommandSupport.Arguments> parseZScan(ArgReader args) {
-        try {
-            return CommandParseResult.ok(CollectionScanCommandSupport.parse(
-                    CommandArgs.of(args.request()), false));
-        } catch (CommandParseException failure) {
-            return CommandParseResult.error(CommandParseError.custom(failure.replyMessage()));
+    private CommandInvocation zadd(CommandArgs args) throws CommandParseException {
+        for (int index = 2; index < args.argc(); index += 2) {
+            parseScore(args.bytes(index));
         }
-    }
-
-    private PreparedCommand zadd(ArgReader args, CommandPreparationContext context) {
-        ExecutionRequest request = args.request();
-        return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
-            int pairsLen = request.argc() - 2;
-            support.sliceResetFromRequest(request, 2, pairsLen);
+        byte[] key = args.bytes(1);
+        List<byte[]> pairs = args.byteArraysFrom(2);
+        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
             try {
-                long added = support.commandDb(execution).writes().zsets()
-                        .zadd(request.readOnlyByteArray(1), support.slice())
-                        .value();
-                execution.reply().integer(added);
-            } finally {
-                support.clearScratch(pairsLen);
+                long added = support.commandDb(execution).writes().zsets().zadd(key, pairs).value();
+                return CommandResult.reply(RedisReplies.integer(added));
+            } catch (WrongTypeException | YierdisCommandException failure) {
+                return CommandResult.controlError(failure.getMessage());
             }
         });
     }
 
-    private record ZRangeArgs(byte[] key, long start, long stop, boolean withScores, boolean rev) {
-    }
-
-    private CommandParseResult<ZRangeArgs> parseZRange(ArgReader args) {
-        long start;
-        long stop;
-        try {
-            start = args.longAt(2);
-            stop = args.longAt(3);
-        } catch (IllegalArgumentException e) {
-            return CommandParseResult.error(CommandParseError.integerOutOfRange());
-        }
+    private CommandInvocation zrange(CommandArgs args) throws CommandParseException {
+        long start = args.longAt(2);
+        long stop = args.longAt(3);
         boolean withScores = false;
-        boolean rev = false;
-        for (int i = 4; i < args.argc(); i++) {
-            if (args.is(i, "WITHSCORES")) {
+        boolean reverse = false;
+        for (int index = 4; index < args.argc(); index++) {
+            if (args.is(index, "WITHSCORES")) {
                 if (withScores) {
-                    return CommandParseResult.error(CommandParseError.syntax());
+                    throw syntaxFailure();
                 }
                 withScores = true;
-                continue;
-            }
-            if (args.is(i, "REV")) {
-                if (rev) {
-                    return CommandParseResult.error(CommandParseError.syntax());
+            } else if (args.is(index, "REV")) {
+                if (reverse) {
+                    throw syntaxFailure();
                 }
-                rev = true;
-                continue;
+                reverse = true;
+            } else {
+                throw syntaxFailure();
             }
-            return CommandParseResult.error(CommandParseError.syntax());
         }
-        return CommandParseResult.ok(new ZRangeArgs(args.bytes(1), start, stop, withScores, rev));
+        ZRangeArgs parsed = new ZRangeArgs(args.bytes(1), start, stop, withScores, reverse);
+        return session -> prepareRange(parsed, session);
     }
 
-    private CommandParseResult<ZRangeArgs> parseZRevRange(ArgReader args) {
-        long start;
-        long stop;
-        try {
-            start = args.longAt(2);
-            stop = args.longAt(3);
-        } catch (IllegalArgumentException e) {
-            return CommandParseResult.error(CommandParseError.integerOutOfRange());
-        }
+    private CommandInvocation zrevrange(CommandArgs args) throws CommandParseException {
+        long start = args.longAt(2);
+        long stop = args.longAt(3);
         boolean withScores = args.argc() == 5;
         if (withScores && !args.is(4, "WITHSCORES")) {
-            return CommandParseResult.error(CommandParseError.syntax());
+            throw syntaxFailure();
         }
-        return CommandParseResult.ok(new ZRangeArgs(args.bytes(1), start, stop, withScores, true));
+        ZRangeArgs parsed = new ZRangeArgs(
+                args.bytes(1), start, stop, withScores, true);
+        return session -> prepareRange(parsed, session);
     }
 
-    private PreparedCommand zrange(ZRangeArgs args, CommandPreparationContext context) {
-        ByteSequenceSource sequence = args.rev()
-                ? support.commandDb(context).reads().zsets()
-                        .zrevrange(args.key(), args.start(), args.stop(), args.withScores())
-                : support.commandDb(context).reads().zsets()
-                        .zrange(args.key(), args.start(), args.stop(), args.withScores());
-        return CommandSupport.sequence(sequence);
-    }
-
-    private record ZRangeByScoreArgs(
-            byte[] key,
-            CommandSupport.ScoreBound min,
-            CommandSupport.ScoreBound max,
-            boolean withScores,
-            long offset,
-            long count
+    private PreparedCommand prepareRange(
+            ZRangeArgs args,
+            yier.bubu.redis.execution.api.CommandSession session
     ) {
+        return prepareSequence(() -> args.reverse()
+                ? support.commandDb(session).reads().zsets()
+                        .zrevrange(args.key(), args.start(), args.stop(), args.withScores())
+                : support.commandDb(session).reads().zsets()
+                        .zrange(args.key(), args.start(), args.stop(), args.withScores()));
     }
 
-    private CommandParseResult<ZRangeByScoreArgs> parseZRangeByScore(ArgReader args, boolean reverse) {
-        CommandSupport.ScoreBound first;
-        CommandSupport.ScoreBound second;
-        try {
-            first = CommandSupport.parseScoreBound(args.bytes(2));
-            second = CommandSupport.parseScoreBound(args.bytes(3));
-        } catch (YierdisCommandException e) {
-            return CommandParseResult.error(CommandParseError.custom(e.getMessage()));
-        }
-        CommandSupport.ScoreBound min = reverse ? second : first;
-        CommandSupport.ScoreBound max = reverse ? first : second;
+    private CommandInvocation zrangeByScore(CommandArgs args, boolean reverse)
+            throws CommandParseException {
+        ScoreBound first = parseScoreBound(args.bytes(2));
+        ScoreBound second = parseScoreBound(args.bytes(3));
+        ScoreBound min = reverse ? second : first;
+        ScoreBound max = reverse ? first : second;
         boolean withScores = false;
         long offset = 0L;
         long count = Long.MAX_VALUE;
 
-        int i = 4;
-        while (i < args.argc()) {
-            if (args.is(i, "WITHSCORES")) {
+        int index = 4;
+        while (index < args.argc()) {
+            if (args.is(index, "WITHSCORES")) {
                 if (withScores) {
-                    return CommandParseResult.error(CommandParseError.syntax());
+                    throw syntaxFailure();
                 }
                 withScores = true;
-                i++;
+                index++;
                 continue;
             }
-            if (args.is(i, "LIMIT")) {
-                if (i + 2 >= args.argc()) {
-                    return CommandParseResult.error(CommandParseError.syntax());
+            if (args.is(index, "LIMIT")) {
+                if (index + 2 >= args.argc()) {
+                    throw syntaxFailure();
                 }
-                try {
-                    offset = args.nonNegativeLongAt(i + 1);
-                    long requestedCount = args.longAt(i + 2);
-                    count = requestedCount < 0L ? Long.MAX_VALUE : requestedCount;
-                } catch (IllegalArgumentException e) {
-                    return CommandParseResult.error(CommandParseError.integerOutOfRange());
-                }
-                i += 3;
+                offset = args.nonNegativeLongAt(index + 1);
+                long requestedCount = args.longAt(index + 2);
+                count = requestedCount < 0L ? Long.MAX_VALUE : requestedCount;
+                index += 3;
                 continue;
             }
-            return CommandParseResult.error(CommandParseError.syntax());
+            throw syntaxFailure();
         }
-        return CommandParseResult.ok(new ZRangeByScoreArgs(args.bytes(1), min, max, withScores, offset, count));
+
+        ZRangeByScoreArgs parsed = new ZRangeByScoreArgs(
+                args.bytes(1), min, max, withScores, offset, count, reverse);
+        return session -> prepareRangeByScore(parsed, session);
     }
 
-    private PreparedCommand zrangebyscore(ZRangeByScoreArgs args, CommandPreparationContext context) {
-        ByteSequenceSource sequence = support.commandDb(context).reads().zsets().zrangeByScore(
-                args.key(),
-                args.min().value,
-                args.min().exclusive,
-                args.max().value,
-                args.max().exclusive,
-                args.withScores(),
-                args.offset(),
-                args.count()
-        );
-        return CommandSupport.sequence(sequence);
-    }
-
-    private PreparedCommand zrevrangebyscore(ZRangeByScoreArgs args, CommandPreparationContext context) {
-        ByteSequenceSource sequence = support.commandDb(context).reads().zsets().zrevrangeByScore(
-                args.key(),
-                args.min().value,
-                args.min().exclusive,
-                args.max().value,
-                args.max().exclusive,
-                args.withScores(),
-                args.offset(),
-                args.count()
-        );
-        return CommandSupport.sequence(sequence);
-    }
-
-    private record ZScoreRemovalArgs(
-            byte[] key,
-            CommandSupport.ScoreBound min,
-            CommandSupport.ScoreBound max
+    private PreparedCommand prepareRangeByScore(
+            ZRangeByScoreArgs args,
+            yier.bubu.redis.execution.api.CommandSession session
     ) {
+        return prepareSequence(() -> args.reverse()
+                ? support.commandDb(session).reads().zsets().zrevrangeByScore(
+                        args.key(), args.min().value(), args.min().exclusive(),
+                        args.max().value(), args.max().exclusive(),
+                        args.withScores(), args.offset(), args.count())
+                : support.commandDb(session).reads().zsets().zrangeByScore(
+                        args.key(), args.min().value(), args.min().exclusive(),
+                        args.max().value(), args.max().exclusive(),
+                        args.withScores(), args.offset(), args.count()));
     }
 
-    private CommandParseResult<ZScoreRemovalArgs> parseZRemRangeByScore(ArgReader args) {
-        try {
-            return CommandParseResult.ok(new ZScoreRemovalArgs(
-                    args.bytes(1),
-                    CommandSupport.parseScoreBound(args.bytes(2)),
-                    CommandSupport.parseScoreBound(args.bytes(3))
-            ));
-        } catch (YierdisCommandException e) {
-            return CommandParseResult.error(CommandParseError.custom(e.getMessage()));
-        }
-    }
-
-    private PreparedCommand zremrangebyscore(ZScoreRemovalArgs args, CommandPreparationContext context) {
-        return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
-            long removed = support.commandDb(execution).writes().zsets().zremrangeByScore(
-                    args.key(),
-                    args.min().value,
-                    args.min().exclusive,
-                    args.max().value,
-                    args.max().exclusive
-            ).value();
-            execution.reply().integer(removed);
+    private CommandInvocation zremrangebyscore(CommandArgs args) throws CommandParseException {
+        ScoreRemovalArgs parsed = new ScoreRemovalArgs(
+                args.bytes(1), parseScoreBound(args.bytes(2)), parseScoreBound(args.bytes(3)));
+        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
+            try {
+                long removed = support.commandDb(execution).writes().zsets().zremrangeByScore(
+                        parsed.key(), parsed.min().value(), parsed.min().exclusive(),
+                        parsed.max().value(), parsed.max().exclusive()).value();
+                return CommandResult.reply(RedisReplies.integer(removed));
+            } catch (WrongTypeException | YierdisCommandException failure) {
+                return CommandResult.controlError(failure.getMessage());
+            }
         });
     }
 
-    private record ZRankRemovalArgs(byte[] key, long start, long stop) {
-    }
-
-    private CommandParseResult<ZRankRemovalArgs> parseZRemRangeByRank(ArgReader args) {
-        try {
-            return CommandParseResult.ok(new ZRankRemovalArgs(
-                    args.bytes(1),
-                    args.longAt(2),
-                    args.longAt(3)
-            ));
-        } catch (IllegalArgumentException e) {
-            return CommandParseResult.error(CommandParseError.integerOutOfRange());
-        }
-    }
-
-    private PreparedCommand zremrangebyrank(ZRankRemovalArgs args, CommandPreparationContext context) {
-        return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
-            long removed = support.commandDb(execution).writes().zsets()
-                    .zremrangeByRank(args.key(), args.start(), args.stop())
-                    .value();
-            execution.reply().integer(removed);
-        });
-    }
-
-    private PreparedCommand zrem(ArgReader args, CommandPreparationContext context) {
-        ExecutionRequest request = args.request();
-        return CommandSupport.fixed(ReplyShapes.integerUpperBound(), execution -> {
-            int membersLen = request.argc() - 2;
-            support.sliceResetFromRequest(request, 2, membersLen);
+    private CommandInvocation zremrangebyrank(CommandArgs args) throws CommandParseException {
+        RankRemovalArgs parsed = new RankRemovalArgs(args.bytes(1), args.longAt(2), args.longAt(3));
+        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
             try {
                 long removed = support.commandDb(execution).writes().zsets()
-                        .zrem(request.readOnlyByteArray(1), support.slice())
-                        .value();
-                execution.reply().integer(removed);
-            } finally {
-                support.clearScratch(membersLen);
+                        .zremrangeByRank(parsed.key(), parsed.start(), parsed.stop()).value();
+                return CommandResult.reply(RedisReplies.integer(removed));
+            } catch (WrongTypeException | YierdisCommandException failure) {
+                return CommandResult.controlError(failure.getMessage());
             }
         });
     }
 
-    private PreparedCommand zscan(
-            CollectionScanCommandSupport.Arguments args,
-            CommandPreparationContext context
+    private CommandInvocation zrem(CommandArgs args) {
+        byte[] key = args.bytes(1);
+        List<byte[]> members = args.byteArraysFrom(2);
+        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
+            try {
+                long removed = support.commandDb(execution).writes().zsets().zrem(key, members).value();
+                return CommandResult.reply(RedisReplies.integer(removed));
+            } catch (WrongTypeException | YierdisCommandException failure) {
+                return CommandResult.controlError(failure.getMessage());
+            }
+        });
+    }
+
+    private CommandInvocation zscan(CommandArgs args) throws CommandParseException {
+        CollectionScanCommandSupport.Arguments parsed = CollectionScanCommandSupport.parse(args, false);
+        return session -> CollectionScanCommandSupport.prepareReply(
+                support.commandDb(session).reads().zsets().zscan(
+                        parsed.key(), parsed.cursor(), parsed.match(), parsed.count()));
+    }
+
+    private static PreparedCommand ownedSequence(ByteSequenceSource source) {
+        RedisReply reply = DbReplies.sequence(source);
+        return PreparedCommands.owned(CommandResult.reply(reply), source);
+    }
+
+    private static PreparedCommand prepareSequence(Supplier<ByteSequenceSource> read) {
+        ByteSequenceSource source;
+        try {
+            source = read.get();
+        } catch (IllegalArgumentException failure) {
+            return PreparedCommands.ready(RedisReplies.error("ERR " + failure.getMessage()));
+        }
+        return ownedSequence(source);
+    }
+
+    private static double parseScore(byte[] raw) throws CommandParseException {
+        if (raw == null) {
+            throw new CommandParseException(SCORE_ERROR);
+        }
+        double value;
+        try {
+            value = Double.parseDouble(new String(raw, StandardCharsets.US_ASCII));
+        } catch (NumberFormatException failure) {
+            throw new CommandParseException(SCORE_ERROR);
+        }
+        if (!Double.isFinite(value)) {
+            throw new CommandParseException(SCORE_ERROR);
+        }
+        return value;
+    }
+
+    private static ScoreBound parseScoreBound(byte[] raw) throws CommandParseException {
+        if (raw == null || raw.length == 0) {
+            throw new CommandParseException(SCORE_BOUND_ERROR);
+        }
+
+        int start = 0;
+        boolean exclusive = false;
+        if (raw[0] == '(') {
+            exclusive = true;
+            start = 1;
+        } else if (raw[0] == '[') {
+            start = 1;
+        }
+        if (start >= raw.length) {
+            throw new CommandParseException(SCORE_BOUND_ERROR);
+        }
+
+        String value = new String(raw, start, raw.length - start, StandardCharsets.US_ASCII);
+        if ("-inf".equalsIgnoreCase(value)) {
+            return new ScoreBound(Double.NEGATIVE_INFINITY, exclusive);
+        }
+        if ("+inf".equalsIgnoreCase(value) || "inf".equalsIgnoreCase(value)) {
+            return new ScoreBound(Double.POSITIVE_INFINITY, exclusive);
+        }
+        double parsed;
+        try {
+            parsed = Double.parseDouble(value);
+        } catch (NumberFormatException failure) {
+            throw new CommandParseException(SCORE_BOUND_ERROR);
+        }
+        if (!Double.isFinite(parsed)) {
+            throw new CommandParseException(SCORE_BOUND_ERROR);
+        }
+        return new ScoreBound(parsed, exclusive);
+    }
+
+    private static CommandParseException syntaxFailure() {
+        return new CommandParseException(SYNTAX_ERROR);
+    }
+
+    private record ZRangeArgs(byte[] key, long start, long stop, boolean withScores, boolean reverse) {
+    }
+
+    private record ZRangeByScoreArgs(
+            byte[] key,
+            ScoreBound min,
+            ScoreBound max,
+            boolean withScores,
+            long offset,
+            long count,
+            boolean reverse
     ) {
-        return CollectionScanCommandSupport.prepareReply(support.commandDb(context).reads().zsets().zscan(
-                args.key(),
-                args.cursor(),
-                args.match(),
-                args.count()
-        ));
+    }
+
+    private record ScoreRemovalArgs(byte[] key, ScoreBound min, ScoreBound max) {
+    }
+
+    private record RankRemovalArgs(byte[] key, long start, long stop) {
+    }
+
+    private record ScoreBound(double value, boolean exclusive) {
     }
 }
