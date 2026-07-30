@@ -926,6 +926,39 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
+    public void stageTwoExecutorAndNetworkingAdaptersStayDeleted() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录", repoRoot);
+
+        Path executorPackage = repoRoot.resolve(
+                "yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor"
+        );
+        for (String deleted : List.of(
+                "ExecutorKeyState.java",
+                "ExecutorKeyStateProvider.java",
+                "ExecutorBackpressureIo.java",
+                "ExecutorBackpressureRuntime.java",
+                "ExecutorBackpressureObserver.java"
+        )) {
+            Assert.assertFalse("Stage 2 executor adapter must stay deleted: " + deleted,
+                    Files.exists(executorPackage.resolve(deleted)));
+        }
+
+        Path ioAdapter = executorPackage.resolve("ExecutionIoAdapter.java");
+        String ioAdapterSource = Files.readString(ioAdapter, StandardCharsets.UTF_8);
+        for (String deletedMethod : List.of("newReplySink(", "writeBufferedReply(", "flushPending(")) {
+            Assert.assertFalse("dead buffered reply method must stay deleted: " + deletedMethod,
+                    ioAdapterSource.contains(deletedMethod));
+        }
+
+        Path protocolHandler = repoRoot.resolve(
+                "yierdis-networking/yierdis-networking-netty/src/main/java/"
+                        + "yier/bubu/redis/protocol/resp/netty/RespProtocolErrorReplyHandler.java"
+        );
+        Assert.assertFalse("detached protocol handler must stay deleted", Files.exists(protocolHandler));
+    }
+
+    @Test
     public void executorCoreMustNotOwnCommandSessionSemantics() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);

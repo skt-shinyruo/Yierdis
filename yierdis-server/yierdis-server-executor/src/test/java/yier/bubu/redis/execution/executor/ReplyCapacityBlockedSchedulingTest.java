@@ -220,8 +220,17 @@ public class ReplyCapacityBlockedSchedulingTest {
 
             Assert.assertEquals(1, blockedRequest.closeCalls());
             Assert.assertEquals(1, blockedReply.cancelCalls());
+            Assert.assertEquals(1, blockedReply.capacityRegistrationCancelCalls());
             Assert.assertFalse(blockedConnection.context().inputPausedByReply());
             Assert.assertEquals(0, executor.statsSnapshot().queuedTasks());
+
+            blockedReply.makeCapacityAvailable(1);
+            Assert.assertEquals("late capacity wakeup must not reschedule a cancelled task",
+                    0, ownerExecutor.pendingTasks());
+            ownerExecutor.runAll();
+            Assert.assertEquals(List.of("B1"), completed);
+            Assert.assertEquals(1, blockedRequest.closeCalls());
+            Assert.assertEquals(1, blockedReply.cancelCalls());
         } finally {
             executor.close();
             ownerExecutor.runAll();
