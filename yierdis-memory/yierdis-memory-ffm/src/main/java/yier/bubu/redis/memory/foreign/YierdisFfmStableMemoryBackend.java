@@ -535,28 +535,6 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
         return runtime.liveRegionCount();
     }
 
-    void armAllocationScopeAbortAllocationTrackingForTesting() {
-        pageAllocator.armAllocationScopeAbortAllocationTrackingForTesting();
-    }
-
-    void disarmAllocationScopeAbortAllocationTrackingForTesting() {
-        pageAllocator.disarmAllocationScopeAbortAllocationTrackingForTesting();
-    }
-
-    boolean allocationScopeAbortAllocatedForTesting() {
-        return pageAllocator.allocationScopeAbortAllocatedForTesting();
-    }
-
-    void armMemoryUsageIterationTrapsForTesting() {
-        objectTable.armHeapIterationTrapForTesting();
-        pageAllocator.armHeapIterationTrapsForTesting();
-    }
-
-    void disarmMemoryUsageIterationTrapsForTesting() {
-        objectTable.disarmHeapIterationTrapForTesting();
-        pageAllocator.disarmHeapIterationTrapsForTesting();
-    }
-
     public MemoryReclaimResult trimEmptyPages(MemoryPressureBudget budget) {
         ensureOpen();
         MemoryReclaimResult result = pageAllocator.trimEmptyPages(budget);

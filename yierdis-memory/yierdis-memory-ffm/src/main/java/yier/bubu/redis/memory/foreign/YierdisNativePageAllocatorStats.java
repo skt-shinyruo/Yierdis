@@ -12,9 +12,9 @@ record YierdisNativePageAllocatorStats(
         long largeFreeBytes,
         long freePages,
         long emptySmallPages,
-        long livePageDirectoryEntries,
+        long livePageRegistryEntries,
         long liveSpanDescriptors,
-        long pageDirectoryHeapBytes
+        long pageRegistryHeapBytes
 ) {
     public YierdisNativePageAllocatorStats(
             long committedBytes,
