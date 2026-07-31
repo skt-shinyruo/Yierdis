@@ -1,6 +1,9 @@
 package yier.bubu.redis.memory.foreign;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -33,25 +36,23 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
     private static final int REALLOC_COPY_CHUNK_BYTES = 64 * 1024;
     private static final long ALLOCATION_SCOPE_HEAP_BYTES = 96L;
     private static final long ARRAY_HEADER_BYTES = 16L;
+    private static final long RETIRED_BLOCK_LIST_HEAP_BYTES = 24L;
+    private static final long RETIRED_BLOCK_HEAP_BYTES = 96L;
     private static final long[] EMPTY_ALLOCATION_SCOPE_HANDLES = new long[0];
     private static final NativeObjectKind[] OBJECT_KINDS = NativeObjectKind.values();
 
     private final YierdisNativePageAllocator pageAllocator;
     private final YierdisNativeObjectTable objectTable;
-    private final YierdisNativeEpochManager epochManager = new YierdisNativeEpochManager();
     private final YierdisNativeDefragValidator defragValidator;
     private final long allocatorId;
     private final MemoryOwner owner;
     private final YierdisFfmMemoryRuntime runtime;
     private final AtomicLong externalRegionBytes = new AtomicLong();
-    private int[] retainedPageIds = new int[0];
-    private int[] retainedPageOffsets = new int[0];
-    private int[] retainedCapacities = new int[0];
-    private int[] retainedPageClasses = new int[0];
-    private long[] retainedEpochs = new long[0];
-    private int retainedBlockCount;
+    private final List<AllocatorEpochScope> activeEpochScopes = new ArrayList<>();
+    private final List<RetiredBlock> retiredBlocks = new ArrayList<>();
 
     private boolean closed;
+    private long currentEpoch;
     private long logicalUsedBytes;
     private long reservedBytes;
     private long liveObjects;
@@ -135,7 +136,7 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
                     block.pageId(),
                     block.pageOffset(),
                     block.pageClass().ordinal(),
-                    epochManager.nextEpoch()
+                    nextEpoch()
             );
             logicalUsedBytes += size;
             reservedBytes += block.capacity();
@@ -208,7 +209,7 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
                     next.pageClass().ordinal()
             );
             logicalUsedBytes += (long) newSize - oldSize;
-            reserveMovedBlock(previous, next.capacity(), epochManager.nextEpoch());
+            reserveMovedBlock(previous, next.capacity(), nextEpoch());
             reallocMovedCount++;
             moved = true;
             if (activeAllocationScope != null) {
@@ -233,8 +234,8 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
             activeAllocationScope.recordGrowth();
         }
         YierdisNativeObjectMeta meta = requireLiveMetaForFree(localRaw);
-        long freeEpoch = epochManager.nextEpoch();
-        boolean delayRelease = meta.pinCount() > 0 || !epochManager.canReclaim(freeEpoch);
+        long freeEpoch = nextEpoch();
+        boolean delayRelease = meta.pinCount() > 0 || !canReclaim(freeEpoch);
         objectTable.free(localRaw, freeEpoch, delayRelease);
         if (delayRelease) {
             reclaimEligibleQuarantine();
@@ -273,8 +274,12 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
 
     public NativeEpochScope beginEpoch(NativeEpochKind kind) {
         ensureOpen();
-        NativeEpochScope delegate = epochManager.begin(kind);
-        return new AllocatorEpochScope(delegate);
+        AllocatorEpochScope scope = new AllocatorEpochScope(
+                Objects.requireNonNull(kind, "kind"),
+                nextEpoch()
+        );
+        activeEpochScopes.add(scope);
+        return scope;
     }
 
     public NativeAllocationScope beginAllocationScope() {
@@ -506,7 +511,7 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
                 objectTable.heapEstimatedBytes(),
                 pageAllocator.heapEstimatedBytes()
         );
-        heapBytes = MemoryUsageSnapshot.addSaturating(heapBytes, retainedLocationHeapBytes());
+        heapBytes = MemoryUsageSnapshot.addSaturating(heapBytes, retiredBlockHeapBytes());
         if (activeAllocationScope != null) {
             heapBytes = MemoryUsageSnapshot.addSaturating(
                     heapBytes,
@@ -613,19 +618,14 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
                         new IllegalStateException("native allocator closed with " + leakedObjects + " live objects")
                 );
             }
-            long activeEpochs = epochManager.activeCount();
+            long activeEpochs = activeEpochScopes.size();
             if (activeEpochs > 0L) {
                 failure = addFailure(
                         failure,
                         new IllegalStateException("native allocator closed with " + activeEpochs + " active epochs")
                 );
             }
-            retainedPageIds = new int[0];
-            retainedPageOffsets = new int[0];
-            retainedCapacities = new int[0];
-            retainedPageClasses = new int[0];
-            retainedEpochs = new long[0];
-            retainedBlockCount = 0;
+            retiredBlocks.clear();
             logicalUsedBytes = 0L;
             reservedBytes = 0L;
             liveObjects = 0L;
@@ -721,7 +721,7 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
             published = true;
             target = null;
             long retiredBytes = previous.capacity();
-            reserveMovedBlock(previous, targetCapacity, epochManager.nextEpoch());
+            reserveMovedBlock(previous, targetCapacity, nextEpoch());
             defragReclaimedPages += retiredBytes / YierdisNativePageAllocator.PAGE_BYTES;
             defragMovedBytes += sourceMeta.size();
             return NativeDefragResult.moved(sourceMeta.size());
@@ -760,19 +760,14 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
     }
 
     private void reserveMovedBlock(YierdisNativeBlock block, int nextCapacity, long retiredEpoch) {
-        if (epochManager.canReclaim(retiredEpoch)) {
+        if (canReclaim(retiredEpoch)) {
             block.close();
             reservedBytes += (long) nextCapacity - block.capacity();
             return;
         }
+        // 发布新位置后，退役块要保留到所有可能看到旧位置的 scope 关闭。
         reservedBytes += nextCapacity;
-        ensureRetainedCapacity(retainedBlockCount + 1);
-        retainedPageIds[retainedBlockCount] = block.pageId();
-        retainedPageOffsets[retainedBlockCount] = block.pageOffset();
-        retainedCapacities[retainedBlockCount] = block.capacity();
-        retainedPageClasses[retainedBlockCount] = block.pageClass().ordinal();
-        retainedEpochs[retainedBlockCount] = retiredEpoch;
-        retainedBlockCount++;
+        retiredBlocks.add(new RetiredBlock(block, retiredEpoch));
     }
 
     private void reclaimEligibleQuarantine() {
@@ -787,7 +782,7 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
             if (meta == null || meta.state() != YierdisNativeObjectTable.STATE_FREED_QUARANTINED) {
                 continue;
             }
-            if (!epochManager.canReclaim(meta.freeEpoch())) {
+            if (!canReclaim(meta.freeEpoch())) {
                 continue;
             }
             if (meta.pinCount() != 0) {
@@ -798,19 +793,15 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
     }
 
     private void reclaimEligibleMovedBlocks() {
-        for (int i = 0; i < retainedBlockCount; ) {
-            if (!epochManager.canReclaim(retainedEpochs[i])) {
-                i++;
+        Iterator<RetiredBlock> iterator = retiredBlocks.iterator();
+        while (iterator.hasNext()) {
+            RetiredBlock retired = iterator.next();
+            if (!canReclaim(retired.epoch())) {
                 continue;
             }
-            reservedBytes -= retainedCapacities[i];
-            pageAllocator.free(
-                    retainedPageIds[i],
-                    retainedPageOffsets[i],
-                    retainedCapacities[i],
-                    retainedPageClasses[i]
-            );
-            removeRetainedLocation(i);
+            retired.block().close();
+            reservedBytes -= retired.block().capacity();
+            iterator.remove();
         }
     }
 
@@ -852,19 +843,14 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
 
     private long retainedMovedBlockBytes() {
         long bytes = 0L;
-        for (int i = 0; i < retainedBlockCount; i++) {
-            bytes += retainedCapacities[i];
+        for (RetiredBlock retired : retiredBlocks) {
+            bytes += retired.block().capacity();
         }
         return bytes;
     }
 
-    private long retainedLocationHeapBytes() {
-        return 80L
-                + (long) retainedPageIds.length * Integer.BYTES
-                + (long) retainedPageOffsets.length * Integer.BYTES
-                + (long) retainedCapacities.length * Integer.BYTES
-                + (long) retainedPageClasses.length * Integer.BYTES
-                + (long) retainedEpochs.length * Long.BYTES;
+    private long retiredBlockHeapBytes() {
+        return RETIRED_BLOCK_LIST_HEAP_BYTES + (long) retiredBlocks.size() * RETIRED_BLOCK_HEAP_BYTES;
     }
 
     private NativeObjectKindCounts objectKindCounts() {
@@ -998,34 +984,16 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
         );
     }
 
-    private void ensureRetainedCapacity(int required) {
-        if (required <= retainedPageIds.length) {
-            return;
-        }
-        int capacity = retainedPageIds.length == 0
-                ? Math.max(4, required)
-                : Math.max(required, retainedPageIds.length + Math.max(1, retainedPageIds.length >>> 1));
-        retainedPageIds = Arrays.copyOf(retainedPageIds, capacity);
-        retainedPageOffsets = Arrays.copyOf(retainedPageOffsets, capacity);
-        retainedCapacities = Arrays.copyOf(retainedCapacities, capacity);
-        retainedPageClasses = Arrays.copyOf(retainedPageClasses, capacity);
-        retainedEpochs = Arrays.copyOf(retainedEpochs, capacity);
+    private long nextEpoch() {
+        return ++currentEpoch;
     }
 
-    private void removeRetainedLocation(int index) {
-        int last = --retainedBlockCount;
-        if (index != last) {
-            retainedPageIds[index] = retainedPageIds[last];
-            retainedPageOffsets[index] = retainedPageOffsets[last];
-            retainedCapacities[index] = retainedCapacities[last];
-            retainedPageClasses[index] = retainedPageClasses[last];
-            retainedEpochs[index] = retainedEpochs[last];
+    private boolean canReclaim(long retiredEpoch) {
+        if (retiredEpoch <= 0L) {
+            return activeEpochScopes.isEmpty();
         }
-        retainedPageIds[last] = 0;
-        retainedPageOffsets[last] = 0;
-        retainedCapacities[last] = 0;
-        retainedPageClasses[last] = 0;
-        retainedEpochs[last] = 0L;
+        // 后启动的 scope 不会引用退役前的位置，因此不应阻塞这次回收。
+        return activeEpochScopes.stream().noneMatch(scope -> scope.epoch <= retiredEpoch);
     }
 
     private static void copyPrefix(YierdisNativeBlock src, YierdisNativeBlock dst, int len) {
@@ -1071,23 +1039,25 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
     }
 
     private final class AllocatorEpochScope implements NativeEpochScope {
-        private final NativeEpochScope delegate;
+        private final NativeEpochKind kind;
+        private final long epoch;
         private boolean closedScope;
 
-        private AllocatorEpochScope(NativeEpochScope delegate) {
-            this.delegate = Objects.requireNonNull(delegate, "delegate");
+        private AllocatorEpochScope(NativeEpochKind kind, long epoch) {
+            this.kind = kind;
+            this.epoch = epoch;
         }
 
         @Override
         public NativeEpochKind kind() {
             owner.checkCurrentThread();
-            return delegate.kind();
+            return kind;
         }
 
         @Override
         public long epoch() {
             owner.checkCurrentThread();
-            return delegate.epoch();
+            return epoch;
         }
 
         @Override
@@ -1097,10 +1067,18 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
                 return;
             }
             closedScope = true;
-            delegate.close();
+            if (!activeEpochScopes.remove(this)) {
+                throw new IllegalStateException("native epoch is not active: " + epoch);
+            }
             if (!closed) {
                 reclaimEligibleQuarantine();
             }
+        }
+    }
+
+    private record RetiredBlock(YierdisNativeBlock block, long epoch) {
+        private RetiredBlock {
+            Objects.requireNonNull(block, "block");
         }
     }
 

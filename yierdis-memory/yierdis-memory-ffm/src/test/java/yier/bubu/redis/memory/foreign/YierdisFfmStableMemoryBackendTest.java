@@ -409,6 +409,34 @@ public class YierdisFfmStableMemoryBackendTest {
     }
 
     @Test
+    public void newerEpochDoesNotDelayStorageRetiredByAnOlderEpoch() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 1)) {
+
+            NativeHandle first = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
+            NativeEpochScope command = allocator.beginEpoch(NativeEpochKind.COMMAND);
+            allocator.free(first);
+            NativeEpochScope snapshot = allocator.beginEpoch(NativeEpochKind.SNAPSHOT);
+
+            Assert.assertTrue(command.epoch() < snapshot.epoch());
+            Assert.assertEquals(1L, allocator.stats().quarantinedObjects());
+
+            command.close();
+            command.close();
+
+            Assert.assertEquals(0L, allocator.stats().quarantinedObjects());
+            NativeHandle second = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
+            Assert.assertEquals(
+                    YierdisLocalHandleCodec.slotId(first.localRaw()),
+                    YierdisLocalHandleCodec.slotId(second.localRaw())
+            );
+
+            snapshot.close();
+            allocator.free(second);
+        }
+    }
+
+    @Test
     public void unpinWithoutPinThrows() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
              YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 1024)) {
@@ -719,6 +747,25 @@ public class YierdisFfmStableMemoryBackendTest {
             Assert.assertEquals(1L, stats.liveObjects());
             Assert.assertEquals(1L, stats.reallocMovedCount());
             allocator.free(resized);
+        }
+    }
+
+    @Test
+    public void activeEpochDelaysReallocOldBlockReleaseUntilClosed() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 1024)) {
+
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 16);
+            NativeEpochScope epoch = allocator.beginEpoch(NativeEpochKind.COMMAND);
+
+            allocator.reallocate(handle, 24, NativeReallocPolicy.PRESERVE_PREFIX);
+
+            Assert.assertEquals(40L, allocator.stats().reservedBytes());
+
+            epoch.close();
+
+            Assert.assertEquals(24L, allocator.stats().reservedBytes());
+            allocator.free(handle);
         }
     }
 
