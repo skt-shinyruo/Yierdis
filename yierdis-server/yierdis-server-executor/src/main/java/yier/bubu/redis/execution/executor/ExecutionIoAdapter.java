@@ -1,7 +1,5 @@
 package yier.bubu.redis.execution.executor;
 
-import yier.bubu.redis.bytes.BytesSink;
-
 public interface ExecutionIoAdapter<C extends ExecutionConnection> {
     boolean isActive(C connection);
 
@@ -15,10 +13,4 @@ public interface ExecutionIoAdapter<C extends ExecutionConnection> {
 
     default void closeConnection(C connection) {
     }
-
-    BytesSink newReplySink(C connection);
-
-    void writeBufferedReply(C connection, boolean closeAfterReply);
-
-    void flushPending(Iterable<C> touchedConnections);
 }

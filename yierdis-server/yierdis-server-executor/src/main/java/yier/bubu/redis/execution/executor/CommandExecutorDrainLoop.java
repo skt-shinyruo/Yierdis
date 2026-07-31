@@ -2,7 +2,6 @@ package yier.bubu.redis.execution.executor;
 
 import yier.bubu.redis.execution.api.CapacityRegistration;
 
-import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
@@ -67,7 +66,6 @@ final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
         int processed = 0;
         boolean hitMaxDrainCommands = false;
         boolean hitDrainTimeBudget = false;
-        LinkedHashSet<C> touchedConnections = new LinkedHashSet<>();
 
         for (; ; ) {
             if (processed >= maxDrainCommands) {
@@ -84,15 +82,13 @@ final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
                 break;
             }
             processed++;
-            ExecutionAttempt attempt = executionSupport.execute(task, touchedConnections);
+            ExecutionAttempt attempt = executionSupport.execute(task);
             if (attempt == ExecutionAttempt.REPLY_CAPACITY_BLOCKED) {
                 registerBlockedReplyTask(task);
             } else if (attempt == ExecutionAttempt.REPREPARE) {
                 requeueStaleTask(task);
             }
         }
-
-        executionSupport.flushPending(touchedConnections);
 
         boolean runnableAfterDrain = taskQueue.hasRunnableTasks();
         if (runnableAfterDrain) {

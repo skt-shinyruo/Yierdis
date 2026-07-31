@@ -349,7 +349,8 @@ final class DelegatingSerialOwnerExecutor implements SerialOwnerExecutor {
 final class IoExecutionReply implements ExecutionReply {
     private final RecordingIoAdapter io;
     private final TestConnection connection;
-    private BytesSink sink;
+    private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    private boolean closeAfterReply;
 
     IoExecutionReply(RecordingIoAdapter io, TestConnection connection) {
         this.io = Objects.requireNonNull(io, "io");
@@ -368,16 +369,13 @@ final class IoExecutionReply implements ExecutionReply {
 
     @Override
     public BytesSink sink() {
-        if (sink == null) {
-            sink = io.newReplySink(connection);
-        }
-        return sink;
+        return bytes::write;
     }
 
     @Override
     public void markReady(boolean closeAfterReply) {
-        io.writeBufferedReply(connection, closeAfterReply);
-        io.flushPending(List.of(connection));
+        this.closeAfterReply = closeAfterReply;
+        io.recordReplyReady(connection, this);
     }
 
     @Override
@@ -386,7 +384,7 @@ final class IoExecutionReply implements ExecutionReply {
 
     @Override
     public boolean hasWrittenBytes() {
-        return sink != null && !io.bufferedReply(connection).isEmpty();
+        return bytes.size() > 0;
     }
 
     @Override
@@ -396,6 +394,14 @@ final class IoExecutionReply implements ExecutionReply {
     @Override
     public void close() {
         cancel();
+    }
+
+    String bytes() {
+        return bytes.toString(StandardCharsets.UTF_8);
+    }
+
+    boolean closeAfterReply() {
+        return closeAfterReply;
     }
 }
 
@@ -704,9 +710,7 @@ final class SimpleReplyWriter implements RedisReplyWriter {
 
 final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
     private final Map<TestConnection, ConnectionState> states = new IdentityHashMap<>();
-    private final List<String> lastFlushedConnectionIds = new ArrayList<>();
     private final List<String> executionOrder = new ArrayList<>();
-    private int flushCalls;
     private RuntimeException closeFailure;
 
     @Override
@@ -742,36 +746,19 @@ final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
         }
     }
 
-    @Override
-    public BytesSink newReplySink(TestConnection connection) {
-        ConnectionState state = state(connection);
-        state.bytes.reset();
-        state.closeAfterReply = false;
-        return state.bytes::write;
-    }
-
-    @Override
-    public void writeBufferedReply(TestConnection connection, boolean closeAfterReply) {
-        state(connection).closeAfterReply = closeAfterReply;
+    void recordReplyReady(TestConnection connection, IoExecutionReply reply) {
+        state(connection).readyReply = Objects.requireNonNull(reply, "reply");
         executionOrder.add(connection.connectionId());
     }
 
-    @Override
-    public void flushPending(Iterable<TestConnection> touchedConnections) {
-        flushCalls++;
-        lastFlushedConnectionIds.clear();
-        for (TestConnection connection : touchedConnections) {
-            state(connection).flushCount++;
-            lastFlushedConnectionIds.add(connection.connectionId());
-        }
+    String replyBytes(TestConnection connection) {
+        IoExecutionReply reply = state(connection).readyReply;
+        return reply == null ? "" : reply.bytes();
     }
 
-    String bufferedReply(TestConnection connection) {
-        return state(connection).bytes.toString();
-    }
-
-    boolean closeAfterReply(TestConnection connection) {
-        return state(connection).closeAfterReply;
+    boolean replyCloseAfterReply(TestConnection connection) {
+        IoExecutionReply reply = state(connection).readyReply;
+        return reply != null && reply.closeAfterReply();
     }
 
     boolean inputDisabled(TestConnection connection) {
@@ -782,24 +769,8 @@ final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
         return state(connection).inputEnabledAgain;
     }
 
-    int flushCalls() {
-        return flushCalls;
-    }
-
-    String lastFlushedConnectionId() {
-        return lastFlushedConnectionIds.isEmpty() ? null : lastFlushedConnectionIds.get(lastFlushedConnectionIds.size() - 1);
-    }
-
-    List<String> lastFlushedConnectionIds() {
-        return List.copyOf(lastFlushedConnectionIds);
-    }
-
     List<String> executionOrder() {
         return List.copyOf(executionOrder);
-    }
-
-    int flushCount(TestConnection connection) {
-        return state(connection).flushCount;
     }
 
     int closeCalls(TestConnection connection) {
@@ -827,14 +798,12 @@ final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
     }
 
     private static final class ConnectionState {
-        private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         private Runnable closeCallback = () -> {};
+        private IoExecutionReply readyReply;
         private boolean active = true;
         private boolean writable = true;
-        private boolean closeAfterReply;
         private boolean inputDisabled;
         private boolean inputEnabledAgain;
-        private int flushCount;
         private int closeCalls;
     }
 }

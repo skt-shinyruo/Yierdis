@@ -12,7 +12,6 @@ import yier.bubu.redis.execution.api.ReplyReservationResult;
 import yier.bubu.redis.execution.api.ReplySizer;
 import yier.bubu.redis.execution.api.ValidationResult;
 
-import java.util.Collection;
 import java.util.Objects;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BooleanSupplier;
@@ -56,19 +55,12 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         this.running = Objects.requireNonNull(running, "running");
     }
 
-    ExecutionAttempt execute(CommandExecutorTask<C> task, Collection<C> touchedConnections) {
+    ExecutionAttempt execute(CommandExecutorTask<C> task) {
         if (task == null) {
             return ExecutionAttempt.CONNECTION_CLOSED;
         }
 
         return executeWithReply(task);
-    }
-
-    void flushPending(Collection<C> touchedConnections) {
-        if (touchedConnections == null || touchedConnections.isEmpty()) {
-            return;
-        }
-        ioAdapter.flushPending(touchedConnections);
     }
 
     void recycleAndRelease(CommandExecutorTask<C> task) {
@@ -254,32 +246,6 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         }
         if (globalOk) {
             backpressureController.scheduleGlobalRecovery();
-        }
-    }
-
-    private void handleExecutionFailure(
-            C connection,
-            ExecutionConnectionContext context,
-            Collection<C> touchedConnections
-    ) {
-        try {
-            if (connection.markClosing()) {
-                backpressureController.disableAutoRead(connection);
-            }
-        } catch (Throwable ignored) {
-            // Ignore best-effort closing bookkeeping after executor-thread failures.
-        }
-
-        try {
-            RedisReplyWriter writer = replyWriterFactory.newWriter(connection.session(), ioAdapter.newReplySink(connection));
-            writer.internalError("ERR internal error");
-            writer.requestCloseAfterReply();
-            context.recordCloseAfterReply();
-            closeAfterReply.increment();
-            ioAdapter.writeBufferedReply(connection, true);
-            touchedConnections.add(connection);
-        } catch (Throwable ignored) {
-            // Ignore best-effort internal error reply failures; the connection is already closing.
         }
     }
 

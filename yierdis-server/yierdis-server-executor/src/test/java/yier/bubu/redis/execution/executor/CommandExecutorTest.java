@@ -88,7 +88,7 @@ public class CommandExecutorTest {
     }
 
     @Test
-    public void ioAdapterContractCanBufferFlushAndCloseOneConnection() {
+    public void ioAdapterContractControlsInputAndObservesClose() {
         RecordingIoAdapter io = new RecordingIoAdapter();
         TestConnection connection = new TestConnection("c-1", new ExecutionConnectionContext());
         AtomicBoolean closed = new AtomicBoolean(false);
@@ -107,21 +107,13 @@ public class CommandExecutorTest {
         Assert.assertTrue(io.inputDisabled(connection));
         io.enableInput(connection);
         Assert.assertTrue(io.inputEnabledAgain(connection));
-        BytesSink sink = io.newReplySink(connection);
-        sink.writeBytes(new byte[]{'O', 'K'});
-        io.writeBufferedReply(connection, true);
-        io.flushPending(java.util.List.of(connection));
         io.fireClosed(connection);
 
-        Assert.assertEquals("OK", io.bufferedReply(connection));
-        Assert.assertTrue(io.closeAfterReply(connection));
-        Assert.assertEquals("c-1", io.lastFlushedConnectionId());
-        Assert.assertEquals(1, io.flushCalls());
         Assert.assertTrue(closed.get());
     }
 
     @Test
-    public void ioAdapterStateIsScopedPerConnectionAndFlushCallsCountInvocations() {
+    public void ioAdapterStateAndCloseCallbacksAreScopedPerConnection() {
         RecordingIoAdapter io = new RecordingIoAdapter();
         TestConnection first = new TestConnection("c-1", new ExecutionConnectionContext());
         TestConnection second = new TestConnection("c-2", new ExecutionConnectionContext());
@@ -134,11 +126,6 @@ public class CommandExecutorTest {
         io.onClose(second, () -> secondClosed.set(true));
         io.disableInput(first);
         io.enableInput(second);
-        io.newReplySink(first).writeBytes(new byte[]{'O', 'N', 'E'});
-        io.newReplySink(second).writeBytes(new byte[]{'T', 'W', 'O'});
-        io.writeBufferedReply(first, true);
-        io.writeBufferedReply(second, false);
-        io.flushPending(java.util.List.of(first, second));
 
         Assert.assertFalse(io.isActive(first));
         Assert.assertTrue(io.isActive(second));
@@ -148,14 +135,6 @@ public class CommandExecutorTest {
         Assert.assertFalse(io.inputDisabled(second));
         Assert.assertFalse(io.inputEnabledAgain(first));
         Assert.assertTrue(io.inputEnabledAgain(second));
-        Assert.assertEquals("ONE", io.bufferedReply(first));
-        Assert.assertEquals("TWO", io.bufferedReply(second));
-        Assert.assertTrue(io.closeAfterReply(first));
-        Assert.assertFalse(io.closeAfterReply(second));
-        Assert.assertEquals(java.util.List.of("c-1", "c-2"), io.lastFlushedConnectionIds());
-        Assert.assertEquals(1, io.flushCalls());
-        Assert.assertEquals(1, io.flushCount(first));
-        Assert.assertEquals(1, io.flushCount(second));
 
         io.fireClosed(first);
         Assert.assertTrue(firstClosed.get());
@@ -189,9 +168,8 @@ public class CommandExecutorTest {
         Assert.assertEquals(1, ownerExecutor.pendingTasks());
         ownerExecutor.runAll();
 
-        Assert.assertEquals("PONG\n", io.bufferedReply(connection));
+        Assert.assertEquals("PONG\n", io.replyBytes(connection));
         Assert.assertEquals(1, ping.closeCalls());
-        Assert.assertEquals(1, io.flushCalls());
 
         TrackingExecutionRequest queuedButClosing = TrackingExecutionRequest.ofUtf8("PING");
         ExecutorCoreTestSupport.publish(
@@ -283,7 +261,7 @@ public class CommandExecutorTest {
                     accepted,
                     ExecutorCoreTestSupport.ioReply(io, acceptedConnection)
             );
-            Assert.assertEquals("PONG\n", io.bufferedReply(acceptedConnection));
+            Assert.assertEquals("PONG\n", io.replyBytes(acceptedConnection));
             Assert.assertEquals(1, accepted.closeCalls());
             Assert.assertEquals(1L, executor.statsSnapshot().commandsExecuted());
             Assert.assertEquals(2L, executor.statsSnapshot().submitAccepted());
@@ -412,8 +390,8 @@ public class CommandExecutorTest {
 
         ownerExecutor.runAll();
 
-        Assert.assertEquals("ERR internal error\n", io.bufferedReply(connection));
-        Assert.assertTrue(io.closeAfterReply(connection));
+        Assert.assertEquals("ERR internal error\n", io.replyBytes(connection));
+        Assert.assertTrue(io.replyCloseAfterReply(connection));
         Assert.assertTrue(connection.context().statsSnapshot().closing());
         Assert.assertEquals(1, exploding.closeCalls());
         Assert.assertEquals(1, queued.closeCalls());

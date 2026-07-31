@@ -1,7 +1,6 @@
 package yier.bubu.redis.app.server;
 
 import io.netty.channel.Channel;
-import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.execution.executor.ExecutionIoAdapter;
 import yier.bubu.redis.protocol.resp.netty.InboundReadCreditHandler;
 
@@ -53,21 +52,6 @@ final class NettyExecutionIoAdapter implements ExecutionIoAdapter<NettyExecution
     @Override
     public void closeConnection(NettyExecutionConnection connection) {
         withChannel(connection, channel -> channel.eventLoop().execute(channel::close));
-    }
-
-    @Override
-    public BytesSink newReplySink(NettyExecutionConnection connection) {
-        throw new IllegalStateException("Netty replies require a registered ordered reply slot");
-    }
-
-    @Override
-    public void writeBufferedReply(NettyExecutionConnection connection, boolean closeAfterReply) {
-        throw new IllegalStateException("Netty replies require a registered ordered reply slot");
-    }
-
-    @Override
-    public void flushPending(Iterable<NettyExecutionConnection> touchedConnections) {
-        // 已注册回复由 ConnectionReplySequencer 在最后一个 chunk 上 flush。
     }
 
     private static void withChannel(NettyExecutionConnection connection, java.util.function.Consumer<Channel> action) {
