@@ -23,7 +23,6 @@ import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
 import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
-import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
@@ -162,14 +161,13 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                             MutationOutcome.VALUE_CHANGED,
                             staged.entryHandle(),
                             staged.stagedKey(),
-                            next,
-                            PreparedTtlMutation.NONE
+                            next
                     );
                     staged = null;
                     replacement = null;
                     return prepared;
                 } catch (RuntimeException | Error failure) {
-                    abortStaged(staged, replacement, PreparedTtlMutation.NONE, failure);
+                    abortStaged(staged, replacement, failure);
                     throw failure;
                 }
             }
@@ -215,17 +213,10 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                 ValueHandle oldHandle = requireListHandle(current);
                 int oldSize = listRoot.size(oldHandle);
                 if (oldSize == 0) {
-                    PreparedTtlMutation ttlMutation = PreparedTtlMutation.NONE;
-                    try {
-                        ttlMutation = keyLifecycle.prepareRemoveExpire(currentEntry.keyHandle());
-                        WriteResult<PoppedValueSequence> result = WriteResult.unchanged(
-                                PreparedPoppedValueSequence.empty()
-                        );
-                        return preparedDelete(currentEntry, current, result, MutationOutcome.NONE, true, ttlMutation);
-                    } catch (RuntimeException | Error failure) {
-                        abortTtl(ttlMutation, failure);
-                        throw failure;
-                    }
+                    WriteResult<PoppedValueSequence> result = WriteResult.unchanged(
+                            PreparedPoppedValueSequence.empty()
+                    );
+                    return preparedDelete(currentEntry, current, result, MutationOutcome.NONE, true);
                 }
 
                 int popCount = Math.min(count, oldSize);
@@ -237,22 +228,14 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                 int remaining = oldSize - popCount;
                 Runnable releaseOldListToPopped = releaseOldListToPopped(oldHandle, popped);
                 if (remaining == 0) {
-                    PreparedTtlMutation ttlMutation = PreparedTtlMutation.NONE;
-                    try {
-                        ttlMutation = keyLifecycle.prepareRemoveExpire(currentEntry.keyHandle());
-                        return preparedDelete(
-                                currentEntry,
-                                current,
-                                result,
-                                MutationOutcome.VALUE_CHANGED,
-                                false,
-                                ttlMutation,
-                                releaseOldListToPopped
-                        );
-                    } catch (RuntimeException | Error failure) {
-                        abortTtl(ttlMutation, failure);
-                        throw failure;
-                    }
+                    return preparedDelete(
+                            currentEntry,
+                            current,
+                            result,
+                            MutationOutcome.VALUE_CHANGED,
+                            false,
+                            releaseOldListToPopped
+                    );
                 }
 
                 return prepareExistingPop(
@@ -303,8 +286,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                     currentEntry.entryHandle(),
                     current,
                     next,
-                    false,
-                    PreparedTtlMutation.NONE
+                    false
             ).releaseReplacedValueWith(transferred::releaseSuperseded)
                     .closeOnAbort(transferred)
                     .beforeEntryPublish(transferred::commit);
@@ -345,8 +327,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                     currentEntry.entryHandle(),
                     current,
                     next,
-                    false,
-                    PreparedTtlMutation.NONE
+                    false
             ).releaseReplacedValueWith(() -> releasePreparedPopToReply(transferred, popped))
                     .closeOnAbort(transferred)
                     .beforeEntryPublish(transferred::commit);
@@ -554,8 +535,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
             EntryRecord current,
             T result,
             MutationOutcome outcome,
-            boolean releaseOldValue,
-            PreparedTtlMutation ttlMutation
+            boolean releaseOldValue
     ) {
         return preparedDelete(
                 currentEntry,
@@ -563,7 +543,6 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                 result,
                 outcome,
                 releaseOldValue,
-                ttlMutation,
                 null
         );
     }
@@ -574,8 +553,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
             T result,
             MutationOutcome outcome,
             boolean releaseOldValue,
-            PreparedTtlMutation ttlMutation,
-        Runnable releaseReplacedValueHook
+            Runnable releaseReplacedValueHook
     ) {
         long deltaBytes = -estimateRecordBytes(currentEntry.keyHandle(), current);
         PreparedEntryMutation<T> prepared = PreparedEntryMutation.delete(
@@ -585,8 +563,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                 outcome,
                 currentEntry.entryHandle(),
                 current,
-                releaseOldValue,
-                ttlMutation
+                releaseOldValue
         );
         return releaseReplacedValueHook == null
                 ? prepared
@@ -644,10 +621,8 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
     private void abortStaged(
             StagedEntry staged,
             ValueHandle replacement,
-            PreparedTtlMutation ttlMutation,
             Throwable failure
     ) {
-        abortTtl(ttlMutation, failure);
         if (replacement != null) {
             try {
                 listRoot.release(replacement);
@@ -656,17 +631,6 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
             }
         }
         EntryMutationEntries.abortStaged(keyLifecycle, staged, failure);
-    }
-
-    private static void abortTtl(PreparedTtlMutation ttlMutation, Throwable failure) {
-        if (ttlMutation == null) {
-            return;
-        }
-        try {
-            ttlMutation.abort();
-        } catch (RuntimeException | Error abortFailure) {
-            failure.addSuppressed(abortFailure);
-        }
     }
 
     private long nativePeak(long heapGrowthBytes, int... nativeAllocationSizes) {

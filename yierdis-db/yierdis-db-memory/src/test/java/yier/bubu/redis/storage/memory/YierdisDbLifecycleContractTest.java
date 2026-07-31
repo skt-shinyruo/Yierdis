@@ -1,12 +1,6 @@
 package yier.bubu.redis.storage.memory;
 
 import java.util.Objects;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Proxy;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Assert;
 import org.junit.Test;
@@ -31,13 +25,10 @@ import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.StableMemoryRegion;
 import yier.bubu.redis.memory.testkit.HeapStableMemoryBackend;
-import yier.bubu.redis.storage.memory.internal.expire.YierdisNativeExpireIndex;
-import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
-import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 
 public class YierdisDbLifecycleContractTest {
     @Test
-    public void unboundDatabaseCanShutdownWithoutInitializingExpiryStorage() {
+    public void unboundDatabaseCanShutdownIdempotently() {
         YierdisDb engine = (YierdisDb) new YierdisDbEngineFactory(
                 HeapStableMemoryBackend::new,
                 new YierdisDbBackendConfig(64)
@@ -90,108 +81,6 @@ public class YierdisDbLifecycleContractTest {
         engine.shutdown();
 
         Assert.assertEquals(1, backendReference.get().closeCalls());
-    }
-
-    @Test
-    public void failedExpiryIndexCloseDoesNotRecreateItsRegionsDuringShutdown() {
-        DbThreadGuard owner = new DbThreadGuard();
-        HeapStableMemoryBackend delegate = new HeapStableMemoryBackend("failed-expiry-close", 64, owner);
-        AtomicBoolean failFirstRegionClose = new AtomicBoolean(true);
-        AtomicInteger regionAllocations = new AtomicInteger();
-        List<StableMemoryRegion> allocatedRegions = new ArrayList<>();
-        StableMemoryBackend backend = closeFailingRegionBackend(
-                delegate,
-                failFirstRegionClose,
-                regionAllocations,
-                allocatedRegions
-        );
-        YierdisDbOwnedResources resources = new YierdisDbOwnedResources(backend);
-        NativeHandle key = NativeHandle.NULL;
-        try {
-            backend.bindToCurrentThread();
-            key = backend.allocate(NativeObjectKind.KEY_BYTES, 1);
-            YierdisNativeExpireIndex index = new YierdisNativeExpireIndex(
-                    backend,
-                    new HashSeed(1L, 2L),
-                    null
-            );
-            index.setExpireAtMillis(KeyHandle.forNative(backend, key, 0), 1L);
-            int allocationsBeforeShutdown = regionAllocations.get();
-
-            Assert.assertThrows(
-                    IllegalStateException.class,
-                    () -> resources.releaseAll(index, null, null, null, null, null, null, null)
-            );
-
-            Assert.assertEquals(
-                    "shutdown must not rebuild the expiry index after a close failure",
-                    allocationsBeforeShutdown,
-                    regionAllocations.get()
-            );
-        } finally {
-            for (StableMemoryRegion region : allocatedRegions) {
-                try {
-                    region.close();
-                } catch (RuntimeException ignored) {
-                    // 回归用例故意注入一次 close 失败，测试清理不能覆盖断言结果。
-                }
-            }
-            if (!key.isNull()) {
-                backend.free(key);
-            }
-            delegate.close();
-        }
-    }
-
-    private static StableMemoryBackend closeFailingRegionBackend(
-            StableMemoryBackend delegate,
-            AtomicBoolean failFirstRegionClose,
-            AtomicInteger regionAllocations,
-            List<StableMemoryRegion> allocatedRegions
-    ) {
-        return (StableMemoryBackend) Proxy.newProxyInstance(
-                StableMemoryBackend.class.getClassLoader(),
-                new Class<?>[]{StableMemoryBackend.class},
-                (proxy, method, arguments) -> {
-                    if (method.getName().equals("close")) {
-                        return null;
-                    }
-                    if (method.getName().equals("allocateRegion")) {
-                        regionAllocations.incrementAndGet();
-                        StableMemoryRegion region = (StableMemoryRegion) invoke(delegate, method, arguments);
-                        allocatedRegions.add(region);
-                        return closeFailingRegion(region, failFirstRegionClose);
-                    }
-                    return invoke(delegate, method, arguments);
-                }
-        );
-    }
-
-    private static StableMemoryRegion closeFailingRegion(
-            StableMemoryRegion delegate,
-            AtomicBoolean failFirstRegionClose
-    ) {
-        return (StableMemoryRegion) Proxy.newProxyInstance(
-                StableMemoryRegion.class.getClassLoader(),
-                new Class<?>[]{StableMemoryRegion.class},
-                (proxy, method, arguments) -> {
-                    Object result = invoke(delegate, method, arguments);
-                    if (method.getName().equals("close")
-                            && failFirstRegionClose.compareAndSet(true, false)) {
-                        throw new IllegalStateException("injected expiry-region close failure");
-                    }
-                    return result;
-                }
-        );
-    }
-
-    private static Object invoke(Object target, java.lang.reflect.Method method, Object[] arguments)
-            throws Throwable {
-        try {
-            return method.invoke(target, arguments);
-        } catch (InvocationTargetException failure) {
-            throw failure.getCause();
-        }
     }
 
     private static final class CallbackAndFailingCloseBackend implements StableMemoryBackend {

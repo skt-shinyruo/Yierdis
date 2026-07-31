@@ -8,7 +8,6 @@ import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
-import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
@@ -42,27 +41,14 @@ public class YierdisDbKeyLifecycleTest {
             Assert.assertNull(lifecycle.copyKeyBytes(null));
             Assert.assertNull(lifecycle.expireAtMillis((byte[]) null));
             Assert.assertNull(lifecycle.expireAtMillis((KeyHandle) null));
-            Assert.assertEquals(0L, lifecycle.estimateExpireSetUpperBound(null, true));
             Assert.assertEquals(0L, lifecycle.estimatedBytesForRemoval(null, null));
             Assert.assertFalse(lifecycle.removeEntry(null, null));
             Assert.assertFalse(lifecycle.isKeyExpiredForScan(null, Long.MAX_VALUE));
             Assert.assertNull(lifecycle.unlinkEntry((byte[]) null));
             Assert.assertNull(lifecycle.unlinkEntry((EntryHandle) null));
 
-            PreparedTtlMutation set = lifecycle.prepareSetExpireAtMillis(null, 1L);
-            PreparedTtlMutation remove = lifecycle.prepareRemoveExpire(null);
-            Assert.assertSame(PreparedTtlMutation.NONE, set);
-            Assert.assertSame(PreparedTtlMutation.NONE, remove);
-            set.commit();
-            set.releaseSuperseded();
-            set.abort();
-            remove.close();
-
-            lifecycle.setExpireAtMillis((KeyHandle) null, 1L);
-            lifecycle.removeExpire((KeyHandle) null);
-            lifecycle.removeExpireIndexOnly(null);
-            lifecycle.removeExpireByKeyBytes(null);
-            lifecycle.resetExpiredEntriesAwaitingPhysicalDeletion();
+            lifecycle.resetEntryStateCounters();
+            Assert.assertEquals(0, lifecycle.expireCount());
             Assert.assertEquals(0L, lifecycle.expiredEntriesAwaitingPhysicalDeletion());
             Assert.assertThrows(NullPointerException.class,
                     () -> lifecycle.forEachKeyHandle(null));
@@ -154,7 +140,7 @@ public class YierdisDbKeyLifecycleTest {
     }
 
     @Test
-    public void ttlUpdatesMirrorEntryRecordsAndByteFallbackRemovesDanglingExpiry() {
+    public void ttlUpdatesReplaceEntryRecordsAndKeepDerivedCountExact() {
         withDb(db -> {
             YierdisDbKeyLifecycle lifecycle = db.keyLifecycle();
             byte[] key = bytes("ttl-key");
@@ -163,32 +149,27 @@ public class YierdisDbKeyLifecycleTest {
             EntryRecord before = lifecycle.entryRecord(key);
             long deadline = System.currentTimeMillis() + 60_000L;
 
-            lifecycle.setExpireAtMillis(keyHandle, deadline);
+            Assert.assertTrue(db.writes().ttl().expireAtMillis(view(key), deadline).value());
 
             EntryRecord expiring = lifecycle.entryRecord(key);
             Assert.assertEquals(Long.valueOf(deadline), lifecycle.expireAtMillis(keyHandle));
             Assert.assertEquals(deadline, expiring.expireAtMillis());
             Assert.assertEquals(before.version() + 1L, expiring.version());
+            Assert.assertEquals(1, lifecycle.expireCount());
             Assert.assertFalse(lifecycle.isKeyExpired(keyHandle, deadline - 1L));
             Assert.assertTrue(lifecycle.isKeyExpiredForScan(keyHandle, deadline));
 
-            lifecycle.removeExpire(key);
+            Assert.assertTrue(db.writes().ttl().persist(view(key)).value());
             EntryRecord persistent = lifecycle.entryRecord(key);
             Assert.assertNull(lifecycle.expireAtMillis(keyHandle));
             Assert.assertEquals(-1L, persistent.expireAtMillis());
             Assert.assertEquals(expiring.version() + 1L, persistent.version());
+            Assert.assertEquals(0, lifecycle.expireCount());
 
-            byte[] detachedKey = bytes("detached-ttl");
-            try (var staged = lifecycle.keyDirectory().stageInsert(detachedKey)) {
-                KeyHandle detachedHandle = staged.keyHandle();
-                lifecycle.setExpireAtMillis(detachedHandle, deadline);
-                Assert.assertEquals(Long.valueOf(deadline), lifecycle.expireAtMillis(detachedHandle));
-
-                lifecycle.removeExpire(detachedKey);
-
-                Assert.assertNull(lifecycle.expireAtMillis(detachedHandle));
-            }
-            Assert.assertTrue(lifecycle.removeEntry(keyHandle, persistent));
+            Assert.assertTrue(db.writes().ttl().expireAtMillis(view(key), deadline).value());
+            EntryRecord expiringAgain = lifecycle.entryRecord(key);
+            Assert.assertEquals(1, lifecycle.expireCount());
+            Assert.assertTrue(lifecycle.removeEntry(keyHandle, expiringAgain));
             Assert.assertEquals(0, lifecycle.keyCount());
             Assert.assertEquals(0, lifecycle.expireCount());
         });
@@ -243,6 +224,10 @@ public class YierdisDbKeyLifecycleTest {
         return value.getBytes(StandardCharsets.UTF_8);
     }
 
+    private static BytesView view(byte[] value) {
+        return new ArrayBytesView(value);
+    }
+
     private static void withDb(DbConsumer consumer) {
         YierdisDb db = TestDbSupport.open();
         try {
@@ -256,5 +241,17 @@ public class YierdisDbKeyLifecycleTest {
     @FunctionalInterface
     private interface DbConsumer {
         void accept(YierdisDb db);
+    }
+
+    private record ArrayBytesView(byte[] bytes) implements BytesView {
+        @Override
+        public int length() {
+            return bytes.length;
+        }
+
+        @Override
+        public byte getByte(int index) {
+            return bytes[index];
+        }
     }
 }

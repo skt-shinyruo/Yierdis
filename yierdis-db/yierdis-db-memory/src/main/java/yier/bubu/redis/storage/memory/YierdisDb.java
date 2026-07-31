@@ -199,10 +199,6 @@ public final class YierdisDb
         );
     }
 
-    void adjustUsedBytes(long deltaBytes) {
-        runtimeState.adjustUsedBytes(deltaBytes);
-    }
-
     void enforceMaxmemory() {
         maintenance.enforceMaxmemory();
     }
@@ -301,22 +297,6 @@ public final class YierdisDb
 
     boolean isKeyExpired(KeyHandle keyHandle, long nowMillis) {
         return keyLifecycle.isKeyExpired(keyHandle, nowMillis);
-    }
-
-    void setExpireAtMillis(byte[] keyBytes, long expireAtMillis) {
-        keyLifecycle.setExpireAtMillis(keyBytes, expireAtMillis);
-    }
-
-    void setExpireAtMillis(KeyHandle keyHandle, long expireAtMillis) {
-        keyLifecycle.setExpireAtMillis(keyHandle, expireAtMillis);
-    }
-
-    void removeExpire(byte[] keyBytes) {
-        keyLifecycle.removeExpire(keyBytes);
-    }
-
-    void removeExpire(KeyHandle keyHandle) {
-        keyLifecycle.removeExpire(keyHandle);
     }
 
     YierdisDbKeyLifecycle keyLifecycle() {

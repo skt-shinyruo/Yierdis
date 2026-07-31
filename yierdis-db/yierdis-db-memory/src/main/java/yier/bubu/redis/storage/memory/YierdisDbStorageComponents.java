@@ -8,8 +8,6 @@ import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
 import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
-import yier.bubu.redis.storage.memory.internal.expire.YierdisExpireIndex;
-import yier.bubu.redis.storage.memory.internal.expire.YierdisNativeExpireIndex;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
@@ -18,7 +16,6 @@ final class YierdisDbStorageComponents {
     final StableMemoryBackend stableMemoryBackend;
     final YierdisDbOwnedResources resources;
     final HashTableMaintenanceRegistry hashTableMaintenanceRegistry;
-    final YierdisExpireIndex expires;
     final EntryTable entries;
     final NativeKeyDirectory keyDirectory;
     final StringRoot stringRoot;
@@ -31,7 +28,6 @@ final class YierdisDbStorageComponents {
             StableMemoryBackend stableMemoryBackend,
             YierdisDbOwnedResources resources,
             HashTableMaintenanceRegistry hashTableMaintenanceRegistry,
-            YierdisExpireIndex expires,
             EntryTable entries,
             NativeKeyDirectory keyDirectory,
             StringRoot stringRoot,
@@ -43,7 +39,6 @@ final class YierdisDbStorageComponents {
         this.stableMemoryBackend = stableMemoryBackend;
         this.resources = resources;
         this.hashTableMaintenanceRegistry = hashTableMaintenanceRegistry;
-        this.expires = expires;
         this.entries = entries;
         this.keyDirectory = keyDirectory;
         this.stringRoot = stringRoot;
@@ -75,7 +70,6 @@ final class YierdisDbStorageComponents {
                 backend,
                 new YierdisDbOwnedResources(backend),
                 hashTableMaintenanceRegistry,
-                new YierdisNativeExpireIndex(backend, resolvedHashSeed, hashTableMaintenanceRegistry),
                 entries,
                 keyDirectory,
                 stringRoot,

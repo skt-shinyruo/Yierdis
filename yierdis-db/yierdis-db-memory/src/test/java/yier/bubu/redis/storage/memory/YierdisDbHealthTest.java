@@ -19,7 +19,6 @@ import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
-import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 import yier.bubu.redis.storage.memory.internal.ledger.AbstractPreparedMutation;
@@ -236,8 +235,7 @@ public class YierdisDbHealthTest {
                         existingEntryHandle,
                         oldRecord,
                         newRecord,
-                        true,
-                        PreparedTtlMutation.NONE
+                        true
                 ).releaseReplacedValueWith(() -> {
                             keyLifecycle.releaseValue(oldRecord);
                             throw new NativeMemoryException("corrupt metadata");

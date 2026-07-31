@@ -10,8 +10,6 @@ import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
 import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
-import yier.bubu.redis.storage.memory.internal.expire.YierdisExpireIndex;
-import yier.bubu.redis.storage.memory.internal.expire.YierdisNativeExpireIndex;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 
 final class YierdisDbOwnedResources implements AutoCloseable {
@@ -23,7 +21,6 @@ final class YierdisDbOwnedResources implements AutoCloseable {
     }
 
     void clearData(
-            YierdisExpireIndex expires,
             EntryTable entries,
             NativeKeyDirectory keyDirectory,
             StringRoot stringRoot,
@@ -34,13 +31,6 @@ final class YierdisDbOwnedResources implements AutoCloseable {
     ) {
         // 清图发生在关闭后端之前，避免释放值对象时解析到已经失效的稳定句柄。
         Throwable failure = null;
-        if (expires != null) {
-            try {
-                expires.clear();
-            } catch (Throwable next) {
-                failure = recordFailure(failure, next);
-            }
-        }
         if (entries != null && keyDirectory != null) {
             Throwable[] entryFailure = new Throwable[1];
             try {
@@ -78,7 +68,6 @@ final class YierdisDbOwnedResources implements AutoCloseable {
     }
 
     void releaseAll(
-            YierdisExpireIndex expires,
             EntryTable entries,
             NativeKeyDirectory keyDirectory,
             StringRoot stringRoot,
@@ -88,19 +77,8 @@ final class YierdisDbOwnedResources implements AutoCloseable {
             ZSetRoot zsetRoot
     ) {
         Throwable failure = null;
-        YierdisExpireIndex expiresToClear = expires;
-        if (expires instanceof YierdisNativeExpireIndex nativeExpires) {
-            expiresToClear = null;
-            try {
-                // shutdown 不复用 clear()：它会重建最小表。先屏蔽 clear 回退，保证 close() 失败时也不重新分配；
-                // 正常 close() 会先释放索引持有的 key pin，随后才能清理 key directory。
-                nativeExpires.close();
-            } catch (Throwable next) {
-                failure = recordFailure(failure, next);
-            }
-        }
         try {
-            clearData(expiresToClear, entries, keyDirectory, stringRoot, listRoot, hashRoot, setRoot, zsetRoot);
+            clearData(entries, keyDirectory, stringRoot, listRoot, hashRoot, setRoot, zsetRoot);
         } catch (Throwable next) {
             failure = recordFailure(failure, next);
         }

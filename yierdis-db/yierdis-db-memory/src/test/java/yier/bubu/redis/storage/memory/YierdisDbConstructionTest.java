@@ -49,7 +49,6 @@ public class YierdisDbConstructionTest {
                 Assert.assertTrue(storage.stableMemoryBackend.stats().objectCount(NativeObjectKind.ENTRY_RECORD) >= 0L);
             } finally {
                 storage.resources.releaseAll(
-                        storage.expires,
                         storage.entries,
                         storage.keyDirectory,
                         storage.stringRoot,

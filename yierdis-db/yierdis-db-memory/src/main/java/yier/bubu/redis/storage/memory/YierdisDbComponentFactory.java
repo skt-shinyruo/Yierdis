@@ -61,7 +61,6 @@ final class YierdisDbComponentFactory {
                 checkedRuntimeState::commitDbIndex
         );
         YierdisDbKeyLifecycle keyLifecycle = new YierdisDbKeyLifecycle(
-                storage.expires,
                 storage.stableMemoryBackend,
                 storage.entries,
                 storage.keyDirectory,
@@ -70,8 +69,7 @@ final class YierdisDbComponentFactory {
                 storage.hashRoot,
                 storage.setRoot,
                 storage.zsetRoot,
-                checkedRuntimeState::nextLruClock,
-                checkedRuntimeState::adjustUsedBytes
+                checkedRuntimeState::nextLruClock
         );
         DbComponentMemoryUsage memoryUsage = new DbComponentMemoryUsage(
                 checkedOwner::checkThread,
@@ -103,7 +101,6 @@ final class YierdisDbComponentFactory {
                 internals,
                 memoryUsage,
                 keyLifecycle,
-                storage.expires,
                 storage.hashTableMaintenanceRegistry,
                 config.maxmemoryBytes,
                 ledger,

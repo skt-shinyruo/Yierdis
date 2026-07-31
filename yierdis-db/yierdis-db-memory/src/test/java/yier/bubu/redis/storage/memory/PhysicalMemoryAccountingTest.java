@@ -47,7 +47,7 @@ public class PhysicalMemoryAccountingTest {
     }
 
     @Test
-    public void dbSnapshotCountsAllocatorAndFfmExpiryRegionsExactlyOnce() {
+    public void deadlineOnlyTtlKeepsPhysicalMemoryAndSnapshotAccountingStable() {
         try (TestBackend runtime = TestBackend.open("physical-accounting-expiry")) {
             YierdisDb db = TestDbSupport.open(
                     runtime,
@@ -60,20 +60,31 @@ public class PhysicalMemoryAccountingTest {
             db.bindToCurrentThread();
             try {
                 db.writes().strings().setString(bytes("key"), bytes("value"), SetMode.NORMAL, null);
-                db.writes().ttl().pexpire(view("key"), 60_000L);
+                MemoryUsageSnapshot beforeTtl = db.memoryUsage();
+                NativeAllocatorStats allocatorBeforeTtl = db.stableMemoryBackend().stats();
+                long backendBytesBeforeTtl = runtime.usedBytes();
+
+                Assert.assertTrue(db.writes().ttl().pexpire(view("key"), 60_000L).value());
 
                 MemoryUsageSnapshot usage = db.memoryUsage();
                 NativeAllocatorStats allocator = db.stableMemoryBackend().stats();
-                long expiryRegionBytes = runtime.usedBytes()
-                        - allocator.committedBytes()
-                        - allocator.metadataCommittedBytes();
+                long ttlMillis = db.reads().ttl().ttlMillis(view("key"));
 
-                Assert.assertTrue("PEXPIRE must allocate a dedicated expiry region", expiryRegionBytes > 0L);
-                Assert.assertEquals(allocator.metadataCommittedBytes(), usage.nativeMetadataCommittedBytes());
+                Assert.assertTrue(ttlMillis > 0L && ttlMillis <= 60_000L);
+                Assert.assertEquals(1, db.memory().memoryStats().expireCount());
+                Assert.assertEquals(backendBytesBeforeTtl, runtime.usedBytes());
                 Assert.assertEquals(
-                        allocator.committedBytes() + expiryRegionBytes,
-                        usage.nativeDataCommittedBytes()
+                        allocatorBeforeTtl.metadataCommittedBytes(),
+                        allocator.metadataCommittedBytes()
                 );
+                Assert.assertEquals(allocatorBeforeTtl.committedBytes(), allocator.committedBytes());
+                Assert.assertEquals(
+                        beforeTtl.nativeMetadataCommittedBytes(),
+                        usage.nativeMetadataCommittedBytes()
+                );
+                Assert.assertEquals(beforeTtl.nativeDataCommittedBytes(), usage.nativeDataCommittedBytes());
+                Assert.assertEquals(allocator.metadataCommittedBytes(), usage.nativeMetadataCommittedBytes());
+                Assert.assertEquals(allocator.committedBytes(), usage.nativeDataCommittedBytes());
                 Assert.assertEquals(
                         MemoryUsageSnapshot.addSaturating(
                                 usage.heapEstimatedBytes(),

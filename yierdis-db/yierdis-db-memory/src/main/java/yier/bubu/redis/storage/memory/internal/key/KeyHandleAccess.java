@@ -7,7 +7,7 @@ import yier.bubu.redis.memory.api.NativeHandle;
  * <p>
  * 目标：
  * - 不把 off-heap address 等细节暴露为 {@link KeyHandle} 公共契约的一部分
- * - 允许内部组件（keyspace/expire index/scan）在已确认 handle 类型的前提下访问实现细节
+ * - 允许内部组件（keyspace/过期候选校验/scan）在已确认 handle 类型的前提下访问实现细节
  */
 public final class KeyHandleAccess {
     private KeyHandleAccess() {

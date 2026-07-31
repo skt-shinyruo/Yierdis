@@ -89,12 +89,7 @@ public final class YierdisDbIntrospection implements YierdisSnapshot {
                     ValueHandle handle = record.valueHandle();
                     stringValue = handle == null ? null : keyLifecycle.stringRoot().copy(handle);
                 }
-                Long expireAtMillis;
-                if (record.expireAtMillis() < 0) {
-                    expireAtMillis = keyLifecycle.expireAtMillis(k);
-                } else {
-                    expireAtMillis = record.expireAtMillis();
-                }
+                Long expireAtMillis = record.expireAtMillis() < 0 ? null : record.expireAtMillis();
                 out.add(new YierdisSnapshotEntry(keyBytes, type, stringValue, expireAtMillis));
 
                 return remaining.consume();

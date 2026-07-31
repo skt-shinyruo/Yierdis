@@ -37,8 +37,6 @@ import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
-import yier.bubu.redis.storage.memory.internal.expire.YierdisNativeExpireIndex;
-import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMemoryLedger;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
@@ -138,48 +136,6 @@ public class MutationFaultInjectionTest {
                         }
                 )
         );
-    }
-
-    @Test
-    public void ttlRegionAllocationFailuresAreFailureAtomic() {
-        for (long failAt = 1; failAt <= 3; failAt++) {
-            try (FaultFixture fixture = FaultFixture.open()) {
-                fixture.stringOps.setString(PRIMARY_KEY, b("old"), SetMode.NORMAL, null);
-                DbStateSnapshot before = fixture.snapshot();
-                fixture.allocator.failOnRegionAllocation(failAt);
-                try {
-                    fixture.ttlOps.pexpire(view(PRIMARY_KEY), 5000L);
-                    Assert.fail("expected region allocation failure at " + failAt);
-                } catch (YierdisCommandException expected) {
-                    Assert.assertEquals(MaxmemoryErrors.OOM_ERR, expected.getMessage());
-                    fixture.allocator.disableRegionFailures();
-                    fixture.assertSnapshotEquals(before);
-                }
-            }
-        }
-
-        for (long failAt = 1; failAt <= 3; failAt++) {
-            try (FaultFixture fixture = FaultFixture.open()) {
-                fixture.stringOps.setString(PRIMARY_KEY, b("old"), SetMode.NORMAL, null);
-                DbStateSnapshot before = fixture.snapshot();
-                fixture.allocator.failOnRegionAllocation(failAt);
-                try {
-                    WriteResult<StringWriteOps.SetStringValue> result = TestDbSupport.commitSetWithOldValue(
-                            fixture.stringOps,
-                            PRIMARY_KEY,
-                            slice("new"),
-                            SetMode.NORMAL,
-                            ExpireOption.px(5000L)
-                    );
-                    result.value().close();
-                    Assert.fail("expected region allocation failure at " + failAt);
-                } catch (YierdisCommandException expected) {
-                    Assert.assertEquals(MaxmemoryErrors.OOM_ERR, expected.getMessage());
-                    fixture.allocator.disableRegionFailures();
-                    fixture.assertSnapshotEquals(before);
-                }
-            }
-        }
     }
 
     @Test
@@ -437,7 +393,6 @@ public class MutationFaultInjectionTest {
     private static final class FaultFixture implements AutoCloseable {
         private final TestBackend runtime;
         private final FailOnAllocationStableMemoryBackend allocator;
-        private final YierdisNativeExpireIndex expires;
         private final EntryTable entries;
         private final NativeKeyDirectory keyDirectory;
         private final YierdisDbKeyLifecycle keyLifecycle;
@@ -459,7 +414,6 @@ public class MutationFaultInjectionTest {
         private FaultFixture(
                 TestBackend runtime,
                 FailOnAllocationStableMemoryBackend allocator,
-                YierdisNativeExpireIndex expires,
                 EntryTable entries,
                 NativeKeyDirectory keyDirectory,
                 YierdisDbKeyLifecycle keyLifecycle,
@@ -480,7 +434,6 @@ public class MutationFaultInjectionTest {
         ) {
             this.runtime = runtime;
             this.allocator = allocator;
-            this.expires = expires;
             this.entries = entries;
             this.keyDirectory = keyDirectory;
             this.keyLifecycle = keyLifecycle;
@@ -506,7 +459,6 @@ public class MutationFaultInjectionTest {
                     runtime.backend()
             );
             allocator.bindToCurrentThread();
-            YierdisNativeExpireIndex expires = new YierdisNativeExpireIndex(allocator, HashSeed.random(), null);
             EntryTable entries = new EntryTable(allocator);
             NativeKeyDirectory keyDirectory = new NativeKeyDirectory(allocator);
             StringRoot stringRoot = new StringRoot(allocator);
@@ -525,7 +477,6 @@ public class MutationFaultInjectionTest {
                     () -> null
             );
             YierdisDbKeyLifecycle keyLifecycle = new YierdisDbKeyLifecycle(
-                    expires,
                     allocator,
                     entries,
                     keyDirectory,
@@ -534,8 +485,7 @@ public class MutationFaultInjectionTest {
                     hashRoot,
                     setRoot,
                     zsetRoot,
-                    () -> 0L,
-                    delta -> ledger.commit(null, delta)
+                    () -> 0L
             );
             YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(
                     () -> {
@@ -561,7 +511,6 @@ public class MutationFaultInjectionTest {
             return new FaultFixture(
                     runtime,
                     allocator,
-                    expires,
                     entries,
                     keyDirectory,
                     keyLifecycle,
@@ -607,14 +556,14 @@ public class MutationFaultInjectionTest {
                     allocator.stats().objectCount(NativeObjectKind.ZSET_NODE),
                     allocator.stats().objectCount(NativeObjectKind.STRING_BYTES),
                     keyDirectory.size(),
-                    expires.size(),
+                    keyLifecycle.expireCount(),
                     primaryStringValue(),
                     primaryListValues(),
                     primaryHashPairs(),
                     primarySetMembers(),
                     primaryZSetMembersAndScores(),
                     primaryHllCount(),
-                    expires.get(PRIMARY_KEY),
+                    keyLifecycle.expireAtMillis(PRIMARY_KEY),
                     entrySnapshots(),
                     nativeHandleGraph()
             );
@@ -802,7 +751,7 @@ public class MutationFaultInjectionTest {
         public void close() {
             allocator.disableFailures();
             allocator.disableRegionFailures();
-            resources.releaseAll(expires, entries, keyDirectory, stringRoot, listRoot, hashRoot, setRoot, zsetRoot);
+            resources.releaseAll(entries, keyDirectory, stringRoot, listRoot, hashRoot, setRoot, zsetRoot);
         }
     }
 

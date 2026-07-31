@@ -18,7 +18,6 @@ import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedCallbackMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
@@ -126,8 +125,7 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                             currentEntry,
                             staged,
                             next,
-                            !stableHandle,
-                            PreparedTtlMutation.NONE
+                            !stableHandle
                     );
                     if (stableHandle) {
                         prepared.releaseReplacedValueWith(preparedAdd::releaseSuperseded)
@@ -498,18 +496,7 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                 MutationOutcome outcome = MutationOutcome.VALUE_CHANGED;
                 WriteResult<Long> result = WriteResult.of((long) removed, outcome);
                 if (removed >= zsetRoot.size(handle)) {
-                    PreparedTtlMutation ttlMutation = PreparedTtlMutation.NONE;
-                    try {
-                        ttlMutation = keyLifecycle.prepareRemoveExpire(currentEntry.keyHandle());
-                        return preparedDelete(currentEntry, current, result, outcome, ttlMutation);
-                    } catch (RuntimeException | Error failure) {
-                        try {
-                            ttlMutation.abort();
-                        } catch (RuntimeException | Error abortFailure) {
-                            failure.addSuppressed(abortFailure);
-                        }
-                        throw failure;
-                    }
+                    return preparedDelete(currentEntry, current, result, outcome);
                 }
 
                 EntryRecord next = zsetRecord(
@@ -591,8 +578,7 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
             CurrentEntry currentEntry,
             EntryRecord current,
             T result,
-            MutationOutcome outcome,
-            PreparedTtlMutation ttlMutation
+            MutationOutcome outcome
     ) {
         return PreparedEntryMutation.delete(
                 keyLifecycle,
@@ -601,8 +587,7 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                 outcome,
                 currentEntry.entryHandle(),
                 current,
-                true,
-                ttlMutation
+                true
         );
     }
 

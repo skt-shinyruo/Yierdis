@@ -27,12 +27,11 @@ import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 public final class YierdisDbMemoryReporter {
-    // 聚合 ledger、TTL index 和 native allocator 的观测口径；它服务 MEMORY/INFO/maxmemory，不替代 ledger 的两阶段预算账本。
+    // 聚合 entry 派生状态、ledger 和 native allocator；物理快照仍只计入一次，不替代写路径的两阶段预算账本。
     private final Runnable threadChecker;
     private final YierdisDbInternals internals;
     private final DbComponentMemoryUsage componentMemoryUsage;
     private final YierdisDbKeyLifecycle keyLifecycle;
-    private final YierdisExpireIndex expires;
     private final HashTableMaintenanceRegistry hashTableMaintenanceRegistry;
     private final long maxmemoryBytes;
     private final MemoryLedger ledger;
@@ -45,7 +44,6 @@ public final class YierdisDbMemoryReporter {
             YierdisDbInternals internals,
             DbComponentMemoryUsage componentMemoryUsage,
             YierdisDbKeyLifecycle keyLifecycle,
-            YierdisExpireIndex expires,
             HashTableMaintenanceRegistry hashTableMaintenanceRegistry,
             long maxmemoryBytes,
             MemoryLedger ledger,
@@ -57,7 +55,6 @@ public final class YierdisDbMemoryReporter {
         this.internals = internals;
         this.componentMemoryUsage = java.util.Objects.requireNonNull(componentMemoryUsage, "componentMemoryUsage");
         this.keyLifecycle = java.util.Objects.requireNonNull(keyLifecycle, "keyLifecycle");
-        this.expires = java.util.Objects.requireNonNull(expires, "expires");
         this.hashTableMaintenanceRegistry = java.util.Objects.requireNonNull(
                 hashTableMaintenanceRegistry,
                 "hashTableMaintenanceRegistry"
@@ -107,8 +104,8 @@ public final class YierdisDbMemoryReporter {
                 usage,
                 ledger.reservedBytes(),
                 keyLifecycle.keyCount(),
+                keyLifecycle.expireCount(),
                 keyLifecycle.expiredEntriesAwaitingPhysicalDeletion(),
-                expires,
                 hashTableMaintenanceRegistry,
                 true,
                 safeNativeAllocatorStats(),
@@ -205,28 +202,6 @@ public final class YierdisDbMemoryReporter {
             return extra;
         }
         return extra;
-    }
-
-    private long estimateTtlBytesForMaxmemory() {
-        // expires index 独立于 entry ledger，只能按条目数做稳定估算，并用 saturating 语义处理溢出。
-        long entryBytesEstimate = yier.bubu.redis.storage.api.DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-        if (entryBytesEstimate <= 0) {
-            return 0;
-        }
-        int ttlCount;
-        try {
-            ttlCount = expires.size();
-        } catch (Throwable ignored) {
-            ttlCount = 0;
-        }
-        if (ttlCount <= 0) {
-            return 0;
-        }
-        try {
-            return Math.multiplyExact((long) ttlCount, entryBytesEstimate);
-        } catch (ArithmeticException e) {
-            return Long.MAX_VALUE;
-        }
     }
 
     private NativeAllocatorStats safeNativeAllocatorStats() {

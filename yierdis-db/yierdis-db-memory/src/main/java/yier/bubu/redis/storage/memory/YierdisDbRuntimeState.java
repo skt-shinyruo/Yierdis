@@ -128,10 +128,6 @@ final class YierdisDbRuntimeState {
         return ++lruClock;
     }
 
-    void adjustUsedBytes(long deltaBytes) {
-        ledger().commit(null, deltaBytes);
-    }
-
     void enforceMaxmemory() {
         checkThread();
         ledger().enforceLocalMaintenance();
@@ -170,7 +166,6 @@ final class YierdisDbRuntimeState {
         try {
             YierdisDbStorageComponents currentStorage = storage();
             currentStorage.resources.releaseAll(
-                    currentStorage.expires,
                     currentStorage.entries,
                     currentStorage.keyDirectory,
                     currentStorage.stringRoot,
@@ -206,9 +201,8 @@ final class YierdisDbRuntimeState {
     FlushPreparation prepareFlushDb() {
         checkThread();
         YierdisDbKeyLifecycle currentKeyLifecycle = keyLifecycle();
-        YierdisDbStorageComponents currentStorage = storage();
         boolean hadKeys = currentKeyLifecycle.keyCount() != 0;
-        boolean hadTtl = currentStorage.expires.size() != 0;
+        boolean hadTtl = currentKeyLifecycle.expireCount() != 0;
         return new FlushPreparation(MutationOutcome.of(hadKeys, hadTtl), -ledger().usedBytes());
     }
 
@@ -216,7 +210,6 @@ final class YierdisDbRuntimeState {
         checkThread();
         YierdisDbStorageComponents currentStorage = storage();
         currentStorage.resources.clearData(
-                currentStorage.expires,
                 currentStorage.entries,
                 currentStorage.keyDirectory,
                 currentStorage.stringRoot,
@@ -225,7 +218,7 @@ final class YierdisDbRuntimeState {
                 currentStorage.setRoot,
                 currentStorage.zsetRoot
         );
-        keyLifecycle().resetExpiredEntriesAwaitingPhysicalDeletion();
+        keyLifecycle().resetEntryStateCounters();
     }
 
     int size() {

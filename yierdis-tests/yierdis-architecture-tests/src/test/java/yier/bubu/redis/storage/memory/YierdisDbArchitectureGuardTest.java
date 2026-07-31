@@ -316,7 +316,9 @@ public class YierdisDbArchitectureGuardTest {
                     offenders,
                     "Yierdis" + "HeapExpireIndex",
                     "YierdisFfmExpireIndex(YierdisFfm" + "BlobStore",
-                    "setExpireAtMillis(byte[] keyBytes, long expireAtMillis, YierdisKeyspace"
+                    "Yierdis" + "NativeExpireIndex",
+                    "Yierdis" + "ExpireIndex",
+                    "Prepared" + "TtlMutation"
             );
         }
 

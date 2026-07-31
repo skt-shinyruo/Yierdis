@@ -6,7 +6,6 @@ import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.common.command.MutationContext;
-import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.PreparedMutation;
@@ -24,7 +23,6 @@ import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
@@ -36,7 +34,6 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class YierdisStringOps implements StringReadOps, StringWriteOps {
-    private static final long TTL_ENTRY_BYTES_ESTIMATE = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
     private static final int MAX_STRING_BYTES = 512 * 1024 * 1024;
     private static final int EMBSTR_BYTES_LIMIT = 44;
     private static final String INTEGER_RANGE_ERROR = "ERR value is not an integer or out of range";
@@ -74,9 +71,6 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 keyBytes == null ? 0 : keyBytes.length,
                 newValueLength
         );
-        if (expireAtMillis != null) {
-            upperBound = addSaturating(upperBound, TTL_ENTRY_BYTES_ESTIMATE);
-        }
         final long estimatedUpperBound = upperBound;
 
         return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
@@ -84,10 +78,10 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
             public long upperBoundBytes() {
                 long nativeUpperBound = addSaturating(
                         setNativeUpperBound(keyBytes, mode, newValueLength, now),
-                        setStagedNonNativeGrowthUpperBound(keyBytes, mode, now, expireAtMillis)
+                        setStagedNonNativeGrowthUpperBound(keyBytes, mode, now)
                 );
                 return withScopeBookkeeping(Math.max(
-                        setReservationUpperBound(keyBytes, mode, estimatedUpperBound, now, keepTtl),
+                        setReservationUpperBound(keyBytes, mode, estimatedUpperBound, now),
                         nativeUpperBound
                 ));
             }
@@ -114,7 +108,6 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
                 StagedEntry staged = null;
                 StoredString stored = null;
-                PreparedTtlMutation ttlMutation = PreparedTtlMutation.NONE;
                 ByteValue oldValue = ByteValue.nullValue();
                 boolean oldValueOwnedByPreparedMutation = false;
                 AtomicBoolean releaseOldValueOnClose = null;
@@ -131,8 +124,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                             ? current.expireAtMillis()
                             : expireAtMillis == null ? -1L : expireAtMillis;
                     EntryRecord next = stringRecord(targetKey, stored.handle(), stored.encoding(), expireForRecord, current);
-                    ttlMutation = setTtlMutation(targetKey, current, keepTtl, expireAtMillis);
-                    boolean ttlChanged = ttlChangedForSet(targetKey, current, keepTtl, expireAtMillis);
+                    boolean ttlChanged = ttlChangedForSet(current, keepTtl, expireAtMillis);
                     if (returnOldValue && current != null) {
                         releaseOldValueOnClose = new AtomicBoolean();
                         AtomicBoolean releaseOnClose = releaseOldValueOnClose;
@@ -161,8 +153,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                             currentEntry,
                             staged,
                             next,
-                            !returnOldValue,
-                            ttlMutation
+                            !returnOldValue
                     );
                     if (releaseOldValueHook != null) {
                         prepared.releaseReplacedValueWith(releaseOldValueHook);
@@ -174,13 +165,12 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     oldValueOwnedByPreparedMutation = true;
                     staged = null;
                     stored = null;
-                    ttlMutation = PreparedTtlMutation.NONE;
                     return prepared;
                 } catch (RuntimeException | Error failure) {
                     if (!oldValueOwnedByPreparedMutation) {
                         closeReplyValue(oldValue, failure);
                     }
-                    abortStaged(staged, stored, ttlMutation, failure);
+                    abortStaged(staged, stored, failure);
                     throw failure;
                 }
             }
@@ -314,8 +304,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                             currentEntry,
                             staged,
                             next,
-                            true,
-                            PreparedTtlMutation.NONE
+                            true
                     );
                     if (replacementCanReleaseNativePages(current, stored)) {
                         prepared.requestNativePageTrimAfterCommit();
@@ -327,7 +316,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     if (current != null && stored != null && current.valueHandle().equals(stored.handle())) {
                         stored = null;
                     }
-                    abortStaged(staged, stored, PreparedTtlMutation.NONE, failure);
+                    abortStaged(staged, stored, failure);
                     throw failure;
                 }
             }
@@ -409,8 +398,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                             currentEntry,
                             staged,
                             next,
-                            true,
-                            PreparedTtlMutation.NONE
+                            true
                     );
                     if (replacementCanReleaseNativePages(current, stored)) {
                         prepared.requestNativePageTrimAfterCommit();
@@ -419,7 +407,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     stored = null;
                     return prepared;
                 } catch (RuntimeException | Error failure) {
-                    abortStaged(staged, stored, PreparedTtlMutation.NONE, failure);
+                    abortStaged(staged, stored, failure);
                     throw failure;
                 }
             }
@@ -479,8 +467,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                             currentEntry,
                             staged,
                             next,
-                            true,
-                            PreparedTtlMutation.NONE
+                            true
                     );
                     if (replacementCanReleaseNativePages(current, stored)) {
                         prepared.requestNativePageTrimAfterCommit();
@@ -489,7 +476,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     stored = null;
                     return prepared;
                 } catch (RuntimeException | Error failure) {
-                    abortStaged(staged, stored, PreparedTtlMutation.NONE, failure);
+                    abortStaged(staged, stored, failure);
                     throw failure;
                 }
             }
@@ -689,28 +676,12 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         }
     }
 
-    private PreparedTtlMutation setTtlMutation(
-            KeyHandle keyHandle,
-            EntryRecord current,
-            boolean keepTtl,
-            Long expireAtMillis
-    ) {
-        if (keepTtl && current != null) {
-            return PreparedTtlMutation.NONE;
-        }
-        if (expireAtMillis != null) {
-            return keyLifecycle.prepareSetExpireAtMillis(keyHandle, expireAtMillis);
-        }
-        return keyLifecycle.prepareRemoveExpire(keyHandle);
-    }
-
     private boolean ttlChangedForSet(
-            KeyHandle keyHandle,
             EntryRecord current,
             boolean keepTtl,
             Long expireAtMillis
     ) {
-        Long before = current == null ? null : keyLifecycle.expireAtMillis(keyHandle);
+        Long before = current == null || current.expireAtMillis() < 0L ? null : current.expireAtMillis();
         if (keepTtl && current != null) {
             return false;
         }
@@ -727,16 +698,8 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     private void abortStaged(
             StagedEntry staged,
             StoredString stored,
-            PreparedTtlMutation ttlMutation,
             Throwable failure
     ) {
-        if (ttlMutation != null) {
-            try {
-                ttlMutation.abort();
-            } catch (RuntimeException | Error abortFailure) {
-                failure.addSuppressed(abortFailure);
-            }
-        }
         if (stored != null) {
             try {
                 stringRoot.release(stored.handle());
@@ -760,7 +723,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         return stringRoot.length(requireStringHandle(current));
     }
 
-    private long setReservationUpperBound(byte[] keyBytes, SetMode mode, long newValueUpperBound, long nowMillis, boolean keepTtl) {
+    private long setReservationUpperBound(byte[] keyBytes, SetMode mode, long newValueUpperBound, long nowMillis) {
         EntryRecord current = keyLifecycle.entryRecord(keyBytes);
         if (current == null) {
             return mode == SetMode.XX ? 0L : newValueUpperBound;
@@ -774,10 +737,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
             return 0L;
         }
 
-        boolean currentHasTtl = keyLifecycle.expireAtMillis(keyHandle) != null;
-        long nextEstimate = keepTtl && currentHasTtl
-                ? addSaturating(newValueUpperBound, TTL_ENTRY_BYTES_ESTIMATE)
-                : newValueUpperBound;
+        long nextEstimate = newValueUpperBound;
         if (current.type() != ValueType.STRING || !stringRoot.contains(current.valueHandle())) {
             return nextEstimate;
         }
@@ -785,10 +745,6 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         long oldEstimate = estimateRecordBytes(keyHandle, current)
                 + (keyBytes == null ? 0L : Math.max(0L, (long) keyBytes.length))
                 + Math.max(0L, (long) stringRoot.length(current.valueHandle()));
-        if (currentHasTtl) {
-            oldEstimate = addSaturating(oldEstimate, TTL_ENTRY_BYTES_ESTIMATE);
-        }
-
         if (nextEstimate <= oldEstimate) {
             return 0L;
         }
@@ -840,25 +796,18 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     private long setStagedNonNativeGrowthUpperBound(
             byte[] keyBytes,
             SetMode mode,
-            long nowMillis,
-            Long expireAtMillis
+            long nowMillis
     ) {
         EntryRecord current = keyLifecycle.entryRecord(keyBytes);
         if (current == null) {
-            return mode == SetMode.XX ? 0L : newEntryStagedNonNativeGrowth(expireAtMillis, true);
+            return mode == SetMode.XX ? 0L : keyLifecycle.keyDirectory().estimatedInsertHeapGrowthBytes();
         }
 
         KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
         if (keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
-            boolean addingNewTtl = expireAtMillis != null && keyLifecycle.expireAtMillis(keyHandle) == null;
-            return mode == SetMode.XX ? 0L : newEntryStagedNonNativeGrowth(expireAtMillis, addingNewTtl);
+            return mode == SetMode.XX ? 0L : keyLifecycle.keyDirectory().estimatedInsertHeapGrowthBytes();
         }
-        if (mode == SetMode.NX || expireAtMillis == null) {
-            return 0L;
-        }
-
-        boolean addingNewTtl = keyLifecycle.expireAtMillis(keyHandle) == null;
-        return keyLifecycle.estimateExpireSetNonNativeGrowthBytes(addingNewTtl);
+        return 0L;
     }
 
     private long newStringCreateUpperBound(byte[] keyBytes, int valueLength) {
@@ -866,17 +815,6 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 newStringNativeUpperBound(keyBytes, valueLength),
                 keyLifecycle.keyDirectory().estimatedInsertHeapGrowthBytes()
         );
-    }
-
-    private long newEntryStagedNonNativeGrowth(Long expireAtMillis, boolean addingNewTtl) {
-        long growth = keyLifecycle.keyDirectory().estimatedInsertHeapGrowthBytes();
-        if (expireAtMillis != null) {
-            growth = addSaturating(
-                    growth,
-                    keyLifecycle.estimateExpireSetNonNativeGrowthBytes(addingNewTtl)
-            );
-        }
-        return growth;
     }
 
     private long newStringNativeUpperBound(byte[] keyBytes, int valueLength) {

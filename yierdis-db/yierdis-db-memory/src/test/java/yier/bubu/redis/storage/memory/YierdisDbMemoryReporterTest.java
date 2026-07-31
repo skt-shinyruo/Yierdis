@@ -8,6 +8,7 @@ import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
+import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
@@ -143,8 +144,7 @@ public class YierdisDbMemoryReporterTest {
 
     private static MarkedEntry markExpiredEntry(YierdisDb db, YierdisDbKeyLifecycle lifecycle, String keyText) {
         byte[] key = bytes(keyText);
-        db.writes().strings().setString(key, bytes("value"), SetMode.NORMAL, null);
-        db.setExpireAtMillis(key, System.currentTimeMillis() - 1L);
+        db.writes().strings().setString(key, bytes("value"), SetMode.NORMAL, ExpireOption.px(0));
         KeyHandle keyHandle = lifecycle.keyHandle(key);
         EntryHandle entryHandle = lifecycle.entryHandle(key);
         EntryRecord record = lifecycle.entryRecord(entryHandle);

@@ -212,7 +212,7 @@ final class YierdisDbDataMaintenance {
                                 preparation.committedMemoryDelta(),
                                 0L,
                                 preparation.outcome(),
-                                runtimeState::commitFlushDb,
+                                YierdisDbDataMaintenance.this::commitFlushDb,
                                 null,
                                 null
                         );
@@ -223,6 +223,11 @@ final class YierdisDbDataMaintenance {
 
     int size() {
         return runtimeState.size();
+    }
+
+    private void commitFlushDb() {
+        runtimeState.commitFlushDb();
+        expirationSupport.resetCursor();
     }
 
     private MaxmemoryCandidate publicCandidate(MaxmemoryParticipant publicOwner, MaxmemoryCandidate candidate) {

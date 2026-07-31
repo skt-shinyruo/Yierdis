@@ -1,7 +1,6 @@
 package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -12,7 +11,6 @@ import yier.bubu.redis.memory.api.NativeEpochKind;
 import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
-import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.AbstractPreparedMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
@@ -81,9 +79,7 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                     if (keyLifecycle.isKeyExpired(handle, nowMillis)) {
                         throw new IllegalStateException("expired key was not reclaimed before DEL preparation");
                     }
-                    PreparedTtlMutation ttlMutation = PreparedTtlMutation.NONE;
                     try {
-                        ttlMutation = keyLifecycle.prepareRemoveExpire(handle);
                         long removalBytes = keyLifecycle.estimatedBytesForRemoval(handle, current);
                         PreparedEntryMutation<Void> mutation = PreparedEntryMutation.delete(
                                 keyLifecycle,
@@ -92,17 +88,11 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                                 MutationOutcome.VALUE_CHANGED,
                                 entryHandle,
                                 current,
-                                true,
-                                ttlMutation
+                                true
                         );
                         deletions[deletionCount++] = new PreparedDeletion(keyBytes, mutation);
                         deltaBytes = Math.addExact(deltaBytes, -removalBytes);
                     } catch (RuntimeException | Error failure) {
-                        try {
-                            ttlMutation.abort();
-                        } catch (RuntimeException | Error abortFailure) {
-                            failure.addSuppressed(abortFailure);
-                        }
                         abortPreparedDeletions(deletions, deletionCount, failure);
                         throw failure;
                     }

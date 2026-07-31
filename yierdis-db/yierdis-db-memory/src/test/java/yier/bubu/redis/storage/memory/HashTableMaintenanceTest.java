@@ -9,7 +9,6 @@ import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
-import yier.bubu.redis.storage.memory.internal.expire.YierdisNativeExpireIndex;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceResult;
@@ -157,13 +156,12 @@ public class HashTableMaintenanceTest {
     }
 
     @Test
-    public void registrySkipsTenThousandIdleMapsAndFairlyAdvancesFiveDebtParticipants() {
+    public void registrySkipsTenThousandIdleMapsAndFairlyAdvancesFourDebtParticipants() {
         HashSeed seed = new HashSeed(0x0123456789abcdefL, 0xfedcba9876543210L);
         HashTableMaintenanceRegistry registry = new HashTableMaintenanceRegistry();
         try (TestBackend runtime = TestBackend.open("hash-table-maintenance-scale");
              StableMemoryBackend allocator = runtime.backend();
              NativeKeyDirectory directory = new NativeKeyDirectory(allocator, seed, registry)) {
-            YierdisNativeExpireIndex expires = new YierdisNativeExpireIndex(allocator, seed, registry);
             NativeByteMap<Integer> hashMembers = new NativeByteMap<>(
                     new NativeByteStore(allocator, NativeObjectKind.HASH_FIELD_BYTES),
                     NativeObjectKind.HASH_FIELD_BYTES,
@@ -196,14 +194,13 @@ public class HashTableMaintenanceTest {
                     NativeHandle entry = allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32);
                     entries.add(entry);
                     directory.compute(key, (ignored, old) -> new EntryHandle(entry));
-                    expires.setExpireAtMillis(directory.getKeyHandle(key), 10_000L + i);
                     hashMembers.put(bytes("hash-member-" + i), i);
                     setMembers.put(bytes("set-member-" + i), i);
                     zsetMembers.put(bytes("zset-member-" + i), i);
                 }
 
-                Assert.assertEquals(5, registry.pendingTableCount());
-                Assert.assertEquals(idleRegistryHeapBytes + 5L * 40L, registry.heapEstimatedBytes());
+                Assert.assertEquals(4, registry.pendingTableCount());
+                Assert.assertEquals(idleRegistryHeapBytes + 4L * 40L, registry.heapEstimatedBytes());
                 for (NativeByteMap<Integer> idleMap : idleMaps) {
                     Assert.assertFalse(idleMap.hasMaintenanceDebt());
                 }
@@ -215,9 +212,8 @@ public class HashTableMaintenanceTest {
 
                 Assert.assertTrue(firstTick.inspectedSlots() <= 12L);
                 Assert.assertEquals(HashTableMaintenanceResult.StopReason.SLOT_LIMIT, firstTick.stopReason());
-                Assert.assertEquals(5, firstTick.pendingTableCount());
+                Assert.assertEquals(4, firstTick.pendingTableCount());
                 Assert.assertTrue(directory.hasMaintenanceDebt());
-                Assert.assertTrue(expires.hasMaintenanceDebt());
                 Assert.assertTrue(hashMembers.hasMaintenanceDebt());
                 Assert.assertTrue(setMembers.hasMaintenanceDebt());
                 Assert.assertTrue(zsetMembers.hasMaintenanceDebt());
@@ -254,7 +250,6 @@ public class HashTableMaintenanceTest {
                     closable.close();
                 }
             } finally {
-                expires.close();
                 hashMembers.close();
                 setMembers.close();
                 zsetMembers.close();

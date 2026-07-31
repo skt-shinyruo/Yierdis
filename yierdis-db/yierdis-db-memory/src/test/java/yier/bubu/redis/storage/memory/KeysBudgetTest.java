@@ -10,6 +10,7 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.ScanCursorV2;
@@ -95,10 +96,10 @@ public class KeysBudgetTest {
             byte[] second = bytes("match:b");
             byte[] third = bytes("match:c");
             byte[] expired = bytes("match:expired");
-            for (byte[] key : List.of(first, second, third, expired)) {
+            for (byte[] key : List.of(first, second, third)) {
                 db.writes().strings().setString(key, bytes("v"), SetMode.NORMAL, null);
             }
-            db.setExpireAtMillis(expired, System.currentTimeMillis() - 1L);
+            db.writes().strings().setString(expired, bytes("v"), SetMode.NORMAL, ExpireOption.px(0));
 
             byte[] tombstone = bytes("tombstone");
             db.writes().strings().setString(tombstone, bytes("v"), SetMode.NORMAL, null);

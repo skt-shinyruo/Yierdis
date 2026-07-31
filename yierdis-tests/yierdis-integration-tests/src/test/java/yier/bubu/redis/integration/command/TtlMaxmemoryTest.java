@@ -26,32 +26,32 @@ import static yier.bubu.redis.testutil.TestDbs.createFfmDb;
 
 public class TtlMaxmemoryTest {
     @Test
-    public void expireAccountsForPhysicalTtlGrowthUnderNoeviction() {
-        assertTtlMutationAccountsForPhysicalGrowth(
+    public void expireUpdatesDeadlineWithoutPhysicalGrowthUnderNoeviction() {
+        assertTtlMutationKeepsPhysicalUsageStable(
                 List.of(b("EXPIRE"), b("k"), b("60")),
                 db -> db.writes().ttl().expire(view(b("k")), 60L).value()
         );
     }
 
     @Test
-    public void pexpireAccountsForPhysicalTtlGrowthUnderNoeviction() {
-        assertTtlMutationAccountsForPhysicalGrowth(
+    public void pexpireUpdatesDeadlineWithoutPhysicalGrowthUnderNoeviction() {
+        assertTtlMutationKeepsPhysicalUsageStable(
                 List.of(b("PEXPIRE"), b("k"), b("60000")),
                 db -> db.writes().ttl().pexpire(view(b("k")), 60_000L).value()
         );
     }
 
     @Test
-    public void pexpireatAccountsForPhysicalTtlGrowthUnderNoeviction() {
+    public void pexpireatUpdatesDeadlineWithoutPhysicalGrowthUnderNoeviction() {
         long unixMillis = System.currentTimeMillis() + 60_000L;
-        assertTtlMutationAccountsForPhysicalGrowth(
+        assertTtlMutationKeepsPhysicalUsageStable(
                 List.of(b("PEXPIREAT"), b("k"), b(Long.toString(unixMillis))),
                 db -> db.writes().ttl().expireAtMillis(view(b("k")), unixMillis).value()
         );
     }
 
     @Test
-    public void setWithExpireOptionIsRejectedWhenItWouldAddTtlMetadataUnderNoeviction() {
+    public void setWithExpireOptionIsRejectedWhenTheEntryDoesNotFitUnderNoeviction() {
         byte[] key = b("k");
         byte[] value = b("v");
         long maxmemoryBytes = minMaxmemoryThatAllowsSetWithTtl(key, value) - 1L;
@@ -72,7 +72,7 @@ public class TtlMaxmemoryTest {
         }
     }
 
-    private static void assertTtlMutationAccountsForPhysicalGrowth(
+    private static void assertTtlMutationKeepsPhysicalUsageStable(
             List<byte[]> ttlCommand,
             TtlMutation ttlMutation
     ) {
@@ -95,8 +95,9 @@ public class TtlMaxmemoryTest {
 
             long usedAfter = db.memory().memoryStats().usedBytesForMaxmemory();
             long nativeDataAfter = db.memory().memoryStats().nativeDataCommittedBytes();
-            Assert.assertTrue("TTL metadata must appear in physical maxmemory usage", usedAfter > usedBefore);
-            Assert.assertTrue("TTL FFM regions must appear in committed native data", nativeDataAfter > nativeDataBefore);
+            Assert.assertEquals(usedBefore, usedAfter);
+            Assert.assertEquals(nativeDataBefore, nativeDataAfter);
+            Assert.assertEquals(1, db.memory().memoryStats().expireCount());
             Assert.assertTrue("physical usage must stay within the admitted maxmemory budget", usedAfter <= maxmemoryBytes);
 
             ReplyObject get = client.execute(List.of(b("GET"), key));

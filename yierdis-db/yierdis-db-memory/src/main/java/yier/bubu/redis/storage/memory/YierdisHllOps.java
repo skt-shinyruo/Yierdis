@@ -14,7 +14,6 @@ import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
@@ -97,14 +96,13 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                             currentEntry,
                             staged,
                             next,
-                            true,
-                            PreparedTtlMutation.NONE
+                            true
                     );
                     staged = null;
                     replacement = null;
                     return prepared;
                 } catch (RuntimeException | Error failure) {
-                    abortStaged(staged, replacement, PreparedTtlMutation.NONE, failure);
+                    abortStaged(staged, replacement, failure);
                     throw failure;
                 }
             }
@@ -164,7 +162,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
 
                 byte[] replacementBytes = YierdisHyperLogLog.prepareMerge(currentBytes, merged.registers());
                 boolean valueChanged = replacementBytes != null;
-                boolean ttlChanged = current != null && keyLifecycle.expireAtMillis(currentEntry.keyHandle()) != null;
+                boolean ttlChanged = current != null && current.expireAtMillis() >= 0L;
                 MutationOutcome outcome = MutationOutcome.of(valueChanged, ttlChanged);
                 if (current != null && !outcome.changedAny()) {
                     return preparedNoEntry(WriteResult.<Void>unchanged(null), MutationOutcome.NONE);
@@ -172,7 +170,6 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
 
                 StagedEntry staged = null;
                 ValueHandle replacement = null;
-                PreparedTtlMutation ttlMutation = PreparedTtlMutation.NONE;
                 try {
                     KeyHandle targetKey = currentEntry.keyHandle();
                     if (current == null) {
@@ -185,10 +182,6 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                     } else {
                         replacement = currentHandle;
                     }
-                    if (ttlChanged) {
-                        ttlMutation = keyLifecycle.prepareRemoveExpire(targetKey);
-                    }
-
                     EntryRecord next = hllRecord(targetKey, replacement, -1L, current);
                     WriteResult<Void> result = WriteResult.of(null, outcome);
                     long deltaBytes = estimateRecordBytes(targetKey, next)
@@ -202,17 +195,15 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                             currentEntry,
                             staged,
                             next,
-                            valueChanged,
-                            ttlMutation
+                            valueChanged
                     );
                     staged = null;
                     if (valueChanged) {
                         replacement = null;
                     }
-                    ttlMutation = PreparedTtlMutation.NONE;
                     return prepared;
                 } catch (RuntimeException | Error failure) {
-                    abortStaged(staged, valueChanged ? replacement : null, ttlMutation, failure);
+                    abortStaged(staged, valueChanged ? replacement : null, failure);
                     throw failure;
                 }
             }
@@ -424,16 +415,8 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
     private void abortStaged(
             StagedEntry staged,
             ValueHandle replacement,
-            PreparedTtlMutation ttlMutation,
             Throwable failure
     ) {
-        if (ttlMutation != null) {
-            try {
-                ttlMutation.abort();
-            } catch (RuntimeException | Error abortFailure) {
-                failure.addSuppressed(abortFailure);
-            }
-        }
         if (replacement != null) {
             try {
                 stringRoot.release(replacement);

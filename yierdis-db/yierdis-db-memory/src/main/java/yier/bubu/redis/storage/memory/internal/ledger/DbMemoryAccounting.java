@@ -1,12 +1,9 @@
 package yier.bubu.redis.storage.memory.internal.ledger;
 
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
-import yier.bubu.redis.storage.memory.internal.expire.YierdisExpireIndex;
-import yier.bubu.redis.storage.memory.internal.expire.YierdisNativeExpireIndex;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeDefragReport;
-import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 
 /**
@@ -23,8 +20,8 @@ public final class DbMemoryAccounting {
             MemoryUsageSnapshot usage,
             long reservedBytes,
             int keyCount,
+            int expireCount,
             long expiredEntriesAwaitingPhysicalDeletion,
-            YierdisExpireIndex expires,
             HashTableMaintenanceRegistry hashTableMaintenanceRegistry,
             boolean keysStoredOffHeap,
             NativeAllocatorStats nativeAllocatorStats,
@@ -38,24 +35,10 @@ public final class DbMemoryAccounting {
                 physicalUsage.nativeDataCommittedBytes()
         );
 
-        int expireCount = expires == null ? 0 : expires.size();
-
         boolean keyspaceRehashing = false;
         int keyspaceCap0 = 0;
         int keyspaceCap1 = 0;
         long keyspaceOverhead = 0;
-
-        boolean expireRehashing = false;
-        int expireCap0 = 0;
-        int expireCap1 = 0;
-        long expireOverhead = 0;
-        long expireValueObjects = 0;
-        if (expires instanceof YierdisNativeExpireIndex nativeExpires) {
-            expireRehashing = nativeExpires.isRehashing();
-            expireCap0 = nativeExpires.table0Capacity();
-            expireCap1 = nativeExpires.table1Capacity();
-            expireOverhead = nativeExpires.estimatedTableOverheadBytes();
-        }
 
         long totalEstimatedBytes = physicalUsage.effectiveBytesForMaxmemory();
         long usedBytesForMaxmemory = totalEstimatedBytes;
@@ -82,11 +65,11 @@ public final class DbMemoryAccounting {
                 keyspaceCap0,
                 keyspaceCap1,
                 keyspaceOverhead,
-                expireRehashing,
-                expireCap0,
-                expireCap1,
-                expireOverhead,
-                expireValueObjects,
+                false,
+                0,
+                0,
+                0L,
+                0L,
                 totalEstimatedBytes,
                 nativeDefragReport == null ? 0L : nativeDefragReport.scannedObjects(),
                 nativeDefragReport == null ? 0L : nativeDefragReport.movedObjects(),
@@ -120,17 +103,5 @@ public final class DbMemoryAccounting {
             return Long.MAX_VALUE;
         }
         return left + right;
-    }
-
-    private static long estimateTtlBytesForMaxmemory(int expireCount) {
-        long perEntry = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-        if (perEntry <= 0 || expireCount <= 0) {
-            return 0;
-        }
-        try {
-            return Math.multiplyExact((long) expireCount, perEntry);
-        } catch (ArithmeticException e) {
-            return Long.MAX_VALUE;
-        }
     }
 }

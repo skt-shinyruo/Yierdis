@@ -4,7 +4,6 @@ import java.util.Objects;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
-import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
@@ -52,8 +51,7 @@ final class EntryMutationEntries {
             CurrentEntry current,
             StagedEntry staged,
             EntryRecord newRecord,
-            boolean releaseReplacedValue,
-            PreparedTtlMutation ttlMutation
+            boolean releaseReplacedValue
     ) {
         if (current.record() == null) {
             StagedEntry inserted = Objects.requireNonNull(staged, "staged");
@@ -65,8 +63,7 @@ final class EntryMutationEntries {
                     outcome,
                     inserted.entryHandle(),
                     inserted.stagedKey(),
-                    newRecord,
-                    ttlMutation
+                    newRecord
             );
         }
         return PreparedEntryMutation.replace(
@@ -78,8 +75,7 @@ final class EntryMutationEntries {
                 current.entryHandle(),
                 current.record(),
                 newRecord,
-                releaseReplacedValue,
-                ttlMutation
+                releaseReplacedValue
         );
     }
 

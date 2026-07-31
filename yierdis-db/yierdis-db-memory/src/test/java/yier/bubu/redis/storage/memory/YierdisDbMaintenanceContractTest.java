@@ -12,6 +12,7 @@ import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.testkit.HeapStableMemoryBackend;
 import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.DbEngineConfig;
+import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
@@ -39,9 +40,8 @@ public class YierdisDbMaintenanceContractTest {
                     expired,
                     bytes("value"),
                     SetMode.NORMAL,
-                    null
+                    ExpireOption.px(0)
             ).value());
-            db.setExpireAtMillis(expired, System.currentTimeMillis() - 1L);
             for (int index = 0; index < 13; index++) {
                 byte[] key = index == 0 ? live : bytes("live-" + index);
                 Assert.assertTrue(db.writes().strings().setString(

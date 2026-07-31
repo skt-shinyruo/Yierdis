@@ -20,7 +20,6 @@ import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
 import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
-import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedCallbackMutation;
@@ -133,8 +132,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
                             currentEntry,
                             staged,
                             next,
-                            !stableHandle,
-                            PreparedTtlMutation.NONE
+                            !stableHandle
                     );
                     if (stableHandle) {
                         prepared.releaseReplacedValueWith(preparedSet::releaseSuperseded)
@@ -153,7 +151,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
                             failure.addSuppressed(closeFailure);
                         }
                     }
-                    abortStaged(staged, replacement, PreparedTtlMutation.NONE, failure);
+                    abortStaged(staged, replacement, failure);
                     throw failure;
                 }
             }
@@ -267,14 +265,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
                 MutationOutcome outcome = MutationOutcome.VALUE_CHANGED;
                 WriteResult<Long> result = WriteResult.of((long) removed, outcome);
                 if (removed >= hashRoot.size(handle)) {
-                    PreparedTtlMutation ttlMutation = PreparedTtlMutation.NONE;
-                    try {
-                        ttlMutation = keyLifecycle.prepareRemoveExpire(currentEntry.keyHandle());
-                        return preparedDelete(currentEntry, current, result, outcome, true, ttlMutation);
-                    } catch (RuntimeException | Error failure) {
-                        abortTtl(ttlMutation, failure);
-                        throw failure;
-                    }
+                    return preparedDelete(currentEntry, current, result, outcome, true);
                 }
 
                 EntryRecord next = hashRecord(currentEntry.keyHandle(), handle, current.expireAtMillis(), current);
@@ -427,8 +418,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
             EntryRecord current,
             T result,
             MutationOutcome outcome,
-            boolean releaseOldValue,
-            PreparedTtlMutation ttlMutation
+            boolean releaseOldValue
     ) {
         long deltaBytes = -estimateRecordBytes(currentEntry.keyHandle(), current);
         return PreparedEntryMutation.delete(
@@ -438,18 +428,15 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
                 outcome,
                 currentEntry.entryHandle(),
                 current,
-                releaseOldValue,
-                ttlMutation
+                releaseOldValue
         );
     }
 
     private void abortStaged(
             StagedEntry staged,
             ValueHandle replacement,
-            PreparedTtlMutation ttlMutation,
             Throwable failure
     ) {
-        abortTtl(ttlMutation, failure);
         if (replacement != null) {
             try {
                 hashRoot.release(replacement);
@@ -458,17 +445,6 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
             }
         }
         EntryMutationEntries.abortStaged(keyLifecycle, staged, failure);
-    }
-
-    private static void abortTtl(PreparedTtlMutation ttlMutation, Throwable failure) {
-        if (ttlMutation == null) {
-            return;
-        }
-        try {
-            ttlMutation.abort();
-        } catch (RuntimeException | Error abortFailure) {
-            failure.addSuppressed(abortFailure);
-        }
     }
 
     private long nativePeak(long heapGrowthBytes, int... nativeAllocationSizes) {

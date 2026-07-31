@@ -1,12 +1,10 @@
 package yier.bubu.redis.storage.memory.internal.ledger;
 
 import java.util.Objects;
-import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
-import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 
 public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
@@ -16,7 +14,6 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
     private final EntryRecord newRecord;
     private final boolean releaseReplacedValue;
     private Runnable releaseReplacedValueHook;
-    private final PreparedTtlMutation ttlMutation;
     private AutoCloseable abortResource;
     private Runnable abortNewValueHook;
     private Runnable beforeEntryPublishHook;
@@ -44,8 +41,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
                 null,
                 null,
                 null,
-                false,
-                PreparedTtlMutation.NONE
+                false
         );
     }
 
@@ -57,8 +53,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
             MutationOutcome outcome,
             EntryHandle stagedEntryHandle,
             NativeKeyDirectory.StagedInsert stagedKey,
-            EntryRecord newRecord,
-            PreparedTtlMutation ttlMutation
+            EntryRecord newRecord
     ) {
         return new PreparedEntryMutation<>(
                 keyLifecycle,
@@ -71,8 +66,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
                 stagedKey,
                 null,
                 newRecord,
-                false,
-                ttlMutation
+                false
         );
     }
 
@@ -85,8 +79,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
             EntryHandle existingEntryHandle,
             EntryRecord oldRecord,
             EntryRecord newRecord,
-            boolean releaseReplacedValue,
-            PreparedTtlMutation ttlMutation
+            boolean releaseReplacedValue
     ) {
         return new PreparedEntryMutation<>(
                 keyLifecycle,
@@ -99,8 +92,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
                 null,
                 oldRecord,
                 newRecord,
-                releaseReplacedValue,
-                ttlMutation
+                releaseReplacedValue
         );
     }
 
@@ -111,8 +103,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
             MutationOutcome outcome,
             EntryHandle existingEntryHandle,
             EntryRecord oldRecord,
-            boolean releaseReplacedValue,
-            PreparedTtlMutation ttlMutation
+            boolean releaseReplacedValue
     ) {
         return new PreparedEntryMutation<>(
                 keyLifecycle,
@@ -125,8 +116,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
                 null,
                 oldRecord,
                 null,
-                releaseReplacedValue,
-                ttlMutation
+                releaseReplacedValue
         );
     }
 
@@ -141,15 +131,11 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
             NativeKeyDirectory.StagedInsert stagedKey,
             EntryRecord oldRecord,
             EntryRecord newRecord,
-            boolean releaseReplacedValue,
-            PreparedTtlMutation ttlMutation
+            boolean releaseReplacedValue
     ) {
         super(
                 actualDeltaBytes,
-                MemoryUsageSnapshot.addSaturating(
-                        Math.max(0L, stagedNonNativeGrowthBytes),
-                        ttlMutation == null ? 0L : ttlMutation.stagedNonNativeGrowthBytes()
-                ),
+                Math.max(0L, stagedNonNativeGrowthBytes),
                 outcome
         );
         this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
@@ -160,7 +146,6 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
         this.oldRecord = oldRecord;
         this.newRecord = newRecord;
         this.releaseReplacedValue = releaseReplacedValue;
-        this.ttlMutation = ttlMutation == null ? PreparedTtlMutation.NONE : ttlMutation;
     }
 
     public PreparedEntryMutation<T> releaseReplacedValueWith(Runnable hook) {
@@ -208,9 +193,6 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
     @Override
     protected T commitPrepared() {
         boolean deletingEntry = newRecord == null && existingEntryHandle != null;
-        if (deletingEntry) {
-            ttlMutation.commit();
-        }
         if (newRecord != null) {
             if (beforeEntryPublishHook != null) {
                 Runnable hook = beforeEntryPublishHook;
@@ -221,8 +203,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
                 keyLifecycle.replaceEntry(existingEntryHandle, oldRecord, newRecord);
                 entryPublished = true;
             } else if (stagedEntryHandle != null && stagedKey != null) {
-                keyLifecycle.entryTable().writeReserved(stagedEntryHandle, newRecord);
-                keyLifecycle.keyDirectory().publishStagedInsert(stagedKey, stagedEntryHandle);
+                keyLifecycle.publishStagedEntry(stagedEntryHandle, stagedKey, newRecord);
                 stagedKey = null;
                 stagedEntryHandle = null;
                 entryPublished = true;
@@ -232,20 +213,12 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
             keyLifecycle.releaseEntry(existingEntryHandle, oldRecord);
             entryPublished = true;
         }
-        if (!deletingEntry) {
-            ttlMutation.commit();
-        }
         return result;
     }
 
     @Override
     protected void releaseSupersededPrepared() {
         Throwable failure = null;
-        try {
-            ttlMutation.releaseSuperseded();
-        } catch (RuntimeException | Error e) {
-            failure = e;
-        }
         if (releaseReplacedValueHook != null) {
             Runnable releaseHook = releaseReplacedValueHook;
             releaseReplacedValueHook = null;
@@ -276,11 +249,6 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
     @Override
     protected void abortPrepared() {
         Throwable failure = null;
-        try {
-            ttlMutation.abort();
-        } catch (RuntimeException | Error e) {
-            failure = e;
-        }
         if (stagedKey != null) {
             try {
                 stagedKey.close();

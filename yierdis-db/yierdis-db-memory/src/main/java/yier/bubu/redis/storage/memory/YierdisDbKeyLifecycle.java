@@ -3,7 +3,6 @@ package yier.bubu.redis.storage.memory;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
-import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
@@ -15,20 +14,15 @@ import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
-import yier.bubu.redis.storage.memory.internal.expire.YierdisExpireIndex;
-import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
-import yier.bubu.redis.storage.memory.internal.expire.YierdisNativeExpireIndex;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 import yier.bubu.redis.storage.memory.internal.keyspace.YierdisKeyspace;
-import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.util.Objects;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
-import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
 
 public final class YierdisDbKeyLifecycle {
@@ -48,7 +42,6 @@ public final class YierdisDbKeyLifecycle {
         }
     }
 
-    private final YierdisExpireIndex expires;
     private final StableMemoryBackend stableMemoryBackend;
     private final EntryTable entryTable;
     private final NativeKeyDirectory keyDirectory;
@@ -58,11 +51,10 @@ public final class YierdisDbKeyLifecycle {
     private final SetRoot setRoot;
     private final ZSetRoot zsetRoot;
     private final LongSupplier lruClockSupplier;
-    private final LongConsumer adjustUsedBytesCallback;
+    private int expireCount;
     private long expiredEntriesAwaitingPhysicalDeletion;
 
     YierdisDbKeyLifecycle(
-            YierdisExpireIndex expires,
             StableMemoryBackend stableMemoryBackend,
             EntryTable entryTable,
             NativeKeyDirectory keyDirectory,
@@ -71,10 +63,8 @@ public final class YierdisDbKeyLifecycle {
             HashRoot hashRoot,
             SetRoot setRoot,
             ZSetRoot zsetRoot,
-            LongSupplier lruClockSupplier,
-            LongConsumer adjustUsedBytesCallback
+            LongSupplier lruClockSupplier
     ) {
-        this.expires = Objects.requireNonNull(expires, "expires");
         this.stableMemoryBackend = java.util.Objects.requireNonNull(stableMemoryBackend, "stableMemoryBackend");
         this.entryTable = Objects.requireNonNull(entryTable, "entryTable");
         this.keyDirectory = Objects.requireNonNull(keyDirectory, "keyDirectory");
@@ -84,7 +74,6 @@ public final class YierdisDbKeyLifecycle {
         this.setRoot = Objects.requireNonNull(setRoot, "setRoot");
         this.zsetRoot = Objects.requireNonNull(zsetRoot, "zsetRoot");
         this.lruClockSupplier = Objects.requireNonNull(lruClockSupplier, "lruClockSupplier");
-        this.adjustUsedBytesCallback = Objects.requireNonNull(adjustUsedBytesCallback, "adjustUsedBytesCallback");
     }
 
     public StableMemoryBackend stableMemoryBackend() {
@@ -201,7 +190,7 @@ public final class YierdisDbKeyLifecycle {
             return null;
         }
         long now = System.currentTimeMillis();
-        if (isKeyExpired(keyHandle, now)) {
+        if (isExpired(record, now)) {
             return null;
         }
         return record;
@@ -243,15 +232,11 @@ public final class YierdisDbKeyLifecycle {
     }
 
     public int expireCount() {
-        return expires.size();
+        return expireCount;
     }
 
     public KeyHandle randomKeyHandle() {
         return keyDirectory.randomKeyHandle();
-    }
-
-    public KeyHandle randomExpireKeyHandle() {
-        return expires.randomKeyHandle();
     }
 
     public void forEachKeyHandle(BiConsumer<KeyHandle, EntryRecord> consumer) {
@@ -260,44 +245,11 @@ public final class YierdisDbKeyLifecycle {
     }
 
     public Long expireAtMillis(byte[] keyBytes) {
-        KeyHandle handle = keyHandle(keyBytes);
-        return handle == null ? null : expires.get(handle);
+        return expireAtMillis(entryRecord(keyBytes));
     }
 
     public Long expireAtMillis(KeyHandle keyHandle) {
-        return keyHandle == null ? null : expires.get(keyHandle);
-    }
-
-    public long estimateExpireSetUpperBound(KeyHandle keyHandle, boolean addingNewTtl) {
-        if (keyHandle == null) {
-            return 0L;
-        }
-        return MutationMemoryEstimator.peakAdditionalBytes(
-                stableMemoryBackend,
-                0L,
-                estimateExpireSetNonNativeGrowthBytes(addingNewTtl)
-        );
-    }
-
-    public long estimateExpireSetNonNativeGrowthBytes(boolean addingNewTtl) {
-        if (expires instanceof YierdisNativeExpireIndex nativeExpires) {
-            return nativeExpires.estimatedSetReplacementNonNativeGrowthBytes(addingNewTtl);
-        }
-        return 0L;
-    }
-
-    public PreparedTtlMutation prepareSetExpireAtMillis(KeyHandle keyHandle, long expireAtMillis) {
-        if (keyHandle == null) {
-            return PreparedTtlMutation.NONE;
-        }
-        return expires.prepareSetExpireAtMillis(keyHandle, expireAtMillis);
-    }
-
-    public PreparedTtlMutation prepareRemoveExpire(KeyHandle keyHandle) {
-        if (keyHandle == null) {
-            return PreparedTtlMutation.NONE;
-        }
-        return expires.prepareRemoveExpire(keyHandle);
+        return expireAtMillis(entryRecord(keyHandle));
     }
 
     public <R> R computeWithHandleResult(
@@ -388,6 +340,34 @@ public final class YierdisDbKeyLifecycle {
                 consumer.accept(keyHandle, entryRecord(entryHandle)));
     }
 
+    public boolean isCurrentExpiredCandidate(
+            byte[] keyBytes,
+            KeyHandle expectedKeyHandle,
+            EntryRecord expectedRecord,
+            long nowMillis
+    ) {
+        NativeHandle expectedIdentity = expectedKeyHandle == null
+                ? null
+                : KeyHandleAccess.allocatorNativeHandleOrNull(expectedKeyHandle);
+        EntryRecord current = currentRecordForIdentity(keyBytes, expectedKeyHandle);
+        return current != null
+                && expectedRecord != null
+                && expectedIdentity != null
+                && expectedIdentity.equals(expectedRecord.keyHandle())
+                && current.version() == expectedRecord.version()
+                && current.expireAtMillis() == expectedRecord.expireAtMillis()
+                && current.equals(expectedRecord)
+                && isExpired(current, nowMillis);
+    }
+
+    public boolean hasCurrentExpiredEntry(
+            byte[] keyBytes,
+            KeyHandle expectedKeyHandle,
+            long nowMillis
+    ) {
+        return isExpired(currentRecordForIdentity(keyBytes, expectedKeyHandle), nowMillis);
+    }
+
     public boolean removeEntry(KeyHandle keyHandle, EntryRecord expectedRecord) {
         if (keyHandle == null) {
             return false;
@@ -415,13 +395,26 @@ public final class YierdisDbKeyLifecycle {
         Objects.requireNonNull(handle, "handle");
         Objects.requireNonNull(newRecord, "newRecord");
         entryTable.replace(handle, newRecord);
-        reconcileExpiredEntryAwaitingPhysicalDeletion(oldRecord, newRecord);
+        reconcileDerivedEntryState(oldRecord, newRecord);
+    }
+
+    public void publishStagedEntry(
+            EntryHandle handle,
+            NativeKeyDirectory.StagedInsert stagedKey,
+            EntryRecord newRecord
+    ) {
+        Objects.requireNonNull(handle, "handle");
+        Objects.requireNonNull(stagedKey, "stagedKey");
+        Objects.requireNonNull(newRecord, "newRecord");
+        entryTable.writeReserved(handle, newRecord);
+        keyDirectory.publishStagedInsert(stagedKey, handle);
+        reconcileDerivedEntryState(null, newRecord);
     }
 
     public void releaseEntry(EntryHandle handle, EntryRecord record) {
         Objects.requireNonNull(handle, "handle");
         entryTable.release(handle);
-        reconcileExpiredEntryAwaitingPhysicalDeletion(record, null);
+        reconcileDerivedEntryState(record, null);
     }
 
     public boolean markExpiredEntryAwaitingPhysicalDeletion(
@@ -431,7 +424,7 @@ public final class YierdisDbKeyLifecycle {
             long nowMillis
     ) {
         if (keyHandle == null || entryHandle == null || expectedRecord == null
-                || !isKeyExpired(keyHandle, nowMillis)) {
+                || !isExpired(expectedRecord, nowMillis)) {
             return false;
         }
         EntryRecord current = entryTable.get(entryHandle);
@@ -450,7 +443,8 @@ public final class YierdisDbKeyLifecycle {
         return expiredEntriesAwaitingPhysicalDeletion;
     }
 
-    public void resetExpiredEntriesAwaitingPhysicalDeletion() {
+    public void resetEntryStateCounters() {
+        expireCount = 0;
         expiredEntriesAwaitingPhysicalDeletion = 0L;
     }
 
@@ -462,60 +456,14 @@ public final class YierdisDbKeyLifecycle {
     }
 
     public boolean isKeyExpired(KeyHandle keyHandle, long nowMillis) {
-        Long expireAtMillis = expireAtMillis(keyHandle);
-        return expireAtMillis != null && expireAtMillis <= nowMillis;
+        return keyHandle != null && isExpired(entryRecord(keyHandle), nowMillis);
     }
 
     public boolean isKeyExpiredForScan(KeyHandle keyHandle, long nowMillis) {
         if (keyHandle == null) {
             return false;
         }
-        Long expireAtMillis = expires.getForScan(keyHandle);
-        return expireAtMillis != null && expireAtMillis <= nowMillis;
-    }
-
-    public void setExpireAtMillis(byte[] keyBytes, long expireAtMillis) {
-        KeyHandle handle = keyHandle(keyBytes);
-        if (handle != null) {
-            setExpireAtMillis(handle, expireAtMillis);
-        }
-    }
-
-    public void setExpireAtMillis(KeyHandle keyHandle, long expireAtMillis) {
-        if (keyHandle == null) {
-            return;
-        }
-        expires.setExpireAtMillis(keyHandle, expireAtMillis);
-        replaceEntryExpire(keyHandle, expireAtMillis);
-    }
-
-    public void removeExpire(byte[] keyBytes) {
-        KeyHandle handle = keyHandle(keyBytes);
-        if (handle != null) {
-            removeExpire(handle);
-            return;
-        }
-        removeExpireByKeyBytes(keyBytes);
-    }
-
-    public void removeExpire(KeyHandle keyHandle) {
-        if (keyHandle == null) {
-            return;
-        }
-        removeExpireIndexOnly(keyHandle);
-        replaceEntryExpire(keyHandle, -1L);
-    }
-
-    public void removeExpireIndexOnly(KeyHandle keyHandle) {
-        if (keyHandle != null) {
-            expires.removeExpire(keyHandle);
-        }
-    }
-
-    public void removeExpireByKeyBytes(byte[] keyBytes) {
-        if (keyBytes != null) {
-            expires.removeExpire(keyBytes);
-        }
+        return isExpired(entryRecord(keyHandle), nowMillis);
     }
 
     public EntryRecord newRecord(
@@ -622,35 +570,6 @@ public final class YierdisDbKeyLifecycle {
         releaseValue(oldRecord);
     }
 
-    private void replaceEntryExpire(KeyHandle keyHandle, long expireAtMillis) {
-        if (keyHandle == null) {
-            return;
-        }
-        // TTL index 是查找权威来源，EntryRecord 只镜像当前 TTL，供后续 value rewrite 和 introspection 保持同一状态。
-        byte[] keyBytes = keyBytes(keyHandle);
-        EntryHandle handle = keyDirectory.get(keyBytes);
-        if (handle == null) {
-            return;
-        }
-        EntryRecord record = entryTable.get(handle);
-        if (record == null) {
-            keyDirectory.remove(keyBytes, handle);
-            return;
-        }
-        EntryRecord replacement = new EntryRecord(
-                record.keyHandle(),
-                record.valueHandle(),
-                record.keyHash(),
-                record.type(),
-                record.encoding(),
-                clearExpiredEntryAwaitingPhysicalDeletionFlag(record.flags()),
-                expireAtMillis,
-                nextVersion(record),
-                record.lruOrLfu()
-        );
-        replaceEntry(handle, record, replacement);
-    }
-
     private long accessClock(long previous) {
         long next = lruClockSupplier.getAsLong();
         return next <= 0L ? previous : next;
@@ -666,11 +585,6 @@ public final class YierdisDbKeyLifecycle {
         return previous.version() + 1L;
     }
 
-    private long expireAtMillisOrAbsent(KeyHandle keyHandle) {
-        Long expireAtMillis = expireAtMillis(keyHandle);
-        return expireAtMillis == null ? -1L : expireAtMillis;
-    }
-
     private <R> R computeNewWithNativeKeyHandle(
             byte[] keyBytes,
             BiFunction<? super KeyHandle, ? super EntryRecord, EntryMutationResult<R>> remappingFunction
@@ -679,7 +593,6 @@ public final class YierdisDbKeyLifecycle {
         NativeKeyDirectory.StagedInsert stagedKey = null;
         boolean published = false;
         boolean initialized = false;
-        boolean entryWritten = false;
         EntryRecord newRecord = null;
         try {
             created = entryTable.reserve();
@@ -695,9 +608,9 @@ public final class YierdisDbKeyLifecycle {
             }
 
             entryTable.writeReserved(created, newRecord);
-            entryWritten = true;
             keyDirectory.publishStagedInsert(stagedKey, created);
             published = true;
+            reconcileDerivedEntryState(null, newRecord);
             initialized = true;
             return mutation.result();
         } finally {
@@ -724,6 +637,24 @@ public final class YierdisDbKeyLifecycle {
         return KeyHandleAccess.allocatorNativeHandle(keyHandle);
     }
 
+    private EntryRecord currentRecordForIdentity(byte[] keyBytes, KeyHandle expectedKeyHandle) {
+        if (keyBytes == null || expectedKeyHandle == null) {
+            return null;
+        }
+        NativeHandle expectedIdentity = KeyHandleAccess.allocatorNativeHandleOrNull(expectedKeyHandle);
+        if (expectedIdentity == null) {
+            return null;
+        }
+        KeyHandle currentKeyHandle = keyDirectory.getKeyHandle(keyBytes);
+        if (currentKeyHandle == null
+                || !expectedIdentity.equals(KeyHandleAccess.allocatorNativeHandleOrNull(currentKeyHandle))) {
+            return null;
+        }
+        EntryHandle currentEntryHandle = keyDirectory.get(keyBytes);
+        EntryRecord current = currentEntryHandle == null ? null : entryTable.get(currentEntryHandle);
+        return current != null && expectedIdentity.equals(current.keyHandle()) ? current : null;
+    }
+
     private static byte[] keyBytes(KeyHandle keyHandle) {
         Objects.requireNonNull(keyHandle, "keyHandle");
         int len = keyHandle.length();
@@ -734,7 +665,17 @@ public final class YierdisDbKeyLifecycle {
         return out;
     }
 
-    private void reconcileExpiredEntryAwaitingPhysicalDeletion(EntryRecord oldRecord, EntryRecord newRecord) {
+    private void reconcileDerivedEntryState(EntryRecord oldRecord, EntryRecord newRecord) {
+        boolean oldHasTtl = hasTtl(oldRecord);
+        boolean newHasTtl = hasTtl(newRecord);
+        if (oldHasTtl != newHasTtl) {
+            int nextExpireCount = expireCount + (newHasTtl ? 1 : -1);
+            if (nextExpireCount < 0) {
+                throw new IllegalStateException("derived expire count underflow");
+            }
+            expireCount = nextExpireCount;
+        }
+
         boolean oldAwaitingDeletion = isExpiredEntryAwaitingPhysicalDeletion(oldRecord);
         boolean newAwaitingDeletion = isExpiredEntryAwaitingPhysicalDeletion(newRecord);
         if (oldAwaitingDeletion == newAwaitingDeletion) {
@@ -753,6 +694,18 @@ public final class YierdisDbKeyLifecycle {
 
     private static boolean isExpiredEntryAwaitingPhysicalDeletion(EntryRecord record) {
         return record != null && (record.flags() & EXPIRED_AWAITING_PHYSICAL_DELETION_FLAG) != 0;
+    }
+
+    private static Long expireAtMillis(EntryRecord record) {
+        return hasTtl(record) ? record.expireAtMillis() : null;
+    }
+
+    private static boolean hasTtl(EntryRecord record) {
+        return record != null && record.expireAtMillis() >= 0L;
+    }
+
+    private static boolean isExpired(EntryRecord record, long nowMillis) {
+        return hasTtl(record) && record.expireAtMillis() <= nowMillis;
     }
 
     private static int clearExpiredEntryAwaitingPhysicalDeletionFlag(int flags) {

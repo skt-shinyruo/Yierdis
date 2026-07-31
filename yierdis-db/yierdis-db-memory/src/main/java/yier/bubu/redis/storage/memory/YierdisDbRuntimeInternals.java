@@ -1,7 +1,6 @@
 package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -16,7 +15,6 @@ import yier.bubu.redis.storage.api.DbCommitStreamUnavailableException;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
-import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 
@@ -178,7 +176,6 @@ public final class YierdisDbRuntimeInternals implements YierdisDbInternals {
                     attempt.track(entryHandle, current);
                 }
                 long removalBytes = keyLifecycle.estimatedBytesForRemoval(keyHandle, current);
-                PreparedTtlMutation ttlMutation = keyLifecycle.prepareRemoveExpire(keyHandle);
                 deletedKey = keyBytes;
                 return PreparedEntryMutation.delete(
                         keyLifecycle,
@@ -187,8 +184,7 @@ public final class YierdisDbRuntimeInternals implements YierdisDbInternals {
                         MutationOutcome.VALUE_CHANGED,
                         entryHandle,
                         current,
-                        true,
-                        ttlMutation
+                        true
                 );
             }
 
