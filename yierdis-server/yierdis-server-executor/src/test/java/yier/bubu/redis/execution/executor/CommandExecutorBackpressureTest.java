@@ -30,13 +30,63 @@ public class CommandExecutorBackpressureTest {
 
         Assert.assertTrue(io.inputDisabled(connection));
         Assert.assertTrue(connection.context().autoReadDisabledByExecutor());
+        Assert.assertEquals(1, executor.statsSnapshot().channelsAutoReadDisabled());
+        Assert.assertEquals(1L, executor.statsSnapshot().backpressureEnter());
+        Assert.assertEquals(1L, connection.context().statsSnapshot().backpressureEnter());
 
         ownerExecutor.runAll();
 
         Assert.assertTrue(io.inputEnabledAgain(connection));
         Assert.assertFalse(connection.context().autoReadDisabledByExecutor());
+        Assert.assertEquals(0, executor.statsSnapshot().channelsAutoReadDisabled());
+        Assert.assertEquals(1L, executor.statsSnapshot().backpressureExit());
+        Assert.assertEquals(1L, connection.context().statsSnapshot().backpressureExit());
 
         executor.close();
         ownerExecutor.runAll();
+    }
+
+    @Test
+    public void transportRecoveryWaitsForWritabilityAndClosedConnectionsLeaveTheTrackingSet() {
+        RecordingIoAdapter io = new RecordingIoAdapter();
+        ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+                () -> { },
+                ExecutorCoreTestSupport.simpleCommandEngine(),
+                ownerExecutor,
+                ExecutorCoreTestSupport.simpleReplySizer(),
+                ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                io,
+                new CommandExecutorConfig(16, 0, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+        );
+        ExecutorCoreTestSupport.startExecutor(executor, ownerExecutor);
+        TestConnection connection = ExecutorCoreTestSupport.newConnection("transport");
+        try {
+            io.setWritable(connection, false);
+            executor.onTransportUnwritable(connection);
+
+            Assert.assertTrue(connection.context().autoReadDisabledByExecutor());
+            Assert.assertEquals(1, executor.statsSnapshot().channelsAutoReadDisabled());
+            executor.onTransportWritable(connection);
+            Assert.assertEquals(1, ownerExecutor.pendingTasks());
+            ownerExecutor.runAll();
+            Assert.assertFalse(io.inputEnabledAgain(connection));
+            Assert.assertEquals(0L, executor.statsSnapshot().backpressureExit());
+
+            io.setWritable(connection, true);
+            executor.onTransportWritable(connection);
+            ownerExecutor.runAll();
+            Assert.assertTrue(io.inputEnabledAgain(connection));
+            Assert.assertFalse(connection.context().autoReadDisabledByExecutor());
+            Assert.assertEquals(1L, executor.statsSnapshot().backpressureExit());
+
+            executor.onTransportUnwritable(connection);
+            Assert.assertEquals(1, executor.statsSnapshot().channelsAutoReadDisabled());
+            io.fireClosed(connection);
+            Assert.assertEquals(0, executor.statsSnapshot().channelsAutoReadDisabled());
+        } finally {
+            executor.close();
+            ownerExecutor.runAll();
+        }
     }
 }

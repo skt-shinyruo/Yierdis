@@ -7,7 +7,6 @@ import yier.bubu.redis.execution.api.ReplySizer;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.LongAdder;
 
 public final class CommandExecutor<C extends ExecutionConnection> implements AutoCloseable {
     private final Runnable bindToCurrentThread;
@@ -38,8 +37,6 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
     private final CommandExecutorDrainLoop<C> drainLoop;
     private final CommandExecutorExecutionSupport<C> executionSupport;
     private final SchedulingPolicy schedulingPolicy;
-    private final LongAdder backpressureEnter = new LongAdder();
-    private final LongAdder backpressureExit = new LongAdder();
     private volatile boolean running = true;
 
     public CommandExecutor(
@@ -62,9 +59,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
                 config.backpressureLowWatermark(),
                 config.backpressureBytesHighWatermark(),
                 config.backpressureBytesLowWatermark(),
-                backpressureIo(ioAdapter),
-                backpressureRuntime(),
-                backpressureObserver(),
+                ioAdapter,
                 () -> running
         );
 
@@ -100,50 +95,6 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
         );
     }
 
-    private ExecutorBackpressureIo<C> backpressureIo(ExecutionIoAdapter<C> ioAdapter) {
-        return new ExecutorBackpressureIo<>() {
-            @Override public boolean isActive(C key) { return ioAdapter.isActive(key); }
-            @Override public boolean isWritable(C key) { return ioAdapter.isWritable(key); }
-            @Override public void disableAutoRead(C key) { ioAdapter.disableInput(key); }
-            @Override public void enableAutoRead(C key) { ioAdapter.enableInput(key); }
-            @Override public void onClose(C key, Runnable callback) { ioAdapter.onClose(key, callback); }
-        };
-    }
-
-    private ExecutorBackpressureRuntime<C> backpressureRuntime() {
-        return new ExecutorBackpressureRuntime<>() {
-            @Override public int pending(C key) { return key.context().pending(); }
-            @Override public long pendingBytes(C key) { return key.context().pendingBytes(); }
-            @Override public boolean isClosing(C key) { return key.context().isClosing(); }
-            @Override public boolean markAutoReadDisabledByExecutor(C key) {
-                return key.context().markInputDisabledByExecutor();
-            }
-            @Override public boolean autoReadDisabledByExecutor(C key) {
-                return key.context().autoReadDisabledByExecutor();
-            }
-            @Override public boolean clearAutoReadDisabledByExecutor(C key) {
-                return key.context().clearAutoReadDisabledByExecutor();
-            }
-            @Override public boolean inputPausedByReply(C key) { return key.context().inputPausedByReply(); }
-        };
-    }
-
-    private ExecutorBackpressureObserver<C> backpressureObserver() {
-        return new ExecutorBackpressureObserver<>() {
-            @Override
-            public void onEnter(C key) {
-                key.context().recordBackpressureEnter();
-                backpressureEnter.increment();
-            }
-
-            @Override
-            public void onExit(C key) {
-                key.context().recordBackpressureExit();
-                backpressureExit.increment();
-            }
-        };
-    }
-
     public void start() {
         executeOwnerTask(bindToCurrentThread).join();
         drainLoop.markStarted();
@@ -169,7 +120,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
                 backlogBudget.queuedTasks(),
                 backlogBudget.queuedBytes(),
                 schedulingPolicy,
-                backpressureController.keysAutoReadDisabledCount(),
+                backpressureController.connectionsAutoReadDisabledCount(),
                 submitter.submitAccepted(),
                 submitter.submitRejectedNotRunning(),
                 submitter.submitRejectedClosing(),
@@ -178,8 +129,8 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
                 submitter.submitRejectedRequestTooLarge(),
                 submitter.submitRejectedOfferFailed(),
                 executionSupport.closeAfterReply(),
-                backpressureEnter.sum(),
-                backpressureExit.sum(),
+                backpressureController.backpressureEnter(),
+                backpressureController.backpressureExit(),
                 drainLoop.drainLimitedByMaxCommands(),
                 drainLoop.drainLimitedByTimeBudget(),
                 taskQueue.deferredFairHeads(),
