@@ -70,25 +70,23 @@ public final class YierdisDb
                 Objects.requireNonNull(stableMemoryBackend, "stableMemoryBackend")
         );
         YierdisDbComponents components = YierdisDbComponentFactory.create(
-                composedRuntimeState::checkThread,
                 composedRuntimeState,
-                stableMemoryBackend,
                 checkedConfig,
                 Objects.requireNonNull(hashSeed, "hashSeed")
         );
 
-        this.runtimeState = components.runtimeState;
-        this.health = components.health;
-        this.memoryUsage = components.memoryUsage;
-        this.ledger = components.ledger;
-        this.keyLifecycle = components.keyLifecycle;
-        this.introspection = components.introspection;
-        this.maintenance = components.maintenance;
-        this.reads = components.reads;
-        this.writes = components.writes;
-        this.expirationManager = components.expirationManager;
-        this.memoryOps = components.memoryOps;
-        this.lifecycleOps = components.lifecycleOps;
+        this.runtimeState = composedRuntimeState;
+        this.health = components.health();
+        this.memoryUsage = components.memoryUsage();
+        this.ledger = components.ledger();
+        this.keyLifecycle = components.keyLifecycle();
+        this.introspection = components.introspection();
+        this.maintenance = components.maintenance();
+        this.reads = components.reads();
+        this.writes = components.writes();
+        this.expirationManager = components.expirationManager();
+        this.memoryOps = components.memoryOps();
+        this.lifecycleOps = components.lifecycleOps();
         runtimeState.bindMaxmemoryParticipant(this);
     }
 

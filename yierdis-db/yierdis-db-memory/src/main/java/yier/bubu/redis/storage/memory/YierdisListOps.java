@@ -35,11 +35,11 @@ import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 public final class YierdisListOps implements ListReadOps, ListWriteOps {
     private static final long LIST_ELEMENT_OVERHEAD_BYTES_ESTIMATE = 32L;
-    private final YierdisDbInternals internals;
+    private final YierdisDbRuntimeInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final ListRoot listRoot;
 
-    YierdisListOps(YierdisDbInternals internals) {
+    YierdisListOps(YierdisDbRuntimeInternals internals) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
         this.listRoot = Objects.requireNonNull(keyLifecycle.listRoot(), "listRoot");
@@ -716,10 +716,8 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
             internals.checkThread();
             Objects.requireNonNull(context, "context");
             requireCommittable();
-            WriteResult<PoppedValueSequence> result = internals.withMutationContext(
-                    context,
-                    () -> popInternal(keyBytes, count, left)
-            );
+            WriteResult<PoppedValueSequence> result = new YierdisListOps(internals.withMutationContext(context))
+                    .popInternal(keyBytes, count, left);
             committed = true;
             trimNativePagesAfterClose = result.mutationOutcome().changedAny();
             try {

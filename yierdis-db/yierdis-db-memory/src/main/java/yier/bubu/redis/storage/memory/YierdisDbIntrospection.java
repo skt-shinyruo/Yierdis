@@ -19,22 +19,18 @@ import java.util.List;
 import java.util.Objects;
 
 public final class YierdisDbIntrospection implements YierdisSnapshot {
-    private final Runnable threadChecker;
-    private final YierdisDbInternals internals;
+    private final YierdisDbRuntimeInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
 
     YierdisDbIntrospection(
-            Runnable threadChecker,
-            YierdisDbInternals internals,
-            YierdisDbKeyLifecycle keyLifecycle
+            YierdisDbRuntimeInternals internals
     ) {
-        this.threadChecker = Objects.requireNonNull(threadChecker, "threadChecker");
-        this.internals = internals;
-        this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
+        this.internals = Objects.requireNonNull(internals, "internals");
+        this.keyLifecycle = internals.keyLifecycle();
     }
 
     String objectEncoding(BytesView keyView) {
-        threadChecker.run();
+        internals.checkThread();
         EntryRecord record = liveEntryRecord(keyLifecycle.keyHandle(keyView));
         if (record == null) {
             return null;
@@ -43,7 +39,7 @@ public final class YierdisDbIntrospection implements YierdisSnapshot {
     }
 
     String objectEncoding(byte[] keyBytes) {
-        threadChecker.run();
+        internals.checkThread();
         if (keyBytes == null) {
             return null;
         }
@@ -55,15 +51,12 @@ public final class YierdisDbIntrospection implements YierdisSnapshot {
     }
 
     private EntryRecord liveEntryRecord(yier.bubu.redis.storage.memory.internal.key.KeyHandle keyHandle) {
-        if (internals != null) {
-            return internals.liveEntryRecord(keyHandle);
-        }
-        return keyLifecycle.liveEntryRecord(keyHandle);
+        return internals.liveEntryRecord(keyHandle);
     }
 
     @Override
     public ScanCursorV2 snapshot(ScanCursorV2 cursor, int count, List<YierdisSnapshotEntry> out) {
-        threadChecker.run();
+        internals.checkThread();
         Objects.requireNonNull(out, "out");
         if (count <= 0) {
             throw new IllegalArgumentException("count must be > 0");

@@ -33,11 +33,11 @@ import java.util.Objects;
 
 public final class YierdisHashOps implements HashReadOps, HashWriteOps {
     private static final long HASH_PAIR_OVERHEAD_BYTES_ESTIMATE = 256L;
-    private final YierdisDbInternals internals;
+    private final YierdisDbRuntimeInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final HashRoot hashRoot;
 
-    YierdisHashOps(YierdisDbInternals internals) {
+    YierdisHashOps(YierdisDbRuntimeInternals internals) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
         this.hashRoot = Objects.requireNonNull(keyLifecycle.hashRoot(), "hashRoot");

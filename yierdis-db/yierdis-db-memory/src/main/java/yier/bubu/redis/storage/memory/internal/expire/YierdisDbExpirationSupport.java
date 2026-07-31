@@ -8,7 +8,7 @@ import java.util.Set;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.storage.api.PostCommitMutationException;
 import yier.bubu.redis.storage.api.ScanCursorV2;
-import yier.bubu.redis.storage.memory.YierdisDbInternals;
+import yier.bubu.redis.storage.memory.YierdisDbRuntimeInternals;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
@@ -19,22 +19,18 @@ public final class YierdisDbExpirationSupport {
     private static final long CLEANUP_MAX_INSPECTED_SLOTS = 320L;
     private static final int CLEANUP_MAX_CANDIDATES = 20;
 
-    private final Runnable threadChecker;
-    private final YierdisDbInternals internals;
+    private final YierdisDbRuntimeInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final long expireCleanupTimeLimitNanos;
     private ScanCursorV2 cursor = ScanCursorV2.start();
     private long cursorTableGeneration = Long.MIN_VALUE;
 
     public YierdisDbExpirationSupport(
-            Runnable threadChecker,
-            YierdisDbInternals internals,
-            YierdisDbKeyLifecycle keyLifecycle,
+            YierdisDbRuntimeInternals internals,
             long expireCleanupTimeLimitNanos
     ) {
-        this.threadChecker = Objects.requireNonNull(threadChecker, "threadChecker");
         this.internals = Objects.requireNonNull(internals, "internals");
-        this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
+        this.keyLifecycle = internals.keyLifecycle();
         if (expireCleanupTimeLimitNanos < 0L) {
             throw new IllegalArgumentException("expireCleanupTimeLimitNanos must be >= 0");
         }
@@ -46,7 +42,7 @@ public final class YierdisDbExpirationSupport {
     }
 
     public void cleanupExpired(long nowMillis) {
-        threadChecker.run();
+        internals.checkThread();
         if (keyLifecycle.expireCount() == 0) {
             resetCursorState();
             return;
@@ -134,7 +130,7 @@ public final class YierdisDbExpirationSupport {
     }
 
     public void resetCursor() {
-        threadChecker.run();
+        internals.checkThread();
         resetCursorState();
     }
 

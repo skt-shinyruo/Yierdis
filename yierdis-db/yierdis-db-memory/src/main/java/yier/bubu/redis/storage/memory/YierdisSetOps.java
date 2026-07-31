@@ -30,11 +30,11 @@ import java.util.List;
 import java.util.Objects;
 
 public final class YierdisSetOps implements SetReadOps, SetWriteOps {
-    private final YierdisDbInternals internals;
+    private final YierdisDbRuntimeInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final SetRoot setRoot;
 
-    YierdisSetOps(YierdisDbInternals internals) {
+    YierdisSetOps(YierdisDbRuntimeInternals internals) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
         this.setRoot = Objects.requireNonNull(keyLifecycle.setRoot(), "setRoot");

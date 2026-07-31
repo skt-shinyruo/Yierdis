@@ -32,10 +32,10 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
     private static final long SCAN_MIN_SLOT_BUDGET = 64L;
     private static final long SCAN_SLOT_MULTIPLIER = 10L;
 
-    private final YierdisDbInternals internals;
+    private final YierdisDbRuntimeInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
 
-    YierdisKeyspaceOps(YierdisDbInternals internals) {
+    YierdisKeyspaceOps(YierdisDbRuntimeInternals internals) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
     }

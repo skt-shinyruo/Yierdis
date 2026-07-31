@@ -31,11 +31,11 @@ import java.util.List;
 import java.util.Objects;
 
 public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
-    private final YierdisDbInternals internals;
+    private final YierdisDbRuntimeInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final ZSetRoot zsetRoot;
 
-    YierdisZSetOps(YierdisDbInternals internals) {
+    YierdisZSetOps(YierdisDbRuntimeInternals internals) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
         this.zsetRoot = Objects.requireNonNull(keyLifecycle.zsetRoot(), "zsetRoot");

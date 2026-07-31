@@ -21,8 +21,7 @@ import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
-    private final Runnable threadChecker;
-    private final YierdisDbInternals internals;
+    private final YierdisDbRuntimeInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final LongSupplier usedBytesForMaxmemory;
     private final Supplier<MemoryUsageSnapshot> memoryUsageSupplier;
@@ -32,9 +31,7 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
     private final long evictionTimeLimitNanos;
 
     YierdisDbMaxmemorySupport(
-            Runnable threadChecker,
-            YierdisDbInternals internals,
-            YierdisDbKeyLifecycle keyLifecycle,
+            YierdisDbRuntimeInternals internals,
             LongSupplier usedBytesForMaxmemory,
             Supplier<MemoryUsageSnapshot> memoryUsageSupplier,
             LongConsumer cleanupExpired,
@@ -42,9 +39,8 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
             int maxmemorySamples,
             long evictionTimeLimitNanos
     ) {
-        this.threadChecker = Objects.requireNonNull(threadChecker, "threadChecker");
         this.internals = Objects.requireNonNull(internals, "internals");
-        this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
+        this.keyLifecycle = internals.keyLifecycle();
         this.usedBytesForMaxmemory = Objects.requireNonNull(usedBytesForMaxmemory, "usedBytesForMaxmemory");
         this.memoryUsageSupplier = Objects.requireNonNull(memoryUsageSupplier, "memoryUsageSupplier");
         this.cleanupExpired = Objects.requireNonNull(cleanupExpired, "cleanupExpired");
@@ -54,7 +50,7 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
     }
 
     void evictUntilUnder(long limitBytes) {
-        threadChecker.run();
+        internals.checkThread();
         if (limitBytes < 0) {
             limitBytes = 0;
         }
@@ -99,30 +95,30 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
 
     @Override
     public MemoryUsageSnapshot memoryUsage() {
-        threadChecker.run();
+        internals.checkThread();
         return memoryUsageSupplier.get();
     }
 
     public long usedBytesForMaxmemory() {
-        threadChecker.run();
+        internals.checkThread();
         return usedBytesForMaxmemory.getAsLong();
     }
 
     @Override
     public int keyCountEstimate() {
-        threadChecker.run();
+        internals.checkThread();
         return Math.max(0, keyLifecycle.keyCount());
     }
 
     @Override
     public void cleanupExpired(long nowMillis) {
-        threadChecker.run();
+        internals.checkThread();
         cleanupExpired.accept(nowMillis);
     }
 
     @Override
     public MaxmemoryCandidate sampleCandidate(MaxmemoryPolicy policy, long nowMillis) {
-        threadChecker.run();
+        internals.checkThread();
         if (policy == null || policy == MaxmemoryPolicy.NOEVICTION) {
             return null;
         }
@@ -148,7 +144,7 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
 
     @Override
     public MaxmemoryCandidate scanBestCandidate(MaxmemoryPolicy policy, long nowMillis) {
-        threadChecker.run();
+        internals.checkThread();
         if (policy != MaxmemoryPolicy.ALLKEYS_LRU) {
             return null;
         }
@@ -176,7 +172,7 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
 
     @Override
     public boolean evict(MaxmemoryCandidate candidate, long nowMillis) {
-        threadChecker.run();
+        internals.checkThread();
         if (candidate == null || candidate.owner() != this) {
             return false;
         }

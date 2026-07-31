@@ -57,13 +57,14 @@ final class YierdisDbRuntimeState {
     }
 
     void bind(
-            YierdisDbConfig config,
+            boolean lruEnabled,
+            NativeDefragOptions nativeDefragOptions,
             YierdisDbStorageComponents storage,
             YierdisDbMemoryLedger ledger,
             YierdisDbKeyLifecycle keyLifecycle
     ) {
-        this.lruEnabled = Objects.requireNonNull(config, "config").lruEnabled;
-        this.nativeDefragOptions = config.nativeDefragOptions;
+        this.lruEnabled = lruEnabled;
+        this.nativeDefragOptions = nativeDefragOptions;
         this.storage = Objects.requireNonNull(storage, "storage");
         if (storage.stableMemoryBackend != stableMemoryBackend) {
             throw new IllegalArgumentException("storage must use the composed stable memory backend");

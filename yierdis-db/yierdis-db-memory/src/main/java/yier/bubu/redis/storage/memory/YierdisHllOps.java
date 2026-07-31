@@ -27,11 +27,11 @@ import java.util.Objects;
 public final class YierdisHllOps implements HllReadOps, HllWriteOps {
     private static final long HLL_REGISTER_HEAP_BYTES = (long) YierdisHyperLogLog.REGISTERS * Integer.BYTES;
 
-    private final YierdisDbInternals internals;
+    private final YierdisDbRuntimeInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final StringRoot stringRoot;
 
-    YierdisHllOps(YierdisDbInternals internals) {
+    YierdisHllOps(YierdisDbRuntimeInternals internals) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
         this.stringRoot = Objects.requireNonNull(keyLifecycle.stringRoot(), "stringRoot");

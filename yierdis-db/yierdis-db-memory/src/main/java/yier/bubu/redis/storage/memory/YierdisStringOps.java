@@ -38,11 +38,11 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     private static final int EMBSTR_BYTES_LIMIT = 44;
     private static final String INTEGER_RANGE_ERROR = "ERR value is not an integer or out of range";
 
-    private final YierdisDbInternals internals;
+    private final YierdisDbRuntimeInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final StringRoot stringRoot;
 
-    YierdisStringOps(YierdisDbInternals internals) {
+    YierdisStringOps(YierdisDbRuntimeInternals internals) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
         this.stringRoot = Objects.requireNonNull(keyLifecycle.stringRoot(), "stringRoot");
@@ -1092,10 +1092,8 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
             internals.checkThread();
             Objects.requireNonNull(context, "context");
             requireCommittable();
-            WriteResult<SetStringValue> result = internals.withMutationContext(
-                    context,
-                    () -> set(keyBytes, sliceOf(valueBytes), mode, expireOption)
-            );
+            WriteResult<SetStringValue> result = new YierdisStringOps(internals.withMutationContext(context))
+                    .set(keyBytes, sliceOf(valueBytes), mode, expireOption);
             committed = true;
             MutationOutcome outcome = result.mutationOutcome();
             trimNativePagesAfterClose = outcome.changedAny() && expectedState.liveRecord() != null;

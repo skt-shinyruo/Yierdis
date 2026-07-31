@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.common.command.ByteArrayCommandRecord;
 import yier.bubu.redis.common.command.ImmutableCommandRecord;
@@ -102,7 +103,7 @@ public class CommitAwareMutationFaultInjectionTest {
                  ImmutableCommandRecord secondRecord = record("SET_SECOND", "second", "2");
                  MutationContext secondContext = MutationContext.of(secondRecord)) {
                 DbWrites first = db.writes().withMutationContext(firstContext);
-                DbWrites second = db.writes().withMutationContext(secondContext);
+                DbWrites second = first.withMutationContext(secondContext);
 
                 Assert.assertNotSame(first, second);
                 Assert.assertTrue(first.strings()
@@ -112,6 +113,10 @@ public class CommitAwareMutationFaultInjectionTest {
                 Assert.assertTrue(second.strings()
                         .setString(bytes("second"), bytes("2"), SetMode.NORMAL, null).value());
                 Assert.assertEquals("SET_SECOND", commandName(publisher.record));
+
+                Assert.assertTrue(first.strings()
+                        .setString(bytes("third"), bytes("3"), SetMode.NORMAL, null).value());
+                Assert.assertEquals("SET_FIRST", commandName(publisher.record));
             }
         } finally {
             publisher.closeRetainedRecord();
@@ -132,7 +137,7 @@ public class CommitAwareMutationFaultInjectionTest {
                  ImmutableCommandRecord secondRecord = record("FLUSHDB_SECOND");
                  MutationContext secondContext = MutationContext.of(secondRecord)) {
                 DbLifecycleOps first = db.lifecycle().withMutationContext(firstContext);
-                DbLifecycleOps second = db.lifecycle().withMutationContext(secondContext);
+                DbLifecycleOps second = first.withMutationContext(secondContext);
 
                 Assert.assertNotSame(first, second);
                 Assert.assertEquals(
@@ -140,6 +145,44 @@ public class CommitAwareMutationFaultInjectionTest {
                         first.flushDb()
                 );
                 Assert.assertEquals("FLUSHDB_FIRST", commandName(publisher.record));
+
+                Assert.assertTrue(db.writes().withMutationContext(firstContext).strings()
+                        .setString(bytes("next"), bytes("value"), SetMode.NORMAL, null).value());
+                Assert.assertEquals(
+                        yier.bubu.redis.storage.api.MutationOutcome.VALUE_CHANGED,
+                        second.flushDb()
+                );
+                Assert.assertEquals("FLUSHDB_SECOND", commandName(publisher.record));
+            }
+        } finally {
+            publisher.closeRetainedRecord();
+            db.shutdown();
+        }
+    }
+
+    @Test
+    public void preparedMutationCommitContextOverridesBoundWriteViewContext() {
+        YierdisDb db = TestDbSupport.open();
+        RecordingPublisher publisher = new RecordingPublisher();
+        try {
+            db.bindToCurrentThread();
+            db.attachCommitPublisher(publisher, 0);
+            try (ImmutableCommandRecord boundRecord = record("BOUND_SET", "key", "value");
+                 MutationContext boundContext = MutationContext.of(boundRecord);
+                 ImmutableCommandRecord commitRecord = record("COMMIT_SET", "key", "value");
+                 MutationContext commitContext = MutationContext.of(commitRecord);
+                 var prepared = db.writes().withMutationContext(boundContext).strings().prepareSet(
+                         bytes("key"),
+                         slice(bytes("value")),
+                         SetMode.NORMAL,
+                         null,
+                         false
+                 )) {
+                Assert.assertEquals(
+                        yier.bubu.redis.storage.api.MutationOutcome.VALUE_CHANGED,
+                        prepared.commit(commitContext)
+                );
+                Assert.assertEquals("COMMIT_SET", commandName(publisher.record));
             }
         } finally {
             publisher.closeRetainedRecord();
@@ -438,6 +481,25 @@ public class CommitAwareMutationFaultInjectionTest {
             @Override
             public byte getByte(int index) {
                 return bytes[index];
+            }
+        };
+    }
+
+    private static BytesSlice slice(byte[] bytes) {
+        return new BytesSlice() {
+            @Override
+            public int length() {
+                return bytes.length;
+            }
+
+            @Override
+            public byte getByte(int index) {
+                return bytes[index];
+            }
+
+            @Override
+            public void writeTo(yier.bubu.redis.bytes.BytesSink out) {
+                out.writeBytes(bytes);
             }
         };
     }

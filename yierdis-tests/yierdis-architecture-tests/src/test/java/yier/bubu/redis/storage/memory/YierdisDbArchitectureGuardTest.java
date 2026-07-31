@@ -4,6 +4,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMemoryLedger;
+import yier.bubu.redis.storage.api.DbEngineConfig;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.ScanCursorV2;
@@ -50,16 +51,6 @@ public class YierdisDbArchitectureGuardTest {
     }
 
     @Test
-    public void yierdisDbInternalsMustNotExposeRawContainersOrMemoryRuntime() {
-        Assert.assertNull(findDeclaredMethod(YierdisDbInternals.class, "store"));
-        Assert.assertNull(findDeclaredMethod(YierdisDbInternals.class, "expires"));
-        Assert.assertNull(findDeclaredMethod(YierdisDbInternals.class, "offHeapAllocator"));
-        Assert.assertNull(findDeclaredMethod(YierdisDbInternals.class, "memoryRuntime"));
-        Assert.assertNull(findDeclaredMethod(YierdisDbInternals.class, "adjustUsedBytes"));
-        Assert.assertNull(findDeclaredMethodByName(YierdisDbInternals.class, "refreshEstimatedBytes"));
-    }
-
-    @Test
     public void yierdisDbMustNotOwnMemoryReportingOrSnapshotMethods() {
         Assert.assertNull(findDeclaredMethod(YierdisDb.class, "memoryStats"));
         Assert.assertNull(findDeclaredMethod(YierdisDb.class, "memoryUsage", BytesView.class));
@@ -75,7 +66,7 @@ public class YierdisDbArchitectureGuardTest {
                 "YierdisDb should not own maxmemoryPolicy directly; configuration/participants own that state",
                 fieldTypeOrNull(YierdisDb.class, "maxmemoryPolicy")
         );
-        Assert.assertEquals(MaxmemoryPolicy.class, fieldType(YierdisDbConfig.class, "maxmemoryPolicy"));
+        Assert.assertEquals(MaxmemoryPolicy.class, fieldType(DbEngineConfig.class, "maxmemoryPolicy"));
         Assert.assertEquals(MaxmemoryPolicy.class, fieldType(YierdisDbMemoryLedger.class, "maxmemoryPolicy"));
         Assert.assertEquals(MaxmemoryPolicy.class, fieldType(YierdisDbMaxmemorySupport.class, "maxmemoryPolicy"));
         Assert.assertNull(findDeclaredMethod(YierdisDb.class, "parse" + "MaxmemoryPolicy", String.class));

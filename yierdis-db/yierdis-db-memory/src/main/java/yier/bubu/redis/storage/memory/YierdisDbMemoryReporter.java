@@ -28,8 +28,7 @@ import java.util.function.Supplier;
 
 public final class YierdisDbMemoryReporter {
     // 聚合 entry 派生状态、ledger 和 native allocator；物理快照仍只计入一次，不替代写路径的两阶段预算账本。
-    private final Runnable threadChecker;
-    private final YierdisDbInternals internals;
+    private final YierdisDbRuntimeInternals internals;
     private final DbComponentMemoryUsage componentMemoryUsage;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final HashTableMaintenanceRegistry hashTableMaintenanceRegistry;
@@ -40,10 +39,8 @@ public final class YierdisDbMemoryReporter {
     private final LongSupplier nativeLiveRegionCountSupplier;
 
     YierdisDbMemoryReporter(
-            Runnable threadChecker,
-            YierdisDbInternals internals,
+            YierdisDbRuntimeInternals internals,
             DbComponentMemoryUsage componentMemoryUsage,
-            YierdisDbKeyLifecycle keyLifecycle,
             HashTableMaintenanceRegistry hashTableMaintenanceRegistry,
             long maxmemoryBytes,
             MemoryLedger ledger,
@@ -51,10 +48,9 @@ public final class YierdisDbMemoryReporter {
             Supplier<NativeDefragReport> nativeDefragReportSupplier,
             LongSupplier nativeLiveRegionCountSupplier
     ) {
-        this.threadChecker = java.util.Objects.requireNonNull(threadChecker, "threadChecker");
-        this.internals = internals;
+        this.internals = java.util.Objects.requireNonNull(internals, "internals");
         this.componentMemoryUsage = java.util.Objects.requireNonNull(componentMemoryUsage, "componentMemoryUsage");
-        this.keyLifecycle = java.util.Objects.requireNonNull(keyLifecycle, "keyLifecycle");
+        this.keyLifecycle = internals.keyLifecycle();
         this.hashTableMaintenanceRegistry = java.util.Objects.requireNonNull(
                 hashTableMaintenanceRegistry,
                 "hashTableMaintenanceRegistry"
@@ -73,7 +69,7 @@ public final class YierdisDbMemoryReporter {
     }
 
     long memoryUsage(BytesView keyView) {
-        threadChecker.run();
+        internals.checkThread();
         KeyHandle keyHandle = keyLifecycle.keyHandle(keyView);
         EntryRecord record = liveEntryRecord(keyHandle);
         if (record == null) {
@@ -84,7 +80,7 @@ public final class YierdisDbMemoryReporter {
     }
 
     long memoryUsage(byte[] keyBytes) {
-        threadChecker.run();
+        internals.checkThread();
         if (keyBytes == null) {
             return -1;
         }
@@ -97,7 +93,7 @@ public final class YierdisDbMemoryReporter {
     }
 
     YierdisMemoryStats memoryStats() {
-        threadChecker.run();
+        internals.checkThread();
         MemoryUsageSnapshot usage = memoryUsage();
         return DbMemoryAccounting.snapshot(
                 maxmemoryBytes,
@@ -115,12 +111,12 @@ public final class YierdisDbMemoryReporter {
     }
 
     MemoryUsageSnapshot memoryUsage() {
-        threadChecker.run();
+        internals.checkThread();
         return componentMemoryUsage.snapshot();
     }
 
     long usedBytesForMaxmemory() {
-        threadChecker.run();
+        internals.checkThread();
         return memoryUsage().effectiveBytesForMaxmemory();
     }
 
@@ -129,7 +125,7 @@ public final class YierdisDbMemoryReporter {
     }
 
     int keyCountEstimate() {
-        threadChecker.run();
+        internals.checkThread();
         int size;
         try {
             size = keyLifecycle.keyCount();
@@ -140,10 +136,7 @@ public final class YierdisDbMemoryReporter {
     }
 
     private EntryRecord liveEntryRecord(KeyHandle keyHandle) {
-        if (internals != null) {
-            return internals.liveEntryRecord(keyHandle);
-        }
-        return keyLifecycle.liveEntryRecord(keyHandle);
+        return internals.liveEntryRecord(keyHandle);
     }
 
     private long metadataEstimatedBytes(KeyHandle keyHandle, EntryRecord record) {

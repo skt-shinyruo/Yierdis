@@ -6,7 +6,7 @@ import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.TtlReadOps;
 import yier.bubu.redis.storage.api.TtlWriteOps;
 import yier.bubu.redis.storage.api.WriteResult;
-import yier.bubu.redis.storage.memory.YierdisDbInternals;
+import yier.bubu.redis.storage.memory.YierdisDbRuntimeInternals;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
@@ -16,10 +16,10 @@ import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 
 public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
-    private final YierdisDbInternals internals;
+    private final YierdisDbRuntimeInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
 
-    public YierdisTtlOps(YierdisDbInternals internals) {
+    public YierdisTtlOps(YierdisDbRuntimeInternals internals) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
     }

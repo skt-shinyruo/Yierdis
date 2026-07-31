@@ -10,6 +10,7 @@ import yier.bubu.redis.storage.memory.internal.ledger.MemoryLedger;
 import yier.bubu.redis.common.command.ByteArrayCommandRecord;
 import yier.bubu.redis.common.command.ImmutableCommandRecord;
 import yier.bubu.redis.common.command.MutationContext;
+import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.storage.api.DbCommitKind;
 import yier.bubu.redis.storage.api.DbCommitStreamUnavailableException;
 import yier.bubu.redis.storage.api.MutationOutcome;
@@ -19,15 +20,14 @@ import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 
 import java.util.Objects;
-import java.util.function.Supplier;
 
-public final class YierdisDbRuntimeInternals implements YierdisDbInternals {
+public final class YierdisDbRuntimeInternals {
     private static final byte[] DELETE_COMMAND = new byte[]{'D', 'E', 'L'};
     private final Runnable threadChecker;
     private final YierdisDbMutationExecutor mutationExecutor;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final MemoryLedger ledger;
-    private MutationContext mutationContext = MutationContext.none();
+    private final MutationContext mutationContext;
 
     YierdisDbRuntimeInternals(
             Runnable threadChecker,
@@ -35,37 +35,42 @@ public final class YierdisDbRuntimeInternals implements YierdisDbInternals {
             YierdisDbKeyLifecycle keyLifecycle,
             MemoryLedger ledger
     ) {
+        this(threadChecker, mutationExecutor, keyLifecycle, ledger, MutationContext.none());
+    }
+
+    private YierdisDbRuntimeInternals(
+            Runnable threadChecker,
+            YierdisDbMutationExecutor mutationExecutor,
+            YierdisDbKeyLifecycle keyLifecycle,
+            MemoryLedger ledger,
+            MutationContext mutationContext
+    ) {
         this.threadChecker = Objects.requireNonNull(threadChecker, "threadChecker");
         this.mutationExecutor = Objects.requireNonNull(mutationExecutor, "mutationExecutor");
         this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
         this.ledger = Objects.requireNonNull(ledger, "ledger");
+        this.mutationContext = Objects.requireNonNull(mutationContext, "mutationContext");
     }
 
-    @Override
     public void checkThread() {
         threadChecker.run();
     }
 
-    @Override
     public <T> T executeMutation(YierdisDbMutationExecutor.MutationPlan<T> plan) {
         return mutationExecutor.execute(mutationContext, plan);
     }
 
-    @Override
-    public <T> T withMutationContext(MutationContext context, Supplier<T> action) {
+    YierdisDbRuntimeInternals withMutationContext(MutationContext context) {
         checkThread();
-        Objects.requireNonNull(context, "context");
-        Objects.requireNonNull(action, "action");
-        MutationContext previous = mutationContext;
-        mutationContext = context;
-        try {
-            return action.get();
-        } finally {
-            mutationContext = previous;
-        }
+        return new YierdisDbRuntimeInternals(
+                threadChecker,
+                mutationExecutor,
+                keyLifecycle,
+                ledger,
+                Objects.requireNonNull(context, "context")
+        );
     }
 
-    @Override
     public EntryRecord liveEntryRecord(KeyHandle keyHandle) {
         if (keyHandle == null) {
             return null;
@@ -82,7 +87,6 @@ public final class YierdisDbRuntimeInternals implements YierdisDbInternals {
         return null;
     }
 
-    @Override
     public boolean reclaimExpired(KeyHandle keyHandle, EntryRecord expectedRecord, long nowMillis) {
         Objects.requireNonNull(keyHandle, "keyHandle");
         ReclamationAttempt attempt = new ReclamationAttempt();
@@ -108,20 +112,23 @@ public final class YierdisDbRuntimeInternals implements YierdisDbInternals {
         }
     }
 
-    @Override
     public boolean evict(KeyHandle keyHandle, EntryRecord expectedRecord) {
         Objects.requireNonNull(keyHandle, "keyHandle");
         return reclaim(keyHandle, expectedRecord, DbCommitKind.EVICTED, 0L, false, null);
     }
 
-    @Override
     public YierdisDbKeyLifecycle keyLifecycle() {
         return keyLifecycle;
     }
 
-    @Override
     public MemoryLedger ledger() {
         return ledger;
+    }
+
+    public void trimEmptyNativePagesAfterPreparedPreviewClose() {
+        if (ledger.maxmemoryEnabled()) {
+            keyLifecycle.stableMemoryBackend().trimEmptyPages(MemoryPressureBudget.unlimited());
+        }
     }
 
     private boolean reclaim(
