@@ -16,7 +16,6 @@ import yier.bubu.redis.execution.executor.ExecutionConnectionContext;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.resp.RespReplySizer;
 import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
-import yier.bubu.redis.protocol.resp.netty.RespProtocolErrorReplyHandler;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 
@@ -62,7 +61,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
     }
 
     @Test
-    public void protocolErrorReplyHandlerMarksClosingAndClosesAfterReply() throws Exception {
+    public void productionIngressMarksProtocolErrorClosingAndClosesAfterReply() throws Exception {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
 
@@ -108,9 +107,9 @@ public class ClosingSkipSideEffectsIntegrationTest {
                     ascii("-ERR Protocol error: invalid inline command\r\n"),
                     awaitOutbound(ch, 1000)
             );
-            Assert.assertTrue("expected protocol error handler to mark connection closing", context.statsSnapshot().closing());
+            Assert.assertTrue("expected production ingress to mark connection closing", context.statsSnapshot().closing());
             Assert.assertTrue(
-                    "protocol error handler should close after replying",
+                    "production ingress should close after replying",
                     awaitChannelClosed(ch, 1000)
             );
 
@@ -122,25 +121,6 @@ public class ClosingSkipSideEffectsIntegrationTest {
             executor.executeOwnerTask(instance::close).join();
             group.shutdownGracefully().syncUninterruptibly();
             replies.close();
-        }
-    }
-
-    @Test
-    public void protocolErrorReplyHandlerDropsWhenInjectedClosingSignalIsAlreadySet() {
-        TrackingCloseable dropped = new TrackingCloseable();
-        EmbeddedChannel ch = new EmbeddedChannel(new RespProtocolErrorReplyHandler(
-                new RespReplyWriterFactory(),
-                ctx -> null,
-                ctx -> true,
-                ctx -> Assert.fail("close observer should not run when already closing")
-        ));
-        try {
-            ch.writeInbound(dropped);
-            Assert.assertNull("no protocol error reply should be produced once closing is already set", readOutbound(ch));
-            Assert.assertTrue("late inbound should be closed when the connection is already closing", dropped.closed);
-            Assert.assertTrue("channel should remain open when the handler only drops late protocol errors", ch.isOpen());
-        } finally {
-            ch.finishAndReleaseAll();
         }
     }
 
@@ -416,15 +396,6 @@ public class ClosingSkipSideEffectsIntegrationTest {
 
     private static byte[] ascii(String s) {
         return s.getBytes(StandardCharsets.US_ASCII);
-    }
-
-    private static final class TrackingCloseable implements AutoCloseable {
-        private boolean closed;
-
-        @Override
-        public void close() {
-            closed = true;
-        }
     }
 
     private static ByteArrayExecutionRequest request(String cmd, String... args) {

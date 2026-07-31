@@ -167,27 +167,39 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
             NettyExecutionConnection connection,
             PendingSubmission submission
     ) {
+        SubmissionAttempt result = attemptSubmission(ctx, connection, submission);
+        if (result == SubmissionAttempt.PUBLISHED) {
+            resumeExecutorInputIfDrained(ctx);
+            return;
+        }
+        if (result == SubmissionAttempt.CAPACITY_UNAVAILABLE) {
+            pendingSubmissions.addFirst(submission);
+            pauseExecutorInput(ctx);
+            armCapacityWait(ctx);
+        }
+    }
+
+    private SubmissionAttempt attemptSubmission(
+            ChannelHandlerContext ctx,
+            NettyExecutionConnection connection,
+            PendingSubmission submission
+    ) {
         ExecutorAdmissionAttempt<NettyExecutionConnection> attempt = executor.tryAcquire(
                 connection,
                 submission.request.retainedBytes()
         );
         if (attempt instanceof ExecutorAdmissionAttempt.Acquired<NettyExecutionConnection> acquired) {
             acquired.admission().publish(submission.request, submission.slot);
-            resumeExecutorInputIfDrained(ctx);
-            return;
+            return SubmissionAttempt.PUBLISHED;
         }
         if (attempt instanceof ExecutorAdmissionAttempt.Unavailable<NettyExecutionConnection>) {
-            pendingSubmissions.addFirst(submission);
-            pauseExecutorInput(ctx);
-            armCapacityWait(ctx);
-            return;
+            return SubmissionAttempt.CAPACITY_UNAVAILABLE;
         }
-        terminateRejectedSubmission(
-                ctx,
-                connection,
-                submission,
-                ((ExecutorAdmissionAttempt.Rejected<NettyExecutionConnection>) attempt).reason()
-        );
+        if (attempt instanceof ExecutorAdmissionAttempt.Rejected<NettyExecutionConnection> rejected) {
+            terminateRejectedSubmission(ctx, connection, submission, rejected.reason());
+            return SubmissionAttempt.REJECTED;
+        }
+        throw new IllegalStateException("unsupported executor admission attempt: " + attempt);
     }
 
     private void retryPendingSubmissions(ChannelHandlerContext ctx) {
@@ -204,25 +216,15 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
         }
         while (!pendingSubmissions.isEmpty()) {
             PendingSubmission submission = pendingSubmissions.removeFirst();
-            ExecutorAdmissionAttempt<NettyExecutionConnection> attempt = executor.tryAcquire(
-                    connection,
-                    submission.request.retainedBytes()
-            );
-            if (attempt instanceof ExecutorAdmissionAttempt.Acquired<NettyExecutionConnection> acquired) {
-                acquired.admission().publish(submission.request, submission.slot);
+            SubmissionAttempt result = attemptSubmission(ctx, connection, submission);
+            if (result == SubmissionAttempt.PUBLISHED) {
                 continue;
             }
-            if (attempt instanceof ExecutorAdmissionAttempt.Unavailable<NettyExecutionConnection>) {
+            if (result == SubmissionAttempt.CAPACITY_UNAVAILABLE) {
                 pendingSubmissions.addFirst(submission);
                 armCapacityWait(ctx);
                 return;
             }
-            terminateRejectedSubmission(
-                    ctx,
-                    connection,
-                    submission,
-                    ((ExecutorAdmissionAttempt.Rejected<NettyExecutionConnection>) attempt).reason()
-            );
             if (!ctx.channel().isActive() || connection.context().isClosing()) {
                 clearPendingSubmissions();
                 return;
@@ -386,5 +388,11 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
             Objects.requireNonNull(request, "request");
             Objects.requireNonNull(slot, "slot");
         }
+    }
+
+    private enum SubmissionAttempt {
+        PUBLISHED,
+        CAPACITY_UNAVAILABLE,
+        REJECTED
     }
 }

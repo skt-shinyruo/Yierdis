@@ -211,21 +211,6 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
         }
     }
 
-    private static void markProtocolErrorClosing(io.netty.channel.ChannelHandlerContext ctx) {
-        if (ctx == null) {
-            return;
-        }
-        NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
-        if (connection != null && connection.markClosing()) {
-            InboundReadCreditHandler readCredits = ctx.pipeline().get(InboundReadCreditHandler.class);
-            if (readCredits != null) {
-                readCredits.pauseIngress();
-            } else {
-                safeSetAutoRead(ctx, false);
-            }
-        }
-    }
-
     static long perConnectionHardLimit(YierdisServerRuntimeConfig config) {
         Objects.requireNonNull(config, "config");
         long total = saturatedAdd(Math.max(0L, config.protocolMaxCommandBytes()), 48L);
@@ -273,14 +258,6 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
             return 0L;
         }
         return left > Long.MAX_VALUE / right ? Long.MAX_VALUE : left * right;
-    }
-
-    private static void safeSetAutoRead(io.netty.channel.ChannelHandlerContext ctx, boolean enabled) {
-        try {
-            ctx.channel().config().setAutoRead(enabled);
-        } catch (Throwable ignored) {
-            // ignore
-        }
     }
 
     /**
