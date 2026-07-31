@@ -33,7 +33,6 @@ import yier.bubu.redis.memory.api.StableMemoryRegion;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
 
 public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend {
-    private static final int REALLOC_COPY_CHUNK_BYTES = 64 * 1024;
     private static final long ALLOCATION_SCOPE_HEAP_BYTES = 96L;
     private static final long ARRAY_HEADER_BYTES = 16L;
     private static final long RETIRED_BLOCK_LIST_HEAP_BYTES = 24L;
@@ -199,7 +198,7 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
         YierdisNativeBlock next = pageAllocator.allocate(physicalAllocationBytes(newSize));
         boolean moved = false;
         try {
-            copyPrefix(previous, next, oldSize);
+            previous.copyTo(next, oldSize);
             objectTable.updateLocation(
                     localRaw,
                     newSize,
@@ -684,7 +683,7 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
         try {
             previous = pageAllocator.moveSource(sourceMeta);
             target = pageAllocator.allocate(physicalAllocationBytes(sourceMeta.size()));
-            copyPrefix(previous, target, sourceMeta.size());
+            previous.copyTo(target, sourceMeta.size());
             defragValidator.validate(localRaw, sourceMeta, target);
 
             int targetCapacity = target.capacity();
@@ -972,17 +971,6 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
         }
         // 后启动的 scope 不会引用退役前的位置，因此不应阻塞这次回收。
         return activeEpochScopes.stream().noneMatch(scope -> scope.epoch <= retiredEpoch);
-    }
-
-    private static void copyPrefix(YierdisNativeBlock src, YierdisNativeBlock dst, int len) {
-        byte[] scratch = new byte[Math.min(len, REALLOC_COPY_CHUNK_BYTES)];
-        int offset = 0;
-        while (offset < len) {
-            int chunk = Math.min(scratch.length, len - offset);
-            src.getBytes(offset, scratch, 0, chunk);
-            dst.setBytes(offset, scratch, 0, chunk);
-            offset += chunk;
-        }
     }
 
     private void ensureOpen() {

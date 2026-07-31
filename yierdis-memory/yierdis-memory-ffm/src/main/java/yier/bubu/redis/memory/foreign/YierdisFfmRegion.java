@@ -16,7 +16,6 @@ final class YierdisFfmRegion implements StableMemoryRegion {
     private static final ValueLayout.OfLong LITTLE_ENDIAN_LONG =
             ValueLayout.JAVA_LONG_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
     private final YierdisFfmMemoryRuntime runtime;
-    private final String owner;
     private final Arena arena;
     private final MemorySegment segment;
     private final int size;
@@ -25,13 +24,11 @@ final class YierdisFfmRegion implements StableMemoryRegion {
 
     YierdisFfmRegion(
             YierdisFfmMemoryRuntime runtime,
-            String owner,
             Arena arena,
             MemorySegment segment,
             int size
     ) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
-        this.owner = Objects.requireNonNull(owner, "owner");
         this.arena = Objects.requireNonNull(arena, "arena");
         this.segment = Objects.requireNonNull(segment, "segment");
         if (size <= 0) {
@@ -44,16 +41,6 @@ final class YierdisFfmRegion implements StableMemoryRegion {
     public int size() {
         ensureOpen();
         return size;
-    }
-
-    public String owner() {
-        return owner;
-    }
-
-    public YierdisFfmSpan span(int offset, int length) {
-        ensureOpen();
-        checkRange(offset, length);
-        return new YierdisFfmSpan(segment.asSlice(offset, length));
     }
 
     @Override

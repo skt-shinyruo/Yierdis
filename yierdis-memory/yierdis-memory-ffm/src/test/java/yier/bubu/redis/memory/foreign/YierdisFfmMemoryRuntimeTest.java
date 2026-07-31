@@ -15,13 +15,11 @@ public class YierdisFfmMemoryRuntimeTest {
     }
 
     @Test
-    public void spanReadsAndWritesUseValueLayouts() {
+    public void regionReadsAndWritesUseValueLayouts() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("test-runtime")) {
             YierdisFfmRegion region = runtime.allocateRegion("test-region", 8);
-            YierdisFfmSpan span = region.span(0, 8);
-            YierdisFfmAccess.setByte(span, 0, (byte) 'a');
-            YierdisFfmAccess.setLong(span, 0, 42L);
-            Assert.assertEquals(42L, YierdisFfmAccess.getLong(span, 0));
+            region.setLong(0, 42L);
+            Assert.assertEquals(42L, region.getLong(0));
             region.close();
         }
     }

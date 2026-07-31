@@ -24,6 +24,7 @@ final class YierdisFfmMemoryRuntime implements AutoCloseable {
         if (closed) {
             throw new IllegalStateException("runtime is closed");
         }
+        Objects.requireNonNull(owner, "owner");
 
         // Regions can be created during bootstrap and released on the DB owner thread, so they must be
         // closable from any thread.
@@ -41,7 +42,7 @@ final class YierdisFfmMemoryRuntime implements AutoCloseable {
                     failure
             );
         }
-        YierdisFfmRegion region = new YierdisFfmRegion(this, owner, arena, segment, bytes);
+        YierdisFfmRegion region = new YierdisFfmRegion(this, arena, segment, bytes);
         liveRegionCount.incrementAndGet();
         usedBytes.addAndGet(bytes);
         return region;

@@ -288,8 +288,8 @@ public class YierdisNativePageAllocatorTest {
             YierdisNativeBlock first = allocator.allocate(16);
             YierdisNativeBlock second = allocator.allocate(17);
 
-            Assert.assertEquals(YierdisNativeSizeClass.forSize(16), first.sizeClass());
-            Assert.assertEquals(YierdisNativeSizeClass.forSize(17), second.sizeClass());
+            Assert.assertEquals(YierdisNativeSizeClass.forSize(16).bytes(), first.capacity());
+            Assert.assertEquals(YierdisNativeSizeClass.forSize(17).bytes(), second.capacity());
             Assert.assertNotEquals(first.pageId(), second.pageId());
         }
     }
@@ -332,9 +332,7 @@ public class YierdisNativePageAllocatorTest {
             YierdisNativeBlock block = allocator.allocate(32769);
 
             Assert.assertEquals(YierdisNativePageClass.MEDIUM_SPAN, block.pageClass());
-            Assert.assertEquals(32769, block.requestedBytes());
             Assert.assertEquals(YierdisNativePageAllocator.PAGE_BYTES, block.capacity());
-            Assert.assertEquals(1, block.pageCount());
         }
     }
 
@@ -346,8 +344,6 @@ public class YierdisNativePageAllocatorTest {
             YierdisNativeBlock block = allocator.allocate((1024 * 1024) + 1);
 
             Assert.assertEquals(YierdisNativePageClass.LARGE_SPAN, block.pageClass());
-            Assert.assertEquals((1024 * 1024) + 1, block.requestedBytes());
-            Assert.assertEquals(17, block.pageCount());
             Assert.assertEquals(17L * YierdisNativePageAllocator.PAGE_BYTES, block.capacity());
         }
     }

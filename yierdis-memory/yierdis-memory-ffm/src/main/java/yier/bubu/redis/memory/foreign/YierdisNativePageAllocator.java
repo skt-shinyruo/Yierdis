@@ -325,8 +325,7 @@ final class YierdisNativePageAllocator
                 meta.segmentId(),
                 Math.toIntExact(meta.address()),
                 meta.capacity(),
-                meta.pageClass(),
-                Math.max(1, meta.size())
+                meta.pageClass()
         );
     }
 
@@ -340,7 +339,7 @@ final class YierdisNativePageAllocator
     }
 
     void free(int pageId, int pageOffset, int capacity, int pageClass) {
-        YierdisNativeBlock block = blockAt(pageId, pageOffset, capacity, pageClass, Math.max(1, capacity));
+        YierdisNativeBlock block = blockAt(pageId, pageOffset, capacity, pageClass);
         block.close();
     }
 
@@ -357,13 +356,10 @@ final class YierdisNativePageAllocator
                 page,
                 page.region,
                 offset,
-                requestedBytes,
                 sizeClass.bytes(),
                 page.pageId,
                 offset,
-                1,
-                YierdisNativePageClass.SMALL,
-                sizeClass
+                YierdisNativePageClass.SMALL
         );
     }
 
@@ -397,13 +393,10 @@ final class YierdisNativePageAllocator
                 span,
                 region,
                 0,
-                requestedBytes,
                 capacity,
                 pageId,
                 0,
-                pageCount,
-                pageClass,
-                null
+                pageClass
         );
     }
 
@@ -461,8 +454,7 @@ final class YierdisNativePageAllocator
             int pageId,
             int pageOffset,
             int capacity,
-            int pageClassOrdinal,
-            int requestedBytes
+            int pageClassOrdinal
     ) {
         if (pageId <= 0) {
             throw new IllegalStateException("invalid native page id: " + pageId);
@@ -489,13 +481,10 @@ final class YierdisNativePageAllocator
                     page,
                     page.region,
                     pageOffset,
-                    requestedBytes,
                     capacity,
                     pageId,
                     pageOffset,
-                    1,
-                    pageClass,
-                    page.sizeClass
+                    pageClass
             );
         }
         if (entry instanceof SpanAllocation span) {
@@ -507,13 +496,10 @@ final class YierdisNativePageAllocator
                     span,
                     span.region,
                     0,
-                    requestedBytes,
                     capacity,
                     pageId,
                     0,
-                    span.pageCount,
-                    pageClass,
-                    null
+                    pageClass
             );
         }
         throw new IllegalStateException("unknown or closed native page id: " + pageId);

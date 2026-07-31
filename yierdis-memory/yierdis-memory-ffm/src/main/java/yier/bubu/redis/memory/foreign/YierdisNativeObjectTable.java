@@ -357,12 +357,6 @@ final class YierdisNativeObjectTable implements AutoCloseable {
         );
     }
 
-    void armHeapIterationTrapForTesting() {
-    }
-
-    void disarmHeapIterationTrapForTesting() {
-    }
-
     long estimateAdditionalHeapBytes(int requestedObjects) {
         int additionalSegments = estimateAdditionalSegments(requestedObjects);
         long bytes = (long) additionalSegments * objectSegmentHeapBytes();
