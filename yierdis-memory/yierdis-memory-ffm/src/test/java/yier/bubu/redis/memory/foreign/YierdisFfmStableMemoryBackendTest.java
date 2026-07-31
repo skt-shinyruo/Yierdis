@@ -88,6 +88,39 @@ public class YierdisFfmStableMemoryBackendTest {
     }
 
     @Test
+    public void invalidMultiByteAndCopyWritesLeaveContentUnchanged() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-invalid-write");
+             YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 16)) {
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
+            byte[] expected = new byte[]{1, 2, 3, 4, 5, 6, 7, 8};
+
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
+                view.setBytes(0, expected, 0, expected.length);
+
+                Assert.assertThrows(
+                        IndexOutOfBoundsException.class,
+                        () -> view.setIntLittleEndian(6, 0x11223344)
+                );
+                assertContentEquals(expected, view);
+
+                Assert.assertThrows(
+                        IndexOutOfBoundsException.class,
+                        () -> view.setLongLittleEndian(1, 0x0102030405060708L)
+                );
+                assertContentEquals(expected, view);
+
+                Assert.assertThrows(
+                        IndexOutOfBoundsException.class,
+                        () -> view.copyBytes(0, 2, 7)
+                );
+                assertContentEquals(expected, view);
+            }
+
+            allocator.free(handle);
+        }
+    }
+
+    @Test
     public void automaticSlotCapacityStartsLazyAndAllocatesNormally() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-auto-capacity");
              YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 0)) {
@@ -688,6 +721,14 @@ public class YierdisFfmStableMemoryBackendTest {
                 } catch (NativeMemoryException expected) {
                     Assert.assertTrue(expected.getMessage().contains("read-only"));
                 }
+                Assert.assertThrows(
+                        NativeMemoryException.class,
+                        () -> view.setLongLittleEndian(Integer.MAX_VALUE, 1L)
+                );
+                Assert.assertThrows(
+                        NativeMemoryException.class,
+                        () -> view.copyBytes(0, Integer.MAX_VALUE, 1)
+                );
             }
             allocator.free(handle);
         }
@@ -747,6 +788,43 @@ public class YierdisFfmStableMemoryBackendTest {
             Assert.assertEquals(1L, stats.liveObjects());
             Assert.assertEquals(1L, stats.reallocMovedCount());
             allocator.free(resized);
+        }
+    }
+
+    @Test
+    public void largeReallocAndDefragPreserveContentAndStableHandle() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-large-copy");
+             YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 1)) {
+            byte[] original = patternedBytes(70_000, 17);
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, original.length);
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
+                view.setBytes(0, original, 0, original.length);
+            }
+
+            NativeHandle resized = allocator.reallocate(handle, 90_000, NativeReallocPolicy.PRESERVE_PREFIX);
+            Assert.assertEquals(handle, resized);
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+                byte[] actual = new byte[original.length];
+                view.getBytes(0, actual, 0, actual.length);
+                Assert.assertArrayEquals(original, actual);
+            }
+
+            byte[] expanded = patternedBytes(90_000, 43);
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
+                view.setBytes(0, expanded, 0, expanded.length);
+            }
+            NativeLocation beforeDefrag = locationOf(allocator.objectMeta(handle.localRaw(), false));
+
+            NativeDefragResult result = allocator.defragOne(handle, expanded.length);
+
+            Assert.assertTrue(result.moved());
+            Assert.assertNotEquals(beforeDefrag, locationOf(allocator.objectMeta(handle.localRaw(), false)));
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+                byte[] actual = new byte[expanded.length];
+                view.getBytes(0, actual, 0, actual.length);
+                Assert.assertArrayEquals(expanded, actual);
+            }
+            allocator.free(handle);
         }
     }
 
@@ -1478,6 +1556,20 @@ public class YierdisFfmStableMemoryBackendTest {
 
     private static NativeLocation locationOf(YierdisNativeObjectMeta meta) {
         return new NativeLocation(meta.segmentId(), meta.address());
+    }
+
+    private static void assertContentEquals(byte[] expected, NativeObjectView view) {
+        byte[] actual = new byte[expected.length];
+        view.getBytes(0, actual, 0, actual.length);
+        Assert.assertArrayEquals(expected, actual);
+    }
+
+    private static byte[] patternedBytes(int length, int seed) {
+        byte[] bytes = new byte[length];
+        for (int index = 0; index < length; index++) {
+            bytes[index] = (byte) (seed + (31 * index));
+        }
+        return bytes;
     }
 
     private static YierdisFfmStableMemoryBackend newAllocator(

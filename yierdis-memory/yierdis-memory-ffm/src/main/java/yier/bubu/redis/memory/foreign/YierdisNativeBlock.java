@@ -86,49 +86,12 @@ final class YierdisNativeBlock implements AutoCloseable {
         region.setBytes(regionOffset + index, src, srcOff, len);
     }
 
-    void copyBytes(int sourceIndex, int targetIndex, int length) {
-        ensureOpen();
-        checkRange(sourceIndex, length);
-        checkRange(targetIndex, length);
-        region.copyBytes(regionOffset + sourceIndex, regionOffset + targetIndex, length);
-    }
-
     void copyTo(YierdisNativeBlock target, int length) {
         ensureOpen();
         Objects.requireNonNull(target, "target").ensureOpen();
         checkRange(0, length);
         target.checkRange(0, length);
         region.copyTo(regionOffset, target.region, target.regionOffset, length);
-    }
-
-    boolean contentEquals(int index, byte[] other, int otherOffset, int length) {
-        ensureOpen();
-        checkRange(index, length);
-        return region.contentEquals(regionOffset + index, other, otherOffset, length);
-    }
-
-    int getIntLittleEndian(int index) {
-        ensureOpen();
-        checkRange(index, Integer.BYTES);
-        return region.getIntLittleEndian(regionOffset + index);
-    }
-
-    void setIntLittleEndian(int index, int value) {
-        ensureOpen();
-        checkRange(index, Integer.BYTES);
-        region.setIntLittleEndian(regionOffset + index, value);
-    }
-
-    long getLongLittleEndian(int index) {
-        ensureOpen();
-        checkRange(index, Long.BYTES);
-        return region.getLongLittleEndian(regionOffset + index);
-    }
-
-    void setLongLittleEndian(int index, long value) {
-        ensureOpen();
-        checkRange(index, Long.BYTES);
-        region.setLongLittleEndian(regionOffset + index, value);
     }
 
     Object allocation() {

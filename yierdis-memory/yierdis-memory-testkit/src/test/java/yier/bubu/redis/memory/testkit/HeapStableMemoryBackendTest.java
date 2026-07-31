@@ -58,6 +58,40 @@ public class HeapStableMemoryBackendTest {
     }
 
     @Test
+    public void multiByteWritesRejectInvalidRangesBeforeChangingContent() {
+        TestOwner owner = new TestOwner();
+        HeapStableMemoryBackend backend = new HeapStableMemoryBackend("heap", 8, owner);
+        backend.bindToCurrentThread();
+        byte[] expected = new byte[]{1, 2, 3, 4, 5, 6, 7, 8};
+        NativeHandle handle = backend.allocate(NativeObjectKind.STRING_BYTES, expected.length);
+
+        try (NativeObjectView view = backend.resolve(handle, NativeAccessMode.READ_WRITE)) {
+            view.setBytes(0, expected, 0, expected.length);
+
+            Assert.assertThrows(
+                    IndexOutOfBoundsException.class,
+                    () -> view.setIntLittleEndian(expected.length - 2, 0x11223344)
+            );
+            assertContentEquals(expected, view);
+
+            Assert.assertThrows(
+                    IndexOutOfBoundsException.class,
+                    () -> view.setLongLittleEndian(1, 0x0102030405060708L)
+            );
+            assertContentEquals(expected, view);
+
+            Assert.assertThrows(
+                    IndexOutOfBoundsException.class,
+                    () -> view.setIntLittleEndian(Integer.MAX_VALUE, 0x11223344)
+            );
+            assertContentEquals(expected, view);
+        }
+
+        backend.free(handle);
+        backend.close();
+    }
+
+    @Test
     public void freePinnedObjectQuarantinesUntilLastUnpin() {
         TestOwner owner = new TestOwner();
         HeapStableMemoryBackend backend = new HeapStableMemoryBackend("heap", 8, owner);
@@ -94,6 +128,12 @@ public class HeapStableMemoryBackendTest {
                 () -> backend.resolvePinned(handle, NativeAccessMode.READ_ONLY)
         );
         backend.close();
+    }
+
+    private static void assertContentEquals(byte[] expected, NativeObjectView view) {
+        byte[] actual = new byte[expected.length];
+        view.getBytes(0, actual, 0, actual.length);
+        Assert.assertArrayEquals(expected, actual);
     }
 
     private static final class TestOwner implements MemoryOwner {

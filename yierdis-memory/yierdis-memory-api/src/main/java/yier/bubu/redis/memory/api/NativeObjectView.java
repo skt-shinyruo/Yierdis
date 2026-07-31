@@ -69,6 +69,10 @@ public interface NativeObjectView extends AutoCloseable {
     }
 
     default void setIntLittleEndian(int index, int value) {
+        int viewSize = size();
+        if (index < 0 || viewSize < Integer.BYTES || index > viewSize - Integer.BYTES) {
+            throw new IndexOutOfBoundsException();
+        }
         for (int offset = 0; offset < Integer.BYTES; offset++) {
             setByte(index + offset, (byte) (value >>> (offset * 8)));
         }
@@ -86,6 +90,10 @@ public interface NativeObjectView extends AutoCloseable {
     }
 
     default void setLongLittleEndian(int index, long value) {
+        int viewSize = size();
+        if (index < 0 || viewSize < Long.BYTES || index > viewSize - Long.BYTES) {
+            throw new IndexOutOfBoundsException();
+        }
         for (int offset = 0; offset < Long.BYTES; offset++) {
             setByte(index + offset, (byte) (value >>> (offset * 8)));
         }

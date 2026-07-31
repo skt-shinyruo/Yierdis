@@ -8,9 +8,6 @@ import java.util.Objects;
 import yier.bubu.redis.memory.api.StableMemoryRegion;
 
 final class YierdisFfmRegion implements StableMemoryRegion {
-    private static final int COMPARE_CHUNK_BYTES = 8 * 1024;
-    private static final ThreadLocal<byte[]> COMPARE_BUFFER =
-            ThreadLocal.withInitial(() -> new byte[COMPARE_CHUNK_BYTES]);
     private static final ValueLayout.OfInt LITTLE_ENDIAN_INT =
             ValueLayout.JAVA_INT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
     private static final ValueLayout.OfLong LITTLE_ENDIAN_LONG =
@@ -139,13 +136,6 @@ final class YierdisFfmRegion implements StableMemoryRegion {
         );
     }
 
-    void copyBytes(int sourceOffset, int targetOffset, int length) {
-        ensureOpen();
-        checkRange(sourceOffset, length);
-        checkRange(targetOffset, length);
-        MemorySegment.copy(segment, sourceOffset, segment, targetOffset, length);
-    }
-
     @Override
     public void copyTo(
             int sourceOffset,
@@ -165,32 +155,6 @@ final class YierdisFfmRegion implements StableMemoryRegion {
         byte[] snapshot = new byte[length];
         getBytes(sourceOffset, snapshot, 0, length);
         target.setBytes(targetOffset, snapshot, 0, length);
-    }
-
-    boolean contentEquals(int offset, byte[] other, int otherOffset, int length) {
-        checkArrayRange(other, otherOffset, length, "other");
-        ensureOpen();
-        checkRange(offset, length);
-        byte[] buffer = COMPARE_BUFFER.get();
-        int compared = 0;
-        while (compared < length) {
-            int chunk = Math.min(buffer.length, length - compared);
-            MemorySegment.copy(
-                    segment,
-                    ValueLayout.JAVA_BYTE,
-                    offset + compared,
-                    buffer,
-                    0,
-                    chunk
-            );
-            for (int index = 0; index < chunk; index++) {
-                if (buffer[index] != other[otherOffset + compared + index]) {
-                    return false;
-                }
-            }
-            compared += chunk;
-        }
-        return true;
     }
 
     void ensureOpen() {

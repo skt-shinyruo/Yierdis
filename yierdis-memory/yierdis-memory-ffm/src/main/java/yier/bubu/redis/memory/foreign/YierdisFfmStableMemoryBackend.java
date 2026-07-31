@@ -1288,7 +1288,7 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
             ensureWritable();
             checkRange(sourceIndex, length, logicalSize);
             checkRange(targetIndex, length, logicalSize);
-            block.copyBytes(sourceIndex, targetIndex, length);
+            NativeObjectView.super.copyBytes(sourceIndex, targetIndex, length);
         }
 
         @Override
@@ -1304,35 +1304,35 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
                 throw new IndexOutOfBoundsException();
             }
             checkRange(index, length, logicalSize);
-            return block.contentEquals(index, other, otherOffset, length);
+            return NativeObjectView.super.contentEquals(index, other, otherOffset, length);
         }
 
         @Override
         public int getIntLittleEndian(int index) {
             ensureLive();
             checkRange(index, Integer.BYTES, logicalSize);
-            return block.getIntLittleEndian(index);
+            return NativeObjectView.super.getIntLittleEndian(index);
         }
 
         @Override
         public void setIntLittleEndian(int index, int value) {
             ensureWritable();
             checkRange(index, Integer.BYTES, logicalSize);
-            block.setIntLittleEndian(index, value);
+            NativeObjectView.super.setIntLittleEndian(index, value);
         }
 
         @Override
         public long getLongLittleEndian(int index) {
             ensureLive();
             checkRange(index, Long.BYTES, logicalSize);
-            return block.getLongLittleEndian(index);
+            return NativeObjectView.super.getLongLittleEndian(index);
         }
 
         @Override
         public void setLongLittleEndian(int index, long value) {
             ensureWritable();
             checkRange(index, Long.BYTES, logicalSize);
-            block.setLongLittleEndian(index, value);
+            NativeObjectView.super.setLongLittleEndian(index, value);
         }
 
         @Override
