@@ -2,21 +2,23 @@ package yier.bubu.redis.execution.executor;
 
 import yier.bubu.redis.execution.api.CapacityRegistration;
 
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
 
 /**
- * executor backlog 的全局任务数与保留字节预算，并提供基于同一计数的背压水位。
+ * executor backlog 的任务数、保留字节和容量等待者共享同一状态锁。
+ * 容量回调只在锁外执行，允许 ingress 在回调中重新尝试 reservation。
  */
 public final class ExecutorBacklogBudget {
     private final int queueCapacity;
     private final long queueMaxBytes;
-
-    private final AtomicInteger queuedTasks = new AtomicInteger(0);
-    private final AtomicLong queuedBytes = new AtomicLong(0);
-    private final ConcurrentLinkedQueue<CapacityWaiter> capacityWaiters = new ConcurrentLinkedQueue<>();
+    private final Object lock = new Object();
+    private final ArrayDeque<CapacityWaiter> capacityWaiters = new ArrayDeque<>();
+    private int queuedTasks;
+    private long queuedBytes;
+    private boolean capacityWaitersClosed;
 
     private final int globalBackpressureHighWatermark;
     private final int globalBackpressureLowWatermark;
@@ -44,101 +46,34 @@ public final class ExecutorBacklogBudget {
         this.globalBackpressureBytesLowWatermark = globalBytesLow;
     }
 
-    public int queueCapacity() {
-        return queueCapacity;
-    }
-
-    public long queueMaxBytes() {
-        return queueMaxBytes;
-    }
-
     public int queuedTasks() {
-        return queuedTasks.get();
+        synchronized (lock) {
+            return queuedTasks;
+        }
     }
 
     public long queuedBytes() {
-        return queuedBytes.get();
-    }
-
-    public int globalBackpressureHighWatermark() {
-        return globalBackpressureHighWatermark;
-    }
-
-    public int globalBackpressureLowWatermark() {
-        return globalBackpressureLowWatermark;
-    }
-
-    public long globalBackpressureBytesHighWatermark() {
-        return globalBackpressureBytesHighWatermark;
-    }
-
-    public long globalBackpressureBytesLowWatermark() {
-        return globalBackpressureBytesLowWatermark;
+        synchronized (lock) {
+            return queuedBytes;
+        }
     }
 
     public boolean isGlobalBackpressureHigh() {
-        boolean tasksHigh = queuedTasks.get() >= globalBackpressureHighWatermark;
-        boolean bytesHigh = globalBackpressureBytesHighWatermark > 0 && queuedBytes.get() >= globalBackpressureBytesHighWatermark;
-        return tasksHigh || bytesHigh;
+        synchronized (lock) {
+            boolean tasksHigh = queuedTasks >= globalBackpressureHighWatermark;
+            boolean bytesHigh = globalBackpressureBytesHighWatermark > 0
+                    && queuedBytes >= globalBackpressureBytesHighWatermark;
+            return tasksHigh || bytesHigh;
+        }
     }
 
     public boolean isGlobalBackpressureCleared() {
-        boolean tasksOk = queuedTasks.get() <= globalBackpressureLowWatermark;
-        boolean bytesOk = globalBackpressureBytesHighWatermark <= 0 || queuedBytes.get() <= globalBackpressureBytesLowWatermark;
-        return tasksOk && bytesOk;
-    }
-
-    public boolean tryReserveSlot() {
-        for (; ; ) {
-            int cur = queuedTasks.get();
-            if (cur >= queueCapacity) {
-                return false;
-            }
-            if (queuedTasks.compareAndSet(cur, cur + 1)) {
-                return true;
-            }
+        synchronized (lock) {
+            boolean tasksOk = queuedTasks <= globalBackpressureLowWatermark;
+            boolean bytesOk = globalBackpressureBytesHighWatermark <= 0
+                    || queuedBytes <= globalBackpressureBytesLowWatermark;
+            return tasksOk && bytesOk;
         }
-    }
-
-    public void releaseSlot() {
-        int now = queuedTasks.decrementAndGet();
-        if (now < 0) {
-            // Best-effort: avoid underflow breaking future reservations.
-            queuedTasks.set(0);
-        }
-        signalCapacityWaiters();
-    }
-
-    public boolean tryReserveQueuedBytes(int bytes) {
-        if (queueMaxBytes <= 0 || bytes <= 0) {
-            return true;
-        }
-        for (; ; ) {
-            long cur = queuedBytes.get();
-            long next = cur + bytes;
-            if (next < 0) {
-                // overflow guard: treat as OOM / reject.
-                return false;
-            }
-            if (next > queueMaxBytes) {
-                return false;
-            }
-            if (queuedBytes.compareAndSet(cur, next)) {
-                return true;
-            }
-        }
-    }
-
-    public void releaseQueuedBytes(int bytes) {
-        if (queueMaxBytes <= 0 || bytes <= 0) {
-            return;
-        }
-        long now = queuedBytes.addAndGet(-bytes);
-        if (now < 0) {
-            // Best-effort: avoid underflow breaking future reservations.
-            queuedBytes.set(0);
-        }
-        signalCapacityWaiters();
     }
 
     public boolean canEverReserveQueuedBytes(int bytes) {
@@ -146,92 +81,142 @@ public final class ExecutorBacklogBudget {
     }
 
     ExecutorAdmissionAttempt.BlockReason tryReserve(int retainedBytes) {
-        if (!tryReserveSlot()) {
-            return ExecutorAdmissionAttempt.BlockReason.QUEUE_SLOTS;
+        if (retainedBytes < 0) {
+            throw new IllegalArgumentException("retainedBytes must be >= 0");
         }
-        if (!tryReserveQueuedBytes(retainedBytes)) {
-            releaseSlot();
-            return ExecutorAdmissionAttempt.BlockReason.QUEUE_BYTES;
+        synchronized (lock) {
+            if (queuedTasks >= queueCapacity) {
+                return ExecutorAdmissionAttempt.BlockReason.QUEUE_SLOTS;
+            }
+            if (queueMaxBytes > 0 && retainedBytes > queueMaxBytes - queuedBytes) {
+                return ExecutorAdmissionAttempt.BlockReason.QUEUE_BYTES;
+            }
+            queuedTasks++;
+            if (queueMaxBytes > 0) {
+                queuedBytes += retainedBytes;
+            }
+            return null;
         }
-        return null;
     }
 
     void release(int retainedBytes) {
-        try {
-            releaseQueuedBytes(retainedBytes);
-        } finally {
-            releaseSlot();
+        if (retainedBytes < 0) {
+            throw new IllegalArgumentException("retainedBytes must be >= 0");
         }
+        List<Runnable> callbacks;
+        synchronized (lock) {
+            if (queuedTasks <= 0) {
+                throw new IllegalStateException("executor backlog task reservation underflow");
+            }
+            if (queueMaxBytes > 0 && retainedBytes > queuedBytes) {
+                throw new IllegalStateException("executor backlog byte reservation underflow");
+            }
+            queuedTasks--;
+            if (queueMaxBytes > 0) {
+                queuedBytes -= retainedBytes;
+            }
+            callbacks = detachEligibleWaitersLocked();
+        }
+        runCallbacks(callbacks);
     }
 
     CapacityRegistration onCapacityAvailable(int retainedBytes, Runnable callback) {
         if (retainedBytes < 0) {
             throw new IllegalArgumentException("retainedBytes must be >= 0");
         }
-        CapacityWaiter waiter = new CapacityWaiter(retainedBytes, callback);
-        capacityWaiters.offer(waiter);
-        signalCapacityWaiters();
+        CapacityWaiter waiter = new CapacityWaiter(retainedBytes, Objects.requireNonNull(callback, "callback"));
+        List<Runnable> callbacks;
+        synchronized (lock) {
+            if (capacityWaitersClosed) {
+                callbacks = List.of(waiter.detachLocked());
+            } else {
+                capacityWaiters.addLast(waiter);
+                callbacks = detachEligibleWaitersLocked();
+            }
+        }
+        runCallbacks(callbacks);
         return waiter;
     }
 
     void wakeAllCapacityWaiters() {
-        CapacityWaiter waiter;
-        while ((waiter = capacityWaiters.poll()) != null) {
-            try {
-                waiter.signal();
-            } catch (Throwable ignored) {
+        List<Runnable> callbacks = new ArrayList<>();
+        synchronized (lock) {
+            capacityWaitersClosed = true;
+            CapacityWaiter waiter;
+            while ((waiter = capacityWaiters.pollFirst()) != null) {
+                Runnable callback = waiter.detachLocked();
+                if (callback != null) {
+                    callbacks.add(callback);
+                }
             }
         }
+        runCallbacks(callbacks);
     }
 
-    private void signalCapacityWaiters() {
-        if (queuedTasks.get() >= queueCapacity) {
-            return;
+    private List<Runnable> detachEligibleWaitersLocked() {
+        if (queuedTasks >= queueCapacity || capacityWaiters.isEmpty()) {
+            return List.of();
         }
-        for (CapacityWaiter waiter : capacityWaiters) {
-            if (!hasByteCapacity(waiter.retainedBytes)) {
+        List<Runnable> callbacks = new ArrayList<>();
+        var iterator = capacityWaiters.iterator();
+        while (iterator.hasNext()) {
+            CapacityWaiter waiter = iterator.next();
+            if (!hasByteCapacityLocked(waiter.retainedBytes)) {
                 continue;
             }
-            if (waiter.signal()) {
-                capacityWaiters.remove(waiter);
-            } else {
-                capacityWaiters.remove(waiter);
+            iterator.remove();
+            Runnable callback = waiter.detachLocked();
+            if (callback != null) {
+                callbacks.add(callback);
             }
         }
+        return callbacks;
     }
 
-    private boolean hasByteCapacity(int retainedBytes) {
+    private boolean hasByteCapacityLocked(int retainedBytes) {
         if (queueMaxBytes <= 0 || retainedBytes <= 0) {
             return true;
         }
-        long current = queuedBytes.get();
-        return current <= queueMaxBytes - retainedBytes;
+        return queuedBytes <= queueMaxBytes - retainedBytes;
     }
 
-    private final class CapacityWaiter implements CapacityRegistration {
-        private final int retainedBytes;
-        private final Runnable callback;
-        private final AtomicBoolean active = new AtomicBoolean(true);
-
-        private CapacityWaiter(int retainedBytes, Runnable callback) {
-            this.retainedBytes = retainedBytes;
-            this.callback = java.util.Objects.requireNonNull(callback, "callback");
-        }
-
-        private boolean signal() {
-            if (!active.compareAndSet(true, false)) {
-                return false;
-            }
+    private static void runCallbacks(List<Runnable> callbacks) {
+        for (Runnable callback : callbacks) {
             try {
                 callback.run();
             } catch (Throwable ignored) {
             }
-            return true;
+        }
+    }
+
+    private final class CapacityWaiter implements CapacityRegistration {
+        private final int retainedBytes;
+        private Runnable callback;
+        private boolean active = true;
+
+        private CapacityWaiter(int retainedBytes, Runnable callback) {
+            this.retainedBytes = retainedBytes;
+            this.callback = Objects.requireNonNull(callback, "callback");
+        }
+
+        private Runnable detachLocked() {
+            if (!active) {
+                return null;
+            }
+            active = false;
+            Runnable detached = callback;
+            callback = null;
+            return detached;
         }
 
         @Override
         public void cancel() {
-            if (active.compareAndSet(true, false)) {
+            synchronized (lock) {
+                if (!active) {
+                    return;
+                }
+                active = false;
+                callback = null;
                 capacityWaiters.remove(this);
             }
         }
@@ -241,7 +226,7 @@ public final class ExecutorBacklogBudget {
         if (queueCapacity <= 0) {
             return 1;
         }
-        int high = (queueCapacity * 3 + 3) / 4; // ceil(0.75 * cap)
+        int high = queueCapacity - queueCapacity / 4;
         if (high <= 0) {
             high = 1;
         }
@@ -266,7 +251,7 @@ public final class ExecutorBacklogBudget {
         if (queueMaxBytes <= 0) {
             return 0;
         }
-        long high = (queueMaxBytes * 3) / 4;
+        long high = (queueMaxBytes / 4) * 3 + ((queueMaxBytes % 4) * 3) / 4;
         if (high <= 0) {
             return queueMaxBytes;
         }

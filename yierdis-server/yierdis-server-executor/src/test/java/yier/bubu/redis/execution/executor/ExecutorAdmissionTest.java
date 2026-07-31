@@ -97,6 +97,21 @@ public class ExecutorAdmissionTest {
         owner.runAll();
     }
 
+    @Test
+    public void capacityRegistrationAfterExecutorCloseWakesImmediately() {
+        ManualOwnerExecutor owner = ExecutorCoreTestSupport.manualOwnerExecutor();
+        CommandExecutor<TestConnection> executor = newExecutor(owner, 1, 64L);
+        AtomicInteger wakeups = new AtomicInteger();
+
+        executor.close();
+        owner.runAll();
+        CapacityRegistration registration = executor.onAdmissionAvailable(32, wakeups::incrementAndGet);
+
+        Assert.assertEquals(1, wakeups.get());
+        registration.cancel();
+        Assert.assertEquals(1, wakeups.get());
+    }
+
     private static <C extends ExecutionConnection> ExecutorAdmission<C> acquired(
             ExecutorAdmissionAttempt<C> attempt
     ) {
