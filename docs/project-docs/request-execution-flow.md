@@ -59,7 +59,7 @@ CommandExecutor
 
 - `Channel`：真实 transport；
 - `EngineSession`：具体的每连接 `CommandSession`，只持有 DB index、transaction、client metadata、认证状态、RESP version，并借用连接统计视图；
-- `ExecutionConnectionContext`：pending、pending bytes、closing、backpressure 和调度状态。
+- `ExecutionConnectionContext`：pending、pending bytes、closing、backpressure 暂停原因和统计；GLOBAL/FAIR 调度状态统一由 `ExecutorTaskQueue` 持有。
 
 `EngineSession` 只是连接 session 状态的 owner，不是命令执行引擎，也不拥有 dispatcher、DB 或 reply writer。`NettyExecutionConnection` 才是 `Channel`、session 和 executor connection context 的连接 root。
 
@@ -80,6 +80,8 @@ CommandExecutor
 ## 提交、admission 和背压
 
 `NettyExecutionRequestIngress` 先调用 `executor.tryAcquire(...)` 预留 backlog，再通过 `ExecutorAdmission.publish(request, replySlot)` 转移请求和回复槽所有权。
+
+首次提交和 capacity waiter 唤醒后的重试都经过同一个 admission 分类入口；暂时不可用的 submission 保持在连接 pending deque 的头部，不会被后到请求越过。协议错误也由这个生产 ingress 使用原先注册的 reply slot 排序回写，不存在旁路 protocol handler。
 
 - `Acquired`：publish 后 ownership 转给 executor；
 - `Unavailable`：queue slot 或 bytes budget 暂时不足，submission 留在连接 pending queue，暂停输入并等待 `onAdmissionAvailable(...)`；

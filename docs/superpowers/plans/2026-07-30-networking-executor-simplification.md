@@ -45,17 +45,17 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 - Create: `yierdis-server/yierdis-server-executor/src/test/java/yier/bubu/redis/execution/executor/ExecutorTaskQueueTest.java`
 - Modify: `yierdis-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
 
-- [ ] Add queue characterization for GLOBAL FIFO, FAIR round-robin,
+- [x] Add queue characterization for GLOBAL FIFO, FAIR round-robin,
   reply-capacity blocked heads, stale retry at head, cancellation, drain, and
   removal of empty per-key state.
-- [ ] Add backlog characterization proving task/byte reservation is all-or-none,
+- [x] Add backlog characterization proving task/byte reservation is all-or-none,
   waiter callbacks run once, cancellation suppresses callbacks, and shutdown
   wakes all waiters.
-- [ ] Add a failing architecture guard that rejects the Stage 2 deletion set:
+- [x] Add a failing architecture guard that rejects the Stage 2 deletion set:
   `ExecutorKeyState`, `ExecutorKeyStateProvider`, `ExecutorBackpressureIo`,
   `ExecutorBackpressureRuntime`, `ExecutorBackpressureObserver`, buffered reply
   methods on `ExecutionIoAdapter`, and `RespProtocolErrorReplyHandler`.
-- [ ] Run the focused RED suite and record that only the final-tree guard fails:
+- [x] Run the focused RED suite and record that only the final-tree guard fails:
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server-executor,yierdis-tests/yierdis-architecture-tests -am -Dtest=ExecutorTaskQueueTest,ExecutorBacklogBudgetTest,ReplyCapacityBlockedSchedulingTest,ArchitectureBoundaryTest -Dsurefire.failIfNoSpecifiedTests=false test
@@ -71,19 +71,19 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 - Modify: `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionIoAdapter.java`
 - Modify executor test adapters under `yierdis-server-executor/src/test`.
 
-- [ ] Remove `newReplySink`, `writeBufferedReply`, and `flushPending` from
+- [x] Remove `newReplySink`, `writeBufferedReply`, and `flushPending` from
   `ExecutionIoAdapter` and all implementations.
-- [ ] Remove `handleExecutionFailure`, touched-connection collection, and drain
+- [x] Remove `handleExecutionFailure`, touched-connection collection, and drain
   flush plumbing. Keep registered-slot internal-error and result-unknown paths.
-- [ ] Ensure `execute(task)` still distinguishes completed/closed, capacity
+- [x] Ensure `execute(task)` still distinguishes completed/closed, capacity
   blocked, and stale reprepare without changing cleanup ownership.
-- [ ] Run executor and Netty adapter tests:
+- [x] Run executor and Netty adapter tests:
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server-executor,yierdis-server/yierdis-server-main -am -Dtest=CommandExecutorTest,ReplyCapacityBlockedSchedulingTest,NettyExecutionAdapterIntegrationTest,ClosingSkipSideEffectsIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-- [ ] Review and commit:
+- [x] Review and commit:
 
 ```bash
 git commit -m "refactor: remove buffered executor reply path"
@@ -97,20 +97,20 @@ git commit -m "refactor: remove buffered executor reply path"
 - Modify: `yierdis-server/yierdis-server-executor/src/test/java/yier/bubu/redis/execution/executor/ExecutorBacklogBudgetTest.java`
 - Modify: `yierdis-server/yierdis-server-executor/src/test/java/yier/bubu/redis/execution/executor/ExecutorAdmissionTest.java`
 
-- [ ] Replace separate atomic task/byte reservation with one private lock and
+- [x] Replace separate atomic task/byte reservation with one private lock and
   primitive counters. Preserve existing metrics and watermark formulas.
-- [ ] Make `tryReserve(retainedBytes)` validate both limits and update both
+- [x] Make `tryReserve(retainedBytes)` validate both limits and update both
   counters in one critical section; reject underflow rather than silently
   clamping corrupt counters.
-- [ ] Store waiters in one deque. Detach eligible/cancelled/shutdown waiters
+- [x] Store waiters in one deque. Detach eligible/cancelled/shutdown waiters
   under the lock and invoke callbacks outside it.
-- [ ] Run backlog, admission, backpressure, and ingress lifecycle tests:
+- [x] Run backlog, admission, backpressure, and ingress lifecycle tests:
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server-executor,yierdis-server/yierdis-server-main -am -Dtest=ExecutorBacklogBudgetTest,ExecutorAdmissionTest,CommandExecutorBackpressureTest,RespIngressLifecycleIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-- [ ] Review and commit:
+- [x] Review and commit:
 
 ```bash
 git commit -m "refactor: simplify executor backlog reservations"
@@ -127,22 +127,22 @@ git commit -m "refactor: simplify executor backlog reservations"
 - Modify: `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java`
 - Modify/create tests from Task 1.
 
-- [ ] Give `ExecutorTaskQueue` one private lock, a standard global deque, and an
+- [x] Give `ExecutorTaskQueue` one private lock, a standard global deque, and an
   identity-keyed private FAIR state map. Do not expose queue state through the
   connection context.
-- [ ] Preserve GLOBAL FIFO and its single blocked head.
-- [ ] Preserve FAIR per-key FIFO, round-robin scheduling, one blocked head per
+- [x] Preserve GLOBAL FIFO and its single blocked head.
+- [x] Preserve FAIR per-key FIFO, round-robin scheduling, one blocked head per
   key, ready wakeup, retry-at-head, and later-command exclusion while blocked.
-- [ ] Remove empty FAIR states and prove the queue does not retain inactive
+- [x] Remove empty FAIR states and prove the queue does not retain inactive
   connection keys.
-- [ ] Delete key-state APIs and the unchecked cast in `CommandExecutor`.
-- [ ] Run queue, fairness, reply-capacity, executor, and shutdown tests:
+- [x] Delete key-state APIs and the unchecked cast in `CommandExecutor`.
+- [x] Run queue, fairness, reply-capacity, executor, and shutdown tests:
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server-executor,yierdis-server/yierdis-server-main -am -Dtest=ExecutorTaskQueueTest,CommandExecutorFairSchedulingTest,ReplyCapacityBlockedSchedulingTest,CommandExecutorTest,YierdisServerBootstrapCloseTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-- [ ] Review and commit:
+- [x] Review and commit:
 
 ```bash
 git commit -m "refactor: consolidate executor queue state"
@@ -159,20 +159,20 @@ git commit -m "refactor: consolidate executor queue state"
 - Modify: `CommandExecutor.java`
 - Modify tests in `yierdis-server-executor`.
 
-- [ ] Parameterize the controller with `C extends ExecutionConnection`, accept
+- [x] Parameterize the controller with `C extends ExecutionConnection`, accept
   `ExecutionIoAdapter<C>`, and read `connection.context()` directly.
-- [ ] Move global enter/exit counters into the controller while preserving
+- [x] Move global enter/exit counters into the controller while preserving
   per-connection counters in `ExecutionConnectionContext`.
-- [ ] Delete anonymous projection adapters from `CommandExecutor`.
-- [ ] Preserve the disabled-connection tracking set, close-listener removal,
+- [x] Delete anonymous projection adapters from `CommandExecutor`.
+- [x] Preserve the disabled-connection tracking set, close-listener removal,
   owner-thread global recovery, and all independent pause checks.
-- [ ] Run backpressure, executor, ingress, and transport-writability tests:
+- [x] Run backpressure, executor, ingress, and transport-writability tests:
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server-executor,yierdis-server/yierdis-server-main -am -Dtest=CommandExecutorBackpressureTest,CommandExecutorTest,RespIngressLifecycleIntegrationTest,NettyExecutionAdapterIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-- [ ] Review and commit:
+- [x] Review and commit:
 
 ```bash
 git commit -m "refactor: simplify executor backpressure state"
@@ -189,20 +189,20 @@ git commit -m "refactor: simplify executor backpressure state"
 - Modify: `ClosingSkipSideEffectsIntegrationTest.java` to use the production
   ingress path for any still-required characterization.
 
-- [ ] Implement one attempt-classification helper shared by initial submission
+- [x] Implement one attempt-classification helper shared by initial submission
   and capacity-wait retry. Keep the pending deque and retry its head.
-- [ ] Preserve request-too-large error text, stopped/closing rejection,
+- [x] Preserve request-too-large error text, stopped/closing rejection,
   capacity waiter cancellation, protocol error ordering, and terminal close.
-- [ ] Delete unused initializer protocol-close helpers.
-- [ ] Delete `RespProtocolErrorReplyHandler`; do not leave a compatibility alias.
-- [ ] Run decoder, ingress admission/lifecycle/pressure/fuzz, ordered reply, and
+- [x] Delete unused initializer protocol-close helpers.
+- [x] Delete `RespProtocolErrorReplyHandler`; do not leave a compatibility alias.
+- [x] Run decoder, ingress admission/lifecycle/pressure/fuzz, ordered reply, and
   closing tests:
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-networking/yierdis-networking-netty,yierdis-server/yierdis-server-main,yierdis-tests/yierdis-integration-tests -am -Dtest=RespRequestDecoderTest,RespIngressAdmissionTest,RespIngressLifecycleIntegrationTest,RespIngressPressureTest,RespIngressFuzzTest,OrderedReplyPipelineTest,ClosingSkipSideEffectsIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-- [ ] Review and commit:
+- [x] Review and commit:
 
 ```bash
 git commit -m "refactor: simplify Netty execution ingress"
@@ -216,47 +216,46 @@ git commit -m "refactor: simplify Netty execution ingress"
 - Modify relevant files under `docs/project-docs`.
 - Finalize this plan.
 
-- [ ] Require the final executor/network tree and reject all deleted types and
+- [x] Require the final executor/network tree and reject all deleted types and
   methods.
-- [ ] Document the one queue owner, atomic backlog reservation, direct
+- [x] Document the one queue owner, atomic backlog reservation, direct
   backpressure boundary, and one ordered protocol/command ingress path.
-- [ ] Prove forbidden symbols are absent:
+- [x] Prove forbidden symbols are absent:
 
 ```bash
 rg -n "ExecutorKeyState|ExecutorKeyStateProvider|ExecutorBackpressureIo|ExecutorBackpressureRuntime|ExecutorBackpressureObserver|RespProtocolErrorReplyHandler|newReplySink|writeBufferedReply|flushPending" yierdis-server yierdis-networking yierdis-tests --glob '*.java' --glob '!ArchitectureBoundaryTest.java'
 ```
 
-- [ ] Prove Stage 2 did not edit DB/FFM or POMs:
+- [x] Prove Stage 2 did not edit DB/FFM or POMs:
 
 ```bash
 git diff --exit-code 935c2417 -- ':(glob)**/pom.xml'
 git diff --name-only 935c2417 -- yierdis-db yierdis-memory
 ```
 
-- [ ] Run affected reactors:
+- [x] Run affected reactors:
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-networking/yierdis-networking-netty,yierdis-server/yierdis-server-executor,yierdis-server/yierdis-server-main,yierdis-tests/yierdis-architecture-tests,yierdis-tests/yierdis-integration-tests -am test
 ```
 
-- [ ] Run the full suite:
+- [x] Run the full suite:
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn test
 ```
 
-- [ ] Verify production Java reduction:
+- [x] Verify production Java reduction:
 
 ```bash
 git diff --numstat 935c2417 -- ':(glob)**/src/main/java/**/*.java' | awk '{ added += $1; deleted += $2 } END { printf "added=%d deleted=%d net=%d\n", added, deleted, added-deleted; exit !(deleted > added) }'
 ```
 
-- [ ] Run `git diff --check`, obtain independent review, close findings, and
+- [x] Run `git diff --check`, obtain independent review, close findings, and
   commit:
 
 ```bash
 git commit -m "refactor: complete networking executor simplification"
 ```
 
-- [ ] Confirm clean status and focused Stage 2 commit history.
-
+- [x] Confirm clean status and focused Stage 2 commit history.

@@ -964,6 +964,47 @@ public class ArchitectureBoundaryTest {
                     Files.exists(executorPackage.resolve(deleted)));
         }
 
+        Path taskQueue = executorPackage.resolve("ExecutorTaskQueue.java");
+        Assert.assertTrue("缺少统一的 executor task queue", Files.isRegularFile(taskQueue));
+        String taskQueueSource = Files.readString(taskQueue, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "GLOBAL 与 FAIR 调度状态必须由 ExecutorTaskQueue 的同一私有锁保护",
+                taskQueueSource.contains("private final Object lock")
+                        && taskQueueSource.contains("IdentityHashMap")
+        );
+
+        Path connectionContext = executorPackage.resolve("ExecutionConnectionContext.java");
+        String connectionContextSource = Files.readString(connectionContext, StandardCharsets.UTF_8);
+        Assert.assertFalse(
+                "连接上下文不能重新持有 FAIR queue state",
+                connectionContextSource.contains("queueState(")
+                        || connectionContextSource.contains("ExecutorKeyState")
+        );
+
+        Path backlogBudget = executorPackage.resolve("ExecutorBacklogBudget.java");
+        Assert.assertTrue("缺少统一的 executor backlog budget", Files.isRegularFile(backlogBudget));
+        String backlogBudgetSource = Files.readString(backlogBudget, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "task/byte reservation 与 capacity waiter 必须共享同一状态锁",
+                backlogBudgetSource.contains("private final Object lock")
+                        && backlogBudgetSource.contains("ArrayDeque<CapacityWaiter>")
+                        && backlogBudgetSource.contains("queuedTasks++")
+                        && backlogBudgetSource.contains("queuedBytes += retainedBytes")
+        );
+        Assert.assertFalse(
+                "backlog reservation 不能重新拆成独立 atomic 计数器",
+                backlogBudgetSource.contains("AtomicInteger")
+                        || backlogBudgetSource.contains("AtomicLong")
+        );
+
+        Path backpressureController = executorPackage.resolve("ExecutorBackpressureController.java");
+        String backpressureSource = Files.readString(backpressureController, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "backpressure controller 必须直接使用 connection context 与 I/O adapter",
+                backpressureSource.contains("ExecutionIoAdapter<C>")
+                        && backpressureSource.contains("connection.context()")
+        );
+
         Path ioAdapter = executorPackage.resolve("ExecutionIoAdapter.java");
         String ioAdapterSource = Files.readString(ioAdapter, StandardCharsets.UTF_8);
         for (String deletedMethod : List.of("newReplySink(", "writeBufferedReply(", "flushPending(")) {
@@ -976,6 +1017,19 @@ public class ArchitectureBoundaryTest {
                         + "yier/bubu/redis/protocol/resp/netty/RespProtocolErrorReplyHandler.java"
         );
         Assert.assertFalse("detached protocol handler must stay deleted", Files.exists(protocolHandler));
+
+        Path ingress = repoRoot.resolve(
+                "yierdis-server/yierdis-server-main/src/main/java/"
+                        + "yier/bubu/redis/app/server/NettyExecutionRequestIngress.java"
+        );
+        String ingressSource = Files.readString(ingress, StandardCharsets.UTF_8);
+        String sharedAttemptCall = "SubmissionAttempt result = attemptSubmission(";
+        Assert.assertTrue(
+                "首次提交与容量恢复重试必须复用同一 admission 分类入口",
+                ingressSource.contains("private SubmissionAttempt attemptSubmission(")
+                        && ingressSource.indexOf(sharedAttemptCall)
+                        != ingressSource.lastIndexOf(sharedAttemptCall)
+        );
     }
 
     @Test
