@@ -1,8 +1,5 @@
 package yier.bubu.redis.memory.foreign;
 
-import java.lang.reflect.Field;
-import java.util.ArrayDeque;
-import java.util.Arrays;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeCapacityExceededException;
@@ -24,7 +21,7 @@ public class YierdisNativeObjectTableTest {
     }
 
     @Test
-    public void metadataBookkeepingUsesSegmentLocalPrimitiveStructures() {
+    public void metadataLayoutRemainsCompactAndNativeBacked() {
         Assert.assertEquals(36, YierdisNativeObjectTable.META_BYTES);
         Assert.assertEquals(0, YierdisNativeObjectTable.ADDRESS_OFFSET);
         Assert.assertEquals(4, YierdisNativeObjectTable.SIZE_OFFSET);
@@ -33,22 +30,6 @@ public class YierdisNativeObjectTableTest {
         Assert.assertEquals(16, YierdisNativeObjectTable.ALLOC_EPOCH_OFFSET);
         Assert.assertEquals(24, YierdisNativeObjectTable.FREE_EPOCH_OFFSET);
         Assert.assertEquals(32, YierdisNativeObjectTable.PIN_COUNT_OFFSET);
-        Assert.assertThrows(
-                NoSuchFieldException.class,
-                () -> YierdisNativeObjectTable.class.getDeclaredField("CAPACITY_OFFSET")
-        );
-        Assert.assertFalse(Arrays.stream(YierdisNativeObjectTable.class.getDeclaredFields())
-                .map(Field::getType)
-                .anyMatch(ArrayDeque.class::equals));
-        Assert.assertFalse(Arrays.stream(YierdisNativeObjectTable.class.getDeclaredFields())
-                .map(Field::getType)
-                .anyMatch(boolean[].class::equals));
-        Assert.assertTrue(Arrays.stream(YierdisNativeObjectSegment.class.getDeclaredFields())
-                .map(Field::getType)
-                .anyMatch(int[].class::equals));
-        Assert.assertTrue(Arrays.stream(YierdisNativeObjectSegment.class.getDeclaredFields())
-                .map(Field::getType)
-                .anyMatch(long[].class::equals));
     }
 
     @Test

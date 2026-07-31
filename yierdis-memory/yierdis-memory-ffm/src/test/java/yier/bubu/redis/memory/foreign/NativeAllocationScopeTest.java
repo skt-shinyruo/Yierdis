@@ -50,17 +50,6 @@ public class NativeAllocationScopeTest {
     }
 
     @Test
-    public void openingScopeDoesNotCopyRetainedAllocatorDirectories() {
-        long oneSegmentOverhead = scopeOpeningHeapOverhead(1);
-        long expandedDirectoryOverhead = scopeOpeningHeapOverhead(9);
-
-        Assert.assertTrue(
-                "scope setup must not copy retained allocator directories",
-                expandedDirectoryOverhead <= oneSegmentOverhead + 32L
-        );
-    }
-
-    @Test
     public void promotedCheckpointsReleaseCowedDirectoryReferences() {
         YierdisNativePageDirectory directory = new YierdisNativePageDirectory();
         directory.add(new Object());
@@ -74,21 +63,50 @@ public class NativeAllocationScopeTest {
     }
 
     @Test
-    public void promotedObjectTableCheckpointReleasesCowedDirectoryReferences() {
+    public void promotedObjectTableCheckpointKeepsPublishedSegment() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-promote-release-test");
              YierdisNativeObjectTable table = new YierdisNativeObjectTable(
                      runtime,
                      128,
                      0,
                      (pageId, pageOffset, pageClass) -> 1
-             )) {
+            )) {
             YierdisNativeObjectTable.AllocationScopeCheckpoint checkpoint = table.allocationScopeCheckpoint();
-            table.allocate(NativeObjectKind.STRING_BYTES, 1, 1, 0, 0L, 0, 0L);
-            long duringScope = checkpoint.heapEstimatedBytes();
+            long handle = table.allocate(NativeObjectKind.STRING_BYTES, 1, 1, 0, 0L, 0, 0L);
 
             table.promoteAllocationScope(checkpoint);
 
-            Assert.assertTrue(checkpoint.heapEstimatedBytes() < duringScope);
+            Assert.assertEquals(1L, table.stats().liveSlots());
+            Assert.assertEquals(1, table.stats().activeSegments());
+            Assert.assertEquals(1, table.resolve(handle).size());
+            table.free(handle, 1L);
+        }
+    }
+
+    @Test
+    public void objectTableAbortKeepsAdvancedGenerationInBaselineSegment() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-generation-test");
+             YierdisNativeObjectTable table = new YierdisNativeObjectTable(
+                     runtime,
+                     1,
+                     0,
+                     (pageId, pageOffset, pageClass) -> 1
+             )) {
+            long first = table.allocate(NativeObjectKind.STRING_BYTES, 1, 1, 0, 0L, 0, 0L);
+            table.free(first, 1L);
+            YierdisNativeObjectTable.AllocationScopeCheckpoint checkpoint = table.allocationScopeCheckpoint();
+            long scoped = table.allocate(NativeObjectKind.STRING_BYTES, 1, 1, 0, 0L, 0, 2L);
+            table.free(scoped, 3L);
+
+            table.beginAllocationScopeAbort(checkpoint);
+            table.restoreAllocationScopeCheckpoint(checkpoint);
+
+            long afterAbort = table.allocate(NativeObjectKind.STRING_BYTES, 1, 1, 0, 0L, 0, 4L);
+            Assert.assertEquals(
+                    YierdisLocalHandleCodec.generation(scoped) + 1,
+                    YierdisLocalHandleCodec.generation(afterAbort)
+            );
+            table.free(afterAbort, 5L);
         }
     }
 
@@ -144,7 +162,7 @@ public class NativeAllocationScopeTest {
     }
 
     @Test
-    public void abortDoesNotGrowTheObjectTableAvailabilityQueue() {
+    public void abortRestoresObjectTableAfterMultipleSegments() {
         int allocationCount = YierdisNativeObjectSegment.SLOTS_PER_SEGMENT * 2;
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-abort-object-table-test");
              YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, allocationCount)) {
@@ -226,28 +244,6 @@ public class NativeAllocationScopeTest {
                 for (NativeHandle handle : handles) {
                     allocator.free(handle);
                 }
-            }
-        }
-    }
-
-    private static long scopeOpeningHeapOverhead(int segmentCount) {
-        int allocationCount = segmentCount * YierdisNativeObjectSegment.SLOTS_PER_SEGMENT;
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-directory-overhead-" + segmentCount);
-             YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, allocationCount)) {
-            allocator.bindToCurrentThread();
-            NativeHandle[] handles = new NativeHandle[allocationCount];
-            for (int i = 0; i < handles.length; i++) {
-                handles[i] = allocator.allocate(NativeObjectKind.STRING_BYTES, 1);
-            }
-            for (NativeHandle handle : handles) {
-                allocator.free(handle);
-            }
-
-            MemoryUsageSnapshot before = allocator.memoryUsage();
-            try (NativeAllocationScope scope = allocator.beginAllocationScope()) {
-                long overhead = allocator.memoryUsage().heapEstimatedBytes() - before.heapEstimatedBytes();
-                scope.abort();
-                return overhead;
             }
         }
     }

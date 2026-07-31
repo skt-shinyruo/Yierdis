@@ -10,7 +10,6 @@ final class YierdisNativeObjectSegment implements AutoCloseable {
     private final long[] retiredBitmap = new long[RETIRED_WORDS];
 
     private int freeCount;
-    private boolean availableQueued;
     private boolean closed;
 
     YierdisNativeObjectSegment(
@@ -74,14 +73,6 @@ final class YierdisNativeObjectSegment implements AutoCloseable {
 
     boolean hasFreeSlot() {
         return freeCount > 0;
-    }
-
-    boolean availableQueued() {
-        return availableQueued;
-    }
-
-    void availableQueued(boolean availableQueued) {
-        this.availableQueued = availableQueued;
     }
 
     long readLong(int offset, int fieldOffset) {
