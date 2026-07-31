@@ -1,298 +1,352 @@
 package yier.bubu.redis.execution.executor;
 
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /**
- * Executor-internal queue scheduling component.\n
- * <p>
- * Isolates {@link SchedulingPolicy#GLOBAL} vs {@link SchedulingPolicy#FAIR} branches and round-robin details.\n
- * This component is intentionally "semantics-free": it only queues/polls tasks. Budget/backpressure/execution
- * are handled by higher-level components.
+ * 在一把私有锁下维护 GLOBAL FIFO 与 FAIR identity-key round-robin 状态。
+ * backlog reservation 和执行语义由上层组件负责。
  */
-public final class ExecutorTaskQueue<K, T> {
+final class ExecutorTaskQueue<K, T> {
     private final SchedulingPolicy schedulingPolicy;
-    private final ArrayBlockingQueue<T> globalQueue;
-    private final ExecutorKeyStateProvider<K, T> stateProvider;
+    private final Object lock = new Object();
+    private final ArrayDeque<T> globalQueue = new ArrayDeque<>();
+    private final IdentityHashMap<K, FairState<T>> fairStates = new IdentityHashMap<>();
+    private final ArrayDeque<K> activeKeys = new ArrayDeque<>();
+    private T globalBlockedHead;
+    private boolean globalBlockedHeadReady;
+    private int blockedFairTasks;
 
-    // FAIR scheduling uses per-key queues + round-robin scheduling.
-    private final ConcurrentLinkedQueue<K> activeKeys = new ConcurrentLinkedQueue<>();
-    private final ConcurrentLinkedQueue<K> blockedKeys = new ConcurrentLinkedQueue<>();
-    private final AtomicInteger blockedFairTasks = new AtomicInteger();
-    private final AtomicReference<T> globalBlockedHead = new AtomicReference<>();
-    private final AtomicBoolean globalBlockedHeadReady = new AtomicBoolean();
-
-    public ExecutorTaskQueue(SchedulingPolicy schedulingPolicy,
-                             ArrayBlockingQueue<T> globalQueue,
-                             ExecutorKeyStateProvider<K, T> stateProvider) {
+    ExecutorTaskQueue(SchedulingPolicy schedulingPolicy) {
         this.schedulingPolicy = schedulingPolicy == null ? SchedulingPolicy.FAIR : schedulingPolicy;
-        this.globalQueue = globalQueue;
-        this.stateProvider = stateProvider;
-        if (this.schedulingPolicy == SchedulingPolicy.GLOBAL && this.globalQueue == null) {
-            throw new IllegalArgumentException("globalQueue must not be null when schedulingPolicy is GLOBAL");
-        }
-        if (this.schedulingPolicy == SchedulingPolicy.FAIR && this.stateProvider == null) {
-            throw new IllegalArgumentException("stateProvider must not be null when schedulingPolicy is FAIR");
-        }
     }
 
-    public boolean offer(K key, T task) {
+    boolean offer(K key, T task) {
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(task, "task");
-
-        if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
-            return globalQueue.offer(task);
-        }
-
-        ExecutorKeyState<T> state = stateProvider.getOrCreate(key);
-        state.queue().offer(task);
-        if (state.scheduled().compareAndSet(false, true)) {
-            activeKeys.offer(key);
-        }
-        return true;
-    }
-
-    public boolean remove(K key, T task) {
-        Objects.requireNonNull(key, "key");
-        Objects.requireNonNull(task, "task");
-        if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
-            return globalQueue.remove(task);
-        }
-        return stateProvider.getOrCreate(key).queue().remove(task);
-    }
-
-    public T poll() {
-        if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
-            return pollGlobalTask();
-        }
-        return pollFairTask();
-    }
-
-    public boolean hasPendingTasks() {
-        if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
-            return globalBlockedHead.get() != null || (globalQueue != null && !globalQueue.isEmpty());
-        }
-        return blockedFairTasks.get() > 0 || !activeKeys.isEmpty();
-    }
-
-    public boolean hasRunnableTasks() {
-        if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
-            T blocked = globalBlockedHead.get();
-            return blocked == null
-                    ? globalQueue != null && !globalQueue.isEmpty()
-                    : globalBlockedHeadReady.get();
-        }
-        return !activeKeys.isEmpty();
-    }
-
-    public int deferredFairHeads() {
-        return blockedFairTasks.get();
-    }
-
-    public int deferredGlobalHeads() {
-        return globalBlockedHead.get() == null ? 0 : 1;
-    }
-
-    public boolean block(K key, T task) {
-        Objects.requireNonNull(key, "key");
-        Objects.requireNonNull(task, "task");
-        if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
-            if (!globalBlockedHead.compareAndSet(null, task)) {
-                return false;
+        synchronized (lock) {
+            if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
+                globalQueue.addLast(task);
+                return true;
             }
-            globalBlockedHeadReady.set(false);
+            FairState<T> state = fairStateLocked(key);
+            state.queue.addLast(task);
+            scheduleFairStateLocked(key, state);
             return true;
         }
-
-        ExecutorKeyState<T> state = stateProvider.getOrCreate(key);
-        if (!state.blockedHead().compareAndSet(null, task)) {
-            return false;
-        }
-        state.blockedHeadReady().set(false);
-        blockedKeys.offer(key);
-        blockedFairTasks.incrementAndGet();
-        return true;
     }
 
-    public boolean retryAtHead(K key, T task) {
+    boolean remove(K key, T task) {
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(task, "task");
-        if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
-            if (!globalBlockedHead.compareAndSet(null, task)) {
+        synchronized (lock) {
+            if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
+                return globalQueue.remove(task);
+            }
+            FairState<T> state = fairStates.get(key);
+            if (state == null || !state.queue.remove(task)) {
                 return false;
             }
-            globalBlockedHeadReady.set(true);
+            if (state.queue.isEmpty() && state.blockedHead == null && state.scheduled) {
+                removeActiveKeyLocked(key);
+                state.scheduled = false;
+            }
+            removeFairStateIfEmptyLocked(key, state);
             return true;
         }
-
-        ExecutorKeyState<T> state = stateProvider.getOrCreate(key);
-        if (!state.blockedHead().compareAndSet(null, task)) {
-            return false;
-        }
-        state.blockedHeadReady().set(true);
-        blockedKeys.offer(key);
-        blockedFairTasks.incrementAndGet();
-        scheduleFairKey(key, state);
-        return true;
     }
 
-    public boolean resumeBlocked(K key, T task) {
-        Objects.requireNonNull(key, "key");
-        Objects.requireNonNull(task, "task");
-        if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
-            if (globalBlockedHead.get() != task) {
-                return false;
-            }
-            return globalBlockedHeadReady.compareAndSet(false, true);
+    T poll() {
+        synchronized (lock) {
+            return schedulingPolicy == SchedulingPolicy.GLOBAL ? pollGlobalLocked() : pollFairLocked();
         }
-
-        ExecutorKeyState<T> state = stateProvider.getOrCreate(key);
-        if (state.blockedHead().get() != task || !state.blockedHeadReady().compareAndSet(false, true)) {
-            return false;
-        }
-        scheduleFairKey(key, state);
-        return true;
     }
 
-    public boolean cancelBlocked(K key, T task) {
+    boolean hasPendingTasks() {
+        synchronized (lock) {
+            if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
+                return globalBlockedHead != null || !globalQueue.isEmpty();
+            }
+            return !fairStates.isEmpty();
+        }
+    }
+
+    boolean hasRunnableTasks() {
+        synchronized (lock) {
+            if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
+                return globalBlockedHead == null ? !globalQueue.isEmpty() : globalBlockedHeadReady;
+            }
+            return !activeKeys.isEmpty();
+        }
+    }
+
+    int deferredFairHeads() {
+        synchronized (lock) {
+            return blockedFairTasks;
+        }
+    }
+
+    int deferredGlobalHeads() {
+        synchronized (lock) {
+            return globalBlockedHead == null ? 0 : 1;
+        }
+    }
+
+    boolean block(K key, T task) {
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(task, "task");
-        if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
-            if (!globalBlockedHead.compareAndSet(task, null)) {
+        synchronized (lock) {
+            if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
+                if (globalBlockedHead != null) {
+                    return false;
+                }
+                globalBlockedHead = task;
+                globalBlockedHeadReady = false;
+                return true;
+            }
+            FairState<T> state = fairStateLocked(key);
+            if (state.blockedHead != null) {
                 return false;
             }
-            globalBlockedHeadReady.set(false);
+            state.blockedHead = task;
+            state.blockedHeadReady = false;
+            blockedFairTasks++;
+            if (state.scheduled) {
+                removeActiveKeyLocked(key);
+                state.scheduled = false;
+            }
             return true;
         }
-
-        ExecutorKeyState<T> state = stateProvider.getOrCreate(key);
-        if (!state.blockedHead().compareAndSet(task, null)) {
-            return false;
-        }
-        state.blockedHeadReady().set(false);
-        decrementBlockedFairTasks();
-        return true;
     }
 
-    public void drainLeftoverTasks(Consumer<T> recycler) {
+    boolean retryAtHead(K key, T task) {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(task, "task");
+        synchronized (lock) {
+            if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
+                if (globalBlockedHead != null) {
+                    return false;
+                }
+                globalBlockedHead = task;
+                globalBlockedHeadReady = true;
+                return true;
+            }
+            FairState<T> state = fairStateLocked(key);
+            if (state.blockedHead != null) {
+                return false;
+            }
+            state.blockedHead = task;
+            state.blockedHeadReady = true;
+            blockedFairTasks++;
+            scheduleFairStateLocked(key, state);
+            return true;
+        }
+    }
+
+    boolean resumeBlocked(K key, T task) {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(task, "task");
+        synchronized (lock) {
+            if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
+                if (globalBlockedHead != task || globalBlockedHeadReady) {
+                    return false;
+                }
+                globalBlockedHeadReady = true;
+                return true;
+            }
+            FairState<T> state = fairStates.get(key);
+            if (state == null || state.blockedHead != task || state.blockedHeadReady) {
+                return false;
+            }
+            state.blockedHeadReady = true;
+            scheduleFairStateLocked(key, state);
+            return true;
+        }
+    }
+
+    boolean cancelBlocked(K key, T task) {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(task, "task");
+        synchronized (lock) {
+            if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
+                if (globalBlockedHead != task) {
+                    return false;
+                }
+                globalBlockedHead = null;
+                globalBlockedHeadReady = false;
+                return true;
+            }
+            FairState<T> state = fairStates.get(key);
+            if (state == null || state.blockedHead != task) {
+                return false;
+            }
+            state.blockedHead = null;
+            state.blockedHeadReady = false;
+            decrementBlockedFairTasksLocked();
+            scheduleFairStateLocked(key, state);
+            removeFairStateIfEmptyLocked(key, state);
+            return true;
+        }
+    }
+
+    void drainLeftoverTasks(Consumer<T> recycler) {
         Objects.requireNonNull(recycler, "recycler");
-
-        if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
-            T blocked = globalBlockedHead.getAndSet(null);
-            globalBlockedHeadReady.set(false);
-            if (blocked != null) {
-                recycler.accept(blocked);
+        List<T> leftovers = new ArrayList<>();
+        synchronized (lock) {
+            if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
+                if (globalBlockedHead != null) {
+                    leftovers.add(globalBlockedHead);
+                    globalBlockedHead = null;
+                }
+                globalBlockedHeadReady = false;
+                leftovers.addAll(globalQueue);
+                globalQueue.clear();
+            } else {
+                for (FairState<T> state : fairStates.values()) {
+                    if (state.blockedHead != null) {
+                        leftovers.add(state.blockedHead);
+                    }
+                    leftovers.addAll(state.queue);
+                }
+                fairStates.clear();
+                activeKeys.clear();
+                blockedFairTasks = 0;
             }
-            T t;
-            while ((t = globalQueue.poll()) != null) {
-                recycler.accept(t);
-            }
-            return;
         }
-
-        K key;
-        while ((key = activeKeys.poll()) != null) {
-            ExecutorKeyState<T> state = stateProvider.getOrCreate(key);
-            T t;
-            while ((t = state.queue().poll()) != null) {
-                recycler.accept(t);
+        // 先解除队列所有权，再在锁外回收，避免关闭路径反向进入调度锁。
+        Throwable failure = null;
+        for (T leftover : leftovers) {
+            try {
+                recycler.accept(leftover);
+            } catch (Throwable current) {
+                if (failure == null) {
+                    failure = current;
+                } else if (failure != current) {
+                    failure.addSuppressed(current);
+                }
             }
-            state.scheduled().set(false);
         }
+        rethrowRecycleFailure(failure);
+    }
 
-        while ((key = blockedKeys.poll()) != null) {
-            ExecutorKeyState<T> state = stateProvider.getOrCreate(key);
-            T blocked = state.blockedHead().getAndSet(null);
-            state.blockedHeadReady().set(false);
-            if (blocked != null) {
-                decrementBlockedFairTasks();
-                recycler.accept(blocked);
-            }
+    int fairStateCount() {
+        synchronized (lock) {
+            return fairStates.size();
         }
     }
 
-    private T pollGlobalTask() {
-        for (; ; ) {
-            T blocked = globalBlockedHead.get();
-            if (blocked == null) {
-                return globalQueue.poll();
-            }
-            if (!globalBlockedHeadReady.get()) {
-                return null;
-            }
-            if (globalBlockedHead.compareAndSet(blocked, null)) {
-                globalBlockedHeadReady.set(false);
-                return blocked;
-            }
+    private T pollGlobalLocked() {
+        if (globalBlockedHead == null) {
+            return globalQueue.pollFirst();
         }
+        if (!globalBlockedHeadReady) {
+            return null;
+        }
+        T task = globalBlockedHead;
+        globalBlockedHead = null;
+        globalBlockedHeadReady = false;
+        return task;
     }
 
-    private T pollFairTask() {
+    private T pollFairLocked() {
         for (; ; ) {
-            K key = activeKeys.poll();
+            K key = activeKeys.pollFirst();
             if (key == null) {
                 return null;
             }
+            FairState<T> state = fairStates.get(key);
+            if (state == null) {
+                continue;
+            }
+            state.scheduled = false;
 
-            ExecutorKeyState<T> state = stateProvider.getOrCreate(key);
-            T blocked = state.blockedHead().get();
-            if (blocked != null) {
-                if (!state.blockedHeadReady().get()) {
-                    state.scheduled().set(false);
-                    if (state.blockedHeadReady().get()) {
-                        scheduleFairKey(key, state);
-                    }
+            if (state.blockedHead != null) {
+                if (!state.blockedHeadReady) {
                     continue;
                 }
-                if (state.blockedHead().compareAndSet(blocked, null)) {
-                    state.blockedHeadReady().set(false);
-                    decrementBlockedFairTasks();
-                    scheduleFairKeyAfterPoll(key, state);
-                    return blocked;
-                }
-                continue;
+                T task = state.blockedHead;
+                state.blockedHead = null;
+                state.blockedHeadReady = false;
+                decrementBlockedFairTasksLocked();
+                scheduleFairStateLocked(key, state);
+                removeFairStateIfEmptyLocked(key, state);
+                return task;
             }
 
-            T task = state.queue().poll();
+            T task = state.queue.pollFirst();
             if (task == null) {
-                // The key was scheduled but its queue is empty (may happen due to races). Unschedule it.
-                state.scheduled().set(false);
-                if (!state.queue().isEmpty() && state.scheduled().compareAndSet(false, true)) {
-                    activeKeys.offer(key);
-                }
+                removeFairStateIfEmptyLocked(key, state);
                 continue;
             }
-
-            scheduleFairKeyAfterPoll(key, state);
-
+            scheduleFairStateLocked(key, state);
+            removeFairStateIfEmptyLocked(key, state);
             return task;
         }
     }
 
-    private void scheduleFairKeyAfterPoll(K key, ExecutorKeyState<T> state) {
-        if (!state.queue().isEmpty()) {
-            activeKeys.offer(key);
+    private FairState<T> fairStateLocked(K key) {
+        FairState<T> state = fairStates.get(key);
+        if (state == null) {
+            state = new FairState<>();
+            fairStates.put(key, state);
+        }
+        return state;
+    }
+
+    private void scheduleFairStateLocked(K key, FairState<T> state) {
+        if (state.scheduled || (state.blockedHead != null && !state.blockedHeadReady)) {
             return;
         }
-        state.scheduled().set(false);
-        if ((!state.queue().isEmpty() || state.blockedHeadReady().get())
-                && state.scheduled().compareAndSet(false, true)) {
-            activeKeys.offer(key);
+        if (state.blockedHead == null && state.queue.isEmpty()) {
+            return;
+        }
+        state.scheduled = true;
+        activeKeys.addLast(key);
+    }
+
+    private void removeFairStateIfEmptyLocked(K key, FairState<T> state) {
+        if (!state.scheduled && state.blockedHead == null && state.queue.isEmpty()) {
+            fairStates.remove(key);
         }
     }
 
-    private void scheduleFairKey(K key, ExecutorKeyState<T> state) {
-        if (state.scheduled().compareAndSet(false, true)) {
-            activeKeys.offer(key);
+    private void removeActiveKeyLocked(K key) {
+        var iterator = activeKeys.iterator();
+        while (iterator.hasNext()) {
+            if (iterator.next() == key) {
+                iterator.remove();
+                return;
+            }
         }
     }
 
-    private void decrementBlockedFairTasks() {
-        blockedFairTasks.updateAndGet(current -> Math.max(0, current - 1));
+    private void decrementBlockedFairTasksLocked() {
+        if (blockedFairTasks <= 0) {
+            throw new IllegalStateException("blocked FAIR task count underflow");
+        }
+        blockedFairTasks--;
+    }
+
+    private static void rethrowRecycleFailure(Throwable failure) {
+        if (failure instanceof RuntimeException runtimeFailure) {
+            throw runtimeFailure;
+        }
+        if (failure instanceof Error error) {
+            throw error;
+        }
+        if (failure != null) {
+            throw new IllegalStateException("executor task recycler failed", failure);
+        }
+    }
+
+    private static final class FairState<T> {
+        private final ArrayDeque<T> queue = new ArrayDeque<>();
+        private T blockedHead;
+        private boolean blockedHeadReady;
+        private boolean scheduled;
     }
 }

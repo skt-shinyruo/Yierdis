@@ -153,7 +153,11 @@ final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
         executionSupport.onConnectionClosed(task.connection, () -> ownerExecutor.execute(() -> {
             ownerExecutor.requireOwnerThread();
             if (taskQueue.cancelBlocked(task.connection, task)) {
-                executionSupport.recycleAndRelease(task);
+                try {
+                    executionSupport.recycleAndRelease(task);
+                } finally {
+                    scheduleDrain();
+                }
             }
         }));
     }

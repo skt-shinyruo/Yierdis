@@ -5,7 +5,6 @@ import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.api.ReplySizer;
 
 import java.util.Objects;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.LongAdder;
@@ -69,10 +68,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
                 () -> running
         );
 
-        ArrayBlockingQueue<CommandExecutorTask<C>> globalQueue = this.schedulingPolicy == SchedulingPolicy.GLOBAL
-                ? new ArrayBlockingQueue<>(config.queueCapacity())
-                : null;
-        this.taskQueue = new ExecutorTaskQueue<>(this.schedulingPolicy, globalQueue, CommandExecutor::queueStateFor);
+        this.taskQueue = new ExecutorTaskQueue<>(this.schedulingPolicy);
         this.executionSupport = new CommandExecutorExecutionSupport<>(
                 commandProcessor,
                 replySizer,
@@ -278,10 +274,5 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
             long deferredFairReplyHeads,
             long deferredGlobalReplyHeads
     ) {
-    }
-
-    @SuppressWarnings("unchecked")
-    private static <C extends ExecutionConnection> ExecutorKeyState<CommandExecutorTask<C>> queueStateFor(C connection) {
-        return (ExecutorKeyState<CommandExecutorTask<C>>) (ExecutorKeyState<?>) connection.context().queueState();
     }
 }

@@ -5,12 +5,6 @@ import org.junit.Test;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Queue;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 
 public class ExecutorTaskQueueTest {
     @Test
@@ -29,8 +23,7 @@ public class ExecutorTaskQueueTest {
 
     @Test
     public void fairQueueRotatesConnectionsAndPreservesPerConnectionOrder() {
-        FairStates states = new FairStates();
-        ExecutorTaskQueue<String, String> queue = fairQueue(states);
+        ExecutorTaskQueue<String, String> queue = fairQueue();
 
         queue.offer("a", "a1");
         queue.offer("a", "a2");
@@ -40,6 +33,7 @@ public class ExecutorTaskQueueTest {
         Assert.assertEquals(List.of("a1", "b1", "a2", "b2"),
                 List.of(queue.poll(), queue.poll(), queue.poll(), queue.poll()));
         Assert.assertNull(queue.poll());
+        Assert.assertEquals(0, queue.fairStateCount());
     }
 
     @Test
@@ -59,8 +53,7 @@ public class ExecutorTaskQueueTest {
 
     @Test
     public void fairBlockedHeadStopsOnlyItsConnection() {
-        FairStates states = new FairStates();
-        ExecutorTaskQueue<String, String> queue = fairQueue(states);
+        ExecutorTaskQueue<String, String> queue = fairQueue();
         queue.offer("a", "a1");
         queue.offer("a", "a2");
         queue.offer("b", "b1");
@@ -77,6 +70,7 @@ public class ExecutorTaskQueueTest {
         Assert.assertEquals("a1", queue.poll());
         Assert.assertEquals("a2", queue.poll());
         Assert.assertFalse(queue.hasPendingTasks());
+        Assert.assertEquals(0, queue.fairStateCount());
     }
 
     @Test
@@ -94,8 +88,7 @@ public class ExecutorTaskQueueTest {
 
     @Test
     public void fairStaleRetryStaysAheadOfLaterTasksForTheSameConnection() {
-        FairStates states = new FairStates();
-        ExecutorTaskQueue<String, String> queue = fairQueue(states);
+        ExecutorTaskQueue<String, String> queue = fairQueue();
         queue.offer("a", "a1");
         queue.offer("a", "a2");
         queue.offer("b", "b1");
@@ -107,6 +100,7 @@ public class ExecutorTaskQueueTest {
         Assert.assertEquals("b1", queue.poll());
         Assert.assertEquals("a1", queue.poll());
         Assert.assertEquals("a2", queue.poll());
+        Assert.assertEquals(0, queue.fairStateCount());
     }
 
     @Test
@@ -125,8 +119,7 @@ public class ExecutorTaskQueueTest {
 
     @Test
     public void cancellingFairBlockedHeadKeepsOtherAndSameConnectionOrder() {
-        FairStates states = new FairStates();
-        ExecutorTaskQueue<String, String> queue = fairQueue(states);
+        ExecutorTaskQueue<String, String> queue = fairQueue();
         queue.offer("a", "a1");
         queue.offer("a", "a2");
         queue.offer("b", "b1");
@@ -139,12 +132,68 @@ public class ExecutorTaskQueueTest {
         Assert.assertEquals("b1", queue.poll());
         Assert.assertEquals("a2", queue.poll());
         Assert.assertNull(queue.poll());
+        Assert.assertEquals(0, queue.fairStateCount());
+    }
+
+    @Test
+    public void cancellingObservedFairBlockedHeadReschedulesLaterTasks() {
+        ExecutorTaskQueue<String, String> queue = fairQueue();
+        queue.offer("a", "a1");
+        queue.offer("a", "a2");
+
+        String blocked = queue.poll();
+        Assert.assertTrue(queue.block("a", blocked));
+        Assert.assertNull(queue.poll());
+        Assert.assertTrue(queue.cancelBlocked("a", blocked));
+
+        Assert.assertEquals("a2", queue.poll());
+        Assert.assertNull(queue.poll());
+        Assert.assertEquals(0, queue.fairStateCount());
+    }
+
+    @Test
+    public void cancellingOnlyFairBlockedHeadReclaimsItsState() {
+        ExecutorTaskQueue<String, String> queue = fairQueue();
+        queue.offer("a", "a1");
+
+        String blocked = queue.poll();
+        Assert.assertTrue(queue.block("a", blocked));
+        Assert.assertTrue(queue.cancelBlocked("a", blocked));
+
+        Assert.assertFalse(queue.hasPendingTasks());
+        Assert.assertFalse(queue.hasRunnableTasks());
+        Assert.assertEquals(0, queue.fairStateCount());
+    }
+
+    @Test
+    public void fairQueueUsesConnectionIdentityInsteadOfEquality() {
+        ExecutorTaskQueue<EqualKey, String> queue = new ExecutorTaskQueue<>(SchedulingPolicy.FAIR);
+        EqualKey first = new EqualKey("same");
+        EqualKey second = new EqualKey("same");
+        queue.offer(first, "a1");
+        queue.offer(first, "a2");
+        queue.offer(second, "b1");
+
+        Assert.assertEquals(List.of("a1", "b1", "a2"),
+                List.of(queue.poll(), queue.poll(), queue.poll()));
+        Assert.assertEquals(0, queue.fairStateCount());
+    }
+
+    @Test
+    public void removingLastFairTaskReclaimsItsState() {
+        ExecutorTaskQueue<String, String> queue = fairQueue();
+        queue.offer("a", "a1");
+
+        Assert.assertTrue(queue.remove("a", "a1"));
+
+        Assert.assertFalse(queue.hasPendingTasks());
+        Assert.assertFalse(queue.hasRunnableTasks());
+        Assert.assertEquals(0, queue.fairStateCount());
     }
 
     @Test
     public void drainingFairQueueRecyclesBlockedAndQueuedTasksOnce() {
-        FairStates states = new FairStates();
-        ExecutorTaskQueue<String, String> queue = fairQueue(states);
+        ExecutorTaskQueue<String, String> queue = fairQueue();
         queue.offer("a", "a1");
         queue.offer("a", "a2");
         queue.offer("b", "b1");
@@ -159,53 +208,63 @@ public class ExecutorTaskQueueTest {
         Assert.assertFalse(queue.hasPendingTasks());
         Assert.assertFalse(queue.hasRunnableTasks());
         Assert.assertEquals(0, queue.deferredFairHeads());
+        Assert.assertEquals(0, queue.fairStateCount());
+    }
+
+    @Test
+    public void drainingGlobalQueueContinuesAfterRecyclerFailures() {
+        ExecutorTaskQueue<String, String> queue = globalQueue();
+        queue.offer("a", "a1");
+        queue.offer("b", "b1");
+        queue.offer("c", "c1");
+        String blocked = queue.poll();
+        Assert.assertTrue(queue.block("a", blocked));
+        List<String> attempted = new ArrayList<>();
+        IllegalStateException firstFailure = new IllegalStateException("a1 cleanup failed");
+        IllegalArgumentException secondFailure = new IllegalArgumentException("b1 cleanup failed");
+
+        IllegalStateException thrown = Assert.assertThrows(IllegalStateException.class, () ->
+                queue.drainLeftoverTasks(task -> {
+                    attempted.add(task);
+                    if (task.equals("a1")) {
+                        throw firstFailure;
+                    }
+                    if (task.equals("b1")) {
+                        throw secondFailure;
+                    }
+                }));
+
+        Assert.assertSame(firstFailure, thrown);
+        Assert.assertArrayEquals(new Throwable[]{secondFailure}, thrown.getSuppressed());
+        Assert.assertEquals(List.of("a1", "b1", "c1"), attempted);
+        Assert.assertFalse(queue.hasPendingTasks());
+        Assert.assertFalse(queue.hasRunnableTasks());
+        Assert.assertEquals(0, queue.deferredGlobalHeads());
     }
 
     private static ExecutorTaskQueue<String, String> globalQueue() {
-        return new ExecutorTaskQueue<>(
-                SchedulingPolicy.GLOBAL,
-                new ArrayBlockingQueue<>(16),
-                null
-        );
+        return new ExecutorTaskQueue<>(SchedulingPolicy.GLOBAL);
     }
 
-    private static ExecutorTaskQueue<String, String> fairQueue(FairStates states) {
-        return new ExecutorTaskQueue<>(SchedulingPolicy.FAIR, null, states);
+    private static ExecutorTaskQueue<String, String> fairQueue() {
+        return new ExecutorTaskQueue<>(SchedulingPolicy.FAIR);
     }
 
-    private static final class FairStates implements ExecutorKeyStateProvider<String, String> {
-        private final ConcurrentHashMap<String, State> states = new ConcurrentHashMap<>();
+    private static final class EqualKey {
+        private final String value;
 
-        @Override
-        public ExecutorKeyState<String> getOrCreate(String key) {
-            return states.computeIfAbsent(key, ignored -> new State());
-        }
-    }
-
-    private static final class State implements ExecutorKeyState<String> {
-        private final Queue<String> queue = new ConcurrentLinkedQueue<>();
-        private final AtomicBoolean scheduled = new AtomicBoolean();
-        private final AtomicReference<String> blockedHead = new AtomicReference<>();
-        private final AtomicBoolean blockedHeadReady = new AtomicBoolean();
-
-        @Override
-        public Queue<String> queue() {
-            return queue;
+        private EqualKey(String value) {
+            this.value = value;
         }
 
         @Override
-        public AtomicBoolean scheduled() {
-            return scheduled;
+        public boolean equals(Object other) {
+            return other instanceof EqualKey key && value.equals(key.value);
         }
 
         @Override
-        public AtomicReference<String> blockedHead() {
-            return blockedHead;
-        }
-
-        @Override
-        public AtomicBoolean blockedHeadReady() {
-            return blockedHeadReady;
+        public int hashCode() {
+            return value.hashCode();
         }
     }
 }

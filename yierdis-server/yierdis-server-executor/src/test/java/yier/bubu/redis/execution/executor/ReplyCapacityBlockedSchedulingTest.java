@@ -194,7 +194,7 @@ public class ReplyCapacityBlockedSchedulingTest {
     }
 
     @Test
-    public void disconnectingABlockedFairConnectionReleasesItsTaskWithoutStoppingOtherConnections() {
+    public void disconnectingABlockedFairConnectionReleasesItsQueuedTasksWithoutStoppingOtherConnections() {
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
         RecordingIoAdapter io = new RecordingIoAdapter();
         List<String> completed = new ArrayList<>();
@@ -202,9 +202,12 @@ public class ReplyCapacityBlockedSchedulingTest {
         TestConnection blockedConnection = ExecutorCoreTestSupport.newConnection("blocked");
         TestConnection runnableConnection = ExecutorCoreTestSupport.newConnection("runnable");
         TrackingExecutionRequest blockedRequest = TrackingExecutionRequest.ofUtf8("A1");
+        TrackingExecutionRequest queuedRequest = TrackingExecutionRequest.ofUtf8("A2");
         BlockingReply blockedReply = new BlockingReply(false);
+        BlockingReply queuedReply = new BlockingReply(true);
         try {
             ExecutorCoreTestSupport.publish(executor, blockedConnection, blockedRequest, blockedReply);
+            ExecutorCoreTestSupport.publish(executor, blockedConnection, queuedRequest, queuedReply);
             ExecutorCoreTestSupport.publish(
                     executor,
                     runnableConnection,
@@ -215,11 +218,14 @@ public class ReplyCapacityBlockedSchedulingTest {
             ownerExecutor.runAll();
             Assert.assertEquals(List.of("B1"), completed);
 
+            blockedConnection.markClosing();
             io.fireClosed(blockedConnection);
             ownerExecutor.runAll();
 
             Assert.assertEquals(1, blockedRequest.closeCalls());
+            Assert.assertEquals(1, queuedRequest.closeCalls());
             Assert.assertEquals(1, blockedReply.cancelCalls());
+            Assert.assertEquals(1, queuedReply.cancelCalls());
             Assert.assertEquals(1, blockedReply.capacityRegistrationCancelCalls());
             Assert.assertFalse(blockedConnection.context().inputPausedByReply());
             Assert.assertEquals(0, executor.statsSnapshot().queuedTasks());
@@ -231,6 +237,77 @@ public class ReplyCapacityBlockedSchedulingTest {
             Assert.assertEquals(List.of("B1"), completed);
             Assert.assertEquals(1, blockedRequest.closeCalls());
             Assert.assertEquals(1, blockedReply.cancelCalls());
+        } finally {
+            executor.close();
+            ownerExecutor.runAll();
+        }
+    }
+
+    @Test
+    public void disconnectingTheBlockedGlobalHeadSchedulesLaterConnections() {
+        ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+        RecordingIoAdapter io = new RecordingIoAdapter();
+        List<String> completed = new ArrayList<>();
+        CommandExecutor<TestConnection> executor = newExecutor(ownerExecutor, completed, SchedulingPolicy.GLOBAL, io);
+        TestConnection blockedConnection = ExecutorCoreTestSupport.newConnection("blocked");
+        TestConnection runnableConnection = ExecutorCoreTestSupport.newConnection("runnable");
+        TrackingExecutionRequest blockedRequest = TrackingExecutionRequest.ofUtf8("A1");
+        TrackingExecutionRequest runnableRequest = TrackingExecutionRequest.ofUtf8("B1");
+        BlockingReply blockedReply = new BlockingReply(false);
+        BlockingReply runnableReply = new BlockingReply(true);
+        try {
+            ExecutorCoreTestSupport.publish(executor, blockedConnection, blockedRequest, blockedReply);
+            ExecutorCoreTestSupport.publish(executor, runnableConnection, runnableRequest, runnableReply);
+
+            ownerExecutor.runAll();
+            Assert.assertTrue(completed.isEmpty());
+
+            blockedConnection.markClosing();
+            io.fireClosed(blockedConnection);
+            ownerExecutor.runAll();
+
+            Assert.assertEquals(List.of("B1"), completed);
+            Assert.assertEquals(1, blockedRequest.closeCalls());
+            Assert.assertEquals(1, blockedReply.cancelCalls());
+            Assert.assertEquals(1, runnableRequest.closeCalls());
+            Assert.assertEquals(1, runnableReply.readyCalls());
+            Assert.assertEquals(0, executor.statsSnapshot().queuedTasks());
+        } finally {
+            executor.close();
+            ownerExecutor.runAll();
+        }
+    }
+
+    @Test
+    public void capacityRegistrationCancelFailureDoesNotStrandTheGlobalTail() {
+        ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+        RecordingIoAdapter io = new RecordingIoAdapter();
+        List<String> completed = new ArrayList<>();
+        CommandExecutor<TestConnection> executor = newExecutor(ownerExecutor, completed, SchedulingPolicy.GLOBAL, io);
+        TestConnection blockedConnection = ExecutorCoreTestSupport.newConnection("blocked");
+        TestConnection runnableConnection = ExecutorCoreTestSupport.newConnection("runnable");
+        TrackingExecutionRequest blockedRequest = TrackingExecutionRequest.ofUtf8("A1");
+        BlockingReply blockedReply = new BlockingReply(false);
+        blockedReply.failCapacityRegistrationCancelWith(new IllegalStateException("cancel failed"));
+        try {
+            ExecutorCoreTestSupport.publish(executor, blockedConnection, blockedRequest, blockedReply);
+            ExecutorCoreTestSupport.publish(
+                    executor,
+                    runnableConnection,
+                    TrackingExecutionRequest.ofUtf8("B1"),
+                    new BlockingReply(true)
+            );
+
+            ownerExecutor.runAll();
+            blockedConnection.markClosing();
+            io.fireClosed(blockedConnection);
+            ownerExecutor.runAll();
+
+            Assert.assertEquals(List.of("B1"), completed);
+            Assert.assertEquals(1, blockedRequest.closeCalls());
+            Assert.assertEquals(1, blockedReply.cancelCalls());
+            Assert.assertEquals(1, blockedReply.capacityRegistrationCancelCalls());
+            Assert.assertEquals(0, executor.statsSnapshot().queuedTasks());
         } finally {
             executor.close();
             ownerExecutor.runAll();
@@ -359,6 +436,7 @@ public class ReplyCapacityBlockedSchedulingTest {
         private final BlockingSink sink = new BlockingSink();
         private final AtomicBoolean capacityWaitActive = new AtomicBoolean();
         private Runnable wakeup;
+        private RuntimeException capacityRegistrationCancelFailure;
 
         private BlockingReply(boolean capacityAvailable) {
             this.capacityAvailable = new AtomicBoolean(capacityAvailable);
@@ -388,6 +466,9 @@ public class ReplyCapacityBlockedSchedulingTest {
             return () -> {
                 capacityRegistrationCancelCalls.incrementAndGet();
                 capacityWaitActive.set(false);
+                if (capacityRegistrationCancelFailure != null) {
+                    throw capacityRegistrationCancelFailure;
+                }
             };
         }
 
@@ -434,6 +515,10 @@ public class ReplyCapacityBlockedSchedulingTest {
 
         private int capacityRegistrationCancelCalls() {
             return capacityRegistrationCancelCalls.get();
+        }
+
+        private void failCapacityRegistrationCancelWith(RuntimeException failure) {
+            capacityRegistrationCancelFailure = Objects.requireNonNull(failure, "failure");
         }
 
         private final class BlockingSink implements ReplyReservationSink {

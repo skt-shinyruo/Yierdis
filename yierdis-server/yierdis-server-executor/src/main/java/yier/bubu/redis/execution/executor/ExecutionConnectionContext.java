@@ -2,14 +2,11 @@ package yier.bubu.redis.execution.executor;
 
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 
-import java.util.Queue;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class ExecutionConnectionContext {
-    private final QueueState queueState = new QueueState();
     private final AtomicInteger pending = new AtomicInteger(0);
     private final AtomicLong pendingBytes = new AtomicLong(0);
     private final AtomicBoolean closing = new AtomicBoolean(false);
@@ -22,10 +19,6 @@ public final class ExecutionConnectionContext {
     private final AtomicLong closeAfterReply = new AtomicLong(0);
     private final AtomicLong backpressureEnter = new AtomicLong(0);
     private final AtomicLong backpressureExit = new AtomicLong(0);
-
-    public ExecutorKeyState<Object> queueState() {
-        return queueState;
-    }
 
     public int pending() {
         return pending.get();
@@ -140,30 +133,4 @@ public final class ExecutionConnectionContext {
     ) implements ConnectionStatsView {
     }
 
-    private static final class QueueState implements ExecutorKeyState<Object> {
-        private final ConcurrentLinkedQueue<Object> queue = new ConcurrentLinkedQueue<>();
-        private final AtomicBoolean scheduled = new AtomicBoolean(false);
-        private final java.util.concurrent.atomic.AtomicReference<Object> blockedHead = new java.util.concurrent.atomic.AtomicReference<>();
-        private final AtomicBoolean blockedHeadReady = new AtomicBoolean(false);
-
-        @Override
-        public Queue<Object> queue() {
-            return queue;
-        }
-
-        @Override
-        public AtomicBoolean scheduled() {
-            return scheduled;
-        }
-
-        @Override
-        public java.util.concurrent.atomic.AtomicReference<Object> blockedHead() {
-            return blockedHead;
-        }
-
-        @Override
-        public AtomicBoolean blockedHeadReady() {
-            return blockedHeadReady;
-        }
-    }
 }

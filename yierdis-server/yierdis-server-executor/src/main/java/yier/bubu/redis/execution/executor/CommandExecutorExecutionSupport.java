@@ -67,7 +67,11 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         if (task == null) {
             return;
         }
-        task.cancelCapacityRegistration();
+        try {
+            task.cancelCapacityRegistration();
+        } catch (Throwable ignored) {
+            // reply 提供的容量监听取消失败时，request、reply 与 backlog 所有权仍必须继续归还。
+        }
         closePrepared(task);
         closeRequest(task.request);
         cancelReply(task.reply);
