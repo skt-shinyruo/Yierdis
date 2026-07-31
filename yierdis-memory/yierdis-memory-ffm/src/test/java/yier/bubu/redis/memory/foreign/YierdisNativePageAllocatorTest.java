@@ -112,7 +112,7 @@ public class YierdisNativePageAllocatorTest {
     @Test
     public void allocationEstimateIncludesOnlyNewSegmentsAndPages() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("allocation-estimate");
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(
+             YierdisFfmStableMemoryBackend allocator = new YierdisFfmStableMemoryBackend(
                      runtime,
                      8_192,
                      StableMemoryBackendIds.nextId(),

@@ -5,7 +5,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.*;
 
-public class YierdisStableNativeAllocatorOwnershipTest {
+public class YierdisFfmStableMemoryBackendOwnershipTest {
     @Test
     public void firstAccessDoesNotBindOwnerImplicitly() {
         TestOwner owner = new TestOwner();
@@ -258,6 +258,26 @@ public class YierdisStableNativeAllocatorOwnershipTest {
             Assert.assertTrue(failure.getSuppressed()[0].getMessage().contains("live regions"));
         } finally {
             region.close();
+            backend.close();
+        }
+    }
+
+    @Test
+    public void closeReportsActiveEpochAndStillCleansRuntime() {
+        TestOwner owner = new TestOwner();
+        StableMemoryBackend backend = backend("active-epoch-close", owner);
+        backend.bindToCurrentThread();
+        NativeEpochScope epoch = backend.beginEpoch(NativeEpochKind.SNAPSHOT);
+        try {
+            IllegalStateException failure = Assert.assertThrows(
+                    IllegalStateException.class,
+                    backend::close
+            );
+
+            Assert.assertTrue(failure.getMessage().contains("active epochs"));
+            Assert.assertEquals(0L, backend.liveRegionCount());
+        } finally {
+            epoch.close();
             backend.close();
         }
     }

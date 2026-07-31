@@ -12,7 +12,7 @@ public class NativeAllocationScopeTest {
     @Test
     public void abortedNativeScopeRestoresCommittedSnapshot() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-test");
-             YierdisStableNativeAllocator allocator = newAllocator(runtime, 128)) {
+             YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 128)) {
             allocator.bindToCurrentThread();
             NativeHandle warmPageValue = allocator.allocate(NativeObjectKind.STRING_BYTES, 32);
             allocator.free(warmPageValue);
@@ -34,7 +34,7 @@ public class NativeAllocationScopeTest {
     @Test
     public void scopedSnapshotCountsCheckpointAndScopeBookkeepingHeap() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-bookkeeping-test");
-             YierdisStableNativeAllocator allocator = newAllocator(runtime, 128)) {
+             YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 128)) {
             allocator.bindToCurrentThread();
             NativeHandle warmPageValue = allocator.allocate(NativeObjectKind.STRING_BYTES, 32);
             allocator.free(warmPageValue);
@@ -95,7 +95,7 @@ public class NativeAllocationScopeTest {
     @Test
     public void scopeBookkeepingEstimateCoversLargeTrackedHandleArray() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-bookkeeping-estimate-test");
-             YierdisStableNativeAllocator allocator = newAllocator(runtime, 2_048)) {
+             YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 2_048)) {
             allocator.bindToCurrentThread();
             NativeHandle anchor = allocator.allocate(NativeObjectKind.STRING_BYTES, 32);
             try {
@@ -123,7 +123,7 @@ public class NativeAllocationScopeTest {
     @Test
     public void abortDoesNotAllocateWhileRecoveringPageDirectoryIds() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-abort-directory-test");
-             YierdisStableNativeAllocator allocator = newAllocator(runtime, 128)) {
+             YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 128)) {
             allocator.bindToCurrentThread();
             MemoryUsageSnapshot before = allocator.memoryUsage();
             NativeAllocationScope scope = allocator.beginAllocationScope();
@@ -147,7 +147,7 @@ public class NativeAllocationScopeTest {
     public void abortDoesNotGrowTheObjectTableAvailabilityQueue() {
         int allocationCount = YierdisNativeObjectSegment.SLOTS_PER_SEGMENT * 2;
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-abort-object-table-test");
-             YierdisStableNativeAllocator allocator = newAllocator(runtime, allocationCount)) {
+             YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, allocationCount)) {
             allocator.bindToCurrentThread();
             MemoryUsageSnapshot before = allocator.memoryUsage();
             NativeAllocationScope scope = allocator.beginAllocationScope();
@@ -168,7 +168,7 @@ public class NativeAllocationScopeTest {
     public void automaticCapacityAbortReleasesNewMetadataSegment() {
         int firstSegmentSlots = YierdisNativeObjectSegment.SLOTS_PER_SEGMENT;
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-auto-segment-abort-test");
-             YierdisStableNativeAllocator allocator = newAllocator(runtime, 0)) {
+             YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 0)) {
             allocator.bindToCurrentThread();
             NativeHandle[] retained = new NativeHandle[firstSegmentSlots];
             for (int i = 0; i < retained.length; i++) {
@@ -194,7 +194,7 @@ public class NativeAllocationScopeTest {
     @Test
     public void growthRetainsTransientNativePeakAfterTheHandleIsFreed() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-transient-peak-test");
-             YierdisStableNativeAllocator allocator = newAllocator(runtime, 128)) {
+             YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 128)) {
             allocator.bindToCurrentThread();
             try (NativeAllocationScope scope = allocator.beginAllocationScope()) {
                 NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 70_000);
@@ -211,7 +211,7 @@ public class NativeAllocationScopeTest {
     @Test
     public void memorySnapshotUsesRetainedAllocatorCountersWithoutWalkingPagesOrSegments() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-o1-snapshot-test");
-             YierdisStableNativeAllocator allocator = newAllocator(runtime, 256)) {
+             YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 256)) {
             allocator.bindToCurrentThread();
             NativeHandle[] handles = new NativeHandle[64];
             for (int i = 0; i < handles.length; i++) {
@@ -233,7 +233,7 @@ public class NativeAllocationScopeTest {
     private static long scopeOpeningHeapOverhead(int segmentCount) {
         int allocationCount = segmentCount * YierdisNativeObjectSegment.SLOTS_PER_SEGMENT;
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-directory-overhead-" + segmentCount);
-             YierdisStableNativeAllocator allocator = newAllocator(runtime, allocationCount)) {
+             YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, allocationCount)) {
             allocator.bindToCurrentThread();
             NativeHandle[] handles = new NativeHandle[allocationCount];
             for (int i = 0; i < handles.length; i++) {
@@ -252,11 +252,11 @@ public class NativeAllocationScopeTest {
         }
     }
 
-    private static YierdisStableNativeAllocator newAllocator(
+    private static YierdisFfmStableMemoryBackend newAllocator(
             YierdisFfmMemoryRuntime runtime,
             int maxSlots
     ) {
-        YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(
+        YierdisFfmStableMemoryBackend allocator = new YierdisFfmStableMemoryBackend(
                 runtime,
                 maxSlots,
                 StableMemoryBackendIds.nextId(),
