@@ -47,6 +47,9 @@ public class CommandParseIsolationTest {
             CommandInvocation invocation = spec.handler().parse(command.args());
             Assert.assertNotNull(command.commandName(), invocation);
         }
+        CommandSpec memory = registry.specByUpperName("MEMORY");
+        Assert.assertNotNull(memory);
+        Assert.assertNotNull(memory.handler().parse(argv("MEMORY", "USAGE", "k")));
 
         Assert.assertEquals(0, routerCalls.get());
         Assert.assertEquals(0, providerCalls.get());

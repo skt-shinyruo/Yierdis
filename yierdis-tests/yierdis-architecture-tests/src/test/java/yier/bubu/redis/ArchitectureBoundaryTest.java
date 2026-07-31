@@ -643,16 +643,14 @@ public class ArchitectureBoundaryTest {
                 " positiveLongAt(int ", " nonNegativeLongAt(int "
         );
         Path serverMain = repoRoot.resolve("yierdis-server/yierdis-server-main/src/main/java").normalize();
-        scanForForbiddenTextExcluding(
+        scanForForbiddenRegexExcluding(
                 repoRoot,
                 serverMain,
                 offenders,
                 List.of(
-                        serverMain.resolve("yier/bubu/redis/app/server/NettyExecutionRequestIngress.java"),
-                        serverMain.resolve("yier/bubu/redis/app/server/YierdisServerBootstrap.java"),
-                        serverMain.resolve("yier/bubu/redis/app/server/YierdisServerChannelInitializer.java")
+                        serverMain.resolve("yier/bubu/redis/app/server/NettyExecutionRequestIngress.java")
                 ),
-                "RedisReplyWriter"
+                "\\bRedisReplyWriter\\b"
         );
 
         Path commandArgsFile = commandApi.resolve("CommandArgs.java");
@@ -674,7 +672,7 @@ public class ArchitectureBoundaryTest {
                 offenders,
                 List.of(commandArgsFile),
                 "\\b(?:long|int)\\s+\\w+\\s*\\([^)]*\\bCommandArgs\\b[^)]*\\)",
-                "\\bboolean\\s+\\w+\\s*\\([^)]*\\bCommandArgs\\b[^)]*\\bString\\b[^)]*\\)",
+                "\\bboolean\\s+\\w+\\s*\\((?=[^)]*\\bCommandArgs\\b)(?=[^)]*\\bString\\b)[^)]*\\)",
                 "\\bfoldAsciiCase\\s*\\("
         );
 
@@ -3614,6 +3612,42 @@ public class ArchitectureBoundaryTest {
                             scanFileForForbiddenText(repoRoot, p, offenders, forbiddenSnippets);
                         } catch (IOException e) {
                             throw new RuntimeException(e);
+                        }
+                    });
+        }
+        return scanned[0];
+    }
+
+    private static int scanForForbiddenRegexExcluding(
+            Path repoRoot,
+            Path root,
+            List<String> offenders,
+            List<Path> allowedFiles,
+            String... forbiddenPatterns
+    ) throws IOException {
+        if (root == null || !Files.exists(root)) {
+            return 0;
+        }
+        List<Path> normalizedAllowed = allowedFiles == null
+                ? List.of()
+                : allowedFiles.stream().map(Path::normalize).toList();
+        List<Pattern> patterns = Stream.of(forbiddenPatterns).map(Pattern::compile).toList();
+        int[] scanned = new int[]{0};
+        try (Stream<Path> paths = Files.walk(root)) {
+            paths.filter(path -> path != null && path.toString().endsWith(".java"))
+                    .filter(path -> !normalizedAllowed.contains(path.normalize()))
+                    .sorted()
+                    .forEach(path -> {
+                        try {
+                            scanned[0]++;
+                            String source = Files.readString(path, StandardCharsets.UTF_8);
+                            for (Pattern pattern : patterns) {
+                                if (pattern.matcher(source).find()) {
+                                    offenders.add(relativePath(repoRoot, path) + " -> /" + pattern + "/");
+                                }
+                            }
+                        } catch (IOException failure) {
+                            throw new RuntimeException(failure);
                         }
                     });
         }

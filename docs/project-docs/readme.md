@@ -39,7 +39,7 @@ CommandExecutor
   -> CommandResult -> RedisReplyRenderer
 ```
 
-事务 queueable 命令在 parse 阶段做 preflight，`EXEC` replay 负责子 `PreparedCommand` 和 retained request 的所有权；语义流式 source 由对应 `PreparedCommand` 持有，renderer 同步消费结果后再由 executor 关闭，`QUIT` 通过 `CommandResult` 表达 reply 后关闭。`EngineSession` 只拥有连接 session 状态，`RedisReplyWriter` 只作为 renderer 的 RESP-facing 端口。
+事务 queueable 命令在 parse 阶段做 preflight，`EXEC` replay 负责子 `PreparedCommand` 和 retained request 的所有权；语义流式 source 由对应 `PreparedCommand` 持有，renderer 同步消费结果后再由 executor 关闭，`QUIT` 通过 `CommandResult` 表达 reply 后关闭。`EngineSession` 只拥有连接 session 状态；普通 command handler 不直接使用 `RedisReplyWriter`，语义结果由 renderer 写出，executor/ingress 控制路径可以直接写协议错误与终止回复。
 
 ## 推荐第一轮阅读
 
