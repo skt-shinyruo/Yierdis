@@ -185,7 +185,6 @@ format。`QUIT` 通过 `CommandResult.closeAfterReply(...)` 传递关闭意图�
 | `ArchitectureDependencyRuleTest` | Maven/module 依赖方向 | [`module-architecture.md`](./module-architecture.md) |
 | `RespBoundaryGuardTest` | RESP DTO 不越过协议边界 | [`protocol-reference.md`](./protocol-reference.md) |
 | `YierdisDbArchitectureGuardTest` | DB internal 边界和 owner thread 假设 | [`db-internals.md`](./db-internals.md) |
-| `ArchitectureBoundaryTest` | 生产 hardening 文档、回复写回 owner 和模块边界 | [`production-hardening-operations.md`](./production-hardening-operations.md) |
 
 ## 边界清单
 

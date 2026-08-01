@@ -45,7 +45,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 先跑命令家族测试和错误测试。例如 string / bitmap：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests/yierdis-integration-tests -am -Dtest=StringCommandTest,BitmapCommandTest,CommandErrorTest,CommandVariantCoverageTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests -am -Dtest=StringCommandTest,BitmapCommandTest,CommandErrorTest,CommandVariantCoverageTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 新增命令或新增 option/subcommand 时，优先补最窄的命令家族测试和错误测试；server-only 命令还要补
@@ -80,7 +80,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 再跑相关命令家族，确认回包语义没有偏移：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests/yierdis-integration-tests -am -Dtest=StringCommandTest,ListCommandTest,HashCommandTest,SetCommandTest,ZSetCommandTest,HllCommandTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests -am -Dtest=StringCommandTest,ListCommandTest,HashCommandTest,SetCommandTest,ZSetCommandTest,HllCommandTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 排障顺序：`DbEngine` capability view -> family ops -> `YierdisDbMutationExecutor` -> key lifecycle -> root/value 结构。DB 读写细节看 [`db-internals.md`](./db-internals.md)。
@@ -90,7 +90,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 先跑事务状态和 replay 相关测试：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-command/yierdis-command-core,yierdis-server/yierdis-server-core,yierdis-server/yierdis-server-main,yierdis-tests/yierdis-integration-tests -am -Dtest=CommandDispatcherTest,EngineSessionTest,TransactionCommandTest,TransactionQueueCleanupTest,ReplyPreflightCommandTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests -am -Dtest=CommandDispatcherTest,EngineSessionTest,TransactionCommandTest,TransactionQueueCleanupTest,ReplyPreflightCommandTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 排障顺序：`CommandDispatcher` 的 handler-parse preflight ->
@@ -106,7 +106,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 先跑 TTL 和过期清理测试：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-integration-tests -am -Dtest=TtlLifecycleDirectOpsTest,ActiveExpirationTest,ExpireSemanticsTest,CommitStreamExpirationEvictionTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests -am -Dtest=TtlLifecycleDirectOpsTest,ActiveExpirationTest,ExpireSemanticsTest,CommitStreamExpirationEvictionTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 排障顺序：`YierdisTtlOps` -> `YierdisDbKeyLifecycle` -> `YierdisDbExpirationSupport` -> synthetic `EXPIRED` delete -> `MEMORY STATS` / `INFO memory` 口径。TTL 细节看 [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)。
@@ -116,7 +116,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 先跑 maxmemory 和 eviction 测试：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-integration-tests -am -Dtest=MutationExecutorReservationTest,MaxmemoryEvictionTest,TtlMaxmemoryTest,YierdisGlobalMaxmemoryGovernorTest,GlobalMaxmemoryLruAcrossDbsTest,MemoryStatsAccountingConsistencyTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests -am -Dtest=MutationExecutorReservationTest,MaxmemoryEvictionTest,TtlMaxmemoryTest,YierdisGlobalMaxmemoryGovernorTest,GlobalMaxmemoryLruAcrossDbsTest,MemoryStatsAccountingConsistencyTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 排障顺序：`YierdisDbMemoryLedger` -> `YierdisDbMutationExecutor` -> `YierdisDbMaxmemorySupport` / `YierdisGlobalMaxmemoryGovernor` -> synthetic `EVICTED` delete -> `MEMORY STATS` 校验。maxmemory 的完整语义看 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)。
@@ -132,7 +132,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 再跑 DB native path：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-integration-tests -am -Dtest=EntryHandleContractTest,ValueHandleContractTest,KeyHandleContractTest,NativeStorageRegressionTest,OffHeapLeakRegressionTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests -am -Dtest=EntryHandleContractTest,ValueHandleContractTest,KeyHandleContractTest,NativeStorageRegressionTest,OffHeapLeakRegressionTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 排障顺序：`NativeHandle` backend identity / private localRaw -> object table generation -> stable backend pin/quarantine/epoch -> DB handle wrappers -> keyspace/root/value release。详细背景看 [`ffm-primer.md`](./ffm-primer.md)、[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)、[`native-memory-runtime.md`](./native-memory-runtime.md)。
@@ -184,11 +184,11 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 当改动可能触碰协议边界、command/internal 边界或 runtime 访问约束时，优先补护栏测试：
 
-- `ArchitectureBoundaryTest`：检查旧命令文件保持删除、`CommandArgs` 是唯一参数 helper、命令层不直接使用 `RedisReplyWriter`、executor 集中渲染，并检查 server composition 持有 `CommandDispatcher`；网络边界改动再连同 `RespRequestDecoderTest` 一起跑。
+- `ArchitectureDependencyRuleTest`：检查 production module 的依赖方向不越界。
+- `RespBoundaryGuardTest`：检查 retired protocol package/artifact 不回到 production source/POM；网络边界改动再连同 `RespRequestDecoderTest` 一起跑。
 - `CommandPipelineArchitectureTest`：逐个检查 builtin 命令家族只注册 `CommandSpec`，不恢复旧参数/回复合同或直接 writer 调用。
 - `CommandParseIsolationTest` / `ServerCommandParseIsolationTest`：检查全部生产注册都有 parse-only fixture，parse 不访问 DB router 或 provider。
-- `YierdisDbArchitectureGuardTest`：检查 command/runtime 不能直接依赖 DB internal，必要时连同 `DbEngineReadWriteBoundaryTest` 一起跑。
-- `ArchitectureDependencyRuleTest`：检查 Maven/module 依赖方向没有回退。
+- `YierdisDbArchitectureGuardTest`：检查 DB 不导入 FFM implementation，并保持 factory-only composition；必要时连同 `DbEngineReadWriteBoundaryTest` 一起跑。
 
 排障顺序：先确认是 boundary regression 还是功能 regression，再决定是去 protocol / command / DB 文档还是直接补 guard 测试。
 

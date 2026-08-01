@@ -61,7 +61,7 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 | `yierdis-db/yierdis-db-memory` | 单机内存 DB、数据族 ops、TTL、maxmemory、native-backed keyspace/value paths。 |
 | `yierdis-cli` | 项目自带 RESP 客户端入口。 |
 | `yierdis-benchmark` | 基准压测入口和请求生成。 |
-| `yierdis-tests/yierdis-integration-tests`、`yierdis-tests/yierdis-architecture-tests`、`yierdis-db/yierdis-db-testkit` | 端到端行为、架构边界和 DB 级测试支撑。 |
+| `yierdis-tests` | 跨模块行为测试和聚焦架构边界测试；DB 级 helper 归属 `yierdis-db-memory/src/test/java`。 |
 
 更完整的模块依赖方向看 [`module-architecture.md`](./module-architecture.md)。
 

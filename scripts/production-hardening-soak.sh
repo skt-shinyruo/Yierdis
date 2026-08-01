@@ -67,7 +67,7 @@ if [[ "$SKIP_PACKAGE" == "0" ]]; then
   (
     cd "$ROOT_DIR"
     mvn -q \
-      -pl yierdis-server/yierdis-server-main,yierdis-tests/yierdis-integration-tests \
+      -pl yierdis-server/yierdis-server-main,yierdis-tests \
       -am \
       -DskipTests package
   ) 2>&1 | tee "$report_dir/package.log"
@@ -96,7 +96,7 @@ printf '[production-hardening-soak] running %s-second deterministic workload (se
 (
   cd "$ROOT_DIR"
   mvn -q \
-    -pl yierdis-tests/yierdis-integration-tests \
+    -pl yierdis-tests \
     -am \
     -Dtest=ProductionHardeningSoakTest \
     -Dyierdis.soak.durationSeconds="$DURATION_SECONDS" \

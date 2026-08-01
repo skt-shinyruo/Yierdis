@@ -21,7 +21,6 @@ flowchart LR
   commandApi["yierdis-command-api"]
   dbMemory["yierdis-db-memory"]
   dbApi["yierdis-db-api"]
-  dbTestkit["yierdis-db-testkit"]
   memoryFfm["yierdis-memory-ffm"]
   memoryApi["yierdis-memory-api"]
   commonBytes["yierdis-common-bytes"]
@@ -73,7 +72,6 @@ flowchart LR
   dbMemory --> memoryFfm
   dbMemory --> memoryApi
   dbApi --> commonBytes
-  dbTestkit --> dbApi
 
   memoryFfm --> memoryApi
   memoryApi --> commonBytes
@@ -86,19 +84,14 @@ flowchart LR
 
 这条方向图说明：实现模块依赖 API 模块，适配模块依赖协议和 bytes 基础层，最外层 `yierdis-server-main` 依赖各车道完成最终组装。
 
-## 聚合模块
+## Maven 聚合
 
-这些模块主要是 parent / aggregator，本身不承担运行时语义：
+根 `yierdis-parent` 是唯一 parent / aggregator，直接列出所有 leaf module。每个 leaf POM
+直接继承根 POM；`yierdis-common`、`yierdis-memory`、`yierdis-networking`、`yierdis-server`、
+`yierdis-command` 和 `yierdis-db` 只是源码目录，不再各自拥有中间 POM。
 
-- `yierdis-parent`
-- `yierdis-common`
-- `yierdis-memory`
-- `yierdis-networking`
-- `yierdis-server`
-- `yierdis-command`
-- `yierdis-db`
-
-它们的作用是统一版本、统一构建配置、统一模块分组。
+根 POM 统一版本、编译器和插件配置，源码目录继续表达领域归属，但不再制造没有独立构建语义的
+Maven project。
 
 ## bytes 基础层
 
@@ -195,7 +188,10 @@ DB owns storage behavior, not RESP.
 
 默认 RESP 模式不该绕过 server 内核去碰 DB，否则就失去验证真实 request path 的意义。`yierdis-benchmark storage` 是显式隔离的诊断入口，允许 benchmark app 依赖 `yierdis-db-memory`，用于测量单 owner DB hot path 和 heap/native footprint；它的结果不代表真实 request path。
 
-## architecture tests
+## 统一测试模块
+
+`yierdis-tests` 同时承载跨模块行为测试和聚焦 architecture guards。DB 专用 helper 位于
+`yierdis-db-memory/src/test/java`，不再通过独立 testkit artifact 发布。
 
 architecture tests protect dependency direction.
 
