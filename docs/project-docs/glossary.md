@@ -116,9 +116,9 @@ runtime 周期任务入口，用于驱动过期清理、defrag 等后台维护�
 
 DB 内 key 到 entry handle/record 的索引结构。heap 路径和 FFM 路径分别有不同实现，但对上层暴露同一类查找、scan、删除语义。
 
-### expire index
+### TTL deadline
 
-key 到过期时间的索引。它和 keyspace 共享 key/handle 生命周期，负责 TTL 查询、过期清理和相关内存记账。
+`EntryRecord.expireAtMillis` 中保存的绝对过期时间。它是当前唯一 TTL 状态；主动清理直接扫描 key directory，并用派生 `expireCount` 快速判断是否有 TTL 工作。
 
 ### maxmemory
 
@@ -126,7 +126,7 @@ key 到过期时间的索引。它和 keyspace 共享 key/handle 生命周期，
 
 ### retained bytes
 
-对象当前持有、仍需计入生命周期或 maxmemory 的字节数。它不一定等同于本次写入的参数大小，因为 native spare capacity、root metadata、TTL metadata 都可能参与计算。
+对象当前持有、仍需计入生命周期或 maxmemory 的字节数。它不一定等同于本次写入的参数大小，因为 native spare capacity、root metadata 和 heap topology 都可能参与计算。
 
 ## Data Model
 
@@ -190,7 +190,7 @@ JDK 25 `java.lang.foreign` API。Yierdis 的 native-memory runtime、blob store�
 
 ### `EntryHandle`
 
-DB entry 的稳定句柄包装。它把 native raw handle 放进 DB entry domain/kind 语义里，避免误用其他 native handle。
+DB entry 的稳定句柄包装。它保留完整 `NativeHandle`，并约束 `ENTRY_RECORD` 语义，避免误用其他 object kind。
 
 ### `ValueHandle`
 
@@ -198,15 +198,15 @@ DB value/root 的稳定句柄包装，包含 null sentinel 约定。它常用于
 
 ### `NativeHandle`
 
-native allocator 的 packed handle，包含 domain、kind、slot/generation 等字段。它不是裸地址。详见 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
+stable-memory backend 的 `(allocatorId, localRaw)` paired identity。`localRaw` 只能由所属 backend 解释；FFM 私有 codec 才在其中编码 domain、kind、slot/generation。它不是裸地址。详见 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 
 ### object table
 
 native allocator 中记录对象 metadata、generation、pin 状态和 quarantine 状态的表。它负责 stale handle 和 wrong kind/domain 检查。
 
-### stable native allocator
+### stable memory backend
 
-提供稳定 handle、resolve view、realloc、epoch、pin/quarantine 和 active defrag 的 allocator。对象移动时 handle 保持稳定。
+提供稳定 handle、resolve view、realloc、epoch、pin/quarantine、region 和 active defrag 的 owner-bound backend。生产实现是 `YierdisFfmStableMemoryBackend`；对象移动时完整 handle 保持稳定。
 
 ### pin
 

@@ -53,7 +53,7 @@ argv
 
 这里最容易误解的是 `ioThreads`。它们是 Netty worker，负责 socket I/O、pipeline decode/encode 事件和定时器触发，不是 DB mutation 并行度。DB 读写和 maintenance 里的 DB 访问都通过 `CommandExecutor` 的 owner thread 进入；`YierdisInstance` 也要求 DB 访问先绑定到 owner thread，跨线程访问会 fail-fast。
 
-当前的单 owner 是有意保留的执行模型，不是把 `CommandExecutor` 线程数调大就能消除的临时限制。它让 keyspace、TTL、allocator、mutation ledger 和连接会话在同一条命令序列中推进，热路径不需要为共享 DB 状态增加锁；本轮吞吐优化集中在 raw handle、primitive topology、连续 native collection 和 bulk FFM access。
+当前的单 owner 是有意保留的执行模型，不是把 `CommandExecutor` 线程数调大就能消除的临时限制。它让 keyspace、TTL、stable backend、mutation ledger 和连接会话在同一条命令序列中推进，DB state 不需要在每个结构内部再实现并发写入协议。
 
 真正的 shard-per-core 必须作为一套完整执行架构实现：每个 shard 拥有独立 DB、allocator 和 runtime；提交前按命令 key 规划路由；同一连接仍保持顺序执行，并正确携带 `SELECT`、RESP 协商和 `MULTI/EXEC` 状态；跨 key 命令还需要明确单 shard 限制或跨 shard 协调协议。global maxmemory、maintenance、shutdown 和 commit stream 也必须覆盖全部 shard。在这些契约同时落地前，增加 DB owner 数会破坏现有语义，因此当前配置不提供伪并行的 storage-shard 开关。
 
@@ -146,10 +146,10 @@ maxmemory 参数：
 
 `YierdisServerBootstrap` 把 server runtime scope 映射成 `YierdisInstanceConfig.MaxmemoryScope`，并在生产启动路径里选择默认 DB factory。`YierdisInstance.create(config)` 是 strict 入口，要求 `YierdisInstanceConfig` 已经注入 `engineFactory` 或 `EngineFactoryBinding`；embedded/test 调用方也必须显式提供相同的 factory 依赖，runtime 不再隐式选择默认 DB backend。
 
-- `global`：server-main 默认 factory 下所有 DB 共享一个 instance-level `YierdisFfmMemoryRuntime("instance")`。每个 DB 仍有自己的 keyspace、entry table、roots、ledger 和 allocator 视图，但 maxmemory 由 `YierdisGlobalMaxmemoryGovernor` 跨 DB 协调。governor 汇总每个 participant 报告的 owned `MemoryUsageSnapshot`，不另加一个 runtime 级 usage source。
-- `per-db`：兼容模式。`YierdisInstance` 把 `maxmemoryBytes` 按 DB 数硬分摊，整数除法后的余数按 DB 创建顺序每个 DB 多给 1 byte。server-main 默认 factory 下每个 DB 创建自己的 DB-owned `YierdisFfmMemoryRuntime("db")`，evict/reserve/memory stats 都按单 DB 预算运行。
+- `global`：每个 DB 仍有独立的 keyspace、entry table、roots、ledger 和 FFM backend/runtime，但 maxmemory 由 `YierdisGlobalMaxmemoryGovernor` 跨 DB 协调。governor 汇总每个 participant 报告的 owned `MemoryUsageSnapshot`，不另加 runtime 级 usage source。
+- `per-db`：兼容模式。`YierdisInstance` 把 `maxmemoryBytes` 按 DB 数硬分摊，整数除法后的余数按 DB 创建顺序每个 DB 多给 1 byte。每个 DB 仍由同一个 backend factory 创建独立 backend/runtime，evict/reserve/memory stats 按单 DB 预算运行。
 
-`global` 是共享实例级 runtime/governor；`per-db` 是拆分预算和 runtime ownership。不要把 `ioThreads`、Netty 连接数或 DB 数误解成 maxmemory 的并发写入模型，mutation 仍经 owner thread。
+`global` 与 `per-db` 的区别是预算协调范围，不是 FFM runtime ownership。不要把 `ioThreads`、Netty 连接数或 DB 数误解成 maxmemory 的并发写入模型，mutation 仍经 owner thread。
 
 `MEMORY STATS` 是 explainable estimate，不是 JVM instrumentation object graph；native memory 是否纳入 maxmemory 要看字段口径。global scope 下 `NettyServerInfoProvider.memoryStats(...)` 会优先返回 instance 聚合视角。
 

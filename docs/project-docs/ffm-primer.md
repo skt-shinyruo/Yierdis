@@ -105,11 +105,11 @@ MemorySegment header = page.asSlice(0, 64);
 MemorySegment body = page.asSlice(64, 4032);
 ```
 
-子 segment 仍然受原 arena lifetime 控制。`YierdisFfmRegion.span(offset, length)` 和 `YierdisFfmSpan.slice(offset, length)` 都是这种模型：先检查范围，再用 `segment.asSlice(...)` 创建一个更小的视图。
+子 segment 仍然受原 arena lifetime 控制。Yierdis 当前不保留额外的 span wrapper；backend 的 region/block access 在完整范围检查后直接使用 `MemorySegment` 或 `MemorySegment.copy(...)`。
 
 ## lifetime 和关闭后的访问
 
-FFM 的重要安全性来自 lifetime check。关闭 arena 或 region 后，之前拿到的 segment、span、view 都不应该继续使用。
+FFM 的重要安全性来自 lifetime check。关闭 arena 或 region 后，之前拿到的 segment 或 view 都不应该继续使用。
 
 ```java
 MemorySegment leaked;
@@ -143,9 +143,11 @@ MemoryLayout point = MemoryLayout.structLayout(
 有了 layout 后，可以用 var handle 或手写 offset 访问字段。Yierdis 当前 DB record 多数选择手写固定 offset，例如 entry record：
 
 ```text
-0   key handle identity
-8   value handle raw
-16  key hash
+0   key allocatorId
+8   key localRaw
+16  value allocatorId
+24  value localRaw
+32  key hash
 ...
 ```
 

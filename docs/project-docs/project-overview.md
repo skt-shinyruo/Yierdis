@@ -37,7 +37,7 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 读源码前先建立三条心智模型：
 
 - 请求不是“方法调用”，而是一段从 RESP bytes 到 `ExecutionRequest`、`CommandExecutor`、`CommandDispatcher`、command handler、DB、`CommandResult`、`RedisReplyRenderer` 再回到 RESP bytes 的链路。
-- DB 不是一张大表，而是 keyspace、entry metadata、value roots、TTL index、memory ledger 和 native handles 共同维护的生命周期边界。
+- DB 不是一张大表，而是 keyspace、带 TTL deadline 的 entry metadata、value roots、memory ledger 和 native handles 共同维护的生命周期边界。
 - native memory 不是旁路优化，而是当前默认数据路径的一部分；但它不等于零拷贝，copy 边界需要按接口 ownership 和 lifetime 判断。
 
 ## 模块总览
@@ -102,9 +102,9 @@ CommandExecutor
 
 主线可以这样拆：
 
-- `YierdisInstance` 决定逻辑 DB 数量、FFM runtime scope 和 maxmemory scope。
+- `YierdisInstance` 决定逻辑 DB 数量和 maxmemory scope；每个 DB backend 拥有自己的 FFM runtime。
 - `YierdisDb` 是单个 DB 的状态 owner 和统一入口。
-- keyspace 和 expires 记录 key 到 entry/expire metadata 的映射。
+- keyspace 把 key 映射到 entry，`EntryRecord.expireAtMillis` 保存唯一 TTL deadline。
 - string、list、hash、set、zset、HLL、bitmap 相关 ops 分别处理数据族语义和内部编码。
 - memory API/FFM 层提供 stable native handle，避免 DB 层直接保存可移动的 physical address。
 - maxmemory 和 approximate eviction 通过账本、协调器和策略把内存预算反馈到写路径。

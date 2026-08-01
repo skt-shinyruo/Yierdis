@@ -78,7 +78,7 @@ off-heap -> off-heap：
 
 view / handle 不是 copy：
 
-- `YierdisFfmSpan.slice(...)` 和 `MemorySegment.asSlice(...)` 是子视图，不复制底层 memory。
+- FFM 的 `MemorySegment.asSlice(...)` 是子视图，不复制底层 memory；Yierdis backend 当前不额外暴露 span wrapper。
 - `NativeHandle` 是 stable identity，不复制对象内容。
 - `NativeObjectView` 是 resolved bounded view；打开 view 会 pin，对象内容没有因为 resolve 自动复制。
 

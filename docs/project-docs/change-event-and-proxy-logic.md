@@ -184,7 +184,7 @@ commit stream 是 in-process fixed ring，不是 durable log：它不提供 AOF�
 | command record scope | executor 为每次实际执行建立并关闭请求级 `MutationContext`，EXEC child 另建自己的作用域 | `CommandExecutorTest`, `CommandDispatcherTest`, `MutationContextTest` |
 | DB commit reservation | reservation 在可见性前完成，发布后才递送，post-commit failure 不被取消 | `DbCommitPublisherTest`, DB mutation tests |
 | commit stream | ring capacity、顺序、borrowed callback view、sink failure 和 shutdown ownership | `CommitStreamTest`, `CommitStreamShutdownTest`, `CommitStreamIntegrationTest` |
-| DB synthetic event | expire cleanup / eviction 删除 key 时只在实际 commit 后发布对应 kind | `ExpireIndexTest`, `YierdisDbConstructionTest`, maxmemory 相关测试 |
+| DB synthetic event | expire cleanup / eviction 删除 key 时只在实际 commit 后发布对应 kind | `ActiveExpirationTest`, `CommitStreamExpirationEvictionTest`, maxmemory 相关测试 |
 | DB routing | `SELECT`、session DB index 和 router 选择一致 | connection command tests, embedded/runtime DB routing tests |
 | session capabilities | dispatcher 使用显式 `CommandSession` capability；`EngineSession` 只拥有连接状态 | `CommandDispatcherTest`, `EngineSessionTest` |
 | observability provider | `INFO` / `STATS` / global `MEMORY STATS` 通过 provider 汇总 server/runtime 统计 | `YierdisServerBootstrapCommandWiringTest`, `MemoryStatsCommandTest` |

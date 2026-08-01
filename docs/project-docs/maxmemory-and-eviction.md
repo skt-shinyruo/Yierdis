@@ -24,7 +24,7 @@ usedBytesForMaxmemory
   + nativeDataCommittedBytes
 ```
 
-expire index 和 collection topology 已由各自组件进入这个 owned snapshot，不能再按 TTL 条目数重复加一遍。`nativeDataLiveBytes` 和 `nativeReclaimableBytes` 是诊断维度，不从 committed footprint 中扣除。`MEMORY STATS` 的 `used_bytes_for_maxmemory` 就是这份物理快照；`effective_used_bytes_for_maxmemory` 再加 ledger `reservedBytes`，用于展示已批准但尚未 settle 的预算窗口。
+entry 中的 TTL 字段和 collection topology 已进入 owned snapshot，不能再按带 TTL 的 key 数量重复加一遍。`nativeDataLiveBytes` 和 `nativeReclaimableBytes` 是诊断维度，不从 committed footprint 中扣除。`MEMORY STATS` 的 `used_bytes_for_maxmemory` 就是这份物理快照；`effective_used_bytes_for_maxmemory` 再加 ledger `reservedBytes`，用于展示已批准但尚未 settle 的预算窗口。
 
 ## `YierdisDbMutationExecutor` 为什么先 reserve 再 prepare
 
@@ -49,7 +49,7 @@ estimate upper bound
 这样做的原因是 DB mutation 经常需要“先分配、后知道实际变化量”：
 
 - 新 key 可能新增 key bytes、entry record 和 value payload；
-- TTL 首次写入可能新增 expire metadata；
+- TTL deadline 更新会产生 mutation-scope bookkeeping，但没有独立的 TTL allocation；
 - collection 或 string 可能触发编码升级；
 - 覆盖写可能最终是 shrink、no-op 或负 delta。
 
@@ -95,7 +95,7 @@ governor 的主线是：
 这里有两个跨 DB 约束：
 
 - participant 是每个 DB 暴露出来的 `YierdisDbMaxmemorySupport`，governor 只能通过 SPI 观察和驱动，不直接越过 DB API。
-- governor 只相加每个 DB 独占的 `MemoryUsageSnapshot`。shared runtime 的 `usedBytes` counter 不进入全局 enforcement，它只用于 region lifecycle 和 native leak 诊断。
+- governor 只相加每个 DB 独占的 `MemoryUsageSnapshot`。各 backend runtime 的 counter 不进入全局 enforcement，它只用于对应 backend 的 region lifecycle 和 native leak 诊断。
 
 maintenance 时的顺序由 `YierdisInstanceRuntimeAccess.maintenanceTick()` 固定：
 
@@ -116,7 +116,7 @@ maintenance 时的顺序由 `YierdisInstanceRuntimeAccess.maintenanceTick()` 固
 还有两条收敛规则：
 
 - cleanup 先于 eviction。候选 key 如果已经过期，会先走 `removeIfExpired(...)`，它算 `EXPIRED`，不是 `EVICTED`。
-- 真正 eviction 时，`YierdisDbMaxmemorySupport` 调用 `YierdisDbInternals.evict(...)`；reclamation plan 在 prepare 阶段复制稳定 key bytes，commit 时移除 TTL index 和 entry，随后结算 ledger，并通过已预留的 commit stream 发布 synthetic `DEL key`，`kind=EVICTED`。
+- 真正 eviction 时，`YierdisDbMaxmemorySupport` 调用 `YierdisDbRuntimeInternals.evict(...)`；reclamation plan 在 prepare 阶段复制稳定 key bytes，commit 时移除 directory entry 并释放完整 entry/value/key graph，随后结算 ledger，并通过已预留的 commit stream 发布 synthetic `DEL key`，`kind=EVICTED`。
 
 所以“淘汰”和“过期”都会删除 key，但 change-event kind、触发原因和测试入口不同。
 
@@ -137,7 +137,7 @@ maintenance 时的顺序由 `YierdisInstanceRuntimeAccess.maintenanceTick()` 固
 - commit 开始前不能把半成品 mutation 留在 DB 内部，reservation 必须 rollback；
 - commit 开始后的失败必须走 post-commit settle/result-unknown，不能宣称 mutation 一定未发生。
 
-TTL index、random/LRU eviction candidates 和 synthetic delete 都使用 native-backed key handles。删除前复制稳定 key bytes 是为了 change event 和 output ownership，不表示 DB 内部仍有 heap keyspace。
+主动过期、random/LRU eviction candidates 和 synthetic delete 都使用 directory 中的 native-backed key handles。删除前复制稳定 key bytes 是为了 change event 和 output ownership，不表示 DB 内部仍有 heap keyspace。
 
 `prepareWrite(0)` 是 maintenance-only enforcement 的关键特例：在 `noeviction` 下它不会因为“当前已经超限”而阻止不增长的维护操作。
 
@@ -145,7 +145,7 @@ TTL index、random/LRU eviction candidates 和 synthetic delete 都使用 native
 
 - `MutationExecutorReservationTest`：reservation 先于 mutation，异常回滚后不污染下一次写入。
 - `MaxmemoryEvictionTest`：`noeviction`、`allkeys-random`、`allkeys-lru`、collection growth 与拒写不变式。
-- `TtlMaxmemoryTest`：TTL metadata 本身也参与 maxmemory enforcement。
+- `TtlMaxmemoryTest`：TTL mutation 的保守 reservation、OOM 和失败原子性。
 - `YierdisGlobalMaxmemoryGovernorTest`：全局 cleanup/eviction/OOM 路径、deterministic LRU scan 和时间预算分支。
 - `GlobalMaxmemoryLruAcrossDbsTest`：global scope 下跨 DB 的真实 LRU 淘汰。
 - `MemoryStatsAccountingConsistencyTest`、`MaxmemoryScopeTest`：观测口径与 enforcement 口径保持一致，global/per-db scope 的统计差异可解释。

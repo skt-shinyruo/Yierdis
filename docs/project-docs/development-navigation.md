@@ -173,7 +173,7 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 - `YierdisTtlOps`
 - `YierdisDbKeyLifecycle`
 - `YierdisDbExpirationSupport`
-- `YierdisExpireIndex`、`YierdisFfmExpireIndex`
+- `YierdisDbRuntimeInternals.reclaimExpired(...)`
 - `YierdisDbMutationExecutor`
 - `YierdisDbMemoryLedger`
 - `YierdisDbMaxmemorySupport`
@@ -186,14 +186,13 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 - TTL 命令写路径、lazy expire、cleanup budget 看 [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)。
 - maxmemory reservation、policy 和 global governor 看 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)。
 - 运行配置和线上语义看 [`configuration-and-operations.md`](./configuration-and-operations.md)。
-- native keyspace 和 expires 看 [`native-memory-runtime.md`](./native-memory-runtime.md)。
+- native keyspace 和唯一 entry deadline 看 [`native-memory-runtime.md`](./native-memory-runtime.md)。
 
 测试优先级：
 
 - `TtlLifecycleDirectOpsTest`
-- `ExpireIndexTest`
+- `ActiveExpirationTest`
 - `ExpireSemanticsTest`
-- `ExpireIndexContractTest`
 - `TtlMaxmemoryTest`
 - `MaxmemoryEvictionTest`
 - `MutationExecutorReservationTest`
@@ -207,7 +206,7 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 
 - [`NativeHandle.java`](../../yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeHandle.java)
 - [`YierdisNativeObjectTable.java`](../../yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativeObjectTable.java)
-- [`YierdisStableNativeAllocator.java`](../../yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisStableNativeAllocator.java)
+- [`YierdisFfmStableMemoryBackend.java`](../../yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmStableMemoryBackend.java)
 - `EntryHandle`、`ValueHandle`、`KeyHandle`
 - `NativeKeyDirectory`
 - `NativeBytesSlice`、`NativeByteStore`、`NativeByteMap`、`NativeListpack`
@@ -223,7 +222,8 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 
 - `NativeHandleTest`
 - `YierdisNativeObjectTableTest`
-- `YierdisStableNativeAllocatorTest`
+- `YierdisFfmStableMemoryBackendTest`
+- `YierdisFfmStableMemoryBackendOwnershipTest`
 - `EntryHandleContractTest`
 - `ValueHandleContractTest`
 - `KeyHandleContractTest`
@@ -315,7 +315,7 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 - `CommitStreamTest`
 - `CommitStreamShutdownTest`
 - `YierdisChangeSinkTest`
-- `ExpireIndexTest`
+- `ActiveExpirationTest`
 - `YierdisDbConstructionTest`
 - `YierdisServerBootstrapCommandWiringTest`
 - `MemoryStatsCommandTest`

@@ -14,10 +14,10 @@ Yierdis 的测试大致分成七层：
 
 | 层 | 主要目的 | 常见测试 |
 | --- | --- | --- |
-| API contract | 稳定接口和边界语义 | `ExecutionRequestContractTest`, `CommandContractTest`, `DbEngineFactoryPolicyContractTest` |
+| API contract | 稳定接口和边界语义 | `ExecutionRequestContractTest`, `CommandContractTest`, `DbEngineFactoryConfigContractTest` |
 | command / integration | 命令注册、parse 隔离、参数、回包和 Redis 兼容语义 | `CommandDispatcherTest`, `CommandParseIsolationTest`, `StringCommandTest`, `CommandErrorTest` |
 | DB direct ops | 绕开 command 层验证 DB API | `StringDirectOpsTest`, `CollectionDirectOpsTest`, `TtlLifecycleDirectOpsTest` |
-| native/internal | handle、allocator、keyspace、root/value、ledger | `NativeHandleTest`, `YierdisStableNativeAllocatorTest`, `StringRootTest`, `MemoryLedgerContractTest` |
+| native/internal | handle、backend、keyspace、root/value、ledger | `NativeHandleTest`, `YierdisFfmStableMemoryBackendTest`, `StringRootTest`, `MemoryLedgerContractTest` |
 | executor / server | owner thread、队列、背压、Netty 适配 | `CommandExecutorTest`, `CommandExecutorBackpressureTest`, `RespProtocolIntegrationTest` |
 | CLI / bench | 客户端、catalog、NIO runner、storage footprint、脚本和输出契约 | `YierdisClientTest`, `RedisBenchmarkCatalogTest`, `NioBenchmarkRunnerTest`, `BenchmarkOutputRendererTest`, `StorageBenchmarkRunnerTest`, `BenchScriptContractTest` |
 | architecture guard | 模块边界和协议边界 | `ArchitectureDependencyRuleTest`, `RespBoundaryGuardTest` |
@@ -106,7 +106,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 先跑 TTL 和过期清理测试：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-integration-tests -am -Dtest=TtlLifecycleDirectOpsTest,ExpireIndexTest,ExpireSemanticsTest,ExpireIndexContractTest,OffHeapBytesViewTtlRegressionTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-integration-tests -am -Dtest=TtlLifecycleDirectOpsTest,ActiveExpirationTest,ExpireSemanticsTest,CommitStreamExpirationEvictionTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 排障顺序：`YierdisTtlOps` -> `YierdisDbKeyLifecycle` -> `YierdisDbExpirationSupport` -> synthetic `EXPIRED` delete -> `MEMORY STATS` / `INFO memory` 口径。TTL 细节看 [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)。
@@ -126,7 +126,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 先跑 allocator / handle contract：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-memory/yierdis-memory-api,yierdis-memory/yierdis-memory-ffm -am -Dtest=NativeHandleTest,YierdisNativeObjectTableTest,YierdisStableNativeAllocatorTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-memory/yierdis-memory-api,yierdis-memory/yierdis-memory-ffm -am -Dtest=NativeHandleTest,YierdisNativeObjectTableTest,YierdisFfmStableMemoryBackendTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 再跑 DB native path：
@@ -135,7 +135,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-integration-tests -am -Dtest=EntryHandleContractTest,ValueHandleContractTest,KeyHandleContractTest,NativeStorageRegressionTest,OffHeapLeakRegressionTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-排障顺序：`NativeHandle` bit layout -> object table generation -> stable allocator pin/quarantine/epoch -> DB handle wrappers -> keyspace/root/value release。详细背景看 [`ffm-primer.md`](./ffm-primer.md)、[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)、[`native-memory-runtime.md`](./native-memory-runtime.md)。
+排障顺序：`NativeHandle` backend identity / private localRaw -> object table generation -> stable backend pin/quarantine/epoch -> DB handle wrappers -> keyspace/root/value release。详细背景看 [`ffm-primer.md`](./ffm-primer.md)、[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)、[`native-memory-runtime.md`](./native-memory-runtime.md)。
 
 ## 改 executor / backpressure 时
 
@@ -201,7 +201,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 | 事务里行为不同 | `CommandDispatcher`, `TransactionCommands`, `TransactionState` | `CommandDispatcherTest`, `TransactionCommandTest`, `TransactionQueueCleanupTest` |
 | RESP 回包形状不对 | `CommandResult`, `RedisReplyRenderer`, `RespReplyWriter` | `RedisReplyRendererTest`, `RespReplyWriterTest`, `RespProtocolIntegrationTest` |
 | `QUIT` 回复后未关闭 | `CommandResult.closeAfterReply`, reply slot / sequencer | `CommandExecutorTest`, `RespProtocolIntegrationTest` |
-| TTL 不准或过期 key 仍可见 | `YierdisExpireIndex`, lifecycle cleanup | `TtlLifecycleDirectOpsTest`, `ExpireIndexTest` |
+| TTL 不准或过期 key 仍可见 | `EntryRecord.expireAtMillis`, expiration scan/reclaim | `TtlLifecycleDirectOpsTest`, `ActiveExpirationTest` |
 | maxmemory 多回包或错误回包 | `YierdisDbMemoryLedger`, mutation executor | `MaxmemoryEvictionTest`, `MaxmemoryDoubleReplyRegressionTest` |
 | off-heap 泄漏 | root/value release, blob store, native handle graph | `OffHeapLeakRegressionTest`, `NativeStorageRegressionTest` |
 | executor 卡住或背压不恢复 | submitter、drain loop、connection context | `CommandExecutorBackpressureTest`, `CommandExecutorFairSchedulingTest` |

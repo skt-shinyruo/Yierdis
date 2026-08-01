@@ -155,7 +155,7 @@ CommandExecutor
   -> CommandResult -> RedisReplyRenderer
 ```
 
-`yierdis-server-main` 负责最终组装，是真正的 composition root。`ServerCommandComposition` 在这里把 builtin、server commands、registry 和 `CommandDispatcher` 组装到一起，bootstrap 再把 `dispatcher::prepare` 接到 `CommandExecutor`。生产启动路径也在这里选择默认 DB backend：按 maxmemory scope 构造 `YierdisDbEngineFactory`，global scope 额外构造 instance-level `YierdisFfmMemoryRuntime("instance")`，再通过 `YierdisInstanceConfig` 注入 runtime。
+`yierdis-server-main` 负责最终组装，是真正的 composition root。`ServerCommandComposition` 在这里把 builtin、server commands、registry 和 `CommandDispatcher` 组装到一起，bootstrap 再把 `dispatcher::prepare` 接到 `CommandExecutor`。生产启动路径也在这里用 `YierdisFfmStableMemoryBackend::new` 构造 `YierdisDbEngineFactory`，再通过 `YierdisInstanceConfig` 注入 runtime；每个 DB create 都得到独立 backend，maxmemory scope 只决定预算协调方式。
 
 `YierdisInstance.create(config)` 是 strict runtime 入口，要求调用方已经提供 `DbEngineFactory` 或 `EngineFactoryBinding`。embedded/test 同样显式组装这些依赖；runtime 本身不选择默认 DB backend。
 

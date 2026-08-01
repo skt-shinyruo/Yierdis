@@ -1,88 +1,81 @@
 # TTL 与过期生命周期
 
-本文解释 TTL 命令、惰性过期、批量清理和 expire index 一致性。这里要同时盯住三条线：读路径把过期 key 当作不存在，写路径让 TTL metadata 与 entry graph 一起提交，maintenance 只在 owner thread 内做 best-effort 清理。
+本文解释 TTL 命令、惰性过期和有界主动清理。当前实现只有一份 TTL 状态：`EntryRecord.expireAtMillis`。读写与 maintenance 都围绕同一条 entry graph 工作，不再维护独立的过期索引。
 
-## TTL 元数据到底存在哪里
+## TTL 状态
 
-TTL 当前不是单点字段，而是两份状态一起维护：
+`EntryRecord.expireAtMillis` 是每个 key 的 TTL 权威字段：
 
-- `YierdisFfmExpireIndex`：按 native-backed `KeyHandle -> expireAtMillis` 建索引，给 `TTL/PTTL`、随机采样 cleanup、maxmemory cleanup-first 使用。
-- `EntryRecord.expireAtMillis`：镜像当前 TTL，保证 entry 改写、introspection 和后续 value rewrite 看到同一状态。
+- 负值表示 persistent；
+- 非负值表示绝对毫秒时间戳；
+- `TTL`、`PTTL`、惰性过期、主动清理和 maxmemory cleanup 都读取这个字段。
 
-`YierdisDbKeyLifecycle.setExpireAtMillis(...)` 先写 expire index，再通过 `replaceEntryExpire(...)` 更新 `EntryRecord` 镜像。`removeExpire(...)` 则先删 index，再把 entry 里的 TTL 设回 `-1`。
-
-这两份状态的职责不同：
-
-- expire index 是查找和 cleanup 的入口；
-- `EntryRecord.expireAtMillis` 是 DB object graph 内部的同步镜像；
-- `YierdisDbMemoryReporter.usedBytesForMaxmemory()` 还会按 TTL 条目数追加稳定估算，因为 expire index 不靠 value payload ledger 自动记账。
-
-维护时不要只改一边。只改 entry 会让 cleanup/`TTL` 看不到 TTL；只改 index 会让 entry rewrite、memory/introspection 和 lazy expire 看到旧状态。
+`YierdisDbKeyLifecycle.expireCount()` 是随 entry 发布、替换和释放同步更新的精确派生计数，用于 cleanup fast path、`MEMORY STATS`、instance observability 和 flush outcome。它不是第二份 key-to-deadline 状态，也不参与查找。
 
 ## TTL 命令写路径
 
-TTL 写命令和 `SET ... EX/PX/EXAT/PXAT/KEEPTTL` 最终都收敛到同一条 DB 写路径：
+TTL 写命令和 `SET ... EX/PX/EXAT/PXAT/KEEPTTL` 最终都通过 mutation executor 提交新的 `EntryRecord`：
 
 ```text
 command
   -> YierdisTtlOps / YierdisStringOps
   -> YierdisDbMutationExecutor.execute(plan)
-     -> YierdisDbMemoryLedger.reserve(upperBound)
-     -> plan.apply()
-        -> keyLifecycle.setExpireAtMillis(...) / removeExpire(...) / removeEntry(...)
-     -> ledger.commit(actualDelta)
+     -> reserve upper bound
+     -> prepare replacement or deletion
+     -> commit EntryRecord
+     -> settle ledger and publish commit stream
 ```
 
-几条关键分支：
+关键分支如下：
 
-- 第一次给 persistent key 增加 TTL 时，`upperBoundBytes()` 会额外预留一份 `ENTRY_OVERHEAD_BYTES_ESTIMATE`，因为 expire index 会新增条目。
-- 更新已有 TTL 不再重复预留这份 metadata 开销。
-- `PERSIST` 仍走 mutation executor，但 `upperBoundBytes()` 为 `0`，成功时只移除 TTL metadata，`MutationOutcome` 是 `TTL_CHANGED`。
-- `EXPIRE 0`、`PEXPIRE 0` 或绝对过期时间已经不晚于 `now` 时，不是“写一个已过期 TTL”，而是直接删除 key。`YierdisTtlOps.deleteImmediately(...)` 会先摘 expire index，再删 entry，并把 `actualDeltaBytes` 记成负数。
-- key 缺失或在进入 TTL 命令前已经被 lazy expire 删除时，写命令返回 unchanged；读命令返回 Redis 兼容的 `-2` / `-1` / `>0`。
+- 设置或更新 TTL 会复用原 `EntryHandle`，只准备并发布新的 `EntryRecord`；upper bound 只包含 allocation-scope bookkeeping，不存在额外 TTL 数据结构 allocation。
+- `PERSIST` 使用 reclamation admission，upper bound 为 `0`，成功时把 deadline 改为 `-1`，结果为 `TTL_CHANGED`。
+- `EXPIRE 0`、`PEXPIRE 0` 或已经到期的绝对时间不会写入一个过期 deadline，而是准备删除当前 entry。
+- key 缺失或在提交前已发生变化时，prepared mutation 返回 unchanged，不覆盖较新的 record。
+- 相对或绝对时间计算溢出时 deadline 饱和到 `Long.MAX_VALUE`。
+- 读命令保持 Redis 兼容结果：key 不存在或已过期为 `-2`，persistent 为 `-1`，其余返回剩余时间。
 
-这也是 `TtlMaxmemoryTest` 的重点：新增 TTL metadata 本身可能触发 `noeviction` OOM，失败时旧值必须保持不变。
+TTL deadline 本身位于既有 entry metadata 中。只改变 deadline 不增加 DB 的物理 committed footprint；maxmemory 仍会对 mutation scope 的保守 bookkeeping 做 admission。
 
-## `liveEntryRecord(...)` 的惰性删除语义
+## 惰性过期
 
-`YierdisDbKeyLifecycle.liveEntryRecord(...)` 是 TTL 可见性的核心，不是普通 lookup。读路径大致顺序是：
+DB ops 解析到 `EntryRecord` 后会比较 `expireAtMillis` 与当前时间。未过期时返回 record；已过期时调用 `YierdisDbRuntimeInternals.reclaimExpired(...)`，并始终对调用方隐藏该 key。
 
-1. 从 `NativeKeyDirectory` 找到 `EntryHandle`。
-2. 从 `EntryTable` 取 `EntryRecord`。
-3. 如果 directory 还指向已经消失的 entry，调用 `unlinkEntry(...)` 清理悬挂映射并返回 `null`。
-4. 如果 TTL 已过期，调用 `removeIfExpired(...)`：
-   - 先复制稳定 key bytes；
-   - 估算删除要扣掉的 bytes；
-   - 先移除 expire index；
-   - 再 `removeEntry(...)` 释放 entry 和 payload；
-   - 调整 used bytes；
-   - 发 synthetic `DEL key`，`kind=EXPIRED`。
-5. 如果删除没有完成，但 `isKeyExpired(...)` 仍判断为过期，继续把 key 隐藏成 `null`。
+回收仍是一笔完整 mutation：
 
-这意味着 lazy expire 不是纯优化，而是当前实现的真实读语义：
+1. 重新校验 key identity、当前 record 与 deadline。
+2. 在 prepare 阶段复制稳定 key bytes，计算删除后的 accounting delta。
+3. commit 时移除 directory entry，释放 entry、value 和 key resources。
+4. 结算 ledger，并发布 synthetic `DEL key`，`kind=EXPIRED`。
 
-- `GET` / `TYPE` / `TTL` / `MEMORY USAGE` 都通过它观察“活着的 key”；
-- 读路径本身可能触发删除、记账和 change event；
-- 启用了 LRU 时，只有成功拿到 live record 的读路径才继续 `touchRecord(...)` 更新访问时钟。
+如果 commit stream 在提交前暂时不可用，entry 会被标记为等待物理删除，key 继续保持不可见，后续 cleanup 再重试。commit 后 publication 失败时删除不会回滚；DB 进入 degraded，并传播 result-unknown 失败。
 
-## `cleanupExpired(...)` 的扫描和 budget
+因此惰性过期不是单纯的优化：读取可能完成物理删除、记账和 commit publication。只有成功取得 live record 的 LRU 路径才会更新访问时钟。
 
-后台清理由 `YierdisDbExpirationSupport.cleanupExpired(...)` 负责，但它不是全表扫描。
+## 有界主动清理
 
-当前策略：
+`YierdisDbExpirationSupport.cleanupExpired(...)` 直接渐进扫描 `NativeKeyDirectory`，不构建单独的 TTL 数据结构。每次调用的硬边界是：
 
-- 每轮最多从 expire index 采样 `20` 个 key。
-- 最多循环 `16` 轮。
-- 单次调用还受 `expireCleanupTimeLimitNanos` 限制。
-- 当本轮过期命中率不高于 `25%` 时提前结束，避免在“几乎没有过期 key”的场景里浪费整轮 budget。
+- 每个 scan chunk 最多检查 `32` 个物理 slot；
+- 单次 cleanup 最多检查 `320` 个物理 slot；
+- 单次最多收集 `20` 个过期候选；
+- 同时受 `expireCleanupTimeLimitNanos` 限制。
 
-每个样本有三种自愈分支：
+cleanup 保存 `ScanCursorV2` 和完整的 key-directory `tableGeneration`。generation 改变时从头开始，避免旧 cursor 在新表拓扑上继续。扫描 callback 只收集候选，退出目录遍历后才执行删除；rehash shadow 可能重复暴露 key，因此候选按完整 native identity 去重。
 
-- expire index 里有 key，但 `expireAtMillis` 取不到：删脏索引。
-- expire index 里有 key，但 `EntryTable` 里没有 record：删脏索引。
-- TTL 已过期：走 `removeIfExpired(...)`，按完整 key lifecycle 删除。
+每个候选在回放前都会重新校验 key bytes、native identity、record/version 和 deadline。TTL 被延后、record 被替换或 key 被重建时，旧候选只会被判为 stale，不会误删新状态。
 
-maintenance 调度链再包一层：
+cursor 的提交规则与 mutation 失败边界一致：
+
+- 候选已删除或已证实 stale 后才保存 next cursor；
+- commit 前失败或当前过期 entry 尚未删除时保留 batch start，供下一次重试；
+- commit 后失败保留已经完成的删除，并保存 next cursor，避免重复发布。
+
+`expireCount == 0` 时 cleanup 快速返回并重置 cursor。只要目录拓扑最终稳定，连续调用会遍历完整 keyspace；单次调用始终受 slot、候选和时间预算限制。
+
+## Maintenance 与 maxmemory
+
+调度链如下：
 
 ```text
 Netty worker timer
@@ -93,32 +86,20 @@ Netty worker timer
      -> global scope: instance-level governor maintenance
 ```
 
-`YierdisServerBootstrap` 用 `cleanupPending` 把重复 tick coalesce 掉，避免 executor 忙时堆出追赶式 cleanup 队列。真正的 DB cleanup 仍只在 owner thread 上执行。
+真正的 DB cleanup 只在 owner thread 上执行。maxmemory admission 也先调用 cleanup，使刚过期的数据能在同一次预算判断中释放；过期候选按 `EXPIRED` 发布，不会计作 `EVICTED`。
 
-如果配置了 change sink，过期清理仍直接走 DB mutation boundary。删除实际提交后，DB 以 `EXPIRED` kind 向固定容量 commit stream 发布规范化的删除记录；stream worker 再把 callback-scoped event 交给 runtime sink。maintenance 不创建命令层观察 scope，也不会在未提交的 cleanup 上发布事件。
+## 维护约束
 
-## `EntryRecord.expireAtMillis` 与 expire index 的双写约束
-
-TTL 相关删除和更新都在维护同一个顺序约束：
-
-- 设置 TTL：先写 expire index，再更新 entry mirror。
-- 清除 TTL：先删 expire index，再把 entry mirror 设回 `-1`。
-- 删除过期 key：先摘 expire index，再删 entry，避免 cleanup 立刻再次随机命中同一个 key。
-- 显式即时过期：`deleteImmediately(...)` 也遵循同样顺序。
-
-这让脏状态可以被自愈，但不应该被主动制造：
-
-- `cleanupExpired(...)` 能清掉 stale expire index entry；
-- `liveEntryRecord(...)` 能清掉 stale key-directory -> entry 映射；
-- 这些分支是保护网，不是鼓励直接改底层结构的许可。
-
-维护规则很简单：TTL 行为统一经 `YierdisTtlOps`、`YierdisStringOps` 和 `YierdisDbKeyLifecycle`；不要在别的地方直接写 `EntryRecord.expireAtMillis` 或单独操作 expire index。
+- 不要在 entry lifecycle 之外直接改写 `expireAtMillis`；`expireCount` 必须随 entry publish/replace/release 一起更新。
+- discovery callback 内不要删除目录项；候选必须在扫描返回后重新验证并回放。
+- 不要只保存 cursor 的编码值；必须同时比较完整 `tableGeneration`。
+- synthetic expiry 必须走无用户 mutation context 的 executor overload，不能伪装成用户命令提交。
 
 ## 相关测试
 
-- `TtlLifecycleDirectOpsTest`：`TTL/PTTL` 的 `-2/-1/>0` 语义、`PERSIST`、绝对过期和 cleanup 后可见性。
-- `ExpireIndexTest`：cleanup 删除无需访问的过期 key、清理 stale expire entry、发 synthetic `EXPIRED` delete、TTL maxmemory accounting。
-- `ExpireSemanticsTest`：`EXPIRE 0` 删除 list/hash/set/zset 后，后续写入可以按新 key 重建。
-- `TtlMaxmemoryTest`：新增第一条 TTL metadata 时，`noeviction` 下的 OOM 必须发生在 mutation 之前。
-- `MemoryStatsAccountingConsistencyTest`：`usedBytesForMaxmemory` 与 `MEMORY STATS` 在有 TTL metadata 时保持一致。
-- `OffHeapBytesViewTtlRegressionTest`、`ExpireKeySharingTest`：补充覆盖 bytes view lookup 和 native key 生命周期共享状态下的过期行为。
+- `TtlLifecycleDirectOpsTest`：`TTL/PTTL` 的 `-2/-1/>0`、`PERSIST`、即时过期和溢出饱和。
+- `ActiveExpirationTest`：有界 slot/candidate 扫描、cursor 推进、rehash 去重、stale 候选、generation 重置，以及 commit 前重试和 commit 后失败。
+- `ExpireSemanticsTest`：各 value type 的即时过期和后续重建。
+- `TtlMaxmemoryTest`：TTL mutation 的 maxmemory admission 与失败原子性。
+- `PhysicalMemoryAccountingTest`、`ActiveExpirationTest`：deadline-only mutation 不改变物理 committed footprint。
+- `CommitStreamExpirationEvictionTest`：`EXPIRED` 与 `EVICTED` synthetic commit 的运行时可见性。
