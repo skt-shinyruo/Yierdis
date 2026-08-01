@@ -56,11 +56,6 @@
         </dependency>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-server-core</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-server-executor</artifactId>
             <scope>test</scope>
         </dependency>
