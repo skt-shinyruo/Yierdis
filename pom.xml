@@ -33,7 +33,6 @@
         <module>yierdis-common/yierdis-common-command</module>
         <module>yierdis-memory/yierdis-memory-api</module>
         <module>yierdis-memory/yierdis-memory-ffm</module>
-        <module>yierdis-memory/yierdis-memory-testkit</module>
         <module>yierdis-networking/yierdis-networking-resp</module>
         <module>yierdis-networking/yierdis-networking-netty</module>
         <module>yierdis-server/yierdis-server-api</module>
@@ -46,7 +45,6 @@
         <module>yierdis-command/yierdis-command-core</module>
         <module>yierdis-command/yierdis-command-builtin</module>
         <module>yierdis-db/yierdis-db-api</module>
-        <module>yierdis-db/yierdis-db-testkit</module>
         <module>yierdis-db/yierdis-db-memory</module>
         <module>yierdis-cli</module>
         <module>yierdis-benchmark</module>
@@ -135,11 +133,6 @@
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-db-testkit</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
                 <artifactId>yierdis-db-memory</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -182,11 +175,6 @@
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
                 <artifactId>yierdis-memory-api</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-memory-testkit</artifactId>
                 <version>${project.version}</version>
             </dependency>
 
