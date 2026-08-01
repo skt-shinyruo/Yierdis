@@ -8,14 +8,14 @@
         <groupId>yier.bubu.redis</groupId>
         <artifactId>yierdis-parent</artifactId>
         <version>0.1.0-SNAPSHOT</version>
-        <relativePath>../../pom.xml</relativePath>
+        <relativePath>../pom.xml</relativePath>
     </parent>
 
-    <artifactId>yierdis-integration-tests</artifactId>
+    <artifactId>yierdis-tests</artifactId>
     <packaging>jar</packaging>
 
-    <name>yierdis-integration-tests</name>
-    <description>Cross-module integration tests for Yierdis runtime and protocol behavior.</description>
+    <name>yierdis-tests</name>
+    <description>Cross-module behavior and architecture tests for Yierdis.</description>
 
     <dependencies>
         <dependency>
@@ -23,89 +23,95 @@
             <artifactId>junit</artifactId>
             <scope>test</scope>
         </dependency>
-
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit4</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-benchmark</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
-
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-common-bytes</artifactId>
             <scope>test</scope>
         </dependency>
-
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-server-runtime</artifactId>
             <scope>test</scope>
         </dependency>
-
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-command-api</artifactId>
+            <artifactId>yierdis-server-runtime-api</artifactId>
             <scope>test</scope>
         </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-command-core</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-command-builtin</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-db-memory</artifactId>
-            <scope>test</scope>
-        </dependency>
-
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-server-api</artifactId>
             <scope>test</scope>
         </dependency>
-
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-server-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-server-executor</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-server-main</artifactId>
             <scope>test</scope>
         </dependency>
-
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-networking-netty</artifactId>
+            <artifactId>yierdis-command-api</artifactId>
             <scope>test</scope>
         </dependency>
-
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-command-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-command-builtin</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-db-api</artifactId>
             <scope>test</scope>
         </dependency>
-
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-db-memory</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-memory-api</artifactId>
             <scope>test</scope>
         </dependency>
-
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-memory-ffm</artifactId>
             <scope>test</scope>
         </dependency>
-
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-server-runtime-api</artifactId>
+            <artifactId>yierdis-networking-resp</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-networking-netty</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
