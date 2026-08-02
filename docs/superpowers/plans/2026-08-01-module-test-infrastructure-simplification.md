@@ -34,7 +34,7 @@ PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn ...
 - [x] Confirm the stage 3 worktree is clean and review the target topology.
 - [x] Add `docs/superpowers/specs/2026-08-01-module-test-infrastructure-simplification-design.md`.
 - [x] Add this implementation plan.
-- [ ] Commit the design and plan before source moves.
+- [x] Commit the design and plan before source moves.
 
 ## Task 2: Flatten Lane Aggregators
 
@@ -108,10 +108,10 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 ## Task 6: Independent Final Review
 
-- [ ] Obtain one built-in review for Maven resolution, test ownership, and
+- [x] Obtain one built-in review for Maven resolution, test ownership, and
   package/API preservation.
-- [ ] Obtain a second built-in review for stale paths, dead dependencies, and
+- [x] Obtain a second built-in review for stale paths, dead dependencies, and
   architecture-guard coverage.
-- [ ] Fix every confirmed finding and rerun the narrowest affected tests.
-- [ ] Run `git diff --check`, verify the worktree is clean, and commit the
+- [x] Fix every confirmed finding and rerun the narrowest affected tests.
+- [x] Run `git diff --check`, verify the worktree is clean, and commit the
   final review fixes.

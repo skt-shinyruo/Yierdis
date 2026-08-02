@@ -27,12 +27,13 @@ collection 写入也类似：root record 和 payload internals 都是 allocator-
 常见场景：
 
 - 返回 `byte[]` 的 storage API。
-- `SET ... GET` 这类需要返回旧值的命令。
-- `RANDOMKEY`、`SCAN`、snapshot、introspection 和测试断言。
+- `RANDOMKEY`、snapshot、introspection 和测试断言。
 - `MEMORY` / `OBJECT` 类命令需要构造诊断输出。
 - 返回 `List<byte[]>` 的 collection read API，例如非流式聚合结果。
 
 当前 string `GET` 路径可以通过 `BytesSlice` / `BulkStringSink` 包装成流式 `RedisReply`，再由中央 renderer 写入协议端口。native slice 只在同步 `writeTo` 期间 pin allocator handle；它不是可被长期持有的 allocator view。
+
+命令 `GET`、`HGET`、pop 和 `SET ... GET` 使用 retained native-backed view/slice；`SCAN` 则保留 cursor、目录元数据和 epoch，在输出阶段重放目录并生成 native-backed key slice。它们都不要求先把完整结果 materialize 到 heap。
 
 keyspace 也是同理：key bytes 持久化为 `KEY_BYTES` native object，但只要外部接口要 `byte[]`，就会通过 allocator resolve view 读取并复制出来。
 

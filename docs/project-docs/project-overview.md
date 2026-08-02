@@ -45,6 +45,8 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 | 模块区域 | 主要职责 |
 | --- | --- |
 | `yierdis-common/yierdis-common-bytes` | 共享 byte/key 工具、字节视图和底层数据转换。 |
+| `yierdis-common/yierdis-common-memory` | 共享 memory snapshot、pressure budget 和 reclaim result 契约。 |
+| `yierdis-common/yierdis-common-command` | 共享 command record、mutation context 和 result-unknown 契约。 |
 | `yierdis-memory/yierdis-memory-api` | memory 抽象、handle 和访问边界。 |
 | `yierdis-memory/yierdis-memory-ffm` | JDK FFM allocator/runtime、native segment 管理和 stable handle 支撑。 |
 | `yierdis-networking/yierdis-networking-resp` | RESP reply model、`RespReplyWriter` 和 inline command parsing。 |
@@ -52,6 +54,7 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 | `yierdis-server/yierdis-server-api` | `ExecutionRequest`、`PreparedCommand`、`CommandResult`、语义 `RedisReply`、`RedisReplyRenderer` 和渲染端口 `RedisReplyWriter` 等执行层公共契约。 |
 | `yierdis-server/yierdis-server-core` | `EngineSession` 连接会话状态 owner；不拥有命令解析、分发或渲染。 |
 | `yierdis-server/yierdis-server-executor` | `CommandExecutor`、队列、背压、回复预留和集中执行/渲染。 |
+| `yierdis-server/yierdis-server-runtime-api` | 实例配置、change event 和 change sink 的 runtime 边界契约。 |
 | `yierdis-server/yierdis-server-runtime` | `YierdisInstance`、多 DB 装配、runtime config、maxmemory governor 和 maintenance。 |
 | `yierdis-server/yierdis-server-main` | `main()`、CLI 参数、server bootstrap、`CommandDispatcher` 和 Netty pipeline 装配。 |
 | `yierdis-command/yierdis-command-api` | `CommandSpec`、`CommandSyntax`、`CommandArgs`、`CommandInvocation` 等命令契约。 |

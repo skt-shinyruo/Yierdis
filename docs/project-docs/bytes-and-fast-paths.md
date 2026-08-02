@@ -54,7 +54,7 @@ DB API 的很多 read ops 接受 `BytesView`，例如 `StringReadOps`、`TtlRead
 
 当前实现里，`YierdisDbKeyLifecycle` 在 `BytesView` 进入 key directory 前会调用 `YierdisDb.toByteArray(keyView)` materialize 一个 heap `byte[]`。这是因为 `NativeKeyDirectory` 的 lookup API 当前是 `byte[]` based，例如 `get(byte[])`、`getKeyHandle(byte[])` 和 `compute(byte[], ...)`。这份 heap copy 是今天的 ownership/lifetime 边界，不应该写成“lookup 已经避免 heap key 生成”。
 
-新 key 持久化会把 key bytes 存成 allocator-backed `KEY_BYTES`；SCAN、snapshot 和显式 introspection 仍会为了输出或诊断生成 heap copy。这些复制点和 lifecycle 边界 copy 一样，都是有意的 lifetime/ownership 边界。
+新 key 持久化会把 key bytes 存成 allocator-backed `KEY_BYTES`。`SCAN` discovery 只保留 cursor、目录元数据和 epoch，输出时重放同一段目录并把 key 暴露为 native-backed slice；snapshot、`RANDOMKEY`、显式 `byte[]` 和 introspection API 才会为了独立 ownership 或诊断生成 heap copy。这些复制点和 lifecycle 边界 copy 一样，都是有意的 lifetime/ownership 边界。
 
 写路径中，`StringWriteOps.set(...)`、`append(...)` 和 HLL 内部逻辑接收 `BytesSlice`。这让 command 层把 value 作为 slice 交给 DB，由 `StringRoot` 或对应 type root 写入 allocator-backed `STRING_BYTES` 或 collection native payload handles。slice 的重点是延后复制决策，而不是承诺零拷贝持久化。
 
@@ -87,6 +87,7 @@ CommandResult / RedisReply
 - API 边界使用 `BytesView`，让 command/DB contract 不依赖 Netty；当前 DB lifecycle lookup 仍会 materialize heap `byte[]`。
 - `BytesSlice.writeTo(BytesSink)` 可以流式写出 value，避免 whole-result materialization，但具体实现仍可能使用有界 heap scratch copy。
 - `NativeBytesSlice` 在同步写出期间 pin allocator handle，写完后 unpin，避免为了 `LRANGE`、`HGETALL`、`SMEMBERS`、`ZRANGE` 这类流式读先 materialize `List<byte[]>`。
+- `SCAN` window 保留 cursor、目录 generation/capacity、epoch 和匹配计数；length/emit 阶段重放相同物理 slot 范围，并把匹配 key 包装为 native-backed slice。
 - `ReplyReservationSink` / `BoundedChunkedReplySink` 在分配前取得额度，并把编码结果限制在有界 `ByteBuf` chunk 内。
 - `BulkStringSink` 让 collection range 边遍历边输出。
 
@@ -95,9 +96,9 @@ fallback 也同样重要。以下 heap materialization 是有意的：
 - protocol snapshots：`RetainedRespExecutionRequest` / `ExecutionRequest` 需要稳定 argv 跨过 decoder 生命周期和 executor queue。
 - DB lifecycle lookup：当前 `YierdisDbKeyLifecycle` 用 `YierdisDb.toByteArray(...)` 把 `BytesView` 转成 heap `byte[]`，再进入 `NativeKeyDirectory`。
 - transaction replay：事务队列通过 `ExecutionRequest.retain()` 取得独立所有权；生产网络实现共享不可变 argv 和 reference-counted request-memory lease，默认接口实现才使用 heap copy。
-- explicit introspection：`SCAN`、snapshot、`MEMORY` / object 类输出需要构造返回值或诊断对象，不能把 native view 泄漏给调用方。
+- explicit materialization：snapshot、`RANDOMKEY`、显式 `byte[]` API 和 `MEMORY` / object 类 introspection 需要构造独立返回值或诊断对象，不能把 native view 泄漏给调用方。
 - tests：测试经常用 heap arrays 和 recording sinks 断言内容，这是可读性和确定性的取舍。
-- ownership-returning DB APIs：`GET` / `HGET` / pop / snapshot / introspection 等返回 owned `byte[]` 或集合快照时会复制。
+- ownership-returning DB APIs：要求 owned `byte[]` 或集合快照的显式 API 会复制；命令 `GET`、`HGET`、pop 和 `SET ... GET` 则持有 retained native-backed view/slice，直到同步 reply rendering 完成后释放。
 - unavoidable fallback paths：JSON/base64/escape、短生命周期输入持久化、需要排序/聚合或独立所有权的结果，都可能必须复制。
 
 判断一条路径是否合理，不是看它有没有复制，而是看复制是否发生在 ownership、lifetime 或格式转换真正需要的位置。

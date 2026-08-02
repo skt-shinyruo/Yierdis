@@ -24,6 +24,8 @@ flowchart LR
   memoryFfm["yierdis-memory-ffm"]
   memoryApi["yierdis-memory-api"]
   commonBytes["yierdis-common-bytes"]
+  commonMemory["yierdis-common-memory"]
+  commonCommand["yierdis-common-command"]
   cli["yierdis-cli"]
   benchmark["yierdis-benchmark"]
 
@@ -40,20 +42,22 @@ flowchart LR
   serverMain --> serverRuntimeApi
   serverMain --> serverExecutor
   serverMain --> memoryFfm
+  serverMain --> memoryApi
 
   serverCore --> serverApi
   serverCore --> commandApi
   serverCore --> commandCore
   serverExecutor --> serverApi
   serverApi --> commonBytes
+  serverApi --> commonCommand
 
   serverRuntime --> dbApi
   serverRuntime --> serverRuntimeApi
   serverRuntimeApi --> serverApi
   serverRuntimeApi --> dbApi
 
-  netty --> commonBytes
   netty --> resp
+  netty --> serverApi
   resp --> commonBytes
   resp --> serverApi
 
@@ -63,23 +67,28 @@ flowchart LR
   commandBuiltin --> commonBytes
   commandCore --> commandApi
   commandCore --> dbApi
+  commandCore --> commonCommand
   commandApi --> serverApi
   commandApi --> dbApi
 
   dbMemory --> dbApi
-  dbMemory --> serverRuntimeApi
   dbMemory --> commonBytes
-  dbMemory --> memoryFfm
   dbMemory --> memoryApi
   dbApi --> commonBytes
+  dbApi --> commonMemory
+  dbApi --> commonCommand
 
   memoryFfm --> memoryApi
+  memoryApi --> commonMemory
   memoryApi --> commonBytes
+  commonCommand --> commonBytes
 
   cli --> resp
-  benchmark --> resp
+  benchmark --> dbMemory
   benchmark --> dbApi
+  benchmark --> memoryApi
   benchmark --> memoryFfm
+  benchmark --> resp
 ```
 
 这条方向图说明：实现模块依赖 API 模块，适配模块依赖协议和 bytes 基础层，最外层 `yierdis-server-main` 依赖各车道完成最终组装。
