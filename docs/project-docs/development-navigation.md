@@ -89,7 +89,7 @@ CommandExecutor
 - [`CommandDispatcher.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java)
 - [`TransactionCommands.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/TransactionCommands.java)
 - [`TransactionState.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/TransactionState.java)
-- [`EngineSession.java`](../../yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java)
+- [`EngineSession.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java)
 
 可排队命令在 `MULTI` 中只运行 handler parse 做 preflight；`QUEUED` action 在回复容量预留后才调用
 `TransactionState.tryEnqueue(request)`，由 transaction state 取得 retained request 所有权，不会提前运行

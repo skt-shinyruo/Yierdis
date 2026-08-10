@@ -67,7 +67,7 @@
 
 | 类/模块 | 职责 | 关键入口 | 继续阅读 |
 | --- | --- | --- | --- |
-| [`EngineSession`](../../yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java) | 仅作为连接级 session state owner，持有 DB index、RESP version、transaction queue 和 client metadata，不承担命令转发 | session accessors, `DefaultTransactionState` | [`transaction-and-replay.md`](./transaction-and-replay.md) |
+| [`EngineSession`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java) | 仅作为连接级 session state owner，持有 DB index、RESP version、transaction queue 和 client metadata，不承担命令转发 | session accessors, `DefaultTransactionState` | [`transaction-and-replay.md`](./transaction-and-replay.md) |
 | [`CommandSession`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/CommandSession.java) | 聚合命令边界需要的 DB index、client metadata、transaction、stats 和 protocol 能力 | inherited capability methods | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
 | [`TransactionState`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/TransactionState.java) | `MULTI/EXEC/DISCARD` 队列状态、abort 和 replay contract | `begin()`, `discard()`, `tryEnqueue(...)`, `drain()` | [`transaction-and-replay.md`](./transaction-and-replay.md) |
 | [`ExecutionRecord`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ExecutionRecord.java) | dbIndex + command record view 的 change-event API 载体；支持 copied 与 callback-scoped borrowed 两种入口 | constructor, `borrowed(...)`, accessors | [`transaction-and-replay.md`](./transaction-and-replay.md), [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md), [`glossary.md`](./glossary.md) |

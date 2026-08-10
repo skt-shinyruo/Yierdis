@@ -50,11 +50,6 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-server-core</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-networking-resp</artifactId>
         </dependency>
 

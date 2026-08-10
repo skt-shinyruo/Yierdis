@@ -9,7 +9,6 @@
 ```mermaid
 flowchart LR
   serverMain["yierdis-server-main"]
-  serverCore["yierdis-server-core"]
   serverExecutor["yierdis-server-executor"]
   serverRuntime["yierdis-server-runtime"]
   serverRuntimeApi["yierdis-server-runtime-api"]
@@ -35,7 +34,6 @@ flowchart LR
   serverMain --> commandApi
   serverMain --> commandCore
   serverMain --> commandBuiltin
-  serverMain --> serverCore
   serverMain --> resp
   serverMain --> netty
   serverMain --> serverRuntime
@@ -44,9 +42,6 @@ flowchart LR
   serverMain --> memoryFfm
   serverMain --> memoryApi
 
-  serverCore --> serverApi
-  serverCore --> commandApi
-  serverCore --> commandCore
   serverExecutor --> serverApi
   serverApi --> commonBytes
   serverApi --> commonCommand
@@ -143,8 +138,6 @@ protocol owns wire shape and reply encoding, not DB semantics.
 
 `yierdis-server-api` 定义执行契约，例如 `ExecutionRequest`、`CommandSession`、`PreparedCommand`、`CommandResult`、`RedisReply` 和 `RedisReplyRenderer`。`RedisReplyWriter` 只作为 renderer 面向 RESP 编码实现的输出端口；命令实现不依赖它。
 
-`yierdis-server-core` 当前只提供 `EngineSession`。它是每条连接的 command session owner，持有 DB 选择、客户端 metadata、认证、RESP 协商和事务队列状态，不拥有命令解析、分发、执行或回复渲染。
-
 `yierdis-server-executor` 负责队列、预算、背压、owner thread 调度、回复容量预留和结果集中渲染。它执行的主链是：
 
 ```text
@@ -157,7 +150,7 @@ CommandExecutor
   -> CommandResult -> RedisReplyRenderer
 ```
 
-`yierdis-server-main` 负责最终组装，是真正的 composition root。`ServerCommandComposition` 在这里把 builtin、server commands、registry 和 `CommandDispatcher` 组装到一起，bootstrap 再把 `dispatcher::prepare` 接到 `CommandExecutor`。生产启动路径也在这里用 `YierdisFfmStableMemoryBackend::new` 构造 `YierdisDbEngineFactory`，再通过 `YierdisInstanceConfig` 注入 runtime；每个 DB create 都得到独立 backend，maxmemory scope 只决定预算协调方式。
+`yierdis-server-main` 负责最终组装，是真正的 composition root。具体的 `EngineSession` 也位于这里：它是每条连接的 command session owner，持有 DB 选择、客户端 metadata、认证、RESP 协商和事务队列状态，但稳定接口仍由 `yierdis-server-api` 中的 `CommandSession` 定义。`ServerCommandComposition` 在这里把 builtin、server commands、registry 和 `CommandDispatcher` 组装到一起，bootstrap 再把 `dispatcher::prepare` 接到 `CommandExecutor`。生产启动路径也在这里用 `YierdisFfmStableMemoryBackend::new` 构造 `YierdisDbEngineFactory`，再通过 `YierdisInstanceConfig` 注入 runtime；每个 DB create 都得到独立 backend，maxmemory scope 只决定预算协调方式。
 
 `YierdisInstance.create(config)` 是 strict runtime 入口，要求调用方已经提供 `DbEngineFactory` 或 `EngineFactoryBinding`。embedded/test 同样显式组装这些依赖；runtime 本身不选择默认 DB backend。
 

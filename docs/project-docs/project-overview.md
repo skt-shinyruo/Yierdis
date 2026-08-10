@@ -52,11 +52,10 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 | `yierdis-networking/yierdis-networking-resp` | RESP reply model、`RespReplyWriter` 和 inline command parsing。 |
 | `yierdis-networking/yierdis-networking-netty` | Netty decoder、带 admission lease 的 `RetainedRespExecutionRequest`、channel handler、protocol error 和 TCP write-back。 |
 | `yierdis-server/yierdis-server-api` | `ExecutionRequest`、`PreparedCommand`、`CommandResult`、语义 `RedisReply`、`RedisReplyRenderer` 和渲染端口 `RedisReplyWriter` 等执行层公共契约。 |
-| `yierdis-server/yierdis-server-core` | `EngineSession` 连接会话状态 owner；不拥有命令解析、分发或渲染。 |
 | `yierdis-server/yierdis-server-executor` | `CommandExecutor`、队列、背压、回复预留和集中执行/渲染。 |
 | `yierdis-server/yierdis-server-runtime-api` | 实例配置、change event 和 change sink 的 runtime 边界契约。 |
 | `yierdis-server/yierdis-server-runtime` | `YierdisInstance`、多 DB 装配、runtime config、maxmemory governor 和 maintenance。 |
-| `yierdis-server/yierdis-server-main` | `main()`、CLI 参数、server bootstrap、`CommandDispatcher` 和 Netty pipeline 装配。 |
+| `yierdis-server/yierdis-server-main` | `main()`、CLI 参数、`EngineSession`、server bootstrap、`CommandDispatcher` 和 Netty pipeline 装配。 |
 | `yierdis-command/yierdis-command-api` | `CommandSpec`、`CommandSyntax`、`CommandArgs`、`CommandInvocation` 等命令契约。 |
 | `yierdis-command/yierdis-command-core` | `CommandRegistry`、`CommandDispatcher`、事务排队预检与 replay。 |
 | `yierdis-command/yierdis-command-builtin` | Redis 风格内置命令实现。 |
@@ -127,7 +126,7 @@ DB 内部读 [`db-internals.md`](./db-internals.md)，FFM runtime 和 native-mem
 - `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/ServerCommandComposition.java`
 - `yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java`
 - `yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java`
-- `yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java`
 - `yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
 - `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`
