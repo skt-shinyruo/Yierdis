@@ -8,6 +8,8 @@ import java.util.Objects;
  * 构造协议无关回复形状的工厂。
  */
 public final class ReplyShapes {
+    private static final int MAX_NORMALIZED_ERROR_BYTES = 512;
+
     private ReplyShapes() {
     }
 
@@ -17,6 +19,10 @@ public final class ReplyShapes {
 
     public static ReplyShape error(String value) {
         return new ReplyShape.Error(asciiLength(normalizeError(value)));
+    }
+
+    public static ReplyShape errorUpperBound() {
+        return new ReplyShape.Error(MAX_NORMALIZED_ERROR_BYTES);
     }
 
     public static ReplyShape integer(long value) {
@@ -88,6 +94,14 @@ public final class ReplyShapes {
         return new ReplyShape.ByteSequence(count, lengths, retainedSourceBytes);
     }
 
+    public static ReplyShape byteSet(
+            int count,
+            long retainedSourceBytes,
+            ReplyShape.PayloadLengths lengths
+    ) {
+        return new ReplyShape.ByteSet(count, lengths, retainedSourceBytes);
+    }
+
     public static ReplyShape byteMap(
             int pairCount,
             long retainedSourceBytes,
@@ -136,7 +150,7 @@ public final class ReplyShapes {
         if (!hasRedisErrorPrefix(value)) {
             value = "ERR " + value;
         }
-        return truncateUtf8(value, 512);
+        return truncateUtf8(value, MAX_NORMALIZED_ERROR_BYTES);
     }
 
     private static String sanitizeSimple(String value) {

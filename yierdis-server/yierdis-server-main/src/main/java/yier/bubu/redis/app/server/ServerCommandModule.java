@@ -113,7 +113,7 @@ final class ServerCommandModule implements CommandModule {
     }
 
     private static RedisReply helloReply(int targetRespVersion) {
-        return RedisReplies.map(List.of(
+        List<RedisReply> fields = List.of(
                 RedisReplies.bulkString(HELLO_SERVER_KEY),
                 RedisReplies.bulkString(HELLO_SERVER_VALUE),
                 RedisReplies.bulkString(HELLO_VERSION_KEY),
@@ -124,7 +124,8 @@ final class ServerCommandModule implements CommandModule {
                 RedisReplies.bulkString(HELLO_MODE_VALUE),
                 RedisReplies.bulkString(HELLO_ROLE_KEY),
                 RedisReplies.bulkString(HELLO_ROLE_VALUE)
-        ));
+        );
+        return targetRespVersion == 3 ? RedisReplies.map(fields) : RedisReplies.array(fields);
     }
 
     private record HelloArgs(Integer requestedVersion, boolean setClientName, String clientName) {

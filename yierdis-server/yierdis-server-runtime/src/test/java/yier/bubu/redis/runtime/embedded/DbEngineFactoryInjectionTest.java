@@ -12,7 +12,6 @@ import yier.bubu.redis.storage.api.DbEngineFactory;
 import yier.bubu.redis.storage.api.RuntimeDbEngine;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbEngine;
-import yier.bubu.redis.storage.api.ExpirationManager;
 import yier.bubu.redis.storage.api.GlobalMaxmemoryDbEngine;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
@@ -198,11 +197,6 @@ public class DbEngineFactoryInjectionTest {
         }
 
         @Override
-        public ExpirationManager expiration() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
         public MemoryOps memory() {
             throw new UnsupportedOperationException();
         }
@@ -242,11 +236,6 @@ public class DbEngineFactoryInjectionTest {
 
         @Override
         public DbWrites writes() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public ExpirationManager expiration() {
             throw new UnsupportedOperationException();
         }
 
@@ -330,11 +319,6 @@ public class DbEngineFactoryInjectionTest {
 
         @Override
         public DbWrites writes() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public ExpirationManager expiration() {
             throw new UnsupportedOperationException();
         }
 
@@ -481,11 +465,6 @@ public class DbEngineFactoryInjectionTest {
 
         @Override
         public DbWrites writes() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public ExpirationManager expiration() {
             throw new UnsupportedOperationException();
         }
 

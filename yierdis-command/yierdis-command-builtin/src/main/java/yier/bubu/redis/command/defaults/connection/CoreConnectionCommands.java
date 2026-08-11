@@ -137,10 +137,16 @@ public final class CoreConnectionCommands {
         if (args.argc() == 2 && !args.is(1, "SYNC") && !args.is(1, "ASYNC")) {
             throw new CommandParseException("ERR syntax error");
         }
+        boolean async = args.argc() == 2 && args.is(1, "ASYNC");
         return session -> PreparedCommands.action(
                 ReplyShapes.simpleString("OK"),
                 execution -> {
-                    support.commandDb(execution).lifecycle().flushDb();
+                    var lifecycle = support.commandDb(execution).lifecycle();
+                    if (async) {
+                        lifecycle.flushDbAsync();
+                    } else {
+                        lifecycle.flushDb();
+                    }
                     return CommandResult.reply(RedisReplies.simpleString("OK"));
                 }
         );

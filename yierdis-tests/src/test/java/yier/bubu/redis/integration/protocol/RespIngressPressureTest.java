@@ -46,12 +46,16 @@ public class RespIngressPressureTest {
                         fixture.readCredits.outstandingReadCreditBytes() <= RECEIVE_CREDIT_BYTES);
             }
 
+            IngressFixture queued = new IngressFixture(budget, "queued-after-pressure");
+            connections.add(queued);
+            queued.channel.runPendingTasks();
+
             InboundMemoryBudgetStats pressured = budget.stats();
             Assert.assertTrue("declared bulks must engage global pressure", pressured.backpressured());
             Assert.assertTrue("at least one connection must be queued at global pressure",
                     pressured.waitingConnections() > 0);
-            Assert.assertTrue("at least one queued connection must pause ingress",
-                    connections.stream().anyMatch(connection -> connection.readCredits.inputPausedByIngress()));
+            Assert.assertEquals("in-flight requests keep progress credit while fresh work waits",
+                    0L, queued.readCredits.outstandingReadCreditBytes());
         } finally {
             for (IngressFixture fixture : connections) {
                 fixture.close();

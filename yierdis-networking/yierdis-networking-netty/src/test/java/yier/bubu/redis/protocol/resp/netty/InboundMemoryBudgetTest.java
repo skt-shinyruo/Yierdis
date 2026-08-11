@@ -85,14 +85,89 @@ public class InboundMemoryBudgetTest {
     }
 
     @Test
-    public void transferWaitsWhenTheRealTemporaryPeakCannotFit() {
+    public void transferThatCannotFitItsOwnCopyPeakIsRejectedRatherThanQueued() {
         InboundMemoryBudget budget = new InboundMemoryBudget(160);
         InboundConnectionMemory connection = connection("a", 100, () -> { });
 
         Assert.assertEquals(InboundMemoryBudget.ReservationResult.RESERVED, budget.tryReserve(connection, 90));
-        Assert.assertEquals(InboundMemoryBudget.ReservationResult.WAITING, budget.tryTransfer(connection, 80, 90));
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.REQUEST_LIMIT,
+                budget.tryTransfer(connection, 80, 90));
         Assert.assertEquals(90L, budget.stats().reservedBytes());
-        Assert.assertEquals(1, budget.stats().waitingConnections());
+        Assert.assertEquals(0, budget.stats().waitingConnections());
+    }
+
+    @Test
+    public void transferWaitsOnlyForCapacityAnotherConnectionCanRelease() {
+        InboundMemoryBudget budget = new InboundMemoryBudget(180);
+        AtomicInteger resumed = new AtomicInteger();
+        InboundConnectionMemory source = connection("source", 100, resumed::incrementAndGet);
+        InboundConnectionMemory blocker = connection("blocker", 100, () -> { });
+
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.RESERVED, budget.tryReserve(source, 90));
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.RESERVED, budget.tryReserve(blocker, 30));
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.WAITING,
+                budget.tryTransfer(source, 80, 90));
+
+        budget.release(blocker, 20);
+
+        Assert.assertEquals(1, resumed.get());
+        Assert.assertEquals(0, budget.stats().waitingConnections());
+        Assert.assertEquals(180L, budget.stats().reservedBytes());
+
+        budget.release(source, 90);
+        budget.release(source, 80);
+        budget.release(blocker, 10);
+        Assert.assertEquals(0L, budget.stats().reservedBytes());
+    }
+
+    @Test
+    public void currentRequestProgressBypassesOnlyTheSoftHighWatermark() {
+        InboundMemoryBudget budget = new InboundMemoryBudget(100);
+        InboundConnectionMemory current = connection("current", 200, () -> { });
+        InboundConnectionMemory fresh = connection("fresh", 100, () -> { });
+        InboundConnectionMemory queued = connection("queued", 100, () -> { });
+
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.RESERVED, budget.tryReserve(current, 75));
+        Assert.assertTrue(budget.stats().backpressured());
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.WAITING,
+                budget.tryReserveReadCredit(fresh, 10));
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.WAITING, budget.tryReserve(queued, 10));
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.RESERVED,
+                budget.tryReserveProgressReadCredit(current, 10));
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.WAITING,
+                budget.tryReserveProgressReadCredit(current, 16));
+
+        budget.cancelWaiter(current);
+        budget.cancelWaiter(fresh);
+        budget.cancelWaiter(queued);
+        budget.release(current, 85);
+        Assert.assertEquals(0L, budget.stats().reservedBytes());
+    }
+
+    @Test
+    public void progressWaiterCanAdvanceAheadOfNewWorkWhileBackpressured() {
+        InboundMemoryBudget budget = new InboundMemoryBudget(100);
+        AtomicInteger progressWakeups = new AtomicInteger();
+        AtomicInteger freshWakeups = new AtomicInteger();
+        InboundConnectionMemory current = connection("current", 100, progressWakeups::incrementAndGet);
+        InboundConnectionMemory holder = connection("holder", 100, () -> { });
+        InboundConnectionMemory fresh = connection("fresh", 100, freshWakeups::incrementAndGet);
+
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.RESERVED, budget.tryReserve(current, 20));
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.RESERVED, budget.tryReserve(holder, 80));
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.WAITING, budget.tryReserve(fresh, 10));
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.WAITING,
+                budget.tryReserveProgressReadCredit(current, 10));
+
+        budget.release(holder, 10);
+
+        Assert.assertEquals(1, progressWakeups.get());
+        Assert.assertEquals(0, freshWakeups.get());
+        Assert.assertTrue(current.claimGrantedReservation(10));
+        budget.cancelWaiter(fresh);
+        budget.release(current, 30);
+        budget.release(holder, 70);
+        Assert.assertEquals(0L, budget.stats().reservedBytes());
     }
 
     @Test

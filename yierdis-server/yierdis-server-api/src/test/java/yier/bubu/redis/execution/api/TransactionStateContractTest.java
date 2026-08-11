@@ -2,25 +2,10 @@ package yier.bubu.redis.execution.api;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.util.Set;
 import org.junit.Assert;
 import org.junit.Test;
 
-public class CommandSessionContractTest {
-    @Test
-    public void commandSessionRequiresEveryConnectionCapability() {
-        Assert.assertEquals(
-                Set.of(
-                        DbIndexSession.class,
-                        ClientMetadataSession.class,
-                        TransactionSession.class,
-                        ConnectionStatsSession.class,
-                        ProtocolNegotiationSession.class
-                ),
-                Set.of(CommandSession.class.getInterfaces())
-        );
-    }
-
+public class TransactionStateContractTest {
     @Test
     public void transactionStateHasNoDefaultOwnershipOrAbortMethods() throws Exception {
         for (String name : new String[]{

@@ -17,13 +17,13 @@ import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbReads;
 import yier.bubu.redis.storage.api.DbWrites;
 import yier.bubu.redis.storage.api.DefragmentableDbEngine;
-import yier.bubu.redis.storage.api.ExpirationManager;
 import yier.bubu.redis.storage.api.GlobalMaxmemoryDbEngine;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.MemoryOps;
 import yier.bubu.redis.storage.api.MutationOutcome;
+import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceResult;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
@@ -34,18 +34,17 @@ import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMemoryLedger;
  * 基于稳定内存后端的单 owner DB；只能由 {@link YierdisDbEngineFactory} 组合。
  */
 public final class YierdisDb
-        implements CommitPublishingDbEngine, GlobalMaxmemoryDbEngine, DefragmentableDbEngine, AutoCloseable {
+        implements CommitPublishingDbEngine, GlobalMaxmemoryDbEngine, DefragmentableDbEngine, MemoryOps, AutoCloseable {
     private final YierdisDbRuntimeState runtimeState;
     private final YierdisDbHealth health;
     private final DbComponentMemoryUsage memoryUsage;
     private final YierdisDbMemoryLedger ledger;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final YierdisDbIntrospection introspection;
+    private final YierdisDbMemoryReporter memoryReporter;
     private final YierdisDbDataMaintenance maintenance;
     private final DbReads reads;
     private final DbWrites writes;
-    private final ExpirationManager expirationManager;
-    private final MemoryOps memoryOps;
     private final DbLifecycleOps lifecycleOps;
 
     static YierdisDb create(
@@ -81,11 +80,10 @@ public final class YierdisDb
         this.ledger = components.ledger();
         this.keyLifecycle = components.keyLifecycle();
         this.introspection = components.introspection();
+        this.memoryReporter = components.memoryReporter();
         this.maintenance = components.maintenance();
         this.reads = components.reads();
         this.writes = components.writes();
-        this.expirationManager = components.expirationManager();
-        this.memoryOps = components.memoryOps();
         this.lifecycleOps = components.lifecycleOps();
         runtimeState.bindMaxmemoryParticipant(this);
     }
@@ -101,13 +99,23 @@ public final class YierdisDb
     }
 
     @Override
-    public ExpirationManager expiration() {
-        return expirationManager;
+    public MemoryOps memory() {
+        return this;
     }
 
     @Override
-    public MemoryOps memory() {
-        return memoryOps;
+    public long memoryUsage(BytesView keyView) {
+        return memoryReporter.memoryUsage(keyView);
+    }
+
+    @Override
+    public YierdisMemoryStats memoryStats() {
+        return memoryReporter.memoryStats();
+    }
+
+    @Override
+    public String objectEncoding(BytesView keyView) {
+        return introspection.objectEncoding(keyView);
     }
 
     @Override
@@ -128,6 +136,11 @@ public final class YierdisDb
     @Override
     public void runMaintenance() {
         maintenance.runMaintenance();
+    }
+
+    @Override
+    public void runDeferredReclamation() {
+        maintenance.runDeferredReclamation();
     }
 
     @Override
@@ -274,6 +287,10 @@ public final class YierdisDb
 
     int size() {
         return maintenance.size();
+    }
+
+    long detachedEntryCount() {
+        return runtimeState.detachedEntryCount();
     }
 
     long estimatedUsedBytes() {

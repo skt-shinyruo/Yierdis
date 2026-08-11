@@ -220,12 +220,27 @@ public class CommandVariantCoverageTest {
                 Assert.assertTrue(client.execute(cmd("SET", "k", "v")) instanceof ReplySimpleString);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(cmd("FLUSHDB"))).value());
                 Assert.assertTrue(client.execute(cmd("GET", "k")) instanceof ReplyNull);
+                Assert.assertEquals(0L, db.memory().memoryStats().nativeLiveObjects());
 
                 Assert.assertTrue(client.execute(cmd("SET", "k", "v")) instanceof ReplySimpleString);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(cmd("FLUSHDB", "SYNC"))).value());
                 Assert.assertTrue(client.execute(cmd("GET", "k")) instanceof ReplyNull);
+                Assert.assertEquals(0L, db.memory().memoryStats().nativeLiveObjects());
 
+                Assert.assertTrue(client.execute(cmd("SET", "k", "before-async")) instanceof ReplySimpleString);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(cmd("FLUSHDB", "ASYNC"))).value());
+                Assert.assertTrue(client.execute(cmd("GET", "k")) instanceof ReplyNull);
+                long detachedNativeObjects = db.memory().memoryStats().nativeLiveObjects();
+                Assert.assertTrue(detachedNativeObjects > 0L);
+                Assert.assertTrue(client.execute(cmd("SET", "k", "after-async")) instanceof ReplySimpleString);
+                long nativeObjectsBeforeReclaim = db.memory().memoryStats().nativeLiveObjects();
+                Assert.assertTrue(nativeObjectsBeforeReclaim > detachedNativeObjects);
+                db.runMaintenance();
+                Assert.assertTrue(db.memory().memoryStats().nativeLiveObjects() < nativeObjectsBeforeReclaim);
+                Assert.assertEquals(
+                        "after-async",
+                        ((ReplyBulkString) client.execute(cmd("GET", "k"))).asString()
+                );
 
                 ReplyError invalid = (ReplyError) client.execute(cmd("FLUSHDB", "BAD"));
                 Assert.assertEquals("ERR syntax error", invalid.message());

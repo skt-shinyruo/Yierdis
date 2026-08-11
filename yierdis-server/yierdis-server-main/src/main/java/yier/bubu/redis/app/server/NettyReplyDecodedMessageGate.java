@@ -1,6 +1,7 @@
 package yier.bubu.redis.app.server;
 
 import io.netty.channel.ChannelHandlerContext;
+import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.protocol.resp.netty.RespDecodedMessageGate;
 
 import java.util.Objects;
@@ -15,6 +16,7 @@ final class NettyReplyDecodedMessageGate implements RespDecodedMessageGate {
     private final long singleReplyLimitBytes;
     private final OutboundConnectionMemory connectionMemory;
     private final ConnectionReplySequencer sequencer;
+    private volatile CompletableFuture<Void> registrationBarrier;
 
     NettyReplyDecodedMessageGate(
             long controlReservationBytes,
@@ -41,6 +43,16 @@ final class NettyReplyDecodedMessageGate implements RespDecodedMessageGate {
         if (!sequencer.acceptingRegistrations() || connectionMemory.closed()) {
             return Admission.closed();
         }
+        CompletableFuture<Void> barrier = registrationBarrier;
+        if (barrier != null) {
+            if (!barrier.isDone()) {
+                barrier.whenComplete((ignored, failure) -> resumeLater(ctx, resumeOnEventLoop));
+                return Admission.waiting();
+            }
+            if (registrationBarrier == barrier) {
+                registrationBarrier = null;
+            }
+        }
 
         Optional<OutboundMemoryLease> reservation = connectionMemory.reserve(
                 controlReservationBytes,
@@ -48,8 +60,15 @@ final class NettyReplyDecodedMessageGate implements RespDecodedMessageGate {
         );
         if (reservation.isPresent()) {
             Optional<ReplySlot> slot = sequencer.register(reservation.get());
-            return slot.<Admission>map(value -> Admission.admitted(new RegisteredRespMessage(decoded, value)))
-                    .orElseGet(Admission::closed);
+            if (slot.isEmpty()) {
+                return Admission.closed();
+            }
+            ReplySlot registered = slot.get();
+            if (isExec(decoded)) {
+                // EXEC 的动态回复需要把当前 lease 扩到单回复上限；后续控制槽若先占额度会把扩容锁死。
+                registrationBarrier = registered.cleanupCompletion();
+            }
+            return Admission.admitted(new RegisteredRespMessage(decoded, registered));
         }
 
         if (connectionMemory.awaitCapacity(controlReservationBytes, singleReplyLimitBytes, resumeOnEventLoop)) {
@@ -75,5 +94,35 @@ final class NettyReplyDecodedMessageGate implements RespDecodedMessageGate {
 
     OutboundConnectionMemory connectionMemoryForTests() {
         return connectionMemory;
+    }
+
+    private static boolean isExec(Object decoded) {
+        if (!(decoded instanceof ExecutionRequest request)
+                || request.argc() == 0
+                || request.isNull(0)
+                || request.len(0) != 4) {
+            return false;
+        }
+        return asciiUpper(request.byteAt(0, 0)) == 'E'
+                && asciiUpper(request.byteAt(0, 1)) == 'X'
+                && asciiUpper(request.byteAt(0, 2)) == 'E'
+                && asciiUpper(request.byteAt(0, 3)) == 'C';
+    }
+
+    private static int asciiUpper(byte value) {
+        int ascii = value & 0xff;
+        return ascii >= 'a' && ascii <= 'z' ? ascii - ('a' - 'A') : ascii;
+    }
+
+    private static void resumeLater(ChannelHandlerContext ctx, Runnable resumeOnEventLoop) {
+        if (ctx == null) {
+            resumeOnEventLoop.run();
+            return;
+        }
+        try {
+            ctx.executor().execute(resumeOnEventLoop);
+        } catch (RuntimeException failure) {
+            ctx.close();
+        }
     }
 }

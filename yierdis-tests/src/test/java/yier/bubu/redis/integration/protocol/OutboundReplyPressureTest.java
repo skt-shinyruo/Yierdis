@@ -57,6 +57,29 @@ public class OutboundReplyPressureTest {
         runBlockedHeadScenario("global", false);
     }
 
+    @Test
+    public void pipelinedTransactionProgressesWhenOneReplyCanFillTheConnectionBudget() throws Exception {
+        YierdisServerBootstrap server = YierdisServerBootstrap.start(serverArgs("fair"));
+        OutboundMemoryBudget budget = server.outboundMemoryBudgetForTests();
+        try (Socket client = RespTcpTestSupport.connect(server)) {
+            RespTcpTestSupport.writePipeline(
+                    client,
+                    new String[]{"MULTI"},
+                    new String[]{"PING"},
+                    new String[]{"EXEC"},
+                    new String[]{"PING"}
+            );
+
+            Assert.assertEquals("+OK\r\n", RespTcpTestSupport.readFrame(client));
+            Assert.assertEquals("+QUEUED\r\n", RespTcpTestSupport.readFrame(client));
+            Assert.assertEquals("*1\r\n+PONG\r\n", RespTcpTestSupport.readFrame(client));
+            Assert.assertEquals("+PONG\r\n", RespTcpTestSupport.readFrame(client));
+            awaitNoOutboundOwnership(budget);
+        } finally {
+            server.close();
+        }
+    }
+
     private static void runBlockedHeadScenario(String policy, boolean expectOtherConnectionProgress) throws Exception {
         YierdisServerBootstrap server = YierdisServerBootstrap.start(serverArgs(policy));
         OutboundMemoryBudget budget = server.outboundMemoryBudgetForTests();

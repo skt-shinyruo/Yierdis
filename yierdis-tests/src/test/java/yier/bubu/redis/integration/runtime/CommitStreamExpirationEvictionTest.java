@@ -15,7 +15,6 @@ import yier.bubu.redis.integration.command.TestCommandDispatchers;
 import yier.bubu.redis.runtime.api.YierdisChangeKind;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
-import yier.bubu.redis.runtime.embedded.YierdisInstanceMaintenance;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
@@ -98,7 +97,7 @@ public class CommitStreamExpirationEvictionTest {
                 blockSink.set(false);
                 releaseCallback.countDown();
                 awaitReservedEvents(instance, 0L);
-                new YierdisInstanceMaintenance(instance).maintenanceTick();
+                instance.runtimeAccess().maintenanceTick();
                 awaitEventCount(events, 4);
                 Assert.assertEquals(1, physicalKeyCount(instance));
                 Assert.assertEquals(0L,

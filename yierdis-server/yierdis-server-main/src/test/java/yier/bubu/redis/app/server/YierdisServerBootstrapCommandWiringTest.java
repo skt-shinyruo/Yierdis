@@ -187,6 +187,7 @@ public class YierdisServerBootstrapCommandWiringTest {
 
         Assert.assertTrue(source.contains("dispatcher::prepare"));
         Assert.assertTrue(source.contains("maintenanceTick.run()"));
+        Assert.assertTrue(source.contains("runtimeAccess::deferredReclamationTick"));
         Assert.assertFalse(source.contains("Yierdis" + "Engine"));
         Assert.assertFalse(source.contains("DefaultYierdis" + "Engine"));
         Assert.assertFalse(source.contains("YierdisFastCommand" + "Processor"));

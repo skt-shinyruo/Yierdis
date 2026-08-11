@@ -40,7 +40,7 @@ CommandExecutor
 - 请求边界看 [`protocol-reference.md`](./protocol-reference.md) 和 [`request-execution-flow.md`](./request-execution-flow.md)。
 - bytes 零拷贝和 materialize 边界看 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)。
 - Netty 适配层设计和 fast-path 看 [`netty-adapter-design.md`](./netty-adapter-design.md)。
-- 如果是 `HELLO 2/3` 或回包类型差异，继续看 `RespReplyWriterFactory`、`ProtocolNegotiationSession`、作为连接 session owner 的 `EngineSession` 和 `RespHandshakeIntegrationTest`。
+- 如果是 `HELLO 2/3` 或回包类型差异，继续看 `RespReplyWriterFactory`、`CommandSession` 的协议版本方法、作为连接 session owner 的 `EngineSession` 和 `RespHandshakeIntegrationTest`。
 
 测试优先级：
 
@@ -178,7 +178,7 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 - `YierdisDbMemoryLedger`
 - `YierdisDbMaxmemorySupport`
 - `YierdisGlobalMaxmemoryGovernor`
-- `YierdisInstanceRuntimeAccess`、`YierdisInstanceMaintenance`
+- `YierdisInstanceRuntimeAccess`
 
 继续追：
 

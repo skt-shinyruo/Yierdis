@@ -58,7 +58,9 @@ public final class RespClientCodec {
             case '-' -> new RespReply(RespReply.Kind.ERROR, readStringLine(in), null, null, null);
             case ':' -> new RespReply(RespReply.Kind.INTEGER, null, null, readLongLine(in, "integer"), null);
             case '$' -> readBulkString(in, maxBulkBytes);
-            case '*' -> readArray(in, maxBulkBytes);
+            case '*' -> readAggregate(in, maxBulkBytes, RespReply.Kind.ARRAY, "array");
+            case '%' -> readAggregate(in, maxBulkBytes, RespReply.Kind.MAP, "map", true);
+            case '~' -> readAggregate(in, maxBulkBytes, RespReply.Kind.SET, "set");
             case '_' -> {
                 expectEmptyLine(in);
                 yield new RespReply(RespReply.Kind.NULL, null, null, null, null);
@@ -83,16 +85,35 @@ public final class RespClientCodec {
         return new RespReply(RespReply.Kind.BULK_STRING, null, bytes, null, null);
     }
 
-    private static RespReply readArray(InputStream in, int maxBulkBytes) throws IOException {
-        int count = readLengthLine(in, "array");
+    private static RespReply readAggregate(
+            InputStream in,
+            int maxBulkBytes,
+            RespReply.Kind kind,
+            String type
+    ) throws IOException {
+        return readAggregate(in, maxBulkBytes, kind, type, false);
+    }
+
+    private static RespReply readAggregate(
+            InputStream in,
+            int maxBulkBytes,
+            RespReply.Kind kind,
+            String type,
+            boolean map
+    ) throws IOException {
+        int count = readLengthLine(in, type);
         if (count < 0) {
             return new RespReply(RespReply.Kind.NULL, null, null, null, null);
         }
-        List<RespReply> values = new ArrayList<>(count);
-        for (int i = 0; i < count; i++) {
+        long valueCount = map ? Math.multiplyExact((long) count, 2L) : count;
+        if (valueCount > Integer.MAX_VALUE) {
+            throw new IOException("invalid RESP " + type + " length: " + count);
+        }
+        List<RespReply> values = new ArrayList<>((int) valueCount);
+        for (int i = 0; i < valueCount; i++) {
             values.add(readReply(in, maxBulkBytes));
         }
-        return new RespReply(RespReply.Kind.ARRAY, null, null, null, values);
+        return new RespReply(kind, null, null, null, values);
     }
 
     private static int readLengthLine(InputStream in, String type) throws IOException {
@@ -202,7 +223,7 @@ public final class RespClientCodec {
         }
 
         public enum Kind {
-            SIMPLE_STRING, ERROR, INTEGER, BULK_STRING, NULL, ARRAY
+            SIMPLE_STRING, ERROR, INTEGER, BULK_STRING, NULL, ARRAY, MAP, SET
         }
 
         public boolean isNull() {

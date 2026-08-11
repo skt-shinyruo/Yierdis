@@ -165,6 +165,11 @@ final class YierdisDbRuntimeState {
             failure = next;
         }
         try {
+            reclaimAllDetachedEntries();
+        } catch (Throwable next) {
+            failure = recordFailure(failure, next);
+        }
+        try {
             YierdisDbStorageComponents currentStorage = storage();
             currentStorage.resources.releaseAll(
                     currentStorage.entries,
@@ -222,6 +227,50 @@ final class YierdisDbRuntimeState {
         keyLifecycle().resetEntryStateCounters();
     }
 
+    void commitFlushDbAsync() {
+        checkThread();
+        storage().keyDirectory.detachEntries();
+        keyLifecycle().resetEntryStateCounters();
+    }
+
+    int reclaimDetachedEntries(int maxEntries) {
+        checkThread();
+        return reclaimDetachedEntriesUnchecked(maxEntries);
+    }
+
+    private int reclaimDetachedEntriesUnchecked(int maxEntries) {
+        if (maxEntries < 0) {
+            throw new IllegalArgumentException("maxEntries must be >= 0");
+        }
+        YierdisDbStorageComponents currentStorage = storage();
+        Throwable failure = null;
+        int attempted = 0;
+        while (attempted < maxEntries && currentStorage.keyDirectory.detachedEntryCount() > 0) {
+            try {
+                currentStorage.keyDirectory.reclaimDetachedEntry((ignoredKey, entryHandle) ->
+                        currentStorage.resources.releaseEntry(
+                                currentStorage.entries,
+                                currentStorage.stringRoot,
+                                currentStorage.listRoot,
+                                currentStorage.hashRoot,
+                                currentStorage.setRoot,
+                                currentStorage.zsetRoot,
+                                entryHandle
+                        ));
+            } catch (RuntimeException | Error next) {
+                failure = recordFailure(failure, next);
+            }
+            attempted++;
+        }
+        throwIfFailure(failure);
+        return attempted;
+    }
+
+    long detachedEntryCount() {
+        checkThread();
+        return storage().keyDirectory.detachedEntryCount();
+    }
+
     int size() {
         checkThread();
         return keyLifecycle().keyCount();
@@ -246,6 +295,43 @@ final class YierdisDbRuntimeState {
             throw new IllegalStateException("runtime state is not bound");
         }
         return keyLifecycle;
+    }
+
+    private void reclaimAllDetachedEntries() {
+        YierdisDbStorageComponents currentStorage = storage();
+        Throwable failure = null;
+        while (currentStorage.keyDirectory.detachedEntryCount() > 0) {
+            try {
+                reclaimDetachedEntriesUnchecked(Integer.MAX_VALUE);
+            } catch (RuntimeException | Error next) {
+                failure = recordFailure(failure, next);
+            }
+        }
+        throwIfFailure(failure);
+    }
+
+    private static Throwable recordFailure(Throwable current, Throwable next) {
+        if (next == null) {
+            return current;
+        }
+        if (current == null) {
+            return next;
+        }
+        current.addSuppressed(next);
+        return current;
+    }
+
+    private static void throwIfFailure(Throwable failure) {
+        if (failure == null) {
+            return;
+        }
+        if (failure instanceof RuntimeException runtimeFailure) {
+            throw runtimeFailure;
+        }
+        if (failure instanceof Error errorFailure) {
+            throw errorFailure;
+        }
+        throw new IllegalStateException(failure);
     }
 
     record FlushPreparation(MutationOutcome outcome, long committedMemoryDelta) {

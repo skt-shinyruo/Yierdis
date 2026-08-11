@@ -55,6 +55,8 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     private int pendingArgIndex;
     private int pendingRetainedBytes;
     private int pendingBulkLength = -1;
+    private byte[] pendingBulkBuffer;
+    private int pendingBulkBytesRead;
     private long pendingReservedBytes;
     private PendingAdmission pendingAdmission;
     private boolean bulkAdmissionGranted;
@@ -212,7 +214,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
 
             if (result == ParseResult.NEED_MORE) {
                 cumulator.discardFullyReadComponents();
-                readControl.resumeIngress();
+                readControl.resumeIngressForProgress();
                 return;
             }
             if (result == ParseResult.WAITING || result == ParseResult.ERROR) {
@@ -250,7 +252,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
 
     private boolean resumePendingState(ChannelHandlerContext ctx) {
         if (state == State.WAITING_FOR_ARGV) {
-            if (!consumePendingAdmission(ctx, outerArgvCharge(pendingArgc), cumulator.releasableChargeAfterRead(0))) {
+            if (!consumeProgressAdmission(ctx, outerArgvCharge(pendingArgc), cumulator.releasableChargeAfterRead(0))) {
                 return false;
             }
             allocatePendingArgv();
@@ -265,7 +267,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         }
         if (state == State.WAITING_FOR_HANDOFF) {
             if (pendingRequestCredit) {
-                if (!consumePendingAdmission(ctx, REQUEST_FIXED_BYTES, cumulator.releasableChargeAfterRead(0))) {
+                if (!consumeProgressAdmission(ctx, REQUEST_FIXED_BYTES, cumulator.releasableChargeAfterRead(0))) {
                     return false;
                 }
                 pendingRequestCredit = false;
@@ -301,7 +303,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         }
 
         pendingArgc = argc;
-        if (!consumePendingAdmission(ctx, outerArgvCharge(argc), cumulator.releasableChargeAfterRead(0))) {
+        if (!consumeProgressAdmission(ctx, outerArgvCharge(argc), cumulator.releasableChargeAfterRead(0))) {
             state = State.WAITING_FOR_ARGV;
             return ParseResult.WAITING;
         }
@@ -369,13 +371,24 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
                 }
                 return ParseResult.ERROR;
             }
-            if (in.readableBytes() < pendingBulkLength + 2L) {
+            int remainingBody = pendingBulkLength - pendingBulkBytesRead;
+            if (remainingBody > 0 && in.isReadable()) {
+                int copied = Math.min(remainingBody, in.readableBytes());
+                in.readBytes(pendingBulkBuffer, pendingBulkBytesRead, copied);
+                pendingBulkBytesRead += copied;
+                cumulator.discardFullyReadComponents();
+            }
+            if (pendingBulkBytesRead < pendingBulkLength) {
                 return ParseResult.NEED_MORE;
             }
 
-            byte[] arg = new byte[pendingBulkLength];
-            allocatedBulkArrays++;
-            in.readBytes(arg);
+            if (in.readableBytes() < 2L) {
+                return ParseResult.NEED_MORE;
+            }
+
+            byte[] arg = pendingBulkBuffer;
+            pendingBulkBuffer = null;
+            pendingBulkBytesRead = 0;
             byte cr = in.readByte();
             byte lf = in.readByte();
             if (cr != CR || lf != LF) {
@@ -398,17 +411,25 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         }
         long charge = payloadCharge(pendingBulkLength);
         long releaseCredit = cumulator.releasableChargeAfterRead(0);
-        if (!consumePendingAdmission(ctx, charge, releaseCredit)) {
+        if (!consumeProgressAdmission(ctx, charge, releaseCredit)) {
             return false;
         }
         pendingReservedBytes = InboundMemoryBudget.saturatedAdd(pendingReservedBytes, charge);
+        try {
+            pendingBulkBuffer = new byte[pendingBulkLength];
+            allocatedBulkArrays++;
+        } catch (OutOfMemoryError failure) {
+            emitRequestMemoryError(ctx);
+            return false;
+        }
+        pendingBulkBytesRead = 0;
         bulkAdmissionGranted = true;
         cumulator.discardFullyReadComponents();
         return true;
     }
 
     private ParseResult completeRequest(ChannelHandlerContext ctx) {
-        if (!consumePendingAdmission(ctx, REQUEST_FIXED_BYTES, cumulator.releasableChargeAfterRead(0))) {
+        if (!consumeProgressAdmission(ctx, REQUEST_FIXED_BYTES, cumulator.releasableChargeAfterRead(0))) {
             pendingRequestCredit = true;
             state = State.WAITING_FOR_HANDOFF;
             return ParseResult.WAITING;
@@ -428,6 +449,8 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         pendingArgIndex = 0;
         pendingRetainedBytes = 0;
         pendingBulkLength = -1;
+        pendingBulkBuffer = null;
+        pendingBulkBytesRead = 0;
         pendingReservedBytes = 0L;
         RequestMemoryLease lease = budget == null
                 ? new ReferenceCountedRequestMemoryLease(reservedBytes, ignored -> { })
@@ -514,7 +537,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
 
         long admissionBytes = inlineAdmissionCharge(length, argc, retainedBytes);
         long inputReleaseCredit = cumulator.releasableChargeAfterRead(0);
-        if (!consumePendingAdmission(ctx, admissionBytes, inputReleaseCredit)) {
+        if (!consumeProgressAdmission(ctx, admissionBytes, inputReleaseCredit)) {
             if (state != State.CLOSING) {
                 in.readerIndex(lineStart);
                 return ParseResult.WAITING;
@@ -543,14 +566,23 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         }
     }
 
-    private boolean consumePendingAdmission(ChannelHandlerContext ctx, long bytes, long inputReleaseCredit) {
+    private boolean consumeProgressAdmission(ChannelHandlerContext ctx, long bytes, long inputReleaseCredit) {
+        return consumePendingAdmission(ctx, bytes, inputReleaseCredit, true);
+    }
+
+    private boolean consumePendingAdmission(
+            ChannelHandlerContext ctx,
+            long bytes,
+            long inputReleaseCredit,
+            boolean progressReservation
+    ) {
         if (bytes < 0L || inputReleaseCredit < 0L) {
             emitRequestMemoryError(ctx);
             return false;
         }
         PendingAdmission pending = pendingAdmission;
         if (pending != null) {
-            if (!pending.matches(bytes, inputReleaseCredit) || !pending.granted) {
+            if (!pending.matches(bytes, inputReleaseCredit, progressReservation) || !pending.granted) {
                 return false;
             }
             pendingAdmission = null;
@@ -559,7 +591,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         if (budget == null) {
             return true;
         }
-        PendingAdmission requested = new PendingAdmission(bytes, inputReleaseCredit);
+        PendingAdmission requested = new PendingAdmission(bytes, inputReleaseCredit, progressReservation);
         pendingAdmission = requested;
         connection.setResumeCallback(ctx.executor(), () -> {
             if (pendingAdmission == requested && connection.claimGrantedReservation(requested.bytes)) {
@@ -567,7 +599,9 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
                 resumeOnEventLoop(ctx);
             }
         });
-        InboundMemoryBudget.ReservationResult result = budget.tryTransfer(connection, bytes, inputReleaseCredit);
+        InboundMemoryBudget.ReservationResult result = progressReservation
+                ? budget.tryTransferForProgress(connection, bytes, inputReleaseCredit)
+                : budget.tryTransfer(connection, bytes, inputReleaseCredit);
         if (result == InboundMemoryBudget.ReservationResult.RESERVED) {
             pendingAdmission = null;
             return true;
@@ -657,6 +691,8 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         pendingArgIndex = 0;
         pendingRetainedBytes = 0;
         pendingBulkLength = -1;
+        pendingBulkBuffer = null;
+        pendingBulkBytesRead = 0;
         pendingReservedBytes = 0L;
         pendingRequestCredit = false;
         bulkAdmissionGranted = false;
@@ -941,15 +977,23 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     private static final class PendingAdmission {
         private final long bytes;
         private final long inputReleaseCredit;
+        private final boolean progressReservation;
         private volatile boolean granted;
 
-        private PendingAdmission(long bytes, long inputReleaseCredit) {
+        private PendingAdmission(long bytes, long inputReleaseCredit, boolean progressReservation) {
             this.bytes = bytes;
             this.inputReleaseCredit = inputReleaseCredit;
+            this.progressReservation = progressReservation;
         }
 
-        private boolean matches(long candidateBytes, long candidateInputReleaseCredit) {
-            return bytes == candidateBytes && inputReleaseCredit == candidateInputReleaseCredit;
+        private boolean matches(
+                long candidateBytes,
+                long candidateInputReleaseCredit,
+                boolean candidateProgressReservation
+        ) {
+            return bytes == candidateBytes
+                    && inputReleaseCredit == candidateInputReleaseCredit
+                    && progressReservation == candidateProgressReservation;
         }
     }
 }

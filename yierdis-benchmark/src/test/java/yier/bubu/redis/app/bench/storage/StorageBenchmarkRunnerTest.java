@@ -6,7 +6,6 @@ import yier.bubu.redis.app.bench.redis.BenchmarkFormat;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbReads;
 import yier.bubu.redis.storage.api.DbWrites;
-import yier.bubu.redis.storage.api.ExpirationManager;
 import yier.bubu.redis.storage.api.MemoryOps;
 import yier.bubu.redis.storage.api.RuntimeDbEngine;
 
@@ -61,7 +60,6 @@ public class StorageBenchmarkRunnerTest {
     private static final class BaselineEngine implements RuntimeDbEngine {
         @Override public DbReads reads() { return null; }
         @Override public DbWrites writes() { return null; }
-        @Override public ExpirationManager expiration() { return null; }
         @Override public MemoryOps memory() { return null; }
         @Override public DbLifecycleOps lifecycle() { return null; }
         @Override public void bindToCurrentThread() { }

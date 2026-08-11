@@ -9,7 +9,6 @@ import yier.bubu.redis.runtime.embedded.YierdisGlobalMaxmemoryGovernor;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbReads;
 import yier.bubu.redis.storage.api.DbWrites;
-import yier.bubu.redis.storage.api.ExpirationManager;
 import yier.bubu.redis.storage.api.GlobalMaxmemoryDbEngine;
 import yier.bubu.redis.storage.api.KeyHandle;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
@@ -57,11 +56,6 @@ public class MaxmemoryPhysicalProgressTest {
 
         @Override
         public DbWrites writes() {
-            return null;
-        }
-
-        @Override
-        public ExpirationManager expiration() {
             return null;
         }
 

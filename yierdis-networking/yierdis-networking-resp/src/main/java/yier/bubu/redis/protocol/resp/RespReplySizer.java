@@ -45,6 +45,7 @@ public final class RespReplySizer implements ReplySizer {
             case ReplyShape.NullArray ignored -> nullArrayBytes(version);
             case ReplyShape.Aggregate value -> aggregateBytes(value, version);
             case ReplyShape.ByteSequence value -> byteSequenceBytes(value, version);
+            case ReplyShape.ByteSet value -> byteSetBytes(value, version);
             case ReplyShape.ByteMap value -> byteMapBytes(value, version);
             case ReplyShape.Maximum ignored -> throw new AssertionError("maximum was handled before sizing");
         };
@@ -97,6 +98,14 @@ public final class RespReplySizer implements ReplySizer {
         sequence.payloadLengths().visit(payloads::accept);
         payloads.verifyComplete("sequence");
         return saturatedAdd(aggregateHeaderBytes('*', sequence.elementCount()), payloads.encodedBytes());
+    }
+
+    private static long byteSetBytes(ReplyShape.ByteSet set, RespProtocolVersion version) {
+        PayloadAccumulator payloads = new PayloadAccumulator(set.elementCount(), version);
+        set.payloadLengths().visit(payloads::accept);
+        payloads.verifyComplete("set");
+        char prefix = version == RespProtocolVersion.RESP3 ? '~' : '*';
+        return saturatedAdd(aggregateHeaderBytes(prefix, set.elementCount()), payloads.encodedBytes());
     }
 
     private static long byteMapBytes(ReplyShape.ByteMap map, RespProtocolVersion version) {

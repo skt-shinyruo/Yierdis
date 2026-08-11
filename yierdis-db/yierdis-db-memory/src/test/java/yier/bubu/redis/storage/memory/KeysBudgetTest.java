@@ -57,6 +57,7 @@ public class KeysBudgetTest {
                         "expected KEYS to return partial results under extreme time budget",
                         window.elementCount() < 4096
                 );
+                Assert.assertNotEquals(0L, window.nextCursor().value());
             }
         } finally {
             db.shutdown();
@@ -75,6 +76,7 @@ public class KeysBudgetTest {
 
             try (KeyScanWindow window = db.reads().keyspace().keys("*".getBytes(StandardCharsets.US_ASCII), 1, 0L)) {
                 Assert.assertEquals("expected KEYS to return at most the configured maxMatches", 1, window.elementCount());
+                Assert.assertNotEquals(0L, window.nextCursor().value());
             }
         } finally {
             db.shutdown();

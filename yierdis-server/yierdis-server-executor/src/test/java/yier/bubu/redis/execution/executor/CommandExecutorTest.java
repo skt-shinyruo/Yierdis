@@ -244,6 +244,7 @@ public class CommandExecutorTest {
             Assert.assertEquals(1, rejectedRequest.closeCalls());
             Assert.assertEquals(1, rejectedReply.cancelCalls());
             Assert.assertTrue(connection.context().isClosing());
+            Assert.assertEquals(1, io.closeCalls(connection));
             Assert.assertEquals(0, connection.context().pending());
             Assert.assertEquals(0L, connection.context().pendingBytes());
             Assert.assertEquals(0L, connection.context().statsSnapshot().commandsEnqueued());

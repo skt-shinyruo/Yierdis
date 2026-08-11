@@ -1,6 +1,8 @@
 package yier.bubu.redis.integration.command;
 
 import yier.bubu.redis.command.kernel.CommandDispatcher;
+import yier.bubu.redis.command.api.SlowCommandGovernor;
+import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.storage.memory.YierdisDb;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
@@ -21,6 +23,34 @@ import static yier.bubu.redis.testutil.TestBytes.cmd;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class CommandProcessorTest {
+    @Test
+    public void keysReportsAnErrorWhenItsSafetyLimitWouldTruncateTheResult() {
+        forEachDb(db -> {
+            SlowCommandGovernor governor = new SlowCommandGovernor() {
+                @Override
+                public long keysTimeBudgetNanos(CommandSession session) {
+                    return 0L;
+                }
+
+                @Override
+                public int keysMaxResults(CommandSession session) {
+                    return 1;
+                }
+            };
+            CommandDispatcher dispatcher = TestCommandDispatchers.forDbWithSlowGovernor(db, governor);
+            try (FastTestClient client = new FastTestClient(dispatcher)) {
+                for (int index = 0; index < 3; index++) {
+                    Assert.assertTrue(client.execute(cmd("SET", "key-" + index, "value"))
+                            instanceof ReplySimpleString);
+                }
+
+                ReplyError error = (ReplyError) client.execute(cmd("KEYS", "*"));
+
+                Assert.assertEquals("ERR KEYS scan incomplete; use SCAN", error.message());
+            }
+        });
+    }
+
     @Test
     public void clientMetadataCommandsAreAccepted() {
         forEachDb(db -> {

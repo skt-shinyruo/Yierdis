@@ -9,6 +9,7 @@ public final class PreparedCallbackMutation<T> extends AbstractPreparedMutation<
 
     private final T result;
     private final Runnable commit;
+    private final boolean trimNativePagesAfterCommit;
     private Runnable releaseSuperseded;
     private Runnable abort;
 
@@ -21,11 +22,39 @@ public final class PreparedCallbackMutation<T> extends AbstractPreparedMutation<
             Runnable releaseSuperseded,
             Runnable abort
     ) {
+        this(
+                result,
+                actualDeltaBytes,
+                stagedNonNativeGrowthBytes,
+                outcome,
+                commit,
+                releaseSuperseded,
+                abort,
+                actualDeltaBytes < 0L
+        );
+    }
+
+    public PreparedCallbackMutation(
+            T result,
+            long actualDeltaBytes,
+            long stagedNonNativeGrowthBytes,
+            MutationOutcome outcome,
+            Runnable commit,
+            Runnable releaseSuperseded,
+            Runnable abort,
+            boolean trimNativePagesAfterCommit
+    ) {
         super(actualDeltaBytes, stagedNonNativeGrowthBytes, outcome);
         this.result = result;
         this.commit = Objects.requireNonNull(commit, "commit");
+        this.trimNativePagesAfterCommit = trimNativePagesAfterCommit;
         this.releaseSuperseded = releaseSuperseded == null ? NOOP : releaseSuperseded;
         this.abort = abort == null ? NOOP : abort;
+    }
+
+    @Override
+    public boolean shouldTrimNativePagesAfterCommit() {
+        return trimNativePagesAfterCommit;
     }
 
     @Override

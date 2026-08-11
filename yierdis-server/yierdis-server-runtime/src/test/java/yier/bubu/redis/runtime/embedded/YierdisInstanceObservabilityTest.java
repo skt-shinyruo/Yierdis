@@ -7,7 +7,6 @@ import yier.bubu.redis.storage.api.DbHealthSnapshot;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbReads;
 import yier.bubu.redis.storage.api.DbWrites;
-import yier.bubu.redis.storage.api.ExpirationManager;
 import yier.bubu.redis.storage.api.MemoryOps;
 import yier.bubu.redis.storage.api.RuntimeDbEngine;
 
@@ -106,11 +105,6 @@ public class YierdisInstanceObservabilityTest {
 
         @Override
         public DbWrites writes() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public ExpirationManager expiration() {
             throw new UnsupportedOperationException();
         }
 

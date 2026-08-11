@@ -36,6 +36,7 @@ import yier.bubu.redis.storage.api.result.KeyScanWindow;
 
 public final class KeyCommands implements CommandModule {
     private static final int KEY_WINDOW_DISCOVERY_ATTEMPTS = 2;
+    private static final String KEYS_INCOMPLETE_ERROR = "ERR KEYS scan incomplete; use SCAN";
     private static final String SYNTAX_ERROR = "ERR syntax error";
     private static final String INTEGER_ERROR = "ERR value is not an integer or out of range";
     private static final CommandKeySpec KEY = new CommandKeySpec(1, 1, 1);
@@ -187,6 +188,10 @@ public final class KeyCommands implements CommandModule {
                 if (!window.current()) {
                     window.close();
                     continue;
+                }
+                if (window.nextCursor().value() != 0L) {
+                    window.close();
+                    return PreparedCommands.ready(RedisReplies.error(KEYS_INCOMPLETE_ERROR));
                 }
                 return keyWindowReply(window);
             }

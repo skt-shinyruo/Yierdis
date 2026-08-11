@@ -52,7 +52,6 @@ public class StringDirectOpsTest {
         withDb(db -> {
             Assert.assertSame(db.reads(), db.reads());
             Assert.assertSame(db.writes(), db.writes());
-            Assert.assertSame(db.expiration(), db.expiration());
             Assert.assertSame(db.memory(), db.memory());
             Assert.assertSame(db.lifecycle(), db.lifecycle());
 
@@ -67,7 +66,7 @@ public class StringDirectOpsTest {
             );
             try (StringWriteOps.SetStringValue value = nxExisting.value()) {
                 Assert.assertFalse(value.applied());
-                Assert.assertTrue(value.oldValue().isNull());
+                Assert.assertArrayEquals(b("one"), byteValueBytes(value.oldValue()));
             }
             Assert.assertSame(MutationOutcome.NONE, nxExisting.mutationOutcome());
             Assert.assertArrayEquals(b("one"), db.reads().strings().getStringBytes(b("k")));

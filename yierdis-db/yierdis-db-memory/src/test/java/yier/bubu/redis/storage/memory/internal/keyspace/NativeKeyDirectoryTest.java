@@ -1,7 +1,9 @@
 package yier.bubu.redis.storage.memory.internal.keyspace;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeHandle;
@@ -13,6 +15,7 @@ import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.memory.DbThreadGuard;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
@@ -95,6 +98,57 @@ public class NativeKeyDirectoryTest {
                 directory.close();
                 for (NativeHandle entry : entries) {
                     backend.free(entry);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void detachDuringRehashReclaimsEachOldKeyOnceAndKeepsTheNewGeneration() {
+        try (TestBackend runtime = TestBackend.open("directory-detach-rehash")) {
+            StableMemoryBackend backend = runtime.backend();
+            NativeKeyDirectory directory = new NativeKeyDirectory(backend, FIXED_SEED);
+            List<NativeHandle> oldEntries = new ArrayList<>();
+            NativeHandle newEntry = null;
+            try {
+                for (int index = 0; index < 256 && !directory.metrics().rehashing(); index++) {
+                    NativeHandle nativeEntry = backend.allocate(NativeObjectKind.ENTRY_RECORD, 1);
+                    oldEntries.add(nativeEntry);
+                    directory.compute(b("key-" + index), (ignored, old) -> new EntryHandle(nativeEntry));
+                }
+                Assert.assertTrue("test setup must leave the directory rehashing", directory.metrics().rehashing());
+                while (directory.advanceRehash(HashTableWorkBudget.of(1L, Long.MAX_VALUE)).migratedSlots() == 0L) {
+                    Assert.assertTrue(directory.metrics().rehashing());
+                }
+
+                int oldKeyCount = directory.size();
+                directory.detachEntries();
+                Assert.assertEquals(0, directory.size());
+                Assert.assertEquals(oldKeyCount, directory.detachedEntryCount());
+
+                newEntry = backend.allocate(NativeObjectKind.ENTRY_RECORD, 1);
+                EntryHandle newHandle = new EntryHandle(newEntry);
+                directory.compute(b("key-0"), (ignored, old) -> newHandle);
+
+                Set<NativeHandle> reclaimedEntries = new HashSet<>();
+                while (directory.detachedEntryCount() > 0) {
+                    Assert.assertTrue(directory.reclaimDetachedEntry((ignored, entry) ->
+                            Assert.assertTrue(
+                                    "a migrated scan shadow must not be reclaimed twice",
+                                    reclaimedEntries.add(entry.nativeHandle())
+                            )));
+                }
+
+                Assert.assertEquals(oldKeyCount, reclaimedEntries.size());
+                Assert.assertEquals(newHandle, directory.get(b("key-0")));
+                Assert.assertEquals(1L, backend.stats().objectCount(NativeObjectKind.KEY_BYTES));
+            } finally {
+                directory.close();
+                for (NativeHandle entry : oldEntries) {
+                    backend.free(entry);
+                }
+                if (newEntry != null) {
+                    backend.free(newEntry);
                 }
             }
         }

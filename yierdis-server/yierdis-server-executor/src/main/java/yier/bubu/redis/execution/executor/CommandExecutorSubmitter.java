@@ -11,6 +11,7 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
     private final ExecutorTaskQueue<C, CommandExecutorTask<C>> taskQueue;
     private final ExecutorBacklogBudget backlogBudget;
     private final ExecutorBackpressureController<C> backpressureController;
+    private final ExecutionIoAdapter<C> ioAdapter;
     private final int backpressureHighWatermark;
     private final long backpressureBytesHighWatermark;
     private final BooleanSupplier running;
@@ -27,6 +28,7 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
             ExecutorTaskQueue<C, CommandExecutorTask<C>> taskQueue,
             ExecutorBacklogBudget backlogBudget,
             ExecutorBackpressureController<C> backpressureController,
+            ExecutionIoAdapter<C> ioAdapter,
             int backpressureHighWatermark,
             long backpressureBytesHighWatermark,
             BooleanSupplier running,
@@ -35,6 +37,7 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
         this.taskQueue = Objects.requireNonNull(taskQueue, "taskQueue");
         this.backlogBudget = Objects.requireNonNull(backlogBudget, "backlogBudget");
         this.backpressureController = Objects.requireNonNull(backpressureController, "backpressureController");
+        this.ioAdapter = Objects.requireNonNull(ioAdapter, "ioAdapter");
         this.backpressureHighWatermark = backpressureHighWatermark;
         this.backpressureBytesHighWatermark = backpressureBytesHighWatermark;
         this.running = Objects.requireNonNull(running, "running");
@@ -115,7 +118,7 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
             // 若 owner 已取走任务，所有权留在正常终止路径；只有确认移除后才能在这里回收。
             Boolean removed = removeAfterPublishFailure(connection, task, offered);
             if (removed == null || !removed) {
-                markClosingAfterPublishFailure(connection);
+                terminateAfterPublishFailure(connection);
                 return;
             }
             if (recorded) {
@@ -126,7 +129,7 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
             }
             submitRejectedOfferFailed.increment();
             closeAcceptedTask(task);
-            markClosingAfterPublishFailure(connection);
+            terminateAfterPublishFailure(connection);
         }
     }
 
@@ -164,9 +167,13 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
         }
     }
 
-    private static <C extends ExecutionConnection> void markClosingAfterPublishFailure(C connection) {
+    private void terminateAfterPublishFailure(C connection) {
         try {
             connection.markClosing();
+        } catch (Throwable ignored) {
+        }
+        try {
+            ioAdapter.closeConnection(connection);
         } catch (Throwable ignored) {
         }
     }

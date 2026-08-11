@@ -478,6 +478,7 @@ public class CommandDispatcherTest {
             Assert.assertEquals(1, parses.get());
             Assert.assertEquals(0, prepares.get());
             Assert.assertEquals(0, tx.size());
+            Assert.assertEquals(ReplyShapes.errorUpperBound(), queued.reservationShape());
 
             Assert.assertEquals("QUEUED", execute(queued, session, request).simpleString());
             Assert.assertEquals(1, tx.size());

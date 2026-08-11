@@ -6,7 +6,6 @@ import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.DbEngineConfig;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
-import yier.bubu.redis.storage.memory.internal.expire.YierdisDbExpirationManager;
 import yier.bubu.redis.storage.memory.internal.expire.YierdisDbExpirationSupport;
 import yier.bubu.redis.storage.memory.internal.expire.YierdisTtlOps;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
@@ -138,6 +137,7 @@ final class YierdisDbComponentFactory {
                 ledger,
                 keyLifecycle,
                 introspection,
+                memoryReporter,
                 maintenance,
                 new YierdisDbReads(stringOps, hashOps, listOps, setOps, zsetOps, hllOps, keyspaceOps, ttlOps),
                 new YierdisDbWrites(
@@ -151,9 +151,11 @@ final class YierdisDbComponentFactory {
                         keyspaceOps,
                         ttlOps
                 ),
-                new YierdisDbExpirationManager(expirationSupport, health),
-                new YierdisDbMemoryOps(memoryReporter, introspection),
-                new YierdisDbLifecycleOps(checkedThreadChecker, maintenance::flushDb)
+                new YierdisDbLifecycleOps(
+                        checkedThreadChecker,
+                        maintenance::flushDb,
+                        maintenance::flushDbAsync
+                )
         );
     }
 

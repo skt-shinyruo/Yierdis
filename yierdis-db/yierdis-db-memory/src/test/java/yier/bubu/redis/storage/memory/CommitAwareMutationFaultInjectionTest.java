@@ -150,9 +150,10 @@ public class CommitAwareMutationFaultInjectionTest {
                         .setString(bytes("next"), bytes("value"), SetMode.NORMAL, null).value());
                 Assert.assertEquals(
                         yier.bubu.redis.storage.api.MutationOutcome.VALUE_CHANGED,
-                        second.flushDb()
+                        second.flushDbAsync()
                 );
                 Assert.assertEquals("FLUSHDB_SECOND", commandName(publisher.record));
+                Assert.assertEquals(1, db.detachedEntryCount());
             }
         } finally {
             publisher.closeRetainedRecord();

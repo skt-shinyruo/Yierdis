@@ -11,12 +11,8 @@
  *     <li>ReplySink - API. Audience: command/storage value streaming adapters and reply writer implementations.</li>
  *     <li>RedisReplyWriter - SPI。受众：executor、server 与协议实现；把语义回复和控制错误编码到已预留的 reply sink。</li>
  *     <li>RedisReplyWriterFactory - API. Audience: executor, server/protocol adapter composition, tests.</li>
- *     <li>CommandSession - API。受众：executor、command dispatcher、server 会话实现与测试。</li>
+ *     <li>CommandSession - API。受众：executor、command dispatcher、server 会话实现与测试；直接承载 client metadata、transaction、stats 和 protocol 能力。</li>
  *     <li>DbIndexSession - API. Audience: DB routing and SELECT command handlers.</li>
- *     <li>ClientMetadataSession - API. Audience: CLIENT, AUTH, and server HELLO command handlers.</li>
- *     <li>TransactionSession - API。受众：事务命令 handler 与 dispatcher 排队逻辑。</li>
- *     <li>ConnectionStatsSession - API. Audience: server INFO/STATS views.</li>
- *     <li>ProtocolNegotiationSession - API. Audience: protocol reply writers and HELLO command handlers.</li>
  *     <li>ConnectionStatsView - API. Audience: server INFO/STATS views, executor/server observability, tests.</li>
  *     <li>TransactionState - API。受众：事务命令 handler、连接 session owner 与测试。</li>
  *     <li>CommandExecutionContext - API。受众：PreparedCommand；由执行器在回复容量预留后创建，只提供本次会话与请求的 mutation context。</li>

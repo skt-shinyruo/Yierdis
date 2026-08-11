@@ -10,7 +10,6 @@ import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbReads;
 import yier.bubu.redis.storage.api.DbWrites;
-import yier.bubu.redis.storage.api.ExpirationManager;
 import yier.bubu.redis.storage.api.GlobalMaxmemoryDbEngine;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
@@ -274,11 +273,6 @@ public class GlobalPhysicalMemoryAccountingTest {
         }
 
         @Override
-        public ExpirationManager expiration() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
         public MemoryOps memory() {
             memoryAccessCalls.incrementAndGet();
             if (stats == null) {
@@ -335,11 +329,6 @@ public class GlobalPhysicalMemoryAccountingTest {
 
         @Override
         public DbWrites writes() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public ExpirationManager expiration() {
             throw new UnsupportedOperationException();
         }
 

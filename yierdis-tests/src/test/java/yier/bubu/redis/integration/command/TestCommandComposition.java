@@ -1,6 +1,7 @@
 package yier.bubu.redis.integration.command;
 
 import yier.bubu.redis.command.api.CommandModule;
+import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.api.YierdisDbRouter;
 import yier.bubu.redis.command.defaults.DefaultCommandModules;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
@@ -18,6 +19,17 @@ public final class TestCommandComposition {
 
     public static CommandDispatcher createDispatcher(DbEngine db, CommandModule... extraModules) {
         return createDispatcher(singleDbRouter(db), extraModules);
+    }
+
+    public static CommandDispatcher createDispatcherWithSlowGovernor(
+            DbEngine db,
+            SlowCommandGovernor slowCommandGovernor
+    ) {
+        return CommandRegistries.dispatcher(DefaultCommandModules.create(
+                singleDbRouter(db),
+                null,
+                slowCommandGovernor
+        ));
     }
 
     public static CommandDispatcher createDispatcher(

@@ -397,11 +397,6 @@ public class ReplyPreflightCommandTest {
             }
 
             @Override
-            public yier.bubu.redis.storage.api.ExpirationManager expiration() {
-                return delegate.expiration();
-            }
-
-            @Override
             public yier.bubu.redis.storage.api.MemoryOps memory() {
                 return delegate.memory();
             }

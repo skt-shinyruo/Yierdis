@@ -2,6 +2,7 @@ package yier.bubu.redis.protocol.resp.netty;
 
 import java.util.ArrayDeque;
 import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Objects;
 
@@ -43,7 +44,15 @@ public final class InboundMemoryBudget implements AutoCloseable {
     }
 
     public ReservationResult tryReserve(InboundConnectionMemory connection, long bytes) {
-        return tryAdmit(connection, bytes, 0L);
+        return tryAdmit(connection, bytes, 0L, false);
+    }
+
+    ReservationResult tryReserveReadCredit(InboundConnectionMemory connection, long bytes) {
+        return tryAdmit(connection, bytes, 0L, false);
+    }
+
+    ReservationResult tryReserveProgressReadCredit(InboundConnectionMemory connection, long bytes) {
+        return tryAdmit(connection, bytes, 0L, true);
     }
 
     public ReservationResult tryTransfer(
@@ -51,7 +60,15 @@ public final class InboundMemoryBudget implements AutoCloseable {
             long newBytes,
             long inputCapacityReleasedAfterCopy
     ) {
-        return tryAdmit(connection, newBytes, inputCapacityReleasedAfterCopy);
+        return tryAdmit(connection, newBytes, inputCapacityReleasedAfterCopy, false);
+    }
+
+    ReservationResult tryTransferForProgress(
+            InboundConnectionMemory connection,
+            long newBytes,
+            long inputCapacityReleasedAfterCopy
+    ) {
+        return tryAdmit(connection, newBytes, inputCapacityReleasedAfterCopy, true);
     }
 
     public void release(InboundConnectionMemory connection, long bytes) {
@@ -79,7 +96,7 @@ public final class InboundMemoryBudget implements AutoCloseable {
             if (backpressured && reservedBytes <= lowWatermarkBytes) {
                 backpressured = false;
             }
-            granted = closed || backpressured ? null : grantOneWaiterLocked();
+            granted = closed ? null : grantOneWaiterLocked();
         }
         scheduleGranted(granted);
     }
@@ -89,7 +106,7 @@ public final class InboundMemoryBudget implements AutoCloseable {
         Granted granted;
         synchronized (lock) {
             removeWaiterLocked(connection);
-            granted = closed || backpressured ? null : grantOneWaiterLocked();
+            granted = closed ? null : grantOneWaiterLocked();
         }
         scheduleGranted(granted);
     }
@@ -152,7 +169,7 @@ public final class InboundMemoryBudget implements AutoCloseable {
             account.markClosed();
             removeWaiterLocked(connection);
             removeClosedEmptyAccountLocked(account);
-            granted = closed || backpressured ? null : grantOneWaiterLocked();
+            granted = closed ? null : grantOneWaiterLocked();
         }
         scheduleGranted(granted);
     }
@@ -175,7 +192,12 @@ public final class InboundMemoryBudget implements AutoCloseable {
         }
     }
 
-    private ReservationResult tryAdmit(InboundConnectionMemory connection, long bytes, long inputCapacityReleasedAfterCopy) {
+    private ReservationResult tryAdmit(
+            InboundConnectionMemory connection,
+            long bytes,
+            long inputCapacityReleasedAfterCopy,
+            boolean progressReservation
+    ) {
         Objects.requireNonNull(connection, "connection");
         if (bytes < 0L || inputCapacityReleasedAfterCopy < 0L) {
             throw new IllegalArgumentException("reservation bytes must be non-negative");
@@ -196,12 +218,27 @@ public final class InboundMemoryBudget implements AutoCloseable {
                 rejectedConnections = saturatedAdd(rejectedConnections, 1L);
                 return ReservationResult.REQUEST_LIMIT;
             }
+            // transfer 在复制结束前仍持有该连接的全部现有额度；若它与目标的峰值超过全局容量，
+            // 其他连接释放再多也无法唤醒当前连接，因此必须直接失败而不能入队。
+            if (inputCapacityReleasedAfterCopy > 0L
+                    && saturatedAdd(account.reservedBytes(), bytes) > capacityBytes) {
+                rejectedConnections = saturatedAdd(rejectedConnections, 1L);
+                return ReservationResult.REQUEST_LIMIT;
+            }
             if (waitersByConnection.containsKey(connection)) {
                 return ReservationResult.WAITING;
             }
-            // 复制/解码替换会在成功后释放已持有的完整输入组件；阻塞该路径会使高水位下的半包无法收敛。
-            if ((backpressured && inputCapacityReleasedAfterCopy == 0L) || !fitsGlobal(bytes)) {
-                Waiter waiter = new Waiter(connection, bytes, inputCapacityReleasedAfterCopy);
+            boolean advancesCurrentRequest = inputCapacityReleasedAfterCopy > 0L
+                    || (progressReservation && account.reservedBytes() > 0L);
+            // 复制/解码替换会释放现有输入，已有半包也必须继续取得 read credit 才能收敛。
+            if ((backpressured && !advancesCurrentRequest)
+                    || !fitsGlobal(bytes)) {
+                Waiter waiter = new Waiter(
+                        connection,
+                        bytes,
+                        inputCapacityReleasedAfterCopy,
+                        progressReservation
+                );
                 waiters.addLast(waiter);
                 waitersByConnection.put(connection, waiter);
                 return ReservationResult.WAITING;
@@ -212,6 +249,9 @@ public final class InboundMemoryBudget implements AutoCloseable {
     }
 
     private Granted grantOneWaiterLocked() {
+        if (backpressured) {
+            return grantProgressWaiterLocked();
+        }
         while (!waiters.isEmpty()) {
             Waiter waiter = waiters.peekFirst();
             InboundConnectionMemory connection = waiter.connection;
@@ -221,12 +261,40 @@ public final class InboundMemoryBudget implements AutoCloseable {
                 waitersByConnection.remove(connection);
                 continue;
             }
-            if (!fitsConnection(account, waiter.bytes, waiter.inputCapacityReleasedAfterCopy)
+            if ((!waiter.progressReservation && backpressured
+                    && waiter.inputCapacityReleasedAfterCopy == 0L)
+                    || !fitsConnection(account, waiter.bytes, waiter.inputCapacityReleasedAfterCopy)
                     || !fitsGlobal(waiter.bytes)) {
                 return null;
             }
             waiters.removeFirst();
             waitersByConnection.remove(connection);
+            reserveLocked(account, waiter.bytes);
+            return new Granted(connection, waiter.bytes);
+        }
+        return null;
+    }
+
+    private Granted grantProgressWaiterLocked() {
+        Iterator<Waiter> iterator = waiters.iterator();
+        while (iterator.hasNext()) {
+            Waiter waiter = iterator.next();
+            InboundConnectionMemory connection = waiter.connection;
+            ConnectionMemoryAccount account = connection.account();
+            if (account.closed()) {
+                iterator.remove();
+                waitersByConnection.remove(connection, waiter);
+                continue;
+            }
+            boolean canAdvanceCurrentRequest = waiter.inputCapacityReleasedAfterCopy > 0L
+                    || (waiter.progressReservation && account.reservedBytes() > 0L);
+            if (!canAdvanceCurrentRequest
+                    || !fitsConnection(account, waiter.bytes, waiter.inputCapacityReleasedAfterCopy)
+                    || !fitsGlobal(waiter.bytes)) {
+                continue;
+            }
+            iterator.remove();
+            waitersByConnection.remove(connection, waiter);
             reserveLocked(account, waiter.bytes);
             return new Granted(connection, waiter.bytes);
         }
@@ -305,7 +373,12 @@ public final class InboundMemoryBudget implements AutoCloseable {
         return left + right;
     }
 
-    private record Waiter(InboundConnectionMemory connection, long bytes, long inputCapacityReleasedAfterCopy) {
+    private record Waiter(
+            InboundConnectionMemory connection,
+            long bytes,
+            long inputCapacityReleasedAfterCopy,
+            boolean progressReservation
+    ) {
     }
 
     private record Granted(InboundConnectionMemory connection, long bytes) {

@@ -141,7 +141,6 @@ public class YierdisInstanceCapabilityValidationTest {
         final AtomicInteger shutdownCalls = new AtomicInteger();
         @Override public DbReads reads() { return null; }
         @Override public DbWrites writes() { return null; }
-        @Override public ExpirationManager expiration() { return null; }
         @Override public MemoryOps memory() { return null; }
         @Override public DbLifecycleOps lifecycle() { return null; }
         @Override public void bindToCurrentThread() { }

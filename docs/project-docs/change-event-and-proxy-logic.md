@@ -41,13 +41,8 @@ CommandExecutorExecutionSupport
   -> CommandResult -> RedisReplyRenderer
 ```
 
-`CommandSession` 同时提供这些能力：
-
-- `DbIndexSession`
-- `ClientMetadataSession`
-- `TransactionSession`
-- `ConnectionStatsSession`
-- `ProtocolNegotiationSession`
+`CommandSession` 直接提供 DB index、client metadata、transaction、connection stats 和 RESP protocol 能力。
+只有 DB index 另有 `DbIndexSession` 窄接口，因为 `YierdisDbRouter` 不需要知道其余连接状态。
 
 类型边界保证 dispatcher 收到的 session 已具备全部能力。准备阶段只暴露 session；reply capacity 预留成功后，`CommandExecutionContext` 再加入请求级 `MutationContext`，但不暴露 writer。`EngineSession` 只是这些连接状态的生产 owner，不负责命令查找、解析或回包。
 

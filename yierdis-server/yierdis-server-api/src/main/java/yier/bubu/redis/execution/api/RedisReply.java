@@ -9,7 +9,7 @@ public sealed interface RedisReply permits
         RedisReply.IntegerValue, RedisReply.BooleanValue, RedisReply.DoubleValue,
         RedisReply.BigNumber, RedisReply.VerbatimString, RedisReply.BlobError,
         RedisReply.BulkString, RedisReply.NullValue, RedisReply.NullArray,
-        RedisReply.Aggregate, RedisReply.ByteSequence, RedisReply.ByteMap {
+        RedisReply.Aggregate, RedisReply.ByteSequence, RedisReply.ByteSet, RedisReply.ByteMap {
 
     ReplyShape shape();
 
@@ -159,6 +159,25 @@ public sealed interface RedisReply permits
         @Override
         public ReplyShape shape() {
             return ReplyShapes.sequence(elementCount, retainedSourceBytes, payloadLengths);
+        }
+    }
+
+    record ByteSet(
+            int elementCount,
+            long retainedSourceBytes,
+            ReplyShape.PayloadLengths payloadLengths,
+            PayloadEmitter emitter
+    ) implements RedisReply {
+        public ByteSet {
+            requireNonNegative(elementCount, "elementCount");
+            requireNonNegative(retainedSourceBytes, "retainedSourceBytes");
+            Objects.requireNonNull(payloadLengths, "payloadLengths");
+            Objects.requireNonNull(emitter, "emitter");
+        }
+
+        @Override
+        public ReplyShape shape() {
+            return ReplyShapes.byteSet(elementCount, retainedSourceBytes, payloadLengths);
         }
     }
 

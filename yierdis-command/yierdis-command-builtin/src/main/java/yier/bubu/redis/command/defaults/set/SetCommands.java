@@ -66,7 +66,7 @@ public final class SetCommands implements CommandModule {
         byte[] key = args.bytes(1);
         return session -> {
             ByteSequenceSource values = support.commandDb(session).reads().sets().smembers(key);
-            RedisReply reply = DbReplies.sequence(values);
+            RedisReply reply = DbReplies.set(values);
             return PreparedCommands.owned(CommandResult.reply(reply), values);
         };
     }

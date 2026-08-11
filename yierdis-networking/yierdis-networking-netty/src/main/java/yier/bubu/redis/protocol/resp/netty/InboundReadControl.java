@@ -17,4 +17,8 @@ public interface InboundReadControl {
     void pauseIngress();
 
     void resumeIngress();
+
+    default void resumeIngressForProgress() {
+        resumeIngress();
+    }
 }

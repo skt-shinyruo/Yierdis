@@ -62,6 +62,19 @@ public class RespClientCodecTest {
     }
 
     @Test
+    public void readsResp3MapsAndSetsWithoutLosingAggregateKind() throws Exception {
+        RespClientCodec.RespReply map = RespClientCodec.readReply(
+                in("%1\r\n+key\r\n~2\r\n$1\r\na\r\n$1\r\nb\r\n"), 1024);
+
+        Assert.assertEquals(RespClientCodec.RespReply.Kind.MAP, map.kind());
+        Assert.assertEquals(2, map.values().size());
+        RespClientCodec.RespReply set = map.values().get(1);
+        Assert.assertEquals(RespClientCodec.RespReply.Kind.SET, set.kind());
+        Assert.assertEquals(2, set.values().size());
+        Assert.assertArrayEquals(bytes("a"), set.values().get(0).bytes());
+    }
+
+    @Test
     public void rejectsInvalidLimitsTypesAndTruncatedReplies() {
         Assert.assertThrows(
                 IllegalArgumentException.class,

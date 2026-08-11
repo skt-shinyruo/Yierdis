@@ -94,6 +94,15 @@ public final class RedisReplies {
                 elementCount, retainedSourceBytes, payloadLengths, emitter);
     }
 
+    public static RedisReply byteSet(
+            int elementCount,
+            long retainedSourceBytes,
+            ReplyShape.PayloadLengths payloadLengths,
+            RedisReply.PayloadEmitter emitter
+    ) {
+        return new RedisReply.ByteSet(elementCount, retainedSourceBytes, payloadLengths, emitter);
+    }
+
     public static RedisReply byteMap(
             int pairCount,
             long retainedSourceBytes,

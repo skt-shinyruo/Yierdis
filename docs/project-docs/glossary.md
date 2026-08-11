@@ -92,7 +92,7 @@ CommandExecutor
 
 ### `DbEngine`
 
-DB 的能力聚合接口，提供 `reads()`、`writes()`、`expiration()`、`memory()`、`lifecycle()`。command 层依赖它，而不是依赖 `YierdisDb` internal。详见 [`db-internals.md`](./db-internals.md)。
+DB 的能力聚合接口，提供 `reads()`、`writes()`、`memory()`、`lifecycle()`。TTL 查询与修改分别属于 typed read/write ops，主动过期清理由 runtime maintenance 调度。command 层依赖它，而不是依赖 `YierdisDb` internal。详见 [`db-internals.md`](./db-internals.md)。
 
 ### `YierdisDb`
 

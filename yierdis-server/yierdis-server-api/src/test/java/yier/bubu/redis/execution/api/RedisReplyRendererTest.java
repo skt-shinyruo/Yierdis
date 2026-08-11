@@ -93,14 +93,26 @@ public class RedisReplyRendererTest {
                     sink.bulkString(bytes("k"));
                     sink.bulkString(bytes("vv"));
                 });
+        RedisReply set = RedisReplies.byteSet(
+                2,
+                11,
+                lengths -> {
+                    lengths.accept(1);
+                    lengths.accept(-1);
+                },
+                sink -> {
+                    sink.bulkString(bytes("a"));
+                    sink.bulkStringNull();
+                });
         RecordingWriter writer = new RecordingWriter();
 
-        RedisReplyRenderer.render(RedisReplies.array(List.of(sequence, map)), writer);
+        RedisReplyRenderer.render(RedisReplies.array(List.of(sequence, map, set)), writer);
 
         Assert.assertEquals(List.of(
-                "array:2",
+                "array:3",
                 "array:2", "bulk:a", "bulk:null",
-                "map:1", "bulk:k", "bulk:vv"
+                "map:1", "bulk:k", "bulk:vv",
+                "set:2", "bulk:a", "bulk:null"
         ), writer.events());
     }
 

@@ -85,11 +85,6 @@ public final class OutboundMemoryBudget implements AutoCloseable {
                 return Optional.empty();
             }
             requireAttached(connection);
-            if (!fitsSingle(bytes, singleReplyLimitBytes) || !fitsConnection(connection, bytes) || !fitsGlobal(bytes)) {
-                capacityRejectedReservations = saturatedAdd(capacityRejectedReservations, 1L);
-                return Optional.empty();
-            }
-
             Waiter waiter = waitersByConnection.get(connection);
             if (waiter != null) {
                 if (!waiter.granted || waiters.peekFirst() != waiter
@@ -97,10 +92,17 @@ public final class OutboundMemoryBudget implements AutoCloseable {
                         || waiter.bytes != bytes || waiter.singleReplyLimitBytes != singleReplyLimitBytes) {
                     return Optional.empty();
                 }
-                removeWaiterLocked(waiter);
+            } else if (hasGrantedWaiterLocked()) {
+                return Optional.empty();
             }
 
-            // 等待中的容量请求只约束自身重试；否则一个连接的 per-connection 压力会把 FAIR 调度退化为全局队首阻塞。
+            if (!fitsSingle(bytes, singleReplyLimitBytes) || !fitsConnection(connection, bytes) || !fitsGlobal(bytes)) {
+                capacityRejectedReservations = saturatedAdd(capacityRejectedReservations, 1L);
+                return Optional.empty();
+            }
+            if (waiter != null) {
+                removeWaiterLocked(waiter);
+            }
 
             reserveLocked(connection, bytes);
             lease = new OutboundMemoryLease(this, connection, bytes);
@@ -209,8 +211,9 @@ public final class OutboundMemoryBudget implements AutoCloseable {
                     capacityRejectedReservations = saturatedAdd(capacityRejectedReservations, 1L);
                     return false;
                 }
+            } else if (hasGrantedWaiterLocked()) {
+                return false;
             }
-            // 后续连接的可用扩容不应被另一连接的 waiter 拦住；GLOBAL 的队首语义由 executor 队列维护。
             if (!fitsWithin(lease.reservedBytes(), bytes, singleReplyLimitBytes)
                     || !fitsConnection(connection, bytes)
                     || !fitsGlobal(bytes)) {
@@ -411,9 +414,29 @@ public final class OutboundMemoryBudget implements AutoCloseable {
                 return null;
             }
             waiter.granted = true;
-            return waiter.callback;
+            return () -> invokeGrantedWaiter(waiter);
         }
         return null;
+    }
+
+    private boolean hasGrantedWaiterLocked() {
+        Waiter head = waiters.peekFirst();
+        return head != null && head.granted;
+    }
+
+    private void invokeGrantedWaiter(Waiter waiter) {
+        try {
+            waiter.callback.run();
+        } catch (RuntimeException ignored) {
+            Runnable callback = null;
+            synchronized (lock) {
+                if (waitersByConnection.get(waiter.connection) == waiter && waiter.granted) {
+                    removeWaiterLocked(waiter);
+                    callback = closed ? null : grantOneWaiterLocked();
+                }
+            }
+            invokeCallback(callback);
+        }
     }
 
     private void removeWaiterLocked(Waiter waiter) {
@@ -492,7 +515,7 @@ public final class OutboundMemoryBudget implements AutoCloseable {
         try {
             callback.run();
         } catch (RuntimeException ignored) {
-            // 回调在锁外运行；其失败不能撤销已经完成的额度归还。
+            // 授予回调会自行撤销未消费的令牌；其他锁外通知失败不影响已完成的额度归还。
         }
     }
 

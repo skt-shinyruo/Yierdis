@@ -109,6 +109,22 @@ public class PreparedMutationStorageTest {
         }
     }
 
+    @Test
+    public void setWithoutGetDoesNotRetainTheSupersededStringForItsPreview() {
+        try (TestDb db = heapDb()) {
+            db.set("key", "old");
+
+            try (PreparedMutation<StringWriteOps.SetStringValue> prepared =
+                         db.writes().strings().prepareSet(
+                                 bytes("key"), slice("new"), SetMode.NORMAL, null, false
+                         )) {
+                Assert.assertTrue(prepared.preview().applied());
+                Assert.assertTrue(prepared.preview().oldValue().isNull());
+                Assert.assertEquals(0L, prepared.preview().oldValue().retainedMemoryBytes());
+            }
+        }
+    }
+
     private static TestDb heapDb() {
         RuntimeDbEngine engine = new YierdisDbEngineFactory(
                 HeapStableMemoryBackend::new,

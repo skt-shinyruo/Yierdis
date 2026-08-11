@@ -41,6 +41,17 @@ public final class YierdisInstanceRuntimeAccess implements AutoCloseable {
         runMaintenanceTick(config, databases);
     }
 
+    /**
+     * 仅推进命令已发布的延迟资源回收，不执行过期清理、rehash、defrag 或 maxmemory 维护。
+     */
+    public void deferredReclamationTick() {
+        instance.requireOpenRuntimeAccess();
+        int databases = Math.max(0, instance.databases());
+        for (int i = 0; i < databases; i++) {
+            engine(i).runDeferredReclamation();
+        }
+    }
+
     private void runMaintenanceTick(YierdisInstanceConfig config, int databases) {
         boolean defragEnabled = config.defrag().enabled();
 

@@ -24,6 +24,7 @@ public final class InboundReadCreditHandler extends ChannelInboundHandlerAdapter
     private boolean executorPaused;
     private boolean readInFlight;
     private boolean readScheduled;
+    private boolean requestInProgress;
     private boolean closed;
 
     public InboundReadCreditHandler(
@@ -115,8 +116,18 @@ public final class InboundReadCreditHandler extends ChannelInboundHandlerAdapter
 
     @Override
     public void resumeIngress() {
+        resumeIngress(false);
+    }
+
+    @Override
+    public void resumeIngressForProgress() {
+        resumeIngress(true);
+    }
+
+    private void resumeIngress(boolean requestInProgress) {
         executeOnEventLoop(() -> {
             ingressPaused = false;
+            this.requestInProgress = requestInProgress;
             scheduleReadIfAllowed();
         });
     }
@@ -176,7 +187,7 @@ public final class InboundReadCreditHandler extends ChannelInboundHandlerAdapter
             return;
         }
 
-        PendingReadCredit pending = new PendingReadCredit(receiveCreditBytes);
+        PendingReadCredit pending = new PendingReadCredit(receiveCreditBytes, requestInProgress);
         pendingReadCredit = pending;
         connection.setResumeCallback(ctx.executor(), () -> {
             if (pendingReadCredit == pending && connection.claimGrantedReservation(pending.bytes)) {
@@ -184,7 +195,9 @@ public final class InboundReadCreditHandler extends ChannelInboundHandlerAdapter
                 grantReadCredit(pending.bytes);
             }
         });
-        InboundMemoryBudget.ReservationResult result = budget.tryReserve(connection, pending.bytes);
+        InboundMemoryBudget.ReservationResult result = pending.requestInProgress
+                ? budget.tryReserveProgressReadCredit(connection, pending.bytes)
+                : budget.tryReserveReadCredit(connection, pending.bytes);
         if (result == InboundMemoryBudget.ReservationResult.RESERVED) {
             pendingReadCredit = null;
             grantReadCredit(pending.bytes);
@@ -195,6 +208,11 @@ public final class InboundReadCreditHandler extends ChannelInboundHandlerAdapter
         }
         pendingReadCredit = null;
         ingressPaused = true;
+        if (result == InboundMemoryBudget.ReservationResult.REQUEST_LIMIT) {
+            ctx.fireChannelRead(new RespProtocolError("ERR request exceeds configured memory limit", true));
+        } else if (result == InboundMemoryBudget.ReservationResult.CLOSED) {
+            ctx.close();
+        }
     }
 
     private void grantReadCredit(long bytes) {
@@ -261,6 +279,6 @@ public final class InboundReadCreditHandler extends ChannelInboundHandlerAdapter
         ctx.executor().execute(action);
     }
 
-    private record PendingReadCredit(long bytes) {
+    private record PendingReadCredit(long bytes, boolean requestInProgress) {
     }
 }

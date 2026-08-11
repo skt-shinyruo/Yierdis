@@ -179,7 +179,7 @@ executor 的队列、字节、连接水位、reply capacity 和 transport 信号
 
 `CommandExecutor.executeMaintenance(...)` 把 maintenance task 投递到同一个 owner executor。这样 expired cleanup、maxmemory enforcement 和 runtime maintenance 不会绕过 DB owner-thread 约束。
 
-server 侧的 task 通常来自 `YierdisInstanceMaintenance`，它只委托 `YierdisInstanceRuntimeAccess.maintenanceTick()`。bootstrap 决定什么时候调度 tick，runtime 决定 tick 做什么，DB 仍只在 owner thread 上被访问。
+server 侧的 task 直接调用 `YierdisInstanceRuntimeAccess.maintenanceTick()`。bootstrap 决定什么时候调度 tick，runtime 决定 tick 做什么，DB 仍只在 owner thread 上被访问。
 
 ## 统计和观测
 

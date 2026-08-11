@@ -34,7 +34,6 @@ import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
 import yier.bubu.redis.storage.memory.YierdisDbEngineFactory;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
-import yier.bubu.redis.runtime.embedded.YierdisInstanceMaintenance;
 import yier.bubu.redis.runtime.embedded.YierdisInstanceObservability;
 import yier.bubu.redis.runtime.embedded.YierdisInstanceRuntimeAccess;
 
@@ -56,6 +55,7 @@ import java.util.function.UnaryOperator;
  */
 public final class YierdisServerBootstrap implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(YierdisServerBootstrap.class);
+    private static final long DEFERRED_RECLAMATION_INTERVAL_MILLIS = 1_000L;
 
     enum LifecycleState {
         STARTING,
@@ -219,7 +219,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         instanceConfigCustomizer.accept(instanceConfig);
         instance = YierdisInstance.create(instanceConfig.build());
         YierdisInstanceRuntimeAccess runtimeAccess = instance.runtimeAccess();
-        Runnable maintenanceTick = new YierdisInstanceMaintenance(instance)::maintenanceTick;
+        Runnable maintenanceTick = runtimeAccess::maintenanceTick;
         YierdisInstanceObservability observability = instance.observability();
 
         infoProvider = new NettyServerInfoProvider(runtimeConfig);
@@ -278,29 +278,32 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         // 命令执行器线程是 DB 的唯一访问者（保持单线程命令语义）。
         executor.start();
 
+        // worker event loop 只负责计时；实际维护仍回到 DB owner thread，并用 coalesce 避免任务堆积。
+        long maintenancePeriodMillis;
+        Runnable scheduledMaintenance;
         if (runtimeConfig.cleanupIntervalMillis() > 0) {
-            // 关键点：
-            // 1) 使用 worker event loop 作为“定时器线程”，避免 command executor 忙碌导致定时器自身无法触发。
-            // 2) 通过 executeMaintenance 让 cleanup 在 DB 绑定线程中执行。
-            // 3) 通过 coalesce 避免在高压下积累多个 cleanup 请求（fixed-rate catch-up storm）。
-            long period = runtimeConfig.cleanupIntervalMillis();
-            CommandExecutor<NettyExecutionConnection> exForTask = executor;
-            java.util.concurrent.atomic.AtomicBoolean cleanupPending = new java.util.concurrent.atomic.AtomicBoolean(false);
-            cleanupFuture = workerGroup.next().scheduleWithFixedDelay(() -> {
-                if (!cleanupPending.compareAndSet(false, true)) {
-                    return;
-                }
-                exForTask.executeMaintenance(() -> {
-                    try {
-                        maintenanceTick.run();
-                    } catch (Exception e) {
-                        log.debug("Expiration cleanup error", e);
-                    } finally {
-                        cleanupPending.set(false);
-                    }
-                });
-            }, period, period, TimeUnit.MILLISECONDS);
+            maintenancePeriodMillis = runtimeConfig.cleanupIntervalMillis();
+            scheduledMaintenance = () -> maintenanceTick.run();
+        } else {
+            maintenancePeriodMillis = DEFERRED_RECLAMATION_INTERVAL_MILLIS;
+            scheduledMaintenance = runtimeAccess::deferredReclamationTick;
         }
+        CommandExecutor<NettyExecutionConnection> exForTask = executor;
+        java.util.concurrent.atomic.AtomicBoolean maintenancePending = new java.util.concurrent.atomic.AtomicBoolean(false);
+        cleanupFuture = workerGroup.next().scheduleWithFixedDelay(() -> {
+            if (!maintenancePending.compareAndSet(false, true)) {
+                return;
+            }
+            exForTask.executeMaintenance(() -> {
+                try {
+                    scheduledMaintenance.run();
+                } catch (Exception e) {
+                    log.debug("Maintenance error", e);
+                } finally {
+                    maintenancePending.set(false);
+                }
+            });
+        }, maintenancePeriodMillis, maintenancePeriodMillis, TimeUnit.MILLISECONDS);
 
         ServerBootstrap bootstrap = new ServerBootstrap();
         bootstrap.group(bossGroup, workerGroup)

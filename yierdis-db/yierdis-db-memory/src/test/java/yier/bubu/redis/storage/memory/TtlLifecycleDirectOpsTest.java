@@ -34,7 +34,7 @@ public class TtlLifecycleDirectOpsTest {
             db.writes().strings().setString(b("expired"), b("v"), SetMode.NORMAL, null);
             Assert.assertTrue(db.writes().ttl().expireAtMillis(view("expired"), System.currentTimeMillis() + 1L).value());
             sleepPastTtl();
-            db.expiration().cleanupExpired();
+            db.runMaintenance();
             Assert.assertNull(db.reads().keyspace().typeOf(view("expired")));
             Assert.assertEquals(-2L, db.reads().ttl().ttlMillis(view("expired")));
         });
@@ -45,7 +45,6 @@ public class TtlLifecycleDirectOpsTest {
         withDb(db -> {
             Assert.assertSame(db.reads(), db.reads());
             Assert.assertSame(db.writes(), db.writes());
-            Assert.assertSame(db.expiration(), db.expiration());
             Assert.assertSame(db.memory(), db.memory());
             Assert.assertSame(db.lifecycle(), db.lifecycle());
 
@@ -69,6 +68,37 @@ public class TtlLifecycleDirectOpsTest {
             Assert.assertEquals(0L, empty.objectCount(NativeObjectKind.STRING_BYTES));
             Assert.assertEquals(0L, empty.liveObjects());
             Assert.assertSame(MutationOutcome.NONE, db.lifecycle().flushDb());
+        });
+    }
+
+    @Test
+    public void asyncFlushDetachesEachGenerationAndMaintenanceCannotDeleteNewKeys() {
+        withDb(db -> {
+            db.writes().strings().setString(b("same"), b("old"), SetMode.NORMAL, null);
+            db.writes().lists().rpush(b("old-list"), List.of(b("a"), b("b")));
+
+            Assert.assertSame(MutationOutcome.VALUE_CHANGED, db.lifecycle().flushDbAsync());
+            Assert.assertEquals(0, db.size());
+            Assert.assertEquals(2, db.detachedEntryCount());
+            NativeAllocatorStats firstDetached = db.stableMemoryBackend().stats();
+            Assert.assertEquals(2L, firstDetached.objectCount(NativeObjectKind.KEY_BYTES));
+            Assert.assertEquals(2L, firstDetached.objectCount(NativeObjectKind.ENTRY_RECORD));
+
+            db.writes().strings().setString(b("same"), b("middle"), SetMode.NORMAL, null);
+            Assert.assertSame(MutationOutcome.VALUE_CHANGED, db.lifecycle().flushDbAsync());
+            Assert.assertEquals(3, db.detachedEntryCount());
+
+            db.writes().strings().setString(b("same"), b("new"), SetMode.NORMAL, null);
+            Assert.assertArrayEquals(b("new"), db.reads().strings().getStringBytes(b("same")));
+            db.runDeferredReclamation();
+
+            Assert.assertEquals(0, db.detachedEntryCount());
+            Assert.assertArrayEquals(b("new"), db.reads().strings().getStringBytes(b("same")));
+            Assert.assertNull(db.reads().keyspace().typeOf(view("old-list")));
+            NativeAllocatorStats reclaimed = db.stableMemoryBackend().stats();
+            Assert.assertEquals(1L, reclaimed.objectCount(NativeObjectKind.KEY_BYTES));
+            Assert.assertEquals(1L, reclaimed.objectCount(NativeObjectKind.ENTRY_RECORD));
+            Assert.assertEquals(1L, reclaimed.objectCount(NativeObjectKind.STRING_BYTES));
         });
     }
 

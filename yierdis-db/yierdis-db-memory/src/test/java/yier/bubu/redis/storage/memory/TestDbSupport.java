@@ -255,7 +255,7 @@ public final class TestDbSupport {
                 value,
                 mode,
                 expireOption,
-                false
+                true
         );
         boolean completed = false;
         try {

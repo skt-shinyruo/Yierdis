@@ -99,7 +99,7 @@ public final class CommandDispatcher {
 
     private static PreparedCommand queued(TransactionState transaction, ExecutionRequest request) {
         return PreparedCommands.action(
-                ReplyShapes.maximum(),
+                ReplyShapes.errorUpperBound(),
                 context -> {
                     String enqueueError = transaction.tryEnqueue(request);
                     return enqueueError == null

@@ -30,7 +30,6 @@
  *     <li>TtlReadOps - API. Audience: TTL command handlers and DB implementations.</li>
  *     <li>TtlWriteOps - API. Audience: TTL command handlers and DB implementations.</li>
  *     <li>MemoryOps - API. Audience: server INFO/STATS adapters, runtime observability, tests.</li>
- *     <li>ExpirationManager - API. Audience: runtime maintenance and DB implementations.</li>
  *     <li>DbLifecycleOps - API. Audience: runtime lifecycle and DB implementations.</li>
  *     <li>DbHealthSnapshot - API. Audience: command handlers, runtime observability, tests.</li>
  *     <li>PostCommitMutationException - API. Audience: command error mapping and DB implementations.</li>

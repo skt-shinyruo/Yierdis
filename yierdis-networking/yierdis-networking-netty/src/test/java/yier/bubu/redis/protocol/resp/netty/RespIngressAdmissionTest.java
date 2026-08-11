@@ -8,6 +8,7 @@ import org.junit.Test;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 public class RespIngressAdmissionTest {
     @Test
@@ -36,13 +37,13 @@ public class RespIngressAdmissionTest {
         InboundMemoryBudget budget = new InboundMemoryBudget(2_048);
         InboundConnectionMemory blocker = new InboundConnectionMemory("blocker", 2_048, Runnable::run, () -> { });
         InboundConnectionMemory connection = new InboundConnectionMemory("decoder", 2_048, Runnable::run, () -> { });
-        Assert.assertEquals(InboundMemoryBudget.ReservationResult.RESERVED, budget.tryReserve(blocker, 1_512));
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.RESERVED, budget.tryReserve(blocker, 1_000));
         RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
                 1_024, 16, 1_024, 1_024, budget, connection, RespDecodedMessageGate.PASS_THROUGH
         );
         EmbeddedChannel channel = new EmbeddedChannel(decoder);
         try {
-            Assert.assertFalse(channel.writeInbound(unaccountedAscii("*1\r\n$32\r\n")));
+            Assert.assertFalse(channel.writeInbound(unaccountedAscii("*1\r\n$1024\r\n")));
 
             Assert.assertEquals("WAITING_FOR_BULK", decoder.stateNameForTests());
             Assert.assertEquals(0, decoder.allocatedBulkArraysForTests());
@@ -55,6 +56,7 @@ public class RespIngressAdmissionTest {
             Assert.assertEquals(0, decoder.allocatedBulkArraysForTests());
         } finally {
             channel.finishAndReleaseAll();
+            budget.release(blocker, 200);
         }
     }
 
@@ -102,7 +104,8 @@ public class RespIngressAdmissionTest {
             Assert.assertFalse(channel.writeInbound(ascii("*1\r\n$4\r\nPI")));
             channel.runPendingTasks();
 
-            Assert.assertTrue(budget.stats().retainedInputCapacityBytes() > 0L);
+            Assert.assertEquals(0L, budget.stats().retainedInputCapacityBytes());
+            Assert.assertTrue(budget.stats().reservedBytes() > budget.stats().readCreditBytes());
             Assert.assertTrue(budget.stats().readCreditBytes() > 0L);
         } finally {
             channel.finishAndReleaseAll();
@@ -111,6 +114,165 @@ public class RespIngressAdmissionTest {
         Assert.assertEquals(0L, budget.stats().readCreditBytes());
         Assert.assertEquals(0L, budget.stats().retainedInputCapacityBytes());
         Assert.assertEquals(0L, budget.stats().reservedBytes());
+    }
+
+    @Test
+    public void fragmentedBulkBodyReleasesConsumedInputAndCompletesWithinTheConnectionLimit() {
+        InboundMemoryBudget budget = new InboundMemoryBudget(600);
+        InboundConnectionMemory connection = new InboundConnectionMemory("streaming-bulk", 480, Runnable::run, () -> { });
+        InboundReadCreditHandler readCredits = new InboundReadCreditHandler(budget, connection, 64);
+        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                512, 4, 1_024, 512, budget, connection, RespDecodedMessageGate.PASS_THROUGH
+        );
+        decoder.setReadControl(readCredits);
+        EmbeddedChannel channel = new EmbeddedChannel(readCredits, new InboundByteAccountingHandler(readCredits), decoder);
+        ExecutionRequest request = null;
+        try {
+            channel.runPendingTasks();
+            Assert.assertFalse(channel.writeInbound(ascii("*1\r\n$256\r\n")));
+            channel.runPendingTasks();
+            Assert.assertNull(channel.readInbound());
+
+            byte[] fragment = new byte[32];
+            Arrays.fill(fragment, (byte) 'x');
+            for (int index = 0; index < 7; index++) {
+                Assert.assertFalse(channel.writeInbound(Unpooled.wrappedBuffer(fragment.clone())));
+                channel.runPendingTasks();
+                Assert.assertNull(channel.readInbound());
+                Assert.assertTrue(connection.reservedBytes() <= 480L);
+            }
+
+            byte[] finalFragment = new byte[34];
+            Arrays.fill(finalFragment, 0, 32, (byte) 'x');
+            finalFragment[32] = '\r';
+            finalFragment[33] = '\n';
+            Assert.assertTrue(channel.writeInbound(Unpooled.wrappedBuffer(finalFragment)));
+            channel.runPendingTasks();
+
+            Object decoded = channel.readInbound();
+            Assert.assertTrue(decoded instanceof ExecutionRequest);
+            request = (ExecutionRequest) decoded;
+            Assert.assertEquals(1, request.argc());
+            Assert.assertArrayEquals(repeatedByte('x', 256), request.readOnlyByteArray(0));
+            Assert.assertNull(channel.readInbound());
+        } finally {
+            if (request != null) {
+                request.close();
+            }
+            channel.finishAndReleaseAll();
+            connection.close();
+        }
+
+        Assert.assertEquals(0L, budget.stats().reservedBytes());
+    }
+
+    @Test
+    public void fragmentedBulkContinuesAfterItsPayloadReservationCrossesTheHighWatermark() {
+        InboundMemoryBudget budget = new InboundMemoryBudget(600);
+        InboundConnectionMemory connection = new InboundConnectionMemory(
+                "high-water-progress", 600, Runnable::run, () -> { });
+        InboundReadCreditHandler readCredits = new InboundReadCreditHandler(budget, connection, 64);
+        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                512, 4, 1_024, 512, budget, connection, RespDecodedMessageGate.PASS_THROUGH
+        );
+        decoder.setReadControl(readCredits);
+        EmbeddedChannel channel = new EmbeddedChannel(readCredits, new InboundByteAccountingHandler(readCredits), decoder);
+        ExecutionRequest request = null;
+        try {
+            channel.runPendingTasks();
+            Assert.assertFalse(channel.writeInbound(ascii("*1\r\n$420\r\n")));
+            channel.runPendingTasks();
+
+            Assert.assertTrue(budget.stats().backpressured());
+            Assert.assertTrue(readCredits.outstandingReadCreditBytes() > 0L);
+            Assert.assertEquals(0, budget.stats().waitingConnections());
+
+            byte[] fragment = new byte[64];
+            Arrays.fill(fragment, (byte) 'x');
+            for (int index = 0; index < 6; index++) {
+                Assert.assertFalse(channel.writeInbound(Unpooled.wrappedBuffer(fragment.clone())));
+                channel.runPendingTasks();
+                Assert.assertNull(channel.readInbound());
+            }
+
+            byte[] finalFragment = new byte[38];
+            Arrays.fill(finalFragment, 0, 36, (byte) 'x');
+            finalFragment[36] = '\r';
+            finalFragment[37] = '\n';
+            Assert.assertTrue(channel.writeInbound(Unpooled.wrappedBuffer(finalFragment)));
+            channel.runPendingTasks();
+
+            request = (ExecutionRequest) channel.readInbound();
+            Assert.assertNotNull(request);
+            Assert.assertArrayEquals(repeatedByte('x', 420), request.readOnlyByteArray(0));
+        } finally {
+            if (request != null) {
+                request.close();
+            }
+            channel.finishAndReleaseAll();
+            connection.close();
+        }
+
+        Assert.assertEquals(0L, budget.stats().reservedBytes());
+    }
+
+    @Test
+    public void completedRequestMemoryDoesNotGrantProgressCreditToTheNextRequest() {
+        InboundMemoryBudget budget = new InboundMemoryBudget(500);
+        InboundConnectionMemory blocker = new InboundConnectionMemory("blocker", 500, Runnable::run, () -> { });
+        InboundConnectionMemory connection = new InboundConnectionMemory("completed", 500, Runnable::run, () -> { });
+        InboundReadCreditHandler readCredits = new InboundReadCreditHandler(budget, connection, 64);
+        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                256, 4, 1_024, 256, budget, connection, RespDecodedMessageGate.PASS_THROUGH
+        );
+        decoder.setReadControl(readCredits);
+        EmbeddedChannel channel = new EmbeddedChannel(readCredits, new InboundByteAccountingHandler(readCredits), decoder);
+        ExecutionRequest request = null;
+        try {
+            channel.runPendingTasks();
+            Assert.assertEquals(InboundMemoryBudget.ReservationResult.RESERVED, budget.tryReserve(blocker, 247));
+            Assert.assertTrue(budget.stats().backpressured());
+
+            Assert.assertTrue(channel.writeInbound(ascii("*1\r\n$4\r\nPING\r\n")));
+            channel.runPendingTasks();
+            request = (ExecutionRequest) channel.readInbound();
+
+            Assert.assertEquals(1, budget.stats().waitingConnections());
+            Assert.assertEquals(0L, readCredits.outstandingReadCreditBytes());
+        } finally {
+            if (request != null) {
+                request.close();
+            }
+            channel.finishAndReleaseAll();
+            budget.release(blocker, 247);
+        }
+        Assert.assertEquals(0L, budget.stats().reservedBytes());
+    }
+
+    @Test
+    public void impossibleInitialReadCreditProducesATerminalMemoryError() {
+        InboundMemoryBudget budget = new InboundMemoryBudget(64);
+        InboundConnectionMemory connection = new InboundConnectionMemory("read-credit", 64, Runnable::run, () -> { });
+        InboundReadCreditHandler readCredits = new InboundReadCreditHandler(budget, connection, 64);
+        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                1_024, 16, 1_024, 1_024, budget, connection, RespDecodedMessageGate.PASS_THROUGH
+        );
+        decoder.setReadControl(readCredits);
+        EmbeddedChannel channel = new EmbeddedChannel(readCredits, new InboundByteAccountingHandler(readCredits), decoder);
+        try {
+            channel.runPendingTasks();
+
+            Object message = channel.readInbound();
+            Assert.assertTrue(message instanceof RespProtocolError);
+            Assert.assertEquals("ERR request exceeds configured memory limit", ((RespProtocolError) message).message());
+            Assert.assertTrue(((RespProtocolError) message).closeAfterReply());
+            Assert.assertEquals("CLOSING", decoder.stateNameForTests());
+            Assert.assertEquals(0, budget.stats().waitingConnections());
+            Assert.assertEquals(0L, budget.stats().reservedBytes());
+        } finally {
+            channel.finishAndReleaseAll();
+            connection.close();
+        }
     }
 
     @Test
@@ -318,6 +480,12 @@ public class RespIngressAdmissionTest {
 
     private static byte[] asciiBytes(String value) {
         return value.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static byte[] repeatedByte(char value, int length) {
+        byte[] bytes = new byte[length];
+        Arrays.fill(bytes, (byte) value);
+        return bytes;
     }
 
     private static final class RecordingGate implements RespDecodedMessageGate {

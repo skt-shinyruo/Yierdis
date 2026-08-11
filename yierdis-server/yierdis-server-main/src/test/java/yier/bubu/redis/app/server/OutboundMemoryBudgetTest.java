@@ -1,6 +1,7 @@
 package yier.bubu.redis.app.server;
 
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.Optional;
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -107,6 +108,73 @@ public class OutboundMemoryBudgetTest {
     }
 
     @Test
+    public void grantedRetryCannotBeDisplacedBeforeItConsumesCapacity() {
+        OutboundMemoryBudget budget = new OutboundMemoryBudget(400L);
+        OutboundConnectionMemory holder = budget.openConnection(400L);
+        OutboundConnectionMemory waiting = budget.openConnection(400L);
+        OutboundConnectionMemory competing = budget.openConnection(400L);
+        OutboundMemoryLease pressure = holder.reserve(400L, 400L).orElseThrow();
+        AtomicInteger wakeups = new AtomicInteger();
+        Optional<OutboundMemoryLease> displaced = Optional.empty();
+        OutboundMemoryLease admitted = null;
+        try {
+            Assert.assertTrue(waiting.awaitCapacity(100L, 400L, wakeups::incrementAndGet));
+
+            pressure.close();
+            Assert.assertEquals(1, wakeups.get());
+
+            displaced = competing.reserve(400L, 400L);
+            Assert.assertTrue("a signalled retry must own the advisory grant", displaced.isEmpty());
+
+            admitted = waiting.reserve(100L, 400L).orElseThrow();
+            Assert.assertEquals(100L, budget.stats().reservedBytes());
+            Assert.assertEquals(0, budget.stats().waitingConnections());
+        } finally {
+            if (admitted != null) {
+                admitted.close();
+            }
+            displaced.ifPresent(OutboundMemoryLease::close);
+            pressure.close();
+            holder.close();
+            waiting.close();
+            competing.close();
+            budget.close();
+        }
+    }
+
+    @Test
+    public void failedGrantCallbackHandsCapacityToTheNextWaiter() {
+        OutboundMemoryBudget budget = new OutboundMemoryBudget(400L);
+        OutboundConnectionMemory holder = budget.openConnection(400L);
+        OutboundConnectionMemory failed = budget.openConnection(400L);
+        OutboundConnectionMemory next = budget.openConnection(400L);
+        OutboundMemoryLease pressure = holder.reserve(400L, 400L).orElseThrow();
+        AtomicInteger nextWakeups = new AtomicInteger();
+        OutboundMemoryLease admitted = null;
+        try {
+            Assert.assertTrue(failed.awaitCapacity(100L, 400L, () -> {
+                throw new IllegalStateException("injected callback failure");
+            }));
+            Assert.assertTrue(next.awaitCapacity(100L, 400L, nextWakeups::incrementAndGet));
+
+            pressure.close();
+
+            Assert.assertEquals(1, nextWakeups.get());
+            admitted = next.reserve(100L, 400L).orElseThrow();
+            Assert.assertEquals(0, budget.stats().waitingConnections());
+        } finally {
+            if (admitted != null) {
+                admitted.close();
+            }
+            pressure.close();
+            holder.close();
+            failed.close();
+            next.close();
+            budget.close();
+        }
+    }
+
+    @Test
     public void wakesAnExpandedLeaseWaiterWithoutReplacingItsControlReservation() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(400L);
         OutboundConnectionMemory waitingConnection = budget.openConnection(400L);
@@ -127,6 +195,37 @@ public class OutboundMemoryBudgetTest {
         } finally {
             holderLease.close();
             waitingLease.close();
+        }
+    }
+
+    @Test
+    public void grantedExpansionCannotBeDisplacedBeforeTheLeaseConsumesIt() {
+        OutboundMemoryBudget budget = new OutboundMemoryBudget(400L);
+        OutboundConnectionMemory waitingConnection = budget.openConnection(400L);
+        OutboundConnectionMemory holderConnection = budget.openConnection(400L);
+        OutboundConnectionMemory competingConnection = budget.openConnection(400L);
+        OutboundMemoryLease waitingLease = waitingConnection.reserve(100L, 400L).orElseThrow();
+        OutboundMemoryLease holderLease = holderConnection.reserve(300L, 400L).orElseThrow();
+        AtomicInteger wakeups = new AtomicInteger();
+        Optional<OutboundMemoryLease> displaced = Optional.empty();
+        try {
+            Assert.assertTrue(waitingLease.awaitAdditionalCapacity(200L, 400L, wakeups::incrementAndGet));
+
+            holderLease.close();
+            Assert.assertEquals(1, wakeups.get());
+
+            displaced = competingConnection.reserve(300L, 400L);
+            Assert.assertTrue("a signalled expansion must own the advisory grant", displaced.isEmpty());
+            Assert.assertTrue(waitingLease.tryReserveAdditional(200L, 400L));
+            Assert.assertEquals(300L, waitingLease.reservedBytes());
+        } finally {
+            displaced.ifPresent(OutboundMemoryLease::close);
+            holderLease.close();
+            waitingLease.close();
+            holderConnection.close();
+            waitingConnection.close();
+            competingConnection.close();
+            budget.close();
         }
     }
 

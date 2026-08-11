@@ -3,6 +3,7 @@ package yier.bubu.redis.storage.memory;
 import java.util.Objects;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.storage.api.ValueType;
+import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
 import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
@@ -91,6 +92,37 @@ final class YierdisDbOwnedResources implements AutoCloseable {
         failure = closeResource(zsetRoot, failure);
         try {
             close();
+        } catch (Throwable next) {
+            failure = recordFailure(failure, next);
+        }
+        throwIfFailure(failure);
+    }
+
+    void releaseEntry(
+            EntryTable entries,
+            StringRoot stringRoot,
+            ListRoot listRoot,
+            HashRoot hashRoot,
+            SetRoot setRoot,
+            ZSetRoot zsetRoot,
+            EntryHandle entryHandle
+    ) {
+        Objects.requireNonNull(entries, "entries");
+        Objects.requireNonNull(entryHandle, "entryHandle");
+        Throwable failure = null;
+        EntryRecord record = null;
+        try {
+            record = entries.get(entryHandle);
+        } catch (Throwable next) {
+            failure = recordFailure(failure, next);
+        }
+        try {
+            releaseValue(record, stringRoot, listRoot, hashRoot, setRoot, zsetRoot);
+        } catch (Throwable next) {
+            failure = recordFailure(failure, next);
+        }
+        try {
+            entries.release(entryHandle);
         } catch (Throwable next) {
             failure = recordFailure(failure, next);
         }

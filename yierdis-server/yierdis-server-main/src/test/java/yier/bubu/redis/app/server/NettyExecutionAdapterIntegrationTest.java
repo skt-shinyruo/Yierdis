@@ -1,6 +1,7 @@
 package yier.bubu.redis.app.server;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutor;
 import io.netty.util.concurrent.ImmediateEventExecutor;
@@ -25,6 +26,20 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class NettyExecutionAdapterIntegrationTest {
+    @Test
+    public void closeConnectionClosesTheChannelWithoutAnExtraEventLoopSubmission() {
+        EmbeddedChannel channel = new EmbeddedChannel();
+        try {
+            NettyExecutionConnection connection = NettyExecutionConnection.getOrCreate(channel, 16, 1_024L);
+
+            new NettyExecutionIoAdapter().closeConnection(connection);
+
+            Assert.assertFalse(channel.isOpen());
+        } finally {
+            channel.finishAndReleaseAll();
+        }
+    }
+
     @Test
     public void registeredRequestSubmitsThroughNettyExecutionConnection() {
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build())) {

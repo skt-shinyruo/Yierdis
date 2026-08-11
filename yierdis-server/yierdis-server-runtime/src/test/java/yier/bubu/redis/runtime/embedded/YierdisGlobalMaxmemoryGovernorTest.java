@@ -9,7 +9,6 @@ import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbReads;
 import yier.bubu.redis.storage.api.DbWrites;
-import yier.bubu.redis.storage.api.ExpirationManager;
 import yier.bubu.redis.storage.api.GlobalMaxmemoryDbEngine;
 import yier.bubu.redis.storage.api.KeyHandle;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
@@ -553,11 +552,6 @@ public class YierdisGlobalMaxmemoryGovernorTest {
 
         @Override
         public DbWrites writes() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public ExpirationManager expiration() {
             throw new UnsupportedOperationException();
         }
 

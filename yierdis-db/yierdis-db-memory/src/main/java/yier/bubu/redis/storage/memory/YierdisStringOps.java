@@ -197,12 +197,9 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         }
         boolean applied = (mode != SetMode.NX || current == null)
                 && (mode != SetMode.XX || current != null);
-        if (applied && currentIsNonString) {
-            throw new WrongTypeException();
-        }
         ByteValue oldValue = current != null
                 && current.type() == ValueType.STRING
-                && (returnOldValue || applied)
+                && returnOldValue
                 ? stringRoot.retainedValue(requireStringHandle(current))
                 : ByteValue.nullValue();
         return new PreparedSetMutation(

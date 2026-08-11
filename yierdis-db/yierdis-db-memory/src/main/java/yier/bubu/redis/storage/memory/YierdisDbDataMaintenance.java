@@ -1,6 +1,7 @@
 package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.common.command.MutationContext;
+import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
@@ -17,6 +18,7 @@ import java.util.Objects;
 
 final class YierdisDbDataMaintenance {
     private static final long MAINTENANCE_REHASH_MAX_INSPECTED_SLOTS = 64L;
+    private static final int ASYNC_FLUSH_RECLAIM_MAX_ENTRIES = 64;
 
     private final YierdisDbRuntimeState runtimeState;
     private final YierdisDbHealth health;
@@ -55,6 +57,7 @@ final class YierdisDbDataMaintenance {
 
     void runMaintenance() {
         runtimeState.checkThread();
+        reclaimDetachedEntries();
         health.requireWritable();
         expirationSupport.cleanupExpired();
         rehashMaintenance(HashTableWorkBudget.of(
@@ -62,6 +65,11 @@ final class YierdisDbDataMaintenance {
                 maintenanceTimeLimitNanos
         ));
         enforceMaxmemory();
+    }
+
+    void runDeferredReclamation() {
+        runtimeState.checkThread();
+        reclaimDetachedEntries();
     }
 
     void enforceMaxmemory() {
@@ -190,6 +198,14 @@ final class YierdisDbDataMaintenance {
     }
 
     MutationOutcome flushDb(MutationContext context) {
+        return flushDb(context, false);
+    }
+
+    MutationOutcome flushDbAsync(MutationContext context) {
+        return flushDb(context, true);
+    }
+
+    private MutationOutcome flushDb(MutationContext context, boolean async) {
         health.requireWritable();
         return mutationExecutor.execute(
                 Objects.requireNonNull(context, "context"),
@@ -212,9 +228,12 @@ final class YierdisDbDataMaintenance {
                                 preparation.committedMemoryDelta(),
                                 0L,
                                 preparation.outcome(),
-                                YierdisDbDataMaintenance.this::commitFlushDb,
+                                async
+                                        ? YierdisDbDataMaintenance.this::commitFlushDbAsync
+                                        : YierdisDbDataMaintenance.this::commitFlushDb,
                                 null,
-                                null
+                                null,
+                                !async && preparation.committedMemoryDelta() < 0L
                         );
                     }
                 }
@@ -228,6 +247,24 @@ final class YierdisDbDataMaintenance {
     private void commitFlushDb() {
         runtimeState.commitFlushDb();
         expirationSupport.resetCursor();
+    }
+
+    private void commitFlushDbAsync() {
+        // 只在 mutation commit 边界发布空目录；旧目录在后续 owner maintenance 中释放，不能再查询当前 keyspace。
+        runtimeState.commitFlushDbAsync();
+        expirationSupport.resetCursor();
+    }
+
+    private void reclaimDetachedEntries() {
+        try {
+            int reclaimed = runtimeState.reclaimDetachedEntries(ASYNC_FLUSH_RECLAIM_MAX_ENTRIES);
+            if (reclaimed > 0) {
+                runtimeState.stableMemoryBackend().trimEmptyPages(MemoryPressureBudget.unlimited());
+            }
+        } catch (RuntimeException | Error failure) {
+            health.recordInvariantFailure(failure);
+            throw failure;
+        }
     }
 
     private MaxmemoryCandidate publicCandidate(MaxmemoryParticipant publicOwner, MaxmemoryCandidate candidate) {

@@ -21,7 +21,6 @@ import yier.bubu.redis.storage.api.DefragmentableDbEngine;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbReads;
 import yier.bubu.redis.storage.api.DbWrites;
-import yier.bubu.redis.storage.api.ExpirationManager;
 import yier.bubu.redis.storage.api.GlobalMaxmemoryDbEngine;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
@@ -35,7 +34,6 @@ import yier.bubu.redis.runtime.api.YierdisChangeKind;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
 import yier.bubu.redis.runtime.embedded.CommitStreamState;
-import yier.bubu.redis.runtime.embedded.YierdisInstanceMaintenance;
 import yier.bubu.redis.runtime.embedded.YierdisInstanceObservability;
 import yier.bubu.redis.runtime.embedded.YierdisInstanceRuntimeAccess;
 import yier.bubu.redis.testutil.FastTestClient;
@@ -235,7 +233,7 @@ public class YierdisInstanceTest {
             instance.bindToCurrentThread();
             Assert.assertTrue(instance.engine(0).writes().strings().setString(b("k"), b("value"), SetMode.NORMAL, null).value());
 
-            new YierdisInstanceMaintenance(instance).maintenanceTick();
+            instance.runtimeAccess().maintenanceTick();
 
             Assert.assertArrayEquals(b("value"), instance.engine(0).reads().strings().getStringBytes(b("k")));
             Assert.assertTrue(instance.engine(0).memory().memoryStats().nativeDefragLastMovedObjects() > 0L);
@@ -274,7 +272,7 @@ public class YierdisInstanceTest {
             }
 
             sleepPastTtl();
-            new YierdisInstanceMaintenance(instance).maintenanceTick();
+            instance.runtimeAccess().maintenanceTick();
 
             try {
                 Assert.assertTrue("commit stream did not deliver expiry", delivered.await(5L, TimeUnit.SECONDS));
@@ -601,6 +599,7 @@ public class YierdisInstanceTest {
             YierdisInstanceRuntimeAccess runtimeAccess = instance.runtimeAccess();
             runtimeAccess.bindToCurrentThread();
             runtimeAccess.maintenanceTick();
+            runtimeAccess.deferredReclamationTick();
             runtimeAccess.close();
         } finally {
             try {
@@ -611,6 +610,7 @@ public class YierdisInstanceTest {
 
         Assert.assertEquals(1, engine.bindCalls);
         Assert.assertEquals(1, engine.runMaintenanceCalls);
+        Assert.assertEquals(1, engine.deferredReclamationCalls);
         Assert.assertEquals(1, engine.defragMaintenanceCalls);
         Assert.assertEquals(1, engine.shutdownCalls);
     }
@@ -627,7 +627,7 @@ public class YierdisInstanceTest {
 
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
             instance.bindToCurrentThread();
-            new YierdisInstanceMaintenance(instance).maintenanceTick();
+            instance.runtimeAccess().maintenanceTick();
         }
 
         Assert.assertEquals(1, engine.runMaintenanceCalls);
@@ -646,7 +646,7 @@ public class YierdisInstanceTest {
 
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
             instance.bindToCurrentThread();
-            new YierdisInstanceMaintenance(instance).maintenanceTick();
+            instance.runtimeAccess().maintenanceTick();
         }
 
         Assert.assertEquals(1, engine0.runMaintenanceCalls);
@@ -825,11 +825,6 @@ public class YierdisInstanceTest {
         }
 
         @Override
-        public ExpirationManager expiration() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
         public MemoryOps memory() {
             throw new UnsupportedOperationException();
         }
@@ -874,11 +869,6 @@ public class YierdisInstanceTest {
         }
 
         @Override
-        public ExpirationManager expiration() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
         public MemoryOps memory() {
             throw new UnsupportedOperationException();
         }
@@ -892,6 +882,7 @@ public class YierdisInstanceTest {
     private static class TrackingRuntimeDbEngine implements RuntimeDbEngine {
         protected int bindCalls;
         protected int runMaintenanceCalls;
+        protected int deferredReclamationCalls;
         protected int defragMaintenanceCalls;
         protected int shutdownCalls;
 
@@ -906,6 +897,11 @@ public class YierdisInstanceTest {
         }
 
         @Override
+        public void runDeferredReclamation() {
+            deferredReclamationCalls++;
+        }
+
+        @Override
         public void shutdown() {
             shutdownCalls++;
         }
@@ -917,11 +913,6 @@ public class YierdisInstanceTest {
 
         @Override
         public DbWrites writes() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public ExpirationManager expiration() {
             throw new UnsupportedOperationException();
         }
 

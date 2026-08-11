@@ -51,7 +51,7 @@ final class NettyExecutionIoAdapter implements ExecutionIoAdapter<NettyExecution
 
     @Override
     public void closeConnection(NettyExecutionConnection connection) {
-        withChannel(connection, channel -> channel.eventLoop().execute(channel::close));
+        withChannel(connection, Channel::close);
     }
 
     private static void withChannel(NettyExecutionConnection connection, java.util.function.Consumer<Channel> action) {

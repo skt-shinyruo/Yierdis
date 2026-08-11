@@ -20,6 +20,7 @@ public sealed interface ReplyShape permits
         ReplyShape.NullArray,
         ReplyShape.Aggregate,
         ReplyShape.ByteSequence,
+        ReplyShape.ByteSet,
         ReplyShape.ByteMap,
         ReplyShape.Maximum {
 
@@ -159,6 +160,18 @@ public sealed interface ReplyShape permits
             long retainedSourceBytes
     ) implements ReplyShape {
         public ByteSequence {
+            requireNonNegative(elementCount, "elementCount");
+            Objects.requireNonNull(payloadLengths, "payloadLengths");
+            requireNonNegative(retainedSourceBytes, "retainedSourceBytes");
+        }
+    }
+
+    record ByteSet(
+            int elementCount,
+            PayloadLengths payloadLengths,
+            long retainedSourceBytes
+    ) implements ReplyShape {
+        public ByteSet {
             requireNonNegative(elementCount, "elementCount");
             Objects.requireNonNull(payloadLengths, "payloadLengths");
             requireNonNegative(retainedSourceBytes, "retainedSourceBytes");

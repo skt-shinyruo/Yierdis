@@ -226,11 +226,21 @@ public class RedisReplyRespContractTest {
             sink.bulkString(bytes("n"));
             sink.bulkStringNull();
         });
+        RedisReply set = RedisReplies.byteSet(2, 29L, consumer -> {
+            consumer.accept(1);
+            consumer.accept(-1);
+        }, sink -> {
+            sink.bulkString(bytes("a"));
+            sink.bulkStringNull();
+        });
 
         return List.of(
                 fixture("streamed sequence", sequence,
                         "*3\r\n$1\r\na\r\n$-1\r\n$3\r\nxyz\r\n",
                         "*3\r\n$1\r\na\r\n_\r\n$3\r\nxyz\r\n", 17L),
+                fixture("streamed set", set,
+                        "*2\r\n$1\r\na\r\n$-1\r\n",
+                        "~2\r\n$1\r\na\r\n_\r\n", 29L),
                 fixture("streamed map", map,
                         "*4\r\n$1\r\nk\r\n$1\r\nv\r\n$1\r\nn\r\n$-1\r\n",
                         "%2\r\n$1\r\nk\r\n$1\r\nv\r\n$1\r\nn\r\n_\r\n", 23L)

@@ -82,12 +82,16 @@ public class StringCommandTest {
     }
 
     @Test
-    public void setXxWithoutGetRetainsWrongTypeProtection() {
+    public void setWithoutGetReplacesExistingValuesRegardlessOfTheirType() {
         withClient(client -> {
-            assertInteger(1, client.execute(cmd("LPUSH", "key", "item")));
+            assertInteger(1, client.execute(cmd("LPUSH", "normal-key", "item")));
 
-            assertErrorContaining("WRONGTYPE", client.execute(cmd("SET", "key", "new", "XX")));
-            assertBulkString("item", assertArraySize(1, client.execute(cmd("LRANGE", "key", "0", "-1"))).values().get(0));
+            assertSimpleString("OK", client.execute(cmd("SET", "normal-key", "normal")));
+            assertBulkString("normal", client.execute(cmd("GET", "normal-key")));
+
+            assertInteger(1, client.execute(cmd("LPUSH", "xx-key", "item")));
+            assertSimpleString("OK", client.execute(cmd("SET", "xx-key", "conditional", "XX")));
+            assertBulkString("conditional", client.execute(cmd("GET", "xx-key")));
         });
     }
 

@@ -27,6 +27,10 @@ public final class RedisReplyRenderer {
                 out.arrayHeader(value.elementCount());
                 value.emitter().emit(out);
             }
+            case RedisReply.ByteSet value -> {
+                out.setHeader(value.elementCount());
+                value.emitter().emit(out);
+            }
             case RedisReply.ByteMap value -> {
                 out.mapHeader(value.pairCount());
                 value.emitter().emit(out);

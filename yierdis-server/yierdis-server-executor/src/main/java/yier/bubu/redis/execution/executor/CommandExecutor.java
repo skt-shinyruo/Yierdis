@@ -88,6 +88,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
                 taskQueue,
                 backlogBudget,
                 backpressureController,
+                ioAdapter,
                 config.backpressureHighWatermark(),
                 config.backpressureBytesHighWatermark(),
                 () -> running,

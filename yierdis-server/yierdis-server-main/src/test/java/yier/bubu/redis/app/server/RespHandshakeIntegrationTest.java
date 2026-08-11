@@ -7,6 +7,10 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
+import yier.bubu.redis.protocol.resp.RespClientCodec;
 
 public class RespHandshakeIntegrationTest {
     @Test
@@ -27,6 +31,65 @@ public class RespHandshakeIntegrationTest {
             out.write("*1\r\n$4\r\nPING\r\n".getBytes(StandardCharsets.US_ASCII));
             out.flush();
             Assert.assertEquals("+PONG\r\n", readAscii(in, 7));
+        }
+    }
+
+    @Test
+    public void helloCanSwitchFromResp3BackToResp2WithoutClosingTheConnection() throws Exception {
+        ServerConfig config = serverConfig();
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(config);
+             Socket socket = new Socket("127.0.0.1", server.port())) {
+            socket.setSoTimeout(3000);
+            OutputStream out = socket.getOutputStream();
+            InputStream in = socket.getInputStream();
+
+            out.write("*2\r\n$5\r\nHELLO\r\n$1\r\n3\r\n".getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+            RespClientCodec.RespReply hello3 = RespClientCodec.readReply(in, 1_024);
+            Assert.assertEquals(RespClientCodec.RespReply.Kind.MAP, hello3.kind());
+
+            out.write("*2\r\n$5\r\nHELLO\r\n$1\r\n2\r\n".getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+            RespClientCodec.RespReply hello2 = RespClientCodec.readReply(in, 1_024);
+            Assert.assertEquals(RespClientCodec.RespReply.Kind.ARRAY, hello2.kind());
+            Assert.assertEquals(10, hello2.values().size());
+            Assert.assertArrayEquals(bytes("proto"), hello2.values().get(4).bytes());
+            Assert.assertEquals(Long.valueOf(2L), hello2.values().get(5).integer());
+
+            out.write("*1\r\n$4\r\nPING\r\n".getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+            Assert.assertTrue(RespClientCodec.readReply(in, 1_024).isSimpleString("PONG"));
+        }
+    }
+
+    @Test
+    public void builtInClientCodecReadsHelloMapAndSmembersSetInResp3() throws Exception {
+        ServerConfig config = serverConfig();
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(config);
+             Socket socket = new Socket("127.0.0.1", server.port())) {
+            socket.setSoTimeout(3000);
+            OutputStream out = socket.getOutputStream();
+            InputStream in = socket.getInputStream();
+
+            out.write(RespClientCodec.encodeCommand(List.of(bytes("HELLO"), bytes("3"))));
+            out.flush();
+            RespClientCodec.RespReply hello = RespClientCodec.readReply(in, 1024);
+            Assert.assertEquals(RespClientCodec.RespReply.Kind.MAP, hello.kind());
+            Assert.assertEquals(10, hello.values().size());
+
+            out.write(RespClientCodec.encodeCommand(List.of(
+                    bytes("SADD"), bytes("members"), bytes("alpha"), bytes("beta"))));
+            out.flush();
+            Assert.assertEquals(Long.valueOf(2), RespClientCodec.readReply(in, 1024).integer());
+
+            out.write(RespClientCodec.encodeCommand(List.of(bytes("SMEMBERS"), bytes("members"))));
+            out.flush();
+            RespClientCodec.RespReply members = RespClientCodec.readReply(in, 1024);
+            Assert.assertEquals(RespClientCodec.RespReply.Kind.SET, members.kind());
+            Set<String> values = members.values().stream()
+                    .map(value -> new String(value.bytes(), StandardCharsets.UTF_8))
+                    .collect(Collectors.toSet());
+            Assert.assertEquals(Set.of("alpha", "beta"), values);
         }
     }
 
@@ -92,6 +155,10 @@ public class RespHandshakeIntegrationTest {
         byte[] buf = new byte[256];
         int n = in.read(buf);
         return new String(buf, 0, n, StandardCharsets.US_ASCII);
+    }
+
+    private static byte[] bytes(String value) {
+        return value.getBytes(StandardCharsets.UTF_8);
     }
 
     private static ServerConfig serverConfig() {

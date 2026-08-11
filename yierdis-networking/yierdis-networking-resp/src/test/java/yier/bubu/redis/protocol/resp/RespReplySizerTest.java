@@ -86,11 +86,17 @@ public class RespReplySizerTest {
             consumer.accept(1);
             consumer.accept(-1);
         });
+        ReplyShape set = ReplyShapes.byteSet(2, 9L, consumer -> {
+            consumer.accept(1);
+            consumer.accept(-1);
+        });
 
         assertEncodedBytes(2, nested, 26L);
         assertEncodedBytes(3, nested, 26L);
         assertEncodedBytes(2, sequence, 16L);
         assertEncodedBytes(3, sequence, 14L);
+        assertEncodedBytes(2, set, 16L);
+        assertEncodedBytes(3, set, 14L);
         Assert.assertEquals(7L, new RespReplySizer().plan(new TestCommandSession(), sequence)
                 .retainedSourceBytes());
     }

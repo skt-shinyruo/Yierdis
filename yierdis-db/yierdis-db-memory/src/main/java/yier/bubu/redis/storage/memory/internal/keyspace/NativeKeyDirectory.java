@@ -28,6 +28,7 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
     private static final long ARRAY_HEADER_BYTES = 16L;
     private static final long HANDLE_BYTES = Long.BYTES * 2L;
     private static final long TABLE_OBJECT_BYTES = 48L;
+    private static final long DETACHED_ENTRIES_OBJECT_BYTES = 64L;
     private static final HashTableWorkBudget WRITE_REHASH_BUDGET = HashTableWorkBudget.of(2L, Long.MAX_VALUE);
 
     private final StableMemoryBackend allocator;
@@ -42,6 +43,10 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
     private long completedRehashes;
     private int maximumProbeLength;
     private boolean maintenanceDebt;
+    private DetachedEntries detachedHead;
+    private DetachedEntries detachedTail;
+    private long detachedHeapBytes;
+    private long detachedEntryCount;
     private boolean closed;
     private boolean iterationTrapForTesting;
 
@@ -76,7 +81,7 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
 
     public synchronized long heapBytes() {
         ensureOpen();
-        return active.heapBytes + (old == null ? 0L : old.heapBytes);
+        return active.heapBytes + (old == null ? 0L : old.heapBytes) + detachedHeapBytes;
     }
 
     public synchronized long estimatedInsertHeapGrowthBytes() {
@@ -488,6 +493,88 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         clearInternal();
     }
 
+    /**
+     * 将当前可见目录切换为空目录；退休目录中的 native key 仍由本实例持有，等待 owner thread 后续回收。
+     */
+    public synchronized void detachEntries() {
+        ensureOpen();
+        Table replacement = new Table(HashCapacityPolicy.MIN_CAPACITY);
+        DetachedEntries detached = size == 0 ? null : new DetachedEntries(active, old, size);
+        long nextDetachedHeapBytes = detached == null
+                ? detachedHeapBytes
+                : Math.addExact(detachedHeapBytes, detached.retainedHeapBytes);
+        long nextDetachedEntryCount = detached == null
+                ? detachedEntryCount
+                : Math.addExact(detachedEntryCount, (long) detached.remainingEntries);
+
+        active = replacement;
+        old = null;
+        rehashCursor = 0;
+        size = 0;
+        maintenanceDebt = false;
+        refreshMaintenanceRegistration();
+        generation++;
+
+        if (detached == null) {
+            return;
+        }
+        if (detachedTail == null) {
+            detachedHead = detached;
+        } else {
+            detachedTail.next = detached;
+        }
+        detachedTail = detached;
+        detachedHeapBytes = nextDetachedHeapBytes;
+        detachedEntryCount = nextDetachedEntryCount;
+    }
+
+    /**
+     * 回收一个已分离 entry。目录槽位会先从退休队列消费，因此回调失败时也不会再次释放同一 native 句柄。
+     */
+    public synchronized boolean reclaimDetachedEntry(EntryConsumer consumer) {
+        Objects.requireNonNull(consumer, "consumer");
+        ensureOpen();
+        DetachedEntries detached = detachedHead;
+        if (detached == null) {
+            return false;
+        }
+
+        DetachedSlot slot = detached.takeNext();
+        detachedEntryCount--;
+        Throwable failure = null;
+        try {
+            consumer.accept(
+                    KeyHandle.forNative(allocator, slot.keyHandle, slot.hash),
+                    new EntryHandle(slot.entryHandle)
+            );
+        } catch (RuntimeException | Error next) {
+            failure = next;
+        }
+        try {
+            allocator.free(slot.keyHandle);
+        } catch (RuntimeException | Error next) {
+            failure = addFailure(failure, next);
+        }
+
+        if (detached.remainingEntries == 0) {
+            detachedHead = detached.next;
+            if (detachedHead == null) {
+                detachedTail = null;
+            }
+            detachedHeapBytes -= detached.retainedHeapBytes;
+            detached.releaseTables();
+        }
+        if (failure != null) {
+            rethrow(failure);
+        }
+        return true;
+    }
+
+    public synchronized long detachedEntryCount() {
+        ensureOpen();
+        return detachedEntryCount;
+    }
+
     @Override
     public synchronized void close() {
         if (closed) {
@@ -498,6 +585,11 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
             clearInternal();
         } catch (RuntimeException | Error e) {
             failure = e;
+        }
+        if (detachedHead != null) {
+            failure = addFailure(failure, new IllegalStateException(
+                    "native key directory closed with detached entries pending"
+            ));
         }
         closed = true;
         if (failure != null) {
@@ -950,6 +1042,74 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
     @FunctionalInterface
     public interface ScanConsumer {
         boolean accept(KeyHandle keyHandle, EntryHandle entryHandle);
+    }
+
+    private static final class DetachedEntries {
+        private final long retainedHeapBytes;
+        private Table first;
+        private Table second;
+        private int tableIndex;
+        private int slotIndex;
+        private int remainingEntries;
+        private DetachedEntries next;
+
+        private DetachedEntries(Table first, Table second, int remainingEntries) {
+            this.first = Objects.requireNonNull(first, "first");
+            this.second = second;
+            this.remainingEntries = remainingEntries;
+            int tableEntries = first.size + (second == null ? 0 : second.size);
+            if (remainingEntries <= 0 || tableEntries != remainingEntries) {
+                throw new IllegalStateException(
+                        "detached key-directory size mismatch: expected=" + remainingEntries
+                                + ", tables=" + tableEntries
+                );
+            }
+            this.retainedHeapBytes = Math.addExact(
+                    DETACHED_ENTRIES_OBJECT_BYTES,
+                    Math.addExact(first.heapBytes, second == null ? 0L : second.heapBytes)
+            );
+        }
+
+        private DetachedSlot takeNext() {
+            while (tableIndex < 2) {
+                Table table = tableIndex == 0 ? first : second;
+                if (table == null || slotIndex >= table.capacity) {
+                    tableIndex++;
+                    slotIndex = 0;
+                    continue;
+                }
+                int index = slotIndex++;
+                if (table.states[index] != STATE_FILLED) {
+                    continue;
+                }
+                DetachedSlot slot = new DetachedSlot(
+                        table.keyHandles[index],
+                        table.entryHandles[index],
+                        table.hashes[index]
+                );
+                table.keyHandles[index] = null;
+                table.entryHandles[index] = null;
+                table.hashes[index] = 0;
+                table.states[index] = STATE_EMPTY;
+                table.size--;
+                remainingEntries--;
+                return slot;
+            }
+            throw new IllegalStateException("detached key-directory entry count exceeds live slots");
+        }
+
+        private void releaseTables() {
+            first = null;
+            second = null;
+            next = null;
+        }
+    }
+
+    private record DetachedSlot(NativeHandle keyHandle, NativeHandle entryHandle, int hash) {
+        private DetachedSlot {
+            Objects.requireNonNull(keyHandle, "keyHandle");
+            Objects.requireNonNull(entryHandle, "entryHandle");
+        }
     }
 
     public final class StagedResize implements AutoCloseable {
