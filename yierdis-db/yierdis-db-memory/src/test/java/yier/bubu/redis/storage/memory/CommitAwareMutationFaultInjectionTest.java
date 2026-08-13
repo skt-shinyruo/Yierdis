@@ -456,7 +456,7 @@ public class CommitAwareMutationFaultInjectionTest {
             db.writes().lists().rpush(bytes("list"), java.util.List.of(bytes("old")));
             Assert.assertEquals(
                     1L,
-                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.LISTPACK_BYTES)
+                    KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.LISTPACK_BYTES)
             );
 
             RecordingPublisher publisher = new RecordingPublisher();
@@ -474,7 +474,7 @@ public class CommitAwareMutationFaultInjectionTest {
 
             Assert.assertEquals(
                     1L,
-                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.LISTPACK_BYTES)
+                    KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.LISTPACK_BYTES)
             );
             Assert.assertEquals(1, publisher.failedAfterCommit.get());
             publisher.closeRetainedRecord();

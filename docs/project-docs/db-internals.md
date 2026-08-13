@@ -16,7 +16,7 @@ YierdisInstance
         -> YierdisDb
 ```
 
-`DbEngineConfig` 是 DB 配置的唯一输入。`YierdisDb` 在私有构造器内直接组装 ledger、mutation executor 和 maintenance；`YierdisDbStorage` 只记录 maintenance registry 与 key lifecycle，`YierdisDbOperationViews` 只聚合公开 operation views。storage 创建一开始就接管 backend，构造失败与正常 shutdown 都沿 key lifecycle 的同一 ownership 路径清理，原始失败保持为 primary，清理失败附加为 suppressed。
+`DbEngineConfig` 是 DB 配置的唯一输入。`YierdisDb` 在私有构造器内直接组装 ledger、mutation executor 和 maintenance；`YierdisDbStorage` 只记录 maintenance registry 与 key lifecycle，`YierdisDbOperationViews` 只聚合公开 operation views。storage 创建一开始就接管 backend，构造失败与正常 shutdown 都沿 key lifecycle 的同一 ownership 路径清理，原始失败保持为 primary，清理失败附加为 suppressed。`YierdisDbRuntimeState` 只保存线程、协调器、commit、LRU clock 和 defrag 报告状态，不持有 storage backend。
 
 global/per-db maxmemory 只改变预算协调方式。每个 DB 都有独立的 stable-memory backend/runtime、keyspace、entry table、roots 和 ledger。
 
@@ -63,7 +63,7 @@ Type roots
 
 新 key 只能通过 opaque `StagedEntry` token 预留 entry 与 native key。abort 或未发布时关闭 token 会幂等释放两者；发布后 token 被消费，prepared mutation 只调用 lifecycle 的 publish/replace/delete 语义，不再持有 directory staging 类型。
 
-ops 不直接组合 directory 与 entry table，也不能从 lifecycle 取出 backend、table、directory 或 roots。各 family root 只在 DB 组合时注入对应 family ops；删除必须让 directory entry、entry record、value/root 和 key allocation 一起收敛，替换必须在 source identity 仍匹配时才发布。
+ops 不直接组合 directory 与 entry table，也不能从 lifecycle 取出 backend、table、directory 或 roots。各 family root 只在 DB 组合时注入对应 family ops；删除必须让 directory entry、entry record、value/root 和 key allocation 一起收敛，替换必须在 source identity 仍匹配时才发布。需要验证 raw graph 的底层测试把反射夹具留在 `src/test`，生产代码不提供 inspection view。
 
 `EntryRecord.expireAtMillis` 是唯一 TTL deadline。`expireCount` 只是随 entry publish/replace/release 更新的派生计数，不是独立索引。
 

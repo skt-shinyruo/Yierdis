@@ -19,14 +19,15 @@ public class YierdisDbKeyLifecycleTest {
         withDb(db -> {
             YierdisDbKeyLifecycle lifecycle = db.keyLifecycle();
 
-            Assert.assertSame(db.stableMemoryBackend(), lifecycle.inspectionForTesting().stableMemoryBackend());
-            Assert.assertNotNull(lifecycle.inspectionForTesting().entryTable());
-            Assert.assertNotNull(lifecycle.inspectionForTesting().keyDirectory());
-            Assert.assertNotNull(lifecycle.inspectionForTesting().stringRoot());
-            Assert.assertNotNull(lifecycle.inspectionForTesting().listRoot());
-            Assert.assertNotNull(lifecycle.inspectionForTesting().hashRoot());
-            Assert.assertNotNull(lifecycle.inspectionForTesting().setRoot());
-            Assert.assertNotNull(lifecycle.inspectionForTesting().zsetRoot());
+            KeyLifecycleTestAccess.Inspection inspection = KeyLifecycleTestAccess.inspect(lifecycle);
+            Assert.assertSame(KeyLifecycleTestAccess.backend(db), inspection.stableMemoryBackend());
+            Assert.assertNotNull(inspection.entryTable());
+            Assert.assertNotNull(inspection.keyDirectory());
+            Assert.assertNotNull(inspection.stringRoot());
+            Assert.assertNotNull(inspection.listRoot());
+            Assert.assertNotNull(inspection.hashRoot());
+            Assert.assertNotNull(inspection.setRoot());
+            Assert.assertNotNull(inspection.zsetRoot());
             Assert.assertNull(lifecycle.keyHandle((byte[]) null));
             Assert.assertNull(lifecycle.keyHandle((BytesView) null));
             Assert.assertNull(lifecycle.entryHandle(null));
@@ -62,21 +63,21 @@ public class YierdisDbKeyLifecycleTest {
     public void stagedEntryTokenAbortsOrPublishesOwnedHandlesExactlyOnce() {
         withDb(db -> {
             YierdisDbKeyLifecycle lifecycle = db.keyLifecycle();
-            long baselineKeys = db.stableMemoryBackend().stats().objectCount(NativeObjectKind.KEY_BYTES);
-            long baselineEntries = db.stableMemoryBackend().stats().objectCount(NativeObjectKind.ENTRY_RECORD);
+            long baselineKeys = KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.KEY_BYTES);
+            long baselineEntries = KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.ENTRY_RECORD);
 
             YierdisDbKeyLifecycle.StagedEntry aborted = lifecycle.stageEntry(bytes("aborted"));
             Assert.assertEquals(0, lifecycle.keyCount());
             Assert.assertEquals(baselineKeys + 1L,
-                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.KEY_BYTES));
+                    KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.KEY_BYTES));
             Assert.assertEquals(baselineEntries + 1L,
-                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.ENTRY_RECORD));
+                    KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.ENTRY_RECORD));
             aborted.close();
             aborted.close();
             Assert.assertEquals(baselineKeys,
-                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.KEY_BYTES));
+                    KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.KEY_BYTES));
             Assert.assertEquals(baselineEntries,
-                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.ENTRY_RECORD));
+                    KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.ENTRY_RECORD));
 
             byte[] publishedKey = bytes("published");
             YierdisDbKeyLifecycle.StagedEntry published = lifecycle.stageEntry(publishedKey);
@@ -100,9 +101,9 @@ public class YierdisDbKeyLifecycleTest {
             Assert.assertNull(lifecycle.entryRecord(publishedKey));
             Assert.assertEquals(0, lifecycle.keyCount());
             Assert.assertEquals(baselineKeys,
-                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.KEY_BYTES));
+                    KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.KEY_BYTES));
             Assert.assertEquals(baselineEntries,
-                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.ENTRY_RECORD));
+                    KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.ENTRY_RECORD));
         });
     }
 

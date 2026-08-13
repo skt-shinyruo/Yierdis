@@ -76,7 +76,6 @@ public final class YierdisDb
             YierdisDbRuntimeState runtimeState = new YierdisDbRuntimeState(
                     checkedConfig.dbIndex(),
                     Objects.requireNonNull(threadGuard, "threadGuard"),
-                    backend,
                     maxmemoryBytes > 0L && maxmemoryPolicy == MaxmemoryPolicy.ALLKEYS_LRU,
                     nativeDefragOptions(checkedConfig.defrag())
             );
@@ -272,7 +271,7 @@ public final class YierdisDb
 
     @Override
     public void bindToCurrentThread() {
-        runtimeState.bindToCurrentThread();
+        storage.keyLifecycle().bindToCurrentThread();
     }
 
     @Override
@@ -347,9 +346,7 @@ public final class YierdisDb
     @Override
     public MemoryReclaimResult trimMemory(MemoryPressureBudget budget) {
         runtimeState.checkThread();
-        return runtimeState.stableMemoryBackend().trimEmptyPages(
-                Objects.requireNonNull(budget, "budget")
-        );
+        return storage.keyLifecycle().trimEmptyNativePages(budget);
     }
 
     void enforceMaxmemory() {
@@ -389,10 +386,6 @@ public final class YierdisDb
 
     YierdisDbHealth healthMonitor() {
         return health;
-    }
-
-    StableMemoryBackend stableMemoryBackend() {
-        return runtimeState.stableMemoryBackend();
     }
 
     DbCommitPublisher commitPublisher() {

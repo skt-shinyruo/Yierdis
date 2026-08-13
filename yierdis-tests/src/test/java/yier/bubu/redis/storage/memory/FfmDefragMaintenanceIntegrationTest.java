@@ -31,7 +31,7 @@ public class FfmDefragMaintenanceIntegrationTest {
             Assert.assertEquals(Long.valueOf(1L), db.writes().sets().sadd(b("set"), List.of(b("m"))).value());
             Assert.assertEquals(Long.valueOf(1L), db.writes().zsets().zadd(b("zset"), List.of(b("1"), b("m"))).value());
 
-            NativeAllocatorStats before = db.stableMemoryBackend().stats();
+            NativeAllocatorStats before = YierdisDbTestAccess.backend(db).stats();
             db.defragMaintenance();
 
             Assert.assertArrayEquals(b("hello"), db.reads().strings().getStringBytes(b("string")));
@@ -45,7 +45,7 @@ public class FfmDefragMaintenanceIntegrationTest {
             }
 
             YierdisMemoryStats stats = db.memory().memoryStats();
-            NativeAllocatorStats after = db.stableMemoryBackend().stats();
+            NativeAllocatorStats after = YierdisDbTestAccess.backend(db).stats();
             Assert.assertTrue(stats.nativeDefragLastMovedObjects() > 0L);
             Assert.assertTrue(stats.nativeDefragLastMovedBytes() > 0L);
             Assert.assertTrue(stats.nativeDefragMovedBytes() >= stats.nativeDefragLastMovedBytes());
@@ -70,7 +70,7 @@ public class FfmDefragMaintenanceIntegrationTest {
             Assert.assertTrue(db.writes().strings().setString(b("pinned"), b("value"), SetMode.NORMAL, null).value());
             Assert.assertTrue(db.writes().strings().setString(b("moved"), b("other"), SetMode.NORMAL, null).value());
             pinnedRecord = db.keyLifecycle().liveEntryRecord(b("pinned"));
-            db.stableMemoryBackend().pin(pinnedRecord.valueHandle().nativeHandle());
+            YierdisDbTestAccess.backend(db).pin(pinnedRecord.valueHandle().nativeHandle());
 
             db.defragMaintenance();
 
@@ -81,7 +81,7 @@ public class FfmDefragMaintenanceIntegrationTest {
             Assert.assertArrayEquals(b("other"), db.reads().strings().getStringBytes(b("moved")));
         } finally {
             if (pinnedRecord != null) {
-                db.stableMemoryBackend().unpin(pinnedRecord.valueHandle().nativeHandle());
+                YierdisDbTestAccess.backend(db).unpin(pinnedRecord.valueHandle().nativeHandle());
             }
             db.shutdown();
         }
@@ -97,11 +97,11 @@ public class FfmDefragMaintenanceIntegrationTest {
             YierdisDb db = openDefragEnabledDb();
             try {
                 populate(db, cycle);
-                NativeAllocatorStats before = db.stableMemoryBackend().stats();
+                NativeAllocatorStats before = YierdisDbTestAccess.backend(db).stats();
                 db.defragMaintenance();
 
                 YierdisMemoryStats memory = db.memory().memoryStats();
-                NativeAllocatorStats after = db.stableMemoryBackend().stats();
+                NativeAllocatorStats after = YierdisDbTestAccess.backend(db).stats();
                 Assert.assertTrue(memory.nativeDefragLastMovedObjects() > 0L);
                 Assert.assertTrue(memory.nativeDefragLastMovedBytes() > 0L);
                 Assert.assertEquals(before.objectCount(NativeObjectKind.KEY_BYTES), after.objectCount(NativeObjectKind.KEY_BYTES));

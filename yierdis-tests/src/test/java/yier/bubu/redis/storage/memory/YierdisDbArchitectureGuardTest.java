@@ -14,11 +14,14 @@ import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 
 import java.io.IOException;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -70,6 +73,8 @@ public class YierdisDbArchitectureGuardTest {
         }
         String runtimeState = Files.readString(main.resolve("YierdisDbRuntimeState.java"), StandardCharsets.UTF_8);
         Assert.assertFalse("runtime state must not late-bind the storage graph", runtimeState.contains("void bind("));
+        Assert.assertFalse("runtime state must not retain the storage backend",
+                runtimeState.contains("StableMemoryBackend"));
     }
 
     @Test
@@ -107,10 +112,22 @@ public class YierdisDbArchitectureGuardTest {
                 SetRoot.class,
                 ZSetRoot.class
         );
-        Arrays.stream(YierdisDbKeyLifecycle.class.getDeclaredMethods()).forEach(method ->
-                Assert.assertFalse(
-                        "key lifecycle leaks " + method.getReturnType().getSimpleName() + " via " + method.getName(),
-                        forbiddenReturnTypes.contains(method.getReturnType())
+        Arrays.stream(YierdisDbKeyLifecycle.class.getDeclaredMethods()).forEach(method -> {
+            Class<?> leakedType = leakedStorageType(
+                    method.getReturnType(),
+                    forbiddenReturnTypes,
+                    new HashSet<>()
+            );
+            Assert.assertNull(
+                    "key lifecycle leaks " + simpleName(leakedType) + " via " + method.getName(),
+                    leakedType
+            );
+        });
+        Arrays.stream(YierdisDb.class.getDeclaredMethods()).forEach(method ->
+                Assert.assertNotEquals(
+                        "database facade must not expose its owned backend via " + method.getName(),
+                        StableMemoryBackend.class,
+                        method.getReturnType()
                 )
         );
 
@@ -125,21 +142,51 @@ public class YierdisDbArchitectureGuardTest {
         }
 
         List<String> offenders = new ArrayList<>();
-        try (java.util.stream.Stream<Path> files = Files.walk(packageRoot)) {
-            for (Path source : files.filter(Files::isRegularFile)
-                    .filter(path -> path.toString().endsWith(".java"))
-                    .filter(path -> !path.getFileName().toString().equals("YierdisDbKeyLifecycle.java"))
-                    .toList()) {
-                List<String> lines = Files.readAllLines(source, StandardCharsets.UTF_8);
-                for (int lineIndex = 0; lineIndex < lines.size(); lineIndex++) {
-                    if (lines.get(lineIndex).contains(".inspectionForTesting()")) {
-                        offenders.add(packageRoot.relativize(source) + ":" + (lineIndex + 1));
-                    }
-                }
+        scanForForbiddenText(
+                resolveRepoRoot(),
+                storageMemoryMain(resolveRepoRoot()),
+                offenders,
+                "inspectionForTesting"
+        );
+        Assert.assertTrue("production code must not declare or use lifecycle inspection:\n"
+                        + String.join("\n", offenders),
+                offenders.isEmpty());
+    }
+
+    private static Class<?> leakedStorageType(
+            Class<?> type,
+            Set<Class<?>> forbiddenTypes,
+            Set<Class<?>> visited
+    ) {
+        if (forbiddenTypes.contains(type)) {
+            return type;
+        }
+        if (type.isArray()) {
+            return leakedStorageType(type.componentType(), forbiddenTypes, visited);
+        }
+        if (type.isPrimitive() || type == Void.TYPE || !visited.add(type)) {
+            return null;
+        }
+        Package typePackage = type.getPackage();
+        if (typePackage == null || !typePackage.getName().startsWith("yier.bubu.redis.storage.memory")) {
+            return null;
+        }
+        for (Method accessor : type.getDeclaredMethods()) {
+            int modifiers = accessor.getModifiers();
+            if (Modifier.isPrivate(modifiers) || Modifier.isStatic(modifiers)
+                    || accessor.getParameterCount() != 0) {
+                continue;
+            }
+            Class<?> leakedType = leakedStorageType(accessor.getReturnType(), forbiddenTypes, visited);
+            if (leakedType != null) {
+                return leakedType;
             }
         }
-        Assert.assertTrue("production code must not use lifecycle inspection:\n" + String.join("\n", offenders),
-                offenders.isEmpty());
+        return null;
+    }
+
+    private static String simpleName(Class<?> type) {
+        return type == null ? "storage component" : type.getSimpleName();
     }
 
     private static Path resolveRepoRoot() {

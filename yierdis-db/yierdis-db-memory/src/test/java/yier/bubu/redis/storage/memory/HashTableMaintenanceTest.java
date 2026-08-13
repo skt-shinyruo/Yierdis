@@ -46,7 +46,7 @@ public class HashTableMaintenanceTest {
             while (current.pendingTableCount() != 0) {
                 current = db.rehashMaintenance(HashTableWorkBudget.of(4L, Long.MAX_VALUE));
             }
-            Assert.assertFalse(db.keyLifecycle().inspectionForTesting().keyDirectory().hasMaintenanceDebt());
+            Assert.assertFalse(KeyLifecycleTestAccess.inspect(db.keyLifecycle()).keyDirectory().hasMaintenanceDebt());
         } finally {
             db.shutdown();
         }
@@ -64,18 +64,18 @@ public class HashTableMaintenanceTest {
                 Assert.assertTrue(db.writes().strings().setString(key, bytes("value"), SetMode.NORMAL, null).value());
             }
             drainMaintenance(db);
-            int peakCapacity = db.keyLifecycle().inspectionForTesting().keyDirectory().metrics().capacity();
+            int peakCapacity = KeyLifecycleTestAccess.inspect(db.keyLifecycle()).keyDirectory().metrics().capacity();
 
             Assert.assertEquals(Long.valueOf(60L), db.writes().keyspace().del(keys.subList(0, 60)).value());
-            Assert.assertTrue(db.keyLifecycle().inspectionForTesting().keyDirectory().hasMaintenanceDebt());
+            Assert.assertTrue(KeyLifecycleTestAccess.inspect(db.keyLifecycle()).keyDirectory().hasMaintenanceDebt());
 
             HashTableMaintenanceResult firstTick = db.rehashMaintenance(HashTableWorkBudget.of(1L, Long.MAX_VALUE));
 
             Assert.assertEquals(1L, firstTick.inspectedSlots());
             Assert.assertEquals(1, firstTick.pendingTableCount());
             drainMaintenance(db);
-            Assert.assertTrue(db.keyLifecycle().inspectionForTesting().keyDirectory().metrics().capacity() < peakCapacity);
-            Assert.assertFalse(db.keyLifecycle().inspectionForTesting().keyDirectory().hasMaintenanceDebt());
+            Assert.assertTrue(KeyLifecycleTestAccess.inspect(db.keyLifecycle()).keyDirectory().metrics().capacity() < peakCapacity);
+            Assert.assertFalse(KeyLifecycleTestAccess.inspect(db.keyLifecycle()).keyDirectory().hasMaintenanceDebt());
         } finally {
             db.shutdown();
         }

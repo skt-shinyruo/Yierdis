@@ -34,7 +34,7 @@ public class YierdisDbNativeHandleGraphTest {
                     new EnumMap<>(YierdisDbNativeHandleGraph.Role.class);
             YierdisDbNativeHandleGraph.visitReachable(db.keyLifecycle(), (role, handle, record) -> {
                 roleCounts.merge(role, 1, Integer::sum);
-                Assert.assertEquals(db.stableMemoryBackend().allocatorId(), handle.allocatorId());
+                Assert.assertEquals(KeyLifecycleTestAccess.backend(db).allocatorId(), handle.allocatorId());
                 Assert.assertNotNull(record);
             });
 
@@ -44,9 +44,9 @@ public class YierdisDbNativeHandleGraphTest {
             Assert.assertEquals(Integer.valueOf(4), roleCounts.get(YierdisDbNativeHandleGraph.Role.COLLECTION_ROOT));
             Assert.assertEquals(Integer.valueOf(4), roleCounts.get(YierdisDbNativeHandleGraph.Role.COLLECTION_INTERNAL));
 
-            Assert.assertEquals(5L, db.stableMemoryBackend().stats().objectCount(NativeObjectKind.KEY_BYTES));
-            Assert.assertEquals(5L, db.stableMemoryBackend().stats().objectCount(NativeObjectKind.ENTRY_RECORD));
-            Assert.assertEquals(1L, db.stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES));
+            Assert.assertEquals(5L, KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.KEY_BYTES));
+            Assert.assertEquals(5L, KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.ENTRY_RECORD));
+            Assert.assertEquals(1L, KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.STRING_BYTES));
         } finally {
             db.shutdown();
         }
@@ -69,12 +69,12 @@ public class YierdisDbNativeHandleGraphTest {
             values.add(new byte[4096]);
             Assert.assertEquals(Long.valueOf(3L), db.writes().lists().rpush(b("list"), values).value());
             Assert.assertEquals(3L,
-                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.LIST_NODE));
+                    KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.LIST_NODE));
 
             List<YierdisDbNativeHandleGraph.Role> roles = new ArrayList<>();
             YierdisDbNativeHandleGraph.visitReachable(db.keyLifecycle(), (role, handle, record) -> {
                 roles.add(role);
-                Assert.assertEquals(db.stableMemoryBackend().allocatorId(), handle.allocatorId());
+                Assert.assertEquals(KeyLifecycleTestAccess.backend(db).allocatorId(), handle.allocatorId());
                 Assert.assertNotNull(record);
             });
 
@@ -89,11 +89,11 @@ public class YierdisDbNativeHandleGraphTest {
                     YierdisDbNativeHandleGraph.Role.COLLECTION_INTERNAL,
                     YierdisDbNativeHandleGraph.Role.COLLECTION_INTERNAL
             ), roles);
-            Assert.assertEquals(1L, db.stableMemoryBackend().stats().objectCount(NativeObjectKind.KEY_BYTES));
-            Assert.assertEquals(1L, db.stableMemoryBackend().stats().objectCount(NativeObjectKind.ENTRY_RECORD));
-            Assert.assertEquals(1L, db.stableMemoryBackend().stats().objectCount(NativeObjectKind.LIST_ROOT));
-            Assert.assertEquals(3L, db.stableMemoryBackend().stats().objectCount(NativeObjectKind.LIST_NODE));
-            Assert.assertEquals(3L, db.stableMemoryBackend().stats().objectCount(NativeObjectKind.LISTPACK_BYTES));
+            Assert.assertEquals(1L, KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.KEY_BYTES));
+            Assert.assertEquals(1L, KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.ENTRY_RECORD));
+            Assert.assertEquals(1L, KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.LIST_ROOT));
+            Assert.assertEquals(3L, KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.LIST_NODE));
+            Assert.assertEquals(3L, KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.LISTPACK_BYTES));
         } finally {
             db.shutdown();
         }

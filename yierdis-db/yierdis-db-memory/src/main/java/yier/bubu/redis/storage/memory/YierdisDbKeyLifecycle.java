@@ -1,6 +1,10 @@
 package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.common.memory.MemoryPressureBudget;
+import yier.bubu.redis.common.memory.MemoryReclaimResult;
+import yier.bubu.redis.memory.api.NativeDefragOptions;
+import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.storage.api.ScanCursorV2;
@@ -151,6 +155,18 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         this.setRoot = Objects.requireNonNull(setRoot, "setRoot");
         this.zsetRoot = Objects.requireNonNull(zsetRoot, "zsetRoot");
         this.lruClockSupplier = Objects.requireNonNull(lruClockSupplier, "lruClockSupplier");
+    }
+
+    void bindToCurrentThread() {
+        stableMemoryBackend.bindToCurrentThread();
+    }
+
+    MemoryReclaimResult trimEmptyNativePages(MemoryPressureBudget budget) {
+        return stableMemoryBackend.trimEmptyPages(Objects.requireNonNull(budget, "budget"));
+    }
+
+    NativeDefragReport defragCycle(NativeDefragOptions options) {
+        return stableMemoryBackend.defragCycle(Objects.requireNonNull(options, "options"));
     }
 
     public KeyHandle keyHandle(byte[] keyBytes) {
@@ -696,31 +712,6 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         hashRoot.disarmIterationTrapForTesting();
         setRoot.disarmIterationTrapForTesting();
         zsetRoot.disarmIterationTrapForTesting();
-    }
-
-    Inspection inspectionForTesting() {
-        return new Inspection(
-                stableMemoryBackend,
-                entryTable,
-                keyDirectory,
-                stringRoot,
-                listRoot,
-                hashRoot,
-                setRoot,
-                zsetRoot
-        );
-    }
-
-    record Inspection(
-            StableMemoryBackend stableMemoryBackend,
-            EntryTable entryTable,
-            NativeKeyDirectory keyDirectory,
-            StringRoot stringRoot,
-            ListRoot listRoot,
-            HashRoot hashRoot,
-            SetRoot setRoot,
-            ZSetRoot zsetRoot
-    ) {
     }
 
     @Override

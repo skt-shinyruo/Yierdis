@@ -171,7 +171,7 @@ public class ActiveExpirationTest {
                 Long.MAX_VALUE
         );
         try {
-            NativeKeyDirectory directory = db.keyLifecycle().inspectionForTesting().keyDirectory();
+            NativeKeyDirectory directory = KeyLifecycleTestAccess.inspect(db.keyLifecycle()).keyDirectory();
             int inserted = 0;
             while (inserted < 200) {
                 db.writes().strings().setString(
@@ -266,7 +266,7 @@ public class ActiveExpirationTest {
                         ExpireOption.px(0)
                 );
             }
-            NativeKeyDirectory directory = db.keyLifecycle().inspectionForTesting().keyDirectory();
+            NativeKeyDirectory directory = KeyLifecycleTestAccess.inspect(db.keyLifecycle()).keyDirectory();
             drainDirectoryRehash(directory);
             long scannedGeneration = directory.tableGeneration();
             ExpirationBatch firstBatch = scanExpiredBatch(db, ScanCursorV2.start(), 20);
@@ -384,7 +384,7 @@ public class ActiveExpirationTest {
         long usedBeforeTtl = db.usedBytesForMaxmemory();
         Assert.assertEquals(
                 1L,
-                db.stableMemoryBackend().stats().objectCount(NativeObjectKind.KEY_BYTES)
+                KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.KEY_BYTES)
         );
         BytesView keyView = viewOf(equalLookupKey);
 
@@ -393,7 +393,7 @@ public class ActiveExpirationTest {
         Assert.assertEquals(usedBeforeTtl, usedAfterTtl);
         Assert.assertEquals(
                 1L,
-                db.stableMemoryBackend().stats().objectCount(NativeObjectKind.KEY_BYTES)
+                KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.KEY_BYTES)
         );
         YierdisMemoryStats stats = db.memory().memoryStats();
         Assert.assertEquals(1, stats.expireCount());
@@ -407,7 +407,7 @@ public class ActiveExpirationTest {
         Assert.assertEquals(usedAfterTtl, db.usedBytesForMaxmemory());
         Assert.assertEquals(
                 1L,
-                db.stableMemoryBackend().stats().objectCount(NativeObjectKind.KEY_BYTES)
+                KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.KEY_BYTES)
         );
 
         Assert.assertTrue(db.writes().ttl().persist(keyView).value());

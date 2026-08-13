@@ -11,7 +11,7 @@ public final class MutationExecutorTestSupport {
         return new YierdisDbMutationExecutor(
                 db::checkThread,
                 db.memoryLedger(),
-                db.stableMemoryBackend(),
+                KeyLifecycleTestAccess.backend(db),
                 db.healthMonitor(),
                 db::commitPublisher,
                 db::commitDbIndex

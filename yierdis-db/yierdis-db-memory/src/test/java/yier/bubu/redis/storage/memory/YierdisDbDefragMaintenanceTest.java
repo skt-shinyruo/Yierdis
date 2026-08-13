@@ -14,12 +14,12 @@ public class YierdisDbDefragMaintenanceTest {
         YierdisDb db = TestDbSupport.open();
         try {
             Assert.assertTrue(db.writes().strings().setString(b("k"), b("value"), SetMode.NORMAL, null).value());
-            NativeAllocatorStats before = db.stableMemoryBackend().stats();
+            NativeAllocatorStats before = KeyLifecycleTestAccess.backend(db).stats();
 
             db.defragMaintenance();
 
             YierdisMemoryStats stats = db.memory().memoryStats();
-            NativeAllocatorStats after = db.stableMemoryBackend().stats();
+            NativeAllocatorStats after = KeyLifecycleTestAccess.backend(db).stats();
             Assert.assertEquals(before.defragMovedBytes(), after.defragMovedBytes());
             Assert.assertEquals(0L, stats.nativeDefragLastMovedObjects());
             Assert.assertEquals(0L, stats.nativeDefragLastMovedBytes());

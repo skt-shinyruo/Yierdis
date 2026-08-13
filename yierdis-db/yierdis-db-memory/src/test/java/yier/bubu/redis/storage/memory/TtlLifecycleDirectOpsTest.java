@@ -63,7 +63,7 @@ public class TtlLifecycleDirectOpsTest {
             Assert.assertNull(db.reads().keyspace().typeOf(view("s")));
             Assert.assertEquals(-1L, db.memory().memoryUsage(view("s")));
             Assert.assertEquals(0L, db.memory().memoryStats().keyCount());
-            NativeAllocatorStats empty = db.stableMemoryBackend().stats();
+            NativeAllocatorStats empty = KeyLifecycleTestAccess.backend(db).stats();
             Assert.assertEquals(0L, empty.objectCount(NativeObjectKind.ENTRY_RECORD));
             Assert.assertEquals(0L, empty.objectCount(NativeObjectKind.STRING_BYTES));
             Assert.assertEquals(0L, empty.liveObjects());
@@ -80,7 +80,7 @@ public class TtlLifecycleDirectOpsTest {
             Assert.assertSame(MutationOutcome.VALUE_CHANGED, db.lifecycle().flushDbAsync());
             Assert.assertEquals(0, db.size());
             Assert.assertEquals(2, db.detachedEntryCount());
-            NativeAllocatorStats firstDetached = db.stableMemoryBackend().stats();
+            NativeAllocatorStats firstDetached = KeyLifecycleTestAccess.backend(db).stats();
             Assert.assertEquals(2L, firstDetached.objectCount(NativeObjectKind.KEY_BYTES));
             Assert.assertEquals(2L, firstDetached.objectCount(NativeObjectKind.ENTRY_RECORD));
 
@@ -95,7 +95,7 @@ public class TtlLifecycleDirectOpsTest {
             Assert.assertEquals(0, db.detachedEntryCount());
             Assert.assertArrayEquals(b("new"), db.reads().strings().getStringBytes(b("same")));
             Assert.assertNull(db.reads().keyspace().typeOf(view("old-list")));
-            NativeAllocatorStats reclaimed = db.stableMemoryBackend().stats();
+            NativeAllocatorStats reclaimed = KeyLifecycleTestAccess.backend(db).stats();
             Assert.assertEquals(1L, reclaimed.objectCount(NativeObjectKind.KEY_BYTES));
             Assert.assertEquals(1L, reclaimed.objectCount(NativeObjectKind.ENTRY_RECORD));
             Assert.assertEquals(1L, reclaimed.objectCount(NativeObjectKind.STRING_BYTES));

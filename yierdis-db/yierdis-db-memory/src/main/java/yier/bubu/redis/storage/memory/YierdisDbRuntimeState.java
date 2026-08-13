@@ -3,12 +3,12 @@ package yier.bubu.redis.storage.memory;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.memory.api.MemoryOwner;
-import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.storage.api.DbCommitPublisher;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 
 import java.util.Objects;
+import java.util.function.Function;
 
 final class YierdisDbRuntimeState {
     private static final NativeDefragReport EMPTY_NATIVE_DEFRAG_REPORT = new NativeDefragReport(
@@ -25,7 +25,6 @@ final class YierdisDbRuntimeState {
 
     private final int dbIndex;
     private final DbThreadGuard threadGuard;
-    private final StableMemoryBackend stableMemoryBackend;
     private final boolean lruEnabled;
     private final NativeDefragOptions nativeDefragOptions;
 
@@ -39,13 +38,11 @@ final class YierdisDbRuntimeState {
     YierdisDbRuntimeState(
             int dbIndex,
             DbThreadGuard threadGuard,
-            StableMemoryBackend stableMemoryBackend,
             boolean lruEnabled,
             NativeDefragOptions nativeDefragOptions
     ) {
         this.dbIndex = Math.max(0, dbIndex);
         this.threadGuard = Objects.requireNonNull(threadGuard, "threadGuard");
-        this.stableMemoryBackend = Objects.requireNonNull(stableMemoryBackend, "stableMemoryBackend");
         this.lruEnabled = lruEnabled;
         this.nativeDefragOptions = nativeDefragOptions;
         this.commitDbIndex = this.dbIndex;
@@ -53,10 +50,6 @@ final class YierdisDbRuntimeState {
 
     int dbIndex() {
         return dbIndex;
-    }
-
-    void bindToCurrentThread() {
-        stableMemoryBackend.bindToCurrentThread();
     }
 
     void checkThread() {
@@ -111,20 +104,20 @@ final class YierdisDbRuntimeState {
         return ++lruClock;
     }
 
-    void defragMaintenance() {
+    void defragMaintenance(Function<NativeDefragOptions, NativeDefragReport> defragCycle) {
         checkThread();
+        Objects.requireNonNull(defragCycle, "defragCycle");
         if (nativeDefragOptions == null) {
             return;
         }
-        lastNativeDefragReport = stableMemoryBackend.defragCycle(nativeDefragOptions);
+        lastNativeDefragReport = Objects.requireNonNull(
+                defragCycle.apply(nativeDefragOptions),
+                "nativeDefragReport"
+        );
     }
 
     NativeDefragReport lastNativeDefragReport() {
         return lastNativeDefragReport;
-    }
-
-    StableMemoryBackend stableMemoryBackend() {
-        return stableMemoryBackend;
     }
 
     boolean beginShutdown() {

@@ -44,7 +44,7 @@ public class CollectionDirectOpsTest {
             EntryRecord before = db.keyLifecycle().liveEntryRecord(b("zset"));
             ValueHandle rootHandle = before.valueHandle();
             long usedBeforePromotion = db.memoryLedger().usedBytes();
-            long heapBeforePromotion = db.keyLifecycle().inspectionForTesting().zsetRoot().heapBytes();
+            long heapBeforePromotion = KeyLifecycleTestAccess.inspect(db.keyLifecycle()).zsetRoot().heapBytes();
             Assert.assertEquals(ValueEncoding.ZSET_PACKED, before.encoding());
 
             Assert.assertEquals(
@@ -57,7 +57,7 @@ public class CollectionDirectOpsTest {
             Assert.assertEquals(ValueEncoding.ZSET_SKIPLIST, after.encoding());
             Assert.assertTrue(after.version() > before.version());
             Assert.assertEquals(usedBeforePromotion, db.memoryLedger().usedBytes());
-            Assert.assertTrue(db.keyLifecycle().inspectionForTesting().zsetRoot().heapBytes() > heapBeforePromotion);
+            Assert.assertTrue(KeyLifecycleTestAccess.inspect(db.keyLifecycle()).zsetRoot().heapBytes() > heapBeforePromotion);
 
             Assert.assertEquals(1L, db.writes().keyspace().del(List.of(b("zset"))).value().longValue());
             Assert.assertEquals(ledgerBeforeCreate, db.memoryLedger().usedBytes());
@@ -107,10 +107,10 @@ public class CollectionDirectOpsTest {
 
             try (PoppedValueSequence popped = TestDbSupport.commitPop(db.writes().lists(), b("list"), 1, true).value()) {
                 Assert.assertEquals(rootHandle, db.keyLifecycle().liveEntryRecord(b("list")).valueHandle());
-                Assert.assertEquals(2L, db.stableMemoryBackend().stats().objectCount(NativeObjectKind.LIST_NODE));
+                Assert.assertEquals(2L, KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.LIST_NODE));
                 Assert.assertEquals(List.of(new String(first, StandardCharsets.UTF_8)), sequence(popped));
             }
-            Assert.assertEquals(2L, db.stableMemoryBackend().stats().objectCount(NativeObjectKind.LISTPACK_BYTES));
+            Assert.assertEquals(2L, KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.LISTPACK_BYTES));
             Assert.assertEquals(
                     List.of(
                             new String(second, StandardCharsets.UTF_8),
@@ -273,7 +273,7 @@ public class CollectionDirectOpsTest {
             }
             Assert.assertEquals(
                     1L,
-                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.LISTPACK_BYTES)
+                    KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.LISTPACK_BYTES)
             );
         });
     }
@@ -497,7 +497,7 @@ public class CollectionDirectOpsTest {
 
     private static Set<NativeHandle> listHandles(YierdisDb db, ValueHandle rootHandle) {
         Set<NativeHandle> handles = new HashSet<>();
-        db.keyLifecycle().inspectionForTesting().listRoot().forEachNativeHandle(rootHandle, handles::add);
+        KeyLifecycleTestAccess.inspect(db.keyLifecycle()).listRoot().forEachNativeHandle(rootHandle, handles::add);
         return handles;
     }
 

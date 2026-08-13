@@ -90,7 +90,7 @@ final class YierdisDbDataMaintenance {
     }
 
     void defragMaintenance() {
-        runtimeState.defragMaintenance();
+        runtimeState.defragMaintenance(keyLifecycle::defragCycle);
     }
 
     HashTableMaintenanceResult rehashMaintenance(HashTableWorkBudget budget) {

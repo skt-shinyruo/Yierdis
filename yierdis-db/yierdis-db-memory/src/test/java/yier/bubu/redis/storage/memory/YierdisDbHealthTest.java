@@ -82,7 +82,7 @@ public class YierdisDbHealthTest {
             EntryRecord denseDestination = db.keyLifecycle().entryRecord(denseDestinationKey);
             Assert.assertNotNull(denseDestination);
             Assert.assertTrue(YierdisHyperLogLog.isDense(
-                    db.keyLifecycle().inspectionForTesting().stringRoot(),
+                    KeyLifecycleTestAccess.inspect(db.keyLifecycle()).stringRoot(),
                     denseDestination.valueHandle()
             ));
             Assert.assertFalse(db.health().toString(), db.health().degraded());
@@ -109,7 +109,9 @@ public class YierdisDbHealthTest {
 
             long stagedDirectoryGrowth = 0L;
             for (int index = 0; index < 100_000; index++) {
-                stagedDirectoryGrowth = db.keyLifecycle().inspectionForTesting().keyDirectory().estimatedInsertHeapGrowthBytes();
+                stagedDirectoryGrowth = KeyLifecycleTestAccess.inspect(db.keyLifecycle())
+                        .keyDirectory()
+                        .estimatedInsertHeapGrowthBytes();
                 if (stagedDirectoryGrowth >= 1_000_000L) {
                     break;
                 }
@@ -127,7 +129,7 @@ public class YierdisDbHealthTest {
             EntryRecord destination = db.keyLifecycle().entryRecord(destinationKey);
             Assert.assertNotNull(destination);
             Assert.assertTrue(YierdisHyperLogLog.isDense(
-                    db.keyLifecycle().inspectionForTesting().stringRoot(),
+                    KeyLifecycleTestAccess.inspect(db.keyLifecycle()).stringRoot(),
                     destination.valueHandle()
             ));
             Assert.assertFalse(db.health().toString(), db.health().degraded());
@@ -201,7 +203,7 @@ public class YierdisDbHealthTest {
                 Assert.assertEquals(DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE, db.memoryLedger().usedBytes());
                 Assert.assertArrayEquals(b("visible"), db.reads().strings().getStringBytes(key));
 
-                try (NativeAllocationScope scope = db.stableMemoryBackend().beginAllocationScope()) {
+                try (NativeAllocationScope scope = KeyLifecycleTestAccess.backend(db).beginAllocationScope()) {
                     scope.abort();
                 }
             } finally {
@@ -224,7 +226,7 @@ public class YierdisDbHealthTest {
                 EntryHandle existingEntryHandle = keyLifecycle.entryHandle(key);
                 KeyHandle keyHandle = keyLifecycle.keyHandle(key);
                 EntryRecord oldRecord = keyLifecycle.entryRecord(existingEntryHandle);
-                ValueHandle replacement = keyLifecycle.inspectionForTesting().stringRoot().store(nextBytes);
+                ValueHandle replacement = KeyLifecycleTestAccess.inspect(keyLifecycle).stringRoot().store(nextBytes);
                 EntryRecord newRecord = stringRecord(keyLifecycle, keyHandle, replacement, oldRecord);
                 return PreparedEntryMutation.<Void>replace(
                         keyLifecycle,
@@ -261,9 +263,10 @@ public class YierdisDbHealthTest {
 
             @Override
             public PreparedDbMutation<Void> prepare() {
-                EntryHandle entryHandle = keyLifecycle.inspectionForTesting().entryTable().reserve();
-                NativeKeyDirectory.StagedInsert stagedKey = keyLifecycle.inspectionForTesting().keyDirectory().stageInsert(key);
-                ValueHandle valueHandle = keyLifecycle.inspectionForTesting().stringRoot().store(value);
+                KeyLifecycleTestAccess.Inspection inspection = KeyLifecycleTestAccess.inspect(keyLifecycle);
+                EntryHandle entryHandle = inspection.entryTable().reserve();
+                NativeKeyDirectory.StagedInsert stagedKey = inspection.keyDirectory().stageInsert(key);
+                ValueHandle valueHandle = inspection.stringRoot().store(value);
                 EntryRecord record = stringRecord(keyLifecycle, stagedKey.keyHandle(), valueHandle, null);
                 return new AbstractPreparedMutation<>(
                         DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE,
@@ -272,8 +275,8 @@ public class YierdisDbHealthTest {
                 ) {
                     @Override
                     protected Void commitPrepared() {
-                        keyLifecycle.inspectionForTesting().entryTable().writeReserved(entryHandle, record);
-                        keyLifecycle.inspectionForTesting().keyDirectory().publishStagedInsert(stagedKey, entryHandle);
+                        inspection.entryTable().writeReserved(entryHandle, record);
+                        inspection.keyDirectory().publishStagedInsert(stagedKey, entryHandle);
                         throw new IllegalStateException("commit switch failed");
                     }
 
@@ -288,7 +291,7 @@ public class YierdisDbHealthTest {
                         try {
                             stagedKey.close();
                         } finally {
-                            keyLifecycle.inspectionForTesting().entryTable().release(entryHandle);
+                            inspection.entryTable().release(entryHandle);
                             keyLifecycle.releaseValue(record);
                         }
                     }
@@ -301,7 +304,7 @@ public class YierdisDbHealthTest {
         return new YierdisDbMutationExecutor(
                 db::checkThread,
                 db.memoryLedger(),
-                db.stableMemoryBackend(),
+                KeyLifecycleTestAccess.backend(db),
                 db.healthMonitor(),
                 db::commitPublisher,
                 db::commitDbIndex

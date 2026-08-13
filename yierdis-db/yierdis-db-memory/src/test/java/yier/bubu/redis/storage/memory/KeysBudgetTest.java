@@ -88,7 +88,7 @@ public class KeysBudgetTest {
         YierdisDb db = TestDbSupport.open();
         db.bindToCurrentThread();
         try {
-            NativeKeyDirectory directory = db.keyLifecycle().inspectionForTesting().keyDirectory();
+            NativeKeyDirectory directory = KeyLifecycleTestAccess.inspect(db.keyLifecycle()).keyDirectory();
             for (int i = 0; i < 13; i++) {
                 db.writes().strings().setString(bytes("filler-" + i), bytes("v"), SetMode.NORMAL, null);
             }

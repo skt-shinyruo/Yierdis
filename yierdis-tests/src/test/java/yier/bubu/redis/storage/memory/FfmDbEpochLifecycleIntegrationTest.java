@@ -32,10 +32,10 @@ public class FfmDbEpochLifecycleIntegrationTest {
             byte[] key = b("epoch-key");
             Assert.assertTrue(db.writes().strings().setString(key, b("epoch-value"), SetMode.NORMAL, null).value());
 
-            try (NativeEpochScope ignored = db.stableMemoryBackend().beginEpoch(NativeEpochKind.SNAPSHOT)) {
+            try (NativeEpochScope ignored = YierdisDbTestAccess.backend(db).beginEpoch(NativeEpochKind.SNAPSHOT)) {
                 Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(key)).value());
 
-                NativeAllocatorStats during = db.stableMemoryBackend().stats();
+                NativeAllocatorStats during = YierdisDbTestAccess.backend(db).stats();
                 Assert.assertTrue(during.logicalUsedBytes() > 0L);
                 Assert.assertTrue(during.reservedBytes() > 0L);
                 Assert.assertTrue(during.quarantinedObjects() > 0L);
@@ -46,7 +46,7 @@ public class FfmDbEpochLifecycleIntegrationTest {
                 Assert.assertTrue(memoryDuring.nativeDefragQuarantineBytes() > 0L);
             }
 
-            NativeAllocatorStats after = db.stableMemoryBackend().stats();
+            NativeAllocatorStats after = YierdisDbTestAccess.backend(db).stats();
             Assert.assertEquals(0L, after.logicalUsedBytes());
             Assert.assertEquals(0L, after.reservedBytes());
             Assert.assertEquals(0L, after.quarantinedObjects());
@@ -133,7 +133,7 @@ public class FfmDbEpochLifecycleIntegrationTest {
             Assert.assertEquals(Long.valueOf(1L), db.writes().sets().sadd(b("set"), List.of(b("m"))).value());
             Assert.assertEquals(Long.valueOf(1L), db.writes().zsets().zadd(b("zset"), List.of(b("1"), b("m"))).value());
 
-            try (NativeEpochScope ignored = db.stableMemoryBackend().beginEpoch(NativeEpochKind.SNAPSHOT)) {
+            try (NativeEpochScope ignored = YierdisDbTestAccess.backend(db).beginEpoch(NativeEpochKind.SNAPSHOT)) {
                 Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(b("cleanup:string"))).value());
                 Assert.assertTrue(db.memory().memoryStats().nativeDefragQuarantinedObjects() > 0L);
             }
@@ -141,7 +141,7 @@ public class FfmDbEpochLifecycleIntegrationTest {
             Assert.assertEquals(Long.valueOf(4L), db.writes().keyspace().del(List.of(
                     b("list"), b("hash"), b("set"), b("zset")
             )).value());
-            NativeAllocatorStats stats = db.stableMemoryBackend().stats();
+            NativeAllocatorStats stats = YierdisDbTestAccess.backend(db).stats();
             Assert.assertEquals(0L, stats.objectCount(NativeObjectKind.KEY_BYTES));
             Assert.assertEquals(0L, stats.objectCount(NativeObjectKind.ENTRY_RECORD));
             Assert.assertEquals(0L, stats.liveObjects());
@@ -163,7 +163,7 @@ public class FfmDbEpochLifecycleIntegrationTest {
                 ),
                 0
         );
-        Assert.assertTrue(db.stableMemoryBackend() instanceof YierdisFfmStableMemoryBackend);
+        Assert.assertTrue(YierdisDbTestAccess.backend(db) instanceof YierdisFfmStableMemoryBackend);
         db.bindToCurrentThread();
         return db;
     }

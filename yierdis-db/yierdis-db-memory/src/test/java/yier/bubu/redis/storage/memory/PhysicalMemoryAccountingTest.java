@@ -28,8 +28,8 @@ public class PhysicalMemoryAccountingTest {
                 db.writes().strings().setString(bytes("key"), bytes("value"), SetMode.NORMAL, null);
 
                 MemoryUsageSnapshot usage = db.memoryUsage();
-                MemoryUsageSnapshot allocatorUsage = db.stableMemoryBackend().memoryUsage();
-                NativeAllocatorStats allocatorStats = db.stableMemoryBackend().stats();
+                MemoryUsageSnapshot allocatorUsage = KeyLifecycleTestAccess.backend(db).memoryUsage();
+                NativeAllocatorStats allocatorStats = KeyLifecycleTestAccess.backend(db).stats();
 
                 Assert.assertEquals(
                         allocatorStats.metadataCommittedBytes(),
@@ -61,13 +61,13 @@ public class PhysicalMemoryAccountingTest {
             try {
                 db.writes().strings().setString(bytes("key"), bytes("value"), SetMode.NORMAL, null);
                 MemoryUsageSnapshot beforeTtl = db.memoryUsage();
-                NativeAllocatorStats allocatorBeforeTtl = db.stableMemoryBackend().stats();
+                NativeAllocatorStats allocatorBeforeTtl = KeyLifecycleTestAccess.backend(db).stats();
                 long backendBytesBeforeTtl = runtime.usedBytes();
 
                 Assert.assertTrue(db.writes().ttl().pexpire(view("key"), 60_000L).value());
 
                 MemoryUsageSnapshot usage = db.memoryUsage();
-                NativeAllocatorStats allocator = db.stableMemoryBackend().stats();
+                NativeAllocatorStats allocator = KeyLifecycleTestAccess.backend(db).stats();
                 long ttlMillis = db.reads().ttl().ttlMillis(view("key"));
 
                 Assert.assertTrue(ttlMillis > 0L && ttlMillis <= 60_000L);

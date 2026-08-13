@@ -200,8 +200,9 @@ public class NativeStorageRegressionTest {
                     64L,
                     0L
             );
-            EntryHandle handle = lifecycle.inspectionForTesting().entryTable().allocate(record);
-            lifecycle.inspectionForTesting().keyDirectory().compute(key, (ignored, oldHandle) -> handle);
+            KeyLifecycleTestAccess.Inspection inspection = KeyLifecycleTestAccess.inspect(lifecycle);
+            EntryHandle handle = inspection.entryTable().allocate(record);
+            inspection.keyDirectory().compute(key, (ignored, oldHandle) -> handle);
 
             Assert.assertEquals(1, lifecycle.keyCount());
             Assert.assertEquals(1, db.size());
@@ -304,7 +305,7 @@ public class NativeStorageRegressionTest {
                 }
 
                 Assert.assertEquals(keyCount, db.size());
-                NativeAllocatorStats populated = db.stableMemoryBackend().stats();
+                NativeAllocatorStats populated = KeyLifecycleTestAccess.backend(db).stats();
                 Assert.assertEquals(keyCount, populated.objectCount(NativeObjectKind.ENTRY_RECORD));
                 Assert.assertEquals(keyCount, populated.objectCount(NativeObjectKind.KEY_BYTES));
                 Assert.assertEquals(keyCount, populated.objectCount(NativeObjectKind.STRING_BYTES));
@@ -395,10 +396,10 @@ public class NativeStorageRegressionTest {
                 }
 
                 YierdisMemoryStats populated = db.memory().memoryStats();
-                Assert.assertTrue(db.stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
+                Assert.assertTrue(KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
                 Assert.assertEquals(db.size(),
-                        db.stableMemoryBackend().stats().objectCount(NativeObjectKind.KEY_BYTES));
-                Assert.assertTrue(db.stableMemoryBackend().stats().logicalUsedBytes() > 0L);
+                        KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.KEY_BYTES));
+                Assert.assertTrue(KeyLifecycleTestAccess.backend(db).stats().logicalUsedBytes() > 0L);
                 Assert.assertEquals(db.size(), populated.keyCount());
                 Assert.assertEquals(db.usedBytesForMaxmemory(), populated.usedBytesForMaxmemory());
                 Assert.assertTrue(populated.offHeapUsedBytes() > 0L);
@@ -455,7 +456,7 @@ public class NativeStorageRegressionTest {
                     }
 
                     Assert.assertTrue("expected at least one accepted write", written.size() > 0);
-                    NativeAllocatorStats populated = db.stableMemoryBackend().stats();
+                    NativeAllocatorStats populated = KeyLifecycleTestAccess.backend(db).stats();
                     Assert.assertEquals(db.size(), populated.objectCount(NativeObjectKind.KEY_BYTES));
                     Assert.assertEquals(db.size(), populated.objectCount(NativeObjectKind.STRING_BYTES));
                     Assert.assertEquals(db.size(), populated.objectCount(NativeObjectKind.ENTRY_RECORD));
@@ -753,7 +754,7 @@ public class NativeStorageRegressionTest {
     private static void assertNativeDbHasNoLiveData(YierdisDb db) {
         YierdisMemoryStats empty = db.memory().memoryStats();
         MemoryUsageSnapshot usage = db.memoryUsage();
-        NativeAllocatorStats allocator = db.stableMemoryBackend().stats();
+        NativeAllocatorStats allocator = KeyLifecycleTestAccess.backend(db).stats();
         Assert.assertEquals(0, db.size());
         Assert.assertEquals(nativeEmptyDebug(db), 0L, db.memoryLedger().usedBytes());
         Assert.assertEquals(nativeEmptyDebug(db), 0L, db.memoryLedger().reservedBytes());
@@ -805,7 +806,7 @@ public class NativeStorageRegressionTest {
 
     private static String nativeEmptyDebug(YierdisDb db) {
         YierdisMemoryStats stats = db.memory().memoryStats();
-        NativeAllocatorStats allocator = db.stableMemoryBackend().stats();
+        NativeAllocatorStats allocator = KeyLifecycleTestAccess.backend(db).stats();
         return "ledgerUsed=" + db.memoryLedger().usedBytes()
                 + ", ledgerReserved=" + db.memoryLedger().reservedBytes()
                 + ", usedForMaxmemory=" + db.usedBytesForMaxmemory()
@@ -813,10 +814,10 @@ public class NativeStorageRegressionTest {
                 + ", offHeap=" + stats.offHeapUsedBytes()
                 + ", ttlCount=" + stats.expireCount()
                 + ", nativeLogical=" + allocator.logicalUsedBytes()
-                + ", listNative=" + db.keyLifecycle().inspectionForTesting().listRoot().nativeBytes()
-                + ", hashNative=" + db.keyLifecycle().inspectionForTesting().hashRoot().nativeBytes()
-                + ", setNative=" + db.keyLifecycle().inspectionForTesting().setRoot().nativeBytes()
-                + ", zsetNative=" + db.keyLifecycle().inspectionForTesting().zsetRoot().nativeBytes();
+                + ", listNative=" + KeyLifecycleTestAccess.inspect(db.keyLifecycle()).listRoot().nativeBytes()
+                + ", hashNative=" + KeyLifecycleTestAccess.inspect(db.keyLifecycle()).hashRoot().nativeBytes()
+                + ", setNative=" + KeyLifecycleTestAccess.inspect(db.keyLifecycle()).setRoot().nativeBytes()
+                + ", zsetNative=" + KeyLifecycleTestAccess.inspect(db.keyLifecycle()).zsetRoot().nativeBytes();
     }
 
     private static void writeOneOfEachCollection(YierdisDb db) {
@@ -827,10 +828,10 @@ public class NativeStorageRegressionTest {
     }
 
     private static void assertCollectionRootCounts(YierdisDb db, long expected) {
-        Assert.assertEquals(expected, db.stableMemoryBackend().stats().objectCount(NativeObjectKind.LIST_ROOT));
-        Assert.assertEquals(expected, db.stableMemoryBackend().stats().objectCount(NativeObjectKind.HASH_ROOT));
-        Assert.assertEquals(expected, db.stableMemoryBackend().stats().objectCount(NativeObjectKind.SET_ROOT));
-        Assert.assertEquals(expected, db.stableMemoryBackend().stats().objectCount(NativeObjectKind.ZSET_ROOT));
+        Assert.assertEquals(expected, KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.LIST_ROOT));
+        Assert.assertEquals(expected, KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.HASH_ROOT));
+        Assert.assertEquals(expected, KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.SET_ROOT));
+        Assert.assertEquals(expected, KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.ZSET_ROOT));
     }
 
     private static void assertNativeStringOnly(YierdisDb db, byte[] key, byte[] expectedBytes) {
@@ -840,7 +841,10 @@ public class NativeStorageRegressionTest {
         EntryRecord record = lifecycle.liveEntryRecord(key);
         Assert.assertNotNull(record);
         Assert.assertEquals(ValueType.STRING, record.type());
-        Assert.assertArrayEquals(expectedBytes, lifecycle.inspectionForTesting().stringRoot().copy(record.valueHandle()));
+        Assert.assertArrayEquals(
+                expectedBytes,
+                KeyLifecycleTestAccess.inspect(lifecycle).stringRoot().copy(record.valueHandle())
+        );
         Assert.assertArrayEquals(expectedBytes, db.reads().strings().getStringBytes(key));
         Assert.assertEquals(expectedBytes.length, db.reads().strings().strlen(view(key)));
     }

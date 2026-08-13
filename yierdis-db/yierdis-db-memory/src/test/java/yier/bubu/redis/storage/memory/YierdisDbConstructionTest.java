@@ -50,10 +50,10 @@ public class YierdisDbConstructionTest {
             try {
                 Assert.assertSame(
                         testBackend.backend(),
-                        storage.keyLifecycle().inspectionForTesting().stableMemoryBackend()
+                        KeyLifecycleTestAccess.inspect(storage.keyLifecycle()).stableMemoryBackend()
                 );
                 Assert.assertTrue(
-                        storage.keyLifecycle().inspectionForTesting().stableMemoryBackend()
+                        KeyLifecycleTestAccess.inspect(storage.keyLifecycle()).stableMemoryBackend()
                                 .stats().objectCount(NativeObjectKind.ENTRY_RECORD) >= 0L
                 );
             } finally {
@@ -154,11 +154,11 @@ public class YierdisDbConstructionTest {
         YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
-            Assert.assertNotNull(db.stableMemoryBackend().stats());
+            Assert.assertNotNull(KeyLifecycleTestAccess.backend(db).stats());
             AtomicReference<Throwable> failure = new AtomicReference<>();
             Thread thread = Thread.ofPlatform().start(() -> {
                 try {
-                    db.stableMemoryBackend().stats();
+                    KeyLifecycleTestAccess.backend(db).stats();
                 } catch (Throwable next) {
                     failure.set(next);
                 }

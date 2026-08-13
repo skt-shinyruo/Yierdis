@@ -215,7 +215,7 @@ public class StringDirectOpsTest {
         withDb(db -> {
             Assert.assertEquals(Long.valueOf(1L), db.writes().strings().incrBy(b("number"), 1L).value());
             EntryRecord integerBefore = db.keyLifecycle().liveEntryRecord(b("number"));
-            long stringObjectsBefore = db.stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES);
+            long stringObjectsBefore = KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.STRING_BYTES);
 
             WriteResult<Long> append = db.writes().strings().append(b("number"), slice(""));
 
@@ -227,7 +227,7 @@ public class StringDirectOpsTest {
             Assert.assertEquals(integerBefore.version(), integerAfter.version());
             Assert.assertEquals(
                     stringObjectsBefore,
-                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES)
+                    KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.STRING_BYTES)
             );
 
             Assert.assertTrue(db.writes().strings().setString(
@@ -237,7 +237,7 @@ public class StringDirectOpsTest {
                     null
             ).value());
             EntryRecord bitsBefore = db.keyLifecycle().liveEntryRecord(b("bits"));
-            stringObjectsBefore = db.stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES);
+            stringObjectsBefore = KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.STRING_BYTES);
 
             WriteResult<Integer> setbit = db.writes().strings().setBit(b("bits"), 0L, 1);
 
@@ -247,7 +247,7 @@ public class StringDirectOpsTest {
             Assert.assertEquals(bitsBefore.valueHandle(), bitsAfter.valueHandle());
             Assert.assertEquals(
                     stringObjectsBefore,
-                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES)
+                    KeyLifecycleTestAccess.backend(db).stats().objectCount(NativeObjectKind.STRING_BYTES)
             );
         });
     }
@@ -257,7 +257,7 @@ public class StringDirectOpsTest {
         withDb(db -> {
             byte[] key = b("k");
             Assert.assertTrue(db.writes().strings().setString(key, b("old"), SetMode.NORMAL, null).value());
-            long liveObjectsBeforeSetGet = db.stableMemoryBackend().stats().liveObjects();
+            long liveObjectsBeforeSetGet = KeyLifecycleTestAccess.backend(db).stats().liveObjects();
 
             StringWriteOps.SetStringValue result = TestDbSupport.commitSetWithOldValue(
                     db.writes().strings(), key, slice("new"), SetMode.NORMAL, null
@@ -268,11 +268,11 @@ public class StringDirectOpsTest {
             Assert.assertTrue("SET GET old value should retain the superseded native allocation",
                     result.oldValue().retainedMemoryBytes() > 0L);
             Assert.assertTrue("old and replacement values should both remain live until the result closes",
-                    db.stableMemoryBackend().stats().liveObjects() > liveObjectsBeforeSetGet);
+                    KeyLifecycleTestAccess.backend(db).stats().liveObjects() > liveObjectsBeforeSetGet);
 
             result.close();
             result.close();
-            Assert.assertEquals(liveObjectsBeforeSetGet, db.stableMemoryBackend().stats().liveObjects());
+            Assert.assertEquals(liveObjectsBeforeSetGet, KeyLifecycleTestAccess.backend(db).stats().liveObjects());
         });
     }
 
