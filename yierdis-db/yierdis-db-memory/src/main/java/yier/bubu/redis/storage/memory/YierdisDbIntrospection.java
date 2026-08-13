@@ -8,7 +8,6 @@ import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.bytes.BytesView;
-import yier.bubu.redis.memory.api.NativeEpochKind;
 import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
@@ -62,7 +61,7 @@ public final class YierdisDbIntrospection implements YierdisSnapshot {
             throw new IllegalArgumentException("count must be > 0");
         }
 
-        try (NativeEpochScope ignored = keyLifecycle.stableMemoryBackend().beginEpoch(NativeEpochKind.SNAPSHOT)) {
+        try (NativeEpochScope ignored = internals.beginSnapshotEpoch()) {
             long now = System.currentTimeMillis();
             int maxSteps = Math.max(64, count * 10);
             RemainingLimit remaining = new RemainingLimit(count);
@@ -79,8 +78,7 @@ public final class YierdisDbIntrospection implements YierdisSnapshot {
                 ValueType type = record.type();
                 byte[] stringValue = null;
                 if (type == ValueType.STRING) {
-                    ValueHandle handle = record.valueHandle();
-                    stringValue = handle == null ? null : keyLifecycle.stringRoot().copy(handle);
+                    stringValue = keyLifecycle.copyStringValue(record);
                 }
                 Long expireAtMillis = record.expireAtMillis() < 0 ? null : record.expireAtMillis();
                 out.add(new YierdisSnapshotEntry(keyBytes, type, stringValue, expireAtMillis));

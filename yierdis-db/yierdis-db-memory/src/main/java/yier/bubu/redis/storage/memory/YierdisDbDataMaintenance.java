@@ -10,7 +10,6 @@ import yier.bubu.redis.storage.memory.internal.expire.YierdisDbExpirationSupport
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceResult;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
-import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedCallbackMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMemoryLedger;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
@@ -23,6 +22,7 @@ final class YierdisDbDataMaintenance {
 
     private final YierdisDbRuntimeState runtimeState;
     private final YierdisDbStorage storage;
+    private final YierdisDbRuntimeInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final YierdisDbMemoryLedger ledger;
     private final YierdisDbHealth health;
@@ -36,6 +36,7 @@ final class YierdisDbDataMaintenance {
     YierdisDbDataMaintenance(
             YierdisDbRuntimeState runtimeState,
             YierdisDbStorage storage,
+            YierdisDbRuntimeInternals internals,
             YierdisDbMemoryLedger ledger,
             YierdisDbHealth health,
             HashTableMaintenanceRegistry hashTableMaintenanceRegistry,
@@ -47,6 +48,7 @@ final class YierdisDbDataMaintenance {
     ) {
         this.runtimeState = Objects.requireNonNull(runtimeState, "runtimeState");
         this.storage = Objects.requireNonNull(storage, "storage");
+        this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = storage.keyLifecycle();
         this.ledger = Objects.requireNonNull(ledger, "ledger");
         this.health = Objects.requireNonNull(health, "health");
@@ -151,10 +153,7 @@ final class YierdisDbDataMaintenance {
 
     private long maintenanceUpperBoundBytes(HashTableMaintenanceRegistry.Participant participant) {
         long stagedGrowth = Math.max(0L, participant.estimatedMaintenanceGrowthBytes());
-        long scopeBookkeeping = MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(
-                storage.stableMemoryBackend(),
-                0
-        );
+        long scopeBookkeeping = internals.nativeAllocationScopeBookkeepingBytes(0);
         return stagedGrowth > Long.MAX_VALUE - scopeBookkeeping
                 ? Long.MAX_VALUE
                 : stagedGrowth + scopeBookkeeping;
@@ -295,7 +294,7 @@ final class YierdisDbDataMaintenance {
         try {
             int reclaimed = reclaimDetachedEntries(ASYNC_FLUSH_RECLAIM_MAX_ENTRIES);
             if (reclaimed > 0) {
-                storage.stableMemoryBackend().trimEmptyPages(MemoryPressureBudget.unlimited());
+                internals.trimEmptyNativePages(MemoryPressureBudget.unlimited());
             }
         } catch (RuntimeException | Error failure) {
             health.recordInvariantFailure(failure);

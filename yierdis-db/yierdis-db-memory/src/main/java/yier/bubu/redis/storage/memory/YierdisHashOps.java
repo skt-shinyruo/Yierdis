@@ -1,7 +1,7 @@
 package yier.bubu.redis.storage.memory;
 
-import yier.bubu.redis.storage.memory.EntryMutationEntries.CurrentEntry;
-import yier.bubu.redis.storage.memory.EntryMutationEntries.StagedEntry;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.CurrentEntry;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
 import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
@@ -22,7 +22,6 @@ import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
 import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedCallbackMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
@@ -38,10 +37,10 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final HashRoot hashRoot;
 
-    YierdisHashOps(YierdisDbRuntimeInternals internals) {
+    YierdisHashOps(YierdisDbRuntimeInternals internals, HashRoot hashRoot) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
-        this.hashRoot = Objects.requireNonNull(keyLifecycle.hashRoot(), "hashRoot");
+        this.hashRoot = Objects.requireNonNull(hashRoot, "hashRoot");
     }
 
     @Override
@@ -80,7 +79,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
 
             @Override
             public PreparedDbMutation<WriteResult<Long>> prepare() {
-                CurrentEntry currentEntry = EntryMutationEntries.current(keyLifecycle, keyBytes);
+                CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current != null) {
                     requireHash(current);
@@ -93,7 +92,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
                 try {
                     KeyHandle targetKey = currentEntry.keyHandle();
                     if (current == null) {
-                        staged = EntryMutationEntries.stage(keyLifecycle, keyBytes);
+                        staged = keyLifecycle.stageEntry(keyBytes);
                         targetKey = staged.keyHandle();
                     }
 
@@ -122,7 +121,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
                     );
                     long deltaBytes = estimateRecordBytes(targetKey, next)
                             - estimateRecordBytes(targetKey, current);
-                    PreparedEntryMutation<WriteResult<Long>> prepared = EntryMutationEntries.upsert(
+                    PreparedEntryMutation<WriteResult<Long>> prepared = PreparedEntryMutation.upsert(
                             keyLifecycle,
                             result,
                             deltaBytes,
@@ -259,7 +258,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
 
             @Override
             public PreparedDbMutation<WriteResult<Long>> prepare() {
-                CurrentEntry currentEntry = EntryMutationEntries.current(keyLifecycle, keyBytes);
+                CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current == null) {
                     return preparedNoEntry(WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
@@ -332,7 +331,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
                 hashRoot.preparedSetNativeAllocationSizes(setPlan)
         );
         long stagedHeapBytes = MemoryUsageSnapshot.addSaturating(
-                keyLifecycle.keyDirectory().estimatedInsertHeapGrowthBytes(),
+                keyLifecycle.estimatedInsertHeapGrowthBytes(),
                 hashRoot.estimatedPreparedSetHeapGrowthBytes(
                         setPlan,
                         allocationSizes.length
@@ -453,12 +452,11 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
                 failure.addSuppressed(releaseFailure);
             }
         }
-        EntryMutationEntries.abortStaged(keyLifecycle, staged, failure);
+        keyLifecycle.abortStagedEntry(staged, failure);
     }
 
     private long nativePeak(long heapGrowthBytes, int... nativeAllocationSizes) {
-        return MutationMemoryEstimator.peakAdditionalBytes(
-                keyLifecycle.stableMemoryBackend(),
+        return internals.nativeAllocationPeakAdditionalBytes(
                 0L,
                 Math.max(0L, heapGrowthBytes),
                 nativeAllocationSizes
@@ -477,7 +475,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
     private long withScopeBookkeeping(long upperBound) {
         return Math.max(
                 Math.max(0L, upperBound),
-                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(keyLifecycle.stableMemoryBackend(), 0)
+                internals.nativeAllocationScopeBookkeepingBytes(0)
         );
     }
 

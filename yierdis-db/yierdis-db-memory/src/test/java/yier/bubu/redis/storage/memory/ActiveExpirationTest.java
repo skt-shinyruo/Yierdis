@@ -171,7 +171,7 @@ public class ActiveExpirationTest {
                 Long.MAX_VALUE
         );
         try {
-            NativeKeyDirectory directory = db.keyLifecycle().keyDirectory();
+            NativeKeyDirectory directory = db.keyLifecycle().inspectionForTesting().keyDirectory();
             int inserted = 0;
             while (inserted < 200) {
                 db.writes().strings().setString(
@@ -266,7 +266,7 @@ public class ActiveExpirationTest {
                         ExpireOption.px(0)
                 );
             }
-            NativeKeyDirectory directory = db.keyLifecycle().keyDirectory();
+            NativeKeyDirectory directory = db.keyLifecycle().inspectionForTesting().keyDirectory();
             drainDirectoryRehash(directory);
             long scannedGeneration = directory.tableGeneration();
             ExpirationBatch firstBatch = scanExpiredBatch(db, ScanCursorV2.start(), 20);
@@ -507,7 +507,7 @@ public class ActiveExpirationTest {
     private static int countDuplicateScanIdentities(YierdisDb db) {
         Set<NativeHandle> identities = new HashSet<>();
         int[] visibleEntries = new int[1];
-        NativeKeyDirectory.ScanResult result = db.keyLifecycle().scanWithWork(
+        YierdisDbKeyLifecycle.KeyScanResult result = db.keyLifecycle().scanWithWork(
                 ScanCursorV2.start(),
                 Long.MAX_VALUE,
                 (key, record) -> {
@@ -523,7 +523,7 @@ public class ActiveExpirationTest {
     private static ExpirationBatch scanExpiredBatch(YierdisDb db, ScanCursorV2 cursor, int limit) {
         List<byte[]> keys = new ArrayList<>(limit);
         Set<NativeHandle> identities = new HashSet<>(limit);
-        NativeKeyDirectory.ScanResult result = db.keyLifecycle().scanWithWork(cursor, 320L, (key, record) -> {
+        YierdisDbKeyLifecycle.KeyScanResult result = db.keyLifecycle().scanWithWork(cursor, 320L, (key, record) -> {
             if (record != null
                     && record.expireAtMillis() >= 0L
                     && identities.add(record.keyHandle())) {

@@ -16,7 +16,7 @@ YierdisInstance
         -> YierdisDb
 ```
 
-`DbEngineConfig` 是 DB 配置的唯一输入。`YierdisDb` 在私有构造器内直接组装 ledger、mutation executor 和 maintenance；`YierdisDbStorage` 只聚合 storage ownership，`YierdisDbOperationViews` 只聚合公开 operation views。构造失败与正常 shutdown 都由同一 storage ownership 路径关闭 backend，原始失败保持为 primary，清理失败附加为 suppressed。
+`DbEngineConfig` 是 DB 配置的唯一输入。`YierdisDb` 在私有构造器内直接组装 ledger、mutation executor 和 maintenance；`YierdisDbStorage` 只记录 maintenance registry 与 key lifecycle，`YierdisDbOperationViews` 只聚合公开 operation views。storage 创建一开始就接管 backend，构造失败与正常 shutdown 都沿 key lifecycle 的同一 ownership 路径清理，原始失败保持为 primary，清理失败附加为 suppressed。
 
 global/per-db maxmemory 只改变预算协调方式。每个 DB 都有独立的 stable-memory backend/runtime、keyspace、entry table、roots 和 ledger。
 
@@ -61,7 +61,9 @@ Type roots
 - 更新 LRU/LFU clock；
 - 提供 bounded key-directory scan。
 
-ops 不直接组合 directory 与 entry table。删除必须让 directory entry、entry record、value/root 和 key allocation 一起收敛；替换必须在 source identity 仍匹配时才发布。
+新 key 只能通过 opaque `StagedEntry` token 预留 entry 与 native key。abort 或未发布时关闭 token 会幂等释放两者；发布后 token 被消费，prepared mutation 只调用 lifecycle 的 publish/replace/delete 语义，不再持有 directory staging 类型。
+
+ops 不直接组合 directory 与 entry table，也不能从 lifecycle 取出 backend、table、directory 或 roots。各 family root 只在 DB 组合时注入对应 family ops；删除必须让 directory entry、entry record、value/root 和 key allocation 一起收敛，替换必须在 source identity 仍匹配时才发布。
 
 `EntryRecord.expireAtMillis` 是唯一 TTL deadline。`expireCount` 只是随 entry publish/replace/release 更新的派生计数，不是独立索引。
 
@@ -123,7 +125,7 @@ upper bound 覆盖新 key/entry/root、native payload、allocator metadata、all
 
 TTL 命令由 `YierdisTtlOps` 通过 prepared entry replacement/delete 实现。设置 deadline 复用原 entry handle；`PERSIST` 把 deadline 改为 `-1`；已经到期的输入直接准备删除。
 
-`YierdisDbExpirationSupport` 持久化 cursor 与完整 table generation，直接扫描 `NativeKeyDirectory`。单次最多检查 320 个 physical slots、收集 20 个候选，并受时间预算限制。扫描 callback 只发现候选；返回后按 key identity、record version 和 deadline 重新验证再删除。
+`YierdisDbExpirationSupport` 持久化 cursor 与完整 table generation，通过 key lifecycle 的 bounded scan 与 directory-state 语义读取 topology。单次最多检查 320 个 physical slots、收集 20 个候选，并受时间预算限制。扫描 callback 只发现候选；返回后按 key identity、record version 和 deadline 重新验证再删除。
 
 详细的 retry、rehash dedup 和 synthetic commit 语义见 [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)。
 
@@ -169,7 +171,7 @@ native reclaimable bytes 只是候选量，不能预先从 committed footprint �
 
 Netty I/O 线程只提交请求，command executor owner thread 执行 DB mutation 和 maintenance。`Arena.ofShared()` 只允许 FFM region 在不同线程关闭，不解除 DB thread confinement。
 
-shutdown 会先重置 ledger、回收 detached entries，再让 storage owner 清空 graph 并关闭 backend。close-once 与失败聚合由 owned resources 保证；构造失败也沿同一 ownership 路径清理已创建的 graph。
+shutdown 会先重置 ledger、回收 detached entries，再让 key lifecycle 清空 graph 并关闭 backend。lifecycle 保证 close-once、固定依赖顺序和失败聚合；构造失败也沿同一 ownership 路径清理已创建的 graph。
 
 ## 修改导航
 

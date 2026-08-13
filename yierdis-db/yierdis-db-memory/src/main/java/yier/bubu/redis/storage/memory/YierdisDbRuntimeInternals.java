@@ -11,6 +11,12 @@ import yier.bubu.redis.common.command.ByteArrayCommandRecord;
 import yier.bubu.redis.common.command.ImmutableCommandRecord;
 import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.common.memory.MemoryPressureBudget;
+import yier.bubu.redis.common.memory.MemoryReclaimResult;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
+import yier.bubu.redis.memory.api.NativeAllocatorStats;
+import yier.bubu.redis.memory.api.NativeEpochKind;
+import yier.bubu.redis.memory.api.NativeEpochScope;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.storage.api.DbCommitKind;
 import yier.bubu.redis.storage.api.DbCommitStreamUnavailableException;
 import yier.bubu.redis.storage.api.MutationOutcome;
@@ -18,6 +24,11 @@ import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
+import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
+import yier.bubu.redis.storage.memory.internal.value.NativeBytesSlice;
+import yier.bubu.redis.storage.memory.internal.value.NativeListEntryRef;
+import yier.bubu.redis.storage.memory.internal.value.PinnedPoppedValueSequence;
+import yier.bubu.redis.storage.memory.internal.value.PreparedPoppedValueSequence;
 
 import java.util.Objects;
 
@@ -27,17 +38,20 @@ public final class YierdisDbRuntimeInternals {
     private final YierdisDbMutationExecutor mutationExecutor;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final MemoryLedger ledger;
+    private final StableMemoryBackend stableMemoryBackend;
 
     YierdisDbRuntimeInternals(
             Runnable threadChecker,
             YierdisDbMutationExecutor mutationExecutor,
             YierdisDbKeyLifecycle keyLifecycle,
-            MemoryLedger ledger
+            MemoryLedger ledger,
+            StableMemoryBackend stableMemoryBackend
     ) {
         this.threadChecker = Objects.requireNonNull(threadChecker, "threadChecker");
         this.mutationExecutor = Objects.requireNonNull(mutationExecutor, "mutationExecutor");
         this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
         this.ledger = Objects.requireNonNull(ledger, "ledger");
+        this.stableMemoryBackend = Objects.requireNonNull(stableMemoryBackend, "stableMemoryBackend");
     }
 
     public void checkThread() {
@@ -112,9 +126,71 @@ public final class YierdisDbRuntimeInternals {
         return ledger;
     }
 
+    public long nativeAllocationPeakAdditionalBytes(
+            long ffmRegionGrowthBytes,
+            long heapGrowthBytes,
+            int... nativeAllocationSizes
+    ) {
+        return MutationMemoryEstimator.peakAdditionalBytes(
+                stableMemoryBackend,
+                ffmRegionGrowthBytes,
+                heapGrowthBytes,
+                nativeAllocationSizes
+        );
+    }
+
+    public long nativeAllocationScopeBookkeepingBytes(int expectedNativeAllocationCount) {
+        return MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(
+                stableMemoryBackend,
+                expectedNativeAllocationCount
+        );
+    }
+
+    public NativeEpochScope beginScanEpoch() {
+        return stableMemoryBackend.beginEpoch(NativeEpochKind.SCAN);
+    }
+
+    public NativeEpochScope beginSnapshotEpoch() {
+        return stableMemoryBackend.beginEpoch(NativeEpochKind.SNAPSHOT);
+    }
+
+    public NativeBytesSlice keyBytesSlice(KeyHandle keyHandle) {
+        Objects.requireNonNull(keyHandle, "keyHandle");
+        return new NativeBytesSlice(
+                stableMemoryBackend,
+                KeyHandleAccess.allocatorNativeHandle(keyHandle),
+                0,
+                keyHandle.length()
+        );
+    }
+
+    public PinnedPoppedValueSequence capturePoppedValues(NativeListEntryRef[] entries) {
+        return PinnedPoppedValueSequence.capture(stableMemoryBackend, entries);
+    }
+
+    public PreparedPoppedValueSequence ownPoppedValues(NativeListEntryRef[] entries) {
+        return PreparedPoppedValueSequence.owned(stableMemoryBackend, entries);
+    }
+
+    public MemoryReclaimResult trimEmptyNativePages(MemoryPressureBudget budget) {
+        return stableMemoryBackend.trimEmptyPages(Objects.requireNonNull(budget, "budget"));
+    }
+
+    public MemoryUsageSnapshot nativeMemoryUsage() {
+        return stableMemoryBackend.memoryUsage();
+    }
+
+    public NativeAllocatorStats nativeAllocatorStats() {
+        return stableMemoryBackend.stats();
+    }
+
+    public long nativeLiveRegionCount() {
+        return stableMemoryBackend.liveRegionCount();
+    }
+
     public void trimEmptyNativePagesAfterPreparedPreviewClose() {
         if (ledger.maxmemoryEnabled()) {
-            keyLifecycle.stableMemoryBackend().trimEmptyPages(MemoryPressureBudget.unlimited());
+            trimEmptyNativePages(MemoryPressureBudget.unlimited());
         }
     }
 

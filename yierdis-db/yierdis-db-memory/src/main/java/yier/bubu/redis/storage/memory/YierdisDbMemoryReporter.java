@@ -16,11 +16,6 @@ import yier.bubu.redis.storage.memory.internal.ledger.MemoryLedger;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
-import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
-import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
-import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
-import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
-import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 
 import java.util.function.LongSupplier;
@@ -154,56 +149,12 @@ public final class YierdisDbMemoryReporter {
         if (keyLen > 0) {
             extra += keyLen;
         }
-        ValueType type = record.type();
-        if (type == ValueType.STRING) {
-            ValueHandle handle = record.valueHandle();
-            if (handle != null) {
-                extra += keyLifecycle.stringRoot().estimatedBytes(handle);
-            }
-            return extra;
-        }
-        if (type == ValueType.LIST) {
-            ValueHandle handle = record.valueHandle();
-            ListRoot listRoot = keyLifecycle.listRoot();
-            if (handle != null && listRoot != null) {
-                extra += listRoot.estimatedBytes(handle);
-            }
-            return extra;
-        }
-        if (type == ValueType.HASH) {
-            ValueHandle handle = record.valueHandle();
-            HashRoot hashRoot = keyLifecycle.hashRoot();
-            if (handle != null && hashRoot != null) {
-                extra += hashRoot.estimatedBytes(handle);
-            }
-            return extra;
-        }
-        if (type == ValueType.SET) {
-            ValueHandle handle = record.valueHandle();
-            SetRoot setRoot = keyLifecycle.setRoot();
-            if (handle != null && setRoot != null) {
-                extra += setRoot.estimatedBytes(handle);
-            }
-            return extra;
-        }
-        if (type == ValueType.ZSET) {
-            ValueHandle handle = record.valueHandle();
-            ZSetRoot zsetRoot = keyLifecycle.zsetRoot();
-            if (handle != null && zsetRoot != null) {
-                extra += zsetRoot.estimatedBytes(handle);
-            }
-            return extra;
-        }
-        return extra;
+        return MemoryUsageSnapshot.addSaturating(extra, keyLifecycle.estimatedValueBytes(record));
     }
 
     private NativeAllocatorStats safeNativeAllocatorStats() {
-        var allocator = keyLifecycle.stableMemoryBackend();
-        if (allocator == null) {
-            return null;
-        }
         try {
-            return allocator.stats();
+            return internals.nativeAllocatorStats();
         } catch (Throwable ignored) {
             return null;
         }

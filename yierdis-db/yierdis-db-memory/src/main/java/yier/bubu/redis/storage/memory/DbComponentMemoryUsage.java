@@ -7,15 +7,18 @@ import java.util.Objects;
 
 final class DbComponentMemoryUsage {
     private final Runnable threadChecker;
+    private final YierdisDbRuntimeInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final HashTableMaintenanceRegistry hashTableMaintenanceRegistry;
 
     DbComponentMemoryUsage(
             Runnable threadChecker,
+            YierdisDbRuntimeInternals internals,
             YierdisDbKeyLifecycle keyLifecycle,
             HashTableMaintenanceRegistry hashTableMaintenanceRegistry
     ) {
         this.threadChecker = Objects.requireNonNull(threadChecker, "threadChecker");
+        this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
         this.hashTableMaintenanceRegistry = Objects.requireNonNull(
                 hashTableMaintenanceRegistry,
@@ -25,23 +28,11 @@ final class DbComponentMemoryUsage {
 
     MemoryUsageSnapshot snapshot() {
         threadChecker.run();
-        MemoryUsageSnapshot usage = keyLifecycle.stableMemoryBackend().memoryUsage();
+        MemoryUsageSnapshot usage = internals.nativeMemoryUsage();
         MemoryUsageSnapshot retainedHeap = new MemoryUsageSnapshot(
                 MemoryUsageSnapshot.addSaturating(
-                        keyLifecycle.keyDirectory().heapBytes(),
-                        MemoryUsageSnapshot.addSaturating(
-                                keyLifecycle.listRoot().heapBytes(),
-                                MemoryUsageSnapshot.addSaturating(
-                                        keyLifecycle.hashRoot().heapBytes(),
-                                        MemoryUsageSnapshot.addSaturating(
-                                                keyLifecycle.setRoot().heapBytes(),
-                                                MemoryUsageSnapshot.addSaturating(
-                                                        keyLifecycle.zsetRoot().heapBytes(),
-                                                        hashTableMaintenanceRegistry.heapEstimatedBytes()
-                                                )
-                                        )
-                                )
-                        )
+                        keyLifecycle.componentRetainedHeapBytes(),
+                        hashTableMaintenanceRegistry.heapEstimatedBytes()
                 ),
                 0L,
                 0L,

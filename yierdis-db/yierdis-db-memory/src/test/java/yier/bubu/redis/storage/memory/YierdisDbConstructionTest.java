@@ -48,9 +48,13 @@ public class YierdisDbConstructionTest {
                     () -> 0L
             );
             try {
-                Assert.assertSame(testBackend.backend(), storage.stableMemoryBackend());
+                Assert.assertSame(
+                        testBackend.backend(),
+                        storage.keyLifecycle().inspectionForTesting().stableMemoryBackend()
+                );
                 Assert.assertTrue(
-                        storage.stableMemoryBackend().stats().objectCount(NativeObjectKind.ENTRY_RECORD) >= 0L
+                        storage.keyLifecycle().inspectionForTesting().stableMemoryBackend()
+                                .stats().objectCount(NativeObjectKind.ENTRY_RECORD) >= 0L
                 );
             } finally {
                 storage.close();
@@ -82,6 +86,31 @@ public class YierdisDbConstructionTest {
         Assert.assertEquals(1, closeCalls.get());
         Assert.assertEquals(1, failure.getSuppressed().length);
         Assert.assertEquals("injected construction cleanup failure", failure.getSuppressed()[0].getMessage());
+    }
+
+    @Test
+    public void storageValidationFailureConsumesAndClosesBackendOwnership() {
+        AtomicInteger closeCalls = new AtomicInteger();
+        var backend = (yier.bubu.redis.memory.api.StableMemoryBackend) Proxy.newProxyInstance(
+                getClass().getClassLoader(),
+                new Class<?>[]{yier.bubu.redis.memory.api.StableMemoryBackend.class},
+                (ignoredProxy, method, ignoredArguments) -> {
+                    if (method.getName().equals("close")) {
+                        closeCalls.incrementAndGet();
+                        return null;
+                    }
+                    throw new AssertionError("unexpected backend call during validation: " + method.getName());
+                }
+        );
+
+        NullPointerException failure = Assert.assertThrows(
+                NullPointerException.class,
+                () -> YierdisDbStorage.create(backend, null, () -> 0L)
+        );
+
+        Assert.assertEquals("hashSeed", failure.getMessage());
+        Assert.assertEquals(1, closeCalls.get());
+        Assert.assertEquals(0, failure.getSuppressed().length);
     }
 
     @Test
@@ -125,11 +154,11 @@ public class YierdisDbConstructionTest {
         YierdisDb db = TestDbSupport.open();
         try {
             db.bindToCurrentThread();
-            Assert.assertNotNull(db.keyLifecycle().stableMemoryBackend().stats());
+            Assert.assertNotNull(db.stableMemoryBackend().stats());
             AtomicReference<Throwable> failure = new AtomicReference<>();
             Thread thread = Thread.ofPlatform().start(() -> {
                 try {
-                    db.keyLifecycle().stableMemoryBackend().stats();
+                    db.stableMemoryBackend().stats();
                 } catch (Throwable next) {
                     failure.set(next);
                 }

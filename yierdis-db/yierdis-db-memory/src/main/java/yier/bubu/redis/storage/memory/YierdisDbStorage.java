@@ -3,7 +3,6 @@ package yier.bubu.redis.storage.memory;
 import java.util.Objects;
 import java.util.function.LongSupplier;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
-import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
 import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
@@ -18,19 +17,12 @@ import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
  * DB storage graph 的单一 ownership 记录；关闭该记录会按依赖顺序释放整张图和 backend。
  */
 record YierdisDbStorage(
-        StableMemoryBackend stableMemoryBackend,
         HashTableMaintenanceRegistry hashTableMaintenanceRegistry,
-        YierdisDbKeyLifecycle keyLifecycle,
-        YierdisDbOwnedResources resources
+        YierdisDbKeyLifecycle keyLifecycle
 ) implements AutoCloseable {
     YierdisDbStorage {
-        Objects.requireNonNull(stableMemoryBackend, "stableMemoryBackend");
         Objects.requireNonNull(hashTableMaintenanceRegistry, "hashTableMaintenanceRegistry");
         Objects.requireNonNull(keyLifecycle, "keyLifecycle");
-        Objects.requireNonNull(resources, "resources");
-        if (keyLifecycle.stableMemoryBackend() != stableMemoryBackend) {
-            throw new IllegalArgumentException("key lifecycle must use the storage backend");
-        }
     }
 
     static YierdisDbStorage create(
@@ -39,10 +31,7 @@ record YierdisDbStorage(
             LongSupplier lruClockSupplier
     ) {
         StableMemoryBackend backend = Objects.requireNonNull(stableMemoryBackend, "stableMemoryBackend");
-        HashSeed resolvedHashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
-        LongSupplier resolvedLruClockSupplier = Objects.requireNonNull(lruClockSupplier, "lruClockSupplier");
-        YierdisDbOwnedResources resources = new YierdisDbOwnedResources(backend);
-        HashTableMaintenanceRegistry maintenanceRegistry = new HashTableMaintenanceRegistry();
+        HashTableMaintenanceRegistry maintenanceRegistry = null;
         EntryTable entries = null;
         NativeKeyDirectory keyDirectory = null;
         StringRoot stringRoot = null;
@@ -51,6 +40,12 @@ record YierdisDbStorage(
         SetRoot setRoot = null;
         ZSetRoot zsetRoot = null;
         try {
+            HashSeed resolvedHashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
+            LongSupplier resolvedLruClockSupplier = Objects.requireNonNull(
+                    lruClockSupplier,
+                    "lruClockSupplier"
+            );
+            maintenanceRegistry = new HashTableMaintenanceRegistry();
             entries = new EntryTable(backend);
             keyDirectory = new NativeKeyDirectory(backend, resolvedHashSeed, maintenanceRegistry);
             stringRoot = new StringRoot(backend);
@@ -69,11 +64,12 @@ record YierdisDbStorage(
                     zsetRoot,
                     resolvedLruClockSupplier
             );
-            return new YierdisDbStorage(backend, maintenanceRegistry, keyLifecycle, resources);
+            return new YierdisDbStorage(maintenanceRegistry, keyLifecycle);
         } catch (Throwable failure) {
             try {
-                // backend 仍由调用方持有；这里只释放已经进入 storage graph 的子资源。
-                resources.releaseComponents(
+                // create 一旦开始就消费 backend 所有权；失败路径与正常 close 使用同一释放顺序。
+                YierdisDbKeyLifecycle.closePartiallyConstructed(
+                        backend,
                         entries,
                         keyDirectory,
                         stringRoot,
@@ -90,51 +86,23 @@ record YierdisDbStorage(
     }
 
     void clearData() {
-        resources.clearData(
-                keyLifecycle.entryTable(),
-                keyLifecycle.keyDirectory(),
-                keyLifecycle.stringRoot(),
-                keyLifecycle.listRoot(),
-                keyLifecycle.hashRoot(),
-                keyLifecycle.setRoot(),
-                keyLifecycle.zsetRoot()
-        );
+        keyLifecycle.clearData();
     }
 
     void detachEntries() {
-        keyLifecycle.keyDirectory().detachEntries();
+        keyLifecycle.detachEntries();
     }
 
     long detachedEntryCount() {
-        return keyLifecycle.keyDirectory().detachedEntryCount();
+        return keyLifecycle.detachedEntryCount();
     }
 
     void reclaimDetachedEntry() {
-        keyLifecycle.keyDirectory().reclaimDetachedEntry((ignoredKey, entryHandle) -> releaseEntry(entryHandle));
-    }
-
-    private void releaseEntry(EntryHandle entryHandle) {
-        resources.releaseEntry(
-                keyLifecycle.entryTable(),
-                keyLifecycle.stringRoot(),
-                keyLifecycle.listRoot(),
-                keyLifecycle.hashRoot(),
-                keyLifecycle.setRoot(),
-                keyLifecycle.zsetRoot(),
-                entryHandle
-        );
+        keyLifecycle.reclaimDetachedEntry();
     }
 
     @Override
     public void close() {
-        resources.releaseAll(
-                keyLifecycle.entryTable(),
-                keyLifecycle.keyDirectory(),
-                keyLifecycle.stringRoot(),
-                keyLifecycle.listRoot(),
-                keyLifecycle.hashRoot(),
-                keyLifecycle.setRoot(),
-                keyLifecycle.zsetRoot()
-        );
+        keyLifecycle.close();
     }
 }

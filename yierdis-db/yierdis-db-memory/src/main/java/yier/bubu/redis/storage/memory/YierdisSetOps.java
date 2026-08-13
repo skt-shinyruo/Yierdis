@@ -1,7 +1,7 @@
 package yier.bubu.redis.storage.memory;
 
-import yier.bubu.redis.storage.memory.EntryMutationEntries.CurrentEntry;
-import yier.bubu.redis.storage.memory.EntryMutationEntries.StagedEntry;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.CurrentEntry;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
 import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
@@ -20,7 +20,6 @@ import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedCallbackMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
@@ -35,10 +34,10 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final SetRoot setRoot;
 
-    YierdisSetOps(YierdisDbRuntimeInternals internals) {
+    YierdisSetOps(YierdisDbRuntimeInternals internals, SetRoot setRoot) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
-        this.setRoot = Objects.requireNonNull(keyLifecycle.setRoot(), "setRoot");
+        this.setRoot = Objects.requireNonNull(setRoot, "setRoot");
     }
 
     @Override
@@ -59,7 +58,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
 
             @Override
             public PreparedDbMutation<WriteResult<Long>> prepare() {
-                CurrentEntry currentEntry = EntryMutationEntries.current(keyLifecycle, keyBytes);
+                CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current != null) {
                     requireSet(current);
@@ -75,7 +74,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
                 try {
                     KeyHandle targetKey = currentEntry.keyHandle();
                     if (current == null) {
-                        staged = EntryMutationEntries.stage(keyLifecycle, keyBytes);
+                        staged = keyLifecycle.stageEntry(keyBytes);
                         targetKey = staged.keyHandle();
                     }
 
@@ -93,7 +92,6 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
                         }
                         if (staged != null) {
                             staged.close();
-                            keyLifecycle.entryTable().release(staged.entryHandle());
                             staged = null;
                         }
                         return preparedNoEntry(result, outcome);
@@ -107,7 +105,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
                     WriteResult<Long> result = WriteResult.of((long) added, outcome);
                     long deltaBytes = estimateRecordBytes(targetKey, next)
                             - estimateRecordBytes(targetKey, current);
-                    PreparedEntryMutation<WriteResult<Long>> prepared = EntryMutationEntries.upsert(
+                    PreparedEntryMutation<WriteResult<Long>> prepared = PreparedEntryMutation.upsert(
                             keyLifecycle,
                             result,
                             deltaBytes,
@@ -155,7 +153,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
 
             @Override
             public PreparedDbMutation<WriteResult<Long>> prepare() {
-                CurrentEntry currentEntry = EntryMutationEntries.current(keyLifecycle, keyBytes);
+                CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current == null) {
                     return preparedNoEntry(WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
@@ -292,7 +290,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
                 members
         );
         long stagedHeapBytes = MemoryUsageSnapshot.addSaturating(
-                keyLifecycle.keyDirectory().estimatedInsertHeapGrowthBytes(),
+                keyLifecycle.estimatedInsertHeapGrowthBytes(),
                 setRoot.estimatedPreparedAddHeapGrowthBytes(
                         null,
                         members,
@@ -413,12 +411,11 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
                 failure.addSuppressed(releaseFailure);
             }
         }
-        EntryMutationEntries.abortStaged(keyLifecycle, staged, failure);
+        keyLifecycle.abortStagedEntry(staged, failure);
     }
 
     private long nativePeak(long heapGrowthBytes, int... nativeAllocationSizes) {
-        return MutationMemoryEstimator.peakAdditionalBytes(
-                keyLifecycle.stableMemoryBackend(),
+        return internals.nativeAllocationPeakAdditionalBytes(
                 0L,
                 Math.max(0L, heapGrowthBytes),
                 nativeAllocationSizes
@@ -428,7 +425,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
     private long withScopeBookkeeping(long upperBound) {
         return Math.max(
                 Math.max(0L, upperBound),
-                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(keyLifecycle.stableMemoryBackend(), 0)
+                internals.nativeAllocationScopeBookkeepingBytes(0)
         );
     }
 

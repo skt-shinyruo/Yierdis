@@ -69,7 +69,7 @@ public class YierdisDbNativeHandleGraphTest {
             values.add(new byte[4096]);
             Assert.assertEquals(Long.valueOf(3L), db.writes().lists().rpush(b("list"), values).value());
             Assert.assertEquals(3L,
-                    db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.LIST_NODE));
+                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.LIST_NODE));
 
             List<YierdisDbNativeHandleGraph.Role> roles = new ArrayList<>();
             YierdisDbNativeHandleGraph.visitReachable(db.keyLifecycle(), (role, handle, record) -> {

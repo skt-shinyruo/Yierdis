@@ -12,7 +12,6 @@ import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 
@@ -251,10 +250,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             EntryRecord record,
             long expireAtMillis
     ) {
-        long upperBound = MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(
-                keyLifecycle.stableMemoryBackend(),
-                0
-        );
+        long upperBound = internals.nativeAllocationScopeBookkeepingBytes(0);
         return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<WriteResult<Boolean>>() {
             @Override
             public long upperBoundBytes() {

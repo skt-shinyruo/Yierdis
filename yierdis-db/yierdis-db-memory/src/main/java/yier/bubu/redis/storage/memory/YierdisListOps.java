@@ -3,8 +3,8 @@ package yier.bubu.redis.storage.memory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import yier.bubu.redis.storage.memory.EntryMutationEntries.CurrentEntry;
-import yier.bubu.redis.storage.memory.EntryMutationEntries.StagedEntry;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.CurrentEntry;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
 import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
@@ -24,7 +24,6 @@ import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
 import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 import yier.bubu.redis.storage.memory.internal.value.PreparedPoppedValueSequence;
@@ -39,10 +38,10 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final ListRoot listRoot;
 
-    YierdisListOps(YierdisDbRuntimeInternals internals) {
+    YierdisListOps(YierdisDbRuntimeInternals internals, ListRoot listRoot) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
-        this.listRoot = Objects.requireNonNull(keyLifecycle.listRoot(), "listRoot");
+        this.listRoot = Objects.requireNonNull(listRoot, "listRoot");
     }
 
     @Override
@@ -110,8 +109,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
             preview = PinnedPoppedValueSequence.nullValue();
         } else {
             requireList(record);
-            preview = PinnedPoppedValueSequence.capture(
-                    keyLifecycle.stableMemoryBackend(),
+            preview = internals.capturePoppedValues(
                     listRoot.popEntries(requireListHandle(record), count, left)
             );
         }
@@ -134,7 +132,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
 
             @Override
             public PreparedEntryMutation<WriteResult<Long>> prepare() {
-                CurrentEntry currentEntry = EntryMutationEntries.current(keyLifecycle, keyBytes);
+                CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current != null) {
                     requireList(current);
@@ -147,7 +145,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                 try {
                     KeyHandle targetKey = currentEntry.keyHandle();
                     if (current == null) {
-                        staged = EntryMutationEntries.stage(keyLifecycle, keyBytes);
+                        staged = keyLifecycle.stageEntry(keyBytes);
                         targetKey = staged.keyHandle();
                     }
 
@@ -172,8 +170,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                                     listRoot.positiveRetainedHeapGrowthBytes(rootHeapBefore)
                             ),
                             MutationOutcome.VALUE_CHANGED,
-                            staged.entryHandle(),
-                            staged.stagedKey(),
+                            staged,
                             next
                     );
                     staged = null;
@@ -218,7 +215,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
 
             @Override
             public PreparedEntryMutation<WriteResult<PoppedValueSequence>> prepare() {
-                CurrentEntry currentEntry = EntryMutationEntries.current(keyLifecycle, keyBytes);
+                CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current == null) {
                     return preparedNoEntry(
@@ -238,8 +235,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                 }
 
                 int popCount = Math.min(count, oldSize);
-                PreparedPoppedValueSequence popped = PreparedPoppedValueSequence.owned(
-                        keyLifecycle.stableMemoryBackend(),
+                PreparedPoppedValueSequence popped = internals.ownPoppedValues(
                         listRoot.popEntries(oldHandle, popCount, left)
                 );
                 WriteResult<PoppedValueSequence> result = WriteResult.of(popped, MutationOutcome.VALUE_CHANGED);
@@ -443,7 +439,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                 listRoot.preparedPushNativeAllocationSizes(null, values, left)
         );
         long stagedHeapBytes = MemoryUsageSnapshot.addSaturating(
-                keyLifecycle.keyDirectory().estimatedInsertHeapGrowthBytes(),
+                keyLifecycle.estimatedInsertHeapGrowthBytes(),
                 listRoot.estimatedPreparedPushHeapGrowthBytes(
                         null,
                         values,
@@ -648,12 +644,11 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                 failure.addSuppressed(releaseFailure);
             }
         }
-        EntryMutationEntries.abortStaged(keyLifecycle, staged, failure);
+        keyLifecycle.abortStagedEntry(staged, failure);
     }
 
     private long nativePeak(long heapGrowthBytes, int... nativeAllocationSizes) {
-        return MutationMemoryEstimator.peakAdditionalBytes(
-                keyLifecycle.stableMemoryBackend(),
+        return internals.nativeAllocationPeakAdditionalBytes(
                 0L,
                 Math.max(0L, heapGrowthBytes),
                 nativeAllocationSizes
@@ -672,7 +667,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
     private long withScopeBookkeeping(long upperBound) {
         return Math.max(
                 Math.max(0L, upperBound),
-                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(keyLifecycle.stableMemoryBackend(), 0)
+                internals.nativeAllocationScopeBookkeepingBytes(0)
         );
     }
 

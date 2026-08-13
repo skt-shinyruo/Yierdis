@@ -1,7 +1,7 @@
 package yier.bubu.redis.storage.memory;
 
-import yier.bubu.redis.storage.memory.EntryMutationEntries.CurrentEntry;
-import yier.bubu.redis.storage.memory.EntryMutationEntries.StagedEntry;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.CurrentEntry;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
@@ -23,7 +23,6 @@ import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
@@ -42,10 +41,10 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final StringRoot stringRoot;
 
-    YierdisStringOps(YierdisDbRuntimeInternals internals) {
+    YierdisStringOps(YierdisDbRuntimeInternals internals, StringRoot stringRoot) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
-        this.stringRoot = Objects.requireNonNull(keyLifecycle.stringRoot(), "stringRoot");
+        this.stringRoot = Objects.requireNonNull(stringRoot, "stringRoot");
     }
 
     @Override
@@ -99,7 +98,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
             @Override
             public PreparedEntryMutation<WriteResult<SetStringValue>> prepare() {
-                CurrentEntry currentEntry = EntryMutationEntries.current(keyLifecycle, keyBytes);
+                CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (mode == SetMode.NX && current != null) {
                     WriteResult<SetStringValue> result = WriteResult.unchanged(
@@ -126,7 +125,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 try {
                     KeyHandle targetKey = currentEntry.keyHandle();
                     if (current == null) {
-                        staged = EntryMutationEntries.stage(keyLifecycle, keyBytes);
+                        staged = keyLifecycle.stageEntry(keyBytes);
                         targetKey = staged.keyHandle();
                     }
 
@@ -155,7 +154,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                             outcome
                     );
                     long deltaBytes = estimateRecordBytes(targetKey, next) - estimateRecordBytes(targetKey, current);
-                    PreparedEntryMutation<WriteResult<SetStringValue>> prepared = EntryMutationEntries.upsert(
+                    PreparedEntryMutation<WriteResult<SetStringValue>> prepared = PreparedEntryMutation.upsert(
                             keyLifecycle,
                             result,
                             deltaBytes,
@@ -285,7 +284,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
             @Override
             public PreparedEntryMutation<WriteResult<Long>> prepare() {
-                CurrentEntry currentEntry = EntryMutationEntries.current(keyLifecycle, keyBytes);
+                CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 StagedEntry staged = null;
                 StoredString stored = null;
@@ -293,7 +292,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     KeyHandle targetKey = currentEntry.keyHandle();
                     if (current == null) {
                         ensureMaxStringLength(suffix.length);
-                        staged = EntryMutationEntries.stage(keyLifecycle, keyBytes);
+                        staged = keyLifecycle.stageEntry(keyBytes);
                         targetKey = staged.keyHandle();
                         stored = new StoredString(stringRoot.store(suffix), ValueEncoding.STRING_RAW);
                     } else {
@@ -327,7 +326,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                             : WriteResult.unchanged((long) newLen);
                     MutationOutcome outcome = result.mutationOutcome();
                     long deltaBytes = estimateRecordBytes(targetKey, next) - estimateRecordBytes(targetKey, current);
-                    PreparedEntryMutation<WriteResult<Long>> prepared = EntryMutationEntries.upsert(
+                    PreparedEntryMutation<WriteResult<Long>> prepared = PreparedEntryMutation.upsert(
                             keyLifecycle,
                             result,
                             deltaBytes,
@@ -384,7 +383,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
             @Override
             public PreparedEntryMutation<WriteResult<Integer>> prepare() {
-                CurrentEntry currentEntry = EntryMutationEntries.current(keyLifecycle, keyBytes);
+                CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 StagedEntry staged = null;
                 StoredString stored = null;
@@ -393,7 +392,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     boolean existed = current != null;
                     byte[] before;
                     if (current == null) {
-                        staged = EntryMutationEntries.stage(keyLifecycle, keyBytes);
+                        staged = keyLifecycle.stageEntry(keyBytes);
                         targetKey = staged.keyHandle();
                         before = new byte[0];
                     } else {
@@ -425,7 +424,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                             : WriteResult.unchanged(oldBit);
                     MutationOutcome outcome = result.mutationOutcome();
                     long deltaBytes = estimateRecordBytes(targetKey, next) - estimateRecordBytes(targetKey, current);
-                    PreparedEntryMutation<WriteResult<Integer>> prepared = EntryMutationEntries.upsert(
+                    PreparedEntryMutation<WriteResult<Integer>> prepared = PreparedEntryMutation.upsert(
                             keyLifecycle,
                             result,
                             deltaBytes,
@@ -472,7 +471,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
             @Override
             public PreparedEntryMutation<WriteResult<Long>> prepare() {
-                CurrentEntry currentEntry = EntryMutationEntries.current(keyLifecycle, keyBytes);
+                CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 StagedEntry staged = null;
                 StoredString stored = null;
@@ -483,7 +482,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                         requireString(current);
                         currentValue = parseLongAscii(copyStringBytes(current));
                     } else {
-                        staged = EntryMutationEntries.stage(keyLifecycle, keyBytes);
+                        staged = keyLifecycle.stageEntry(keyBytes);
                         targetKey = staged.keyHandle();
                     }
                     long result = safeAdd(currentValue, delta);
@@ -498,7 +497,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     );
                     WriteResult<Long> writeResult = WriteResult.of(result, MutationOutcome.VALUE_CHANGED);
                     long deltaBytes = estimateRecordBytes(targetKey, next) - estimateRecordBytes(targetKey, current);
-                    PreparedEntryMutation<WriteResult<Long>> prepared = EntryMutationEntries.upsert(
+                    PreparedEntryMutation<WriteResult<Long>> prepared = PreparedEntryMutation.upsert(
                             keyLifecycle,
                             writeResult,
                             deltaBytes,
@@ -747,7 +746,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 failure.addSuppressed(releaseFailure);
             }
         }
-        EntryMutationEntries.abortStaged(keyLifecycle, staged, failure);
+        keyLifecycle.abortStagedEntry(staged, failure);
     }
 
     private int currentStringLengthForEstimate(byte[] keyBytes, long nowMillis) {
@@ -840,12 +839,12 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     ) {
         EntryRecord current = keyLifecycle.entryRecord(keyBytes);
         if (current == null) {
-            return mode == SetMode.XX ? 0L : keyLifecycle.keyDirectory().estimatedInsertHeapGrowthBytes();
+            return mode == SetMode.XX ? 0L : keyLifecycle.estimatedInsertHeapGrowthBytes();
         }
 
         KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
         if (keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
-            return mode == SetMode.XX ? 0L : keyLifecycle.keyDirectory().estimatedInsertHeapGrowthBytes();
+            return mode == SetMode.XX ? 0L : keyLifecycle.estimatedInsertHeapGrowthBytes();
         }
         return 0L;
     }
@@ -853,7 +852,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     private long newStringCreateUpperBound(byte[] keyBytes, int valueLength) {
         return addSaturating(
                 newStringNativeUpperBound(keyBytes, valueLength),
-                keyLifecycle.keyDirectory().estimatedInsertHeapGrowthBytes()
+                keyLifecycle.estimatedInsertHeapGrowthBytes()
         );
     }
 
@@ -862,8 +861,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     }
 
     private long nativePeak(int... nativeAllocationSizes) {
-        return MutationMemoryEstimator.peakAdditionalBytes(
-                keyLifecycle.stableMemoryBackend(),
+        return internals.nativeAllocationPeakAdditionalBytes(
                 0L,
                 0L,
                 nativeAllocationSizes
@@ -887,7 +885,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     private long withScopeBookkeeping(long upperBound) {
         return Math.max(
                 Math.max(0L, upperBound),
-                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(keyLifecycle.stableMemoryBackend(), 0)
+                internals.nativeAllocationScopeBookkeepingBytes(0)
         );
     }
 

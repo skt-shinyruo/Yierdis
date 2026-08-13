@@ -409,7 +409,6 @@ public class MutationFaultInjectionTest {
         private final YierdisZSetOps zsetOps;
         private final YierdisHllOps hllOps;
         private final YierdisTtlOps ttlOps;
-        private final YierdisDbOwnedResources resources;
 
         private FaultFixture(
                 TestBackend runtime,
@@ -429,8 +428,7 @@ public class MutationFaultInjectionTest {
                 YierdisSetOps setOps,
                 YierdisZSetOps zsetOps,
                 YierdisHllOps hllOps,
-                YierdisTtlOps ttlOps,
-                YierdisDbOwnedResources resources
+                YierdisTtlOps ttlOps
         ) {
             this.runtime = runtime;
             this.allocator = allocator;
@@ -450,7 +448,6 @@ public class MutationFaultInjectionTest {
             this.zsetOps = zsetOps;
             this.hllOps = hllOps;
             this.ttlOps = ttlOps;
-            this.resources = resources;
         }
 
         private static FaultFixture open() {
@@ -498,15 +495,15 @@ public class MutationFaultInjectionTest {
                     },
                     executor,
                     keyLifecycle,
-                    ledger
+                    ledger,
+                    allocator
             );
-            YierdisDbOwnedResources resources = new YierdisDbOwnedResources(allocator);
-            YierdisStringOps stringOps = new YierdisStringOps(internals);
-            YierdisListOps listOps = new YierdisListOps(internals);
-            YierdisHashOps hashOps = new YierdisHashOps(internals);
-            YierdisSetOps setOps = new YierdisSetOps(internals);
-            YierdisZSetOps zsetOps = new YierdisZSetOps(internals);
-            YierdisHllOps hllOps = new YierdisHllOps(internals);
+            YierdisStringOps stringOps = new YierdisStringOps(internals, stringRoot);
+            YierdisListOps listOps = new YierdisListOps(internals, listRoot);
+            YierdisHashOps hashOps = new YierdisHashOps(internals, hashRoot);
+            YierdisSetOps setOps = new YierdisSetOps(internals, setRoot);
+            YierdisZSetOps zsetOps = new YierdisZSetOps(internals, zsetRoot);
+            YierdisHllOps hllOps = new YierdisHllOps(internals, stringRoot);
             YierdisTtlOps ttlOps = new YierdisTtlOps(internals);
             return new FaultFixture(
                     runtime,
@@ -526,8 +523,7 @@ public class MutationFaultInjectionTest {
                     setOps,
                     zsetOps,
                     hllOps,
-                    ttlOps,
-                    resources
+                    ttlOps
             );
         }
 
@@ -751,7 +747,7 @@ public class MutationFaultInjectionTest {
         public void close() {
             allocator.disableFailures();
             allocator.disableRegionFailures();
-            resources.releaseAll(entries, keyDirectory, stringRoot, listRoot, hashRoot, setRoot, zsetRoot);
+            keyLifecycle.close();
         }
     }
 

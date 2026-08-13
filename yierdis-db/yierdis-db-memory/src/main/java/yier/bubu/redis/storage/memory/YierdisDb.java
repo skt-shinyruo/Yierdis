@@ -68,6 +68,7 @@ public final class YierdisDb
     ) {
         StableMemoryBackend backend = Objects.requireNonNull(stableMemoryBackend, "stableMemoryBackend");
         YierdisDbStorage storage = null;
+        boolean backendOwnershipTransferred = false;
         try {
             DbEngineConfig checkedConfig = Objects.requireNonNull(config, "config");
             long maxmemoryBytes = checkedConfig.maxmemoryBytes();
@@ -79,9 +80,11 @@ public final class YierdisDb
                     maxmemoryBytes > 0L && maxmemoryPolicy == MaxmemoryPolicy.ALLKEYS_LRU,
                     nativeDefragOptions(checkedConfig.defrag())
             );
+            HashSeed checkedHashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
+            backendOwnershipTransferred = true;
             storage = YierdisDbStorage.create(
                     backend,
-                    Objects.requireNonNull(hashSeed, "hashSeed"),
+                    checkedHashSeed,
                     runtimeState::nextLruClock
             );
             Runnable threadChecker = runtimeState::checkThread;
@@ -106,33 +109,35 @@ public final class YierdisDb
             YierdisDbMutationExecutor mutationExecutor = new YierdisDbMutationExecutor(
                     threadChecker,
                     ledger,
-                    storage.stableMemoryBackend(),
+                    backend,
                     health,
                     runtimeState::commitPublisher,
                     runtimeState::commitDbIndex
             );
             YierdisDbKeyLifecycle keyLifecycle = storage.keyLifecycle();
-            DbComponentMemoryUsage memoryUsage = new DbComponentMemoryUsage(
-                    threadChecker,
-                    keyLifecycle,
-                    storage.hashTableMaintenanceRegistry()
-            );
             YierdisDbRuntimeInternals internals = new YierdisDbRuntimeInternals(
                     threadChecker,
                     mutationExecutor,
                     keyLifecycle,
-                    ledger
+                    ledger,
+                    backend
+            );
+            DbComponentMemoryUsage memoryUsage = new DbComponentMemoryUsage(
+                    threadChecker,
+                    internals,
+                    keyLifecycle,
+                    storage.hashTableMaintenanceRegistry()
             );
             YierdisDbExpirationSupport expirationSupport = new YierdisDbExpirationSupport(
                     internals,
                     expireCleanupTimeLimitNanos
             );
-            YierdisStringOps stringOps = new YierdisStringOps(internals);
-            YierdisHashOps hashOps = new YierdisHashOps(internals);
-            YierdisListOps listOps = new YierdisListOps(internals);
-            YierdisSetOps setOps = new YierdisSetOps(internals);
-            YierdisZSetOps zsetOps = new YierdisZSetOps(internals);
-            YierdisHllOps hllOps = new YierdisHllOps(internals);
+            YierdisStringOps stringOps = keyLifecycle.createStringOps(internals);
+            YierdisHashOps hashOps = keyLifecycle.createHashOps(internals);
+            YierdisListOps listOps = keyLifecycle.createListOps(internals);
+            YierdisSetOps setOps = keyLifecycle.createSetOps(internals);
+            YierdisZSetOps zsetOps = keyLifecycle.createZSetOps(internals);
+            YierdisHllOps hllOps = keyLifecycle.createHllOps(internals);
             YierdisTtlOps ttlOps = new YierdisTtlOps(internals);
             YierdisKeyspaceOps keyspaceOps = new YierdisKeyspaceOps(internals);
             YierdisDbMemoryReporter memoryReporter = new YierdisDbMemoryReporter(
@@ -143,7 +148,7 @@ public final class YierdisDb
                     ledger,
                     new YierdisDbMemoryEstimator(),
                     runtimeState::lastNativeDefragReport,
-                    storage.stableMemoryBackend()::liveRegionCount
+                    internals::nativeLiveRegionCount
             );
             YierdisDbIntrospection introspection = new YierdisDbIntrospection(internals);
             YierdisDbMaxmemorySupport maxmemorySupport = new YierdisDbMaxmemorySupport(
@@ -163,6 +168,7 @@ public final class YierdisDb
             YierdisDbDataMaintenance maintenance = new YierdisDbDataMaintenance(
                     runtimeState,
                     storage,
+                    internals,
                     ledger,
                     health,
                     storage.hashTableMaintenanceRegistry(),
@@ -200,9 +206,9 @@ public final class YierdisDb
             runtimeState.bindMaxmemoryParticipant(this);
         } catch (Throwable failure) {
             try {
-                if (storage == null) {
+                if (!backendOwnershipTransferred) {
                     backend.close();
-                } else {
+                } else if (storage != null) {
                     storage.close();
                 }
             } catch (Throwable closeFailure) {
@@ -341,7 +347,7 @@ public final class YierdisDb
     @Override
     public MemoryReclaimResult trimMemory(MemoryPressureBudget budget) {
         runtimeState.checkThread();
-        return storage.stableMemoryBackend().trimEmptyPages(
+        return runtimeState.stableMemoryBackend().trimEmptyPages(
                 Objects.requireNonNull(budget, "budget")
         );
     }
@@ -386,7 +392,7 @@ public final class YierdisDb
     }
 
     StableMemoryBackend stableMemoryBackend() {
-        return storage.stableMemoryBackend();
+        return runtimeState.stableMemoryBackend();
     }
 
     DbCommitPublisher commitPublisher() {
@@ -402,19 +408,11 @@ public final class YierdisDb
     }
 
     void armMemoryUsageIterationTrapsForTesting() {
-        storage.keyLifecycle().keyDirectory().armIterationTrapForTesting();
-        storage.keyLifecycle().listRoot().armIterationTrapForTesting();
-        storage.keyLifecycle().hashRoot().armIterationTrapForTesting();
-        storage.keyLifecycle().setRoot().armIterationTrapForTesting();
-        storage.keyLifecycle().zsetRoot().armIterationTrapForTesting();
+        storage.keyLifecycle().armMemoryUsageIterationTrapsForTesting();
     }
 
     void disarmMemoryUsageIterationTrapsForTesting() {
-        storage.keyLifecycle().keyDirectory().disarmIterationTrapForTesting();
-        storage.keyLifecycle().listRoot().disarmIterationTrapForTesting();
-        storage.keyLifecycle().hashRoot().disarmIterationTrapForTesting();
-        storage.keyLifecycle().setRoot().disarmIterationTrapForTesting();
-        storage.keyLifecycle().zsetRoot().disarmIterationTrapForTesting();
+        storage.keyLifecycle().disarmMemoryUsageIterationTrapsForTesting();
     }
 
     MutationOutcome flushDb() {

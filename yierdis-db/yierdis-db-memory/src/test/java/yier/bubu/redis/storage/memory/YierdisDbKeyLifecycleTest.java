@@ -12,22 +12,21 @@ import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public class YierdisDbKeyLifecycleTest {
     @Test
-    public void accessorsAndNullInputsHaveStableNoopContracts() {
+    public void inspectionAndNullInputsHaveStableNoopContracts() {
         withDb(db -> {
             YierdisDbKeyLifecycle lifecycle = db.keyLifecycle();
 
-            Assert.assertSame(db.stableMemoryBackend(), lifecycle.stableMemoryBackend());
-            Assert.assertNotNull(lifecycle.entryTable());
-            Assert.assertNotNull(lifecycle.keyDirectory());
-            Assert.assertNotNull(lifecycle.stringRoot());
-            Assert.assertNotNull(lifecycle.listRoot());
-            Assert.assertNotNull(lifecycle.hashRoot());
-            Assert.assertNotNull(lifecycle.setRoot());
-            Assert.assertNotNull(lifecycle.zsetRoot());
+            Assert.assertSame(db.stableMemoryBackend(), lifecycle.inspectionForTesting().stableMemoryBackend());
+            Assert.assertNotNull(lifecycle.inspectionForTesting().entryTable());
+            Assert.assertNotNull(lifecycle.inspectionForTesting().keyDirectory());
+            Assert.assertNotNull(lifecycle.inspectionForTesting().stringRoot());
+            Assert.assertNotNull(lifecycle.inspectionForTesting().listRoot());
+            Assert.assertNotNull(lifecycle.inspectionForTesting().hashRoot());
+            Assert.assertNotNull(lifecycle.inspectionForTesting().setRoot());
+            Assert.assertNotNull(lifecycle.inspectionForTesting().zsetRoot());
             Assert.assertNull(lifecycle.keyHandle((byte[]) null));
             Assert.assertNull(lifecycle.keyHandle((BytesView) null));
             Assert.assertNull(lifecycle.entryHandle(null));
@@ -53,89 +52,57 @@ public class YierdisDbKeyLifecycleTest {
             Assert.assertThrows(NullPointerException.class,
                     () -> lifecycle.forEachKeyHandle(null));
             Assert.assertThrows(NullPointerException.class,
-                    () -> lifecycle.computeWithHandleResult(null, (key, old) -> null));
+                    () -> lifecycle.stageEntry(null));
             Assert.assertThrows(NullPointerException.class,
-                    () -> lifecycle.computeWithHandleResult(bytes("k"), null));
-            Assert.assertThrows(NullPointerException.class,
-                    () -> lifecycle.computeIfPresentWithHandleResult(null, (key, old) -> null));
-            Assert.assertThrows(NullPointerException.class,
-                    () -> lifecycle.computeIfPresentWithHandleResult(bytes("k"), null));
+                    () -> lifecycle.publishStagedEntry(null, null));
         });
     }
 
     @Test
-    public void computeCreatesReplacesRetainsAndDeletesOwnedValues() {
+    public void stagedEntryTokenAbortsOrPublishesOwnedHandlesExactlyOnce() {
         withDb(db -> {
             YierdisDbKeyLifecycle lifecycle = db.keyLifecycle();
-            long baselineStrings = db.stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES);
-            byte[] key = bytes("compute-key");
+            long baselineKeys = db.stableMemoryBackend().stats().objectCount(NativeObjectKind.KEY_BYTES);
+            long baselineEntries = db.stableMemoryBackend().stats().objectCount(NativeObjectKind.ENTRY_RECORD);
 
-            String created = lifecycle.computeWithHandleResult(key, (keyHandle, oldRecord) -> {
-                Assert.assertNull(oldRecord);
-                ValueHandle value = lifecycle.stringRoot().store(bytes("one"));
-                EntryRecord record = lifecycle.newRecord(
-                        keyHandle,
-                        value,
-                        ValueType.STRING,
-                        ValueEncoding.STRING_RAW,
-                        -1L,
-                        null
-                );
-                return YierdisDbKeyLifecycle.EntryMutationResult.of(record, "created");
-            });
+            YierdisDbKeyLifecycle.StagedEntry aborted = lifecycle.stageEntry(bytes("aborted"));
+            Assert.assertEquals(0, lifecycle.keyCount());
+            Assert.assertEquals(baselineKeys + 1L,
+                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.KEY_BYTES));
+            Assert.assertEquals(baselineEntries + 1L,
+                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.ENTRY_RECORD));
+            aborted.close();
+            aborted.close();
+            Assert.assertEquals(baselineKeys,
+                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.KEY_BYTES));
+            Assert.assertEquals(baselineEntries,
+                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.ENTRY_RECORD));
 
-            Assert.assertEquals("created", created);
+            byte[] publishedKey = bytes("published");
+            YierdisDbKeyLifecycle.StagedEntry published = lifecycle.stageEntry(publishedKey);
+            EntryRecord record = lifecycle.newRecord(
+                    published.keyHandle(),
+                    ValueHandle.NULL,
+                    ValueType.STRING,
+                    ValueEncoding.STRING_RAW,
+                    -1L,
+                    null
+            );
+            lifecycle.publishStagedEntry(published, record);
+            published.close();
+
+            YierdisDbKeyLifecycle.CurrentEntry current = lifecycle.currentEntry(publishedKey);
+            Assert.assertEquals(record, current.record());
             Assert.assertEquals(1, lifecycle.keyCount());
-            EntryRecord firstRecord = lifecycle.entryRecord(key);
-            ValueHandle firstValue = firstRecord.valueHandle();
-            Assert.assertArrayEquals(bytes("one"), lifecycle.stringRoot().copy(firstValue));
+            Assert.assertThrows(IllegalStateException.class, published::keyHandle);
 
-            ValueHandle secondValue = lifecycle.stringRoot().store(bytes("two"));
-            String replaced = lifecycle.computeWithHandleResult(key, (keyHandle, oldRecord) -> {
-                EntryRecord replacement = lifecycle.newRecord(
-                        keyHandle,
-                        secondValue,
-                        ValueType.STRING,
-                        ValueEncoding.STRING_RAW,
-                        -1L,
-                        oldRecord
-                );
-                return YierdisDbKeyLifecycle.EntryMutationResult.of(replacement, "retained", false);
-            });
-
-            Assert.assertEquals("retained", replaced);
-            Assert.assertTrue(lifecycle.stringRoot().contains(firstValue));
-            Assert.assertArrayEquals(bytes("two"), lifecycle.stringRoot().copy(secondValue));
-            lifecycle.stringRoot().release(firstValue);
-
-            AtomicInteger invocations = new AtomicInteger();
-            Assert.assertNull(lifecycle.computeIfPresentWithHandleResult(
-                    bytes("missing"),
-                    (keyHandle, oldRecord) -> {
-                        invocations.incrementAndGet();
-                        return YierdisDbKeyLifecycle.EntryMutationResult.of(null, "unexpected");
-                    }
-            ));
-            Assert.assertEquals(0, invocations.get());
-
-            String deleted = lifecycle.computeIfPresentWithHandleResult(
-                    key,
-                    (keyHandle, oldRecord) -> YierdisDbKeyLifecycle.EntryMutationResult.of(null, "deleted")
-            );
-            Assert.assertEquals("deleted", deleted);
-            Assert.assertNull(lifecycle.entryRecord(key));
+            lifecycle.deleteEntry(current.entryHandle(), current.record());
+            Assert.assertNull(lifecycle.entryRecord(publishedKey));
             Assert.assertEquals(0, lifecycle.keyCount());
-            Assert.assertEquals(
-                    baselineStrings,
-                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES)
-            );
-
-            String absent = lifecycle.computeWithHandleResult(
-                    bytes("not-published"),
-                    (keyHandle, oldRecord) -> new YierdisDbKeyLifecycle.EntryMutationResult<>(null, "absent")
-            );
-            Assert.assertEquals("absent", absent);
-            Assert.assertEquals(0, lifecycle.keyCount());
+            Assert.assertEquals(baselineKeys,
+                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.KEY_BYTES));
+            Assert.assertEquals(baselineEntries,
+                    db.stableMemoryBackend().stats().objectCount(NativeObjectKind.ENTRY_RECORD));
         });
     }
 
@@ -205,19 +172,19 @@ public class YierdisDbKeyLifecycleTest {
     }
 
     private static void createNullValueEntry(YierdisDbKeyLifecycle lifecycle, byte[] key) {
-        lifecycle.computeWithHandleResult(key, (keyHandle, oldRecord) ->
-                YierdisDbKeyLifecycle.EntryMutationResult.of(
-                        lifecycle.newRecord(
-                                keyHandle,
-                                ValueHandle.NULL,
-                                ValueType.STRING,
-                                ValueEncoding.STRING_RAW,
-                                -1L,
-                                oldRecord
-                        ),
-                        null
-                )
-        );
+        try (YierdisDbKeyLifecycle.StagedEntry stagedEntry = lifecycle.stageEntry(key)) {
+            lifecycle.publishStagedEntry(
+                    stagedEntry,
+                    lifecycle.newRecord(
+                            stagedEntry.keyHandle(),
+                            ValueHandle.NULL,
+                            ValueType.STRING,
+                            ValueEncoding.STRING_RAW,
+                            -1L,
+                            null
+                    )
+            );
+        }
     }
 
     private static byte[] bytes(String value) {

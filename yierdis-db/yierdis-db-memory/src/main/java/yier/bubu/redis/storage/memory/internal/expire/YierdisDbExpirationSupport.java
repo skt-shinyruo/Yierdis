@@ -10,9 +10,9 @@ import yier.bubu.redis.storage.api.PostCommitMutationException;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.memory.YierdisDbRuntimeInternals;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.KeyScanResult;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 
 public final class YierdisDbExpirationSupport {
     private static final long CLEANUP_SCAN_CHUNK_SLOTS = 32L;
@@ -47,7 +47,7 @@ public final class YierdisDbExpirationSupport {
             resetCursorState();
             return;
         }
-        if (cursorTableGeneration != keyLifecycle.keyDirectory().tableGeneration()) {
+        if (cursorTableGeneration != keyLifecycle.directoryState().tableGeneration()) {
             resetCursorState();
         }
 
@@ -63,7 +63,7 @@ public final class YierdisDbExpirationSupport {
         do {
             long remainingSlots = CLEANUP_MAX_INSPECTED_SLOTS - inspectedSlots;
             long chunkSlots = Math.min(CLEANUP_SCAN_CHUNK_SLOTS, remainingSlots);
-            NativeKeyDirectory.ScanResult result = keyLifecycle.scanWithWork(next, chunkSlots, (key, record) -> {
+            KeyScanResult result = keyLifecycle.scanWithWork(next, chunkSlots, (key, record) -> {
                 // scan callback 只收集候选；目录删除必须等遍历返回后执行。
                 if (isExpired(record, nowFixed) && candidateIdentities.add(record.keyHandle())) {
                     candidates.add(new ExpirationCandidate(
@@ -135,7 +135,7 @@ public final class YierdisDbExpirationSupport {
     }
 
     private void resetCursorState() {
-        retainCursor(ScanCursorV2.start(), keyLifecycle.keyDirectory().tableGeneration());
+        retainCursor(ScanCursorV2.start(), keyLifecycle.directoryState().tableGeneration());
     }
 
     private void retainCursor(ScanCursorV2 nextCursor, long tableGeneration) {

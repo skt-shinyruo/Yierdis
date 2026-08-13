@@ -35,7 +35,7 @@ public class OffHeapStringStorageTest {
 
                 Assert.assertTrue(db.writes().strings().setString(key, value, SetMode.NORMAL, null).value());
                 Assert.assertTrue(runtime.usedBytes() > 0);
-                Assert.assertTrue(db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
+                Assert.assertTrue(db.stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
 
                 try (ByteValue replyValue = db.reads().strings().getStringValue(new TestBytesView(key))) {
                     RecordingByteValueOutput out = new RecordingByteValueOutput();
@@ -48,9 +48,9 @@ public class OffHeapStringStorageTest {
                 Assert.assertEquals(1L, (long) db.writes().keyspace().del(Collections.singletonList(key)).value());
                 Assert.assertEquals(0, db.size());
                 assertPhysicalStatsConsistent(db);
-                Assert.assertEquals(0L, db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES));
-                Assert.assertEquals(0L, db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.ENTRY_RECORD));
-                Assert.assertEquals(0L, db.keyLifecycle().stableMemoryBackend().stats().liveObjects());
+                Assert.assertEquals(0L, db.stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES));
+                Assert.assertEquals(0L, db.stableMemoryBackend().stats().objectCount(NativeObjectKind.ENTRY_RECORD));
+                Assert.assertEquals(0L, db.stableMemoryBackend().stats().liveObjects());
             } finally {
                 db.shutdown();
             }
@@ -112,11 +112,11 @@ public class OffHeapStringStorageTest {
             db.bindToCurrentThread();
             byte[] key = b("k");
             db.writes().strings().setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(0)).value();
-            Assert.assertTrue(db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
+            Assert.assertTrue(db.stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
 
             db.writes().lists().lpush(key, List.of(b("a")));
 
-            Assert.assertEquals(0L, db.keyLifecycle().stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES));
+            Assert.assertEquals(0L, db.stableMemoryBackend().stats().objectCount(NativeObjectKind.STRING_BYTES));
             Assert.assertEquals(ValueType.LIST, db.reads().keyspace().typeOf(new TestBytesView(key)));
         } finally {
             db.shutdown();
@@ -173,30 +173,30 @@ public class OffHeapStringStorageTest {
                 ).value());
                 NativeHandle supersededHandle = db.keyLifecycle().liveEntryRecord(key).valueHandle().nativeHandle();
                 long supersededCapacity;
-                try (NativeObjectView view = db.keyLifecycle().stableMemoryBackend()
+                try (NativeObjectView view = db.stableMemoryBackend()
                         .resolve(supersededHandle, NativeAccessMode.READ_ONLY)) {
                     supersededCapacity = view.capacity();
                 }
-                long committedBefore = db.keyLifecycle().stableMemoryBackend().stats().committedBytes();
+                long committedBefore = db.stableMemoryBackend().stats().committedBytes();
 
                 Assert.assertTrue(db.writes().strings().setString(key, b("x"), SetMode.NORMAL, null).value());
 
                 NativeHandle replacementHandle = db.keyLifecycle().liveEntryRecord(key).valueHandle().nativeHandle();
                 Assert.assertNotEquals(supersededHandle, replacementHandle);
                 Assert.assertThrows(StaleNativeHandleException.class, () -> {
-                    try (NativeObjectView ignored = db.keyLifecycle().stableMemoryBackend()
+                    try (NativeObjectView ignored = db.stableMemoryBackend()
                             .resolve(supersededHandle, NativeAccessMode.READ_ONLY)) {
                     }
                 });
-                try (NativeObjectView replacement = db.keyLifecycle().stableMemoryBackend()
+                try (NativeObjectView replacement = db.stableMemoryBackend()
                         .resolve(replacementHandle, NativeAccessMode.READ_ONLY)) {
                     Assert.assertTrue(replacement.capacity() < supersededCapacity);
                 }
-                Assert.assertEquals(1L, db.keyLifecycle().stableMemoryBackend().stats()
+                Assert.assertEquals(1L, db.stableMemoryBackend().stats()
                         .objectCount(NativeObjectKind.STRING_BYTES));
                 Assert.assertTrue(
                         "release plus trim must return the superseded string page",
-                        db.keyLifecycle().stableMemoryBackend().stats().committedBytes() < committedBefore
+                        db.stableMemoryBackend().stats().committedBytes() < committedBefore
                 );
                 Assert.assertArrayEquals(b("x"), db.reads().strings().getStringBytes(key));
             } finally {

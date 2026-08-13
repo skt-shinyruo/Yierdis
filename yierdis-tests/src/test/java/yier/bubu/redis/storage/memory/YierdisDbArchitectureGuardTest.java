@@ -2,7 +2,15 @@ package yier.bubu.redis.storage.memory;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.StableMemoryBackendFactory;
+import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
+import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
+import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
+import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
+import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
+import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
+import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 
 import java.io.IOException;
 import java.lang.reflect.Constructor;
@@ -12,6 +20,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 
 public class YierdisDbArchitectureGuardTest {
     @Test
@@ -84,6 +93,53 @@ public class YierdisDbArchitectureGuardTest {
                 internals.contains("MutationContext mutationContext"));
         Assert.assertFalse("runtime internals must not be rebuilt for request context",
                 internals.contains("withMutationContext("));
+    }
+
+    @Test
+    public void keyLifecycleDoesNotExposeOwnedStorageComponents() throws IOException {
+        Set<Class<?>> forbiddenReturnTypes = Set.of(
+                StableMemoryBackend.class,
+                EntryTable.class,
+                NativeKeyDirectory.class,
+                StringRoot.class,
+                ListRoot.class,
+                HashRoot.class,
+                SetRoot.class,
+                ZSetRoot.class
+        );
+        Arrays.stream(YierdisDbKeyLifecycle.class.getDeclaredMethods()).forEach(method ->
+                Assert.assertFalse(
+                        "key lifecycle leaks " + method.getReturnType().getSimpleName() + " via " + method.getName(),
+                        forbiddenReturnTypes.contains(method.getReturnType())
+                )
+        );
+
+        Path packageRoot = storageMemoryMain(resolveRepoRoot()).resolve("yier/bubu/redis/storage/memory");
+        for (String removedType : List.of(
+                "EntryMutationEntries.java",
+                "YierdisDbOwnedResources.java",
+                "internal/keyspace/YierdisKeyspace.java"
+        )) {
+            Assert.assertFalse("removed lifecycle helper returned: " + removedType,
+                    Files.exists(packageRoot.resolve(removedType)));
+        }
+
+        List<String> offenders = new ArrayList<>();
+        try (java.util.stream.Stream<Path> files = Files.walk(packageRoot)) {
+            for (Path source : files.filter(Files::isRegularFile)
+                    .filter(path -> path.toString().endsWith(".java"))
+                    .filter(path -> !path.getFileName().toString().equals("YierdisDbKeyLifecycle.java"))
+                    .toList()) {
+                List<String> lines = Files.readAllLines(source, StandardCharsets.UTF_8);
+                for (int lineIndex = 0; lineIndex < lines.size(); lineIndex++) {
+                    if (lines.get(lineIndex).contains(".inspectionForTesting()")) {
+                        offenders.add(packageRoot.relativize(source) + ":" + (lineIndex + 1));
+                    }
+                }
+            }
+        }
+        Assert.assertTrue("production code must not use lifecycle inspection:\n" + String.join("\n", offenders),
+                offenders.isEmpty());
     }
 
     private static Path resolveRepoRoot() {

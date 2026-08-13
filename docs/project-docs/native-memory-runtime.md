@@ -34,7 +34,7 @@ global/per-db maxmemory scope 只改变预算协调方式，不改变 FFM 所有
 - global scope 由 instance governor 汇总多个 DB participant 的独占 snapshots；
 - global scope 仍保留 per-DB backend/runtime ownership，也不把 runtime counter 叠加进 participant snapshots。
 
-如果 DB 组合失败，`YierdisDbEngineFactory` 会关闭刚创建的 backend，并把 close failure 作为 suppressed exception 保留。正常 shutdown 则由 DB owned resources 在 storage graph 清理后关闭 backend。
+`YierdisDbEngineFactory` 创建 backend 后把所有权交给 `YierdisDb`。storage 组合开始后，backend 所有权立即转入 `YierdisDbKeyLifecycle`；组合失败和正常 shutdown 都由 lifecycle 在 storage graph 清理后关闭 backend，并把后续清理失败保留为 suppressed exception。
 
 ## Runtime 与 region
 

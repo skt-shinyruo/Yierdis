@@ -31,10 +31,10 @@ final class YierdisDbNativeHandleGraph {
     static void visitReachable(YierdisDbKeyLifecycle lifecycle, Visitor visitor) {
         Objects.requireNonNull(lifecycle, "lifecycle");
         Objects.requireNonNull(visitor, "visitor");
-        StableMemoryBackend allocator = lifecycle.stableMemoryBackend();
+        StableMemoryBackend allocator = lifecycle.inspectionForTesting().stableMemoryBackend();
         // 以 keyDirectory 为根遍历当前可达 native 对象；未从目录发布的半创建对象不会出现在这张图里。
-        lifecycle.keyDirectory().forEachEntry((keyHandle, entryHandle) -> {
-            EntryRecord record = lifecycle.entryTable().get(entryHandle);
+        lifecycle.inspectionForTesting().keyDirectory().forEachEntry((keyHandle, entryHandle) -> {
+            EntryRecord record = lifecycle.inspectionForTesting().entryTable().get(entryHandle);
             NativeHandle keyNativeHandle = KeyHandleAccess.allocatorNativeHandleOrNull(keyHandle);
             if (keyNativeHandle != null) {
                 visitResolved(allocator, keyNativeHandle, Role.KEY_BYTES, record, visitor);
@@ -75,19 +75,19 @@ final class YierdisDbNativeHandleGraph {
             Visitor visitor
     ) {
         switch (record.type()) {
-            case LIST -> lifecycle.listRoot().forEachNativeHandle(
+            case LIST -> lifecycle.inspectionForTesting().listRoot().forEachNativeHandle(
                     valueHandle,
                     handle -> visitResolved(allocator, handle, Role.COLLECTION_INTERNAL, record, visitor)
             );
-            case HASH -> lifecycle.hashRoot().forEachNativeHandle(
+            case HASH -> lifecycle.inspectionForTesting().hashRoot().forEachNativeHandle(
                     valueHandle,
                     handle -> visitResolved(allocator, handle, Role.COLLECTION_INTERNAL, record, visitor)
             );
-            case SET -> lifecycle.setRoot().forEachNativeHandle(
+            case SET -> lifecycle.inspectionForTesting().setRoot().forEachNativeHandle(
                     valueHandle,
                     handle -> visitResolved(allocator, handle, Role.COLLECTION_INTERNAL, record, visitor)
             );
-            case ZSET -> lifecycle.zsetRoot().forEachNativeHandle(
+            case ZSET -> lifecycle.inspectionForTesting().zsetRoot().forEachNativeHandle(
                     valueHandle,
                     handle -> visitResolved(allocator, handle, Role.COLLECTION_INTERNAL, record, visitor)
             );

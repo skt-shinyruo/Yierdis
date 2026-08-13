@@ -54,7 +54,7 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
         if (limitBytes < 0) {
             limitBytes = 0;
         }
-        keyLifecycle.stableMemoryBackend().trimEmptyPages(MemoryPressureBudget.unlimited());
+        internals.trimEmptyNativePages(MemoryPressureBudget.unlimited());
         if (usedBytesForMaxmemory() <= limitBytes) {
             return;
         }
@@ -77,17 +77,17 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
                 continue;
             }
             if (internals.reclaimExpired(victim, record, nowMillis)) {
-                keyLifecycle.stableMemoryBackend().trimEmptyPages(MemoryPressureBudget.unlimited());
+                internals.trimEmptyNativePages(MemoryPressureBudget.unlimited());
                 if (usedBytesForMaxmemory() <= limitBytes) {
                     return;
                 }
                 continue;
             }
             if (internals.evict(victim, record)) {
-                keyLifecycle.stableMemoryBackend().trimEmptyPages(MemoryPressureBudget.unlimited());
+                internals.trimEmptyNativePages(MemoryPressureBudget.unlimited());
             }
         }
-        keyLifecycle.stableMemoryBackend().trimEmptyPages(MemoryPressureBudget.unlimited());
+        internals.trimEmptyNativePages(MemoryPressureBudget.unlimited());
         if (usedBytesForMaxmemory() <= limitBytes) {
             return;
         }

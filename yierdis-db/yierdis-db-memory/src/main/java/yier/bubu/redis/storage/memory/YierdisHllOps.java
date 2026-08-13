@@ -1,7 +1,7 @@
 package yier.bubu.redis.storage.memory;
 
-import yier.bubu.redis.storage.memory.EntryMutationEntries.CurrentEntry;
-import yier.bubu.redis.storage.memory.EntryMutationEntries.StagedEntry;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.CurrentEntry;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
 import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.HllReadOps;
@@ -15,7 +15,6 @@ import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
@@ -32,10 +31,10 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final StringRoot stringRoot;
 
-    YierdisHllOps(YierdisDbRuntimeInternals internals) {
+    YierdisHllOps(YierdisDbRuntimeInternals internals, StringRoot stringRoot) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
-        this.stringRoot = Objects.requireNonNull(keyLifecycle.stringRoot(), "stringRoot");
+        this.stringRoot = Objects.requireNonNull(stringRoot, "stringRoot");
     }
 
     @Override
@@ -56,7 +55,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
 
             @Override
             public PreparedDbMutation<WriteResult<Integer>> prepare() {
-                CurrentEntry currentEntry = EntryMutationEntries.current(keyLifecycle, keyBytes);
+                CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 byte[] currentBytes = null;
                 if (current != null) {
@@ -77,7 +76,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                 try {
                     KeyHandle targetKey = currentEntry.keyHandle();
                     if (current == null) {
-                        staged = EntryMutationEntries.stage(keyLifecycle, keyBytes);
+                        staged = keyLifecycle.stageEntry(keyBytes);
                         targetKey = staged.keyHandle();
                     }
 
@@ -92,7 +91,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                     WriteResult<Integer> result = WriteResult.of(changed ? 1 : 0, outcome);
                     long deltaBytes = estimateRecordBytes(targetKey, next)
                             - estimateRecordBytes(targetKey, current);
-                    PreparedEntryMutation<WriteResult<Integer>> prepared = EntryMutationEntries.upsert(
+                    PreparedEntryMutation<WriteResult<Integer>> prepared = PreparedEntryMutation.upsert(
                             keyLifecycle,
                             result,
                             deltaBytes,
@@ -159,7 +158,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
             @Override
             public PreparedDbMutation<WriteResult<Void>> prepare() {
                 MergeRegisters merged = mergeSourceRegisters(sourceKeys, now);
-                CurrentEntry currentEntry = EntryMutationEntries.current(keyLifecycle, destKeyBytes);
+                CurrentEntry currentEntry = keyLifecycle.currentEntry(destKeyBytes);
                 EntryRecord current = currentEntry.record();
                 byte[] currentBytes = null;
                 ValueHandle currentHandle = null;
@@ -182,7 +181,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                 try {
                     KeyHandle targetKey = currentEntry.keyHandle();
                     if (current == null) {
-                        staged = EntryMutationEntries.stage(keyLifecycle, destKeyBytes);
+                        staged = keyLifecycle.stageEntry(destKeyBytes);
                         targetKey = staged.keyHandle();
                     }
 
@@ -195,7 +194,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                     WriteResult<Void> result = WriteResult.of(null, outcome);
                     long deltaBytes = estimateRecordBytes(targetKey, next)
                             - estimateRecordBytes(targetKey, current);
-                    PreparedEntryMutation<WriteResult<Void>> prepared = EntryMutationEntries.upsert(
+                    PreparedEntryMutation<WriteResult<Void>> prepared = PreparedEntryMutation.upsert(
                             keyLifecycle,
                             result,
                             deltaBytes,
@@ -294,7 +293,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
             int replacementLength
     ) {
         long stagedKeyDirectoryGrowthBytes = includeKeyAndEntry
-                ? keyLifecycle.keyDirectory().estimatedInsertHeapGrowthBytes()
+                ? keyLifecycle.estimatedInsertHeapGrowthBytes()
                 : 0L;
         int valueLength = Math.max(1, replacementLength);
         int[] sizes = includeKeyAndEntry
@@ -304,8 +303,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                         valueLength
                 }
                 : new int[]{valueLength};
-        return withScopeBookkeeping(MutationMemoryEstimator.peakAdditionalBytes(
-                keyLifecycle.stableMemoryBackend(),
+        return withScopeBookkeeping(internals.nativeAllocationPeakAdditionalBytes(
                 0L,
                 addSaturating(Math.max(0L, heapGrowthBytes), stagedKeyDirectoryGrowthBytes),
                 sizes
@@ -433,13 +431,13 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                 failure.addSuppressed(releaseFailure);
             }
         }
-        EntryMutationEntries.abortStaged(keyLifecycle, staged, failure);
+        keyLifecycle.abortStagedEntry(staged, failure);
     }
 
     private long withScopeBookkeeping(long upperBound) {
         return Math.max(
                 Math.max(0L, upperBound),
-                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(keyLifecycle.stableMemoryBackend(), 0)
+                internals.nativeAllocationScopeBookkeepingBytes(0)
         );
     }
 

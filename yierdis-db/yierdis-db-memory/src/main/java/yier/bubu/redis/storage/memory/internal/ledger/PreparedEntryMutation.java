@@ -3,9 +3,10 @@ package yier.bubu.redis.storage.memory.internal.ledger;
 import java.util.Objects;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.CurrentEntry;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
-import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 
 public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
     private final YierdisDbKeyLifecycle keyLifecycle;
@@ -20,8 +21,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
     private boolean nativePageTrimRequested;
 
     private EntryHandle existingEntryHandle;
-    private EntryHandle stagedEntryHandle;
-    private NativeKeyDirectory.StagedInsert stagedKey;
+    private StagedEntry stagedEntry;
     private boolean entryPublished;
     private boolean replacedValueReleaseClaimed;
 
@@ -40,7 +40,6 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
                 null,
                 null,
                 null,
-                null,
                 false
         );
     }
@@ -51,8 +50,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
             long actualDeltaBytes,
             long stagedNonNativeGrowthBytes,
             MutationOutcome outcome,
-            EntryHandle stagedEntryHandle,
-            NativeKeyDirectory.StagedInsert stagedKey,
+            StagedEntry stagedEntry,
             EntryRecord newRecord
     ) {
         return new PreparedEntryMutation<>(
@@ -62,8 +60,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
                 stagedNonNativeGrowthBytes,
                 outcome,
                 null,
-                stagedEntryHandle,
-                stagedKey,
+                stagedEntry,
                 null,
                 newRecord,
                 false
@@ -89,7 +86,6 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
                 outcome,
                 existingEntryHandle,
                 null,
-                null,
                 oldRecord,
                 newRecord,
                 releaseReplacedValue
@@ -113,9 +109,44 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
                 outcome,
                 existingEntryHandle,
                 null,
-                null,
                 oldRecord,
                 null,
+                releaseReplacedValue
+        );
+    }
+
+    public static <T> PreparedEntryMutation<T> upsert(
+            YierdisDbKeyLifecycle keyLifecycle,
+            T result,
+            long actualDeltaBytes,
+            long stagedNonNativeGrowthBytes,
+            MutationOutcome outcome,
+            CurrentEntry current,
+            StagedEntry staged,
+            EntryRecord newRecord,
+            boolean releaseReplacedValue
+    ) {
+        Objects.requireNonNull(current, "current");
+        if (current.record() == null) {
+            return insert(
+                    keyLifecycle,
+                    result,
+                    actualDeltaBytes,
+                    stagedNonNativeGrowthBytes,
+                    outcome,
+                    Objects.requireNonNull(staged, "staged"),
+                    newRecord
+            );
+        }
+        return replace(
+                keyLifecycle,
+                result,
+                actualDeltaBytes,
+                stagedNonNativeGrowthBytes,
+                outcome,
+                current.entryHandle(),
+                current.record(),
+                newRecord,
                 releaseReplacedValue
         );
     }
@@ -127,8 +158,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
             long stagedNonNativeGrowthBytes,
             MutationOutcome outcome,
             EntryHandle existingEntryHandle,
-            EntryHandle stagedEntryHandle,
-            NativeKeyDirectory.StagedInsert stagedKey,
+            StagedEntry stagedEntry,
             EntryRecord oldRecord,
             EntryRecord newRecord,
             boolean releaseReplacedValue
@@ -141,8 +171,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
         this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
         this.result = result;
         this.existingEntryHandle = existingEntryHandle;
-        this.stagedEntryHandle = stagedEntryHandle;
-        this.stagedKey = stagedKey;
+        this.stagedEntry = stagedEntry;
         this.oldRecord = oldRecord;
         this.newRecord = newRecord;
         this.releaseReplacedValue = releaseReplacedValue;
@@ -202,15 +231,13 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
             if (existingEntryHandle != null) {
                 keyLifecycle.replaceEntry(existingEntryHandle, oldRecord, newRecord);
                 entryPublished = true;
-            } else if (stagedEntryHandle != null && stagedKey != null) {
-                keyLifecycle.publishStagedEntry(stagedEntryHandle, stagedKey, newRecord);
-                stagedKey = null;
-                stagedEntryHandle = null;
+            } else if (stagedEntry != null) {
+                keyLifecycle.publishStagedEntry(stagedEntry, newRecord);
+                stagedEntry = null;
                 entryPublished = true;
             }
         } else if (deletingEntry) {
-            keyLifecycle.keyDirectory().remove(existingEntryHandle);
-            keyLifecycle.releaseEntry(existingEntryHandle, oldRecord);
+            keyLifecycle.deleteEntry(existingEntryHandle, oldRecord);
             entryPublished = true;
         }
         return result;
@@ -249,22 +276,13 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
     @Override
     protected void abortPrepared() {
         Throwable failure = null;
-        if (stagedKey != null) {
+        if (stagedEntry != null) {
             try {
-                stagedKey.close();
+                stagedEntry.close();
             } catch (RuntimeException | Error e) {
                 failure = addFailure(failure, e);
             } finally {
-                stagedKey = null;
-            }
-        }
-        if (stagedEntryHandle != null) {
-            try {
-                keyLifecycle.entryTable().release(stagedEntryHandle);
-            } catch (RuntimeException | Error e) {
-                failure = addFailure(failure, e);
-            } finally {
-                stagedEntryHandle = null;
+                stagedEntry = null;
             }
         }
         if (!entryPublished && newRecord != null && !sameValue(oldRecord, newRecord)) {

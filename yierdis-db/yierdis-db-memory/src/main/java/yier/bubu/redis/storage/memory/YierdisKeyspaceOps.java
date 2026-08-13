@@ -8,8 +8,9 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.common.command.MutationContext;
-import yier.bubu.redis.memory.api.NativeEpochKind;
 import yier.bubu.redis.memory.api.NativeEpochScope;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.DirectoryState;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.KeyScanResult;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.ledger.AbstractPreparedMutation;
@@ -170,26 +171,26 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
         }
 
         long deadlineNanos = deadlineNanos(timeBudgetNanos);
-        NativeEpochScope epoch = keyLifecycle.stableMemoryBackend().beginEpoch(NativeEpochKind.SCAN);
+        NativeEpochScope epoch = internals.beginScanEpoch();
         boolean transferred = false;
         try {
             ScanCursorV2 next = ScanCursorV2.start();
             ScanCursorV2 start = next;
             long inspected = 0L;
-            long generation = keyLifecycle.keyDirectory().tableGeneration();
+            long generation = keyLifecycle.directoryState().tableGeneration();
             KeyDiscovery discovery = new KeyDiscovery();
             boolean firstStep = true;
 
             while (firstStep || (next.value() != 0L && !deadlineReached(deadlineNanos) && discovery.count < limit)) {
                 firstStep = false;
                 if (deadlineReached(deadlineNanos)) {
-                    NativeKeyDirectory.ScanResult initial = keyLifecycle.scanWithWork(next, 0L, (key, record) -> true);
+                    KeyScanResult initial = keyLifecycle.scanWithWork(next, 0L, (key, record) -> true);
                     start = initial.startCursor();
                     next = initial.nextCursor();
                     generation = initial.tableGeneration();
                     break;
                 }
-                NativeKeyDirectory.ScanResult step = keyLifecycle.scanWithWork(next, KEYS_SCAN_CHUNK_SLOTS, (key, record) -> {
+                KeyScanResult step = keyLifecycle.scanWithWork(next, KEYS_SCAN_CHUNK_SLOTS, (key, record) -> {
                     if (matchesForWindow(globPattern, key, record, nowMillis)) {
                         discovery.record(key.length());
                         if (discovery.count >= limit) {
@@ -209,6 +210,7 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                 }
             }
 
+            DirectoryState directoryState = keyLifecycle.directoryState();
             KeyScanWindow window = new KeyWindow(
                     epoch,
                     start,
@@ -217,8 +219,8 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                     discovery.count,
                     inspected,
                     generation,
-                    keyLifecycle.keyDirectory().metrics().capacity(),
-                    keyLifecycle.keyDirectory().metrics().oldCapacity(),
+                    directoryState.activeCapacity(),
+                    directoryState.oldCapacity(),
                     nowMillis
             );
             // window 持有 SCAN epoch，直到响应同步重放完成或被丢弃，避免 key handle 在此期间被回收。
@@ -239,11 +241,11 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
         }
 
         long nowMillis = System.currentTimeMillis();
-        NativeEpochScope epoch = keyLifecycle.stableMemoryBackend().beginEpoch(NativeEpochKind.SCAN);
+        NativeEpochScope epoch = internals.beginScanEpoch();
         boolean transferred = false;
         try {
             KeyDiscovery discovery = new KeyDiscovery();
-            NativeKeyDirectory.ScanResult result = keyLifecycle.scanWithWork(
+            KeyScanResult result = keyLifecycle.scanWithWork(
                     cursor == null ? ScanCursorV2.start() : cursor,
                     scanSlotBudget(count),
                     (key, record) -> {
@@ -254,6 +256,7 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                         return discovery.count < count;
                     }
             );
+            DirectoryState directoryState = keyLifecycle.directoryState();
             KeyScanWindow window = new KeyWindow(
                     epoch,
                     result.startCursor(),
@@ -262,8 +265,8 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                     discovery.count,
                     result.inspectedSlots(),
                     result.tableGeneration(),
-                    keyLifecycle.keyDirectory().metrics().capacity(),
-                    keyLifecycle.keyDirectory().metrics().oldCapacity(),
+                    directoryState.activeCapacity(),
+                    directoryState.oldCapacity(),
                     nowMillis
             );
             // 与 KEYS 相同，epoch 的所有权随 window 转移给命令层的 try-with-resources。
@@ -277,7 +280,8 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
     }
 
     private KeyScanWindow emptyWindow(ScanCursorV2 cursor, byte[] globPattern, long nowMillis) {
-        NativeKeyDirectory.ScanResult result = keyLifecycle.scanWithWork(cursor, 0L, (key, record) -> true);
+        KeyScanResult result = keyLifecycle.scanWithWork(cursor, 0L, (key, record) -> true);
+        DirectoryState directoryState = keyLifecycle.directoryState();
         return new KeyWindow(
                 null,
                 result.startCursor(),
@@ -286,8 +290,8 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                 0,
                 0L,
                 result.tableGeneration(),
-                keyLifecycle.keyDirectory().metrics().capacity(),
-                keyLifecycle.keyDirectory().metrics().oldCapacity(),
+                directoryState.activeCapacity(),
+                directoryState.oldCapacity(),
                 nowMillis
         );
     }
@@ -446,11 +450,11 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
 
         @Override
         public boolean current() {
-            if (closed || keyLifecycle.keyDirectory().tableGeneration() != tableGeneration) {
-                return false;
-            }
-            var metrics = keyLifecycle.keyDirectory().metrics();
-            return metrics.capacity() == activeTableCapacity && metrics.oldCapacity() == oldTableCapacity;
+            return !closed && keyLifecycle.directoryStateIsCurrent(
+                    tableGeneration,
+                    activeTableCapacity,
+                    oldTableCapacity
+            );
         }
 
         @Override
@@ -472,12 +476,7 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
         @Override
         public void emitTo(ByteValueSink out) {
             Objects.requireNonNull(out, "out");
-            replay(key -> out.value(new NativeBytesSlice(
-                    keyLifecycle.stableMemoryBackend(),
-                    KeyHandleAccess.allocatorNativeHandle(key),
-                    0,
-                    key.length()
-            )));
+            replay(key -> out.value(internals.keyBytesSlice(key)));
         }
 
         private void replay(KeyEmitter emitter) {
@@ -486,7 +485,7 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                 return;
             }
             ReplayDiscovery replay = new ReplayDiscovery();
-            NativeKeyDirectory.ScanResult result = keyLifecycle.scanWithWork(startCursor, inspectedSlots, (key, record) -> {
+            KeyScanResult result = keyLifecycle.scanWithWork(startCursor, inspectedSlots, (key, record) -> {
                 if (!matchesForWindow(globPattern, key, record, expiryEvaluationMillis)) {
                     return true;
                 }
@@ -508,8 +507,8 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                                 + ", actual next=" + result.nextCursor().value()
                                 + ", start=" + startCursor.value()
                                 + ", inspected=" + inspectedSlots
-                                + ", generation=" + keyLifecycle.keyDirectory().tableGeneration()
-                                + ", old capacity=" + keyLifecycle.keyDirectory().metrics().oldCapacity()
+                                + ", generation=" + keyLifecycle.directoryState().tableGeneration()
+                                + ", old capacity=" + keyLifecycle.directoryState().oldCapacity()
                 );
             }
         }
