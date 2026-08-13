@@ -10,6 +10,16 @@ import org.junit.Test;
 
 public class RedisReplyTest {
     @Test
+    public void shapeProjectionIsDefinedOnlyByRedisReply() throws NoSuchMethodException {
+        Assert.assertTrue(RedisReply.class.getDeclaredMethod("shape").isDefault());
+        for (Class<?> variant : RedisReply.class.getPermittedSubclasses()) {
+            for (java.lang.reflect.Method method : variant.getDeclaredMethods()) {
+                Assert.assertNotEquals(variant.getSimpleName(), "shape", method.getName());
+            }
+        }
+    }
+
+    @Test
     public void exactRepliesCarryTheirOwnDataAndShape() {
         byte[] verbatimData = bytes("body");
         byte[] bulkData = bytes("value");
@@ -156,12 +166,19 @@ public class RedisReplyTest {
             consumer.accept(1);
             consumer.accept(3);
         };
+        ReplyShape.PayloadLengths setLengths = consumer -> {
+            consumer.accept(1);
+            consumer.accept(-1);
+        };
         AtomicInteger sequenceEmissions = new AtomicInteger();
         AtomicInteger mapEmissions = new AtomicInteger();
+        AtomicInteger setEmissions = new AtomicInteger();
         RedisReply.ByteSequence sequence = (RedisReply.ByteSequence) RedisReplies.sequence(
                 2, 19L, sequenceLengths, sink -> sequenceEmissions.incrementAndGet());
         RedisReply.ByteMap map = (RedisReply.ByteMap) RedisReplies.byteMap(
                 1, 23L, mapLengths, sink -> mapEmissions.incrementAndGet());
+        RedisReply.ByteSet set = (RedisReply.ByteSet) RedisReplies.byteSet(
+                2, 29L, setLengths, sink -> setEmissions.incrementAndGet());
 
         Assert.assertEquals(2, sequence.elementCount());
         Assert.assertSame(sequenceLengths, sequence.payloadLengths());
@@ -171,8 +188,13 @@ public class RedisReplyTest {
         Assert.assertSame(mapLengths, map.payloadLengths());
         Assert.assertEquals(23L, map.retainedSourceBytes());
         Assert.assertEquals(new ReplyShape.ByteMap(1, mapLengths, 23L), map.shape());
+        Assert.assertEquals(2, set.elementCount());
+        Assert.assertSame(setLengths, set.payloadLengths());
+        Assert.assertEquals(29L, set.retainedSourceBytes());
+        Assert.assertEquals(new ReplyShape.ByteSet(2, setLengths, 29L), set.shape());
         Assert.assertEquals(0, sequenceEmissions.get());
         Assert.assertEquals(0, mapEmissions.get());
+        Assert.assertEquals(0, setEmissions.get());
     }
 
     @Test
@@ -188,6 +210,10 @@ public class RedisReplyTest {
         assertIllegalArgument(() -> RedisReplies.sequence(-1, 0, lengths, emitter));
         assertIllegalArgument(() -> new RedisReply.ByteSequence(0, -1, lengths, emitter));
         assertIllegalArgument(() -> RedisReplies.sequence(0, -1, lengths, emitter));
+        assertIllegalArgument(() -> new RedisReply.ByteSet(-1, 0, lengths, emitter));
+        assertIllegalArgument(() -> RedisReplies.byteSet(-1, 0, lengths, emitter));
+        assertIllegalArgument(() -> new RedisReply.ByteSet(0, -1, lengths, emitter));
+        assertIllegalArgument(() -> RedisReplies.byteSet(0, -1, lengths, emitter));
         assertIllegalArgument(() -> new RedisReply.ByteMap(-1, 0, lengths, emitter));
         assertIllegalArgument(() -> RedisReplies.byteMap(-1, 0, lengths, emitter));
         assertIllegalArgument(() -> new RedisReply.ByteMap(0, -1, lengths, emitter));
@@ -205,6 +231,10 @@ public class RedisReplyTest {
         assertNullPointer(() -> new RedisReply.ByteSequence(0, 0, lengths, null));
         assertNullPointer(() -> RedisReplies.sequence(0, 0, null, emitter));
         assertNullPointer(() -> RedisReplies.sequence(0, 0, lengths, null));
+        assertNullPointer(() -> new RedisReply.ByteSet(0, 0, null, emitter));
+        assertNullPointer(() -> new RedisReply.ByteSet(0, 0, lengths, null));
+        assertNullPointer(() -> RedisReplies.byteSet(0, 0, null, emitter));
+        assertNullPointer(() -> RedisReplies.byteSet(0, 0, lengths, null));
         assertNullPointer(() -> new RedisReply.ByteMap(0, 0, null, emitter));
         assertNullPointer(() -> new RedisReply.ByteMap(0, 0, lengths, null));
         assertNullPointer(() -> RedisReplies.byteMap(0, 0, null, emitter));

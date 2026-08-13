@@ -68,6 +68,8 @@ parse 阶段只产生 `CommandInvocation`，不会访问 DB，也不会创建 re
 
 `CommandExecutionContext` 只包含当前 `CommandSession` 与请求级 `MutationContext`。它没有 reply writer。`CommandResult` 则包含语义 `RedisReply` 和 `closeAfterReply` flag。
 
+`RedisReply.shape()` 是 sealed reply hierarchy 到 `ReplyShape` 的唯一投影权威：根接口用穷尽 switch 覆盖全部 variant，各 variant 只保存语义数据，不再各自重复 shape 映射。`ReplyShapes` 负责 shape 的构造与规范化；`RedisReplyRenderer` 负责遍历语义 reply；RESP sizer 只消费 `ReplyShape`。新增 reply variant 时，这三个职责仍应分别演进。
+
 executor 的固定顺序是：
 
 ```text
@@ -100,7 +102,7 @@ RESP2 / RESP3 的标量与 aggregate 编码由协议 writer 根据 session versi
 - `ByteMapSource`：field/value pairs；
 - `CollectionScanWindow`：带 cursor 的一次 scan window。
 
-`DbReplies` 把这些 source 转成 `RedisReply.BulkString`、`ByteSequence` 或 `ByteMap`。语义 reply 记录 element count、payload lengths、retained source bytes 和同步 emitter；`PreparedCommands.owned(...)` 让 prepared command 持有 source。
+`DbReplies` 把这些 source 转成 `RedisReply.BulkString`、`ByteSequence`、`ByteSet` 或 `ByteMap`。语义 reply 记录 element count、payload lengths、retained source bytes 和同步 emitter；`PreparedCommands.owned(...)` 让 prepared command 持有 source。
 
 executor 先把 source 的 retained memory 纳入 reply preflight，再执行并交给 renderer。renderer 在 command owner thread 同步调用 emitter；渲染完成后 executor 关闭 prepared command，source 才 unpin 或释放。source ownership 不会转移给 `RedisReplyWriter` 或 Netty event loop。
 

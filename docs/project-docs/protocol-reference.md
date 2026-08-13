@@ -80,7 +80,7 @@ HELLO 3 SETNAME <name>
 
 ## RedisReply 到 RESP 回包
 
-`RedisReply` 是命令结果的语义模型，`RedisReplyRenderer` 是唯一的命令结果遍历点。命令实现只构造 `SimpleString`、`IntegerValue`、`BulkString`、`Aggregate`、`NullValue`、`Error` 等变体；renderer 再调用 `RedisReplyWriter`。因此 `RedisReplyWriter` 只作为 renderer 面向 RESP encoder 的端口，不是命令 API。ingress admission 或协议错误属于命令管线之外的控制回复，仍由网络边界直接编码。
+`RedisReply` 是命令结果的语义模型，根接口的 default `shape()` 用 sealed hierarchy 上的穷尽 switch 集中完成 `ReplyShape` 投影；各 variant 不声明自己的 `shape()`。`ReplyShapes` 只负责 shape 构造与规范化，`RedisReplyRenderer` 则是唯一的命令结果遍历点。命令实现只构造 `SimpleString`、`IntegerValue`、`BulkString`、`Aggregate`、`NullValue`、`Error` 等变体；renderer 再调用 `RedisReplyWriter`。因此 `RedisReplyWriter` 只作为 renderer 面向 RESP encoder 的端口，不是命令 API。ingress admission 或协议错误属于命令管线之外的控制回复，仍由网络边界直接编码。
 
 RESP2 下的典型映射是：
 

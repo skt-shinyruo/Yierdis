@@ -11,7 +11,29 @@ public sealed interface RedisReply permits
         RedisReply.BulkString, RedisReply.NullValue, RedisReply.NullArray,
         RedisReply.Aggregate, RedisReply.ByteSequence, RedisReply.ByteSet, RedisReply.ByteMap {
 
-    ReplyShape shape();
+    default ReplyShape shape() {
+        return switch (this) {
+            case SimpleString value -> ReplyShapes.simpleString(value.value);
+            case Error value -> ReplyShapes.error(value.message);
+            case ControlError ignored -> ReplyShapes.maximum();
+            case IntegerValue value -> ReplyShapes.integer(value.value);
+            case BooleanValue value -> ReplyShapes.booleanValue(value.value);
+            case DoubleValue value -> ReplyShapes.doubleValue(value.value);
+            case BigNumber value -> ReplyShapes.bigNumber(value.ascii);
+            case VerbatimString value -> ReplyShapes.verbatimString(value.format, value.data.length);
+            case BlobError value -> ReplyShapes.blobError(value.message);
+            case BulkString value -> ReplyShapes.bulkString(value.payloadLength, value.retainedSourceBytes);
+            case NullValue ignored -> ReplyShapes.nullValue();
+            case NullArray ignored -> ReplyShapes.nullArray();
+            case Aggregate value -> aggregateShape(value);
+            case ByteSequence value -> ReplyShapes.sequence(
+                    value.elementCount, value.retainedSourceBytes, value.payloadLengths);
+            case ByteSet value -> ReplyShapes.byteSet(
+                    value.elementCount, value.retainedSourceBytes, value.payloadLengths);
+            case ByteMap value -> ReplyShapes.byteMap(
+                    value.pairCount, value.retainedSourceBytes, value.payloadLengths);
+        };
+    }
 
     @FunctionalInterface
     interface PayloadEmitter {
@@ -19,52 +41,24 @@ public sealed interface RedisReply permits
     }
 
     record SimpleString(String value) implements RedisReply {
-        @Override
-        public ReplyShape shape() {
-            return ReplyShapes.simpleString(value);
-        }
     }
 
     record Error(String message) implements RedisReply {
-        @Override
-        public ReplyShape shape() {
-            return ReplyShapes.error(message);
-        }
     }
 
     record ControlError(String message) implements RedisReply {
-        @Override
-        public ReplyShape shape() {
-            return ReplyShapes.maximum();
-        }
     }
 
     record IntegerValue(long value) implements RedisReply {
-        @Override
-        public ReplyShape shape() {
-            return ReplyShapes.integer(value);
-        }
     }
 
     record BooleanValue(boolean value) implements RedisReply {
-        @Override
-        public ReplyShape shape() {
-            return ReplyShapes.booleanValue(value);
-        }
     }
 
     record DoubleValue(double value) implements RedisReply {
-        @Override
-        public ReplyShape shape() {
-            return ReplyShapes.doubleValue(value);
-        }
     }
 
     record BigNumber(String ascii) implements RedisReply {
-        @Override
-        public ReplyShape shape() {
-            return ReplyShapes.bigNumber(ascii);
-        }
     }
 
     record VerbatimString(String format, byte[] data) implements RedisReply {
@@ -76,18 +70,9 @@ public sealed interface RedisReply permits
         public byte[] data() {
             return data.clone();
         }
-
-        @Override
-        public ReplyShape shape() {
-            return ReplyShapes.verbatimString(format, data.length);
-        }
     }
 
     record BlobError(String message) implements RedisReply {
-        @Override
-        public ReplyShape shape() {
-            return ReplyShapes.blobError(message);
-        }
     }
 
     record BulkString(
@@ -100,46 +85,18 @@ public sealed interface RedisReply permits
             requireNonNegative(retainedSourceBytes, "retainedSourceBytes");
             Objects.requireNonNull(emitter, "emitter");
         }
-
-        @Override
-        public ReplyShape shape() {
-            return ReplyShapes.bulkString(payloadLength, retainedSourceBytes);
-        }
     }
 
     record NullValue() implements RedisReply {
-        @Override
-        public ReplyShape shape() {
-            return ReplyShapes.nullValue();
-        }
     }
 
     record NullArray() implements RedisReply {
-        @Override
-        public ReplyShape shape() {
-            return ReplyShapes.nullArray();
-        }
     }
 
     record Aggregate(ReplyShape.AggregateKind kind, List<RedisReply> elements) implements RedisReply {
         public Aggregate {
             kind = Objects.requireNonNull(kind, "kind");
             elements = copyAggregateElements(kind, elements);
-        }
-
-        @Override
-        public ReplyShape shape() {
-            List<ReplyShape> shapes = new ArrayList<>(elements.size());
-            for (RedisReply element : elements) {
-                shapes.add(element.shape());
-            }
-            return switch (kind) {
-                case ARRAY -> ReplyShapes.array(shapes);
-                case MAP -> ReplyShapes.map(shapes);
-                case SET -> ReplyShapes.set(shapes);
-                case PUSH -> ReplyShapes.push(shapes);
-                case ATTRIBUTE -> ReplyShapes.attribute(shapes);
-            };
         }
     }
 
@@ -155,11 +112,6 @@ public sealed interface RedisReply permits
             Objects.requireNonNull(payloadLengths, "payloadLengths");
             Objects.requireNonNull(emitter, "emitter");
         }
-
-        @Override
-        public ReplyShape shape() {
-            return ReplyShapes.sequence(elementCount, retainedSourceBytes, payloadLengths);
-        }
     }
 
     record ByteSet(
@@ -173,11 +125,6 @@ public sealed interface RedisReply permits
             requireNonNegative(retainedSourceBytes, "retainedSourceBytes");
             Objects.requireNonNull(payloadLengths, "payloadLengths");
             Objects.requireNonNull(emitter, "emitter");
-        }
-
-        @Override
-        public ReplyShape shape() {
-            return ReplyShapes.byteSet(elementCount, retainedSourceBytes, payloadLengths);
         }
     }
 
@@ -193,11 +140,20 @@ public sealed interface RedisReply permits
             Objects.requireNonNull(payloadLengths, "payloadLengths");
             Objects.requireNonNull(emitter, "emitter");
         }
+    }
 
-        @Override
-        public ReplyShape shape() {
-            return ReplyShapes.byteMap(pairCount, retainedSourceBytes, payloadLengths);
+    private static ReplyShape aggregateShape(Aggregate aggregate) {
+        List<ReplyShape> shapes = new ArrayList<>(aggregate.elements.size());
+        for (RedisReply element : aggregate.elements) {
+            shapes.add(element.shape());
         }
+        return switch (aggregate.kind) {
+            case ARRAY -> ReplyShapes.array(shapes);
+            case MAP -> ReplyShapes.map(shapes);
+            case SET -> ReplyShapes.set(shapes);
+            case PUSH -> ReplyShapes.push(shapes);
+            case ATTRIBUTE -> ReplyShapes.attribute(shapes);
+        };
     }
 
     private static List<RedisReply> copyAggregateElements(
