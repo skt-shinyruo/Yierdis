@@ -11,11 +11,12 @@ YierdisInstance
   -> YierdisDbEngineFactory.create(DbEngineConfig)
      -> StableMemoryBackendFactory.create("db-N", ...)
      -> YierdisDb.create(...)
-        -> YierdisDbComponentFactory
+        -> YierdisDbStorage
+        -> YierdisDbOperationViews
         -> YierdisDb
 ```
 
-`DbEngineConfig` 是 DB 配置的唯一输入。`YierdisDbComponentFactory` 创建 storage graph、ledger、mutation executor、maintenance 和 facade，并通过一个 package-private components record 返回 `YierdisDb` 真正持有的对象。构造失败时 factory 关闭已创建的 backend；正常 shutdown 由 DB owned resources 负责。
+`DbEngineConfig` 是 DB 配置的唯一输入。`YierdisDb` 在私有构造器内直接组装 ledger、mutation executor 和 maintenance；`YierdisDbStorage` 只聚合 storage ownership，`YierdisDbOperationViews` 只聚合公开 operation views。构造失败与正常 shutdown 都由同一 storage ownership 路径关闭 backend，原始失败保持为 primary，清理失败附加为 suppressed。
 
 global/per-db maxmemory 只改变预算协调方式。每个 DB 都有独立的 stable-memory backend/runtime、keyspace、entry table、roots 和 ledger。
 
@@ -168,11 +169,11 @@ native reclaimable bytes 只是候选量，不能预先从 committed footprint �
 
 Netty I/O 线程只提交请求，command executor owner thread 执行 DB mutation 和 maintenance。`Arena.ofShared()` 只允许 FFM region 在不同线程关闭，不解除 DB thread confinement。
 
-shutdown 会先让 lifecycle 清空 graph，再关闭 owned backend。close-once 与失败聚合由 owned resources 保证；backend 构造失败则由 engine factory 关闭。
+shutdown 会先重置 ledger、回收 detached entries，再让 storage owner 清空 graph 并关闭 backend。close-once 与失败聚合由 owned resources 保证；构造失败也沿同一 ownership 路径清理已创建的 graph。
 
 ## 修改导航
 
-- DB 组装：`YierdisDbEngineFactory`、`YierdisDb`、`YierdisDbComponentFactory`。
+- DB 组装：`YierdisDbEngineFactory`、`YierdisDb`、`YierdisDbStorage`、`YierdisDbOperationViews`。
 - key/entry/value 生命周期：`YierdisDbKeyLifecycle`、`EntryTable`、type roots。
 - mutation 与预算：`YierdisDbMutationExecutor`、`PreparedEntryMutation`、`YierdisDbMemoryLedger`。
 - TTL：`YierdisTtlOps`、`YierdisDbExpirationSupport`、`YierdisDbRuntimeInternals.reclaimExpired(...)`。

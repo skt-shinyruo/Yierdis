@@ -12,6 +12,7 @@ import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceResult;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
 import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedCallbackMutation;
+import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMemoryLedger;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 
 import java.util.Objects;
@@ -21,6 +22,9 @@ final class YierdisDbDataMaintenance {
     private static final int ASYNC_FLUSH_RECLAIM_MAX_ENTRIES = 64;
 
     private final YierdisDbRuntimeState runtimeState;
+    private final YierdisDbStorage storage;
+    private final YierdisDbKeyLifecycle keyLifecycle;
+    private final YierdisDbMemoryLedger ledger;
     private final YierdisDbHealth health;
     private final HashTableMaintenanceRegistry hashTableMaintenanceRegistry;
     private final YierdisDbMutationExecutor mutationExecutor;
@@ -31,6 +35,8 @@ final class YierdisDbDataMaintenance {
 
     YierdisDbDataMaintenance(
             YierdisDbRuntimeState runtimeState,
+            YierdisDbStorage storage,
+            YierdisDbMemoryLedger ledger,
             YierdisDbHealth health,
             HashTableMaintenanceRegistry hashTableMaintenanceRegistry,
             YierdisDbMutationExecutor mutationExecutor,
@@ -40,6 +46,9 @@ final class YierdisDbDataMaintenance {
             long maintenanceTimeLimitNanos
     ) {
         this.runtimeState = Objects.requireNonNull(runtimeState, "runtimeState");
+        this.storage = Objects.requireNonNull(storage, "storage");
+        this.keyLifecycle = storage.keyLifecycle();
+        this.ledger = Objects.requireNonNull(ledger, "ledger");
         this.health = Objects.requireNonNull(health, "health");
         this.hashTableMaintenanceRegistry = Objects.requireNonNull(
                 hashTableMaintenanceRegistry,
@@ -74,7 +83,8 @@ final class YierdisDbDataMaintenance {
 
     void enforceMaxmemory() {
         health.requireWritable();
-        runtimeState.enforceMaxmemory();
+        runtimeState.checkThread();
+        ledger.enforceLocalMaintenance();
     }
 
     void defragMaintenance() {
@@ -142,7 +152,7 @@ final class YierdisDbDataMaintenance {
     private long maintenanceUpperBoundBytes(HashTableMaintenanceRegistry.Participant participant) {
         long stagedGrowth = Math.max(0L, participant.estimatedMaintenanceGrowthBytes());
         long scopeBookkeeping = MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes(
-                runtimeState.stableMemoryBackend(),
+                storage.stableMemoryBackend(),
                 0
         );
         return stagedGrowth > Long.MAX_VALUE - scopeBookkeeping
@@ -194,7 +204,28 @@ final class YierdisDbDataMaintenance {
     }
 
     void shutdown() {
-        runtimeState.shutdown();
+        if (!runtimeState.beginShutdown()) {
+            return;
+        }
+        Throwable failure = null;
+        try {
+            ledger.resetUsage();
+        } catch (Throwable next) {
+            failure = next;
+        }
+        try {
+            reclaimAllDetachedEntries();
+        } catch (Throwable next) {
+            failure = recordFailure(failure, next);
+        }
+        try {
+            storage.close();
+        } catch (Throwable next) {
+            failure = recordFailure(failure, next);
+        } finally {
+            runtimeState.finishShutdown();
+        }
+        throwIfFailure(failure);
     }
 
     MutationOutcome flushDb(MutationContext context) {
@@ -222,7 +253,7 @@ final class YierdisDbDataMaintenance {
 
                     @Override
                     public yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation<MutationOutcome> prepare() {
-                        YierdisDbRuntimeState.FlushPreparation preparation = runtimeState.prepareFlushDb();
+                        FlushPreparation preparation = prepareFlushDb();
                         return new PreparedCallbackMutation<>(
                                 preparation.outcome(),
                                 preparation.committedMemoryDelta(),
@@ -241,30 +272,110 @@ final class YierdisDbDataMaintenance {
     }
 
     int size() {
-        return runtimeState.size();
+        runtimeState.checkThread();
+        return keyLifecycle.keyCount();
     }
 
     private void commitFlushDb() {
-        runtimeState.commitFlushDb();
+        runtimeState.checkThread();
+        storage.clearData();
+        keyLifecycle.resetEntryStateCounters();
         expirationSupport.resetCursor();
     }
 
     private void commitFlushDbAsync() {
         // 只在 mutation commit 边界发布空目录；旧目录在后续 owner maintenance 中释放，不能再查询当前 keyspace。
-        runtimeState.commitFlushDbAsync();
+        runtimeState.checkThread();
+        storage.detachEntries();
+        keyLifecycle.resetEntryStateCounters();
         expirationSupport.resetCursor();
     }
 
     private void reclaimDetachedEntries() {
         try {
-            int reclaimed = runtimeState.reclaimDetachedEntries(ASYNC_FLUSH_RECLAIM_MAX_ENTRIES);
+            int reclaimed = reclaimDetachedEntries(ASYNC_FLUSH_RECLAIM_MAX_ENTRIES);
             if (reclaimed > 0) {
-                runtimeState.stableMemoryBackend().trimEmptyPages(MemoryPressureBudget.unlimited());
+                storage.stableMemoryBackend().trimEmptyPages(MemoryPressureBudget.unlimited());
             }
         } catch (RuntimeException | Error failure) {
             health.recordInvariantFailure(failure);
             throw failure;
         }
+    }
+
+    private FlushPreparation prepareFlushDb() {
+        runtimeState.checkThread();
+        boolean hadKeys = keyLifecycle.keyCount() != 0;
+        boolean hadTtl = keyLifecycle.expireCount() != 0;
+        return new FlushPreparation(MutationOutcome.of(hadKeys, hadTtl), -ledger.usedBytes());
+    }
+
+    private int reclaimDetachedEntries(int maxEntries) {
+        runtimeState.checkThread();
+        return reclaimDetachedEntriesUnchecked(maxEntries);
+    }
+
+    private int reclaimDetachedEntriesUnchecked(int maxEntries) {
+        if (maxEntries < 0) {
+            throw new IllegalArgumentException("maxEntries must be >= 0");
+        }
+        Throwable failure = null;
+        int attempted = 0;
+        while (attempted < maxEntries && storage.detachedEntryCount() > 0) {
+            try {
+                storage.reclaimDetachedEntry();
+            } catch (RuntimeException | Error next) {
+                failure = recordFailure(failure, next);
+            }
+            attempted++;
+        }
+        throwIfFailure(failure);
+        return attempted;
+    }
+
+    private void reclaimAllDetachedEntries() {
+        Throwable failure = null;
+        while (storage.detachedEntryCount() > 0) {
+            try {
+                // beginShutdown 已完成 owner 校验；CLOSING 状态下不能再走普通 DB access guard。
+                reclaimDetachedEntriesUnchecked(Integer.MAX_VALUE);
+            } catch (RuntimeException | Error next) {
+                failure = recordFailure(failure, next);
+            }
+        }
+        throwIfFailure(failure);
+    }
+
+    long detachedEntryCount() {
+        runtimeState.checkThread();
+        return storage.detachedEntryCount();
+    }
+
+    private static Throwable recordFailure(Throwable current, Throwable next) {
+        if (next == null) {
+            return current;
+        }
+        if (current == null) {
+            return next;
+        }
+        current.addSuppressed(next);
+        return current;
+    }
+
+    private static void throwIfFailure(Throwable failure) {
+        if (failure == null) {
+            return;
+        }
+        if (failure instanceof RuntimeException runtimeFailure) {
+            throw runtimeFailure;
+        }
+        if (failure instanceof Error errorFailure) {
+            throw errorFailure;
+        }
+        throw new IllegalStateException("YierdisDb shutdown failed", failure);
+    }
+
+    private record FlushPreparation(MutationOutcome outcome, long committedMemoryDelta) {
     }
 
     private MaxmemoryCandidate publicCandidate(MaxmemoryParticipant publicOwner, MaxmemoryCandidate candidate) {

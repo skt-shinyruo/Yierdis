@@ -37,15 +37,6 @@ public final class YierdisDbEngineFactory implements DbEngineFactory {
         if (backend == null) {
             throw new IllegalStateException("StableMemoryBackendFactory returned null");
         }
-        try {
-            return YierdisDb.create(config, backend, owner, hashSeed);
-        } catch (Throwable failure) {
-            try {
-                backend.close();
-            } catch (Throwable closeFailure) {
-                failure.addSuppressed(closeFailure);
-            }
-            throw failure;
-        }
+        return YierdisDb.create(config, backend, owner, hashSeed);
     }
 }

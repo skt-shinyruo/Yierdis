@@ -77,7 +77,56 @@ final class YierdisDbOwnedResources implements AutoCloseable {
             SetRoot setRoot,
             ZSetRoot zsetRoot
     ) {
-        Throwable failure = null;
+        Throwable failure = releaseComponents(
+                entries,
+                keyDirectory,
+                stringRoot,
+                listRoot,
+                hashRoot,
+                setRoot,
+                zsetRoot,
+                null
+        );
+        try {
+            close();
+        } catch (Throwable next) {
+            failure = recordFailure(failure, next);
+        }
+        throwIfFailure(failure);
+    }
+
+    void releaseComponents(
+            EntryTable entries,
+            NativeKeyDirectory keyDirectory,
+            StringRoot stringRoot,
+            ListRoot listRoot,
+            HashRoot hashRoot,
+            SetRoot setRoot,
+            ZSetRoot zsetRoot
+    ) {
+        throwIfFailure(releaseComponents(
+                entries,
+                keyDirectory,
+                stringRoot,
+                listRoot,
+                hashRoot,
+                setRoot,
+                zsetRoot,
+                null
+        ));
+    }
+
+    private Throwable releaseComponents(
+            EntryTable entries,
+            NativeKeyDirectory keyDirectory,
+            StringRoot stringRoot,
+            ListRoot listRoot,
+            HashRoot hashRoot,
+            SetRoot setRoot,
+            ZSetRoot zsetRoot,
+            Throwable initialFailure
+    ) {
+        Throwable failure = initialFailure;
         try {
             clearData(entries, keyDirectory, stringRoot, listRoot, hashRoot, setRoot, zsetRoot);
         } catch (Throwable next) {
@@ -90,12 +139,7 @@ final class YierdisDbOwnedResources implements AutoCloseable {
         failure = closeResource(hashRoot, failure);
         failure = closeResource(setRoot, failure);
         failure = closeResource(zsetRoot, failure);
-        try {
-            close();
-        } catch (Throwable next) {
-            failure = recordFailure(failure, next);
-        }
-        throwIfFailure(failure);
+        return failure;
     }
 
     void releaseEntry(

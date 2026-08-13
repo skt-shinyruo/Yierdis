@@ -48,6 +48,21 @@ public class YierdisDbArchitectureGuardTest {
         );
     }
 
+    @Test
+    public void dbConstructionGraphDoesNotRegrowComponentBagsOrLateBinding() throws IOException {
+        Path main = storageMemoryMain(resolveRepoRoot()).resolve("yier/bubu/redis/storage/memory");
+        for (String removedType : List.of(
+                "YierdisDbComponentFactory.java",
+                "YierdisDbComponents.java",
+                "YierdisDbStorageComponents.java"
+        )) {
+            Assert.assertFalse("removed construction type returned: " + removedType,
+                    Files.exists(main.resolve(removedType)));
+        }
+        String runtimeState = Files.readString(main.resolve("YierdisDbRuntimeState.java"), StandardCharsets.UTF_8);
+        Assert.assertFalse("runtime state must not late-bind the storage graph", runtimeState.contains("void bind("));
+    }
+
     private static Path resolveRepoRoot() {
         Path current = Path.of("").toAbsolutePath().normalize();
         while (current != null) {

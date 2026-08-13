@@ -1,5 +1,7 @@
 package yier.bubu.redis.storage.memory;
 
+import java.lang.reflect.Proxy;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Assert;
 import org.junit.Test;
@@ -38,27 +40,48 @@ public class YierdisDbConstructionTest {
     }
 
     @Test
-    public void storageComponentsShareTheProvidedStableBackend() {
+    public void storageOwnershipUsesTheProvidedStableBackend() {
         try (TestBackend testBackend = TestBackend.open("shared-components")) {
-            YierdisDbStorageComponents storage = YierdisDbStorageComponents.create(
+            YierdisDbStorage storage = YierdisDbStorage.create(
                     testBackend.backend(),
-                    HashSeed.random()
+                    HashSeed.random(),
+                    () -> 0L
             );
             try {
-                Assert.assertSame(testBackend.backend(), storage.stableMemoryBackend);
-                Assert.assertTrue(storage.stableMemoryBackend.stats().objectCount(NativeObjectKind.ENTRY_RECORD) >= 0L);
-            } finally {
-                storage.resources.releaseAll(
-                        storage.entries,
-                        storage.keyDirectory,
-                        storage.stringRoot,
-                        storage.listRoot,
-                        storage.hashRoot,
-                        storage.setRoot,
-                        storage.zsetRoot
+                Assert.assertSame(testBackend.backend(), storage.stableMemoryBackend());
+                Assert.assertTrue(
+                        storage.stableMemoryBackend().stats().objectCount(NativeObjectKind.ENTRY_RECORD) >= 0L
                 );
+            } finally {
+                storage.close();
             }
         }
+    }
+
+    @Test
+    public void constructionPreservesPrimaryFailureAndClosesBackendOnce() {
+        AtomicInteger closeCalls = new AtomicInteger();
+        var backend = (yier.bubu.redis.memory.api.StableMemoryBackend) Proxy.newProxyInstance(
+                getClass().getClassLoader(),
+                new Class<?>[]{yier.bubu.redis.memory.api.StableMemoryBackend.class},
+                (ignoredProxy, method, ignoredArguments) -> {
+                    if (method.getName().equals("close")) {
+                        closeCalls.incrementAndGet();
+                        throw new IllegalStateException("injected construction cleanup failure");
+                    }
+                    throw new AssertionError("unexpected backend call during failed construction: " + method.getName());
+                }
+        );
+
+        NullPointerException failure = Assert.assertThrows(
+                NullPointerException.class,
+                () -> YierdisDb.create(null, backend, new DbThreadGuard(), HashSeed.random())
+        );
+
+        Assert.assertEquals("config", failure.getMessage());
+        Assert.assertEquals(1, closeCalls.get());
+        Assert.assertEquals(1, failure.getSuppressed().length);
+        Assert.assertEquals("injected construction cleanup failure", failure.getSuppressed()[0].getMessage());
     }
 
     @Test

@@ -1,16 +1,19 @@
 package yier.bubu.redis.storage.memory;
 
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.common.memory.MemoryReclaimResult;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.MemoryOwner;
+import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.storage.api.CommitPublishingDbEngine;
 import yier.bubu.redis.storage.api.DbCommitPublisher;
+import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.DbEngineConfig;
 import yier.bubu.redis.storage.api.DbHealthSnapshot;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
@@ -25,10 +28,13 @@ import yier.bubu.redis.storage.api.MemoryOps;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.expire.YierdisDbExpirationSupport;
+import yier.bubu.redis.storage.memory.internal.expire.YierdisTtlOps;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceResult;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMemoryLedger;
+import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 
 /**
  * 基于稳定内存后端的单 owner DB；只能由 {@link YierdisDbEngineFactory} 组合。
@@ -36,16 +42,14 @@ import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMemoryLedger;
 public final class YierdisDb
         implements CommitPublishingDbEngine, GlobalMaxmemoryDbEngine, DefragmentableDbEngine, MemoryOps, AutoCloseable {
     private final YierdisDbRuntimeState runtimeState;
+    private final YierdisDbStorage storage;
     private final YierdisDbHealth health;
     private final DbComponentMemoryUsage memoryUsage;
     private final YierdisDbMemoryLedger ledger;
-    private final YierdisDbKeyLifecycle keyLifecycle;
     private final YierdisDbIntrospection introspection;
     private final YierdisDbMemoryReporter memoryReporter;
     private final YierdisDbDataMaintenance maintenance;
-    private final DbReads reads;
-    private final DbWrites writes;
-    private final DbLifecycleOps lifecycleOps;
+    private final YierdisDbOperationViews operations;
 
     static YierdisDb create(
             DbEngineConfig config,
@@ -62,40 +66,172 @@ public final class YierdisDb
             DbThreadGuard threadGuard,
             HashSeed hashSeed
     ) {
-        DbEngineConfig checkedConfig = Objects.requireNonNull(config, "config");
-        YierdisDbRuntimeState composedRuntimeState = new YierdisDbRuntimeState(
-                checkedConfig.dbIndex(),
-                Objects.requireNonNull(threadGuard, "threadGuard"),
-                Objects.requireNonNull(stableMemoryBackend, "stableMemoryBackend")
-        );
-        YierdisDbComponents components = YierdisDbComponentFactory.create(
-                composedRuntimeState,
-                checkedConfig,
-                Objects.requireNonNull(hashSeed, "hashSeed")
-        );
+        StableMemoryBackend backend = Objects.requireNonNull(stableMemoryBackend, "stableMemoryBackend");
+        YierdisDbStorage storage = null;
+        try {
+            DbEngineConfig checkedConfig = Objects.requireNonNull(config, "config");
+            long maxmemoryBytes = checkedConfig.maxmemoryBytes();
+            MaxmemoryPolicy maxmemoryPolicy = checkedConfig.maxmemoryPolicy();
+            YierdisDbRuntimeState runtimeState = new YierdisDbRuntimeState(
+                    checkedConfig.dbIndex(),
+                    Objects.requireNonNull(threadGuard, "threadGuard"),
+                    backend,
+                    maxmemoryBytes > 0L && maxmemoryPolicy == MaxmemoryPolicy.ALLKEYS_LRU,
+                    nativeDefragOptions(checkedConfig.defrag())
+            );
+            storage = YierdisDbStorage.create(
+                    backend,
+                    Objects.requireNonNull(hashSeed, "hashSeed"),
+                    runtimeState::nextLruClock
+            );
+            Runnable threadChecker = runtimeState::checkThread;
+            long evictionTimeLimitNanos = TimeUnit.MILLISECONDS.toNanos(
+                    checkedConfig.evictionTimeLimitMillis()
+            );
+            long expireCleanupTimeLimitNanos = TimeUnit.MILLISECONDS.toNanos(
+                    checkedConfig.expireCleanupTimeLimitMillis()
+            );
+            YierdisDbHealth health = new YierdisDbHealth(threadChecker);
+            // ledger 的 admission 回调依赖稍后创建的 expiry/maxmemory 模块；该占位对象只负责收敛这条构造环。
+            YierdisDbMemoryBudgetCallbacks memoryBudgetCallbacks = new YierdisDbMemoryBudgetCallbacks();
+            YierdisDbMemoryLedger ledger = new YierdisDbMemoryLedger(
+                    maxmemoryBytes,
+                    maxmemoryPolicy,
+                    memoryBudgetCallbacks::cleanupExpired,
+                    memoryBudgetCallbacks::evictUntilUnder,
+                    memoryBudgetCallbacks::usedBytesForMaxmemory,
+                    runtimeState::maxmemoryCoordinator,
+                    runtimeState::maxmemoryParticipant
+            );
+            YierdisDbMutationExecutor mutationExecutor = new YierdisDbMutationExecutor(
+                    threadChecker,
+                    ledger,
+                    storage.stableMemoryBackend(),
+                    health,
+                    runtimeState::commitPublisher,
+                    runtimeState::commitDbIndex
+            );
+            YierdisDbKeyLifecycle keyLifecycle = storage.keyLifecycle();
+            DbComponentMemoryUsage memoryUsage = new DbComponentMemoryUsage(
+                    threadChecker,
+                    keyLifecycle,
+                    storage.hashTableMaintenanceRegistry()
+            );
+            YierdisDbRuntimeInternals internals = new YierdisDbRuntimeInternals(
+                    threadChecker,
+                    mutationExecutor,
+                    keyLifecycle,
+                    ledger
+            );
+            YierdisDbExpirationSupport expirationSupport = new YierdisDbExpirationSupport(
+                    internals,
+                    expireCleanupTimeLimitNanos
+            );
+            YierdisStringOps stringOps = new YierdisStringOps(internals);
+            YierdisHashOps hashOps = new YierdisHashOps(internals);
+            YierdisListOps listOps = new YierdisListOps(internals);
+            YierdisSetOps setOps = new YierdisSetOps(internals);
+            YierdisZSetOps zsetOps = new YierdisZSetOps(internals);
+            YierdisHllOps hllOps = new YierdisHllOps(internals);
+            YierdisTtlOps ttlOps = new YierdisTtlOps(internals);
+            YierdisKeyspaceOps keyspaceOps = new YierdisKeyspaceOps(internals);
+            YierdisDbMemoryReporter memoryReporter = new YierdisDbMemoryReporter(
+                    internals,
+                    memoryUsage,
+                    storage.hashTableMaintenanceRegistry(),
+                    maxmemoryBytes,
+                    ledger,
+                    new YierdisDbMemoryEstimator(),
+                    runtimeState::lastNativeDefragReport,
+                    storage.stableMemoryBackend()::liveRegionCount
+            );
+            YierdisDbIntrospection introspection = new YierdisDbIntrospection(internals);
+            YierdisDbMaxmemorySupport maxmemorySupport = new YierdisDbMaxmemorySupport(
+                    internals,
+                    memoryReporter::usedBytesForMaxmemory,
+                    memoryReporter::memoryUsage,
+                    expirationSupport::cleanupExpired,
+                    maxmemoryPolicy,
+                    checkedConfig.maxmemorySamples(),
+                    evictionTimeLimitNanos
+            );
+            memoryBudgetCallbacks.bind(
+                    () -> expirationSupport.cleanupExpired(0L),
+                    maxmemorySupport::evictUntilUnder,
+                    memoryReporter::usedBytesForMaxmemory
+            );
+            YierdisDbDataMaintenance maintenance = new YierdisDbDataMaintenance(
+                    runtimeState,
+                    storage,
+                    ledger,
+                    health,
+                    storage.hashTableMaintenanceRegistry(),
+                    mutationExecutor,
+                    expirationSupport,
+                    maxmemorySupport,
+                    memoryReporter,
+                    expireCleanupTimeLimitNanos
+            );
+            YierdisDbOperationViews operations = new YierdisDbOperationViews(
+                    new YierdisDbReads(stringOps, hashOps, listOps, setOps, zsetOps, hllOps, keyspaceOps, ttlOps),
+                    new YierdisDbWrites(
+                            internals,
+                            stringOps,
+                            hashOps,
+                            listOps,
+                            setOps,
+                            zsetOps,
+                            hllOps,
+                            keyspaceOps,
+                            ttlOps
+                    ),
+                    new YierdisDbLifecycleOps(threadChecker, maintenance::flushDb, maintenance::flushDbAsync)
+            );
 
-        this.runtimeState = composedRuntimeState;
-        this.health = components.health();
-        this.memoryUsage = components.memoryUsage();
-        this.ledger = components.ledger();
-        this.keyLifecycle = components.keyLifecycle();
-        this.introspection = components.introspection();
-        this.memoryReporter = components.memoryReporter();
-        this.maintenance = components.maintenance();
-        this.reads = components.reads();
-        this.writes = components.writes();
-        this.lifecycleOps = components.lifecycleOps();
-        runtimeState.bindMaxmemoryParticipant(this);
+            this.runtimeState = runtimeState;
+            this.storage = storage;
+            this.health = health;
+            this.memoryUsage = memoryUsage;
+            this.ledger = ledger;
+            this.introspection = introspection;
+            this.memoryReporter = memoryReporter;
+            this.maintenance = maintenance;
+            this.operations = operations;
+            runtimeState.bindMaxmemoryParticipant(this);
+        } catch (Throwable failure) {
+            try {
+                if (storage == null) {
+                    backend.close();
+                } else {
+                    storage.close();
+                }
+            } catch (Throwable closeFailure) {
+                failure.addSuppressed(closeFailure);
+            }
+            throw failure;
+        }
+    }
+
+    private static NativeDefragOptions nativeDefragOptions(DbDefragConfig defrag) {
+        DbDefragConfig checkedDefrag = Objects.requireNonNull(defrag, "defrag");
+        if (!checkedDefrag.enabled()) {
+            return null;
+        }
+        return new NativeDefragOptions(
+                checkedDefrag.maxMoveBytes(),
+                checkedDefrag.maxObjects(),
+                TimeUnit.MILLISECONDS.toNanos(checkedDefrag.timeLimitMillis())
+        );
     }
 
     @Override
     public DbReads reads() {
-        return reads;
+        return operations.reads();
     }
 
     @Override
     public DbWrites writes() {
-        return writes;
+        return operations.writes();
     }
 
     @Override
@@ -120,7 +256,7 @@ public final class YierdisDb
 
     @Override
     public DbLifecycleOps lifecycle() {
-        return lifecycleOps;
+        return operations.lifecycle();
     }
 
     @Override
@@ -205,7 +341,7 @@ public final class YierdisDb
     @Override
     public MemoryReclaimResult trimMemory(MemoryPressureBudget budget) {
         runtimeState.checkThread();
-        return keyLifecycle.stableMemoryBackend().trimEmptyPages(
+        return storage.stableMemoryBackend().trimEmptyPages(
                 Objects.requireNonNull(budget, "budget")
         );
     }
@@ -250,7 +386,7 @@ public final class YierdisDb
     }
 
     StableMemoryBackend stableMemoryBackend() {
-        return keyLifecycle.stableMemoryBackend();
+        return storage.stableMemoryBackend();
     }
 
     DbCommitPublisher commitPublisher() {
@@ -266,19 +402,19 @@ public final class YierdisDb
     }
 
     void armMemoryUsageIterationTrapsForTesting() {
-        keyLifecycle.keyDirectory().armIterationTrapForTesting();
-        keyLifecycle.listRoot().armIterationTrapForTesting();
-        keyLifecycle.hashRoot().armIterationTrapForTesting();
-        keyLifecycle.setRoot().armIterationTrapForTesting();
-        keyLifecycle.zsetRoot().armIterationTrapForTesting();
+        storage.keyLifecycle().keyDirectory().armIterationTrapForTesting();
+        storage.keyLifecycle().listRoot().armIterationTrapForTesting();
+        storage.keyLifecycle().hashRoot().armIterationTrapForTesting();
+        storage.keyLifecycle().setRoot().armIterationTrapForTesting();
+        storage.keyLifecycle().zsetRoot().armIterationTrapForTesting();
     }
 
     void disarmMemoryUsageIterationTrapsForTesting() {
-        keyLifecycle.keyDirectory().disarmIterationTrapForTesting();
-        keyLifecycle.listRoot().disarmIterationTrapForTesting();
-        keyLifecycle.hashRoot().disarmIterationTrapForTesting();
-        keyLifecycle.setRoot().disarmIterationTrapForTesting();
-        keyLifecycle.zsetRoot().disarmIterationTrapForTesting();
+        storage.keyLifecycle().keyDirectory().disarmIterationTrapForTesting();
+        storage.keyLifecycle().listRoot().disarmIterationTrapForTesting();
+        storage.keyLifecycle().hashRoot().disarmIterationTrapForTesting();
+        storage.keyLifecycle().setRoot().disarmIterationTrapForTesting();
+        storage.keyLifecycle().zsetRoot().disarmIterationTrapForTesting();
     }
 
     MutationOutcome flushDb() {
@@ -290,7 +426,7 @@ public final class YierdisDb
     }
 
     long detachedEntryCount() {
-        return runtimeState.detachedEntryCount();
+        return maintenance.detachedEntryCount();
     }
 
     long estimatedUsedBytes() {
@@ -306,15 +442,15 @@ public final class YierdisDb
     }
 
     boolean isKeyExpired(byte[] keyBytes, long nowMillis) {
-        KeyHandle handle = keyLifecycle.keyHandle(keyBytes);
+        KeyHandle handle = storage.keyLifecycle().keyHandle(keyBytes);
         return handle != null && isKeyExpired(handle, nowMillis);
     }
 
     boolean isKeyExpired(KeyHandle keyHandle, long nowMillis) {
-        return keyLifecycle.isKeyExpired(keyHandle, nowMillis);
+        return storage.keyLifecycle().isKeyExpired(keyHandle, nowMillis);
     }
 
     YierdisDbKeyLifecycle keyLifecycle() {
-        return keyLifecycle;
+        return storage.keyLifecycle();
     }
 }
