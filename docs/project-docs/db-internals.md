@@ -71,7 +71,7 @@ ops 不直接组合 directory 与 entry table，也不能从 lifecycle 取出 ba
 
 `YierdisDbRuntimeInternals` 是 concrete ops 共用的窄内部能力：owner check、mutation executor、key lifecycle 和 ledger。它没有第二实现，也不作为公开 SPI；请求级 `MutationContext` 不进入长期 DB graph。
 
-`YierdisDbWrites.withMutationContext(...)` 只创建一个 immutable contextual view。这个 view 同时实现八个 family write interface，复用已经构造好的 family implementation，并把 context 显式传给 mutation executor；它不会重建 internals 或 family modules，也不会临时改写共享字段。`CommandDb` 在请求入口绑定并缓存该 view，因此两个 contextual write/lifecycle views 可以交错使用。
+`YierdisDbWrites.withMutationContext(...)` 一次只创建一个 immutable contextual view。这个 view 同时实现八个 family write interface，复用已经构造好的 family implementation，并把 context 显式传给 mutation executor；它不会重建 internals 或 family modules，也不会临时改写共享字段。因此两个 contextual write/lifecycle views 可以交错使用。`CommandDb` 保留 capability 的惰性访问边界，避免只读路径提前触发 write/lifecycle owner check。
 
 prepared set/pop 的 `commit(context)` 以显式 commit context 为准。lazy expiry、active expiry 和 eviction 则使用 executor 的无用户 context overload，发布 `EXPIRED` / `EVICTED` synthetic `DEL`，不会继承用户 command context。
 
