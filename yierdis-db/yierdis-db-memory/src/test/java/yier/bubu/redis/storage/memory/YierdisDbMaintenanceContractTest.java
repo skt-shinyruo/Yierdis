@@ -17,6 +17,7 @@ import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
+import yier.bubu.redis.storage.api.YierdisMemoryStats;
 
 public class YierdisDbMaintenanceContractTest {
     @Test
@@ -27,7 +28,7 @@ public class YierdisDbMaintenanceContractTest {
                 MaxmemoryPolicy.NOEVICTION,
                 5,
                 5L,
-                5L,
+                1_000L,
                 new DbDefragConfig(false, 0L, 0L, 0L)
         ));
         try {
@@ -40,7 +41,7 @@ public class YierdisDbMaintenanceContractTest {
                     expired,
                     bytes("value"),
                     SetMode.NORMAL,
-                    ExpireOption.px(0)
+                    ExpireOption.pxAt(1L)
             ).value());
             for (int index = 0; index < 13; index++) {
                 byte[] key = index == 0 ? live : bytes("live-" + index);
@@ -78,7 +79,8 @@ public class YierdisDbMaintenanceContractTest {
                         name,
                         maxSlots,
                         owner,
-                        defragCycleCalls
+                        defragCycleCalls,
+                        false
                 ),
                 64,
                 new DbEngineConfig(
@@ -104,11 +106,50 @@ public class YierdisDbMaintenanceContractTest {
         }
     }
 
+    @Test
+    public void defragKeepsNullBackendReportCompatibleWithZeroAccounting() {
+        AtomicInteger defragCycleCalls = new AtomicInteger();
+        YierdisDb db = TestDbSupport.openWithFactory(
+                (name, maxSlots, owner) -> recordingDefragBackend(
+                        name,
+                        maxSlots,
+                        owner,
+                        defragCycleCalls,
+                        true
+                ),
+                64,
+                new DbEngineConfig(
+                        0,
+                        0L,
+                        MaxmemoryPolicy.NOEVICTION,
+                        5,
+                        5L,
+                        5L,
+                        new DbDefragConfig(true, 64L, 64L, 1L)
+                )
+        );
+        try {
+            db.defragMaintenance();
+
+            YierdisMemoryStats stats = db.memory().memoryStats();
+            Assert.assertEquals(1, defragCycleCalls.get());
+            Assert.assertEquals(0L, stats.nativeDefragLastScannedObjects());
+            Assert.assertEquals(0L, stats.nativeDefragLastMovedObjects());
+            Assert.assertEquals(0L, stats.nativeDefragLastMovedBytes());
+            Assert.assertEquals(0L, stats.nativeDefragLastSkippedPinnedObjects());
+            Assert.assertEquals(0L, stats.nativeDefragLastSkippedBudgetObjects());
+            Assert.assertEquals(0L, stats.nativeDefragLastFailedMoves());
+        } finally {
+            db.shutdown();
+        }
+    }
+
     private static StableMemoryBackend recordingDefragBackend(
             String name,
             int maxSlots,
             MemoryOwner owner,
-            AtomicInteger defragCycleCalls
+            AtomicInteger defragCycleCalls,
+            boolean returnNullReport
     ) {
         StableMemoryBackend delegate = new HeapStableMemoryBackend(name, maxSlots, owner);
         return (StableMemoryBackend) Proxy.newProxyInstance(
@@ -117,6 +158,9 @@ public class YierdisDbMaintenanceContractTest {
                 (proxy, method, arguments) -> {
                     if (method.getName().equals("defragCycle")) {
                         defragCycleCalls.incrementAndGet();
+                        if (returnNullReport) {
+                            return null;
+                        }
                     }
                     try {
                         return method.invoke(delegate, arguments);

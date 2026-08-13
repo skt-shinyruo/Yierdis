@@ -98,8 +98,15 @@ public class CommitStreamIntegrationTest {
                         .pexpire(view(bytes("expiring")), 1L).value());
             }
 
-            Thread.sleep(20L);
-            Assert.assertNull(instance.engine(0).reads().strings().getStringBytes(bytes("expiring")));
+            long expiryDeadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(5L);
+            byte[] value;
+            do {
+                value = instance.engine(0).reads().strings().getStringBytes(bytes("expiring"));
+                if (value != null) {
+                    Thread.sleep(1L);
+                }
+            } while (value != null && System.nanoTime() < expiryDeadlineNanos);
+            Assert.assertNull("key did not expire before the test deadline", value);
             Assert.assertTrue("commit stream did not deliver expiry", delivered.await(5, TimeUnit.SECONDS));
 
             synchronized (events) {

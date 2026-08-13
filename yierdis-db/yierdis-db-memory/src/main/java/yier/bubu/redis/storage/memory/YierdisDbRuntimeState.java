@@ -110,10 +110,7 @@ final class YierdisDbRuntimeState {
         if (nativeDefragOptions == null) {
             return;
         }
-        lastNativeDefragReport = Objects.requireNonNull(
-                defragCycle.apply(nativeDefragOptions),
-                "nativeDefragReport"
-        );
+        lastNativeDefragReport = defragCycle.apply(nativeDefragOptions);
     }
 
     NativeDefragReport lastNativeDefragReport() {
