@@ -106,6 +106,14 @@ public class CommitAwareMutationFaultInjectionTest {
                 DbWrites second = first.withMutationContext(secondContext);
 
                 Assert.assertNotSame(first, second);
+                Assert.assertSame(first, first.strings());
+                Assert.assertSame(first, first.hashes());
+                Assert.assertSame(first, first.lists());
+                Assert.assertSame(first, first.sets());
+                Assert.assertSame(first, first.zsets());
+                Assert.assertSame(first, first.hll());
+                Assert.assertSame(first, first.keyspace());
+                Assert.assertSame(first, first.ttl());
                 Assert.assertTrue(first.strings()
                         .setString(bytes("first"), bytes("1"), SetMode.NORMAL, null).value());
                 Assert.assertEquals("SET_FIRST", commandName(publisher.record));
@@ -184,6 +192,32 @@ public class CommitAwareMutationFaultInjectionTest {
                         prepared.commit(commitContext)
                 );
                 Assert.assertEquals("COMMIT_SET", commandName(publisher.record));
+            }
+        } finally {
+            publisher.closeRetainedRecord();
+            db.shutdown();
+        }
+    }
+
+    @Test
+    public void preparedListMutationCommitContextOverridesBoundWriteViewContext() {
+        YierdisDb db = TestDbSupport.open();
+        RecordingPublisher publisher = new RecordingPublisher();
+        try {
+            db.bindToCurrentThread();
+            db.writes().lists().rpush(bytes("list"), java.util.List.of(bytes("value")));
+            db.attachCommitPublisher(publisher, 0);
+            try (ImmutableCommandRecord boundRecord = record("BOUND_LPOP", "list");
+                 MutationContext boundContext = MutationContext.of(boundRecord);
+                 ImmutableCommandRecord commitRecord = record("COMMIT_LPOP", "list");
+                 MutationContext commitContext = MutationContext.of(commitRecord);
+                 var prepared = db.writes().withMutationContext(boundContext).lists()
+                         .preparePop(bytes("list"), 1, true)) {
+                Assert.assertEquals(
+                        yier.bubu.redis.storage.api.MutationOutcome.VALUE_CHANGED,
+                        prepared.commit(commitContext)
+                );
+                Assert.assertEquals("COMMIT_LPOP", commandName(publisher.record));
             }
         } finally {
             publisher.closeRetainedRecord();

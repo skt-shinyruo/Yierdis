@@ -7,6 +7,7 @@ import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.memory.api.NativeEpochKind;
 import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
@@ -42,11 +43,15 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
 
     @Override
     public WriteResult<Long> del(Collection<byte[]> keys) {
+        return del(MutationContext.none(), keys);
+    }
+
+    WriteResult<Long> del(MutationContext context, Collection<byte[]> keys) {
         internals.checkThread();
         Objects.requireNonNull(keys, "keys");
         long nowMillis = System.currentTimeMillis();
         reclaimExpiredBeforeDeletion(keys, nowMillis);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return 0L;

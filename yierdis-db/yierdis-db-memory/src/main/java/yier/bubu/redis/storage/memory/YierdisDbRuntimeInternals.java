@@ -27,7 +27,6 @@ public final class YierdisDbRuntimeInternals {
     private final YierdisDbMutationExecutor mutationExecutor;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final MemoryLedger ledger;
-    private final MutationContext mutationContext;
 
     YierdisDbRuntimeInternals(
             Runnable threadChecker,
@@ -35,21 +34,10 @@ public final class YierdisDbRuntimeInternals {
             YierdisDbKeyLifecycle keyLifecycle,
             MemoryLedger ledger
     ) {
-        this(threadChecker, mutationExecutor, keyLifecycle, ledger, MutationContext.none());
-    }
-
-    private YierdisDbRuntimeInternals(
-            Runnable threadChecker,
-            YierdisDbMutationExecutor mutationExecutor,
-            YierdisDbKeyLifecycle keyLifecycle,
-            MemoryLedger ledger,
-            MutationContext mutationContext
-    ) {
         this.threadChecker = Objects.requireNonNull(threadChecker, "threadChecker");
         this.mutationExecutor = Objects.requireNonNull(mutationExecutor, "mutationExecutor");
         this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
         this.ledger = Objects.requireNonNull(ledger, "ledger");
-        this.mutationContext = Objects.requireNonNull(mutationContext, "mutationContext");
     }
 
     public void checkThread() {
@@ -57,17 +45,16 @@ public final class YierdisDbRuntimeInternals {
     }
 
     public <T> T executeMutation(YierdisDbMutationExecutor.MutationPlan<T> plan) {
-        return mutationExecutor.execute(mutationContext, plan);
+        return executeMutation(MutationContext.none(), plan);
     }
 
-    YierdisDbRuntimeInternals withMutationContext(MutationContext context) {
-        checkThread();
-        return new YierdisDbRuntimeInternals(
-                threadChecker,
-                mutationExecutor,
-                keyLifecycle,
-                ledger,
-                Objects.requireNonNull(context, "context")
+    public <T> T executeMutation(
+            MutationContext context,
+            YierdisDbMutationExecutor.MutationPlan<T> plan
+    ) {
+        return mutationExecutor.execute(
+                Objects.requireNonNull(context, "context"),
+                Objects.requireNonNull(plan, "plan")
         );
     }
 

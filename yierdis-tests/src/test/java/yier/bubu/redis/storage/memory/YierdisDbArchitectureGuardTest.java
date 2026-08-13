@@ -63,6 +63,29 @@ public class YierdisDbArchitectureGuardTest {
         Assert.assertFalse("runtime state must not late-bind the storage graph", runtimeState.contains("void bind("));
     }
 
+    @Test
+    public void contextualWritesDoNotRebuildRuntimeOrFamilyModules() throws IOException {
+        Path main = storageMemoryMain(resolveRepoRoot()).resolve("yier/bubu/redis/storage/memory");
+        String writes = Files.readString(main.resolve("YierdisDbWrites.java"), StandardCharsets.UTF_8);
+        String internals = Files.readString(main.resolve("YierdisDbRuntimeInternals.java"), StandardCharsets.UTF_8);
+        for (String family : List.of(
+                "YierdisStringOps",
+                "YierdisHashOps",
+                "YierdisListOps",
+                "YierdisSetOps",
+                "YierdisZSetOps",
+                "YierdisHllOps",
+                "YierdisKeyspaceOps",
+                "YierdisTtlOps"
+        )) {
+            Assert.assertFalse("context binding must reuse " + family, writes.contains("new " + family));
+        }
+        Assert.assertFalse("runtime internals must not retain request context",
+                internals.contains("MutationContext mutationContext"));
+        Assert.assertFalse("runtime internals must not be rebuilt for request context",
+                internals.contains("withMutationContext("));
+    }
+
     private static Path resolveRepoRoot() {
         Path current = Path.of("").toAbsolutePath().normalize();
         while (current != null) {

@@ -2,6 +2,7 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.EntryMutationEntries.CurrentEntry;
 import yier.bubu.redis.storage.memory.EntryMutationEntries.StagedEntry;
+import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.ScanCursorV2;
@@ -43,6 +44,10 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
 
     @Override
     public WriteResult<Long> zadd(byte[] keyBytes, List<byte[]> scoreMemberPairs) {
+        return zadd(MutationContext.none(), keyBytes, scoreMemberPairs);
+    }
+
+    WriteResult<Long> zadd(MutationContext context, byte[] keyBytes, List<byte[]> scoreMemberPairs) {
         internals.checkThread();
         if (scoreMemberPairs.size() % 2 != 0) {
             throw new IllegalArgumentException("scoreMemberPairs must contain score/member pairs");
@@ -50,7 +55,7 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
         reclaimExpiredBeforeMutation(keyBytes, now);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<>() {
             private ZSetRoot.AddPlan cachedAddPlan;
             private boolean addPlanInitialized;
 
@@ -415,10 +420,14 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
 
     @Override
     public WriteResult<Long> zrem(byte[] keyBytes, List<byte[]> members) {
+        return zrem(MutationContext.none(), keyBytes, members);
+    }
+
+    WriteResult<Long> zrem(MutationContext context, byte[] keyBytes, List<byte[]> members) {
         internals.checkThread();
         long now = System.currentTimeMillis();
         reclaimExpiredBeforeMutation(keyBytes, now);
-        return removeInternal(keyBytes, new ZSetRemoval() {
+        return removeInternal(context, keyBytes, new ZSetRemoval() {
             @Override
             public int count(ValueHandle handle) {
                 return zsetRoot.countExistingMembers(handle, members);
@@ -433,10 +442,14 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
 
     @Override
     public WriteResult<Long> zremrangeByRank(byte[] keyBytes, long start, long stop) {
+        return zremrangeByRank(MutationContext.none(), keyBytes, start, stop);
+    }
+
+    WriteResult<Long> zremrangeByRank(MutationContext context, byte[] keyBytes, long start, long stop) {
         internals.checkThread();
         long now = System.currentTimeMillis();
         reclaimExpiredBeforeMutation(keyBytes, now);
-        return removeInternal(keyBytes, new ZSetRemoval() {
+        return removeInternal(context, keyBytes, new ZSetRemoval() {
             @Override
             public int count(ValueHandle handle) {
                 return zsetRoot.countRemovalsByRank(handle, start, stop);
@@ -451,10 +464,21 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
 
     @Override
     public WriteResult<Long> zremrangeByScore(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive) {
+        return zremrangeByScore(MutationContext.none(), keyBytes, min, minExclusive, max, maxExclusive);
+    }
+
+    WriteResult<Long> zremrangeByScore(
+            MutationContext context,
+            byte[] keyBytes,
+            double min,
+            boolean minExclusive,
+            double max,
+            boolean maxExclusive
+    ) {
         internals.checkThread();
         long now = System.currentTimeMillis();
         reclaimExpiredBeforeMutation(keyBytes, now);
-        return removeInternal(keyBytes, new ZSetRemoval() {
+        return removeInternal(context, keyBytes, new ZSetRemoval() {
             @Override
             public int count(ValueHandle handle) {
                 return zsetRoot.countRemovalsByScore(handle, min, minExclusive, max, maxExclusive);
@@ -467,8 +491,12 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
         });
     }
 
-    private WriteResult<Long> removeInternal(byte[] keyBytes, ZSetRemoval removal) {
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+    private WriteResult<Long> removeInternal(
+            MutationContext context,
+            byte[] keyBytes,
+            ZSetRemoval removal
+    ) {
+        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return 0L;

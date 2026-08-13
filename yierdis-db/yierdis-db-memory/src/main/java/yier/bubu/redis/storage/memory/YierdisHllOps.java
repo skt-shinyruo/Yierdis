@@ -2,6 +2,7 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.EntryMutationEntries.CurrentEntry;
 import yier.bubu.redis.storage.memory.EntryMutationEntries.StagedEntry;
+import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.HllReadOps;
 import yier.bubu.redis.storage.api.HllWriteOps;
@@ -39,11 +40,15 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
 
     @Override
     public WriteResult<Integer> pfadd(byte[] keyBytes, List<byte[]> elements) {
+        return pfadd(MutationContext.none(), keyBytes, elements);
+    }
+
+    WriteResult<Integer> pfadd(MutationContext context, byte[] keyBytes, List<byte[]> elements) {
         internals.checkThread();
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
         reclaimExpiredBeforeMutation(keyBytes, now);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return estimatePfaddUpperBound(keyBytes, elements, now);
@@ -130,6 +135,10 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
 
     @Override
     public WriteResult<Void> pfmerge(byte[] destKeyBytes, List<byte[]> sourceKeys) {
+        return pfmerge(MutationContext.none(), destKeyBytes, sourceKeys);
+    }
+
+    WriteResult<Void> pfmerge(MutationContext context, byte[] destKeyBytes, List<byte[]> sourceKeys) {
         internals.checkThread();
         Objects.requireNonNull(destKeyBytes, "destKeyBytes");
         if (sourceKeys == null || sourceKeys.isEmpty()) {
@@ -141,7 +150,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
         for (byte[] sourceKey : sourceKeys) {
             reclaimExpiredBeforeMutation(sourceKey, now);
         }
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return estimatePfmergeUpperBound(destKeyBytes, sourceKeys, now);

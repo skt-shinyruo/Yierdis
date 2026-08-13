@@ -14,11 +14,19 @@ import java.util.Objects;
  */
 public final class CommandDb {
     private final DbEngine engine;
-    private final MutationContext mutationContext;
+    private final DbWrites writes;
+    private final DbLifecycleOps lifecycle;
 
     CommandDb(DbEngine engine, MutationContext mutationContext) {
         this.engine = Objects.requireNonNull(engine, "engine");
-        this.mutationContext = mutationContext;
+        DbWrites engineWrites = engine.writes();
+        DbLifecycleOps engineLifecycle = engine.lifecycle();
+        this.writes = mutationContext == null
+                ? engineWrites
+                : engineWrites.withMutationContext(mutationContext);
+        this.lifecycle = mutationContext == null
+                ? engineLifecycle
+                : engineLifecycle.withMutationContext(mutationContext);
     }
 
     public DbReads reads() {
@@ -26,8 +34,7 @@ public final class CommandDb {
     }
 
     public DbWrites writes() {
-        DbWrites writes = engine.writes();
-        return mutationContext == null ? writes : writes.withMutationContext(mutationContext);
+        return writes;
     }
 
     public MemoryOps memory() {
@@ -35,7 +42,6 @@ public final class CommandDb {
     }
 
     public DbLifecycleOps lifecycle() {
-        DbLifecycleOps lifecycle = engine.lifecycle();
-        return mutationContext == null ? lifecycle : lifecycle.withMutationContext(mutationContext);
+        return lifecycle;
     }
 }

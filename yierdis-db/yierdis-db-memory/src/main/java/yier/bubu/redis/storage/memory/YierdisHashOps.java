@@ -2,6 +2,7 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.EntryMutationEntries.CurrentEntry;
 import yier.bubu.redis.storage.memory.EntryMutationEntries.StagedEntry;
+import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.HashReadOps;
@@ -45,6 +46,10 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
 
     @Override
     public WriteResult<Long> hset(byte[] keyBytes, List<byte[]> fieldValuePairs) {
+        return hset(MutationContext.none(), keyBytes, fieldValuePairs);
+    }
+
+    WriteResult<Long> hset(MutationContext context, byte[] keyBytes, List<byte[]> fieldValuePairs) {
         internals.checkThread();
         Objects.requireNonNull(keyBytes, "keyBytes");
         if (fieldValuePairs.size() % 2 != 0) {
@@ -52,7 +57,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
         }
         long now = System.currentTimeMillis();
         reclaimExpiredBeforeMutation(keyBytes, now);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<>() {
             private HashRoot.SetPlan cachedSetPlan;
             private boolean setPlanInitialized;
 
@@ -233,11 +238,15 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
 
     @Override
     public WriteResult<Long> hdel(byte[] keyBytes, List<byte[]> fields) {
+        return hdel(MutationContext.none(), keyBytes, fields);
+    }
+
+    WriteResult<Long> hdel(MutationContext context, byte[] keyBytes, List<byte[]> fields) {
         internals.checkThread();
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
         reclaimExpiredBeforeMutation(keyBytes, now);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return 0;

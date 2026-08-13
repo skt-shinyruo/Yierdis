@@ -47,18 +47,26 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
 
     @Override
     public WriteResult<Long> lpush(byte[] keyBytes, List<byte[]> values) {
+        return lpush(MutationContext.none(), keyBytes, values);
+    }
+
+    WriteResult<Long> lpush(MutationContext context, byte[] keyBytes, List<byte[]> values) {
         internals.checkThread();
         Objects.requireNonNull(keyBytes, "keyBytes");
         Objects.requireNonNull(values, "values");
-        return pushInternal(keyBytes, values, true);
+        return pushInternal(context, keyBytes, values, true);
     }
 
     @Override
     public WriteResult<Long> rpush(byte[] keyBytes, List<byte[]> values) {
+        return rpush(MutationContext.none(), keyBytes, values);
+    }
+
+    WriteResult<Long> rpush(MutationContext context, byte[] keyBytes, List<byte[]> values) {
         internals.checkThread();
         Objects.requireNonNull(keyBytes, "keyBytes");
         Objects.requireNonNull(values, "values");
-        return pushInternal(keyBytes, values, false);
+        return pushInternal(context, keyBytes, values, false);
     }
 
     @Override
@@ -110,10 +118,15 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
         return new PreparedPopMutation(preparedKey, count, left, state, preview);
     }
 
-    private WriteResult<Long> pushInternal(byte[] keyBytes, List<byte[]> values, boolean left) {
+    private WriteResult<Long> pushInternal(
+            MutationContext context,
+            byte[] keyBytes,
+            List<byte[]> values,
+            boolean left
+    ) {
         long now = System.currentTimeMillis();
         reclaimExpiredBeforeMutation(keyBytes, now);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return estimatePushUpperBound(keyBytes, values, left, now);
@@ -174,7 +187,12 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
         });
     }
 
-    private WriteResult<PoppedValueSequence> popInternal(byte[] keyBytes, int count, boolean left) {
+    private WriteResult<PoppedValueSequence> popInternal(
+            MutationContext context,
+            byte[] keyBytes,
+            int count,
+            boolean left
+    ) {
         if (count == 0) {
             return WriteResult.unchanged(PreparedPoppedValueSequence.empty());
         }
@@ -184,7 +202,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
 
         long now = System.currentTimeMillis();
         reclaimExpiredBeforeMutation(keyBytes, now);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 if (isPopReclamation(keyBytes, count, now)) {
@@ -716,8 +734,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
             internals.checkThread();
             Objects.requireNonNull(context, "context");
             requireCommittable();
-            WriteResult<PoppedValueSequence> result = new YierdisListOps(internals.withMutationContext(context))
-                    .popInternal(keyBytes, count, left);
+            WriteResult<PoppedValueSequence> result = popInternal(context, keyBytes, count, left);
             committed = true;
             trimNativePagesAfterClose = result.mutationOutcome().changedAny();
             try {

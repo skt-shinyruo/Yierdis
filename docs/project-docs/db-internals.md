@@ -67,9 +67,9 @@ ops 不直接组合 directory 与 entry table。删除必须让 directory entry�
 
 ## Runtime internals 与 facade
 
-`YierdisDbRuntimeInternals` 是 concrete ops 共用的窄内部能力：owner check、mutation executor、key lifecycle、ledger 和当前 `MutationContext`。它没有第二实现，也不作为公开 SPI。
+`YierdisDbRuntimeInternals` 是 concrete ops 共用的窄内部能力：owner check、mutation executor、key lifecycle 和 ledger。它没有第二实现，也不作为公开 SPI；请求级 `MutationContext` 不进入长期 DB graph。
 
-根 internals 绑定 `MutationContext.none()`。`withMutationContext(...)` 返回共享 executor/lifecycle/ledger 的新 immutable view；它不会临时改写根对象字段。因此两个 contextual write/lifecycle views 可以交错使用，重新绑定也只替换新 view 的 context。
+`YierdisDbWrites.withMutationContext(...)` 只创建一个 immutable contextual view。这个 view 同时实现八个 family write interface，复用已经构造好的 family implementation，并把 context 显式传给 mutation executor；它不会重建 internals 或 family modules，也不会临时改写共享字段。`CommandDb` 在请求入口绑定并缓存该 view，因此两个 contextual write/lifecycle views 可以交错使用。
 
 prepared set/pop 的 `commit(context)` 以显式 commit context 为准。lazy expiry、active expiry 和 eviction 则使用 executor 的无用户 context overload，发布 `EXPIRED` / `EVICTED` synthetic `DEL`，不会继承用户 command context。
 

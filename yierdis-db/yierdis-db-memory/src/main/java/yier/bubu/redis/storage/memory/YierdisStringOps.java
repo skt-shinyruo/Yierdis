@@ -50,10 +50,21 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
     @Override
     public WriteResult<SetStringValue> set(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption) {
-        return setInternal(keyBytes, value, mode, expireOption, false);
+        return set(MutationContext.none(), keyBytes, value, mode, expireOption);
+    }
+
+    WriteResult<SetStringValue> set(
+            MutationContext context,
+            byte[] keyBytes,
+            BytesSlice value,
+            SetMode mode,
+            ExpireOption expireOption
+    ) {
+        return setInternal(context, keyBytes, value, mode, expireOption, false);
     }
 
     private WriteResult<SetStringValue> setInternal(
+            MutationContext context,
             byte[] keyBytes,
             BytesSlice value,
             SetMode mode,
@@ -73,7 +84,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         );
         final long estimatedUpperBound = upperBound;
 
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 long nativeUpperBound = addSaturating(
@@ -214,18 +225,42 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
     @Override
     public WriteResult<Boolean> setString(byte[] keyBytes, byte[] value, SetMode mode, ExpireOption expireOption) {
-        WriteResult<SetStringValue> result = set(keyBytes, sliceOf(value), mode, expireOption);
+        return setString(MutationContext.none(), keyBytes, value, mode, expireOption);
+    }
+
+    WriteResult<Boolean> setString(
+            MutationContext context,
+            byte[] keyBytes,
+            byte[] value,
+            SetMode mode,
+            ExpireOption expireOption
+    ) {
+        WriteResult<SetStringValue> result = set(context, keyBytes, sliceOf(value), mode, expireOption);
         return WriteResult.of(result.value().applied(), result.mutationOutcome());
     }
 
     @Override
     public WriteResult<Boolean> setString(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption) {
-        WriteResult<SetStringValue> result = set(keyBytes, value, mode, expireOption);
+        return setString(MutationContext.none(), keyBytes, value, mode, expireOption);
+    }
+
+    WriteResult<Boolean> setString(
+            MutationContext context,
+            byte[] keyBytes,
+            BytesSlice value,
+            SetMode mode,
+            ExpireOption expireOption
+    ) {
+        WriteResult<SetStringValue> result = set(context, keyBytes, value, mode, expireOption);
         return WriteResult.of(result.value().applied(), result.mutationOutcome());
     }
 
     @Override
     public WriteResult<Long> append(byte[] keyBytes, BytesSlice value) {
+        return append(MutationContext.none(), keyBytes, value);
+    }
+
+    WriteResult<Long> append(MutationContext context, byte[] keyBytes, BytesSlice value) {
         internals.checkThread();
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
@@ -235,7 +270,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 keyBytes == null ? 0 : keyBytes.length,
                 suffix.length
         );
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
+        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
             @Override
             public long upperBoundBytes() {
                 int replacementLength = Math.addExact(
@@ -322,6 +357,10 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
     @Override
     public WriteResult<Integer> setBit(byte[] keyBytes, long offset, int value) {
+        return setBit(MutationContext.none(), keyBytes, offset, value);
+    }
+
+    WriteResult<Integer> setBit(MutationContext context, byte[] keyBytes, long offset, int value) {
         internals.checkThread();
         Objects.requireNonNull(keyBytes, "keyBytes");
         validateBitValue(value);
@@ -334,7 +373,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 keyBytes == null ? 0 : keyBytes.length,
                 (int) growth
         );
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Integer>>() {
+        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<WriteResult<Integer>>() {
             @Override
             public long upperBoundBytes() {
                 return withScopeBookkeeping(Math.max(
@@ -413,12 +452,16 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
     @Override
     public WriteResult<Long> incrBy(byte[] keyBytes, long delta) {
+        return incrBy(MutationContext.none(), keyBytes, delta);
+    }
+
+    WriteResult<Long> incrBy(MutationContext context, byte[] keyBytes, long delta) {
         internals.checkThread();
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
         reclaimExpiredBeforeMutation(keyBytes, now);
         long estimatedUpperBound = YierdisDbMemoryEstimator.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, 32);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
+        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
             @Override
             public long upperBoundBytes() {
                 return withScopeBookkeeping(Math.max(
@@ -1089,8 +1132,13 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
             internals.checkThread();
             Objects.requireNonNull(context, "context");
             requireCommittable();
-            WriteResult<SetStringValue> result = new YierdisStringOps(internals.withMutationContext(context))
-                    .set(keyBytes, sliceOf(valueBytes), mode, expireOption);
+            WriteResult<SetStringValue> result = set(
+                    context,
+                    keyBytes,
+                    sliceOf(valueBytes),
+                    mode,
+                    expireOption
+            );
             committed = true;
             MutationOutcome outcome = result.mutationOutcome();
             trimNativePagesAfterClose = outcome.changedAny() && expectedState.liveRecord() != null;

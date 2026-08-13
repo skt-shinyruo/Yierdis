@@ -2,6 +2,7 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.EntryMutationEntries.CurrentEntry;
 import yier.bubu.redis.storage.memory.EntryMutationEntries.StagedEntry;
+import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.MutationOutcome;
@@ -42,11 +43,15 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
 
     @Override
     public WriteResult<Long> sadd(byte[] keyBytes, List<byte[]> members) {
+        return sadd(MutationContext.none(), keyBytes, members);
+    }
+
+    WriteResult<Long> sadd(MutationContext context, byte[] keyBytes, List<byte[]> members) {
         internals.checkThread();
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
         reclaimExpiredBeforeMutation(keyBytes, now);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return estimateSetAddUpperBound(keyBytes, members, now);
@@ -129,11 +134,15 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
 
     @Override
     public WriteResult<Long> srem(byte[] keyBytes, List<byte[]> members) {
+        return srem(MutationContext.none(), keyBytes, members);
+    }
+
+    WriteResult<Long> srem(MutationContext context, byte[] keyBytes, List<byte[]> members) {
         internals.checkThread();
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
         reclaimExpiredBeforeMutation(keyBytes, now);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return 0;

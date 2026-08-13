@@ -155,7 +155,7 @@ renderer 调用 emitter 时 source 仍然有效，渲染后 executor 才关闭 p
 
 ## 命令记录与 DB 提交边界
 
-reply capacity 成功后，executor 为当前 request 创建显式 `MutationContext`。DB write view 从 `CommandExecutionContext` 取得它，不依赖隐式 `ThreadLocal`。
+reply capacity 成功后，executor 为当前 request 创建显式 `MutationContext`。`CommandDb` 从 `CommandExecutionContext` 取得它，在请求入口只绑定一次并缓存 immutable write/lifecycle view，不依赖隐式 `ThreadLocal`。
 
 真正的 change-event 发布由 DB mutation path 持有。`YierdisDbMutationExecutor` 只在 mutation 确认有变化后预留 commit record，再完成 storage 与 ledger 提交，最后发布事件。因此 parse error、unknown command、`QUEUED` 和条件写 no-op 都不会产生 commit-stream event。
 
