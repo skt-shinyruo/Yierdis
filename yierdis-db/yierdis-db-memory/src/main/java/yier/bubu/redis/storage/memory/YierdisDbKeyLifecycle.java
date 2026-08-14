@@ -90,7 +90,7 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
             }
             if (reservedEntry != null) {
                 try {
-                    entryTable.release(reservedEntry);
+                    ownedResources.entryTable.release(reservedEntry);
                 } catch (Throwable next) {
                     failure = recordFailure(failure, next);
                 }
@@ -122,18 +122,10 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         }
     }
 
-    private final StableMemoryBackend stableMemoryBackend;
-    private final EntryTable entryTable;
-    private final NativeKeyDirectory keyDirectory;
-    private final StringRoot stringRoot;
-    private final ListRoot listRoot;
-    private final HashRoot hashRoot;
-    private final SetRoot setRoot;
-    private final ZSetRoot zsetRoot;
+    private final OwnedResources ownedResources;
     private final LongSupplier lruClockSupplier;
     private int expireCount;
     private long expiredEntriesAwaitingPhysicalDeletion;
-    private boolean closeAttempted;
 
     YierdisDbKeyLifecycle(
             StableMemoryBackend stableMemoryBackend,
@@ -146,48 +138,50 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
             ZSetRoot zsetRoot,
             LongSupplier lruClockSupplier
     ) {
-        this.stableMemoryBackend = java.util.Objects.requireNonNull(stableMemoryBackend, "stableMemoryBackend");
-        this.entryTable = Objects.requireNonNull(entryTable, "entryTable");
-        this.keyDirectory = Objects.requireNonNull(keyDirectory, "keyDirectory");
-        this.stringRoot = Objects.requireNonNull(stringRoot, "stringRoot");
-        this.listRoot = Objects.requireNonNull(listRoot, "listRoot");
-        this.hashRoot = Objects.requireNonNull(hashRoot, "hashRoot");
-        this.setRoot = Objects.requireNonNull(setRoot, "setRoot");
-        this.zsetRoot = Objects.requireNonNull(zsetRoot, "zsetRoot");
+        this.ownedResources = new OwnedResources(
+                Objects.requireNonNull(stableMemoryBackend, "stableMemoryBackend"),
+                Objects.requireNonNull(entryTable, "entryTable"),
+                Objects.requireNonNull(keyDirectory, "keyDirectory"),
+                Objects.requireNonNull(stringRoot, "stringRoot"),
+                Objects.requireNonNull(listRoot, "listRoot"),
+                Objects.requireNonNull(hashRoot, "hashRoot"),
+                Objects.requireNonNull(setRoot, "setRoot"),
+                Objects.requireNonNull(zsetRoot, "zsetRoot")
+        );
         this.lruClockSupplier = Objects.requireNonNull(lruClockSupplier, "lruClockSupplier");
     }
 
     void bindToCurrentThread() {
-        stableMemoryBackend.bindToCurrentThread();
+        ownedResources.stableMemoryBackend.bindToCurrentThread();
     }
 
     MemoryReclaimResult trimEmptyNativePages(MemoryPressureBudget budget) {
-        return stableMemoryBackend.trimEmptyPages(Objects.requireNonNull(budget, "budget"));
+        return ownedResources.stableMemoryBackend.trimEmptyPages(Objects.requireNonNull(budget, "budget"));
     }
 
     NativeDefragReport defragCycle(NativeDefragOptions options) {
-        return stableMemoryBackend.defragCycle(Objects.requireNonNull(options, "options"));
+        return ownedResources.stableMemoryBackend.defragCycle(Objects.requireNonNull(options, "options"));
     }
 
     public KeyHandle keyHandle(byte[] keyBytes) {
         if (keyBytes == null) {
             return null;
         }
-        return keyDirectory.getKeyHandle(keyBytes);
+        return ownedResources.keyDirectory.getKeyHandle(keyBytes);
     }
 
     public KeyHandle keyHandle(BytesView keyView) {
         if (keyView == null) {
             return null;
         }
-        return keyDirectory.getKeyHandle(YierdisDb.toByteArray(keyView));
+        return ownedResources.keyDirectory.getKeyHandle(YierdisDb.toByteArray(keyView));
     }
 
     public EntryHandle entryHandle(byte[] keyBytes) {
         if (keyBytes == null) {
             return null;
         }
-        return keyDirectory.get(keyBytes);
+        return ownedResources.keyDirectory.get(keyBytes);
     }
 
     public EntryRecord entryRecord(byte[] keyBytes) {
@@ -213,25 +207,25 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         if (handle == null) {
             return null;
         }
-        return entryTable.get(handle);
+        return ownedResources.entryTable.get(handle);
     }
 
     public CurrentEntry currentEntry(byte[] keyBytes) {
         Objects.requireNonNull(keyBytes, "keyBytes");
-        EntryHandle handle = keyDirectory.get(keyBytes);
-        EntryRecord record = handle == null ? null : entryTable.get(handle);
-        KeyHandle keyHandle = handle == null ? null : keyDirectory.getKeyHandle(keyBytes);
+        EntryHandle handle = ownedResources.keyDirectory.get(keyBytes);
+        EntryRecord record = handle == null ? null : ownedResources.entryTable.get(handle);
+        KeyHandle keyHandle = handle == null ? null : ownedResources.keyDirectory.getKeyHandle(keyBytes);
         return new CurrentEntry(handle, keyHandle, record);
     }
 
     public StagedEntry stageEntry(byte[] keyBytes) {
         Objects.requireNonNull(keyBytes, "keyBytes");
-        EntryHandle handle = entryTable.reserve();
+        EntryHandle handle = ownedResources.entryTable.reserve();
         try {
-            return new StagedEntry(handle, keyDirectory.stageInsert(keyBytes));
+            return new StagedEntry(handle, ownedResources.keyDirectory.stageInsert(keyBytes));
         } catch (RuntimeException | Error failure) {
             try {
-                entryTable.release(handle);
+                ownedResources.entryTable.release(handle);
             } catch (RuntimeException | Error releaseFailure) {
                 failure.addSuppressed(releaseFailure);
             }
@@ -296,11 +290,11 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         if (keyBytes == null) {
             return null;
         }
-        EntryHandle handle = keyDirectory.remove(keyBytes);
+        EntryHandle handle = ownedResources.keyDirectory.remove(keyBytes);
         if (handle == null) {
             return null;
         }
-        EntryRecord record = entryTable.get(handle);
+        EntryRecord record = ownedResources.entryTable.get(handle);
         if (record != null) {
             releaseValue(record);
             releaseEntry(handle, record);
@@ -312,10 +306,10 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         if (handle == null) {
             return null;
         }
-        if (!keyDirectory.remove(handle)) {
+        if (!ownedResources.keyDirectory.remove(handle)) {
             return null;
         }
-        EntryRecord record = entryTable.get(handle);
+        EntryRecord record = ownedResources.entryTable.get(handle);
         if (record != null) {
             releaseValue(record);
             releaseEntry(handle, record);
@@ -324,7 +318,7 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
     }
 
     public int keyCount() {
-        return keyDirectory.size();
+        return ownedResources.keyDirectory.size();
     }
 
     public int expireCount() {
@@ -332,12 +326,14 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
     }
 
     public KeyHandle randomKeyHandle() {
-        return keyDirectory.randomKeyHandle();
+        return ownedResources.keyDirectory.randomKeyHandle();
     }
 
     public void forEachKeyHandle(BiConsumer<KeyHandle, EntryRecord> consumer) {
         Objects.requireNonNull(consumer, "consumer");
-        keyDirectory.forEachEntry((keyHandle, entryHandle) -> consumer.accept(keyHandle, entryRecord(entryHandle)));
+        ownedResources.keyDirectory.forEachEntry(
+                (keyHandle, entryHandle) -> consumer.accept(keyHandle, entryRecord(entryHandle))
+        );
     }
 
     public Long expireAtMillis(byte[] keyBytes) {
@@ -357,7 +353,11 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
 
     public ScanCursorV2 scan(ScanCursorV2 cursor, int maxSteps, EntryScanConsumer consumer) {
         Objects.requireNonNull(consumer, "consumer");
-        return keyDirectory.scan(cursor, maxSteps, (keyHandle, entryHandle) -> consumer.accept(keyHandle, entryRecord(entryHandle)));
+        return ownedResources.keyDirectory.scan(
+                cursor,
+                maxSteps,
+                (keyHandle, entryHandle) -> consumer.accept(keyHandle, entryRecord(entryHandle))
+        );
     }
 
     public KeyScanResult scanWithWork(
@@ -366,8 +366,11 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
             EntryScanConsumer consumer
     ) {
         Objects.requireNonNull(consumer, "consumer");
-        NativeKeyDirectory.ScanResult result = keyDirectory.scanWithWork(cursor, maxSteps, (keyHandle, entryHandle) ->
-                consumer.accept(keyHandle, entryRecord(entryHandle)));
+        NativeKeyDirectory.ScanResult result = ownedResources.keyDirectory.scanWithWork(
+                cursor,
+                maxSteps,
+                (keyHandle, entryHandle) -> consumer.accept(keyHandle, entryRecord(entryHandle))
+        );
         return new KeyScanResult(
                 result.startCursor(),
                 result.nextCursor(),
@@ -377,7 +380,7 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
     }
 
     public DirectoryState directoryState() {
-        var metrics = keyDirectory.metrics();
+        var metrics = ownedResources.keyDirectory.metrics();
         return new DirectoryState(metrics.generation(), metrics.capacity(), metrics.oldCapacity());
     }
 
@@ -389,7 +392,7 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
     }
 
     public long estimatedInsertHeapGrowthBytes() {
-        return keyDirectory.estimatedInsertHeapGrowthBytes();
+        return ownedResources.keyDirectory.estimatedInsertHeapGrowthBytes();
     }
 
     public boolean isCurrentExpiredCandidate(
@@ -425,19 +428,19 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
             return false;
         }
         byte[] keyBytes = keyBytes(keyHandle);
-        EntryHandle handle = keyDirectory.get(keyBytes);
+        EntryHandle handle = ownedResources.keyDirectory.get(keyBytes);
         if (handle == null) {
             return false;
         }
-        EntryRecord current = entryTable.get(handle);
+        EntryRecord current = ownedResources.entryTable.get(handle);
         if (current == null) {
-            keyDirectory.remove(keyBytes, handle);
+            ownedResources.keyDirectory.remove(keyBytes, handle);
             return false;
         }
         if (expectedRecord != null && !current.equals(expectedRecord)) {
             return false;
         }
-        keyDirectory.remove(keyBytes, handle);
+        ownedResources.keyDirectory.remove(keyBytes, handle);
         releaseEntry(handle, current);
         releaseValue(current);
         return true;
@@ -446,7 +449,7 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
     public void replaceEntry(EntryHandle handle, EntryRecord oldRecord, EntryRecord newRecord) {
         Objects.requireNonNull(handle, "handle");
         Objects.requireNonNull(newRecord, "newRecord");
-        entryTable.replace(handle, newRecord);
+        ownedResources.entryTable.replace(handle, newRecord);
         reconcileDerivedEntryState(oldRecord, newRecord);
     }
 
@@ -455,21 +458,31 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         Objects.requireNonNull(newRecord, "newRecord");
         EntryHandle handle = stagedEntry.requireActiveEntryHandle();
         NativeKeyDirectory.StagedInsert stagedKey = stagedEntry.consumeStagedKey();
-        entryTable.writeReserved(handle, newRecord);
-        keyDirectory.publishStagedInsert(stagedKey, handle);
+        try {
+            ownedResources.entryTable.writeReserved(handle, newRecord);
+            ownedResources.keyDirectory.publishStagedInsert(stagedKey, handle);
+        } catch (RuntimeException | Error failure) {
+            abortStagedEntry(stagedEntry, failure);
+            try {
+                releaseValue(newRecord);
+            } catch (RuntimeException | Error releaseFailure) {
+                failure.addSuppressed(releaseFailure);
+            }
+            throw failure;
+        }
         stagedEntry.markPublished();
         reconcileDerivedEntryState(null, newRecord);
     }
 
     public void deleteEntry(EntryHandle handle, EntryRecord record) {
         Objects.requireNonNull(handle, "handle");
-        keyDirectory.remove(handle);
+        ownedResources.keyDirectory.remove(handle);
         releaseEntry(handle, record);
     }
 
     public void releaseEntry(EntryHandle handle, EntryRecord record) {
         Objects.requireNonNull(handle, "handle");
-        entryTable.release(handle);
+        ownedResources.entryTable.release(handle);
         reconcileDerivedEntryState(record, null);
     }
 
@@ -483,7 +496,7 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
                 || !isExpired(expectedRecord, nowMillis)) {
             return false;
         }
-        EntryRecord current = entryTable.get(entryHandle);
+        EntryRecord current = ownedResources.entryTable.get(entryHandle);
         if (current == null || !current.equals(expectedRecord)
                 || isExpiredEntryAwaitingPhysicalDeletion(current)) {
             return false;
@@ -562,9 +575,9 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
                 record.version(),
                 nextClock
         );
-        EntryHandle handle = keyDirectory.get(keyBytes(keyHandle));
+        EntryHandle handle = ownedResources.keyDirectory.get(keyBytes(keyHandle));
         if (handle != null) {
-            EntryRecord current = entryTable.get(handle);
+            EntryRecord current = ownedResources.entryTable.get(handle);
             if (record.equals(current)) {
                 replaceEntry(handle, current, touched);
             }
@@ -590,28 +603,7 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
     }
 
     public void releaseValue(EntryRecord record) {
-        if (record == null || record.valueHandle() == null || record.valueHandle().isNull()) {
-            return;
-        }
-        switch (record.type()) {
-            case STRING:
-                stringRoot.release(record.valueHandle());
-                break;
-            case LIST:
-                listRoot.release(record.valueHandle());
-                break;
-            case HASH:
-                hashRoot.release(record.valueHandle());
-                break;
-            case SET:
-                setRoot.release(record.valueHandle());
-                break;
-            case ZSET:
-                zsetRoot.release(record.valueHandle());
-                break;
-            default:
-                break;
-        }
+        ownedResources.releaseValue(record);
     }
 
     public long estimatedValueBytes(EntryRecord record) {
@@ -619,11 +611,11 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
             return 0L;
         }
         return switch (record.type()) {
-            case STRING -> stringRoot.estimatedBytes(record.valueHandle());
-            case LIST -> listRoot.estimatedBytes(record.valueHandle());
-            case HASH -> hashRoot.estimatedBytes(record.valueHandle());
-            case SET -> setRoot.estimatedBytes(record.valueHandle());
-            case ZSET -> zsetRoot.estimatedBytes(record.valueHandle());
+            case STRING -> ownedResources.stringRoot.estimatedBytes(record.valueHandle());
+            case LIST -> ownedResources.listRoot.estimatedBytes(record.valueHandle());
+            case HASH -> ownedResources.hashRoot.estimatedBytes(record.valueHandle());
+            case SET -> ownedResources.setRoot.estimatedBytes(record.valueHandle());
+            case ZSET -> ownedResources.zsetRoot.estimatedBytes(record.valueHandle());
         };
     }
 
@@ -631,19 +623,19 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         if (record == null || record.type() != ValueType.STRING || record.valueHandle() == null) {
             return null;
         }
-        return stringRoot.copy(record.valueHandle());
+        return ownedResources.stringRoot.copy(record.valueHandle());
     }
 
     long componentRetainedHeapBytes() {
         return yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating(
-                keyDirectory.heapBytes(),
+                ownedResources.keyDirectory.heapBytes(),
                 yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating(
-                        listRoot.heapBytes(),
+                        ownedResources.listRoot.heapBytes(),
                         yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating(
-                                hashRoot.heapBytes(),
+                                ownedResources.hashRoot.heapBytes(),
                                 yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating(
-                                        setRoot.heapBytes(),
-                                        zsetRoot.heapBytes()
+                                        ownedResources.setRoot.heapBytes(),
+                                        ownedResources.zsetRoot.heapBytes()
                                 )
                         )
                 )
@@ -651,85 +643,66 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
     }
 
     YierdisStringOps createStringOps(YierdisDbRuntimeInternals internals) {
-        return new YierdisStringOps(internals, stringRoot);
+        return new YierdisStringOps(internals, ownedResources.stringRoot);
     }
 
     YierdisListOps createListOps(YierdisDbRuntimeInternals internals) {
-        return new YierdisListOps(internals, listRoot);
+        return new YierdisListOps(internals, ownedResources.listRoot);
     }
 
     YierdisHashOps createHashOps(YierdisDbRuntimeInternals internals) {
-        return new YierdisHashOps(internals, hashRoot);
+        return new YierdisHashOps(internals, ownedResources.hashRoot);
     }
 
     YierdisSetOps createSetOps(YierdisDbRuntimeInternals internals) {
-        return new YierdisSetOps(internals, setRoot);
+        return new YierdisSetOps(internals, ownedResources.setRoot);
     }
 
     YierdisZSetOps createZSetOps(YierdisDbRuntimeInternals internals) {
-        return new YierdisZSetOps(internals, zsetRoot);
+        return new YierdisZSetOps(internals, ownedResources.zsetRoot);
     }
 
     YierdisHllOps createHllOps(YierdisDbRuntimeInternals internals) {
-        return new YierdisHllOps(internals, stringRoot);
+        return new YierdisHllOps(internals, ownedResources.stringRoot);
     }
 
     void clearData() {
-        throwIfFailure(clearData(
-                entryTable,
-                keyDirectory,
-                stringRoot,
-                listRoot,
-                hashRoot,
-                setRoot,
-                zsetRoot
-        ));
+        ownedResources.clearData();
     }
 
     void detachEntries() {
-        keyDirectory.detachEntries();
+        ownedResources.keyDirectory.detachEntries();
     }
 
     long detachedEntryCount() {
-        return keyDirectory.detachedEntryCount();
+        return ownedResources.keyDirectory.detachedEntryCount();
     }
 
     void reclaimDetachedEntry() {
-        keyDirectory.reclaimDetachedEntry((ignoredKey, entryHandle) -> releaseOwnedEntry(entryHandle));
+        ownedResources.keyDirectory.reclaimDetachedEntry(
+                (ignoredKey, entryHandle) -> ownedResources.releaseOwnedEntry(entryHandle)
+        );
     }
 
     void armMemoryUsageIterationTrapsForTesting() {
-        keyDirectory.armIterationTrapForTesting();
-        listRoot.armIterationTrapForTesting();
-        hashRoot.armIterationTrapForTesting();
-        setRoot.armIterationTrapForTesting();
-        zsetRoot.armIterationTrapForTesting();
+        ownedResources.keyDirectory.armIterationTrapForTesting();
+        ownedResources.listRoot.armIterationTrapForTesting();
+        ownedResources.hashRoot.armIterationTrapForTesting();
+        ownedResources.setRoot.armIterationTrapForTesting();
+        ownedResources.zsetRoot.armIterationTrapForTesting();
     }
 
     void disarmMemoryUsageIterationTrapsForTesting() {
-        keyDirectory.disarmIterationTrapForTesting();
-        listRoot.disarmIterationTrapForTesting();
-        hashRoot.disarmIterationTrapForTesting();
-        setRoot.disarmIterationTrapForTesting();
-        zsetRoot.disarmIterationTrapForTesting();
+        ownedResources.keyDirectory.disarmIterationTrapForTesting();
+        ownedResources.listRoot.disarmIterationTrapForTesting();
+        ownedResources.hashRoot.disarmIterationTrapForTesting();
+        ownedResources.setRoot.disarmIterationTrapForTesting();
+        ownedResources.zsetRoot.disarmIterationTrapForTesting();
     }
 
     @Override
     public void close() {
-        if (closeAttempted) {
-            return;
-        }
-        closeAttempted = true;
-        throwIfFailure(releaseAll(
-                stableMemoryBackend,
-                entryTable,
-                keyDirectory,
-                stringRoot,
-                listRoot,
-                hashRoot,
-                setRoot,
-                zsetRoot
-        ));
+        ownedResources.close();
     }
 
     static void closePartiallyConstructed(
@@ -742,7 +715,7 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
             SetRoot sets,
             ZSetRoot zsets
     ) {
-        throwIfFailure(releaseAll(backend, entries, directory, strings, lists, hashes, sets, zsets));
+        new OwnedResources(backend, entries, directory, strings, lists, hashes, sets, zsets).close();
     }
 
     private long accessClock(long previous) {
@@ -775,13 +748,15 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         if (expectedIdentity == null) {
             return null;
         }
-        KeyHandle currentKeyHandle = keyDirectory.getKeyHandle(keyBytes);
+        KeyHandle currentKeyHandle = ownedResources.keyDirectory.getKeyHandle(keyBytes);
         if (currentKeyHandle == null
                 || !expectedIdentity.equals(KeyHandleAccess.allocatorNativeHandleOrNull(currentKeyHandle))) {
             return null;
         }
-        EntryHandle currentEntryHandle = keyDirectory.get(keyBytes);
-        EntryRecord current = currentEntryHandle == null ? null : entryTable.get(currentEntryHandle);
+        EntryHandle currentEntryHandle = ownedResources.keyDirectory.get(keyBytes);
+        EntryRecord current = currentEntryHandle == null
+                ? null
+                : ownedResources.entryTable.get(currentEntryHandle);
         return current != null && expectedIdentity.equals(current.keyHandle()) ? current : null;
     }
 
@@ -867,125 +842,142 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         return current;
     }
 
-    private void releaseOwnedEntry(EntryHandle entryHandle) {
-        Objects.requireNonNull(entryHandle, "entryHandle");
-        Throwable failure = null;
-        EntryRecord record = null;
-        try {
-            record = entryTable.get(entryHandle);
-        } catch (Throwable next) {
-            failure = recordFailure(failure, next);
-        }
-        try {
-            releaseValue(record);
-        } catch (Throwable next) {
-            failure = recordFailure(failure, next);
-        }
-        try {
-            entryTable.release(entryHandle);
-        } catch (Throwable next) {
-            failure = recordFailure(failure, next);
-        }
-        throwIfFailure(failure);
-    }
+    private static final class OwnedResources implements AutoCloseable {
+        private final StableMemoryBackend stableMemoryBackend;
+        private final EntryTable entryTable;
+        private final NativeKeyDirectory keyDirectory;
+        private final StringRoot stringRoot;
+        private final ListRoot listRoot;
+        private final HashRoot hashRoot;
+        private final SetRoot setRoot;
+        private final ZSetRoot zsetRoot;
+        private boolean closeAttempted;
 
-    private static Throwable releaseAll(
-            StableMemoryBackend backend,
-            EntryTable entries,
-            NativeKeyDirectory directory,
-            StringRoot strings,
-            ListRoot lists,
-            HashRoot hashes,
-            SetRoot sets,
-            ZSetRoot zsets
-    ) {
-        Throwable failure = clearData(entries, directory, strings, lists, hashes, sets, zsets);
-        failure = closeResource(entries, failure);
-        failure = closeResource(directory, failure);
-        failure = closeResource(strings, failure);
-        failure = closeResource(lists, failure);
-        failure = closeResource(hashes, failure);
-        failure = closeResource(sets, failure);
-        failure = closeResource(zsets, failure);
-        return closeResource(backend, failure);
-    }
+        private OwnedResources(
+                StableMemoryBackend stableMemoryBackend,
+                EntryTable entryTable,
+                NativeKeyDirectory keyDirectory,
+                StringRoot stringRoot,
+                ListRoot listRoot,
+                HashRoot hashRoot,
+                SetRoot setRoot,
+                ZSetRoot zsetRoot
+        ) {
+            this.stableMemoryBackend = stableMemoryBackend;
+            this.entryTable = entryTable;
+            this.keyDirectory = keyDirectory;
+            this.stringRoot = stringRoot;
+            this.listRoot = listRoot;
+            this.hashRoot = hashRoot;
+            this.setRoot = setRoot;
+            this.zsetRoot = zsetRoot;
+        }
 
-    private static Throwable clearData(
-            EntryTable entries,
-            NativeKeyDirectory directory,
-            StringRoot strings,
-            ListRoot lists,
-            HashRoot hashes,
-            SetRoot sets,
-            ZSetRoot zsets
-    ) {
-        Throwable failure = null;
-        if (entries != null && directory != null) {
-            Throwable[] entryFailure = new Throwable[1];
-            try {
-                directory.forEachEntry((ignoredKey, entryHandle) -> {
-                    EntryRecord record = null;
-                    try {
-                        record = entries.get(entryHandle);
-                    } catch (Throwable next) {
-                        entryFailure[0] = recordFailure(entryFailure[0], next);
-                    }
-                    try {
-                        releaseValue(record, strings, lists, hashes, sets, zsets);
-                    } catch (Throwable next) {
-                        entryFailure[0] = recordFailure(entryFailure[0], next);
-                    }
-                    try {
-                        entries.release(entryHandle);
-                    } catch (Throwable next) {
-                        entryFailure[0] = recordFailure(entryFailure[0], next);
-                    }
-                });
-            } catch (Throwable next) {
-                entryFailure[0] = recordFailure(entryFailure[0], next);
+        private void releaseValue(EntryRecord record) {
+            if (record == null || record.valueHandle() == null || record.valueHandle().isNull()) {
+                return;
             }
-            failure = recordFailure(failure, entryFailure[0]);
+            switch (record.type()) {
+                case STRING -> stringRoot.release(record.valueHandle());
+                case LIST -> listRoot.release(record.valueHandle());
+                case HASH -> hashRoot.release(record.valueHandle());
+                case SET -> setRoot.release(record.valueHandle());
+                case ZSET -> zsetRoot.release(record.valueHandle());
+            }
         }
-        if (directory != null) {
+
+        private void releaseOwnedEntry(EntryHandle entryHandle) {
+            Objects.requireNonNull(entryHandle, "entryHandle");
+            Throwable failure = null;
+            EntryRecord record = null;
             try {
-                directory.clear();
+                record = entryTable.get(entryHandle);
             } catch (Throwable next) {
                 failure = recordFailure(failure, next);
             }
+            try {
+                releaseValue(record);
+            } catch (Throwable next) {
+                failure = recordFailure(failure, next);
+            }
+            try {
+                entryTable.release(entryHandle);
+            } catch (Throwable next) {
+                failure = recordFailure(failure, next);
+            }
+            throwIfFailure(failure);
         }
-        return failure;
-    }
 
-    private static void releaseValue(
-            EntryRecord record,
-            StringRoot strings,
-            ListRoot lists,
-            HashRoot hashes,
-            SetRoot sets,
-            ZSetRoot zsets
-    ) {
-        if (record == null || record.valueHandle() == null || record.valueHandle().isNull()) {
-            return;
+        private void clearData() {
+            throwIfFailure(clearDataFailure());
         }
-        switch (record.type()) {
-            case STRING -> strings.release(record.valueHandle());
-            case LIST -> lists.release(record.valueHandle());
-            case HASH -> hashes.release(record.valueHandle());
-            case SET -> sets.release(record.valueHandle());
-            case ZSET -> zsets.release(record.valueHandle());
-        }
-    }
 
-    private static Throwable closeResource(AutoCloseable resource, Throwable failure) {
-        if (resource == null) {
+        private Throwable clearDataFailure() {
+            Throwable failure = null;
+            if (entryTable != null && keyDirectory != null) {
+                Throwable[] entryFailure = new Throwable[1];
+                try {
+                    keyDirectory.forEachEntry((ignoredKey, entryHandle) -> {
+                        EntryRecord record = null;
+                        try {
+                            record = entryTable.get(entryHandle);
+                        } catch (Throwable next) {
+                            entryFailure[0] = recordFailure(entryFailure[0], next);
+                        }
+                        try {
+                            releaseValue(record);
+                        } catch (Throwable next) {
+                            entryFailure[0] = recordFailure(entryFailure[0], next);
+                        }
+                        try {
+                            entryTable.release(entryHandle);
+                        } catch (Throwable next) {
+                            entryFailure[0] = recordFailure(entryFailure[0], next);
+                        }
+                    });
+                } catch (Throwable next) {
+                    entryFailure[0] = recordFailure(entryFailure[0], next);
+                }
+                failure = recordFailure(failure, entryFailure[0]);
+            }
+            if (keyDirectory != null) {
+                try {
+                    keyDirectory.clear();
+                } catch (Throwable next) {
+                    failure = recordFailure(failure, next);
+                }
+            }
             return failure;
         }
-        try {
-            resource.close();
-        } catch (Throwable next) {
-            return recordFailure(failure, next);
+
+        @Override
+        public void close() {
+            if (closeAttempted) {
+                return;
+            }
+            closeAttempted = true;
+            Throwable failure = clearDataFailure();
+            failure = closeResource(entryTable, failure);
+            failure = closeResource(keyDirectory, failure);
+            failure = closeResource(stringRoot, failure);
+            failure = closeResource(listRoot, failure);
+            failure = closeResource(hashRoot, failure);
+            failure = closeResource(setRoot, failure);
+            failure = closeResource(zsetRoot, failure);
+            throwIfFailure(closeResource(stableMemoryBackend, failure));
         }
-        return failure;
+
+        private static Throwable closeResource(AutoCloseable resource, Throwable failure) {
+            if (resource == null) {
+                return failure;
+            }
+            try {
+                resource.close();
+            } catch (Throwable next) {
+                return recordFailure(failure, next);
+            }
+            return failure;
+        }
     }
 
     private static void throwIfFailure(Throwable failure) {

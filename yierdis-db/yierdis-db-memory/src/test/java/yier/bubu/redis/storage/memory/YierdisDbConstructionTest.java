@@ -1,19 +1,30 @@
 package yier.bubu.redis.storage.memory;
 
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.MemoryOwner;
 import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.testkit.HeapStableMemoryBackend;
 import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.DbEngineConfig;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.RuntimeDbEngine;
 import yier.bubu.redis.storage.api.SetMode;
+import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
+import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
+import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
+import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
@@ -114,6 +125,46 @@ public class YierdisDbConstructionTest {
     }
 
     @Test
+    public void partialConstructionCloseAttemptsEveryResourceAndAggregatesFailuresInOrder() {
+        try (TestBackend runtime = TestBackend.open("partial-close-failures")) {
+            List<String> operations = new ArrayList<>();
+            AtomicInteger freeCalls = new AtomicInteger();
+            StableMemoryBackend backend = recordingFailureBackend(runtime.backend(), operations, freeCalls);
+            EntryTable entries = new EntryTable(backend);
+            NativeKeyDirectory directory = new NativeKeyDirectory(backend);
+            StringRoot strings = new StringRoot(backend);
+            NativeKeyDirectory.StagedInsert stagedKey = directory.stageInsert(b("k"));
+            EntryHandle entryHandle = entries.allocate(entryRecord(
+                    KeyHandleAccess.allocatorNativeHandle(stagedKey.keyHandle())
+            ));
+            directory.publishStagedInsert(stagedKey, entryHandle);
+
+            IllegalStateException failure = Assert.assertThrows(
+                    IllegalStateException.class,
+                    () -> YierdisDbKeyLifecycle.closePartiallyConstructed(
+                            backend,
+                            entries,
+                            directory,
+                            strings,
+                            null,
+                            null,
+                            null,
+                            null
+                    )
+            );
+
+            Assert.assertEquals("free 1 failed", failure.getMessage());
+            Assert.assertEquals(2, failure.getSuppressed().length);
+            Assert.assertEquals("free 2 failed", failure.getSuppressed()[0].getMessage());
+            Assert.assertEquals("backend close failed", failure.getSuppressed()[1].getMessage());
+            Assert.assertEquals(
+                    List.of("free-1", "free-2", "backend-close"),
+                    operations
+            );
+        }
+    }
+
+    @Test
     public void configRejectsInvalidValues() {
         Assert.assertThrows(IllegalArgumentException.class, () -> config(-1));
         Assert.assertThrows(
@@ -187,5 +238,56 @@ public class YierdisDbConstructionTest {
 
     private static DbDefragConfig defrag() {
         return new DbDefragConfig(false, 0L, 0L, 0L);
+    }
+
+    private static EntryRecord entryRecord(yier.bubu.redis.memory.api.NativeHandle keyHandle) {
+        return new EntryRecord(
+                keyHandle,
+                ValueHandle.NULL,
+                0,
+                yier.bubu.redis.storage.api.ValueType.STRING,
+                yier.bubu.redis.storage.memory.internal.value.ValueEncoding.STRING_RAW,
+                0,
+                -1L,
+                1L,
+                0L
+        );
+    }
+
+    private static StableMemoryBackend recordingFailureBackend(
+            StableMemoryBackend delegate,
+            List<String> operations,
+            AtomicInteger freeCalls
+    ) {
+        return (StableMemoryBackend) Proxy.newProxyInstance(
+                StableMemoryBackend.class.getClassLoader(),
+                new Class<?>[]{StableMemoryBackend.class},
+                (ignoredProxy, method, arguments) -> {
+                    if (method.getName().equals("free")) {
+                        int call = freeCalls.incrementAndGet();
+                        operations.add("free-" + call);
+                        try {
+                            method.invoke(delegate, arguments);
+                        } catch (InvocationTargetException failure) {
+                            throw failure.getCause();
+                        }
+                        throw new IllegalStateException("free " + call + " failed");
+                    }
+                    if (method.getName().equals("close")) {
+                        operations.add("backend-close");
+                        try {
+                            method.invoke(delegate, arguments);
+                        } catch (InvocationTargetException failure) {
+                            throw failure.getCause();
+                        }
+                        throw new IllegalStateException("backend close failed");
+                    }
+                    try {
+                        return method.invoke(delegate, arguments);
+                    } catch (InvocationTargetException failure) {
+                        throw failure.getCause();
+                    }
+                }
+        );
     }
 }

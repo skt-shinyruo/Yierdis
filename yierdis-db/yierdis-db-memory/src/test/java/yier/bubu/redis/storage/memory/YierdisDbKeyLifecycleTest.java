@@ -108,6 +108,61 @@ public class YierdisDbKeyLifecycleTest {
     }
 
     @Test
+    public void rejectedStagedPublishReleasesTheUnpublishedKeyEntryAndValue() {
+        withDb(db -> {
+            YierdisDbKeyLifecycle lifecycle = db.keyLifecycle();
+            KeyLifecycleTestAccess.Inspection inspection = KeyLifecycleTestAccess.inspect(lifecycle);
+            long baselineKeys = KeyLifecycleTestAccess.backend(db).stats()
+                    .objectCount(NativeObjectKind.KEY_BYTES);
+            long baselineEntries = KeyLifecycleTestAccess.backend(db).stats()
+                    .objectCount(NativeObjectKind.ENTRY_RECORD);
+            long baselineStrings = KeyLifecycleTestAccess.backend(db).stats()
+                    .objectCount(NativeObjectKind.STRING_BYTES);
+            byte[] key = bytes("publish-conflict");
+
+            YierdisDbKeyLifecycle.StagedEntry rejected = lifecycle.stageEntry(key);
+            ValueHandle rejectedValue = inspection.stringRoot().store(bytes("rejected"));
+            EntryRecord rejectedRecord = lifecycle.newRecord(
+                    rejected.keyHandle(),
+                    rejectedValue,
+                    ValueType.STRING,
+                    ValueEncoding.STRING_RAW,
+                    -1L,
+                    null
+            );
+            YierdisDbKeyLifecycle.StagedEntry winner = lifecycle.stageEntry(key);
+            EntryRecord winnerRecord = lifecycle.newRecord(
+                    winner.keyHandle(),
+                    ValueHandle.NULL,
+                    ValueType.STRING,
+                    ValueEncoding.STRING_RAW,
+                    -1L,
+                    null
+            );
+            lifecycle.publishStagedEntry(winner, winnerRecord);
+
+            Assert.assertThrows(
+                    IllegalStateException.class,
+                    () -> lifecycle.publishStagedEntry(rejected, rejectedRecord)
+            );
+
+            Assert.assertThrows(IllegalStateException.class, rejected::keyHandle);
+            Assert.assertEquals(baselineKeys + 1L, KeyLifecycleTestAccess.backend(db).stats()
+                    .objectCount(NativeObjectKind.KEY_BYTES));
+            Assert.assertEquals(baselineEntries + 1L, KeyLifecycleTestAccess.backend(db).stats()
+                    .objectCount(NativeObjectKind.ENTRY_RECORD));
+            Assert.assertEquals(baselineStrings, KeyLifecycleTestAccess.backend(db).stats()
+                    .objectCount(NativeObjectKind.STRING_BYTES));
+
+            lifecycle.deleteEntry(lifecycle.entryHandle(key), winnerRecord);
+            Assert.assertEquals(baselineKeys, KeyLifecycleTestAccess.backend(db).stats()
+                    .objectCount(NativeObjectKind.KEY_BYTES));
+            Assert.assertEquals(baselineEntries, KeyLifecycleTestAccess.backend(db).stats()
+                    .objectCount(NativeObjectKind.ENTRY_RECORD));
+        });
+    }
+
+    @Test
     public void ttlUpdatesReplaceEntryRecordsAndKeepDerivedCountExact() {
         withDb(db -> {
             YierdisDbKeyLifecycle lifecycle = db.keyLifecycle();

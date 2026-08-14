@@ -11,9 +11,12 @@ final class YierdisDbTestAccess {
     static StableMemoryBackend backend(YierdisDb db) {
         YierdisDbKeyLifecycle lifecycle = Objects.requireNonNull(db, "db").keyLifecycle();
         try {
-            Field field = YierdisDbKeyLifecycle.class.getDeclaredField("stableMemoryBackend");
-            field.setAccessible(true);
-            return StableMemoryBackend.class.cast(field.get(lifecycle));
+            Field ownedResourcesField = YierdisDbKeyLifecycle.class.getDeclaredField("ownedResources");
+            ownedResourcesField.setAccessible(true);
+            Object ownedResources = ownedResourcesField.get(lifecycle);
+            Field backendField = ownedResources.getClass().getDeclaredField("stableMemoryBackend");
+            backendField.setAccessible(true);
+            return StableMemoryBackend.class.cast(backendField.get(ownedResources));
         } catch (ReflectiveOperationException failure) {
             throw new AssertionError("unable to inspect key lifecycle backend", failure);
         }

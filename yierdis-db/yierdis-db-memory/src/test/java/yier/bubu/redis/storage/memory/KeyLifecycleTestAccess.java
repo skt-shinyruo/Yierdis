@@ -21,23 +21,24 @@ final class KeyLifecycleTestAccess {
 
     static Inspection inspect(YierdisDbKeyLifecycle lifecycle) {
         Objects.requireNonNull(lifecycle, "lifecycle");
+        Object ownedResources = field(lifecycle, "ownedResources", Object.class);
         return new Inspection(
-                field(lifecycle, "stableMemoryBackend", StableMemoryBackend.class),
-                field(lifecycle, "entryTable", EntryTable.class),
-                field(lifecycle, "keyDirectory", NativeKeyDirectory.class),
-                field(lifecycle, "stringRoot", StringRoot.class),
-                field(lifecycle, "listRoot", ListRoot.class),
-                field(lifecycle, "hashRoot", HashRoot.class),
-                field(lifecycle, "setRoot", SetRoot.class),
-                field(lifecycle, "zsetRoot", ZSetRoot.class)
+                field(ownedResources, "stableMemoryBackend", StableMemoryBackend.class),
+                field(ownedResources, "entryTable", EntryTable.class),
+                field(ownedResources, "keyDirectory", NativeKeyDirectory.class),
+                field(ownedResources, "stringRoot", StringRoot.class),
+                field(ownedResources, "listRoot", ListRoot.class),
+                field(ownedResources, "hashRoot", HashRoot.class),
+                field(ownedResources, "setRoot", SetRoot.class),
+                field(ownedResources, "zsetRoot", ZSetRoot.class)
         );
     }
 
-    private static <T> T field(YierdisDbKeyLifecycle lifecycle, String name, Class<T> type) {
+    private static <T> T field(Object owner, String name, Class<T> type) {
         try {
-            Field field = YierdisDbKeyLifecycle.class.getDeclaredField(name);
+            Field field = owner.getClass().getDeclaredField(name);
             field.setAccessible(true);
-            return type.cast(field.get(lifecycle));
+            return type.cast(field.get(owner));
         } catch (ReflectiveOperationException failure) {
             throw new AssertionError("unable to inspect key lifecycle field: " + name, failure);
         }

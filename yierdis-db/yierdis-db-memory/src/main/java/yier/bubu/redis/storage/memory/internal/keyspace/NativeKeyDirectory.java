@@ -425,8 +425,10 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         if (staged.directory != null) {
             publishStagedDirectory(staged.directory);
         }
-        insertActive(staged.publish(), entryHandle, staged.hash, staged.keyBytes);
         recordMaintenanceDebt();
+        NativeHandle keyHandle = staged.keyHandleForPublish();
+        insertActive(keyHandle, entryHandle, staged.hash, staged.keyBytes);
+        staged.markPublished();
     }
 
     public synchronized EntryHandle remove(byte[] keyBytes) {
@@ -1177,12 +1179,15 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
             return directory == null ? 0L : directory.heapBytes;
         }
 
-        private NativeHandle publish() {
+        private NativeHandle keyHandleForPublish() {
             ensureActive();
-            NativeHandle published = keyHandle;
+            return keyHandle;
+        }
+
+        private void markPublished() {
+            ensureActive();
             keyHandle = null;
             terminal = true;
-            return published;
         }
 
         private void ensureActive() {
