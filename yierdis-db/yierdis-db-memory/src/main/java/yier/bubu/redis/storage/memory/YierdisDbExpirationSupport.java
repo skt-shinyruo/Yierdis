@@ -1,4 +1,4 @@
-package yier.bubu.redis.storage.memory.internal.expire;
+package yier.bubu.redis.storage.memory;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -8,41 +8,46 @@ import java.util.Set;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.storage.api.PostCommitMutationException;
 import yier.bubu.redis.storage.api.ScanCursorV2;
-import yier.bubu.redis.storage.memory.YierdisDbRuntimeInternals;
-import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.KeyScanResult;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 
-public final class YierdisDbExpirationSupport {
+final class YierdisDbExpirationSupport {
     private static final long CLEANUP_SCAN_CHUNK_SLOTS = 32L;
     private static final long CLEANUP_MAX_INSPECTED_SLOTS = 320L;
     private static final int CLEANUP_MAX_CANDIDATES = 20;
 
-    private final YierdisDbRuntimeInternals internals;
+    private final YierdisDbKernel kernel;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final long expireCleanupTimeLimitNanos;
     private ScanCursorV2 cursor = ScanCursorV2.start();
     private long cursorTableGeneration = Long.MIN_VALUE;
 
-    public YierdisDbExpirationSupport(
-            YierdisDbRuntimeInternals internals,
+    YierdisDbExpirationSupport(
+            YierdisDbKernel kernel,
+            YierdisDbKeyLifecycle keyLifecycle,
             long expireCleanupTimeLimitNanos
     ) {
-        this.internals = Objects.requireNonNull(internals, "internals");
-        this.keyLifecycle = internals.keyLifecycle();
+        this.kernel = Objects.requireNonNull(kernel, "kernel");
+        this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
         if (expireCleanupTimeLimitNanos < 0L) {
             throw new IllegalArgumentException("expireCleanupTimeLimitNanos must be >= 0");
         }
         this.expireCleanupTimeLimitNanos = expireCleanupTimeLimitNanos;
     }
 
-    public void cleanupExpired() {
+    void cleanupExpired() {
         cleanupExpired(0L);
     }
 
-    public void cleanupExpired(long nowMillis) {
-        internals.checkThread();
+    void cleanupExpired(long nowMillis) {
+        kernel.execute(DbUse.maintain(scope -> {
+            cleanupExpired(scope, nowMillis);
+            return null;
+        }));
+    }
+
+    private void cleanupExpired(MaintenanceScope scope, long nowMillis) {
         if (keyLifecycle.expireCount() == 0) {
             resetCursorState();
             return;
@@ -102,7 +107,7 @@ public final class YierdisDbExpirationSupport {
                 )) {
                     continue;
                 }
-                if (internals.reclaimExpired(candidate.keyHandle(), candidate.record(), nowFixed)) {
+                if (scope.reclaimExpired(candidate.keyHandle(), candidate.record(), nowFixed)) {
                     continue;
                 }
                 if (keyLifecycle.hasCurrentExpiredEntry(
@@ -129,9 +134,11 @@ public final class YierdisDbExpirationSupport {
         }
     }
 
-    public void resetCursor() {
-        internals.checkThread();
-        resetCursorState();
+    void resetCursor() {
+        kernel.execute(DbUse.maintain(ignored -> {
+            resetCursorState();
+            return null;
+        }));
     }
 
     private void resetCursorState() {

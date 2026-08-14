@@ -1,7 +1,6 @@
 package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -19,7 +18,7 @@ import yier.bubu.redis.storage.api.ZSetReadOps;
 
 import java.util.Objects;
 
-public final class YierdisDbReads implements DbReads {
+final class YierdisDbReads implements DbReads {
     private final StringReadOps strings;
     private final HashReadOps hashes;
     private final ListReadOps lists;

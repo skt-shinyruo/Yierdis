@@ -40,7 +40,6 @@ import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMemoryLedger;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
-import yier.bubu.redis.storage.memory.internal.expire.YierdisTtlOps;
 import yier.bubu.redis.storage.memory.internal.value.YierdisHyperLogLog;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
@@ -490,21 +489,21 @@ public class MutationFaultInjectionTest {
                     ledger,
                     allocator
             );
-            YierdisDbRuntimeInternals internals = new YierdisDbRuntimeInternals(
+            YierdisDbMemoryContext memoryContext = new YierdisDbMemoryContext(ledger, allocator);
+            YierdisDbKernel kernel = new YierdisDbKernel(
                     () -> {
                     },
                     executor,
                     keyLifecycle,
-                    ledger,
-                    allocator
+                    memoryContext
             );
-            YierdisStringOps stringOps = new YierdisStringOps(internals, stringRoot);
-            YierdisListOps listOps = new YierdisListOps(internals, listRoot);
-            YierdisHashOps hashOps = new YierdisHashOps(internals, hashRoot);
-            YierdisSetOps setOps = new YierdisSetOps(internals, setRoot);
-            YierdisZSetOps zsetOps = new YierdisZSetOps(internals, zsetRoot);
-            YierdisHllOps hllOps = new YierdisHllOps(internals, stringRoot);
-            YierdisTtlOps ttlOps = new YierdisTtlOps(internals);
+            YierdisStringOps stringOps = new YierdisStringOps(kernel, keyLifecycle, memoryContext, stringRoot);
+            YierdisListOps listOps = new YierdisListOps(kernel, keyLifecycle, memoryContext, listRoot);
+            YierdisHashOps hashOps = new YierdisHashOps(kernel, keyLifecycle, memoryContext, hashRoot);
+            YierdisSetOps setOps = new YierdisSetOps(kernel, keyLifecycle, memoryContext, setRoot);
+            YierdisZSetOps zsetOps = new YierdisZSetOps(kernel, keyLifecycle, memoryContext, zsetRoot);
+            YierdisHllOps hllOps = new YierdisHllOps(kernel, keyLifecycle, memoryContext, stringRoot);
+            YierdisTtlOps ttlOps = new YierdisTtlOps(kernel, keyLifecycle, memoryContext);
             return new FaultFixture(
                     runtime,
                     allocator,

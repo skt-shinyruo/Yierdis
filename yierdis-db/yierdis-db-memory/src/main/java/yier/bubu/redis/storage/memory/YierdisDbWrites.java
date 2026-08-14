@@ -20,10 +20,9 @@ import yier.bubu.redis.storage.api.TtlWriteOps;
 import yier.bubu.redis.storage.api.WriteResult;
 import yier.bubu.redis.storage.api.ZSetWriteOps;
 import yier.bubu.redis.storage.api.result.PoppedValueSequence;
-import yier.bubu.redis.storage.memory.internal.expire.YierdisTtlOps;
 
-public final class YierdisDbWrites implements DbWrites {
-    private final YierdisDbRuntimeInternals internals;
+final class YierdisDbWrites implements DbWrites {
+    private final YierdisDbKernel kernel;
     private final YierdisStringOps strings;
     private final YierdisHashOps hashes;
     private final YierdisListOps lists;
@@ -34,7 +33,7 @@ public final class YierdisDbWrites implements DbWrites {
     private final YierdisTtlOps ttl;
 
     YierdisDbWrites(
-            YierdisDbRuntimeInternals internals,
+            YierdisDbKernel kernel,
             YierdisStringOps strings,
             YierdisHashOps hashes,
             YierdisListOps lists,
@@ -44,7 +43,7 @@ public final class YierdisDbWrites implements DbWrites {
             YierdisKeyspaceOps keyspace,
             YierdisTtlOps ttl
     ) {
-        this.internals = Objects.requireNonNull(internals, "internals");
+        this.kernel = Objects.requireNonNull(kernel, "kernel");
         this.strings = Objects.requireNonNull(strings, "strings");
         this.hashes = Objects.requireNonNull(hashes, "hashes");
         this.lists = Objects.requireNonNull(lists, "lists");
@@ -97,7 +96,7 @@ public final class YierdisDbWrites implements DbWrites {
 
     @Override
     public DbWrites withMutationContext(MutationContext context) {
-        internals.checkThread();
+        kernel.execute(DbUse.ownerCheck());
         return new ContextualWrites(Objects.requireNonNull(context, "context"));
     }
 
@@ -159,7 +158,7 @@ public final class YierdisDbWrites implements DbWrites {
 
         @Override
         public DbWrites withMutationContext(MutationContext context) {
-            internals.checkThread();
+            kernel.execute(DbUse.ownerCheck());
             return new ContextualWrites(Objects.requireNonNull(context, "context"));
         }
 

@@ -16,7 +16,7 @@ YierdisInstance
         -> YierdisDb
 ```
 
-`DbEngineConfig` 是 DB 配置的唯一输入。`YierdisDb` 在私有构造器内直接组装 ledger、mutation executor 和 maintenance；`YierdisDbStorage` 只记录 maintenance registry 与 key lifecycle，`YierdisDbOperationViews` 只聚合公开 operation views。storage 创建一开始就接管 backend，构造失败与正常 shutdown 都沿 key lifecycle 的同一 ownership 路径清理，原始失败保持为 primary，清理失败附加为 suppressed。`YierdisDbRuntimeState` 只保存线程、协调器、commit、LRU clock 和 defrag 报告状态，不持有 storage backend。
+`DbEngineConfig` 是 DB 配置的唯一输入。`YierdisDb` 在私有构造器内直接组装 ledger、mutation executor、DB kernel、memory context 和 maintenance；`YierdisDbStorage` 只记录 maintenance registry 与 key lifecycle，`YierdisDbOperationViews` 只聚合公开 operation views。storage 创建一开始就接管 backend，构造失败与正常 shutdown 都沿 key lifecycle 的同一 ownership 路径清理，原始失败保持为 primary，清理失败附加为 suppressed。`YierdisDbRuntimeState` 只保存线程、协调器、commit、LRU clock 和 defrag 报告状态，不持有 storage backend。
 
 global/per-db maxmemory 只改变预算协调方式。每个 DB 都有独立的 stable-memory backend/runtime、keyspace、entry table、roots 和 ledger。
 
@@ -67,11 +67,13 @@ ops 不直接组合 directory 与 entry table，也不能从 lifecycle 取出 ba
 
 `EntryRecord.expireAtMillis` 是唯一 TTL deadline。`expireCount` 只是随 entry publish/replace/release 更新的派生计数，不是独立索引。
 
-## Runtime internals 与 facade
+## Runtime kernel 与 facade
 
-`YierdisDbRuntimeInternals` 是 concrete ops 共用的窄内部能力：owner check、mutation executor、key lifecycle 和 ledger。它没有第二实现，也不作为公开 SPI；请求级 `MutationContext` 不进入长期 DB graph。
+`YierdisDbKernel` 是 package-private 深模块，调用方只有泛型 `execute(DbUse<R>)` seam。sealed `DbUse` 固定四种 mode：`ReadUse`、`MutationUse`、`InspectionUse` 和 `MaintenanceUse`；kernel 按 mode 传入受限 scope。concrete ops、operation views、scope、memory context、key lifecycle、entry mutation、TTL driver、active-expiration driver、memory reporter 和 maxmemory participant 都保持 package-private，handle、entry record、backend 与 ledger 不进入公开 DB interface。
 
-`YierdisDbWrites.withMutationContext(...)` 一次只创建一个 immutable contextual view。这个 view 同时实现八个 family write interface，复用已经构造好的 family implementation，并把 context 显式传给 mutation executor；它不会重建 internals 或 family modules，也不会临时改写共享字段。因此两个 contextual write/lifecycle views 可以交错使用。`CommandDb` 保留 capability 的惰性访问边界，避免只读路径提前触发 write/lifecycle owner check。
+`MutationUse` 只声明 context、upper bound、admission、commit spec 和 `prepare(MutationScope)`。`Admission` 区分 normal/reclamation；`CommitSpec` 区分 user、synthetic 和 none；family 返回 opaque `PreparedChange`，由 `MutationScope` 统一构造 unchanged/insert/replace/delete/upsert/callback/batch。只有 kernel 内部 adapter 知道 `YierdisDbMutationExecutor.MutationPlan` 与 `PreparedDbMutation`。`YierdisDbMemoryContext` 继续封装 allocation 估算、epoch、native slice、allocator stats 和 page trim，但不再是可见扩展 seam。请求级 `MutationContext` 不进入长期 DB graph。
+
+`YierdisDbWrites.withMutationContext(...)` 一次只创建一个 immutable contextual view。这个 view 同时实现八个 family write interface，复用已经构造好的 family implementation，并把 context 显式传给 mutation executor；它不会重建 kernel 或 family modules，也不会临时改写共享字段。因此两个 contextual write/lifecycle views 可以交错使用。`CommandDb` 保留 capability 的惰性访问边界，避免只读路径提前触发 write/lifecycle owner check。
 
 prepared set/pop 的 `commit(context)` 以显式 commit context 为准。lazy expiry、active expiry 和 eviction 则使用 executor 的无用户 context overload，发布 `EXPIRED` / `EVICTED` synthetic `DEL`，不会继承用户 command context。
 
@@ -82,13 +84,16 @@ prepared set/pop 的 `commit(context)` 以显式 commit context 为准。lazy ex
 ```text
 DbReads
   -> Yierdis*Ops
-  -> YierdisDbRuntimeInternals.liveEntryRecord(...)
+  -> YierdisDbKernel.execute(ReadUse)
+  -> ReadScope.liveEntryRecord(...)
   -> type/encoding check
   -> EntryRecord.valueHandle()
   -> type root read
 ```
 
 `liveEntryRecord(...)` 比较 `expireAtMillis`。live record 正常返回；过期 record 触发 `reclaimExpired(...)` 并对调用方隐藏。reclamation 是完整 mutation，可能删除 graph、结算 ledger 和发布 `EXPIRED` commit。只有成功取得 live record 的 LRU 路径才 touch clock。
+
+普通查询从参数检查、live-entry 解析到结果视图构造都在同一个 `ReadUse` 内完成，family 不直接调用 kernel 的 entry lookup。prepared mutation 会跨越一次调用的生命周期，因此在创建、状态检查与提交入口使用显式 `DbUse.ownerCheck()`；scan/result view 则在 `ReadUse` 内创建并按各自契约持有 epoch 或结果资源。实际变更仍只能通过 `MutationUse` 进入 executor。
 
 需要拥有结果的 API 会复制 bytes；callback-scoped streaming 可以使用短生命周期 native view。`SCAN` 的 `KeyWindow` 先在 bounded epoch 内 discovery，再按同一 cursor/window 同步 replay 到 sink；window close 后 epoch 才释放，不能让 slice 或 view 逃逸。
 
@@ -98,7 +103,8 @@ DbReads
 
 ```text
 estimate upper bound
-  -> YierdisDbMutationExecutor.execute(plan)
+  -> YierdisDbKernel.execute(MutationUse)
+     -> internal MutationPlan adapter
      -> ledger.reserve(upperBound)
      -> NativeAllocationScope.begin()
      -> plan.prepare()
@@ -112,7 +118,7 @@ estimate upper bound
      -> optional page trim
 ```
 
-prepare 完成可能失败的 native allocation、replacement topology 和 source validation。`PreparedEntryMutation` 用 unchanged/insert/replace/delete 表达 entry 转换，并只在 value representation 需要时附加 abort、before-publish 或 superseded-release hook。
+prepare 完成可能失败的 native allocation、replacement topology 和 source validation。family 通过 `MutationScope` 产生 opaque `PreparedChange`，用 unchanged/insert/replace/delete/upsert/callback/batch 表达转换；scope 在内部映射到 prepared mutation，并只在 value representation 需要时附加 abort、before-publish 或 superseded-release hook。
 
 失败边界以 `prepared.commit()` 开始为界：
 
@@ -146,13 +152,13 @@ heap estimated
 
 per-db scope 先 cleanup expired，再按 `maxmemoryBytes - estimatedExtraBytes` trim/resample/evict。global scope 把相同 participant 操作交给 `YierdisGlobalMaxmemoryGovernor`，由它跨 DB 汇总 snapshots 和挑选 victim。各 DB backend runtime counter 只用于 lifecycle 诊断，不作为第二套 global usage source。
 
-`noeviction` 不选 victim；`allkeys-random` 随机取候选；`allkeys-lru` 比较 `EntryRecord.lruOrLfu()`。过期候选先按 `EXPIRED` reclaim，真正 victim 通过 `YierdisDbRuntimeInternals.evict(...)` 发布 `EVICTED` synthetic delete。
+`noeviction` 不选 victim；`allkeys-random` 随机取候选；`allkeys-lru` 比较 `EntryRecord.lruOrLfu()`。过期候选先按 `EXPIRED` reclaim，真正 victim 通过 `YierdisDbKernel.evict(...)` 发布 `EVICTED` synthetic delete。
 
 更完整的 admission、OOM 和 result-unknown 边界见 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)。
 
 ## Memory 与 introspection
 
-`YierdisDbMemoryReporter` 和 `YierdisDbIntrospection` 通过 runtime internals/lifecycle 读取 live state。`MEMORY USAGE` / `MEMORY STATS` 是 explainable estimate，不是 JVM instrumentation object graph。
+`YierdisDbMemoryReporter` 和 `YierdisDbIntrospection` 通过 `InspectionUse` 获取 storage-neutral encoding、snapshot 和 memory state。snapshot epoch、bounded scan、TTL 过滤与 string materialization 都留在 `InspectionScope` 内。`MEMORY USAGE` / `MEMORY STATS` 是 explainable estimate，不是 JVM instrumentation object graph。
 
 主要口径包括：
 
@@ -176,9 +182,10 @@ shutdown 会先重置 ledger、回收 detached entries，再让 key lifecycle �
 ## 修改导航
 
 - DB 组装：`YierdisDbEngineFactory`、`YierdisDb`、`YierdisDbStorage`、`YierdisDbOperationViews`。
+- 内部能力 seam：`YierdisDbKernel`、`YierdisDbUse`；实现细节：`YierdisDbMemoryContext`、`YierdisDbKeyLifecycle`。
 - key/entry/value 生命周期：`YierdisDbKeyLifecycle`、`EntryTable`、type roots。
-- mutation 与预算：`YierdisDbMutationExecutor`、`PreparedEntryMutation`、`YierdisDbMemoryLedger`。
-- TTL：`YierdisTtlOps`、`YierdisDbExpirationSupport`、`YierdisDbRuntimeInternals.reclaimExpired(...)`。
+- mutation 与预算：`MutationUse`、`MutationScope`、`PreparedChange`、`YierdisDbMutationExecutor`、`YierdisDbMemoryLedger`。
+- TTL：`YierdisTtlOps`、`YierdisDbExpirationSupport`、`YierdisDbKernel.reclaimExpired(...)`。
 - maxmemory：`YierdisDbMaxmemorySupport`、`YierdisGlobalMaxmemoryGovernor`。
 - memory backend：`YierdisFfmStableMemoryBackend` 与 [`native-memory-runtime.md`](./native-memory-runtime.md)。
 

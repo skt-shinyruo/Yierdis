@@ -19,7 +19,8 @@ TTL 写命令和 `SET ... EX/PX/EXAT/PXAT/KEEPTTL` 最终都通过 mutation exec
 ```text
 command
   -> YierdisTtlOps / YierdisStringOps
-  -> YierdisDbMutationExecutor.execute(plan)
+  -> YierdisDbKernel.execute(MutationUse)
+  -> internal YierdisDbMutationExecutor adapter
      -> reserve upper bound
      -> prepare replacement or deletion
      -> commit EntryRecord
@@ -39,7 +40,7 @@ TTL deadline 本身位于既有 entry metadata 中。只改变 deadline 不增�
 
 ## 惰性过期
 
-DB ops 解析到 `EntryRecord` 后会比较 `expireAtMillis` 与当前时间。未过期时返回 record；已过期时调用 `YierdisDbRuntimeInternals.reclaimExpired(...)`，并始终对调用方隐藏该 key。
+DB ops 解析到 `EntryRecord` 后会比较 `expireAtMillis` 与当前时间。未过期时返回 record；已过期时调用 `YierdisDbKernel.reclaimExpired(...)`，并始终对调用方隐藏该 key。
 
 回收仍是一笔完整 mutation：
 

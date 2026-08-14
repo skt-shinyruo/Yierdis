@@ -113,7 +113,7 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 - API：`StringReadOps`、`StringWriteOps`、`HllReadOps`、`HllWriteOps`
 - DB 实现：`YierdisStringOps`、HLL 相关 ops
 - 共享 entry staging 与 ownership：[`YierdisDbKeyLifecycle.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java)
-- entry 提交生命周期：[`PreparedEntryMutation.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/PreparedEntryMutation.java)
+- entry 提交生命周期：[`PreparedEntryMutation.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/PreparedEntryMutation.java)
 - 内部结构：`StringRoot`、`YierdisHyperLogLog`
 
 继续追：
@@ -140,7 +140,7 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 - API：`ListReadOps` / `ListWriteOps` 等同名 family ops
 - DB 实现：对应 `Yierdis*Ops`
 - 共享 entry staging 与 ownership：[`YierdisDbKeyLifecycle.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java)
-- entry 提交生命周期：[`PreparedEntryMutation.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/PreparedEntryMutation.java)
+- entry 提交生命周期：[`PreparedEntryMutation.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/PreparedEntryMutation.java)
 - root/value：`ListRoot`、`HashRoot`、`SetRoot`、`ZSetRoot`、`ListValue`、`HashValue`、`SetValue`、`ZSetValue`
 
 继续追：
@@ -173,7 +173,8 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 - `YierdisTtlOps`
 - `YierdisDbKeyLifecycle`
 - `YierdisDbExpirationSupport`
-- `YierdisDbRuntimeInternals.reclaimExpired(...)`
+- `YierdisDbUse`、`MutationScope`、`MaintenanceScope`
+- `YierdisDbKernel.reclaimExpired(...)`
 - `YierdisDbMutationExecutor`
 - `YierdisDbMemoryLedger`
 - `YierdisDbMaxmemorySupport`

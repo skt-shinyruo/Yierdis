@@ -7,18 +7,18 @@ import java.util.Objects;
 
 final class DbComponentMemoryUsage {
     private final Runnable threadChecker;
-    private final YierdisDbRuntimeInternals internals;
+    private final YierdisDbMemoryContext memoryContext;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final HashTableMaintenanceRegistry hashTableMaintenanceRegistry;
 
     DbComponentMemoryUsage(
             Runnable threadChecker,
-            YierdisDbRuntimeInternals internals,
+            YierdisDbMemoryContext memoryContext,
             YierdisDbKeyLifecycle keyLifecycle,
             HashTableMaintenanceRegistry hashTableMaintenanceRegistry
     ) {
         this.threadChecker = Objects.requireNonNull(threadChecker, "threadChecker");
-        this.internals = Objects.requireNonNull(internals, "internals");
+        this.memoryContext = Objects.requireNonNull(memoryContext, "memoryContext");
         this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
         this.hashTableMaintenanceRegistry = Objects.requireNonNull(
                 hashTableMaintenanceRegistry,
@@ -28,7 +28,7 @@ final class DbComponentMemoryUsage {
 
     MemoryUsageSnapshot snapshot() {
         threadChecker.run();
-        MemoryUsageSnapshot usage = internals.nativeMemoryUsage();
+        MemoryUsageSnapshot usage = memoryContext.nativeMemoryUsage();
         MemoryUsageSnapshot retainedHeap = new MemoryUsageSnapshot(
                 MemoryUsageSnapshot.addSaturating(
                         keyLifecycle.componentRetainedHeapBytes(),

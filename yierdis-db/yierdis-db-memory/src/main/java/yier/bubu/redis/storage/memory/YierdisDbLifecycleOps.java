@@ -6,7 +6,7 @@ import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.MutationOutcome;
 
-public final class YierdisDbLifecycleOps implements DbLifecycleOps {
+final class YierdisDbLifecycleOps implements DbLifecycleOps {
     private final Runnable threadChecker;
     private final Function<MutationContext, MutationOutcome> flushDb;
     private final Function<MutationContext, MutationOutcome> flushDbAsync;

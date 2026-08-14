@@ -1,132 +1,34 @@
 package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.bytes.BytesView;
-import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.storage.api.ScanCursorV2;
-import yier.bubu.redis.storage.api.ValueType;
-import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
-import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 
 import java.util.List;
 import java.util.Objects;
 
-public final class YierdisDbIntrospection implements YierdisSnapshot {
-    private final YierdisDbRuntimeInternals internals;
-    private final YierdisDbKeyLifecycle keyLifecycle;
+final class YierdisDbIntrospection implements YierdisSnapshot {
+    private final YierdisDbKernel kernel;
 
-    YierdisDbIntrospection(
-            YierdisDbRuntimeInternals internals
-    ) {
-        this.internals = Objects.requireNonNull(internals, "internals");
-        this.keyLifecycle = internals.keyLifecycle();
+    YierdisDbIntrospection(YierdisDbKernel kernel) {
+        this.kernel = Objects.requireNonNull(kernel, "kernel");
     }
 
     String objectEncoding(BytesView keyView) {
-        internals.checkThread();
-        EntryRecord record = liveEntryRecord(keyLifecycle.keyHandle(keyView));
-        if (record == null) {
-            return null;
-        }
-        return encodingName(record.encoding());
+        return kernel.execute(DbUse.inspect(scope -> scope.objectEncoding(keyView)));
     }
 
     String objectEncoding(byte[] keyBytes) {
-        internals.checkThread();
-        if (keyBytes == null) {
-            return null;
-        }
-        EntryRecord record = liveEntryRecord(keyLifecycle.keyHandle(keyBytes));
-        if (record == null) {
-            return null;
-        }
-        return encodingName(record.encoding());
-    }
-
-    private EntryRecord liveEntryRecord(yier.bubu.redis.storage.memory.internal.key.KeyHandle keyHandle) {
-        return internals.liveEntryRecord(keyHandle);
+        return kernel.execute(DbUse.inspect(scope -> scope.objectEncoding(keyBytes)));
     }
 
     @Override
     public ScanCursorV2 snapshot(ScanCursorV2 cursor, int count, List<YierdisSnapshotEntry> out) {
-        internals.checkThread();
-        Objects.requireNonNull(out, "out");
-        if (count <= 0) {
-            throw new IllegalArgumentException("count must be > 0");
-        }
-
-        try (NativeEpochScope ignored = internals.beginSnapshotEpoch()) {
-            long now = System.currentTimeMillis();
-            int maxSteps = Math.max(64, count * 10);
-            RemainingLimit remaining = new RemainingLimit(count);
-
-            return keyLifecycle.scan(cursor == null ? ScanCursorV2.start() : cursor, maxSteps, (k, record) -> {
-                if (k == null || record == null) {
-                    return true;
-                }
-                if (keyLifecycle.isKeyExpired(k, now)) {
-                    return true;
-                }
-
-                byte[] keyBytes = YierdisDb.toByteArray(k);
-                ValueType type = record.type();
-                byte[] stringValue = null;
-                if (type == ValueType.STRING) {
-                    stringValue = keyLifecycle.copyStringValue(record);
-                }
-                Long expireAtMillis = record.expireAtMillis() < 0 ? null : record.expireAtMillis();
-                out.add(new YierdisSnapshotEntry(keyBytes, type, stringValue, expireAtMillis));
-
-                return remaining.consume();
-            });
-        }
-    }
-
-    private static String encodingName(ValueEncoding encoding) {
-        if (encoding == null) {
-            return "unknown";
-        }
-        switch (encoding) {
-            case STRING_INT:
-                return "int";
-            case STRING_EMBSTR:
-                return "embstr";
-            case STRING_RAW:
-                return "raw";
-            case HASH_PACKED:
-            case LIST_PACKED:
-            case ZSET_PACKED:
-                return "listpack";
-            case HASH_HT:
-            case SET_HT:
-                return "hashtable";
-            case SET_INTSET:
-                return "intset";
-            case LIST_QUICKLIST:
-                return "quicklist";
-            case ZSET_SKIPLIST:
-                return "skiplist";
-            default:
-                return encoding.name().toLowerCase(java.util.Locale.ROOT);
-        }
-    }
-
-    private static final class RemainingLimit {
-        private int remaining;
-
-        RemainingLimit(int remaining) {
-            this.remaining = remaining;
-        }
-
-        boolean consume() {
-            remaining--;
-            return remaining > 0;
-        }
+        return kernel.execute(DbUse.inspect(scope -> scope.snapshot(cursor, count, out)));
     }
 }

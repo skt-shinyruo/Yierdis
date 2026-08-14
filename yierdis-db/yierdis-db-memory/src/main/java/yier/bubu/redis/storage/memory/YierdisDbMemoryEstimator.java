@@ -7,7 +7,7 @@ import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
-public final class YierdisDbMemoryEstimator {
+final class YierdisDbMemoryEstimator {
     private static final long SET_MEMBER_OVERHEAD_BYTES_ESTIMATE = 32L;
     private static final long ZSET_MEMBER_OVERHEAD_BYTES_ESTIMATE = 96L;
 

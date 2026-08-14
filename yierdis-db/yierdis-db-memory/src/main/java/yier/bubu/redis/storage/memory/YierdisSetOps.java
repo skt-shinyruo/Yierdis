@@ -20,23 +20,26 @@ import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.internal.ledger.PreparedCallbackMutation;
-import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
-import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
-import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 import yier.bubu.redis.storage.memory.internal.value.SemanticResultSupport;
 
 import java.util.List;
 import java.util.Objects;
 
-public final class YierdisSetOps implements SetReadOps, SetWriteOps {
-    private final YierdisDbRuntimeInternals internals;
+final class YierdisSetOps implements SetReadOps, SetWriteOps {
+    private final YierdisDbKernel kernel;
     private final YierdisDbKeyLifecycle keyLifecycle;
+    private final YierdisDbMemoryContext memoryContext;
     private final SetRoot setRoot;
 
-    YierdisSetOps(YierdisDbRuntimeInternals internals, SetRoot setRoot) {
-        this.internals = Objects.requireNonNull(internals, "internals");
-        this.keyLifecycle = internals.keyLifecycle();
+    YierdisSetOps(
+            YierdisDbKernel kernel,
+            YierdisDbKeyLifecycle keyLifecycle,
+            YierdisDbMemoryContext memoryContext,
+            SetRoot setRoot
+    ) {
+        this.kernel = Objects.requireNonNull(kernel, "kernel");
+        this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
+        this.memoryContext = Objects.requireNonNull(memoryContext, "memoryContext");
         this.setRoot = Objects.requireNonNull(setRoot, "setRoot");
     }
 
@@ -46,25 +49,30 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
     }
 
     WriteResult<Long> sadd(MutationContext context, byte[] keyBytes, List<byte[]> members) {
-        internals.checkThread();
+        kernel.execute(DbUse.ownerCheck());
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
-        reclaimExpiredBeforeMutation(keyBytes, now);
-        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<>() {
+        kernel.reclaimExpiredBeforeMutation(keyBytes, now);
+        return kernel.execute(new MutationUse<WriteResult<Long>>() {
+            @Override
+            public MutationContext context() {
+                return context;
+            }
+
             @Override
             public long upperBoundBytes() {
                 return estimateSetAddUpperBound(keyBytes, members, now);
             }
 
             @Override
-            public PreparedDbMutation<WriteResult<Long>> prepare() {
+            public PreparedChange<WriteResult<Long>> prepare(MutationScope scope) {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current != null) {
                     requireSet(current);
                     int expectedAdditions = setRoot.countAdditions(requireSetHandle(current), members);
                     if (expectedAdditions == 0) {
-                        return preparedNoEntry(WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
+                        return preparedNoEntry(scope, WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
                     }
                 }
 
@@ -94,7 +102,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
                             staged.close();
                             staged = null;
                         }
-                        return preparedNoEntry(result, outcome);
+                        return preparedNoEntry(scope, result, outcome);
                     }
                     EntryRecord next = setRecord(
                             targetKey,
@@ -105,8 +113,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
                     WriteResult<Long> result = WriteResult.of((long) added, outcome);
                     long deltaBytes = estimateRecordBytes(targetKey, next)
                             - estimateRecordBytes(targetKey, current);
-                    PreparedEntryMutation<WriteResult<Long>> prepared = PreparedEntryMutation.upsert(
-                            keyLifecycle,
+                    PreparedChange<WriteResult<Long>> prepared = scope.upsert(
                             result,
                             deltaBytes,
                             MemoryUsageSnapshot.addSaturating(
@@ -136,45 +143,50 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
     }
 
     WriteResult<Long> srem(MutationContext context, byte[] keyBytes, List<byte[]> members) {
-        internals.checkThread();
+        kernel.execute(DbUse.ownerCheck());
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
-        reclaimExpiredBeforeMutation(keyBytes, now);
-        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<>() {
+        kernel.reclaimExpiredBeforeMutation(keyBytes, now);
+        return kernel.execute(new MutationUse<WriteResult<Long>>() {
+            @Override
+            public MutationContext context() {
+                return context;
+            }
+
             @Override
             public long upperBoundBytes() {
                 return 0;
             }
 
             @Override
-            public AdmissionMode admissionMode() {
-                return AdmissionMode.RECLAMATION;
+            public Admission admission() {
+                return Admission.RECLAMATION;
             }
 
             @Override
-            public PreparedDbMutation<WriteResult<Long>> prepare() {
+            public PreparedChange<WriteResult<Long>> prepare(MutationScope scope) {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current == null) {
-                    return preparedNoEntry(WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
+                    return preparedNoEntry(scope, WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
                 }
                 requireSet(current);
                 ValueHandle handle = requireSetHandle(current);
                 int removed = setRoot.countExistingMembers(handle, members);
                 if (removed == 0) {
-                    return preparedNoEntry(WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
+                    return preparedNoEntry(scope, WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
                 }
 
                 MutationOutcome outcome = MutationOutcome.VALUE_CHANGED;
                 WriteResult<Long> result = WriteResult.of((long) removed, outcome);
                 if (removed >= setRoot.size(handle)) {
-                    return preparedDelete(currentEntry, current, result, outcome, true);
+                    return preparedDelete(scope, currentEntry, current, result, outcome, true);
                 }
 
                 EntryRecord next = setRecord(currentEntry.keyHandle(), handle, current.expireAtMillis(), current);
                 long deltaBytes = estimateRecordBytes(currentEntry.keyHandle(), next)
                         - estimateRecordBytes(currentEntry.keyHandle(), current);
-                return new PreparedCallbackMutation<>(
+                return scope.callback(
                         result,
                         deltaBytes,
                         0L,
@@ -188,7 +200,8 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
                             keyLifecycle.replaceEntry(currentEntry.entryHandle(), current, next);
                         },
                         null,
-                        null
+                        null,
+                        deltaBytes < 0L
                 );
             }
         });
@@ -196,56 +209,60 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
 
     @Override
     public ByteSequenceSource smembers(byte[] keyBytes) {
-        internals.checkThread();
-        EntryRecord record = liveSetRecord(keyBytes);
-        if (record == null) {
-            return ByteSequenceSources.empty();
-        }
-        ValueHandle handle = requireSetHandle(record);
-        return ByteSequenceSources.of(
-                setRoot.size(handle),
-                0L,
-                out -> setRoot.membersInto(handle, SemanticResultSupport.lengthSink(out)),
-                out -> setRoot.membersInto(handle, out)
-        );
+        return kernel.execute(DbUse.read(scope -> {
+            EntryRecord record = liveSetRecord(scope, keyBytes);
+            if (record == null) {
+                return ByteSequenceSources.empty();
+            }
+            ValueHandle handle = requireSetHandle(record);
+            return ByteSequenceSources.of(
+                    setRoot.size(handle),
+                    0L,
+                    out -> setRoot.membersInto(handle, SemanticResultSupport.lengthSink(out)),
+                    out -> setRoot.membersInto(handle, out)
+            );
+        }));
     }
 
     @Override
     public boolean sismember(byte[] keyBytes, byte[] member) {
-        internals.checkThread();
-        EntryRecord record = liveSetRecord(keyBytes);
-        if (record == null) {
-            return false;
-        }
-        return setRoot.contains(requireSetHandle(record), member);
+        return kernel.execute(DbUse.read(scope -> {
+            EntryRecord record = liveSetRecord(scope, keyBytes);
+            if (record == null) {
+                return false;
+            }
+            return setRoot.contains(requireSetHandle(record), member);
+        }));
     }
 
     @Override
     public long scard(byte[] keyBytes) {
-        internals.checkThread();
-        EntryRecord record = liveSetRecord(keyBytes);
-        if (record == null) {
-            return 0;
-        }
-        return setRoot.size(requireSetHandle(record));
+        return kernel.execute(DbUse.read(scope -> {
+            EntryRecord record = liveSetRecord(scope, keyBytes);
+            if (record == null) {
+                return 0L;
+            }
+            return (long) setRoot.size(requireSetHandle(record));
+        }));
     }
 
     @Override
     public CollectionScanWindow sscan(byte[] keyBytes, ScanCursorV2 cursor, byte[] globPattern, int count) {
-        internals.checkThread();
-        if (count <= 0) {
-            throw new IllegalArgumentException("count must be > 0");
-        }
-        EntryRecord record = liveSetRecord(keyBytes);
-        if (record == null) {
-            return new MaterializedCollectionScanWindow(ScanCursorV2.start(), List.of());
-        }
-        return setRoot.sscan(
-                requireSetHandle(record),
-                cursor == null ? ScanCursorV2.start() : cursor,
-                globPattern,
-                count
-        );
+        return kernel.execute(DbUse.read(scope -> {
+            if (count <= 0) {
+                throw new IllegalArgumentException("count must be > 0");
+            }
+            EntryRecord record = liveSetRecord(scope, keyBytes);
+            if (record == null) {
+                return new MaterializedCollectionScanWindow(ScanCursorV2.start(), List.of());
+            }
+            return setRoot.sscan(
+                    requireSetHandle(record),
+                    cursor == null ? ScanCursorV2.start() : cursor,
+                    globPattern,
+                    count
+            );
+        }));
     }
 
     private long estimateSetAddUpperBound(byte[] keyBytes, List<byte[]> members, long nowMillis) {
@@ -326,9 +343,9 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
         return sizes;
     }
 
-    private EntryRecord liveSetRecord(byte[] keyBytes) {
+    private EntryRecord liveSetRecord(ReadScope scope, byte[] keyBytes) {
         KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
-        EntryRecord record = internals.liveEntryRecord(keyHandle);
+        EntryRecord record = scope.liveEntryRecord(keyHandle);
         if (record == null) {
             return null;
         }
@@ -365,22 +382,16 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
         return keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
     }
 
-    private void reclaimExpiredBeforeMutation(byte[] keyBytes, long nowMillis) {
-        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
-        if (keyHandle == null) {
-            return;
-        }
-        EntryRecord record = keyLifecycle.entryRecord(keyHandle);
-        if (record != null && keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
-            internals.reclaimExpired(keyHandle, record, nowMillis);
-        }
+    private static <T> PreparedChange<T> preparedNoEntry(
+            MutationScope scope,
+            T result,
+            MutationOutcome outcome
+    ) {
+        return scope.unchanged(result, outcome);
     }
 
-    private <T> PreparedEntryMutation<T> preparedNoEntry(T result, MutationOutcome outcome) {
-        return PreparedEntryMutation.unchanged(keyLifecycle, result, outcome);
-    }
-
-    private <T> PreparedEntryMutation<T> preparedDelete(
+    private <T> PreparedChange<T> preparedDelete(
+            MutationScope scope,
             CurrentEntry currentEntry,
             EntryRecord current,
             T result,
@@ -388,8 +399,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
             boolean releaseOldValue
     ) {
         long deltaBytes = -estimateRecordBytes(currentEntry.keyHandle(), current);
-        return PreparedEntryMutation.delete(
-                keyLifecycle,
+        return scope.delete(
                 result,
                 deltaBytes,
                 outcome,
@@ -415,7 +425,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
     }
 
     private long nativePeak(long heapGrowthBytes, int... nativeAllocationSizes) {
-        return internals.nativeAllocationPeakAdditionalBytes(
+        return memoryContext.nativeAllocationPeakAdditionalBytes(
                 0L,
                 Math.max(0L, heapGrowthBytes),
                 nativeAllocationSizes
@@ -425,7 +435,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
     private long withScopeBookkeeping(long upperBound) {
         return Math.max(
                 Math.max(0L, upperBound),
-                internals.nativeAllocationScopeBookkeepingBytes(0)
+                memoryContext.nativeAllocationScopeBookkeepingBytes(0)
         );
     }
 

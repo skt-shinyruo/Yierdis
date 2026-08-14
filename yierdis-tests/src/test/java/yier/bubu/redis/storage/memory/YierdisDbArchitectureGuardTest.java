@@ -2,6 +2,7 @@ package yier.bubu.redis.storage.memory;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.StableMemoryBackendFactory;
 import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
@@ -92,7 +93,7 @@ public class YierdisDbArchitectureGuardTest {
     public void contextualWritesDoNotRebuildRuntimeOrFamilyModules() throws IOException {
         Path main = storageMemoryMain(resolveRepoRoot()).resolve("yier/bubu/redis/storage/memory");
         String writes = Files.readString(main.resolve("YierdisDbWrites.java"), StandardCharsets.UTF_8);
-        String internals = Files.readString(main.resolve("YierdisDbRuntimeInternals.java"), StandardCharsets.UTF_8);
+        String kernel = Files.readString(main.resolve("YierdisDbKernel.java"), StandardCharsets.UTF_8);
         for (String family : List.of(
                 "YierdisStringOps",
                 "YierdisHashOps",
@@ -105,10 +106,129 @@ public class YierdisDbArchitectureGuardTest {
         )) {
             Assert.assertFalse("context binding must reuse " + family, writes.contains("new " + family));
         }
-        Assert.assertFalse("runtime internals must not retain request context",
-                internals.contains("MutationContext mutationContext"));
-        Assert.assertFalse("runtime internals must not be rebuilt for request context",
-                internals.contains("withMutationContext("));
+        Assert.assertFalse("runtime kernel must not retain request context",
+                Arrays.stream(YierdisDbKernel.class.getDeclaredFields())
+                        .anyMatch(field -> field.getType().equals(MutationContext.class)));
+        Assert.assertFalse("runtime kernel must not be rebuilt for request context",
+                kernel.contains("withMutationContext("));
+    }
+
+    @Test
+    public void dbKernelDoesNotRegrowLifecycleOrMemoryAccessors() throws IOException {
+        Path main = storageMemoryMain(resolveRepoRoot()).resolve("yier/bubu/redis/storage/memory");
+        String kernel = Files.readString(main.resolve("YierdisDbKernel.java"), StandardCharsets.UTF_8);
+
+        Assert.assertFalse("removed runtime internals type returned",
+                Files.exists(main.resolve("YierdisDbRuntimeInternals.java")));
+        Assert.assertFalse("kernel must not expose key lifecycle",
+                Arrays.stream(YierdisDbKernel.class.getDeclaredMethods())
+                        .anyMatch(method -> method.getName().equals("keyLifecycle")));
+        Assert.assertFalse("kernel must not depend on stable-memory backend",
+                kernel.contains("StableMemoryBackend"));
+        Assert.assertFalse("kernel must not depend on memory ledger",
+                kernel.contains("MemoryLedger"));
+    }
+
+    @Test
+    public void dbKernelUsesOneSealedModeInterface() {
+        Assert.assertFalse("kernel is an internal module", Modifier.isPublic(YierdisDbKernel.class.getModifiers()));
+        Assert.assertFalse("memory context is an internal implementation detail",
+                Modifier.isPublic(YierdisDbMemoryContext.class.getModifiers()));
+        Assert.assertTrue("DB use modes must stay sealed", DbUse.class.isSealed());
+        Assert.assertEquals(
+                Set.of(ReadUse.class, MutationUse.class, InspectionUse.class, MaintenanceUse.class),
+                Set.of(DbUse.class.getPermittedSubclasses())
+        );
+        Assert.assertEquals(
+                "kernel must have one generic use entry point",
+                1L,
+                Arrays.stream(YierdisDbKernel.class.getDeclaredMethods())
+                        .filter(method -> method.getName().equals("execute"))
+                        .count()
+        );
+        Assert.assertFalse(
+                "removed mutation-plan compatibility seam returned",
+                Arrays.stream(YierdisDbKernel.class.getDeclaredMethods())
+                        .anyMatch(method -> method.getName().equals("executeMutation"))
+        );
+        Assert.assertFalse(
+                "owner checks must cross the generic use entry point",
+                Arrays.stream(YierdisDbKernel.class.getDeclaredMethods())
+                        .anyMatch(method -> method.getName().equals("checkThread"))
+        );
+    }
+
+    @Test
+    public void concreteDbOpsDoNotImplementExecutorProtocol() throws IOException {
+        Path main = storageMemoryMain(resolveRepoRoot()).resolve("yier/bubu/redis/storage/memory");
+        for (String sourceName : List.of(
+                "YierdisStringOps.java",
+                "YierdisListOps.java",
+                "YierdisHashOps.java",
+                "YierdisSetOps.java",
+                "YierdisZSetOps.java",
+                "YierdisHllOps.java",
+                "YierdisKeyspaceOps.java",
+                "YierdisTtlOps.java",
+                "YierdisDbWrites.java",
+                "YierdisDbDataMaintenance.java"
+        )) {
+            String source = Files.readString(main.resolve(sourceName), StandardCharsets.UTF_8);
+            for (String forbidden : List.of(
+                    "YierdisDbMutationExecutor",
+                    "MutationPlan",
+                    "PreparedEntryMutation",
+                    "PreparedDbMutation",
+                    "PreparedCallbackMutation",
+                    "kernel.checkThread()",
+                    "kernel.liveEntryRecord("
+            )) {
+                Assert.assertFalse(sourceName + " bypasses the kernel via " + forbidden,
+                        source.contains(forbidden));
+            }
+        }
+    }
+
+    @Test
+    public void concreteDbImplementationStaysBehindTheKernelModule() {
+        for (Class<?> implementation : List.of(
+                YierdisDbKeyLifecycle.class,
+                PreparedEntryMutation.class,
+                YierdisStringOps.class,
+                YierdisListOps.class,
+                YierdisHashOps.class,
+                YierdisSetOps.class,
+                YierdisZSetOps.class,
+                YierdisHllOps.class,
+                YierdisKeyspaceOps.class,
+                YierdisTtlOps.class,
+                YierdisDbExpirationSupport.class,
+                YierdisDbReads.class,
+                YierdisDbWrites.class,
+                YierdisDbLifecycleOps.class,
+                YierdisDbIntrospection.class,
+                YierdisDbMemoryReporter.class,
+                YierdisDbMemoryEstimator.class,
+                YierdisDbMaxmemorySupport.class
+        )) {
+            Assert.assertFalse(implementation.getSimpleName() + " must remain internal",
+                    Modifier.isPublic(implementation.getModifiers()));
+        }
+    }
+
+    @Test
+    public void keyLifecycleHasNoPublicImplementationMembers() {
+        Assert.assertTrue(
+                "key lifecycle must keep its implementation interface package-private",
+                Arrays.stream(YierdisDbKeyLifecycle.class.getDeclaredMethods())
+                        .noneMatch(method -> Modifier.isPublic(method.getModifiers())
+                                && !method.getName().equals("close"))
+        );
+        Assert.assertTrue(
+                "key lifecycle nested implementation types must stay package-private",
+                Arrays.stream(YierdisDbKeyLifecycle.class.getDeclaredClasses())
+                        .noneMatch(type -> Modifier.isPublic(type.getModifiers()))
+        );
     }
 
     @Test

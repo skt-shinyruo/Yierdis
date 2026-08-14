@@ -1,7 +1,6 @@
 package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -18,34 +17,29 @@ import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 
-import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
-public final class YierdisDbMemoryReporter {
+final class YierdisDbMemoryReporter {
     // 聚合 entry 派生状态、ledger 和 native allocator；物理快照仍只计入一次，不替代写路径的两阶段预算账本。
-    private final YierdisDbRuntimeInternals internals;
+    private final YierdisDbKernel kernel;
     private final DbComponentMemoryUsage componentMemoryUsage;
-    private final YierdisDbKeyLifecycle keyLifecycle;
     private final HashTableMaintenanceRegistry hashTableMaintenanceRegistry;
     private final long maxmemoryBytes;
     private final MemoryLedger ledger;
     private final YierdisDbMemoryEstimator memoryEstimator;
     private final Supplier<NativeDefragReport> nativeDefragReportSupplier;
-    private final LongSupplier nativeLiveRegionCountSupplier;
 
     YierdisDbMemoryReporter(
-            YierdisDbRuntimeInternals internals,
+            YierdisDbKernel kernel,
             DbComponentMemoryUsage componentMemoryUsage,
             HashTableMaintenanceRegistry hashTableMaintenanceRegistry,
             long maxmemoryBytes,
             MemoryLedger ledger,
             YierdisDbMemoryEstimator memoryEstimator,
-            Supplier<NativeDefragReport> nativeDefragReportSupplier,
-            LongSupplier nativeLiveRegionCountSupplier
+            Supplier<NativeDefragReport> nativeDefragReportSupplier
     ) {
-        this.internals = java.util.Objects.requireNonNull(internals, "internals");
+        this.kernel = java.util.Objects.requireNonNull(kernel, "kernel");
         this.componentMemoryUsage = java.util.Objects.requireNonNull(componentMemoryUsage, "componentMemoryUsage");
-        this.keyLifecycle = internals.keyLifecycle();
         this.hashTableMaintenanceRegistry = java.util.Objects.requireNonNull(
                 hashTableMaintenanceRegistry,
                 "hashTableMaintenanceRegistry"
@@ -57,62 +51,60 @@ public final class YierdisDbMemoryReporter {
                 nativeDefragReportSupplier,
                 "nativeDefragReportSupplier"
         );
-        this.nativeLiveRegionCountSupplier = java.util.Objects.requireNonNull(
-                nativeLiveRegionCountSupplier,
-                "nativeLiveRegionCountSupplier"
-        );
     }
 
     long memoryUsage(BytesView keyView) {
-        internals.checkThread();
-        KeyHandle keyHandle = keyLifecycle.keyHandle(keyView);
-        EntryRecord record = liveEntryRecord(keyHandle);
-        if (record == null) {
-            return -1;
-        }
-        long keyLen = keyView == null ? 0 : Math.max(0L, (long) keyView.length());
-        return metadataEstimatedBytes(keyHandle, record) + estimateNativeBytesForMemoryUsage(keyLen, record);
+        return kernel.execute(DbUse.inspect(scope -> {
+            KeyHandle keyHandle = scope.keyHandle(keyView);
+            EntryRecord record = scope.liveEntryRecord(keyHandle);
+            if (record == null) {
+                return -1L;
+            }
+            long keyLen = Math.max(0L, (long) keyView.length());
+            return metadataEstimatedBytes(keyHandle, record)
+                    + estimateNativeBytesForMemoryUsage(scope, keyLen, record);
+        }));
     }
 
     long memoryUsage(byte[] keyBytes) {
-        internals.checkThread();
-        if (keyBytes == null) {
-            return -1;
-        }
-        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
-        EntryRecord record = liveEntryRecord(keyHandle);
-        if (record == null) {
-            return -1;
-        }
-        return metadataEstimatedBytes(keyHandle, record) + estimateNativeBytesForMemoryUsage(keyBytes.length, record);
+        return kernel.execute(DbUse.inspect(scope -> {
+            if (keyBytes == null) {
+                return -1L;
+            }
+            KeyHandle keyHandle = scope.keyHandle(keyBytes);
+            EntryRecord record = scope.liveEntryRecord(keyHandle);
+            if (record == null) {
+                return -1L;
+            }
+            return metadataEstimatedBytes(keyHandle, record)
+                    + estimateNativeBytesForMemoryUsage(scope, keyBytes.length, record);
+        }));
     }
 
     YierdisMemoryStats memoryStats() {
-        internals.checkThread();
-        MemoryUsageSnapshot usage = memoryUsage();
-        return DbMemoryAccounting.snapshot(
+        return kernel.execute(DbUse.inspect(scope -> DbMemoryAccounting.snapshot(
                 maxmemoryBytes,
-                usage,
+                componentMemoryUsage.snapshot(),
                 ledger.reservedBytes(),
-                keyLifecycle.keyCount(),
-                keyLifecycle.expireCount(),
-                keyLifecycle.expiredEntriesAwaitingPhysicalDeletion(),
+                scope.keyCount(),
+                scope.expireCount(),
+                scope.expiredEntriesAwaitingPhysicalDeletion(),
                 hashTableMaintenanceRegistry,
                 true,
-                safeNativeAllocatorStats(),
+                safeNativeAllocatorStats(scope),
                 nativeDefragReportSupplier.get(),
-                safeNativeLiveRegionCount()
-        );
+                safeNativeLiveRegionCount(scope)
+        )));
     }
 
     MemoryUsageSnapshot memoryUsage() {
-        internals.checkThread();
-        return componentMemoryUsage.snapshot();
+        return kernel.execute(DbUse.inspect(ignored -> componentMemoryUsage.snapshot()));
     }
 
     long usedBytesForMaxmemory() {
-        internals.checkThread();
-        return memoryUsage().effectiveBytesForMaxmemory();
+        return kernel.execute(DbUse.inspect(
+                ignored -> componentMemoryUsage.snapshot().effectiveBytesForMaxmemory()
+        ));
     }
 
     long estimatedUsedBytes() {
@@ -120,18 +112,15 @@ public final class YierdisDbMemoryReporter {
     }
 
     int keyCountEstimate() {
-        internals.checkThread();
-        int size;
-        try {
-            size = keyLifecycle.keyCount();
-        } catch (Throwable ignored) {
-            size = 0;
-        }
-        return Math.max(0, size);
-    }
-
-    private EntryRecord liveEntryRecord(KeyHandle keyHandle) {
-        return internals.liveEntryRecord(keyHandle);
+        return kernel.execute(DbUse.inspect(scope -> {
+            int size;
+            try {
+                size = scope.keyCount();
+            } catch (Throwable ignored) {
+                size = 0;
+            }
+            return Math.max(0, size);
+        }));
     }
 
     private long metadataEstimatedBytes(KeyHandle keyHandle, EntryRecord record) {
@@ -141,7 +130,11 @@ public final class YierdisDbMemoryReporter {
         return 0L;
     }
 
-    private long estimateNativeBytesForMemoryUsage(long keyLen, EntryRecord record) {
+    private long estimateNativeBytesForMemoryUsage(
+            InspectionScope scope,
+            long keyLen,
+            EntryRecord record
+    ) {
         if (record == null) {
             return 0;
         }
@@ -149,20 +142,20 @@ public final class YierdisDbMemoryReporter {
         if (keyLen > 0) {
             extra += keyLen;
         }
-        return MemoryUsageSnapshot.addSaturating(extra, keyLifecycle.estimatedValueBytes(record));
+        return MemoryUsageSnapshot.addSaturating(extra, scope.estimatedValueBytes(record));
     }
 
-    private NativeAllocatorStats safeNativeAllocatorStats() {
+    private static NativeAllocatorStats safeNativeAllocatorStats(InspectionScope scope) {
         try {
-            return internals.nativeAllocatorStats();
+            return scope.nativeAllocatorStats();
         } catch (Throwable ignored) {
             return null;
         }
     }
 
-    private long safeNativeLiveRegionCount() {
+    private static long safeNativeLiveRegionCount(InspectionScope scope) {
         try {
-            return Math.max(0L, nativeLiveRegionCountSupplier.getAsLong());
+            return Math.max(0L, scope.nativeLiveRegionCount());
         } catch (Throwable ignored) {
             return 0L;
         }

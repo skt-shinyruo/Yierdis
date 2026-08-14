@@ -15,25 +15,29 @@ import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
-import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
-import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 import yier.bubu.redis.storage.memory.internal.value.YierdisHyperLogLog;
 
 import java.util.List;
 import java.util.Objects;
 
-public final class YierdisHllOps implements HllReadOps, HllWriteOps {
+final class YierdisHllOps implements HllReadOps, HllWriteOps {
     private static final long HLL_REGISTER_HEAP_BYTES = (long) YierdisHyperLogLog.REGISTERS * Integer.BYTES;
 
-    private final YierdisDbRuntimeInternals internals;
+    private final YierdisDbKernel kernel;
     private final YierdisDbKeyLifecycle keyLifecycle;
+    private final YierdisDbMemoryContext memoryContext;
     private final StringRoot stringRoot;
 
-    YierdisHllOps(YierdisDbRuntimeInternals internals, StringRoot stringRoot) {
-        this.internals = Objects.requireNonNull(internals, "internals");
-        this.keyLifecycle = internals.keyLifecycle();
+    YierdisHllOps(
+            YierdisDbKernel kernel,
+            YierdisDbKeyLifecycle keyLifecycle,
+            YierdisDbMemoryContext memoryContext,
+            StringRoot stringRoot
+    ) {
+        this.kernel = Objects.requireNonNull(kernel, "kernel");
+        this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
+        this.memoryContext = Objects.requireNonNull(memoryContext, "memoryContext");
         this.stringRoot = Objects.requireNonNull(stringRoot, "stringRoot");
     }
 
@@ -43,18 +47,23 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
     }
 
     WriteResult<Integer> pfadd(MutationContext context, byte[] keyBytes, List<byte[]> elements) {
-        internals.checkThread();
+        kernel.execute(DbUse.ownerCheck());
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
-        reclaimExpiredBeforeMutation(keyBytes, now);
-        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<>() {
+        kernel.reclaimExpiredBeforeMutation(keyBytes, now);
+        return kernel.execute(new MutationUse<WriteResult<Integer>>() {
+            @Override
+            public MutationContext context() {
+                return context;
+            }
+
             @Override
             public long upperBoundBytes() {
                 return estimatePfaddUpperBound(keyBytes, elements, now);
             }
 
             @Override
-            public PreparedDbMutation<WriteResult<Integer>> prepare() {
+            public PreparedChange<WriteResult<Integer>> prepare(MutationScope scope) {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 byte[] currentBytes = null;
@@ -65,7 +74,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                 byte[] replacementBytes = YierdisHyperLogLog.prepareAdd(currentBytes, elements);
                 boolean changed = replacementBytes != null;
                 if (current != null && !changed) {
-                    return preparedNoEntry(WriteResult.of(0, MutationOutcome.NONE), MutationOutcome.NONE);
+                    return preparedNoEntry(scope, WriteResult.of(0, MutationOutcome.NONE), MutationOutcome.NONE);
                 }
                 if (current == null && replacementBytes == null) {
                     replacementBytes = YierdisHyperLogLog.newSparse();
@@ -91,8 +100,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                     WriteResult<Integer> result = WriteResult.of(changed ? 1 : 0, outcome);
                     long deltaBytes = estimateRecordBytes(targetKey, next)
                             - estimateRecordBytes(targetKey, current);
-                    PreparedEntryMutation<WriteResult<Integer>> prepared = PreparedEntryMutation.upsert(
-                            keyLifecycle,
+                    PreparedChange<WriteResult<Integer>> prepared = scope.upsert(
                             result,
                             deltaBytes,
                             staged == null ? 0L : staged.stagedHeapBytes(),
@@ -115,21 +123,22 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
 
     @Override
     public long pfcount(List<byte[]> keys) {
-        internals.checkThread();
-        if (keys == null || keys.isEmpty()) {
-            return 0L;
-        }
-
-        int[] registers = new int[YierdisHyperLogLog.REGISTERS];
-        for (byte[] keyBytes : keys) {
-            EntryRecord record = liveStringRecord(keyBytes);
-            if (record == null) {
-                continue;
+        return kernel.execute(DbUse.read(scope -> {
+            if (keys == null || keys.isEmpty()) {
+                return 0L;
             }
-            ValueHandle handle = requireHllHandle(record);
-            YierdisHyperLogLog.mergeHllIntoRegisters(stringRoot.slice(handle), registers);
-        }
-        return YierdisHyperLogLog.estimateCardinality(registers);
+
+            int[] registers = new int[YierdisHyperLogLog.REGISTERS];
+            for (byte[] keyBytes : keys) {
+                EntryRecord record = liveStringRecord(scope, keyBytes);
+                if (record == null) {
+                    continue;
+                }
+                ValueHandle handle = requireHllHandle(record);
+                YierdisHyperLogLog.mergeHllIntoRegisters(stringRoot.slice(handle), registers);
+            }
+            return YierdisHyperLogLog.estimateCardinality(registers);
+        }));
     }
 
     @Override
@@ -138,25 +147,30 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
     }
 
     WriteResult<Void> pfmerge(MutationContext context, byte[] destKeyBytes, List<byte[]> sourceKeys) {
-        internals.checkThread();
+        kernel.execute(DbUse.ownerCheck());
         Objects.requireNonNull(destKeyBytes, "destKeyBytes");
         if (sourceKeys == null || sourceKeys.isEmpty()) {
             throw new IllegalArgumentException("sourceKeys must not be empty");
         }
 
         long now = System.currentTimeMillis();
-        reclaimExpiredBeforeMutation(destKeyBytes, now);
+        kernel.reclaimExpiredBeforeMutation(destKeyBytes, now);
         for (byte[] sourceKey : sourceKeys) {
-            reclaimExpiredBeforeMutation(sourceKey, now);
+            kernel.reclaimExpiredBeforeMutation(sourceKey, now);
         }
-        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<>() {
+        return kernel.execute(new MutationUse<WriteResult<Void>>() {
+            @Override
+            public MutationContext context() {
+                return context;
+            }
+
             @Override
             public long upperBoundBytes() {
                 return estimatePfmergeUpperBound(destKeyBytes, sourceKeys, now);
             }
 
             @Override
-            public PreparedDbMutation<WriteResult<Void>> prepare() {
+            public PreparedChange<WriteResult<Void>> prepare(MutationScope scope) {
                 MergeRegisters merged = mergeSourceRegisters(sourceKeys, now);
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(destKeyBytes);
                 EntryRecord current = currentEntry.record();
@@ -173,7 +187,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                 boolean ttlChanged = current != null && current.expireAtMillis() >= 0L;
                 MutationOutcome outcome = MutationOutcome.of(valueChanged, ttlChanged);
                 if (current != null && !outcome.changedAny()) {
-                    return preparedNoEntry(WriteResult.<Void>unchanged(null), MutationOutcome.NONE);
+                    return preparedNoEntry(scope, WriteResult.<Void>unchanged(null), MutationOutcome.NONE);
                 }
 
                 StagedEntry staged = null;
@@ -194,8 +208,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                     WriteResult<Void> result = WriteResult.of(null, outcome);
                     long deltaBytes = estimateRecordBytes(targetKey, next)
                             - estimateRecordBytes(targetKey, current);
-                    PreparedEntryMutation<WriteResult<Void>> prepared = PreparedEntryMutation.upsert(
-                            keyLifecycle,
+                    PreparedChange<WriteResult<Void>> prepared = scope.upsert(
                             result,
                             deltaBytes,
                             staged == null ? 0L : staged.stagedHeapBytes(),
@@ -303,7 +316,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                         valueLength
                 }
                 : new int[]{valueLength};
-        return withScopeBookkeeping(internals.nativeAllocationPeakAdditionalBytes(
+        return withScopeBookkeeping(memoryContext.nativeAllocationPeakAdditionalBytes(
                 0L,
                 addSaturating(Math.max(0L, heapGrowthBytes), stagedKeyDirectoryGrowthBytes),
                 sizes
@@ -352,9 +365,9 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
         return new MergeRegisters(registers, copiedBytes);
     }
 
-    private EntryRecord liveStringRecord(byte[] keyBytes) {
+    private EntryRecord liveStringRecord(ReadScope scope, byte[] keyBytes) {
         KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
-        EntryRecord record = internals.liveEntryRecord(keyHandle);
+        EntryRecord record = scope.liveEntryRecord(keyHandle);
         if (record == null) {
             return null;
         }
@@ -404,19 +417,12 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
         return keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
     }
 
-    private void reclaimExpiredBeforeMutation(byte[] keyBytes, long nowMillis) {
-        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
-        if (keyHandle == null) {
-            return;
-        }
-        EntryRecord record = keyLifecycle.entryRecord(keyHandle);
-        if (record != null && keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
-            internals.reclaimExpired(keyHandle, record, nowMillis);
-        }
-    }
-
-    private <T> PreparedEntryMutation<T> preparedNoEntry(T result, MutationOutcome outcome) {
-        return PreparedEntryMutation.unchanged(keyLifecycle, result, outcome);
+    private static <T> PreparedChange<T> preparedNoEntry(
+            MutationScope scope,
+            T result,
+            MutationOutcome outcome
+    ) {
+        return scope.unchanged(result, outcome);
     }
 
     private void abortStaged(
@@ -437,7 +443,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
     private long withScopeBookkeeping(long upperBound) {
         return Math.max(
                 Math.max(0L, upperBound),
-                internals.nativeAllocationScopeBookkeepingBytes(0)
+                memoryContext.nativeAllocationScopeBookkeepingBytes(0)
         );
     }
 

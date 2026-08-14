@@ -6,13 +6,10 @@ import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.MutationOutcome;
-import yier.bubu.redis.storage.memory.internal.expire.YierdisDbExpirationSupport;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceResult;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
-import yier.bubu.redis.storage.memory.internal.ledger.PreparedCallbackMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMemoryLedger;
-import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 
 import java.util.Objects;
 
@@ -22,12 +19,12 @@ final class YierdisDbDataMaintenance {
 
     private final YierdisDbRuntimeState runtimeState;
     private final YierdisDbStorage storage;
-    private final YierdisDbRuntimeInternals internals;
+    private final YierdisDbKernel kernel;
+    private final YierdisDbMemoryContext memoryContext;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final YierdisDbMemoryLedger ledger;
     private final YierdisDbHealth health;
     private final HashTableMaintenanceRegistry hashTableMaintenanceRegistry;
-    private final YierdisDbMutationExecutor mutationExecutor;
     private final YierdisDbExpirationSupport expirationSupport;
     private final YierdisDbMaxmemorySupport maxmemorySupport;
     private final YierdisDbMemoryReporter memoryReporter;
@@ -36,11 +33,11 @@ final class YierdisDbDataMaintenance {
     YierdisDbDataMaintenance(
             YierdisDbRuntimeState runtimeState,
             YierdisDbStorage storage,
-            YierdisDbRuntimeInternals internals,
+            YierdisDbKernel kernel,
+            YierdisDbMemoryContext memoryContext,
             YierdisDbMemoryLedger ledger,
             YierdisDbHealth health,
             HashTableMaintenanceRegistry hashTableMaintenanceRegistry,
-            YierdisDbMutationExecutor mutationExecutor,
             YierdisDbExpirationSupport expirationSupport,
             YierdisDbMaxmemorySupport maxmemorySupport,
             YierdisDbMemoryReporter memoryReporter,
@@ -48,7 +45,8 @@ final class YierdisDbDataMaintenance {
     ) {
         this.runtimeState = Objects.requireNonNull(runtimeState, "runtimeState");
         this.storage = Objects.requireNonNull(storage, "storage");
-        this.internals = Objects.requireNonNull(internals, "internals");
+        this.kernel = Objects.requireNonNull(kernel, "kernel");
+        this.memoryContext = Objects.requireNonNull(memoryContext, "memoryContext");
         this.keyLifecycle = storage.keyLifecycle();
         this.ledger = Objects.requireNonNull(ledger, "ledger");
         this.health = Objects.requireNonNull(health, "health");
@@ -56,7 +54,6 @@ final class YierdisDbDataMaintenance {
                 hashTableMaintenanceRegistry,
                 "hashTableMaintenanceRegistry"
         );
-        this.mutationExecutor = Objects.requireNonNull(mutationExecutor, "mutationExecutor");
         this.expirationSupport = Objects.requireNonNull(expirationSupport, "expirationSupport");
         this.maxmemorySupport = Objects.requireNonNull(maxmemorySupport, "maxmemorySupport");
         this.memoryReporter = Objects.requireNonNull(memoryReporter, "memoryReporter");
@@ -106,22 +103,22 @@ final class YierdisDbDataMaintenance {
             HashTableMaintenanceRegistry.Participant participant
     ) {
         try {
-            mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Void>() {
+            kernel.execute(new MutationUse<Void>() {
                 @Override
                 public long upperBoundBytes() {
                     return maintenanceUpperBoundBytes(participant);
                 }
 
                 @Override
-                public boolean requiresCommitStream() {
-                    return false;
+                public CommitSpec commit() {
+                    return CommitSpec.none();
                 }
 
                 @Override
-                public yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation<Void> prepare() {
+                public PreparedChange<Void> prepare(MutationScope scope) {
                     HashTableMaintenanceRegistry.MaintenancePreparation preparation = participant.prepareMaintenance();
                     if (preparation == null) {
-                        return new PreparedCallbackMutation<>(
+                        return scope.callback(
                                 null,
                                 0L,
                                 0L,
@@ -129,17 +126,19 @@ final class YierdisDbDataMaintenance {
                                 () -> {
                                 },
                                 null,
-                                null
+                                null,
+                                false
                         );
                     }
-                    return new PreparedCallbackMutation<>(
+                    return scope.callback(
                             null,
                             0L,
                             preparation.stagedNonNativeGrowthBytes(),
                             MutationOutcome.NONE,
                             preparation::commit,
                             null,
-                            preparation::abort
+                            preparation::abort,
+                            false
                     );
                 }
             });
@@ -153,7 +152,7 @@ final class YierdisDbDataMaintenance {
 
     private long maintenanceUpperBoundBytes(HashTableMaintenanceRegistry.Participant participant) {
         long stagedGrowth = Math.max(0L, participant.estimatedMaintenanceGrowthBytes());
-        long scopeBookkeeping = internals.nativeAllocationScopeBookkeepingBytes(0);
+        long scopeBookkeeping = memoryContext.nativeAllocationScopeBookkeepingBytes(0);
         return stagedGrowth > Long.MAX_VALUE - scopeBookkeeping
                 ? Long.MAX_VALUE
                 : stagedGrowth + scopeBookkeeping;
@@ -218,7 +217,7 @@ final class YierdisDbDataMaintenance {
             failure = recordFailure(failure, next);
         }
         try {
-            storage.close();
+            kernel.close();
         } catch (Throwable next) {
             failure = recordFailure(failure, next);
         } finally {
@@ -237,23 +236,27 @@ final class YierdisDbDataMaintenance {
 
     private MutationOutcome flushDb(MutationContext context, boolean async) {
         health.requireWritable();
-        return mutationExecutor.execute(
-                Objects.requireNonNull(context, "context"),
-                new YierdisDbMutationExecutor.MutationPlan<>() {
+        MutationContext checkedContext = Objects.requireNonNull(context, "context");
+        return kernel.execute(new MutationUse<MutationOutcome>() {
+                    @Override
+                    public MutationContext context() {
+                        return checkedContext;
+                    }
+
                     @Override
                     public long upperBoundBytes() {
                         return 0L;
                     }
 
                     @Override
-                    public AdmissionMode admissionMode() {
-                        return AdmissionMode.RECLAMATION;
+                    public Admission admission() {
+                        return Admission.RECLAMATION;
                     }
 
                     @Override
-                    public yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation<MutationOutcome> prepare() {
+                    public PreparedChange<MutationOutcome> prepare(MutationScope scope) {
                         FlushPreparation preparation = prepareFlushDb();
-                        return new PreparedCallbackMutation<>(
+                        return scope.callback(
                                 preparation.outcome(),
                                 preparation.committedMemoryDelta(),
                                 0L,
@@ -266,8 +269,7 @@ final class YierdisDbDataMaintenance {
                                 !async && preparation.committedMemoryDelta() < 0L
                         );
                     }
-                }
-        );
+                });
     }
 
     int size() {
@@ -294,7 +296,7 @@ final class YierdisDbDataMaintenance {
         try {
             int reclaimed = reclaimDetachedEntries(ASYNC_FLUSH_RECLAIM_MAX_ENTRIES);
             if (reclaimed > 0) {
-                internals.trimEmptyNativePages(MemoryPressureBudget.unlimited());
+                memoryContext.trimEmptyNativePages(MemoryPressureBudget.unlimited());
             }
         } catch (RuntimeException | Error failure) {
             health.recordInvariantFailure(failure);

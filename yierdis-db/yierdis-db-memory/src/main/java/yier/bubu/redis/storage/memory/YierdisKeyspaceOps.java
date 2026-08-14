@@ -13,9 +13,6 @@ import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.DirectoryState;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.KeyScanResult;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
-import yier.bubu.redis.storage.memory.internal.ledger.AbstractPreparedMutation;
-import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
-import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.api.KeyspaceReadOps;
 import yier.bubu.redis.storage.api.KeyspaceWriteOps;
@@ -29,17 +26,23 @@ import yier.bubu.redis.storage.api.result.KeyScanWindow;
 import java.util.Collection;
 import java.util.Objects;
 
-public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
+final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
     private static final long KEYS_SCAN_CHUNK_SLOTS = 1024L;
     private static final long SCAN_MIN_SLOT_BUDGET = 64L;
     private static final long SCAN_SLOT_MULTIPLIER = 10L;
 
-    private final YierdisDbRuntimeInternals internals;
+    private final YierdisDbKernel kernel;
     private final YierdisDbKeyLifecycle keyLifecycle;
+    private final YierdisDbMemoryContext memoryContext;
 
-    YierdisKeyspaceOps(YierdisDbRuntimeInternals internals) {
-        this.internals = Objects.requireNonNull(internals, "internals");
-        this.keyLifecycle = internals.keyLifecycle();
+    YierdisKeyspaceOps(
+            YierdisDbKernel kernel,
+            YierdisDbKeyLifecycle keyLifecycle,
+            YierdisDbMemoryContext memoryContext
+    ) {
+        this.kernel = Objects.requireNonNull(kernel, "kernel");
+        this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
+        this.memoryContext = Objects.requireNonNull(memoryContext, "memoryContext");
     }
 
     @Override
@@ -48,23 +51,28 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
     }
 
     WriteResult<Long> del(MutationContext context, Collection<byte[]> keys) {
-        internals.checkThread();
+        kernel.execute(DbUse.ownerCheck());
         Objects.requireNonNull(keys, "keys");
         long nowMillis = System.currentTimeMillis();
         reclaimExpiredBeforeDeletion(keys, nowMillis);
-        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<>() {
+        return kernel.execute(new MutationUse<WriteResult<Long>>() {
+            @Override
+            public MutationContext context() {
+                return context;
+            }
+
             @Override
             public long upperBoundBytes() {
                 return 0L;
             }
 
             @Override
-            public AdmissionMode admissionMode() {
-                return AdmissionMode.RECLAMATION;
+            public Admission admission() {
+                return Admission.RECLAMATION;
             }
 
             @Override
-            public PreparedDbMutation<WriteResult<Long>> prepare() {
+            public PreparedChange<WriteResult<Long>> prepare(MutationScope scope) {
                 PreparedDeletion[] deletions = new PreparedDeletion[keys.size()];
                 int deletionCount = 0;
                 long deltaBytes = 0L;
@@ -87,8 +95,7 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                     }
                     try {
                         long removalBytes = keyLifecycle.estimatedBytesForRemoval(handle, current);
-                        PreparedEntryMutation<Void> mutation = PreparedEntryMutation.delete(
-                                keyLifecycle,
+                        PreparedChange<Void> mutation = scope.delete(
                                 null,
                                 -removalBytes,
                                 MutationOutcome.VALUE_CHANGED,
@@ -104,9 +111,13 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                     }
                 }
                 MutationOutcome outcome = deletionCount > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
-                return new PreparedDeletionBatch(
-                        deletions,
-                        deletionCount,
+                PreparedChange<?>[] changes = new PreparedChange<?>[deletionCount];
+                for (int index = 0; index < deletionCount; index++) {
+                    changes[index] = deletions[index].mutation;
+                }
+                return scope.batch(
+                        changes,
+                        changes.length,
                         WriteResult.of((long) deletionCount, outcome),
                         deltaBytes,
                         outcome
@@ -118,14 +129,7 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
     private void reclaimExpiredBeforeDeletion(Collection<byte[]> keys, long nowMillis) {
         for (byte[] keyBytes : keys) {
             Objects.requireNonNull(keyBytes, "key");
-            KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
-            if (keyHandle == null) {
-                continue;
-            }
-            EntryRecord record = keyLifecycle.entryRecord(keyHandle);
-            if (record != null && keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
-                internals.reclaimExpired(keyHandle, record, nowMillis);
-            }
+            kernel.reclaimExpiredBeforeMutation(keyBytes, nowMillis);
         }
     }
 
@@ -150,20 +154,27 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
 
     @Override
     public ValueType typeOf(BytesView keyView) {
-        internals.checkThread();
-        EntryRecord record = internals.liveEntryRecord(keyLifecycle.keyHandle(keyView));
-        return record == null ? null : record.type();
+        return kernel.execute(DbUse.read(scope -> {
+            EntryRecord record = scope.liveEntryRecord(keyLifecycle.keyHandle(keyView));
+            return record == null ? null : record.type();
+        }));
     }
 
     @Override
     public boolean existsKey(BytesView keyView) {
-        internals.checkThread();
-        return internals.liveEntryRecord(keyLifecycle.keyHandle(keyView)) != null;
+        return kernel.execute(DbUse.read(
+                scope -> scope.liveEntryRecord(keyLifecycle.keyHandle(keyView)) != null
+        ));
     }
 
     @Override
     public KeyScanWindow keys(byte[] globPattern, int maxMatches, long timeBudgetNanos) {
-        internals.checkThread();
+        return kernel.execute(DbUse.read(
+                ignored -> keysWithinRead(globPattern, maxMatches, timeBudgetNanos)
+        ));
+    }
+
+    private KeyScanWindow keysWithinRead(byte[] globPattern, int maxMatches, long timeBudgetNanos) {
         int limit = maxMatches <= 0 ? 0 : maxMatches;
         long nowMillis = System.currentTimeMillis();
         if (globPattern == null || limit == 0) {
@@ -171,7 +182,7 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
         }
 
         long deadlineNanos = deadlineNanos(timeBudgetNanos);
-        NativeEpochScope epoch = internals.beginScanEpoch();
+        NativeEpochScope epoch = memoryContext.beginScanEpoch();
         boolean transferred = false;
         try {
             ScanCursorV2 next = ScanCursorV2.start();
@@ -235,13 +246,16 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
 
     @Override
     public KeyScanWindow scan(ScanCursorV2 cursor, byte[] globPattern, int count) {
-        internals.checkThread();
+        return kernel.execute(DbUse.read(ignored -> scanWithinRead(cursor, globPattern, count)));
+    }
+
+    private KeyScanWindow scanWithinRead(ScanCursorV2 cursor, byte[] globPattern, int count) {
         if (count <= 0) {
             throw new IllegalArgumentException("count must be > 0");
         }
 
         long nowMillis = System.currentTimeMillis();
-        NativeEpochScope epoch = internals.beginScanEpoch();
+        NativeEpochScope epoch = memoryContext.beginScanEpoch();
         boolean transferred = false;
         try {
             KeyDiscovery discovery = new KeyDiscovery();
@@ -331,52 +345,11 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
 
     private static final class PreparedDeletion {
         private final byte[] keyBytes;
-        private final PreparedEntryMutation<Void> mutation;
+        private final PreparedChange<Void> mutation;
 
-        private PreparedDeletion(byte[] keyBytes, PreparedEntryMutation<Void> mutation) {
+        private PreparedDeletion(byte[] keyBytes, PreparedChange<Void> mutation) {
             this.keyBytes = keyBytes;
             this.mutation = mutation;
-        }
-    }
-
-    private static final class PreparedDeletionBatch extends AbstractPreparedMutation<WriteResult<Long>> {
-        private final PreparedDeletion[] deletions;
-        private final int deletionCount;
-        private final WriteResult<Long> result;
-
-        private PreparedDeletionBatch(
-                PreparedDeletion[] deletions,
-                int deletionCount,
-                WriteResult<Long> result,
-                long actualDeltaBytes,
-                MutationOutcome outcome
-        ) {
-            super(actualDeltaBytes, 0L, outcome);
-            this.deletions = deletions;
-            this.deletionCount = deletionCount;
-            this.result = result;
-        }
-
-        @Override
-        protected WriteResult<Long> commitPrepared() {
-            for (int index = 0; index < deletionCount; index++) {
-                deletions[index].mutation.commit();
-            }
-            return result;
-        }
-
-        @Override
-        protected void releaseSupersededPrepared() {
-            for (int index = 0; index < deletionCount; index++) {
-                deletions[index].mutation.releaseSuperseded();
-            }
-        }
-
-        @Override
-        protected void abortPrepared() {
-            for (int index = 0; index < deletionCount; index++) {
-                deletions[index].mutation.abort();
-            }
         }
     }
 
@@ -476,7 +449,7 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
         @Override
         public void emitTo(ByteValueSink out) {
             Objects.requireNonNull(out, "out");
-            replay(key -> out.value(internals.keyBytesSlice(key)));
+            replay(key -> out.value(memoryContext.keyBytesSlice(key)));
         }
 
         private void replay(KeyEmitter emitter) {

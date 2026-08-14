@@ -1,4 +1,4 @@
-package yier.bubu.redis.storage.memory.internal.expire;
+package yier.bubu.redis.storage.memory;
 
 import java.util.Objects;
 import yier.bubu.redis.bytes.BytesView;
@@ -7,21 +7,23 @@ import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.TtlReadOps;
 import yier.bubu.redis.storage.api.TtlWriteOps;
 import yier.bubu.redis.storage.api.WriteResult;
-import yier.bubu.redis.storage.memory.YierdisDbRuntimeInternals;
-import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
-import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 
-public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
-    private final YierdisDbRuntimeInternals internals;
+final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
+    private final YierdisDbKernel kernel;
     private final YierdisDbKeyLifecycle keyLifecycle;
+    private final YierdisDbMemoryContext memoryContext;
 
-    public YierdisTtlOps(YierdisDbRuntimeInternals internals) {
-        this.internals = Objects.requireNonNull(internals, "internals");
-        this.keyLifecycle = internals.keyLifecycle();
+    YierdisTtlOps(
+            YierdisDbKernel kernel,
+            YierdisDbKeyLifecycle keyLifecycle,
+            YierdisDbMemoryContext memoryContext
+    ) {
+        this.kernel = Objects.requireNonNull(kernel, "kernel");
+        this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
+        this.memoryContext = Objects.requireNonNull(memoryContext, "memoryContext");
     }
 
     @Override
@@ -30,7 +32,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
     }
 
     public WriteResult<Boolean> expire(MutationContext context, BytesView keyView, long seconds) {
-        internals.checkThread();
+        kernel.execute(DbUse.ownerCheck());
         KeyHandle handle = keyLifecycle.keyHandle(keyView);
         if (handle == null) {
             return WriteResult.unchanged(Boolean.FALSE);
@@ -53,7 +55,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
     }
 
     public WriteResult<Boolean> pexpire(MutationContext context, BytesView keyView, long milliseconds) {
-        internals.checkThread();
+        kernel.execute(DbUse.ownerCheck());
         KeyHandle handle = keyLifecycle.keyHandle(keyView);
         if (handle == null) {
             return WriteResult.unchanged(Boolean.FALSE);
@@ -92,7 +94,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
     }
 
     public WriteResult<Boolean> expireAtMillis(MutationContext context, BytesView keyView, long unixMillis) {
-        internals.checkThread();
+        kernel.execute(DbUse.ownerCheck());
         KeyHandle handle = keyLifecycle.keyHandle(keyView);
         if (handle == null) {
             return WriteResult.unchanged(Boolean.FALSE);
@@ -116,7 +118,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
     }
 
     public WriteResult<Boolean> persist(MutationContext context, BytesView keyView) {
-        internals.checkThread();
+        kernel.execute(DbUse.ownerCheck());
         KeyHandle handle = keyLifecycle.keyHandle(keyView);
         if (handle == null) {
             return WriteResult.unchanged(Boolean.FALSE);
@@ -129,28 +131,32 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
         if (record.expireAtMillis() < 0L) {
             return WriteResult.unchanged(Boolean.FALSE);
         }
-        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<WriteResult<Boolean>>() {
+        return kernel.execute(new MutationUse<WriteResult<Boolean>>() {
+            @Override
+            public MutationContext context() {
+                return context;
+            }
+
             @Override
             public long upperBoundBytes() {
                 return 0;
             }
 
             @Override
-            public AdmissionMode admissionMode() {
-                return AdmissionMode.RECLAMATION;
+            public Admission admission() {
+                return Admission.RECLAMATION;
             }
 
             @Override
-            public PreparedEntryMutation<WriteResult<Boolean>> prepare() {
+            public PreparedChange<WriteResult<Boolean>> prepare(MutationScope scope) {
                 EntryHandle entryHandle = keyLifecycle.entryHandle(keyLifecycle.copyKeyBytes(handle));
                 EntryRecord current = entryHandle == null ? null : keyLifecycle.entryRecord(entryHandle);
                 if (current == null || !record.equals(current) || current.expireAtMillis() < 0L) {
-                    return preparedNoEntry(WriteResult.unchanged(Boolean.FALSE), MutationOutcome.NONE);
+                    return preparedNoEntry(scope, WriteResult.unchanged(Boolean.FALSE), MutationOutcome.NONE);
                 }
                 EntryRecord next = keyLifecycle.withExpireAtMillis(handle, current, -1L);
                 WriteResult<Boolean> result = WriteResult.of(Boolean.TRUE, MutationOutcome.TTL_CHANGED);
-                return PreparedEntryMutation.replace(
-                        keyLifecycle,
+                return scope.replace(
                         result,
                         0L,
                         0L,
@@ -166,46 +172,48 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
 
     @Override
     public long ttlSeconds(BytesView keyView) {
-        internals.checkThread();
-        KeyHandle handle = keyLifecycle.keyHandle(keyView);
-        if (handle == null) {
-            return -2;
-        }
-        EntryRecord record = liveRecord(handle);
-        if (record == null) {
-            return -2;
-        }
-        keyLifecycle.touchRecord(handle, record);
+        return kernel.execute(DbUse.read(scope -> {
+            KeyHandle handle = keyLifecycle.keyHandle(keyView);
+            if (handle == null) {
+                return -2L;
+            }
+            EntryRecord record = scope.liveEntryRecord(handle);
+            if (record == null) {
+                return -2L;
+            }
+            keyLifecycle.touchRecord(handle, record);
 
-        long now = System.currentTimeMillis();
-        long expireAtMillis = record.expireAtMillis();
-        if (expireAtMillis < 0L) {
-            return -1;
-        }
-        long remainingMillis = expireAtMillis - now;
-        return remainingMillis <= 0 ? -2 : remainingMillis / 1000L;
+            long now = System.currentTimeMillis();
+            long expireAtMillis = record.expireAtMillis();
+            if (expireAtMillis < 0L) {
+                return -1L;
+            }
+            long remainingMillis = expireAtMillis - now;
+            return remainingMillis <= 0 ? -2L : remainingMillis / 1000L;
+        }));
     }
 
     @Override
     public long ttlMillis(BytesView keyView) {
-        internals.checkThread();
-        KeyHandle handle = keyLifecycle.keyHandle(keyView);
-        if (handle == null) {
-            return -2;
-        }
-        EntryRecord record = liveRecord(handle);
-        if (record == null) {
-            return -2;
-        }
-        keyLifecycle.touchRecord(handle, record);
+        return kernel.execute(DbUse.read(scope -> {
+            KeyHandle handle = keyLifecycle.keyHandle(keyView);
+            if (handle == null) {
+                return -2L;
+            }
+            EntryRecord record = scope.liveEntryRecord(handle);
+            if (record == null) {
+                return -2L;
+            }
+            keyLifecycle.touchRecord(handle, record);
 
-        long now = System.currentTimeMillis();
-        long expireAtMillis = record.expireAtMillis();
-        if (expireAtMillis < 0L) {
-            return -1;
-        }
-        long remainingMillis = expireAtMillis - now;
-        return remainingMillis <= 0 ? -2 : remainingMillis;
+            long now = System.currentTimeMillis();
+            long expireAtMillis = record.expireAtMillis();
+            if (expireAtMillis < 0L) {
+                return -1L;
+            }
+            long remainingMillis = expireAtMillis - now;
+            return remainingMillis <= 0 ? -2L : remainingMillis;
+        }));
     }
 
     private WriteResult<Boolean> deleteImmediately(
@@ -213,26 +221,30 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             KeyHandle handle,
             EntryRecord record
     ) {
-        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<>() {
+        return kernel.execute(new MutationUse<WriteResult<Boolean>>() {
+            @Override
+            public MutationContext context() {
+                return context;
+            }
+
             @Override
             public long upperBoundBytes() {
                 return 0;
             }
 
             @Override
-            public AdmissionMode admissionMode() {
-                return AdmissionMode.RECLAMATION;
+            public Admission admission() {
+                return Admission.RECLAMATION;
             }
 
             @Override
-            public PreparedEntryMutation<WriteResult<Boolean>> prepare() {
+            public PreparedChange<WriteResult<Boolean>> prepare(MutationScope scope) {
                 EntryHandle entryHandle = keyLifecycle.entryHandle(keyLifecycle.copyKeyBytes(handle));
                 EntryRecord current = entryHandle == null ? null : keyLifecycle.entryRecord(entryHandle);
                 if (current == null || !record.equals(current)) {
-                    return preparedNoEntry(WriteResult.unchanged(Boolean.FALSE), MutationOutcome.NONE);
+                    return preparedNoEntry(scope, WriteResult.unchanged(Boolean.FALSE), MutationOutcome.NONE);
                 }
-                return PreparedEntryMutation.delete(
-                        keyLifecycle,
+                return scope.delete(
                         WriteResult.of(Boolean.TRUE, MutationOutcome.VALUE_CHANGED),
                         -keyLifecycle.estimatedBytesForRemoval(handle, current),
                         MutationOutcome.VALUE_CHANGED,
@@ -250,24 +262,28 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             EntryRecord record,
             long expireAtMillis
     ) {
-        long upperBound = internals.nativeAllocationScopeBookkeepingBytes(0);
-        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<WriteResult<Boolean>>() {
+        long upperBound = memoryContext.nativeAllocationScopeBookkeepingBytes(0);
+        return kernel.execute(new MutationUse<WriteResult<Boolean>>() {
+            @Override
+            public MutationContext context() {
+                return context;
+            }
+
             @Override
             public long upperBoundBytes() {
                 return upperBound;
             }
 
             @Override
-            public PreparedEntryMutation<WriteResult<Boolean>> prepare() {
+            public PreparedChange<WriteResult<Boolean>> prepare(MutationScope scope) {
                 EntryHandle entryHandle = keyLifecycle.entryHandle(keyLifecycle.copyKeyBytes(handle));
                 EntryRecord current = entryHandle == null ? null : keyLifecycle.entryRecord(entryHandle);
                 if (current == null || !record.equals(current)) {
-                    return preparedNoEntry(WriteResult.unchanged(Boolean.FALSE), MutationOutcome.NONE);
+                    return preparedNoEntry(scope, WriteResult.unchanged(Boolean.FALSE), MutationOutcome.NONE);
                 }
                 EntryRecord next = keyLifecycle.withExpireAtMillis(handle, current, expireAtMillis);
                 WriteResult<Boolean> result = WriteResult.of(Boolean.TRUE, MutationOutcome.TTL_CHANGED);
-                return PreparedEntryMutation.replace(
-                        keyLifecycle,
+                return scope.replace(
                         result,
                         0L,
                         0L,
@@ -281,8 +297,12 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
         });
     }
 
-    private <T> PreparedEntryMutation<T> preparedNoEntry(T result, MutationOutcome outcome) {
-        return PreparedEntryMutation.unchanged(keyLifecycle, result, outcome);
+    private static <T> PreparedChange<T> preparedNoEntry(
+            MutationScope scope,
+            T result,
+            MutationOutcome outcome
+    ) {
+        return scope.unchanged(result, outcome);
     }
 
     private EntryRecord liveRecord(KeyHandle handle) {
@@ -292,7 +312,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
         }
         long nowMillis = System.currentTimeMillis();
         if (record.expireAtMillis() >= 0L && record.expireAtMillis() <= nowMillis) {
-            internals.reclaimExpired(handle, record, nowMillis);
+            kernel.reclaimExpired(handle, record, nowMillis);
             return null;
         }
         return record;

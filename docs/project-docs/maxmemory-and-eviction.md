@@ -32,7 +32,8 @@ entry 中的 TTL 字段和 collection topology 已进入 owned snapshot，不能
 
 ```text
 estimate upper bound
-  -> YierdisDbMutationExecutor.execute(plan)
+  -> YierdisDbKernel.execute(MutationUse)
+  -> internal YierdisDbMutationExecutor adapter
      -> ledger.reserve(upperBound)
      -> NativeAllocationScope.begin()
      -> plan.prepare()
@@ -116,7 +117,7 @@ maintenance 时的顺序由 `YierdisInstanceRuntimeAccess.maintenanceTick()` 固
 还有两条收敛规则：
 
 - cleanup 先于 eviction。候选 key 如果已经过期，会先走 `removeIfExpired(...)`，它算 `EXPIRED`，不是 `EVICTED`。
-- 真正 eviction 时，`YierdisDbMaxmemorySupport` 调用 `YierdisDbRuntimeInternals.evict(...)`；reclamation plan 在 prepare 阶段复制稳定 key bytes，commit 时移除 directory entry 并释放完整 entry/value/key graph，随后结算 ledger，并通过已预留的 commit stream 发布 synthetic `DEL key`，`kind=EVICTED`。
+- 真正 eviction 时，`YierdisDbMaxmemorySupport` 调用 `YierdisDbKernel.evict(...)`；reclamation plan 在 prepare 阶段复制稳定 key bytes，commit 时移除 directory entry 并释放完整 entry/value/key graph，随后结算 ledger，并通过已预留的 commit stream 发布 synthetic `DEL key`，`kind=EVICTED`。
 
 所以“淘汰”和“过期”都会删除 key，但 change-event kind、触发原因和测试入口不同。
 

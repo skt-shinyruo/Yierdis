@@ -1,14 +1,14 @@
-package yier.bubu.redis.storage.memory.internal.ledger;
+package yier.bubu.redis.storage.memory;
 
 import java.util.Objects;
 import yier.bubu.redis.storage.api.MutationOutcome;
-import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.CurrentEntry;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.ledger.AbstractPreparedMutation;
 
-public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
+final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final T result;
     private final EntryRecord oldRecord;
@@ -25,7 +25,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
     private boolean entryPublished;
     private boolean replacedValueReleaseClaimed;
 
-    public static <T> PreparedEntryMutation<T> unchanged(
+    static <T> PreparedEntryMutation<T> unchanged(
             YierdisDbKeyLifecycle keyLifecycle,
             T result,
             MutationOutcome outcome
@@ -44,7 +44,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
         );
     }
 
-    public static <T> PreparedEntryMutation<T> insert(
+    static <T> PreparedEntryMutation<T> insert(
             YierdisDbKeyLifecycle keyLifecycle,
             T result,
             long actualDeltaBytes,
@@ -67,7 +67,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
         );
     }
 
-    public static <T> PreparedEntryMutation<T> replace(
+    static <T> PreparedEntryMutation<T> replace(
             YierdisDbKeyLifecycle keyLifecycle,
             T result,
             long actualDeltaBytes,
@@ -92,7 +92,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
         );
     }
 
-    public static <T> PreparedEntryMutation<T> delete(
+    static <T> PreparedEntryMutation<T> delete(
             YierdisDbKeyLifecycle keyLifecycle,
             T result,
             long actualDeltaBytes,
@@ -115,7 +115,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
         );
     }
 
-    public static <T> PreparedEntryMutation<T> upsert(
+    static <T> PreparedEntryMutation<T> upsert(
             YierdisDbKeyLifecycle keyLifecycle,
             T result,
             long actualDeltaBytes,
@@ -177,7 +177,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
         this.releaseReplacedValue = releaseReplacedValue;
     }
 
-    public PreparedEntryMutation<T> releaseReplacedValueWith(Runnable hook) {
+    PreparedEntryMutation<T> releaseReplacedValueWith(Runnable hook) {
         if (releaseReplacedValueHook != null) {
             throw new IllegalStateException("replaced-value release hook is already configured");
         }
@@ -185,7 +185,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
         return this;
     }
 
-    public PreparedEntryMutation<T> closeOnAbort(AutoCloseable resource) {
+    PreparedEntryMutation<T> closeOnAbort(AutoCloseable resource) {
         if (abortResource != null) {
             throw new IllegalStateException("abort resource is already configured");
         }
@@ -193,7 +193,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
         return this;
     }
 
-    public PreparedEntryMutation<T> releaseNewValueOnAbortWith(Runnable hook) {
+    PreparedEntryMutation<T> releaseNewValueOnAbortWith(Runnable hook) {
         if (abortNewValueHook != null) {
             throw new IllegalStateException("new-value abort hook is already configured");
         }
@@ -201,7 +201,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
         return this;
     }
 
-    public PreparedEntryMutation<T> beforeEntryPublish(Runnable hook) {
+    PreparedEntryMutation<T> beforeEntryPublish(Runnable hook) {
         if (beforeEntryPublishHook != null) {
             throw new IllegalStateException("before-entry-publish hook is already configured");
         }
@@ -209,7 +209,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
         return this;
     }
 
-    public PreparedEntryMutation<T> requestNativePageTrimAfterCommit() {
+    PreparedEntryMutation<T> requestNativePageTrimAfterCommit() {
         nativePageTrimRequested = true;
         return this;
     }

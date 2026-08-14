@@ -22,24 +22,27 @@ import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
 import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.internal.ledger.PreparedCallbackMutation;
-import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
-import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
-import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 import yier.bubu.redis.storage.memory.internal.value.SemanticResultSupport;
 
 import java.util.List;
 import java.util.Objects;
 
-public final class YierdisHashOps implements HashReadOps, HashWriteOps {
+final class YierdisHashOps implements HashReadOps, HashWriteOps {
     private static final long HASH_PAIR_OVERHEAD_BYTES_ESTIMATE = 256L;
-    private final YierdisDbRuntimeInternals internals;
+    private final YierdisDbKernel kernel;
     private final YierdisDbKeyLifecycle keyLifecycle;
+    private final YierdisDbMemoryContext memoryContext;
     private final HashRoot hashRoot;
 
-    YierdisHashOps(YierdisDbRuntimeInternals internals, HashRoot hashRoot) {
-        this.internals = Objects.requireNonNull(internals, "internals");
-        this.keyLifecycle = internals.keyLifecycle();
+    YierdisHashOps(
+            YierdisDbKernel kernel,
+            YierdisDbKeyLifecycle keyLifecycle,
+            YierdisDbMemoryContext memoryContext,
+            HashRoot hashRoot
+    ) {
+        this.kernel = Objects.requireNonNull(kernel, "kernel");
+        this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
+        this.memoryContext = Objects.requireNonNull(memoryContext, "memoryContext");
         this.hashRoot = Objects.requireNonNull(hashRoot, "hashRoot");
     }
 
@@ -49,16 +52,21 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
     }
 
     WriteResult<Long> hset(MutationContext context, byte[] keyBytes, List<byte[]> fieldValuePairs) {
-        internals.checkThread();
+        kernel.execute(DbUse.ownerCheck());
         Objects.requireNonNull(keyBytes, "keyBytes");
         if (fieldValuePairs.size() % 2 != 0) {
             throw new IllegalArgumentException("fieldValuePairs must contain field/value pairs");
         }
         long now = System.currentTimeMillis();
-        reclaimExpiredBeforeMutation(keyBytes, now);
-        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<>() {
+        kernel.reclaimExpiredBeforeMutation(keyBytes, now);
+        return kernel.execute(new MutationUse<WriteResult<Long>>() {
             private HashRoot.SetPlan cachedSetPlan;
             private boolean setPlanInitialized;
+
+            @Override
+            public MutationContext context() {
+                return context;
+            }
 
             @Override
             public long upperBoundBytes() {
@@ -78,7 +86,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
             }
 
             @Override
-            public PreparedDbMutation<WriteResult<Long>> prepare() {
+            public PreparedChange<WriteResult<Long>> prepare(MutationScope scope) {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current != null) {
@@ -102,6 +110,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
                         preparedSet.close();
                         preparedSet = null;
                         return preparedNoEntry(
+                                scope,
                                 WriteResult.of((long) setPlan(sourceHandle).added(), MutationOutcome.NONE),
                                 MutationOutcome.NONE
                         );
@@ -121,8 +130,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
                     );
                     long deltaBytes = estimateRecordBytes(targetKey, next)
                             - estimateRecordBytes(targetKey, current);
-                    PreparedEntryMutation<WriteResult<Long>> prepared = PreparedEntryMutation.upsert(
-                            keyLifecycle,
+                    PreparedChange<WriteResult<Long>> prepared = scope.upsert(
                             result,
                             deltaBytes,
                             MemoryUsageSnapshot.addSaturating(
@@ -176,38 +184,41 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
 
     @Override
     public ByteValue hget(byte[] keyBytes, byte[] fieldBytes) {
-        internals.checkThread();
-        EntryRecord record = liveHashRecord(keyBytes);
-        if (record == null) {
-            return ByteValue.nullValue();
-        }
-        return hashRoot.hgetValue(requireHashHandle(record), fieldBytes);
+        return kernel.execute(DbUse.read(scope -> {
+            EntryRecord record = liveHashRecord(scope, keyBytes);
+            if (record == null) {
+                return ByteValue.nullValue();
+            }
+            return hashRoot.hgetValue(requireHashHandle(record), fieldBytes);
+        }));
     }
 
     @Override
     public ByteMapSource hgetall(byte[] keyBytes) {
-        internals.checkThread();
-        EntryRecord record = liveHashRecord(keyBytes);
-        if (record == null) {
-            return ByteMapSources.empty();
-        }
-        ValueHandle handle = requireHashHandle(record);
-        return ByteMapSources.of(
-                hashRoot.size(handle),
-                0L,
-                out -> hashRoot.hgetallPairsInto(handle, SemanticResultSupport.lengthSink(out)),
-                out -> hashRoot.hgetallPairsInto(handle, out)
-        );
+        return kernel.execute(DbUse.read(scope -> {
+            EntryRecord record = liveHashRecord(scope, keyBytes);
+            if (record == null) {
+                return ByteMapSources.empty();
+            }
+            ValueHandle handle = requireHashHandle(record);
+            return ByteMapSources.of(
+                    hashRoot.size(handle),
+                    0L,
+                    out -> hashRoot.hgetallPairsInto(handle, SemanticResultSupport.lengthSink(out)),
+                    out -> hashRoot.hgetallPairsInto(handle, out)
+            );
+        }));
     }
 
     @Override
     public long hlen(byte[] keyBytes) {
-        internals.checkThread();
-        EntryRecord record = liveHashRecord(keyBytes);
-        if (record == null) {
-            return 0;
-        }
-        return hashRoot.size(requireHashHandle(record));
+        return kernel.execute(DbUse.read(scope -> {
+            EntryRecord record = liveHashRecord(scope, keyBytes);
+            if (record == null) {
+                return 0L;
+            }
+            return (long) hashRoot.size(requireHashHandle(record));
+        }));
     }
 
     @Override
@@ -218,21 +229,22 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
             int count,
             boolean noValues
     ) {
-        internals.checkThread();
-        if (count <= 0) {
-            throw new IllegalArgumentException("count must be > 0");
-        }
-        EntryRecord record = liveHashRecord(keyBytes);
-        if (record == null) {
-            return new MaterializedCollectionScanWindow(ScanCursorV2.start(), List.of());
-        }
-        return hashRoot.hscan(
-                requireHashHandle(record),
-                cursor == null ? ScanCursorV2.start() : cursor,
-                globPattern,
-                count,
-                noValues
-        );
+        return kernel.execute(DbUse.read(scope -> {
+            if (count <= 0) {
+                throw new IllegalArgumentException("count must be > 0");
+            }
+            EntryRecord record = liveHashRecord(scope, keyBytes);
+            if (record == null) {
+                return new MaterializedCollectionScanWindow(ScanCursorV2.start(), List.of());
+            }
+            return hashRoot.hscan(
+                    requireHashHandle(record),
+                    cursor == null ? ScanCursorV2.start() : cursor,
+                    globPattern,
+                    count,
+                    noValues
+            );
+        }));
     }
 
     @Override
@@ -241,45 +253,50 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
     }
 
     WriteResult<Long> hdel(MutationContext context, byte[] keyBytes, List<byte[]> fields) {
-        internals.checkThread();
+        kernel.execute(DbUse.ownerCheck());
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
-        reclaimExpiredBeforeMutation(keyBytes, now);
-        return internals.executeMutation(context, new YierdisDbMutationExecutor.MutationPlan<>() {
+        kernel.reclaimExpiredBeforeMutation(keyBytes, now);
+        return kernel.execute(new MutationUse<WriteResult<Long>>() {
+            @Override
+            public MutationContext context() {
+                return context;
+            }
+
             @Override
             public long upperBoundBytes() {
                 return 0;
             }
 
             @Override
-            public AdmissionMode admissionMode() {
-                return AdmissionMode.RECLAMATION;
+            public Admission admission() {
+                return Admission.RECLAMATION;
             }
 
             @Override
-            public PreparedDbMutation<WriteResult<Long>> prepare() {
+            public PreparedChange<WriteResult<Long>> prepare(MutationScope scope) {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current == null) {
-                    return preparedNoEntry(WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
+                    return preparedNoEntry(scope, WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
                 }
                 requireHash(current);
                 ValueHandle handle = requireHashHandle(current);
                 int removed = hashRoot.countExistingFields(handle, fields);
                 if (removed == 0) {
-                    return preparedNoEntry(WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
+                    return preparedNoEntry(scope, WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
                 }
 
                 MutationOutcome outcome = MutationOutcome.VALUE_CHANGED;
                 WriteResult<Long> result = WriteResult.of((long) removed, outcome);
                 if (removed >= hashRoot.size(handle)) {
-                    return preparedDelete(currentEntry, current, result, outcome, true);
+                    return preparedDelete(scope, currentEntry, current, result, outcome, true);
                 }
 
                 EntryRecord next = hashRecord(currentEntry.keyHandle(), handle, current.expireAtMillis(), current);
                 long deltaBytes = estimateRecordBytes(currentEntry.keyHandle(), next)
                         - estimateRecordBytes(currentEntry.keyHandle(), current);
-                return new PreparedCallbackMutation<>(
+                return scope.callback(
                         result,
                         deltaBytes,
                         0L,
@@ -293,7 +310,8 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
                             keyLifecycle.replaceEntry(currentEntry.entryHandle(), current, next);
                         },
                         null,
-                        null
+                        null,
+                        deltaBytes < 0L
                 );
             }
         });
@@ -367,9 +385,9 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
         return sizes;
     }
 
-    private EntryRecord liveHashRecord(byte[] keyBytes) {
+    private EntryRecord liveHashRecord(ReadScope scope, byte[] keyBytes) {
         KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
-        EntryRecord record = internals.liveEntryRecord(keyHandle);
+        EntryRecord record = scope.liveEntryRecord(keyHandle);
         if (record == null) {
             return null;
         }
@@ -406,22 +424,16 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
         return keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
     }
 
-    private void reclaimExpiredBeforeMutation(byte[] keyBytes, long nowMillis) {
-        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
-        if (keyHandle == null) {
-            return;
-        }
-        EntryRecord record = keyLifecycle.entryRecord(keyHandle);
-        if (record != null && keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
-            internals.reclaimExpired(keyHandle, record, nowMillis);
-        }
+    private static <T> PreparedChange<T> preparedNoEntry(
+            MutationScope scope,
+            T result,
+            MutationOutcome outcome
+    ) {
+        return scope.unchanged(result, outcome);
     }
 
-    private <T> PreparedEntryMutation<T> preparedNoEntry(T result, MutationOutcome outcome) {
-        return PreparedEntryMutation.unchanged(keyLifecycle, result, outcome);
-    }
-
-    private <T> PreparedEntryMutation<T> preparedDelete(
+    private <T> PreparedChange<T> preparedDelete(
+            MutationScope scope,
             CurrentEntry currentEntry,
             EntryRecord current,
             T result,
@@ -429,8 +441,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
             boolean releaseOldValue
     ) {
         long deltaBytes = -estimateRecordBytes(currentEntry.keyHandle(), current);
-        return PreparedEntryMutation.delete(
-                keyLifecycle,
+        return scope.delete(
                 result,
                 deltaBytes,
                 outcome,
@@ -456,7 +467,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
     }
 
     private long nativePeak(long heapGrowthBytes, int... nativeAllocationSizes) {
-        return internals.nativeAllocationPeakAdditionalBytes(
+        return memoryContext.nativeAllocationPeakAdditionalBytes(
                 0L,
                 Math.max(0L, heapGrowthBytes),
                 nativeAllocationSizes
@@ -475,7 +486,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
     private long withScopeBookkeeping(long upperBound) {
         return Math.max(
                 Math.max(0L, upperBound),
-                internals.nativeAllocationScopeBookkeepingBytes(0)
+                memoryContext.nativeAllocationScopeBookkeepingBytes(0)
         );
     }
 

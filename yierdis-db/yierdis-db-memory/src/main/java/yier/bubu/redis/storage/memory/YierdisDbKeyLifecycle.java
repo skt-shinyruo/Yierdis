@@ -27,10 +27,10 @@ import java.util.Objects;
 import java.util.function.BiConsumer;
 import java.util.function.LongSupplier;
 
-public final class YierdisDbKeyLifecycle implements AutoCloseable {
+final class YierdisDbKeyLifecycle implements AutoCloseable {
     private static final int EXPIRED_AWAITING_PHYSICAL_DELETION_FLAG = 1;
 
-    public record CurrentEntry(
+    record CurrentEntry(
             EntryHandle entryHandle,
             KeyHandle keyHandle,
             EntryRecord record
@@ -38,11 +38,11 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
     }
 
     @FunctionalInterface
-    public interface EntryScanConsumer {
+    interface EntryScanConsumer {
         boolean accept(KeyHandle keyHandle, EntryRecord record);
     }
 
-    public record KeyScanResult(
+    record KeyScanResult(
             ScanCursorV2 startCursor,
             ScanCursorV2 nextCursor,
             long inspectedSlots,
@@ -50,10 +50,10 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
     ) {
     }
 
-    public record DirectoryState(long tableGeneration, int activeCapacity, int oldCapacity) {
+    record DirectoryState(long tableGeneration, int activeCapacity, int oldCapacity) {
     }
 
-    public final class StagedEntry implements AutoCloseable {
+    final class StagedEntry implements AutoCloseable {
         private EntryHandle entryHandle;
         private NativeKeyDirectory.StagedInsert stagedKey;
 
@@ -62,11 +62,11 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
             this.stagedKey = Objects.requireNonNull(stagedKey, "stagedKey");
         }
 
-        public KeyHandle keyHandle() {
+        KeyHandle keyHandle() {
             return requireActiveStagedKey().keyHandle();
         }
 
-        public long stagedHeapBytes() {
+        long stagedHeapBytes() {
             return requireActiveStagedKey().stagedHeapBytes();
         }
 
@@ -163,54 +163,54 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         return ownedResources.stableMemoryBackend.defragCycle(Objects.requireNonNull(options, "options"));
     }
 
-    public KeyHandle keyHandle(byte[] keyBytes) {
+    KeyHandle keyHandle(byte[] keyBytes) {
         if (keyBytes == null) {
             return null;
         }
         return ownedResources.keyDirectory.getKeyHandle(keyBytes);
     }
 
-    public KeyHandle keyHandle(BytesView keyView) {
+    KeyHandle keyHandle(BytesView keyView) {
         if (keyView == null) {
             return null;
         }
         return ownedResources.keyDirectory.getKeyHandle(YierdisDb.toByteArray(keyView));
     }
 
-    public EntryHandle entryHandle(byte[] keyBytes) {
+    EntryHandle entryHandle(byte[] keyBytes) {
         if (keyBytes == null) {
             return null;
         }
         return ownedResources.keyDirectory.get(keyBytes);
     }
 
-    public EntryRecord entryRecord(byte[] keyBytes) {
+    EntryRecord entryRecord(byte[] keyBytes) {
         EntryHandle handle = entryHandle(keyBytes);
         return handle == null ? null : entryRecord(handle);
     }
 
-    public EntryRecord entryRecord(BytesView keyView) {
+    EntryRecord entryRecord(BytesView keyView) {
         if (keyView == null) {
             return null;
         }
         return entryRecord(YierdisDb.toByteArray(keyView));
     }
 
-    public EntryRecord entryRecord(KeyHandle keyHandle) {
+    EntryRecord entryRecord(KeyHandle keyHandle) {
         if (keyHandle == null) {
             return null;
         }
         return entryRecord(keyBytes(keyHandle));
     }
 
-    public EntryRecord entryRecord(EntryHandle handle) {
+    EntryRecord entryRecord(EntryHandle handle) {
         if (handle == null) {
             return null;
         }
         return ownedResources.entryTable.get(handle);
     }
 
-    public CurrentEntry currentEntry(byte[] keyBytes) {
+    CurrentEntry currentEntry(byte[] keyBytes) {
         Objects.requireNonNull(keyBytes, "keyBytes");
         EntryHandle handle = ownedResources.keyDirectory.get(keyBytes);
         EntryRecord record = handle == null ? null : ownedResources.entryTable.get(handle);
@@ -218,7 +218,7 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         return new CurrentEntry(handle, keyHandle, record);
     }
 
-    public StagedEntry stageEntry(byte[] keyBytes) {
+    StagedEntry stageEntry(byte[] keyBytes) {
         Objects.requireNonNull(keyBytes, "keyBytes");
         EntryHandle handle = ownedResources.entryTable.reserve();
         try {
@@ -233,7 +233,7 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         }
     }
 
-    public void abortStagedEntry(StagedEntry stagedEntry, Throwable failure) {
+    void abortStagedEntry(StagedEntry stagedEntry, Throwable failure) {
         Objects.requireNonNull(failure, "failure");
         if (stagedEntry == null) {
             return;
@@ -245,7 +245,7 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         }
     }
 
-    public EntryRecord liveEntryRecord(byte[] keyBytes) {
+    EntryRecord liveEntryRecord(byte[] keyBytes) {
         EntryHandle handle = entryHandle(keyBytes);
         if (handle == null) {
             return null;
@@ -260,14 +260,14 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         return liveEntryRecord(keyHandle, record);
     }
 
-    public EntryRecord liveEntryRecord(BytesView keyView) {
+    EntryRecord liveEntryRecord(BytesView keyView) {
         if (keyView == null) {
             return null;
         }
         return liveEntryRecord(YierdisDb.toByteArray(keyView));
     }
 
-    public EntryRecord liveEntryRecord(KeyHandle keyHandle) {
+    EntryRecord liveEntryRecord(KeyHandle keyHandle) {
         if (keyHandle == null) {
             return null;
         }
@@ -286,7 +286,7 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         return record;
     }
 
-    public EntryRecord unlinkEntry(byte[] keyBytes) {
+    EntryRecord unlinkEntry(byte[] keyBytes) {
         if (keyBytes == null) {
             return null;
         }
@@ -302,7 +302,7 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         return record;
     }
 
-    public EntryRecord unlinkEntry(EntryHandle handle) {
+    EntryRecord unlinkEntry(EntryHandle handle) {
         if (handle == null) {
             return null;
         }
@@ -317,41 +317,41 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         return record;
     }
 
-    public int keyCount() {
+    int keyCount() {
         return ownedResources.keyDirectory.size();
     }
 
-    public int expireCount() {
+    int expireCount() {
         return expireCount;
     }
 
-    public KeyHandle randomKeyHandle() {
+    KeyHandle randomKeyHandle() {
         return ownedResources.keyDirectory.randomKeyHandle();
     }
 
-    public void forEachKeyHandle(BiConsumer<KeyHandle, EntryRecord> consumer) {
+    void forEachKeyHandle(BiConsumer<KeyHandle, EntryRecord> consumer) {
         Objects.requireNonNull(consumer, "consumer");
         ownedResources.keyDirectory.forEachEntry(
                 (keyHandle, entryHandle) -> consumer.accept(keyHandle, entryRecord(entryHandle))
         );
     }
 
-    public Long expireAtMillis(byte[] keyBytes) {
+    Long expireAtMillis(byte[] keyBytes) {
         return expireAtMillis(entryRecord(keyBytes));
     }
 
-    public Long expireAtMillis(KeyHandle keyHandle) {
+    Long expireAtMillis(KeyHandle keyHandle) {
         return expireAtMillis(entryRecord(keyHandle));
     }
 
-    public long estimatedBytesForRemoval(KeyHandle keyHandle, EntryRecord record) {
+    long estimatedBytesForRemoval(KeyHandle keyHandle, EntryRecord record) {
         if (keyHandle == null || record == null) {
             return 0L;
         }
         return YierdisDbMemoryEstimator.entryMetadataBytes(record);
     }
 
-    public ScanCursorV2 scan(ScanCursorV2 cursor, int maxSteps, EntryScanConsumer consumer) {
+    ScanCursorV2 scan(ScanCursorV2 cursor, int maxSteps, EntryScanConsumer consumer) {
         Objects.requireNonNull(consumer, "consumer");
         return ownedResources.keyDirectory.scan(
                 cursor,
@@ -360,7 +360,7 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         );
     }
 
-    public KeyScanResult scanWithWork(
+    KeyScanResult scanWithWork(
             ScanCursorV2 cursor,
             long maxSteps,
             EntryScanConsumer consumer
@@ -379,23 +379,23 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         );
     }
 
-    public DirectoryState directoryState() {
+    DirectoryState directoryState() {
         var metrics = ownedResources.keyDirectory.metrics();
         return new DirectoryState(metrics.generation(), metrics.capacity(), metrics.oldCapacity());
     }
 
-    public boolean directoryStateIsCurrent(long generation, int activeCapacity, int oldCapacity) {
+    boolean directoryStateIsCurrent(long generation, int activeCapacity, int oldCapacity) {
         DirectoryState state = directoryState();
         return state.tableGeneration() == generation
                 && state.activeCapacity() == activeCapacity
                 && state.oldCapacity() == oldCapacity;
     }
 
-    public long estimatedInsertHeapGrowthBytes() {
+    long estimatedInsertHeapGrowthBytes() {
         return ownedResources.keyDirectory.estimatedInsertHeapGrowthBytes();
     }
 
-    public boolean isCurrentExpiredCandidate(
+    boolean isCurrentExpiredCandidate(
             byte[] keyBytes,
             KeyHandle expectedKeyHandle,
             EntryRecord expectedRecord,
@@ -415,7 +415,7 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
                 && isExpired(current, nowMillis);
     }
 
-    public boolean hasCurrentExpiredEntry(
+    boolean hasCurrentExpiredEntry(
             byte[] keyBytes,
             KeyHandle expectedKeyHandle,
             long nowMillis
@@ -423,7 +423,7 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         return isExpired(currentRecordForIdentity(keyBytes, expectedKeyHandle), nowMillis);
     }
 
-    public boolean removeEntry(KeyHandle keyHandle, EntryRecord expectedRecord) {
+    boolean removeEntry(KeyHandle keyHandle, EntryRecord expectedRecord) {
         if (keyHandle == null) {
             return false;
         }
@@ -446,14 +446,14 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         return true;
     }
 
-    public void replaceEntry(EntryHandle handle, EntryRecord oldRecord, EntryRecord newRecord) {
+    void replaceEntry(EntryHandle handle, EntryRecord oldRecord, EntryRecord newRecord) {
         Objects.requireNonNull(handle, "handle");
         Objects.requireNonNull(newRecord, "newRecord");
         ownedResources.entryTable.replace(handle, newRecord);
         reconcileDerivedEntryState(oldRecord, newRecord);
     }
 
-    public void publishStagedEntry(StagedEntry stagedEntry, EntryRecord newRecord) {
+    void publishStagedEntry(StagedEntry stagedEntry, EntryRecord newRecord) {
         Objects.requireNonNull(stagedEntry, "stagedEntry");
         Objects.requireNonNull(newRecord, "newRecord");
         EntryHandle handle = stagedEntry.requireActiveEntryHandle();
@@ -474,19 +474,19 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         reconcileDerivedEntryState(null, newRecord);
     }
 
-    public void deleteEntry(EntryHandle handle, EntryRecord record) {
+    void deleteEntry(EntryHandle handle, EntryRecord record) {
         Objects.requireNonNull(handle, "handle");
         ownedResources.keyDirectory.remove(handle);
         releaseEntry(handle, record);
     }
 
-    public void releaseEntry(EntryHandle handle, EntryRecord record) {
+    void releaseEntry(EntryHandle handle, EntryRecord record) {
         Objects.requireNonNull(handle, "handle");
         ownedResources.entryTable.release(handle);
         reconcileDerivedEntryState(record, null);
     }
 
-    public boolean markExpiredEntryAwaitingPhysicalDeletion(
+    boolean markExpiredEntryAwaitingPhysicalDeletion(
             KeyHandle keyHandle,
             EntryHandle entryHandle,
             EntryRecord expectedRecord,
@@ -508,34 +508,34 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         return true;
     }
 
-    public long expiredEntriesAwaitingPhysicalDeletion() {
+    long expiredEntriesAwaitingPhysicalDeletion() {
         return expiredEntriesAwaitingPhysicalDeletion;
     }
 
-    public void resetEntryStateCounters() {
+    void resetEntryStateCounters() {
         expireCount = 0;
         expiredEntriesAwaitingPhysicalDeletion = 0L;
     }
 
-    public byte[] copyKeyBytes(KeyHandle keyHandle) {
+    byte[] copyKeyBytes(KeyHandle keyHandle) {
         if (keyHandle == null) {
             return null;
         }
         return keyBytes(keyHandle);
     }
 
-    public boolean isKeyExpired(KeyHandle keyHandle, long nowMillis) {
+    boolean isKeyExpired(KeyHandle keyHandle, long nowMillis) {
         return keyHandle != null && isExpired(entryRecord(keyHandle), nowMillis);
     }
 
-    public boolean isKeyExpiredForScan(KeyHandle keyHandle, long nowMillis) {
+    boolean isKeyExpiredForScan(KeyHandle keyHandle, long nowMillis) {
         if (keyHandle == null) {
             return false;
         }
         return isExpired(entryRecord(keyHandle), nowMillis);
     }
 
-    public EntryRecord newRecord(
+    EntryRecord newRecord(
             KeyHandle keyHandle,
             ValueHandle valueHandle,
             ValueType type,
@@ -556,7 +556,7 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         );
     }
 
-    public EntryRecord touchRecord(KeyHandle keyHandle, EntryRecord record) {
+    EntryRecord touchRecord(KeyHandle keyHandle, EntryRecord record) {
         if (keyHandle == null || record == null) {
             return record;
         }
@@ -585,7 +585,7 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         return touched;
     }
 
-    public EntryRecord withExpireAtMillis(KeyHandle keyHandle, EntryRecord record, long expireAtMillis) {
+    EntryRecord withExpireAtMillis(KeyHandle keyHandle, EntryRecord record, long expireAtMillis) {
         if (keyHandle == null || record == null) {
             return record;
         }
@@ -602,11 +602,11 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         );
     }
 
-    public void releaseValue(EntryRecord record) {
+    void releaseValue(EntryRecord record) {
         ownedResources.releaseValue(record);
     }
 
-    public long estimatedValueBytes(EntryRecord record) {
+    long estimatedValueBytes(EntryRecord record) {
         if (record == null || record.valueHandle() == null || record.valueHandle().isNull()) {
             return 0L;
         }
@@ -619,7 +619,7 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         };
     }
 
-    public byte[] copyStringValue(EntryRecord record) {
+    byte[] copyStringValue(EntryRecord record) {
         if (record == null || record.type() != ValueType.STRING || record.valueHandle() == null) {
             return null;
         }
@@ -642,28 +642,28 @@ public final class YierdisDbKeyLifecycle implements AutoCloseable {
         );
     }
 
-    YierdisStringOps createStringOps(YierdisDbRuntimeInternals internals) {
-        return new YierdisStringOps(internals, ownedResources.stringRoot);
+    YierdisStringOps createStringOps(YierdisDbKernel kernel, YierdisDbMemoryContext memoryContext) {
+        return new YierdisStringOps(kernel, this, memoryContext, ownedResources.stringRoot);
     }
 
-    YierdisListOps createListOps(YierdisDbRuntimeInternals internals) {
-        return new YierdisListOps(internals, ownedResources.listRoot);
+    YierdisListOps createListOps(YierdisDbKernel kernel, YierdisDbMemoryContext memoryContext) {
+        return new YierdisListOps(kernel, this, memoryContext, ownedResources.listRoot);
     }
 
-    YierdisHashOps createHashOps(YierdisDbRuntimeInternals internals) {
-        return new YierdisHashOps(internals, ownedResources.hashRoot);
+    YierdisHashOps createHashOps(YierdisDbKernel kernel, YierdisDbMemoryContext memoryContext) {
+        return new YierdisHashOps(kernel, this, memoryContext, ownedResources.hashRoot);
     }
 
-    YierdisSetOps createSetOps(YierdisDbRuntimeInternals internals) {
-        return new YierdisSetOps(internals, ownedResources.setRoot);
+    YierdisSetOps createSetOps(YierdisDbKernel kernel, YierdisDbMemoryContext memoryContext) {
+        return new YierdisSetOps(kernel, this, memoryContext, ownedResources.setRoot);
     }
 
-    YierdisZSetOps createZSetOps(YierdisDbRuntimeInternals internals) {
-        return new YierdisZSetOps(internals, ownedResources.zsetRoot);
+    YierdisZSetOps createZSetOps(YierdisDbKernel kernel, YierdisDbMemoryContext memoryContext) {
+        return new YierdisZSetOps(kernel, this, memoryContext, ownedResources.zsetRoot);
     }
 
-    YierdisHllOps createHllOps(YierdisDbRuntimeInternals internals) {
-        return new YierdisHllOps(internals, ownedResources.stringRoot);
+    YierdisHllOps createHllOps(YierdisDbKernel kernel, YierdisDbMemoryContext memoryContext) {
+        return new YierdisHllOps(kernel, this, memoryContext, ownedResources.stringRoot);
     }
 
     void clearData() {

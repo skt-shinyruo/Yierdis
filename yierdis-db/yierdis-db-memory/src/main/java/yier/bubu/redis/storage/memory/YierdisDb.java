@@ -28,8 +28,6 @@ import yier.bubu.redis.storage.api.MemoryOps;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
-import yier.bubu.redis.storage.memory.internal.expire.YierdisDbExpirationSupport;
-import yier.bubu.redis.storage.memory.internal.expire.YierdisTtlOps;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceResult;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
@@ -43,6 +41,7 @@ public final class YierdisDb
         implements CommitPublishingDbEngine, GlobalMaxmemoryDbEngine, DefragmentableDbEngine, MemoryOps, AutoCloseable {
     private final YierdisDbRuntimeState runtimeState;
     private final YierdisDbStorage storage;
+    private final YierdisDbKernel kernel;
     private final YierdisDbHealth health;
     private final DbComponentMemoryUsage memoryUsage;
     private final YierdisDbMemoryLedger ledger;
@@ -114,44 +113,44 @@ public final class YierdisDb
                     runtimeState::commitDbIndex
             );
             YierdisDbKeyLifecycle keyLifecycle = storage.keyLifecycle();
-            YierdisDbRuntimeInternals internals = new YierdisDbRuntimeInternals(
+            YierdisDbMemoryContext memoryContext = new YierdisDbMemoryContext(ledger, backend);
+            YierdisDbKernel kernel = new YierdisDbKernel(
                     threadChecker,
                     mutationExecutor,
                     keyLifecycle,
-                    ledger,
-                    backend
+                    memoryContext
             );
             DbComponentMemoryUsage memoryUsage = new DbComponentMemoryUsage(
                     threadChecker,
-                    internals,
+                    memoryContext,
                     keyLifecycle,
                     storage.hashTableMaintenanceRegistry()
             );
             YierdisDbExpirationSupport expirationSupport = new YierdisDbExpirationSupport(
-                    internals,
+                    kernel,
+                    keyLifecycle,
                     expireCleanupTimeLimitNanos
             );
-            YierdisStringOps stringOps = keyLifecycle.createStringOps(internals);
-            YierdisHashOps hashOps = keyLifecycle.createHashOps(internals);
-            YierdisListOps listOps = keyLifecycle.createListOps(internals);
-            YierdisSetOps setOps = keyLifecycle.createSetOps(internals);
-            YierdisZSetOps zsetOps = keyLifecycle.createZSetOps(internals);
-            YierdisHllOps hllOps = keyLifecycle.createHllOps(internals);
-            YierdisTtlOps ttlOps = new YierdisTtlOps(internals);
-            YierdisKeyspaceOps keyspaceOps = new YierdisKeyspaceOps(internals);
+            YierdisStringOps stringOps = keyLifecycle.createStringOps(kernel, memoryContext);
+            YierdisHashOps hashOps = keyLifecycle.createHashOps(kernel, memoryContext);
+            YierdisListOps listOps = keyLifecycle.createListOps(kernel, memoryContext);
+            YierdisSetOps setOps = keyLifecycle.createSetOps(kernel, memoryContext);
+            YierdisZSetOps zsetOps = keyLifecycle.createZSetOps(kernel, memoryContext);
+            YierdisHllOps hllOps = keyLifecycle.createHllOps(kernel, memoryContext);
+            YierdisTtlOps ttlOps = new YierdisTtlOps(kernel, keyLifecycle, memoryContext);
+            YierdisKeyspaceOps keyspaceOps = new YierdisKeyspaceOps(kernel, keyLifecycle, memoryContext);
             YierdisDbMemoryReporter memoryReporter = new YierdisDbMemoryReporter(
-                    internals,
+                    kernel,
                     memoryUsage,
                     storage.hashTableMaintenanceRegistry(),
                     maxmemoryBytes,
                     ledger,
                     new YierdisDbMemoryEstimator(),
-                    runtimeState::lastNativeDefragReport,
-                    internals::nativeLiveRegionCount
+                    runtimeState::lastNativeDefragReport
             );
-            YierdisDbIntrospection introspection = new YierdisDbIntrospection(internals);
+            YierdisDbIntrospection introspection = new YierdisDbIntrospection(kernel);
             YierdisDbMaxmemorySupport maxmemorySupport = new YierdisDbMaxmemorySupport(
-                    internals,
+                    kernel,
                     memoryReporter::usedBytesForMaxmemory,
                     memoryReporter::memoryUsage,
                     expirationSupport::cleanupExpired,
@@ -167,11 +166,11 @@ public final class YierdisDb
             YierdisDbDataMaintenance maintenance = new YierdisDbDataMaintenance(
                     runtimeState,
                     storage,
-                    internals,
+                    kernel,
+                    memoryContext,
                     ledger,
                     health,
                     storage.hashTableMaintenanceRegistry(),
-                    mutationExecutor,
                     expirationSupport,
                     maxmemorySupport,
                     memoryReporter,
@@ -180,7 +179,7 @@ public final class YierdisDb
             YierdisDbOperationViews operations = new YierdisDbOperationViews(
                     new YierdisDbReads(stringOps, hashOps, listOps, setOps, zsetOps, hllOps, keyspaceOps, ttlOps),
                     new YierdisDbWrites(
-                            internals,
+                            kernel,
                             stringOps,
                             hashOps,
                             listOps,
@@ -195,6 +194,7 @@ public final class YierdisDb
 
             this.runtimeState = runtimeState;
             this.storage = storage;
+            this.kernel = kernel;
             this.health = health;
             this.memoryUsage = memoryUsage;
             this.ledger = ledger;
@@ -271,7 +271,7 @@ public final class YierdisDb
 
     @Override
     public void bindToCurrentThread() {
-        storage.keyLifecycle().bindToCurrentThread();
+        kernel.bindToCurrentThread();
     }
 
     @Override
