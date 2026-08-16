@@ -50,7 +50,7 @@ reply 编码方向相反。`RespReplyWriter.bulkString(BytesSlice)` 先写 RESP 
 
 ## DB lookup 和写路径如何使用 bytes
 
-DB API 的很多 read ops 接受 `BytesView`，例如 `StringReadOps`、`TtlReadOps`、`KeyspaceReadOps`、`MemoryOps`。这让 command/DB contract 保持 Netty-free，也给未来 direct lookup 优化留出接口空间。
+DB API 的很多 read ops 接受 `BytesView`，例如 `StringReadOps`、`TtlReadOps`、`KeyspaceReadOps`、`MemoryOps`。这让 command/DB contract 保持 Netty-free；当前 lookup 的 ownership copy 边界见下文。
 
 当前实现里，`YierdisDbKeyLifecycle` 在 `BytesView` 进入 key directory 前会调用 `YierdisDb.toByteArray(keyView)` materialize 一个 heap `byte[]`。这是因为 `NativeKeyDirectory` 的 lookup API 当前是 `byte[]` based，例如 `get(byte[])`、`getKeyHandle(byte[])` 和 `compute(byte[], ...)`。这份 heap copy 是今天的 ownership/lifetime 边界，不应该写成“lookup 已经避免 heap key 生成”。
 

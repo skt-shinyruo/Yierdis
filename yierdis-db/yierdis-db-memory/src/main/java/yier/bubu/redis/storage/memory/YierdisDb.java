@@ -369,10 +369,9 @@ public final class YierdisDb
         if (length < 0) {
             return null;
         }
+        // ponytail: BytesView lookup 每次分配一个 heap byte[], allocation profile 证明该 copy 是热点时，再为 NativeKeyDirectory 增加 direct lookup。
         byte[] bytes = new byte[length];
-        for (int index = 0; index < length; index++) {
-            bytes[index] = view.getByte(index);
-        }
+        view.getBytes(0, bytes, 0, length);
         return bytes;
     }
 
