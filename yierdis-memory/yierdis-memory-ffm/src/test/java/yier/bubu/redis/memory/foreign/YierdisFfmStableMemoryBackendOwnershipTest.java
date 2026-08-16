@@ -267,7 +267,7 @@ public class YierdisFfmStableMemoryBackendOwnershipTest {
         TestOwner owner = new TestOwner();
         StableMemoryBackend backend = backend("active-epoch-close", owner);
         backend.bindToCurrentThread();
-        NativeEpochScope epoch = backend.beginEpoch(NativeEpochKind.SNAPSHOT);
+        NativeEpochScope epoch = backend.beginEpoch(NativeEpochKind.SCAN);
         try {
             IllegalStateException failure = Assert.assertThrows(
                     IllegalStateException.class,

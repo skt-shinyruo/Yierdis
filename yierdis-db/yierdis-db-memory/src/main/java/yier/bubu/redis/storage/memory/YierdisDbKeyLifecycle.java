@@ -28,7 +28,6 @@ import java.util.function.BiConsumer;
 import java.util.function.LongSupplier;
 
 final class YierdisDbKeyLifecycle implements AutoCloseable {
-    private static final int EXPIRED_AWAITING_PHYSICAL_DELETION_FLAG = 1;
 
     record CurrentEntry(
             EntryHandle entryHandle,
@@ -125,7 +124,6 @@ final class YierdisDbKeyLifecycle implements AutoCloseable {
     private final OwnedResources ownedResources;
     private final LongSupplier lruClockSupplier;
     private int expireCount;
-    private long expiredEntriesAwaitingPhysicalDeletion;
 
     YierdisDbKeyLifecycle(
             StableMemoryBackend stableMemoryBackend,
@@ -486,35 +484,8 @@ final class YierdisDbKeyLifecycle implements AutoCloseable {
         reconcileDerivedEntryState(record, null);
     }
 
-    boolean markExpiredEntryAwaitingPhysicalDeletion(
-            KeyHandle keyHandle,
-            EntryHandle entryHandle,
-            EntryRecord expectedRecord,
-            long nowMillis
-    ) {
-        if (keyHandle == null || entryHandle == null || expectedRecord == null
-                || !isExpired(expectedRecord, nowMillis)) {
-            return false;
-        }
-        EntryRecord current = ownedResources.entryTable.get(entryHandle);
-        if (current == null || !current.equals(expectedRecord)
-                || isExpiredEntryAwaitingPhysicalDeletion(current)) {
-            return false;
-        }
-        replaceEntry(entryHandle, current, withFlags(
-                current,
-                current.flags() | EXPIRED_AWAITING_PHYSICAL_DELETION_FLAG
-        ));
-        return true;
-    }
-
-    long expiredEntriesAwaitingPhysicalDeletion() {
-        return expiredEntriesAwaitingPhysicalDeletion;
-    }
-
-    void resetEntryStateCounters() {
+    void resetExpireCount() {
         expireCount = 0;
-        expiredEntriesAwaitingPhysicalDeletion = 0L;
     }
 
     byte[] copyKeyBytes(KeyHandle keyHandle) {
@@ -595,7 +566,7 @@ final class YierdisDbKeyLifecycle implements AutoCloseable {
                 record.keyHash(),
                 record.type(),
                 record.encoding(),
-                clearExpiredEntryAwaitingPhysicalDeletionFlag(record.flags()),
+                record.flags(),
                 expireAtMillis,
                 nextVersion(record),
                 accessClock(record.lruOrLfu())
@@ -780,25 +751,6 @@ final class YierdisDbKeyLifecycle implements AutoCloseable {
             }
             expireCount = nextExpireCount;
         }
-
-        boolean oldAwaitingDeletion = isExpiredEntryAwaitingPhysicalDeletion(oldRecord);
-        boolean newAwaitingDeletion = isExpiredEntryAwaitingPhysicalDeletion(newRecord);
-        if (oldAwaitingDeletion == newAwaitingDeletion) {
-            return;
-        }
-        if (newAwaitingDeletion) {
-            if (expiredEntriesAwaitingPhysicalDeletion < Long.MAX_VALUE) {
-                expiredEntriesAwaitingPhysicalDeletion++;
-            }
-            return;
-        }
-        if (expiredEntriesAwaitingPhysicalDeletion > 0L) {
-            expiredEntriesAwaitingPhysicalDeletion--;
-        }
-    }
-
-    private static boolean isExpiredEntryAwaitingPhysicalDeletion(EntryRecord record) {
-        return record != null && (record.flags() & EXPIRED_AWAITING_PHYSICAL_DELETION_FLAG) != 0;
     }
 
     private static Long expireAtMillis(EntryRecord record) {
@@ -811,24 +763,6 @@ final class YierdisDbKeyLifecycle implements AutoCloseable {
 
     private static boolean isExpired(EntryRecord record, long nowMillis) {
         return hasTtl(record) && record.expireAtMillis() <= nowMillis;
-    }
-
-    private static int clearExpiredEntryAwaitingPhysicalDeletionFlag(int flags) {
-        return flags & ~EXPIRED_AWAITING_PHYSICAL_DELETION_FLAG;
-    }
-
-    private static EntryRecord withFlags(EntryRecord record, int flags) {
-        return new EntryRecord(
-                record.keyHandle(),
-                record.valueHandle(),
-                record.keyHash(),
-                record.type(),
-                record.encoding(),
-                flags,
-                record.expireAtMillis(),
-                nextVersion(record),
-                record.lruOrLfu()
-        );
     }
 
     private static Throwable recordFailure(Throwable current, Throwable next) {

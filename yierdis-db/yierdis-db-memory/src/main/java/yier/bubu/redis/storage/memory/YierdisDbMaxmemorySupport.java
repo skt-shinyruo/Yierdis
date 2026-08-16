@@ -46,10 +46,10 @@ final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
     }
 
     void evictUntilUnder(long limitBytes) {
-        kernel.execute(DbUse.maintain(scope -> {
+        kernel.maintain(scope -> {
             evictUntilUnder(scope, limitBytes);
             return null;
-        }));
+        });
     }
 
     private void evictUntilUnder(MaintenanceScope scope, long requestedLimitBytes) {
@@ -98,29 +98,29 @@ final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
 
     @Override
     public MemoryUsageSnapshot memoryUsage() {
-        return kernel.execute(DbUse.maintain(ignored -> memoryUsageSupplier.get()));
+        return kernel.maintain(ignored -> memoryUsageSupplier.get());
     }
 
     public long usedBytesForMaxmemory() {
-        return kernel.execute(DbUse.maintain(ignored -> usedBytesForMaxmemory.getAsLong()));
+        return kernel.maintain(ignored -> usedBytesForMaxmemory.getAsLong());
     }
 
     @Override
     public int keyCountEstimate() {
-        return kernel.execute(DbUse.maintain(scope -> Math.max(0, scope.keyCount())));
+        return kernel.maintain(scope -> Math.max(0, scope.keyCount()));
     }
 
     @Override
     public void cleanupExpired(long nowMillis) {
-        kernel.execute(DbUse.maintain(ignored -> {
+        kernel.maintain(ignored -> {
             cleanupExpired.accept(nowMillis);
             return null;
-        }));
+        });
     }
 
     @Override
     public MaxmemoryCandidate sampleCandidate(MaxmemoryPolicy policy, long nowMillis) {
-        return kernel.execute(DbUse.maintain(scope -> sampleCandidate(scope, policy, nowMillis)));
+        return kernel.maintain(scope -> sampleCandidate(scope, policy, nowMillis));
     }
 
     private MaxmemoryCandidate sampleCandidate(
@@ -153,7 +153,7 @@ final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
 
     @Override
     public MaxmemoryCandidate scanBestCandidate(MaxmemoryPolicy policy, long nowMillis) {
-        return kernel.execute(DbUse.maintain(scope -> scanBestCandidate(scope, policy, nowMillis)));
+        return kernel.maintain(scope -> scanBestCandidate(scope, policy, nowMillis));
     }
 
     private MaxmemoryCandidate scanBestCandidate(
@@ -188,7 +188,7 @@ final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
 
     @Override
     public boolean evict(MaxmemoryCandidate candidate, long nowMillis) {
-        return kernel.execute(DbUse.maintain(scope -> evict(scope, candidate, nowMillis)));
+        return kernel.maintain(scope -> evict(scope, candidate, nowMillis));
     }
 
     private boolean evict(MaintenanceScope scope, MaxmemoryCandidate candidate, long nowMillis) {

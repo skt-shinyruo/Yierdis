@@ -16,7 +16,6 @@ import yier.bubu.redis.storage.api.DbEngineConfig;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.SetMode;
-import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.KeyScanWindow;
@@ -26,13 +25,13 @@ import static yier.bubu.redis.testutil.TestBytes.b;
 
 public class FfmDbEpochLifecycleIntegrationTest {
     @Test
-    public void snapshotEpochDefersReleaseUntilClosed() {
+    public void scanEpochDefersReleaseUntilClosed() {
         YierdisDb db = openFfm();
         try {
             byte[] key = b("epoch-key");
             Assert.assertTrue(db.writes().strings().setString(key, b("epoch-value"), SetMode.NORMAL, null).value());
 
-            try (NativeEpochScope ignored = YierdisDbTestAccess.backend(db).beginEpoch(NativeEpochKind.SNAPSHOT)) {
+            try (NativeEpochScope ignored = YierdisDbTestAccess.backend(db).beginEpoch(NativeEpochKind.SCAN)) {
                 Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(key)).value());
 
                 NativeAllocatorStats during = YierdisDbTestAccess.backend(db).stats();
@@ -84,46 +83,6 @@ public class FfmDbEpochLifecycleIntegrationTest {
     }
 
     @Test
-    public void snapshotCopiesValuesBeforeTheSourceKeyIsDeleted() {
-        YierdisDb db = openFfm();
-        try {
-            byte[] key = b("snapshot-keep");
-            byte[] value = b("snapshot-value");
-            Assert.assertTrue(db.writes().strings().setString(key, value, SetMode.NORMAL, null).value());
-
-            List<YierdisSnapshotEntry> entries = new ArrayList<>() {
-                private boolean deleted;
-
-                @Override
-                public boolean add(YierdisSnapshotEntry entry) {
-                    boolean added = super.add(entry);
-                    if (added && !deleted) {
-                        deleted = true;
-                        Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(key)).value());
-                        YierdisMemoryStats during = db.memory().memoryStats();
-                        Assert.assertTrue(during.nativeDefragQuarantinedObjects() > 0L);
-                        Assert.assertTrue(during.nativeDefragQuarantineBytes() > 0L);
-                    }
-                    return added;
-                }
-            };
-
-            ScanCursorV2 cursor = db.introspection().snapshot(ScanCursorV2.start(), 2, entries);
-
-            Assert.assertEquals(0L, cursor.value());
-            Assert.assertEquals(1, entries.size());
-            YierdisSnapshotEntry entry = entries.get(0);
-            Assert.assertArrayEquals(key, entry.keyBytes());
-            Assert.assertEquals(ValueType.STRING, entry.type());
-            Assert.assertArrayEquals(value, entry.stringValueBytes());
-            Assert.assertNull(db.reads().strings().getStringBytes(key));
-            assertNoQuarantine(db);
-        } finally {
-            db.shutdown();
-        }
-    }
-
-    @Test
     public void shutdownReleasesCollectionsAfterACompletedEpoch() {
         YierdisDb db = openFfm();
         try {
@@ -133,7 +92,7 @@ public class FfmDbEpochLifecycleIntegrationTest {
             Assert.assertEquals(Long.valueOf(1L), db.writes().sets().sadd(b("set"), List.of(b("m"))).value());
             Assert.assertEquals(Long.valueOf(1L), db.writes().zsets().zadd(b("zset"), List.of(b("1"), b("m"))).value());
 
-            try (NativeEpochScope ignored = YierdisDbTestAccess.backend(db).beginEpoch(NativeEpochKind.SNAPSHOT)) {
+            try (NativeEpochScope ignored = YierdisDbTestAccess.backend(db).beginEpoch(NativeEpochKind.SCAN)) {
                 Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(b("cleanup:string"))).value());
                 Assert.assertTrue(db.memory().memoryStats().nativeDefragQuarantinedObjects() > 0L);
             }

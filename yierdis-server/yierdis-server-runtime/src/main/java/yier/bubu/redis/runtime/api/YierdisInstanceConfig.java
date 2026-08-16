@@ -1,6 +1,5 @@
 package yier.bubu.redis.runtime.api;
 
-import yier.bubu.redis.storage.api.DbEngineFactory;
 import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
@@ -12,19 +11,8 @@ public final class YierdisInstanceConfig {
         GLOBAL
     }
 
-    public record EngineFactoryBinding(DbEngineFactory engineFactory, AutoCloseable ownedResource) {
-        public EngineFactoryBinding {
-            Objects.requireNonNull(engineFactory, "engineFactory");
-        }
-
-        public EngineFactoryBinding(DbEngineFactory engineFactory) {
-            this(engineFactory, null);
-        }
-    }
-
     private final int databases;
-    private final EngineFactoryBinding engineFactoryBinding;
-    private final YierdisChangeSink changeSink;
+    private final int nativeSlotCapacity;
 
     private final long maxmemoryBytes;
     private final MaxmemoryScope maxmemoryScope;
@@ -33,9 +21,6 @@ public final class YierdisInstanceConfig {
     private final long evictionTimeLimitMillis;
     private final long expireCleanupTimeLimitMillis;
     private final DbDefragConfig defrag;
-    private final int commitStreamMaxEvents;
-    private final long commitStreamMaxRetainedBytes;
-    private final long commitStreamShutdownTimeoutMillis;
 
     private YierdisInstanceConfig(
             Builder b,
@@ -44,8 +29,7 @@ public final class YierdisInstanceConfig {
             MaxmemoryPolicy maxmemoryPolicy
     ) {
         this.databases = databases;
-        this.engineFactoryBinding = b.engineFactoryBinding;
-        this.changeSink = b.changeSink == null ? YierdisChangeSink.NOOP : b.changeSink;
+        this.nativeSlotCapacity = b.nativeSlotCapacity;
         this.maxmemoryBytes = b.maxmemoryBytes;
         this.maxmemoryScope = maxmemoryScope;
         this.maxmemoryPolicy = maxmemoryPolicy;
@@ -53,9 +37,6 @@ public final class YierdisInstanceConfig {
         this.evictionTimeLimitMillis = b.evictionTimeLimitMillis;
         this.expireCleanupTimeLimitMillis = b.expireCleanupTimeLimitMillis;
         this.defrag = b.defrag;
-        this.commitStreamMaxEvents = b.commitStreamMaxEvents;
-        this.commitStreamMaxRetainedBytes = b.commitStreamMaxRetainedBytes;
-        this.commitStreamShutdownTimeoutMillis = b.commitStreamShutdownTimeoutMillis;
     }
 
     public static Builder builder() {
@@ -66,16 +47,8 @@ public final class YierdisInstanceConfig {
         return databases;
     }
 
-    public DbEngineFactory engineFactory() {
-        return engineFactoryBinding == null ? null : engineFactoryBinding.engineFactory();
-    }
-
-    public EngineFactoryBinding engineFactoryBinding() {
-        return engineFactoryBinding;
-    }
-
-    public YierdisChangeSink changeSink() {
-        return changeSink;
+    public int nativeSlotCapacity() {
+        return nativeSlotCapacity;
     }
 
     public long maxmemoryBytes() {
@@ -106,22 +79,9 @@ public final class YierdisInstanceConfig {
         return defrag;
     }
 
-    public int commitStreamMaxEvents() {
-        return commitStreamMaxEvents;
-    }
-
-    public long commitStreamMaxRetainedBytes() {
-        return commitStreamMaxRetainedBytes;
-    }
-
-    public long commitStreamShutdownTimeoutMillis() {
-        return commitStreamShutdownTimeoutMillis;
-    }
-
     public static final class Builder {
         private int databases = 1;
-        private EngineFactoryBinding engineFactoryBinding;
-        private YierdisChangeSink changeSink = YierdisChangeSink.NOOP;
+        private int nativeSlotCapacity;
 
         private long maxmemoryBytes;
         private MaxmemoryScope maxmemoryScope = MaxmemoryScope.PER_DB;
@@ -130,9 +90,6 @@ public final class YierdisInstanceConfig {
         private long evictionTimeLimitMillis = 5;
         private long expireCleanupTimeLimitMillis = 5;
         private DbDefragConfig defrag = new DbDefragConfig(false, 64L * 1024L, 64L, 1L);
-        private int commitStreamMaxEvents = 8_192;
-        private long commitStreamMaxRetainedBytes = 64L * 1024L * 1024L;
-        private long commitStreamShutdownTimeoutMillis = 5_000L;
 
         private Builder() {
         }
@@ -142,18 +99,8 @@ public final class YierdisInstanceConfig {
             return this;
         }
 
-        public Builder engineFactory(DbEngineFactory engineFactory) {
-            this.engineFactoryBinding = engineFactory == null ? null : new EngineFactoryBinding(engineFactory);
-            return this;
-        }
-
-        public Builder engineFactoryBinding(EngineFactoryBinding engineFactoryBinding) {
-            this.engineFactoryBinding = engineFactoryBinding;
-            return this;
-        }
-
-        public Builder changeSink(YierdisChangeSink changeSink) {
-            this.changeSink = changeSink == null ? YierdisChangeSink.NOOP : changeSink;
+        public Builder nativeSlotCapacity(int nativeSlotCapacity) {
+            this.nativeSlotCapacity = nativeSlotCapacity;
             return this;
         }
 
@@ -192,25 +139,13 @@ public final class YierdisInstanceConfig {
             return this;
         }
 
-        public Builder commitStreamMaxEvents(int commitStreamMaxEvents) {
-            this.commitStreamMaxEvents = commitStreamMaxEvents;
-            return this;
-        }
-
-        public Builder commitStreamMaxRetainedBytes(long commitStreamMaxRetainedBytes) {
-            this.commitStreamMaxRetainedBytes = commitStreamMaxRetainedBytes;
-            return this;
-        }
-
-        public Builder commitStreamShutdownTimeoutMillis(long commitStreamShutdownTimeoutMillis) {
-            this.commitStreamShutdownTimeoutMillis = commitStreamShutdownTimeoutMillis;
-            return this;
-        }
-
         public YierdisInstanceConfig build() {
             int dbs = Math.max(1, databases);
             if (maxmemoryBytes < 0) {
                 throw new IllegalArgumentException("maxmemoryBytes must be >= 0");
+            }
+            if (nativeSlotCapacity < 0) {
+                throw new IllegalArgumentException("nativeSlotCapacity must be >= 0");
             }
             if (maxmemorySamples <= 0) {
                 throw new IllegalArgumentException("maxmemorySamples must be > 0");
@@ -220,15 +155,6 @@ public final class YierdisInstanceConfig {
             }
             if (expireCleanupTimeLimitMillis <= 0) {
                 throw new IllegalArgumentException("expireCleanupTimeLimitMillis must be > 0");
-            }
-            if (commitStreamMaxEvents <= 0) {
-                throw new IllegalArgumentException("commitStreamMaxEvents must be > 0");
-            }
-            if (commitStreamMaxRetainedBytes <= 0L) {
-                throw new IllegalArgumentException("commitStreamMaxRetainedBytes must be > 0");
-            }
-            if (commitStreamShutdownTimeoutMillis <= 0L) {
-                throw new IllegalArgumentException("commitStreamShutdownTimeoutMillis must be > 0");
             }
             MaxmemoryScope scope = maxmemoryScope == null ? MaxmemoryScope.PER_DB : maxmemoryScope;
             MaxmemoryPolicy policy = maxmemoryPolicy == null ? MaxmemoryPolicy.NOEVICTION : maxmemoryPolicy;

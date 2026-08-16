@@ -12,7 +12,6 @@ import yier.bubu.redis.testutil.ReplyArray;
 import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyError;
 import yier.bubu.redis.testutil.ReplyInteger;
-import yier.bubu.redis.testutil.TestYierdisInstances;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -34,7 +33,7 @@ public class ContractsIntegrationSmokeTest {
                 .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
             instance.bindToCurrentThread();
             CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
             TestSession session = new TestSession();

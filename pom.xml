@@ -35,7 +35,6 @@
         <module>yierdis-networking/yierdis-networking-netty</module>
         <module>yierdis-server/yierdis-server-api</module>
         <module>yierdis-server/yierdis-server-executor</module>
-        <module>yierdis-server/yierdis-server-runtime-api</module>
         <module>yierdis-server/yierdis-server-runtime</module>
         <module>yierdis-server/yierdis-server-main</module>
         <module>yierdis-command/yierdis-command-api</module>
@@ -120,11 +119,6 @@
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
                 <artifactId>yierdis-db-memory</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-server-runtime-api</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

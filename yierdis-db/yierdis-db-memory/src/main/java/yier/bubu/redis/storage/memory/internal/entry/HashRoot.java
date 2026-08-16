@@ -26,14 +26,6 @@ public final class HashRoot implements TypeRoot {
     private final HashTableMaintenanceRegistry maintenanceRegistry;
     private boolean closed;
 
-    public HashRoot(StableMemoryBackend allocator) {
-        this(allocator, HashSeed.random());
-    }
-
-    public HashRoot(StableMemoryBackend allocator, HashSeed hashSeed) {
-        this(allocator, hashSeed, null);
-    }
-
     public HashRoot(
             StableMemoryBackend allocator,
             HashSeed hashSeed,

@@ -53,10 +53,6 @@ final class YierdisDbMemoryContext {
         return stableMemoryBackend.beginEpoch(NativeEpochKind.SCAN);
     }
 
-    NativeEpochScope beginSnapshotEpoch() {
-        return stableMemoryBackend.beginEpoch(NativeEpochKind.SNAPSHOT);
-    }
-
     NativeBytesSlice keyBytesSlice(KeyHandle keyHandle) {
         Objects.requireNonNull(keyHandle, "keyHandle");
         return new NativeBytesSlice(

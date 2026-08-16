@@ -30,12 +30,12 @@ public final class CommandSupport {
 
     public CommandDb commandDb(CommandSession session) {
         Objects.requireNonNull(session, "session");
-        return new CommandDb(dbRouter.dbFor(session), null);
+        return new CommandDb(dbRouter.dbFor(session));
     }
 
     public CommandDb commandDb(CommandExecutionContext context) {
         Objects.requireNonNull(context, "context");
-        return new CommandDb(dbRouter.dbFor(context.session()), context.mutationContext());
+        return new CommandDb(dbRouter.dbFor(context.session()));
     }
 
     public int databases() {

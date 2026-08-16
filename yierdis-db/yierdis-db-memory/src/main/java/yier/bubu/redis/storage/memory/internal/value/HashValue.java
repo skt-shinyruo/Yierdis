@@ -35,14 +35,6 @@ public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTra
     private Runnable heapChangeListener = () -> {
     };
 
-    public HashValue(StableMemoryBackend allocator) {
-        this(allocator, HashSeed.random());
-    }
-
-    public HashValue(StableMemoryBackend allocator, HashSeed hashSeed) {
-        this(allocator, hashSeed, null);
-    }
-
     public HashValue(
             StableMemoryBackend allocator,
             HashSeed hashSeed,

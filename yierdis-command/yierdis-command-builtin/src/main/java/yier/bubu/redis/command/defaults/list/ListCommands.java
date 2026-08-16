@@ -108,7 +108,7 @@ public final class ListCommands implements CommandModule {
                 reply.shape(),
                 mutation,
                 execution -> {
-                    mutation.commit(execution.mutationContext());
+                    mutation.commit();
                     return CommandResult.reply(reply);
                 }
         );

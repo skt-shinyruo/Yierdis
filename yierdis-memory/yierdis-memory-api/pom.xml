@@ -24,11 +24,6 @@
         </dependency>
 
         <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-common-bytes</artifactId>
-        </dependency>
-
-        <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
             <scope>test</scope>

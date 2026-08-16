@@ -47,14 +47,6 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTra
     private Runnable heapChangeListener = () -> {
     };
 
-    public ZSetValue(StableMemoryBackend allocator) {
-        this(allocator, HashSeed.random());
-    }
-
-    public ZSetValue(StableMemoryBackend allocator, HashSeed hashSeed) {
-        this(allocator, hashSeed, null);
-    }
-
     public ZSetValue(
             StableMemoryBackend allocator,
             HashSeed hashSeed,

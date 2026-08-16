@@ -7,7 +7,6 @@ import java.util.List;
 import java.util.Objects;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.CurrentEntry;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
-import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.ListReadOps;
@@ -53,31 +52,23 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
 
     @Override
     public WriteResult<Long> lpush(byte[] keyBytes, List<byte[]> values) {
-        return lpush(MutationContext.none(), keyBytes, values);
-    }
-
-    WriteResult<Long> lpush(MutationContext context, byte[] keyBytes, List<byte[]> values) {
-        kernel.execute(DbUse.ownerCheck());
+        kernel.checkOwner();
         Objects.requireNonNull(keyBytes, "keyBytes");
         Objects.requireNonNull(values, "values");
-        return pushInternal(context, keyBytes, values, true);
+        return pushInternal(keyBytes, values, true);
     }
 
     @Override
     public WriteResult<Long> rpush(byte[] keyBytes, List<byte[]> values) {
-        return rpush(MutationContext.none(), keyBytes, values);
-    }
-
-    WriteResult<Long> rpush(MutationContext context, byte[] keyBytes, List<byte[]> values) {
-        kernel.execute(DbUse.ownerCheck());
+        kernel.checkOwner();
         Objects.requireNonNull(keyBytes, "keyBytes");
         Objects.requireNonNull(values, "values");
-        return pushInternal(context, keyBytes, values, false);
+        return pushInternal(keyBytes, values, false);
     }
 
     @Override
     public ByteSequenceSource lrange(byte[] keyBytes, int start, int stop) {
-        return kernel.execute(DbUse.read(scope -> {
+        return kernel.read(scope -> {
             EntryRecord record = liveListRecord(scope, keyBytes);
             if (record == null) {
                 return ByteSequenceSources.empty();
@@ -90,12 +81,12 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
                     out -> listRoot.rangeInto(handle, start, stop, SemanticResultSupport.lengthSink(out)),
                     out -> listRoot.rangeInto(handle, start, stop, out)
             );
-        }));
+        });
     }
 
     @Override
     public PreparedMutation<PoppedValueSequence> preparePop(byte[] keyBytes, int count, boolean left) {
-        kernel.execute(DbUse.ownerCheck());
+        kernel.checkOwner();
         Objects.requireNonNull(keyBytes, "keyBytes");
         byte[] preparedKey = java.util.Arrays.copyOf(keyBytes, keyBytes.length);
         if (count == 0) {
@@ -125,7 +116,6 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
     }
 
     private WriteResult<Long> pushInternal(
-            MutationContext context,
             byte[] keyBytes,
             List<byte[]> values,
             boolean left
@@ -133,11 +123,6 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
         long now = System.currentTimeMillis();
         kernel.reclaimExpiredBeforeMutation(keyBytes, now);
         return kernel.execute(new MutationUse<WriteResult<Long>>() {
-            @Override
-            public MutationContext context() {
-                return context;
-            }
-
             @Override
             public long upperBoundBytes() {
                 return estimatePushUpperBound(keyBytes, values, left, now);
@@ -197,7 +182,6 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
     }
 
     private WriteResult<PoppedValueSequence> popInternal(
-            MutationContext context,
             byte[] keyBytes,
             int count,
             boolean left
@@ -212,11 +196,6 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
         long now = System.currentTimeMillis();
         kernel.reclaimExpiredBeforeMutation(keyBytes, now);
         return kernel.execute(new MutationUse<WriteResult<PoppedValueSequence>>() {
-            @Override
-            public MutationContext context() {
-                return context;
-            }
-
             @Override
             public long upperBoundBytes() {
                 if (isPopReclamation(keyBytes, count, now)) {
@@ -733,7 +712,7 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
 
         @Override
         public boolean isCurrent() {
-            kernel.execute(DbUse.ownerCheck());
+            kernel.checkOwner();
             PreparedEntryState current = preparedEntryState(keyBytes);
             return Objects.equals(expectedState.entryHandle(), current.entryHandle())
                     && expectedState.version() == current.version()
@@ -741,11 +720,10 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
         }
 
         @Override
-        public MutationOutcome commit(MutationContext context) {
-            kernel.execute(DbUse.ownerCheck());
-            Objects.requireNonNull(context, "context");
+        public MutationOutcome commit() {
+            kernel.checkOwner();
             requireCommittable();
-            WriteResult<PoppedValueSequence> result = popInternal(context, keyBytes, count, left);
+            WriteResult<PoppedValueSequence> result = popInternal(keyBytes, count, left);
             committed = true;
             trimNativePagesAfterClose = result.mutationOutcome().changedAny();
             try {

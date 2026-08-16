@@ -34,7 +34,7 @@ argv
 9. 创建 boss/worker Netty group，并由 `YierdisServerChannelInitializer` 装配连接 pipeline。
 10. `bind(port)`。
 
-`YierdisInstance` 在这个过程中不是“随手可用的 DB 容器”。`YierdisInstance.create(config)` 要求 `engineFactory` 已经注入；`bindToCurrentThread()` 要先把当前线程标成 owner thread，后续 DB access 才会被允许；`close()` 负责按拥有关系关闭 runtime、allocator 和 DB resources。bootstrap 失败时会 best-effort 清掉已经创建的对象，避免留下半初始化实例。
+`YierdisInstance` 在这个过程中不是“随手可用的 DB 容器”。`YierdisInstance.create(config)` 直接组装固定的 FFM DB backend；`bindToCurrentThread()` 要先把当前线程标成 owner thread，后续 DB access 才会被允许；`close()` 负责按拥有关系关闭 runtime、allocator 和 DB resources。bootstrap 失败时会 best-effort 清掉已经创建的对象，避免留下半初始化实例。
 
 注意：benchmark 不持有 server 参数或生命周期模型，只连接由操作者单独管理的 Yierdis。client idle/output-buffer 等 server-only 参数必须在启动目标 Yierdis 时直接配置。
 
@@ -55,7 +55,7 @@ argv
 
 当前的单 owner 是有意保留的执行模型，不是把 `CommandExecutor` 线程数调大就能消除的临时限制。它让 keyspace、TTL、stable backend、mutation ledger 和连接会话在同一条命令序列中推进，DB state 不需要在每个结构内部再实现并发写入协议。
 
-真正的 shard-per-core 必须作为一套完整执行架构实现：每个 shard 拥有独立 DB、allocator 和 runtime；提交前按命令 key 规划路由；同一连接仍保持顺序执行，并正确携带 `SELECT`、RESP 协商和 `MULTI/EXEC` 状态；跨 key 命令还需要明确单 shard 限制或跨 shard 协调协议。global maxmemory、maintenance、shutdown 和 commit stream 也必须覆盖全部 shard。在这些契约同时落地前，增加 DB owner 数会破坏现有语义，因此当前配置不提供伪并行的 storage-shard 开关。
+真正的 shard-per-core 必须作为一套完整执行架构实现：每个 shard 拥有独立 DB、allocator 和 runtime；提交前按命令 key 规划路由；同一连接仍保持顺序执行，并正确携带 `SELECT`、RESP 协商和 `MULTI/EXEC` 状态；跨 key 命令还需要明确单 shard 限制或跨 shard 协调协议。global maxmemory、maintenance 和 shutdown 也必须覆盖全部 shard。在这些契约同时落地前，增加 DB owner 数会破坏现有语义，因此当前配置不提供伪并行的 storage-shard 开关。
 
 本地运行命令应和根 `README.md` 保持一致：
 
@@ -132,7 +132,7 @@ bootstrap 使用 Netty worker event loop 做定时器，但定时器只提交 `e
 
 当前 native-memory 路径统一使用 JDK 25 FFM。更细的 runtime、region、arena 和 copy 边界见 [`native-memory-runtime.md`](./native-memory-runtime.md)。
 
-TTL 命令写路径、lazy expire、cleanup sample/budget 和 synthetic `EXPIRED` delete 见 [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)。这里的配置章节只保留参数和 runtime 调度顺序。
+TTL 命令写路径、lazy expire、cleanup sample/budget 和 expiration reclamation 见 [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)。这里的配置章节只保留参数和 runtime 调度顺序。
 
 ## maxmemory 和 eviction
 
@@ -144,16 +144,16 @@ maxmemory 参数：
 - `--maxmemorySamples`：采样数量，默认 `5`。
 - `--evictionTimeLimitMillis`：单次 eviction 时间预算，默认 `5` ms。
 
-`YierdisServerBootstrap` 把 server runtime scope 映射成 `YierdisInstanceConfig.MaxmemoryScope`，并在生产启动路径里选择默认 DB factory。`YierdisInstance.create(config)` 是 strict 入口，要求 `YierdisInstanceConfig` 已经注入 `engineFactory` 或 `EngineFactoryBinding`；embedded/test 调用方也必须显式提供相同的 factory 依赖，runtime 不再隐式选择默认 DB backend。
+`YierdisServerBootstrap` 把 server runtime scope 和 native slot capacity 映射进 `YierdisInstanceConfig`。`YierdisInstance.create(config)` 使用唯一的 FFM backend 组合，不接受可替换的 DB factory。
 
 - `global`：每个 DB 仍有独立的 keyspace、entry table、roots、ledger 和 FFM backend/runtime，但 maxmemory 由 `YierdisGlobalMaxmemoryGovernor` 跨 DB 协调。governor 汇总每个 participant 报告的 owned `MemoryUsageSnapshot`，不另加 runtime 级 usage source。
-- `per-db`：兼容模式。`YierdisInstance` 把 `maxmemoryBytes` 按 DB 数硬分摊，整数除法后的余数按 DB 创建顺序每个 DB 多给 1 byte。每个 DB 仍由同一个 backend factory 创建独立 backend/runtime，evict/reserve/memory stats 按单 DB 预算运行。
+- `per-db`：兼容模式。`YierdisInstance` 把 `maxmemoryBytes` 按 DB 数硬分摊，整数除法后的余数按 DB 创建顺序每个 DB 多给 1 byte。每个 DB 都创建独立 backend/runtime，evict/reserve/memory stats 按单 DB 预算运行。
 
 `global` 与 `per-db` 的区别是预算协调范围，不是 FFM runtime ownership。不要把 `ioThreads`、Netty 连接数或 DB 数误解成 maxmemory 的并发写入模型，mutation 仍经 owner thread。
 
 `MEMORY STATS` 是 explainable estimate，不是 JVM instrumentation object graph；native memory 是否纳入 maxmemory 要看字段口径。global scope 下 `NettyServerInfoProvider.memoryStats(...)` 会优先返回 instance 聚合视角。
 
-更细的 reservation 顺序、`usedBytes` / `reservedBytes` 口径、victim 选择、global governor 协调和 synthetic `EVICTED` delete 见 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)。
+更细的 reservation 顺序、`usedBytes` / `reservedBytes` 口径、victim 选择、global governor 协调和 eviction reclamation 见 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)。
 
 ## 慢客户端和输出缓冲保护
 
@@ -180,7 +180,7 @@ maxmemory 参数：
 
 `STATS` 返回结构化 map，专注 executor 和当前连接统计。遇到 `ERR busy ...`、输入被暂停、吞吐抖动时先看它。
 
-每次 `INFO`、`INFO yierdis`、`INFO health` 或 `STATS` 执行时，`NettyServerInfoProvider` 都先构造一份请求级 `ServerStatsSnapshot`。executor、ingress、commit stream、egress、child channels、runtime health 和 uptime 只采集一次，文本与结构化 writer 共享这份快照，避免同一个回复里的字段来自不同采样时刻。`INFO memory` 和 `INFO keyspace` 的 DB 聚合仍按 section 按需读取，不让轻量 health 探针承担全库聚合成本。
+每次 `INFO`、`INFO yierdis`、`INFO health` 或 `STATS` 执行时，`NettyServerInfoProvider` 都先构造一份请求级 `ServerStatsSnapshot`。executor、ingress、egress、child channels、runtime health 和 uptime 只采集一次，文本与结构化 writer 共享这份快照，避免同一个回复里的字段来自不同采样时刻。`INFO memory` 和 `INFO keyspace` 的 DB 聚合仍按 section 按需读取，不让轻量 health 探针承担全库聚合成本。
 
 `MEMORY STATS` 返回内存估算 map。常用字段包括 `maxmemory_bytes`、`used_bytes_for_maxmemory`、`effective_used_bytes_for_maxmemory`、`ledger_used_bytes`、`ledger_reserved_bytes`、`offheap_used_bytes`、`offheap_included_in_maxmemory`、`key_count`、`expire_count`、`keyspace_rehashing`、`expire_rehashing` 和 table capacity。global scope 下优先读聚合视角；per-db scope 下更贴近当前 DB。native defrag 摘要当前在 `INFO` memory section 中输出。
 
@@ -240,4 +240,4 @@ java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SN
 
 ## Production Hardening Operations
 
-reply global/per-connection/single limits、ingress admission、commit-stream、maxmemory、result-unknown 和 graceful shutdown 共同构成运行时容量边界。精确默认值、启动校验、INFO/STATS 字段、漏账排查和发布命令以 [`production-hardening-operations.md`](./production-hardening-operations.md) 为准；不要只用 `clientOutputBufferLimitBytes` 或 JVM heap 来判断这些硬限制是否生效。
+reply global/per-connection/single limits、ingress admission、maxmemory、result-unknown 和 graceful shutdown 共同构成运行时容量边界。精确默认值、启动校验、INFO/STATS 字段、漏账排查和发布命令以 [`production-hardening-operations.md`](./production-hardening-operations.md) 为准；不要只用 `clientOutputBufferLimitBytes` 或 JVM heap 来判断这些硬限制是否生效。

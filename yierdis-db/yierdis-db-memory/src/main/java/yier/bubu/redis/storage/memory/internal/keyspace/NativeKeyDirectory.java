@@ -50,14 +50,6 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
     private boolean closed;
     private boolean iterationTrapForTesting;
 
-    public NativeKeyDirectory(StableMemoryBackend allocator) {
-        this(allocator, HashSeed.random(), null);
-    }
-
-    public NativeKeyDirectory(StableMemoryBackend allocator, HashSeed hashSeed) {
-        this(allocator, hashSeed, null);
-    }
-
     public NativeKeyDirectory(
             StableMemoryBackend allocator,
             HashSeed hashSeed,

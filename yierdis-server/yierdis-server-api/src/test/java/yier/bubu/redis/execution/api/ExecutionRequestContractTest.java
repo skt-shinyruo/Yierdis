@@ -8,7 +8,6 @@ import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import yier.bubu.redis.common.command.CommandRecordView;
 import yier.bubu.redis.common.command.ImmutableCommandRecord;
 
 public class ExecutionRequestContractTest {
@@ -37,36 +36,6 @@ public class ExecutionRequestContractTest {
     }
 
     @Test
-    public void executionRecordNormalizesNegativeDbIndexAndSnapshotsRequest() {
-        MutableExecutionRequest source = new MutableExecutionRequest("SET", "key", "value");
-
-        ExecutionRecord record = new ExecutionRecord(-3, source);
-        source.set(0, "GET");
-        source.set(2, "next");
-
-        Assert.assertEquals(0, record.dbIndex());
-        Assert.assertNotSame(source, record.request());
-        Assert.assertArrayEquals(ascii("SET"), record.request().toByteArray(0));
-        Assert.assertArrayEquals(ascii("key"), record.request().toByteArray(1));
-        Assert.assertArrayEquals(ascii("value"), record.request().toByteArray(2));
-    }
-
-    @Test
-    public void executionRecordReadOnlyFastPathDoesNotExposeMutableSnapshotBacking() {
-        ExecutionRecord record = new ExecutionRecord(
-                0,
-                ByteArrayExecutionRequest.fromUtf8("SET", List.of("key"))
-        );
-
-        byte[] leaked = record.request().toByteArray(0);
-        leaked[0] = (byte) 'G';
-
-        Assert.assertArrayEquals(ascii("SET"), record.request().toByteArray(0));
-        Assert.assertArrayEquals(ascii("SET"), record.request().toByteArray(0));
-        Assert.assertNotSame(leaked, record.request().toByteArray(0));
-    }
-
-    @Test
     public void executionRequestIsAnOwnedImmutableCommandRecord() {
         boolean found = false;
         for (Class<?> type : ExecutionRequest.class.getInterfaces()) {
@@ -75,17 +44,6 @@ public class ExecutionRequestContractTest {
         Assert.assertTrue(found);
         ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("SET", List.of("key"));
         Assert.assertEquals(request.admittedMemoryBytes(), request.retainedMemoryBytes());
-        request.close();
-    }
-
-    @Test
-    public void borrowedExecutionRecordKeepsTheExactViewWithoutRetainingIt() {
-        ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("SET", List.of("key"));
-        CommandRecordView view = request;
-        ExecutionRecord record = ExecutionRecord.borrowed(-1, view);
-
-        Assert.assertEquals(0, record.dbIndex());
-        Assert.assertSame(view, record.request());
         request.close();
     }
 
@@ -160,10 +118,6 @@ public class ExecutionRequestContractTest {
             for (int i = 0; i < args.length; i++) {
                 this.argv[i] = args[i] == null ? null : ascii(args[i]);
             }
-        }
-
-        private void set(int index, String value) {
-            argv[index] = value == null ? null : ascii(value);
         }
 
         @Override

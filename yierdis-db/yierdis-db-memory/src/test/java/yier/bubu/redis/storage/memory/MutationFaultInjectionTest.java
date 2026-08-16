@@ -35,6 +35,8 @@ import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
 import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
+import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
@@ -455,13 +457,15 @@ public class MutationFaultInjectionTest {
                     runtime.backend()
             );
             allocator.bindToCurrentThread();
+            HashSeed hashSeed = HashSeed.random();
+            HashTableMaintenanceRegistry maintenanceRegistry = new HashTableMaintenanceRegistry();
             EntryTable entries = new EntryTable(allocator);
-            NativeKeyDirectory keyDirectory = new NativeKeyDirectory(allocator);
+            NativeKeyDirectory keyDirectory = new NativeKeyDirectory(allocator, hashSeed, maintenanceRegistry);
             StringRoot stringRoot = new StringRoot(allocator);
             ListRoot listRoot = new ListRoot(allocator);
-            HashRoot hashRoot = new HashRoot(allocator);
-            SetRoot setRoot = new SetRoot(allocator);
-            ZSetRoot zsetRoot = new ZSetRoot(allocator);
+            HashRoot hashRoot = new HashRoot(allocator, hashSeed, maintenanceRegistry);
+            SetRoot setRoot = new SetRoot(allocator, hashSeed, maintenanceRegistry);
+            ZSetRoot zsetRoot = new ZSetRoot(allocator, hashSeed, maintenanceRegistry);
             YierdisDbMemoryLedger ledger = new YierdisDbMemoryLedger(
                     0L,
                     MaxmemoryPolicy.NOEVICTION,
@@ -470,6 +474,7 @@ public class MutationFaultInjectionTest {
                     ignored -> {
                     },
                     () -> 0L,
+                    () -> null,
                     () -> null
             );
             YierdisDbKeyLifecycle keyLifecycle = new YierdisDbKeyLifecycle(
@@ -483,11 +488,13 @@ public class MutationFaultInjectionTest {
                     zsetRoot,
                     () -> 0L
             );
+            Runnable threadChecker = () -> {
+            };
             YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(
-                    () -> {
-                    },
+                    threadChecker,
                     ledger,
-                    allocator
+                    allocator,
+                    new YierdisDbHealth(threadChecker)
             );
             YierdisDbMemoryContext memoryContext = new YierdisDbMemoryContext(ledger, allocator);
             YierdisDbKernel kernel = new YierdisDbKernel(

@@ -17,11 +17,4 @@
     <name>yierdis-common-bytes</name>
     <description>Neutral bytes abstractions shared by protocol/off-heap/netty adapters.</description>
 
-    <dependencies>
-        <dependency>
-            <groupId>junit</groupId>
-            <artifactId>junit</artifactId>
-            <scope>test</scope>
-        </dependency>
-    </dependencies>
 </project>

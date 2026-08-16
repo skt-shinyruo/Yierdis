@@ -6,26 +6,10 @@ import io.netty.channel.ChannelOutboundHandlerAdapter;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.util.ReferenceCountUtil;
-import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.ImmediateEventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.kernel.CommandDispatcher;
-import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
-import yier.bubu.redis.execution.executor.CommandExecutor;
-import yier.bubu.redis.execution.executor.CommandExecutorConfig;
-import yier.bubu.redis.execution.executor.SchedulingPolicy;
-import yier.bubu.redis.protocol.resp.RespReplySizer;
-import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
-import yier.bubu.redis.storage.api.DbEngineFactory;
-import yier.bubu.redis.storage.api.DbLifecycleOps;
-import yier.bubu.redis.storage.api.DbReads;
-import yier.bubu.redis.storage.api.DbWrites;
-import yier.bubu.redis.storage.api.MemoryOps;
-import yier.bubu.redis.storage.api.RuntimeDbEngine;
-import yier.bubu.redis.runtime.embedded.YierdisInstance;
-import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -194,84 +178,6 @@ public class YierdisServerBootstrapCloseTest {
         }
     }
 
-    @Test
-    public void closeWithoutExecutorStillPropagatesInstanceFailures() throws Exception {
-        List<String> closeOrder = Collections.synchronizedList(new ArrayList<>());
-        YierdisServerBootstrap bootstrap = newBootstrap(ServerConfig.fromArgs(new String[]{
-                "--maxmemoryBytes", "0"
-        }));
-
-        YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder()
-                .databases(1)
-                .engineFactory(config -> new FailingRuntimeDbEngine("db-" + config.dbIndex(), closeOrder))
-                .build());
-
-        setField(bootstrap, "instance", instance);
-
-        try {
-            bootstrap.close();
-            Assert.fail("expected close failure");
-        } catch (IllegalStateException e) {
-            Assert.assertEquals("db-0", e.getMessage());
-            Assert.assertEquals(Arrays.asList("db-0"), closeOrder);
-            Assert.assertEquals(0, e.getSuppressed().length);
-        }
-    }
-
-    @Test
-    public void closePropagatesInstanceFailuresAfterBestEffortCleanup() throws Exception {
-        List<String> closeOrder = Collections.synchronizedList(new ArrayList<>());
-        DefaultEventExecutorGroup commandGroup = new DefaultEventExecutorGroup(1);
-        YierdisServerBootstrap bootstrap = newBootstrap(ServerConfig.fromArgs(new String[]{
-                "--maxmemoryBytes", "0"
-        }));
-
-        YierdisInstance instance = null;
-        try {
-            DbEngineFactory factory = config -> new FailingRuntimeDbEngine("db-" + config.dbIndex(), closeOrder);
-            instance = YierdisInstance.create(YierdisInstanceConfig.builder()
-                    .databases(1)
-                    .engineFactory(factory)
-                    .build());
-
-            CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
-            CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
-                    instance::bindToCurrentThread,
-                    dispatcher::prepare,
-                    new NettySerialOwnerExecutor(commandGroup.next()),
-                    new RespReplySizer(),
-                    new RespReplyWriterFactory(),
-                    new NettyExecutionIoAdapter(),
-                    new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
-            );
-            executor.start();
-
-            setField(bootstrap, "instance", instance);
-            setField(bootstrap, "executor", executor);
-            setField(bootstrap, "commandGroup", commandGroup);
-
-            try {
-                bootstrap.close();
-                Assert.fail("expected close failure");
-            } catch (IllegalStateException e) {
-                Assert.assertEquals("db-0", e.getMessage());
-                Assert.assertEquals(Arrays.asList("db-0"), closeOrder);
-                Assert.assertEquals(0, e.getSuppressed().length);
-            }
-            instance = null;
-        } finally {
-            if (instance != null) {
-                try {
-                    instance.close();
-                } catch (Throwable ignored) {
-                }
-            }
-            if (!commandGroup.isShuttingDown()) {
-                commandGroup.shutdownGracefully().syncUninterruptibly();
-            }
-        }
-    }
-
     private static YierdisServerBootstrap newBootstrap(ServerConfig config) throws Exception {
         Constructor<YierdisServerBootstrap> ctor = YierdisServerBootstrap.class.getDeclaredConstructor(ServerConfig.class);
         ctor.setAccessible(true);
@@ -360,50 +266,6 @@ public class YierdisServerBootstrapCloseTest {
             if (heldPromise != null) {
                 heldPromise.tryFailure(new IllegalStateException("channel closed during drain"));
             }
-        }
-    }
-
-    private static final class FailingRuntimeDbEngine implements RuntimeDbEngine {
-        private final String name;
-        private final List<String> closeOrder;
-
-        private FailingRuntimeDbEngine(String name, List<String> closeOrder) {
-            this.name = name;
-            this.closeOrder = closeOrder;
-        }
-
-        @Override
-        public void bindToCurrentThread() {
-        }
-
-        @Override
-        public void runMaintenance() {
-        }
-
-        @Override
-        public void shutdown() {
-            closeOrder.add(name);
-            throw new IllegalStateException(name);
-        }
-
-        @Override
-        public DbReads reads() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public DbWrites writes() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public MemoryOps memory() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public DbLifecycleOps lifecycle() {
-            throw new UnsupportedOperationException();
         }
     }
 

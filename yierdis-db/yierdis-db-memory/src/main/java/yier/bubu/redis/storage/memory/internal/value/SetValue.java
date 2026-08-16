@@ -43,14 +43,6 @@ public final class SetValue implements YierdisValue, NativeHandleOwner, HeapTrac
     private Runnable heapChangeListener = () -> {
     };
 
-    public SetValue(StableMemoryBackend allocator) {
-        this(allocator, HashSeed.random());
-    }
-
-    public SetValue(StableMemoryBackend allocator, HashSeed hashSeed) {
-        this(allocator, hashSeed, null);
-    }
-
     public SetValue(
             StableMemoryBackend allocator,
             HashSeed hashSeed,

@@ -8,12 +8,8 @@ import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
-import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
-import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
-import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
-import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 
 import java.nio.charset.StandardCharsets;
 
@@ -89,41 +85,6 @@ public class YierdisDbMemoryReporterTest {
         }
     }
 
-    @Test
-    public void deferredExpirationGaugeIsDeduplicatedAndConvergesAfterReplaceDeleteAndFlush() {
-        try (TestBackend runtime = TestBackend.open("deferred-expiration-gauge")) {
-            YierdisDb db = TestDbSupport.open(runtime, 0L, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
-            db.bindToCurrentThread();
-            try {
-                YierdisDbKeyLifecycle lifecycle = db.keyLifecycle();
-
-                MarkedEntry replaced = markExpiredEntry(db, lifecycle, "replace");
-                Assert.assertFalse(lifecycle.markExpiredEntryAwaitingPhysicalDeletion(
-                        replaced.keyHandle(),
-                        replaced.entryHandle(),
-                        lifecycle.entryRecord(replaced.entryHandle()),
-                        System.currentTimeMillis()
-                ));
-                Assert.assertEquals(1L, db.memory().memoryStats().expiredEntriesAwaitingPhysicalDeletion());
-
-                EntryRecord current = lifecycle.entryRecord(replaced.entryHandle());
-                lifecycle.replaceEntry(replaced.entryHandle(), current, withoutFlags(current));
-                Assert.assertEquals(0L, db.memory().memoryStats().expiredEntriesAwaitingPhysicalDeletion());
-
-                MarkedEntry deleted = markExpiredEntry(db, lifecycle, "delete");
-                Assert.assertTrue(lifecycle.removeEntry(deleted.keyHandle(), deleted.record()));
-                Assert.assertEquals(0L, db.memory().memoryStats().expiredEntriesAwaitingPhysicalDeletion());
-
-                markExpiredEntry(db, lifecycle, "flush");
-                Assert.assertEquals(1L, db.memory().memoryStats().expiredEntriesAwaitingPhysicalDeletion());
-                db.flushDb();
-                Assert.assertEquals(0L, db.memory().memoryStats().expiredEntriesAwaitingPhysicalDeletion());
-            } finally {
-                db.shutdown();
-            }
-        }
-    }
-
     private static byte[] bytes(String value) {
         return value.getBytes(StandardCharsets.UTF_8);
     }
@@ -140,38 +101,6 @@ public class YierdisDbMemoryReporterTest {
                 return data[index];
             }
         };
-    }
-
-    private static MarkedEntry markExpiredEntry(YierdisDb db, YierdisDbKeyLifecycle lifecycle, String keyText) {
-        byte[] key = bytes(keyText);
-        db.writes().strings().setString(key, bytes("value"), SetMode.NORMAL, ExpireOption.px(0));
-        KeyHandle keyHandle = lifecycle.keyHandle(key);
-        EntryHandle entryHandle = lifecycle.entryHandle(key);
-        EntryRecord record = lifecycle.entryRecord(entryHandle);
-        Assert.assertTrue(lifecycle.markExpiredEntryAwaitingPhysicalDeletion(
-                keyHandle,
-                entryHandle,
-                record,
-                System.currentTimeMillis()
-        ));
-        return new MarkedEntry(keyHandle, entryHandle, lifecycle.entryRecord(entryHandle));
-    }
-
-    private static EntryRecord withoutFlags(EntryRecord record) {
-        return new EntryRecord(
-                record.keyHandle(),
-                record.valueHandle(),
-                record.keyHash(),
-                record.type(),
-                record.encoding(),
-                0,
-                record.expireAtMillis(),
-                record.version(),
-                record.lruOrLfu()
-        );
-    }
-
-    private record MarkedEntry(KeyHandle keyHandle, EntryHandle entryHandle, EntryRecord record) {
     }
 
     private enum TestMaxmemoryCoordinator implements MaxmemoryCoordinator {

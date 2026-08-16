@@ -1,136 +1,27 @@
 package yier.bubu.redis.storage.memory;
 
-import java.util.List;
 import java.util.Objects;
-import java.util.function.Function;
-import java.util.function.Supplier;
 import yier.bubu.redis.bytes.BytesView;
-import yier.bubu.redis.common.command.ImmutableCommandRecord;
-import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
-import yier.bubu.redis.memory.api.NativeEpochScope;
-import yier.bubu.redis.storage.api.DbCommitKind;
 import yier.bubu.redis.storage.api.MutationOutcome;
-import yier.bubu.redis.storage.api.ScanCursorV2;
-import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.ledger.AbstractPreparedMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
-
-final class DbUse {
-    private DbUse() {
-    }
-
-    static ReadUse<Void> ownerCheck() {
-        return ignored -> null;
-    }
-
-    static <R> ReadUse<R> read(Function<YierdisDbKernel, R> action) {
-        Objects.requireNonNull(action, "action");
-        return action::apply;
-    }
-
-    static <R> InspectionUse<R> inspect(Function<InspectionScope, R> action) {
-        Objects.requireNonNull(action, "action");
-        return action::apply;
-    }
-
-    static <R> MaintenanceUse<R> maintain(Function<MaintenanceScope, R> action) {
-        Objects.requireNonNull(action, "action");
-        return action::apply;
-    }
-}
-
-@FunctionalInterface
-interface ReadUse<R> {
-    R execute(YierdisDbKernel kernel);
-}
 
 interface MutationUse<R> {
     long upperBoundBytes();
 
     PreparedDbMutation<R> prepare(YierdisDbKernel kernel);
 
-    default MutationContext context() {
-        return MutationContext.none();
-    }
-
     default Admission admission() {
         return Admission.NORMAL;
     }
 
-    default CommitSpec commit() {
-        return CommitSpec.user();
-    }
-}
-
-@FunctionalInterface
-interface InspectionUse<R> {
-    R execute(InspectionScope scope);
-}
-
-@FunctionalInterface
-interface MaintenanceUse<R> {
-    R execute(MaintenanceScope scope);
 }
 
 enum Admission {
     NORMAL,
     RECLAMATION
-}
-
-final class CommitSpec {
-    private static final CommitSpec USER = new CommitSpec(
-            DbCommitKind.USER,
-            true,
-            context -> {
-                ImmutableCommandRecord record = context.retainCommandRecord();
-                if (record == null) {
-                    throw new yier.bubu.redis.storage.api.DbCommitStreamUnavailableException();
-                }
-                return record;
-            }
-    );
-    private static final CommitSpec NONE = new CommitSpec(DbCommitKind.USER, false, ignored -> null);
-
-    private final DbCommitKind kind;
-    private final boolean required;
-    private final Function<MutationContext, ImmutableCommandRecord> recordFactory;
-
-    private CommitSpec(
-            DbCommitKind kind,
-            boolean required,
-            Function<MutationContext, ImmutableCommandRecord> recordFactory
-    ) {
-        this.kind = Objects.requireNonNull(kind, "kind");
-        this.required = required;
-        this.recordFactory = Objects.requireNonNull(recordFactory, "recordFactory");
-    }
-
-    static CommitSpec user() {
-        return USER;
-    }
-
-    static CommitSpec none() {
-        return NONE;
-    }
-
-    static CommitSpec synthetic(DbCommitKind kind, Supplier<ImmutableCommandRecord> recordFactory) {
-        Objects.requireNonNull(recordFactory, "recordFactory");
-        return new CommitSpec(kind, true, ignored -> recordFactory.get());
-    }
-
-    DbCommitKind kind() {
-        return kind;
-    }
-
-    boolean required() {
-        return required;
-    }
-
-    ImmutableCommandRecord retainRecord(MutationContext context) {
-        return recordFactory.apply(Objects.requireNonNull(context, "context"));
-    }
 }
 
 final class InspectionScope {
@@ -161,33 +52,6 @@ final class InspectionScope {
         return record == null ? null : encodingName(record.encoding());
     }
 
-    ScanCursorV2 snapshot(ScanCursorV2 cursor, int count, List<YierdisSnapshotEntry> out) {
-        Objects.requireNonNull(out, "out");
-        if (count <= 0) {
-            throw new IllegalArgumentException("count must be > 0");
-        }
-        try (NativeEpochScope ignored = memoryContext.beginSnapshotEpoch()) {
-            long now = System.currentTimeMillis();
-            int maxSteps = Math.max(64, count * 10);
-            RemainingLimit remaining = new RemainingLimit(count);
-            return keyLifecycle.scan(cursor == null ? ScanCursorV2.start() : cursor, maxSteps, (key, record) -> {
-                if (key == null || record == null || keyLifecycle.isKeyExpired(key, now)) {
-                    return true;
-                }
-                ValueType type = record.type();
-                byte[] stringValue = type == ValueType.STRING ? keyLifecycle.copyStringValue(record) : null;
-                Long expireAtMillis = record.expireAtMillis() < 0L ? null : record.expireAtMillis();
-                out.add(new YierdisSnapshotEntry(
-                        YierdisDb.toByteArray(key),
-                        type,
-                        stringValue,
-                        expireAtMillis
-                ));
-                return remaining.consume();
-            });
-        }
-    }
-
     EntryRecord liveEntryRecord(yier.bubu.redis.storage.memory.internal.key.KeyHandle keyHandle) {
         return kernel.liveEntryRecord(keyHandle);
     }
@@ -210,10 +74,6 @@ final class InspectionScope {
 
     int expireCount() {
         return keyLifecycle.expireCount();
-    }
-
-    long expiredEntriesAwaitingPhysicalDeletion() {
-        return keyLifecycle.expiredEntriesAwaitingPhysicalDeletion();
     }
 
     NativeAllocatorStats nativeAllocatorStats() {
@@ -240,18 +100,6 @@ final class InspectionScope {
         };
     }
 
-    private static final class RemainingLimit {
-        private int remaining;
-
-        private RemainingLimit(int remaining) {
-            this.remaining = remaining;
-        }
-
-        private boolean consume() {
-            remaining--;
-            return remaining > 0;
-        }
-    }
 }
 
 final class MaintenanceScope {

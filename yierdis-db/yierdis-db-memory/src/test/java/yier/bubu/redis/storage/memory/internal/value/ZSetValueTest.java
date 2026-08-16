@@ -14,6 +14,8 @@ import yier.bubu.redis.memory.testkit.FailOnAllocationStableMemoryBackend;
 import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
+import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -37,7 +39,7 @@ public class ZSetValueTest {
 
         try (TestBackend runtime = TestBackend.open("zset-packed-final-block");
              StableMemoryBackend allocator = runtime.backend()) {
-            ZSetValue zset = new ZSetValue(allocator);
+            ZSetValue zset = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 zset.reservePackedForBuild(plan);
                 Assert.assertEquals(plan.memberCount(), zset.prepareAdd(pairs).added());
@@ -56,7 +58,7 @@ public class ZSetValueTest {
              FailOnAllocationStableMemoryBackend allocator = new FailOnAllocationStableMemoryBackend(
                      runtime.backend()
              );
-             ZSetRoot root = new ZSetRoot(allocator)) {
+             ZSetRoot root = new ZSetRoot(allocator, HashSeed.random(), new HashTableMaintenanceRegistry())) {
             allocator.bindToCurrentThread();
             ValueHandle source = root.create();
             root.zadd(source, List.of(b("1"), b("member")));
@@ -88,7 +90,7 @@ public class ZSetValueTest {
     public void preparedPackedAddRejectsReleaseBeforeCommitAbortReuseAndDoubleCommit() {
         try (TestBackend runtime = TestBackend.open("zset-prepared-state-guards");
              StableMemoryBackend allocator = runtime.backend()) {
-            ZSetValue zset = new ZSetValue(allocator);
+            ZSetValue zset = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 zset.zaddMany(List.of(b("1"), b("member")));
                 long liveBefore = allocator.stats().liveObjects();
@@ -124,7 +126,7 @@ public class ZSetValueTest {
     public void closingNoopPreparedAddMakesItTerminalWithoutAllocating() {
         try (TestBackend runtime = TestBackend.open("zset-prepared-noop-abort");
              StableMemoryBackend allocator = runtime.backend()) {
-            ZSetValue zset = new ZSetValue(allocator);
+            ZSetValue zset = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 zset.zaddMany(List.of(b("1"), b("member")));
                 long liveBefore = allocator.stats().liveObjects();
@@ -149,7 +151,7 @@ public class ZSetValueTest {
     public void preparedAddHeapUpperBoundsCoverPackedAndSkiplistStagingTopology() {
         try (TestBackend runtime = TestBackend.open("zset-staged-heap-bound");
              StableMemoryBackend allocator = runtime.backend()) {
-            ZSetValue zset = new ZSetValue(allocator);
+            ZSetValue zset = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 Assert.assertEquals(4, zset.zaddMany(List.of(
                         b("1"), b("a"),
@@ -199,7 +201,7 @@ public class ZSetValueTest {
                      runtime.backend()
              )) {
             allocator.bindToCurrentThread();
-            ZSetValue zset = new ZSetValue(allocator);
+            ZSetValue zset = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 zset.zaddMany(skiplistPairs(200));
                 Assert.assertEquals(ValueEncoding.ZSET_SKIPLIST, zset.encoding());
@@ -242,7 +244,7 @@ public class ZSetValueTest {
     public void abortingSkiplistDeltaReleasesOnlyTheNewCanonicalMember() {
         try (TestBackend runtime = TestBackend.open("zset-skiplist-abort");
              StableMemoryBackend allocator = runtime.backend()) {
-            ZSetValue zset = new ZSetValue(allocator);
+            ZSetValue zset = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 zset.zaddMany(skiplistPairs(200));
                 Set<Long> beforeHandles = nativeHandles(zset);
@@ -267,7 +269,7 @@ public class ZSetValueTest {
     public void packedCommitReclaimsTheOldBlockWhenHeapRefreshFails() {
         try (TestBackend runtime = TestBackend.open("zset-packed-refresh-failure");
              StableMemoryBackend allocator = runtime.backend()) {
-            ZSetValue zset = new ZSetValue(allocator);
+            ZSetValue zset = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 zset.zaddMany(List.of(b("1"), b("member")));
                 try (ZSetValue.PreparedExistingAdd prepared = zset.prepareExistingAdd(
@@ -296,7 +298,7 @@ public class ZSetValueTest {
     public void preparedPackedAddRejectsAnUnrelatedInPlaceMutation() {
         try (TestBackend runtime = TestBackend.open("zset-packed-stale-plan");
              StableMemoryBackend allocator = runtime.backend()) {
-            ZSetValue zset = new ZSetValue(allocator);
+            ZSetValue zset = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 zset.zaddMany(List.of(b("1"), b("a"), b("2"), b("b")));
                 try (ZSetValue.PreparedExistingAdd prepared = zset.prepareExistingAdd(
@@ -317,7 +319,7 @@ public class ZSetValueTest {
     public void preparedSkiplistAddRejectsAnUnrelatedScoreMutationBeforePublishing() {
         try (TestBackend runtime = TestBackend.open("zset-skiplist-stale-plan");
              StableMemoryBackend allocator = runtime.backend()) {
-            ZSetValue zset = new ZSetValue(allocator);
+            ZSetValue zset = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 zset.zaddMany(skiplistPairs(200));
                 try (ZSetValue.PreparedExistingAdd prepared = zset.prepareExistingAdd(
@@ -345,7 +347,7 @@ public class ZSetValueTest {
     public void packedZSetKeepsScoreOrderingAndSupportsUpdates() {
         try (TestBackend runtime = TestBackend.open("zset-test");
              StableMemoryBackend allocator = runtime.backend()) {
-            ZSetValue zv = new ZSetValue(allocator);
+            ZSetValue zv = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 Assert.assertEquals(ValueEncoding.ZSET_PACKED, zv.encoding());
 
@@ -384,7 +386,7 @@ public class ZSetValueTest {
                      runtime.backend()
              )) {
             allocator.bindToCurrentThread();
-            ZSetValue zset = new ZSetValue(allocator);
+            ZSetValue zset = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 Assert.assertEquals(2, zset.zaddMany(List.of(b("1"), b("a"), b("3"), b("c"))));
                 long usedBefore = allocator.logicalUsedBytes();
@@ -416,7 +418,7 @@ public class ZSetValueTest {
                      runtime.backend()
              )) {
             allocator.bindToCurrentThread();
-            ZSetValue zset = new ZSetValue(allocator);
+            ZSetValue zset = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 Assert.assertEquals(4, zset.zaddMany(List.of(
                         b("1"), b("a"),
@@ -458,7 +460,7 @@ public class ZSetValueTest {
                      runtime.backend()
              )) {
             allocator.bindToCurrentThread();
-            ZSetValue zset = new ZSetValue(allocator);
+            ZSetValue zset = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 Assert.assertEquals(4, zset.zaddMany(List.of(
                         b("1"), b("a"),
@@ -507,7 +509,7 @@ public class ZSetValueTest {
     public void zsetUpgradesAfterTooManyEntries() {
         try (TestBackend runtime = TestBackend.open("zset-test");
              StableMemoryBackend allocator = runtime.backend()) {
-            ZSetValue zv = new ZSetValue(allocator);
+            ZSetValue zv = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 ArrayList<byte[]> pairs = new ArrayList<>();
                 for (int i = 0; i < 200; i++) {
@@ -527,7 +529,7 @@ public class ZSetValueTest {
     public void skiplistRangeRemovalUsesMeasuredNativeMemberLookup() {
         try (TestBackend runtime = TestBackend.open("zset-remove-skiplist");
              StableMemoryBackend allocator = runtime.backend()) {
-            ZSetValue zv = new ZSetValue(allocator);
+            ZSetValue zv = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 ArrayList<byte[]> pairs = new ArrayList<>();
                 for (int i = 0; i < 200; i++) {
@@ -553,8 +555,8 @@ public class ZSetValueTest {
     public void preparedCopyHeapUpperBoundCoversListpackToSkiplistUpgrade() {
         try (TestBackend runtime = TestBackend.open("zset-prepared-heap");
              StableMemoryBackend allocator = runtime.backend()) {
-            ZSetValue source = new ZSetValue(allocator);
-            ZSetValue replacement = new ZSetValue(allocator);
+            ZSetValue source = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
+            ZSetValue replacement = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 List<byte[]> sourcePairs = List.of(
                         b("1"), b("alpha"), b("2"), b("beta"), b("3"), b("gamma")
@@ -578,7 +580,7 @@ public class ZSetValueTest {
     public void packedZSetStreamsMembersThroughNativeBytesSlice() {
         try (TestBackend runtime = TestBackend.open("zset-stream-packed");
              StableMemoryBackend allocator = runtime.backend()) {
-            ZSetValue zv = new ZSetValue(allocator);
+            ZSetValue zv = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 Assert.assertEquals(2, zv.zaddMany(List.of(b("1"), b("m1"), b("2"), b("m2"))));
                 RecordingSink out = new RecordingSink();
@@ -597,7 +599,7 @@ public class ZSetValueTest {
     public void skiplistZSetStreamsMembersThroughNativeBytesSlice() {
         try (TestBackend runtime = TestBackend.open("zset-stream-skiplist");
              StableMemoryBackend allocator = runtime.backend()) {
-            ZSetValue zv = new ZSetValue(allocator);
+            ZSetValue zv = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 ArrayList<byte[]> pairs = new ArrayList<>();
                 for (int i = 0; i < 200; i++) {
@@ -685,7 +687,7 @@ public class ZSetValueTest {
                      runtime.backend()
              )) {
             allocator.bindToCurrentThread();
-            ZSetValue zset = new ZSetValue(allocator);
+            ZSetValue zset = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 if (factory.skiplist) {
                     zset.zaddMany(List.of(
@@ -723,7 +725,7 @@ public class ZSetValueTest {
     private static void assertScoreAndRankBoundaries(boolean skiplist) {
         try (TestBackend runtime = TestBackend.open("zset-boundaries-" + skiplist);
              StableMemoryBackend allocator = runtime.backend()) {
-            ZSetValue zset = new ZSetValue(allocator);
+            ZSetValue zset = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 if (skiplist) {
                     zset.prepareSkiplistForBuild();
@@ -770,7 +772,7 @@ public class ZSetValueTest {
     private static void assertScoreAndRankRemovals(boolean skiplist) {
         try (TestBackend runtime = TestBackend.open("zset-removals-" + skiplist);
              StableMemoryBackend allocator = runtime.backend()) {
-            ZSetValue zset = new ZSetValue(allocator);
+            ZSetValue zset = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 if (skiplist) {
                     zset.prepareSkiplistForBuild();

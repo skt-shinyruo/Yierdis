@@ -93,9 +93,8 @@ public class CommandSupportTest {
                     throw new UnsupportedOperationException("unexpected method: " + method.getName());
                 });
         CommandResult result;
-        try (ByteArrayExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("TEST", List.of());
-             CommandExecutionContext context = CommandExecutionContext.forRequest(session(), request)) {
-            result = prepared.execute(context);
+        try (ByteArrayExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("TEST", List.of())) {
+            result = prepared.execute(CommandExecutionContext.forSession(session()));
         }
         RedisReplyRenderer.render(result.reply(), writer);
         return events;
@@ -153,7 +152,7 @@ public class CommandSupportTest {
         }
 
         @Override
-        public MutationOutcome commit(yier.bubu.redis.common.command.MutationContext context) {
+        public MutationOutcome commit() {
             commitCount++;
             return MutationOutcome.NONE;
         }

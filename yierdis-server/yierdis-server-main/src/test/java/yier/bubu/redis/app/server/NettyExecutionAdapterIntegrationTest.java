@@ -42,7 +42,7 @@ public class NettyExecutionAdapterIntegrationTest {
 
     @Test
     public void registeredRequestSubmitsThroughNettyExecutionConnection() {
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build())) {
+        try (YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build())) {
             CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
             RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
@@ -72,7 +72,7 @@ public class NettyExecutionAdapterIntegrationTest {
     public void queueFullPausesIngressAndRetriesTheRegisteredRequest() throws Exception {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
-        YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build());
+        YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
         RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
@@ -124,7 +124,7 @@ public class NettyExecutionAdapterIntegrationTest {
     public void quitClosesAfterItsRegisteredReplyAndSkipsTheLaterSlot() throws Exception {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
-        YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build());
+        YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
         RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
@@ -172,7 +172,7 @@ public class NettyExecutionAdapterIntegrationTest {
 
     @Test
     public void echoNullBulkStringUsesTheRegisteredRequestSlot() {
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build())) {
+        try (YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build())) {
             RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
@@ -199,7 +199,7 @@ public class NettyExecutionAdapterIntegrationTest {
 
     @Test
     public void setNullBulkStringUsesTheRegisteredRequestSlot() {
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build())) {
+        try (YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build())) {
             RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,

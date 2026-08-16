@@ -24,7 +24,7 @@ command
      -> reserve upper bound
      -> prepare replacement or deletion
      -> commit EntryRecord
-     -> settle ledger and publish commit stream
+     -> settle ledger and release superseded resources
 ```
 
 关键分支如下：
@@ -46,12 +46,10 @@ DB ops 解析到 `EntryRecord` 后会比较 `expireAtMillis` 与当前时间。�
 
 1. 重新校验 key identity、当前 record 与 deadline。
 2. 在 prepare 阶段复制稳定 key bytes，计算删除后的 accounting delta。
-3. commit 时移除 directory entry，释放 entry、value 和 key resources。
-4. 结算 ledger，并发布 synthetic `DEL key`，`kind=EXPIRED`。
+3. commit 时移除 directory entry，并释放 entry 与 key resources。
+4. 结算 ledger，再释放 superseded value，并按提示回收空 native page。
 
-如果 commit stream 在提交前暂时不可用，entry 会被标记为等待物理删除，key 继续保持不可见，后续 cleanup 再重试。commit 后 publication 失败时删除不会回滚；DB 进入 degraded，并传播 result-unknown 失败。
-
-因此惰性过期不是单纯的优化：读取可能完成物理删除、记账和 commit publication。只有成功取得 live record 的 LRU 路径才会更新访问时钟。
+因此惰性过期不是单纯的优化：读取可能完成物理删除和记账。只有成功取得 live record 的 LRU 路径才会更新访问时钟。
 
 ## 有界主动清理
 
@@ -70,7 +68,7 @@ cursor 的提交规则与 mutation 失败边界一致：
 
 - 候选已删除或已证实 stale 后才保存 next cursor；
 - commit 前失败或当前过期 entry 尚未删除时保留 batch start，供下一次重试；
-- commit 后失败保留已经完成的删除，并保存 next cursor，避免重复发布。
+- commit 后失败保留已经完成的删除，并保存 next cursor，避免重复处理同一批次。
 
 `expireCount == 0` 时 cleanup 快速返回并重置 cursor。只要目录拓扑最终稳定，连续调用会遍历完整 keyspace；单次调用始终受 slot、候选和时间预算限制。
 
@@ -87,14 +85,14 @@ Netty worker timer
      -> global scope: instance-level governor maintenance
 ```
 
-真正的 DB cleanup 只在 owner thread 上执行。maxmemory admission 也先调用 cleanup，使刚过期的数据能在同一次预算判断中释放；过期候选按 `EXPIRED` 发布，不会计作 `EVICTED`。
+真正的 DB cleanup 只在 owner thread 上执行。maxmemory admission 也先调用 cleanup，使刚过期的数据能在同一次预算判断中释放。
 
 ## 维护约束
 
 - 不要在 entry lifecycle 之外直接改写 `expireAtMillis`；`expireCount` 必须随 entry publish/replace/release 一起更新。
 - discovery callback 内不要删除目录项；候选必须在扫描返回后重新验证并回放。
 - 不要只保存 cursor 的编码值；必须同时比较完整 `tableGeneration`。
-- synthetic expiry 必须走无用户 mutation context 的 executor overload，不能伪装成用户命令提交。
+- expiration reclamation 必须使用 `Admission.RECLAMATION`，upper bound 为 `0`，且不得产生正增长。
 
 ## 相关测试
 
@@ -103,4 +101,3 @@ Netty worker timer
 - `ExpireSemanticsTest`：各 value type 的即时过期和后续重建。
 - `TtlMaxmemoryTest`：TTL mutation 的 maxmemory admission 与失败原子性。
 - `PhysicalMemoryAccountingTest`、`ActiveExpirationTest`：deadline-only mutation 不改变物理 committed footprint。
-- `CommitStreamExpirationEvictionTest`：`EXPIRED` 与 `EVICTED` synthetic commit 的运行时可见性。

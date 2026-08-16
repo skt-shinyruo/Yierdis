@@ -7,7 +7,6 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.memory.testkit.HeapStableMemoryBackend;
 import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.DbEngineConfig;
@@ -38,7 +37,7 @@ public class PreparedMutationStorageTest {
                 Assert.assertFalse(prepared.isCurrent());
                 Assert.assertThrows(
                         IllegalStateException.class,
-                        () -> prepared.commit(MutationContext.none())
+                        prepared::commit
                 );
             }
             Assert.assertEquals(List.of("a", "b", "c", "d"), db.list("list"));
@@ -52,14 +51,14 @@ public class PreparedMutationStorageTest {
             try (PreparedMutation<PoppedValueSequence> prepared =
                          db.writes().lists().preparePop(bytes("list"), 2, true)) {
                 PoppedValueSequence preview = prepared.preview();
-                MutationOutcome outcome = prepared.commit(MutationContext.none());
+                MutationOutcome outcome = prepared.commit();
 
                 Assert.assertTrue(outcome.changedAny());
                 Assert.assertEquals(List.of("a", "b"), strings(preview));
                 Assert.assertEquals(List.of("c"), db.list("list"));
                 Assert.assertThrows(
                         IllegalStateException.class,
-                        () -> prepared.commit(MutationContext.none())
+                        prepared::commit
                 );
             }
         }
@@ -82,7 +81,7 @@ public class PreparedMutationStorageTest {
                 Assert.assertFalse(stale.isCurrent());
                 Assert.assertThrows(
                         IllegalStateException.class,
-                        () -> stale.commit(MutationContext.none())
+                        stale::commit
                 );
             }
             Assert.assertEquals("intervening", db.string("key"));
@@ -96,14 +95,14 @@ public class PreparedMutationStorageTest {
                 Assert.assertEquals("intervening", string(preview.oldValue()));
                 Assert.assertEquals("intervening", db.string("key"));
 
-                MutationOutcome outcome = fresh.commit(MutationContext.none());
+                MutationOutcome outcome = fresh.commit();
 
                 Assert.assertTrue(outcome.changedAny());
                 Assert.assertEquals("intervening", string(preview.oldValue()));
                 Assert.assertEquals("fresh", db.string("key"));
                 Assert.assertThrows(
                         IllegalStateException.class,
-                        () -> fresh.commit(MutationContext.none())
+                        fresh::commit
                 );
             }
         }

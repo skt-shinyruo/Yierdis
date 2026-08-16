@@ -12,9 +12,7 @@ public final class MutationExecutorTestSupport {
                 db::checkThread,
                 db.memoryLedger(),
                 KeyLifecycleTestAccess.backend(db),
-                db.healthMonitor(),
-                db::commitPublisher,
-                db::commitDbIndex
+                db.healthMonitor()
         );
     }
 }

@@ -14,7 +14,7 @@ Yierdis 的测试大致分成七层：
 
 | 层 | 主要目的 | 常见测试 |
 | --- | --- | --- |
-| API contract | 稳定接口和边界语义 | `ExecutionRequestContractTest`, `CommandContractTest`, `DbEngineFactoryConfigContractTest` |
+| API contract | 稳定接口和边界语义 | `ExecutionRequestContractTest`, `CommandContractTest`, `YierdisInstanceConfigTest` |
 | command / integration | 命令注册、parse 隔离、参数、回包和 Redis 兼容语义 | `CommandDispatcherTest`, `CommandParseIsolationTest`, `StringCommandTest`, `CommandErrorTest` |
 | DB direct ops | 绕开 command 层验证 DB API | `StringDirectOpsTest`, `CollectionDirectOpsTest`, `TtlLifecycleDirectOpsTest` |
 | native/internal | handle、backend、keyspace、root/value、ledger | `NativeHandleTest`, `YierdisFfmStableMemoryBackendTest`, `StringRootTest`, `MemoryLedgerContractTest` |
@@ -97,19 +97,17 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 `EngineSession.DefaultTransactionState.tryEnqueue(...)` -> retained `ExecutionRequest` ->
 `TransactionCommands` drain -> `CommandDispatcher.prepareReplay(...)` -> child execute 和聚合结果。入队前不运行
 `CommandInvocation.prepare(session)`；drain 后的 `PreparedExec` 拥有并最终关闭队列 request 与 child
-`PreparedCommand`。
-`ExecutionRecord` 只属于 change-event API，不是事务队列载体。事务与 replay 的完整主线看
-[`transaction-and-replay.md`](./transaction-and-replay.md)。
+`PreparedCommand`。事务与 replay 的完整主线看 [`transaction-and-replay.md`](./transaction-and-replay.md)。
 
 ## 改 TTL / expiration 时
 
 先跑 TTL 和过期清理测试：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests -am -Dtest=TtlLifecycleDirectOpsTest,ActiveExpirationTest,ExpireSemanticsTest,CommitStreamExpirationEvictionTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests -am -Dtest=TtlLifecycleDirectOpsTest,ActiveExpirationTest,ExpireSemanticsTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-排障顺序：`YierdisTtlOps` -> `YierdisDbKeyLifecycle` -> `YierdisDbExpirationSupport` -> synthetic `EXPIRED` delete -> `MEMORY STATS` / `INFO memory` 口径。TTL 细节看 [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)。
+排障顺序：`YierdisTtlOps` -> `YierdisDbKeyLifecycle` -> `YierdisDbExpirationSupport` -> reclamation mutation -> `MEMORY STATS` / `INFO memory` 口径。TTL 细节看 [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)。
 
 ## 改 maxmemory / eviction 时
 
@@ -119,7 +117,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests -am -Dtest=MutationExecutorReservationTest,MaxmemoryEvictionTest,TtlMaxmemoryTest,YierdisGlobalMaxmemoryGovernorTest,GlobalMaxmemoryLruAcrossDbsTest,MemoryStatsAccountingConsistencyTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-排障顺序：`YierdisDbMemoryLedger` -> `YierdisDbMutationExecutor` -> `YierdisDbMaxmemorySupport` / `YierdisGlobalMaxmemoryGovernor` -> synthetic `EVICTED` delete -> `MEMORY STATS` 校验。maxmemory 的完整语义看 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)。
+排障顺序：`YierdisDbMemoryLedger` -> `YierdisDbMutationExecutor` -> `YierdisDbMaxmemorySupport` / `YierdisGlobalMaxmemoryGovernor` -> eviction reclamation -> `MEMORY STATS` 校验。maxmemory 的完整语义看 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)。
 
 ## 改 native memory 时
 
@@ -218,4 +216,4 @@ executor/server 改动：executor 单元测试 + server main 集成测试 + 相�
 
 ## Production Hardening Gates
 
-有界 ingress、commit-stream、maxmemory、ordered reply 和 shutdown 改动都要运行与影响面相符的 focused tests，并用 JDK 25 运行架构守卫。性能证据由操作者分别管理的 Yierdis benchmark 与官方 Redis benchmark 原始结果组成，两边必须使用等价 workload 设置；项目 benchmark 不计算阈值或 artifact ratio，任何通过/失败判定都属于外部 policy。完整的 reply matrix、smoke、deterministic soak、最终 ownership counter 和候选证据要求见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
+有界 ingress、maxmemory、ordered reply 和 shutdown 改动都要运行与影响面相符的 focused tests，并用 JDK 25 运行架构守卫。性能证据由操作者分别管理的 Yierdis benchmark 与官方 Redis benchmark 原始结果组成，两边必须使用等价 workload 设置；项目 benchmark 不计算阈值或 artifact ratio，任何通过/失败判定都属于外部 policy。完整的 reply matrix、smoke、deterministic soak、最终 ownership counter 和候选证据要求见 [`production-hardening-operations.md`](./production-hardening-operations.md)。

@@ -16,7 +16,7 @@
 - maxmemory / 淘汰：[`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)
 - executor：[`executor-and-backpressure.md`](./executor-and-backpressure.md)
 - 生产 hardening 操作和验收：[`production-hardening-operations.md`](./production-hardening-operations.md)
-- 代理和变更事件：[`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)
+- 代理边界：[`proxy-logic.md`](./proxy-logic.md)
 - native memory：[`native-memory-runtime.md`](./native-memory-runtime.md)、[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)、[`offheap-copy-behavior.md`](./offheap-copy-behavior.md)
 - 测试入口：[`testing-and-debugging.md`](./testing-and-debugging.md)
 - 维护覆盖矩阵：[`code-logic-coverage.md`](./code-logic-coverage.md)
@@ -30,7 +30,7 @@
 | [`YierdisServerRuntimeConfig`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/args/YierdisServerRuntimeConfig.java) | server 领域配置校验，并直接生成 executor config | record constructor, `executorConfig()` | [`configuration-and-operations.md`](./configuration-and-operations.md), [`executor-and-backpressure.md`](./executor-and-backpressure.md) |
 | [`YierdisServerBootstrap`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java) | composition root，选择默认 `YierdisDbEngineFactory` / memory runtime，并组装 `YierdisInstance`、`CommandDispatcher`、`CommandExecutor` 和 Netty pipeline | `start(...)`, `startInternal()`, `close()` | [`request-execution-flow.md`](./request-execution-flow.md) |
 | [`YierdisServerChannelInitializer`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java) | 组装每条连接的 Netty handler 链 | `initChannel(...)` | [`protocol-reference.md`](./protocol-reference.md) |
-| [`NettyServerInfoProvider`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyServerInfoProvider.java) | 为 INFO / STATS / health 一次采集请求级公共统计快照并按 section 输出 | `prepareInfo(...)`, `prepareStats(...)`, `serverStatsSnapshot(...)` | [`configuration-and-operations.md`](./configuration-and-operations.md), [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
+| [`NettyServerInfoProvider`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyServerInfoProvider.java) | 为 INFO / STATS / health 一次采集请求级公共统计快照并按 section 输出 | `prepareInfo(...)`, `prepareStats(...)`, `serverStatsSnapshot(...)` | [`configuration-and-operations.md`](./configuration-and-operations.md), [`proxy-logic.md`](./proxy-logic.md) |
 | `OutboundMemoryBudget` / `ConnectionReplySequencer` / `BoundedChunkedReplySink` | 全局、连接和单回复容量账户；receive-order slot；固定容量 chunk 写回 | reserve/ready/drain methods | [`production-hardening-operations.md`](./production-hardening-operations.md), [`executor-and-backpressure.md`](./executor-and-backpressure.md) |
 | [`NettyExecutionRequestIngress`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionRequestIngress.java) | I/O 边界上的 reply slot 对齐、executor admission、容量等待和异常 fallback | `channelRead(...)`, `submitOrDefer(...)`, `exceptionCaught(...)` | [`request-execution-flow.md`](./request-execution-flow.md), [`executor-and-backpressure.md`](./executor-and-backpressure.md) |
 
@@ -40,12 +40,11 @@
 
 | 类/模块 | 职责 | 关键入口 | 继续阅读 |
 | --- | --- | --- | --- |
-| [`YierdisInstance`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java) | 多 DB 生命周期、owner thread 绑定、资源关闭；strict `create(config)` 要求已注入 `DbEngineFactory` 或 `EngineFactoryBinding` | `create(...)`, `engine(int)`, `engines()`, `bindToCurrentThread()`, `close()` | [`db-internals.md`](./db-internals.md) |
-| [`YierdisInstanceConfig`](../../yierdis-server/yierdis-server-runtime-api/src/main/java/yier/bubu/redis/runtime/api/YierdisInstanceConfig.java) | runtime 配置对象，承载外部注入的 DB factory 和 factory-owned resource | builder methods | [`configuration-and-operations.md`](./configuration-and-operations.md) |
+| [`YierdisInstance`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java) | 多 DB 的固定 FFM 组合、owner thread 绑定和资源关闭 | `create(...)`, `engine(int)`, `engines()`, `bindToCurrentThread()`, `close()` | [`db-internals.md`](./db-internals.md) |
+| [`YierdisInstanceConfig`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/api/YierdisInstanceConfig.java) | runtime 的 DB 数量、maxmemory、maintenance 和 native slot 配置 | builder methods | [`configuration-and-operations.md`](./configuration-and-operations.md) |
 | [`YierdisInstanceRuntimeAccess`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceRuntimeAccess.java) | owner-thread runtime access，包括 executor 绑定、maintenance tick 和关闭 | `maintenanceTick()`, `bindToCurrentThread()`, `close()` | [`request-execution-flow.md`](./request-execution-flow.md), [`configuration-and-operations.md`](./configuration-and-operations.md), [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md), [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md) |
 | [`YierdisGlobalMaxmemoryGovernor`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisGlobalMaxmemoryGovernor.java) | global scope 下跨 DB 协调 cleanup、victim 选择和淘汰 | `prepareWrite(...)`, `enforceMaintenance()`, victim selection helpers | [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md), [`configuration-and-operations.md`](./configuration-and-operations.md) |
 | [`YierdisInstanceObservability`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceObservability.java) | INFO / STATS 使用的实例观测快照 | snapshot methods | [`configuration-and-operations.md`](./configuration-and-operations.md) |
-| [`CommitStream`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/CommitStream.java) | 固定容量 DB commit ring，异步向 runtime sink 交付已提交记录 | `reserve(...)`, `publish(...)`, `shutdownGracefully(...)` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md), [`production-hardening-operations.md`](./production-hardening-operations.md) |
 
 边界：runtime 暴露 `DbEngine` 能力视图，不把 `YierdisDb` 具体类泄漏给 command/server。
 
@@ -67,9 +66,8 @@
 | 类/模块 | 职责 | 关键入口 | 继续阅读 |
 | --- | --- | --- | --- |
 | [`EngineSession`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java) | 仅作为连接级 session state owner，持有 DB index、RESP version、transaction queue 和 client metadata，不承担命令转发 | session accessors, `DefaultTransactionState` | [`transaction-and-replay.md`](./transaction-and-replay.md) |
-| [`CommandSession`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/CommandSession.java) | 提供命令边界需要的 DB index、client metadata、transaction、stats 和 protocol 能力 | session methods | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
+| [`CommandSession`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/CommandSession.java) | 提供命令边界需要的 DB index、client metadata、transaction、stats 和 protocol 能力 | session methods | [`proxy-logic.md`](./proxy-logic.md) |
 | [`TransactionState`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/TransactionState.java) | `MULTI/EXEC/DISCARD` 队列状态、abort 和 replay contract | `begin()`, `discard()`, `tryEnqueue(...)`, `drain()` | [`transaction-and-replay.md`](./transaction-and-replay.md) |
-| [`ExecutionRecord`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ExecutionRecord.java) | dbIndex + command record view 的 change-event API 载体；支持 copied 与 callback-scoped borrowed 两种入口 | constructor, `borrowed(...)`, accessors | [`transaction-and-replay.md`](./transaction-and-replay.md), [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md), [`glossary.md`](./glossary.md) |
 
 边界：事务排队前由 `CommandDispatcher` 只运行 `CommandSpec.handler().parse(CommandArgs)` 做 preflight，
 不会调用 `CommandInvocation.prepare(session)`；`EXEC` 由 `TransactionCommands` 通过同一 dispatcher replay，
@@ -86,8 +84,8 @@
 | [`CommandDispatcher`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java) | empty/unknown command、arity、handler parse、事务 preflight/排队、replay 和预期异常翻译的 command-kernel 入口 | `prepare(session, request)`, `prepareReplay(...)` | [`request-execution-flow.md`](./request-execution-flow.md), [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md), [`transaction-and-replay.md`](./transaction-and-replay.md) |
 | [`DefaultCommandModules`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/DefaultCommandModules.java) | transport-neutral 默认命令模块集合 | `create(...)` | [`module-architecture.md`](./module-architecture.md) |
 | [`CommandSupport`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java) | DB routing、server info / slow-command provider 和 prepared mutation 共享逻辑 | helper methods | [`commands-and-data-model.md`](./commands-and-data-model.md), [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md) |
-| [`YierdisDbRouter`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/YierdisDbRouter.java) | 根据当前 session DB index 选择命令本次访问的 `DbEngine` | `dbFor(...)`, `databases()` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
-| [`ServerInfoProvider`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/ServerInfoProvider.java) | command 层 Netty-free 的 INFO / STATS / MEMORY STATS 观测代理 | `info(...)`, `stats(...)`, `memoryStats(...)` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
+| [`YierdisDbRouter`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/YierdisDbRouter.java) | 根据当前 session DB index 选择命令本次访问的 `DbEngine` | `dbFor(...)`, `databases()` | [`proxy-logic.md`](./proxy-logic.md) |
+| [`ServerInfoProvider`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/ServerInfoProvider.java) | command 层 Netty-free 的 INFO / STATS / MEMORY STATS 观测代理 | `info(...)`, `stats(...)`, `memoryStats(...)` | [`proxy-logic.md`](./proxy-logic.md) |
 
 最终主线固定为：
 
@@ -104,17 +102,6 @@ CommandExecutor
 边界：handler parse 不访问 DB、provider 或 session；command 层返回 Redis 回复语义，不直接操作 internal
 root/value，也不调用 `RedisReplyWriter`。
 
-## 代理和 DB 提交事件
-
-| 类/模块 | 职责 | 关键入口 | 继续阅读 |
-| --- | --- | --- | --- |
-| [`MutationContext`](../../yierdis-common/yierdis-common-command/src/main/java/yier/bubu/redis/common/command/MutationContext.java) | 命令边界内借用的 mutation record，关闭后释放 argv 引用 | `of(...)`, `retainCommandRecord()`, `close()` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
-| [`DbCommitPublisher`](../../yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/DbCommitPublisher.java) | DB API 的有界提交发布端口；可见性前预留、提交后发布 | `reserve(...)`, `publish(...)`, `failAfterCommit(...)` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
-| [`DbCommitEvent`](../../yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/DbCommitEvent.java) | 已提交记录的 callback-scoped DB 视图 | event accessors | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
-| [`YierdisChangeEvent`](../../yierdis-server/yierdis-server-runtime-api/src/main/java/yier/bubu/redis/runtime/api/YierdisChangeEvent.java) | runtime sink 接收的 borrowed event，包含 sequence、kind、record 和提交元数据 | `borrowed(...)`, `close()` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
-
-边界：当前 change event 是最小可重放事件契约，不是完整 AOF、复制协议或持久化保证。
-
 ## DB API 和 DB 内核
 
 | 类/模块 | 职责 | 关键入口 | 继续阅读 |
@@ -124,11 +111,11 @@ root/value，也不调用 `RedisReplyWriter`。
 | [`YierdisDb`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java) | 单 DB 内核和 capability view 实现 | ops accessors / lifecycle methods | [`db-internals.md`](./db-internals.md) |
 | [`YierdisDbKeyLifecycle`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java) | 拥有 key directory、entry table、payload roots 和 backend，统一 staging、scan、TTL 派生计数与释放 | `currentEntry(...)`, `stageEntry(...)`, `publishStagedEntry(...)`, `replaceEntry(...)`, `deleteEntry(...)` | [`db-internals.md`](./db-internals.md), [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md) |
 | [`PreparedEntryMutation`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/PreparedEntryMutation.java) | entry insert/replace/delete/no-op 的提交、TTL 顺序、abort 和 superseded value 释放 | `unchanged(...)`, `insert(...)`, `replace(...)`, `delete(...)`, lifecycle hooks | [`db-internals.md`](./db-internals.md), [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md) |
-| [`YierdisDbMutationExecutor`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java) | prepared mutation、memory reservation、rollback/no-op accounting 和 DB commit publication | `execute(plan)` | [`db-internals.md`](./db-internals.md), [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md), [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
-| [`YierdisDbExpirationSupport`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbExpirationSupport.java) | 通过 `MaintenanceUse` 按 slot/candidate/time budget 扫描 key directory 并回放过期候选 | `cleanupExpired(...)` | [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md) |
-| [`YierdisDbMaxmemorySupport`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMaxmemorySupport.java) | 单 DB maxmemory participant，负责 victim 选择、evict 和 synthetic `EVICTED` delete | `evictUntilUnder(...)`, `sampleCandidate(...)`, `scanBestCandidate(...)`, `evict(...)` | [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md) |
+| [`YierdisDbMutationExecutor`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java) | prepared mutation、memory reservation、rollback/no-op accounting 和提交 | `execute(plan)` | [`db-internals.md`](./db-internals.md), [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md) |
+| [`YierdisDbExpirationSupport`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbExpirationSupport.java) | 通过 maintenance scope 按 slot/candidate/time budget 扫描 key directory 并回放过期候选 | `cleanupExpired(...)` | [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md) |
+| [`YierdisDbMaxmemorySupport`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMaxmemorySupport.java) | 单 DB maxmemory participant，负责 victim 选择和 eviction reclamation | `evictUntilUnder(...)`, `sampleCandidate(...)`, `scanBestCandidate(...)`, `evict(...)` | [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md) |
 | [`YierdisDbMemoryReporter`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporter.java) | `MEMORY` / `INFO memory` 数据来源 | memory methods | [`configuration-and-operations.md`](./configuration-and-operations.md) |
-| [`YierdisDbIntrospection`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbIntrospection.java) | `OBJECT ENCODING` 和 snapshot 读取 native metadata | introspection methods | [`db-internals.md`](./db-internals.md) |
+| [`YierdisDbIntrospection`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbIntrospection.java) | `OBJECT ENCODING` 与 native metadata 读取 | introspection methods | [`db-internals.md`](./db-internals.md) |
 
 边界：DB API 是 command 层的依赖边界；internal 包里的 entry/keyspace/value/ledger 不应被 command 层直接引用。
 

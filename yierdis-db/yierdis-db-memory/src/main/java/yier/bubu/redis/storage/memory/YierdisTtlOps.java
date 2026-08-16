@@ -4,7 +4,6 @@ import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
 
 import java.util.Objects;
 import yier.bubu.redis.bytes.BytesView;
-import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.TtlReadOps;
 import yier.bubu.redis.storage.api.TtlWriteOps;
@@ -30,11 +29,7 @@ final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
 
     @Override
     public WriteResult<Boolean> expire(BytesView keyView, long seconds) {
-        return expire(MutationContext.none(), keyView, seconds);
-    }
-
-    public WriteResult<Boolean> expire(MutationContext context, BytesView keyView, long seconds) {
-        kernel.execute(DbUse.ownerCheck());
+        kernel.checkOwner();
         KeyHandle handle = keyLifecycle.keyHandle(keyView);
         if (handle == null) {
             return WriteResult.unchanged(Boolean.FALSE);
@@ -44,20 +39,16 @@ final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             return WriteResult.unchanged(Boolean.FALSE);
         }
         if (seconds <= 0) {
-            return deleteImmediately(context, handle, record);
+            return deleteImmediately(handle, record);
         }
 
         long expireAtMillis = safeExpireAtMillis(System.currentTimeMillis(), seconds);
-        return setExpirePrepared(context, handle, record, expireAtMillis);
+        return setExpirePrepared(handle, record, expireAtMillis);
     }
 
     @Override
     public WriteResult<Boolean> pexpire(BytesView keyView, long milliseconds) {
-        return pexpire(MutationContext.none(), keyView, milliseconds);
-    }
-
-    public WriteResult<Boolean> pexpire(MutationContext context, BytesView keyView, long milliseconds) {
-        kernel.execute(DbUse.ownerCheck());
+        kernel.checkOwner();
         KeyHandle handle = keyLifecycle.keyHandle(keyView);
         if (handle == null) {
             return WriteResult.unchanged(Boolean.FALSE);
@@ -68,35 +59,27 @@ final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
         }
 
         if (milliseconds <= 0) {
-            return deleteImmediately(context, handle, record);
+            return deleteImmediately(handle, record);
         }
 
         long expireAtMillis = safeAddMillis(System.currentTimeMillis(), milliseconds);
-        return setExpirePrepared(context, handle, record, expireAtMillis);
+        return setExpirePrepared(handle, record, expireAtMillis);
     }
 
     @Override
     public WriteResult<Boolean> expireAtSeconds(BytesView keyView, long unixSeconds) {
-        return expireAtSeconds(MutationContext.none(), keyView, unixSeconds);
-    }
-
-    public WriteResult<Boolean> expireAtSeconds(MutationContext context, BytesView keyView, long unixSeconds) {
         long expireAtMillis;
         try {
             expireAtMillis = Math.multiplyExact(unixSeconds, 1000L);
         } catch (ArithmeticException e) {
             expireAtMillis = Long.MAX_VALUE;
         }
-        return expireAtMillis(context, keyView, expireAtMillis);
+        return expireAtMillis(keyView, expireAtMillis);
     }
 
     @Override
     public WriteResult<Boolean> expireAtMillis(BytesView keyView, long unixMillis) {
-        return expireAtMillis(MutationContext.none(), keyView, unixMillis);
-    }
-
-    public WriteResult<Boolean> expireAtMillis(MutationContext context, BytesView keyView, long unixMillis) {
-        kernel.execute(DbUse.ownerCheck());
+        kernel.checkOwner();
         KeyHandle handle = keyLifecycle.keyHandle(keyView);
         if (handle == null) {
             return WriteResult.unchanged(Boolean.FALSE);
@@ -108,19 +91,15 @@ final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
         }
 
         if (unixMillis <= now) {
-            return deleteImmediately(context, handle, record);
+            return deleteImmediately(handle, record);
         }
 
-        return setExpirePrepared(context, handle, record, unixMillis);
+        return setExpirePrepared(handle, record, unixMillis);
     }
 
     @Override
     public WriteResult<Boolean> persist(BytesView keyView) {
-        return persist(MutationContext.none(), keyView);
-    }
-
-    public WriteResult<Boolean> persist(MutationContext context, BytesView keyView) {
-        kernel.execute(DbUse.ownerCheck());
+        kernel.checkOwner();
         KeyHandle handle = keyLifecycle.keyHandle(keyView);
         if (handle == null) {
             return WriteResult.unchanged(Boolean.FALSE);
@@ -134,11 +113,6 @@ final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             return WriteResult.unchanged(Boolean.FALSE);
         }
         return kernel.execute(new MutationUse<WriteResult<Boolean>>() {
-            @Override
-            public MutationContext context() {
-                return context;
-            }
-
             @Override
             public long upperBoundBytes() {
                 return 0;
@@ -174,7 +148,7 @@ final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
 
     @Override
     public long ttlSeconds(BytesView keyView) {
-        return kernel.execute(DbUse.read(scope -> {
+        return kernel.read(scope -> {
             KeyHandle handle = keyLifecycle.keyHandle(keyView);
             if (handle == null) {
                 return -2L;
@@ -192,12 +166,12 @@ final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             }
             long remainingMillis = expireAtMillis - now;
             return remainingMillis <= 0 ? -2L : remainingMillis / 1000L;
-        }));
+        });
     }
 
     @Override
     public long ttlMillis(BytesView keyView) {
-        return kernel.execute(DbUse.read(scope -> {
+        return kernel.read(scope -> {
             KeyHandle handle = keyLifecycle.keyHandle(keyView);
             if (handle == null) {
                 return -2L;
@@ -215,20 +189,14 @@ final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             }
             long remainingMillis = expireAtMillis - now;
             return remainingMillis <= 0 ? -2L : remainingMillis;
-        }));
+        });
     }
 
     private WriteResult<Boolean> deleteImmediately(
-            MutationContext context,
             KeyHandle handle,
             EntryRecord record
     ) {
         return kernel.execute(new MutationUse<WriteResult<Boolean>>() {
-            @Override
-            public MutationContext context() {
-                return context;
-            }
-
             @Override
             public long upperBoundBytes() {
                 return 0;
@@ -259,18 +227,12 @@ final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
     }
 
     private WriteResult<Boolean> setExpirePrepared(
-            MutationContext context,
             KeyHandle handle,
             EntryRecord record,
             long expireAtMillis
     ) {
         long upperBound = memoryContext.nativeAllocationScopeBookkeepingBytes(0);
         return kernel.execute(new MutationUse<WriteResult<Boolean>>() {
-            @Override
-            public MutationContext context() {
-                return context;
-            }
-
             @Override
             public long upperBoundBytes() {
                 return upperBound;

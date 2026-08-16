@@ -20,12 +20,12 @@
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-db-api</artifactId>
+            <artifactId>yierdis-db-memory</artifactId>
         </dependency>
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-server-runtime-api</artifactId>
+            <artifactId>yierdis-memory-ffm</artifactId>
         </dependency>
 
         <dependency>

@@ -11,6 +11,8 @@ import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.ByteValue;
 import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
+import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -33,7 +35,7 @@ public class HashValueTest {
 
         try (TestBackend runtime = TestBackend.open("hash-packed-final-block");
              StableMemoryBackend allocator = runtime.backend()) {
-            HashValue hash = new HashValue(allocator);
+            HashValue hash = new HashValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 hash.loadForBuild(pairs);
                 Assert.assertEquals(ValueEncoding.HASH_PACKED, hash.encoding());
@@ -51,7 +53,7 @@ public class HashValueTest {
     public void hashtableEncodingStoresValueHandlesInPrimitiveArray() throws ReflectiveOperationException {
         try (TestBackend runtime = TestBackend.open("hash-complete-value-handles");
              StableMemoryBackend allocator = runtime.backend()) {
-            HashValue hash = new HashValue(allocator);
+            HashValue hash = new HashValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 byte[] field = bytes("field");
                 byte[] value = new byte[YierdisEncodingThresholds.HASH_MAX_LISTPACK_VALUE_BYTES + 1];
@@ -72,7 +74,7 @@ public class HashValueTest {
     public void hashTableDeltaNoopDoesNotAllocateNativeObjects() {
         try (TestBackend runtime = TestBackend.open("hash-table-delta-noop");
              StableMemoryBackend allocator = runtime.backend()) {
-            HashValue hash = new HashValue(allocator);
+            HashValue hash = new HashValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 byte[] field = bytes("field");
                 byte[] value = fixedBytes(
@@ -124,7 +126,7 @@ public class HashValueTest {
     public void hashTableDeltaAbortRestoresOriginalHandlesAndContent() {
         try (TestBackend runtime = TestBackend.open("hash-table-delta-abort");
              StableMemoryBackend allocator = runtime.backend()) {
-            HashValue hash = new HashValue(allocator);
+            HashValue hash = new HashValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 byte[] firstField = bytes("first");
                 byte[] firstValue = fixedBytes(
@@ -180,7 +182,7 @@ public class HashValueTest {
     public void hashTableDeltaCommitUsesLastDuplicateAndReusesExistingFieldHandles() {
         try (TestBackend runtime = TestBackend.open("hash-table-delta-commit");
              StableMemoryBackend allocator = runtime.backend()) {
-            HashValue hash = new HashValue(allocator);
+            HashValue hash = new HashValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             byte[] existingField = bytes("existing");
             byte[] untouchedField = bytes("untouched");
             byte[] newField = bytes("new");
@@ -248,7 +250,7 @@ public class HashValueTest {
     public void rootCreatedPackedHashStoresFieldsAndValuesAsNativeBytesAndStreamsNativeSlices() {
         try (TestBackend runtime = TestBackend.open("hash-native-packed-bytes");
              StableMemoryBackend allocator = runtime.backend();
-             HashRoot root = new HashRoot(allocator)) {
+             HashRoot root = new HashRoot(allocator, HashSeed.random(), new HashTableMaintenanceRegistry())) {
             ValueHandle handle = root.create();
 
             root.hsetMany(handle, List.of(bytes("field"), bytes("value")));
@@ -267,7 +269,7 @@ public class HashValueTest {
     public void packedHgetValueReturnsOnlyTheValueSlice() {
         try (TestBackend runtime = TestBackend.open("hash-native-value-slice");
              StableMemoryBackend allocator = runtime.backend()) {
-            HashValue hash = new HashValue(allocator);
+            HashValue hash = new HashValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 hash.hset(bytes("field"), bytes("value"));
                 try (ByteValue value = hash.hgetValue(bytes("field"))) {
@@ -286,7 +288,7 @@ public class HashValueTest {
     public void packedHashSupportsUpdateAndDeleteWithRepacking() {
         try (TestBackend runtime = TestBackend.open("hash-test");
              StableMemoryBackend allocator = runtime.backend()) {
-            HashValue hv = new HashValue(allocator);
+            HashValue hv = new HashValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 Assert.assertEquals(ValueEncoding.HASH_PACKED, hv.encoding());
 
@@ -325,7 +327,7 @@ public class HashValueTest {
     public void hashConvertsToHashTableAfterTooManyFields() {
         try (TestBackend runtime = TestBackend.open("hash-test");
              StableMemoryBackend allocator = runtime.backend()) {
-            HashValue hv = new HashValue(allocator);
+            HashValue hv = new HashValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 int added = 0;
                 for (int i = 0; i < 600; i++) {

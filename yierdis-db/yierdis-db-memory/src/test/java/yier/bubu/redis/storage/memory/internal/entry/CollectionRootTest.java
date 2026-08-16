@@ -7,6 +7,8 @@ import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.storage.memory.TestBackend;
+import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
@@ -40,9 +42,11 @@ public class CollectionRootTest {
     public void collectionRootsRoundTripValuesAndReleaseStableHandles() {
         try (TestBackend runtime = TestBackend.open("collection-roots")) {
             StableMemoryBackend backend = runtime.backend();
-            HashRoot hash = new HashRoot(backend);
-            SetRoot set = new SetRoot(backend);
-            ZSetRoot zset = new ZSetRoot(backend);
+            HashSeed hashSeed = HashSeed.random();
+            HashTableMaintenanceRegistry maintenanceRegistry = new HashTableMaintenanceRegistry();
+            HashRoot hash = new HashRoot(backend, hashSeed, maintenanceRegistry);
+            SetRoot set = new SetRoot(backend, hashSeed, maintenanceRegistry);
+            ZSetRoot zset = new ZSetRoot(backend, hashSeed, maintenanceRegistry);
             ListRoot list = new ListRoot(backend);
             ValueHandle hashHandle = hash.create();
             ValueHandle setHandle = set.create();

@@ -153,7 +153,7 @@ public final class StringCommands implements CommandModule {
         return CommandSupport.preparedMutation(
                 reply.shape(), mutation,
                 execution -> {
-                    mutation.commit(execution.mutationContext());
+                    mutation.commit();
                     return CommandResult.reply(reply);
                 }
         );

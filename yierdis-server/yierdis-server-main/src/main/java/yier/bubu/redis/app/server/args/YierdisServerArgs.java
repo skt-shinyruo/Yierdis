@@ -33,256 +33,256 @@ public final class YierdisServerArgs {
     @Option(names = {"-h", "--help"}, usageHelp = true, description = "Show this help message and exit.")
     public boolean help;
 
-    @Option(names = YierdisServerArgNames.BIND, defaultValue = "127.0.0.1", description = "TCP host or address to bind.")
+    @Option(names = "--bind", defaultValue = "127.0.0.1", description = "TCP host or address to bind.")
     public String bind = "127.0.0.1";
 
-    @Option(names = YierdisServerArgNames.PORT, defaultValue = "6378", description = "TCP port to bind.")
+    @Option(names = "--port", defaultValue = "6378", description = "TCP port to bind.")
     public int port = 6378;
 
-    @Option(names = YierdisServerArgNames.MAX_CLIENTS, defaultValue = "1024", description = "Maximum accepted client connections.")
+    @Option(names = "--maxClients", defaultValue = "1024", description = "Maximum accepted client connections.")
     public int maxClients = 1024;
 
     @Option(
-            names = YierdisServerArgNames.DATABASES,
+            names = "--databases",
             defaultValue = "16",
             description = "Number of logical databases (SELECT 0..N-1)."
     )
     public int databases = 16;
 
     @Option(
-            names = YierdisServerArgNames.CLEANUP_INTERVAL_MILLIS,
+            names = "--cleanupIntervalMillis",
             defaultValue = "1000",
             description = "Expiration cleanup interval in milliseconds (0 disables cleanup)."
     )
     public long cleanupIntervalMillis = 1000;
 
-    @Option(names = YierdisServerArgNames.NO_CLEANUP, description = "Disable periodic expiration cleanup.")
+    @Option(names = "--noCleanup", description = "Disable periodic expiration cleanup.")
     public boolean noCleanup;
 
-    @Option(names = YierdisServerArgNames.IO_THREADS, defaultValue = "1", description = "Netty I/O threads.")
+    @Option(names = "--ioThreads", defaultValue = "1", description = "Netty I/O threads.")
     public int ioThreads = 1;
 
     @Option(
-            names = YierdisServerArgNames.EXECUTOR_QUEUE_CAPACITY,
+            names = "--executorQueueCapacity",
             defaultValue = "1024",
             description = "Command executor queue capacity."
     )
     public int executorQueueCapacity = 1024;
 
     @Option(
-            names = YierdisServerArgNames.EXECUTOR_QUEUE_MAX_BYTES,
+            names = "--executorQueueMaxBytes",
             defaultValue = "" + DEFAULT_EXECUTOR_QUEUE_MAX_BYTES,
             description = "Command executor queue max bytes (0 disables)."
     )
     public long executorQueueMaxBytes = DEFAULT_EXECUTOR_QUEUE_MAX_BYTES;
 
     @Option(
-            names = YierdisServerArgNames.EXECUTOR_SCHEDULING_POLICY,
+            names = "--executorSchedulingPolicy",
             defaultValue = "fair",
             description = "Executor scheduling policy: global|fair."
     )
     public String executorSchedulingPolicy = "fair";
 
-    @Option(names = YierdisServerArgNames.BACKPRESSURE_HIGH, defaultValue = "256", description = "Backpressure high watermark.")
+    @Option(names = "--backpressureHigh", defaultValue = "256", description = "Backpressure high watermark.")
     public int backpressureHighWatermark = 256;
 
-    @Option(names = YierdisServerArgNames.BACKPRESSURE_LOW, defaultValue = "128", description = "Backpressure low watermark.")
+    @Option(names = "--backpressureLow", defaultValue = "128", description = "Backpressure low watermark.")
     public int backpressureLowWatermark = 128;
 
     @Option(
-            names = YierdisServerArgNames.BACKPRESSURE_BYTES_HIGH,
+            names = "--backpressureBytesHigh",
             defaultValue = "" + DEFAULT_BACKPRESSURE_BYTES_HIGH,
             description = "Backpressure bytes high watermark (0 disables)."
     )
     public long backpressureBytesHighWatermark = DEFAULT_BACKPRESSURE_BYTES_HIGH;
 
     @Option(
-            names = YierdisServerArgNames.BACKPRESSURE_BYTES_LOW,
+            names = "--backpressureBytesLow",
             defaultValue = "" + DEFAULT_BACKPRESSURE_BYTES_LOW,
             description = "Backpressure bytes low watermark (0 disables)."
     )
     public long backpressureBytesLowWatermark = DEFAULT_BACKPRESSURE_BYTES_LOW;
 
-    @Option(names = YierdisServerArgNames.EXECUTOR_MAX_DRAIN, defaultValue = "512", description = "Max commands drained per executor tick.")
+    @Option(names = "--executorMaxDrain", defaultValue = "512", description = "Max commands drained per executor tick.")
     public int executorMaxDrainCommands = 512;
 
-    @Option(names = YierdisServerArgNames.EXECUTOR_DRAIN_MILLIS, defaultValue = "2", description = "Executor drain time budget in milliseconds.")
+    @Option(names = "--executorDrainMillis", defaultValue = "2", description = "Executor drain time budget in milliseconds.")
     public long executorDrainTimeLimitMillis = 2;
 
     @Option(
-            names = YierdisServerArgNames.TRANSACTION_QUEUE_MAX_COMMANDS,
+            names = "--transactionQueueMaxCommands",
             defaultValue = "" + DEFAULT_TRANSACTION_QUEUE_MAX_COMMANDS,
             description = "Transaction queue max commands for MULTI (0 disables)."
     )
     public int transactionQueueMaxCommands = DEFAULT_TRANSACTION_QUEUE_MAX_COMMANDS;
 
     @Option(
-            names = YierdisServerArgNames.TRANSACTION_QUEUE_MAX_BYTES,
+            names = "--transactionQueueMaxBytes",
             defaultValue = "" + DEFAULT_TRANSACTION_QUEUE_MAX_BYTES,
             description = "Transaction queue max bytes for MULTI (0 disables)."
     )
     public long transactionQueueMaxBytes = DEFAULT_TRANSACTION_QUEUE_MAX_BYTES;
 
     @Option(
-            names = YierdisServerArgNames.PROTOCOL_MAX_BULK_BYTES,
+            names = "--protocolMaxBulkBytes",
             defaultValue = "" + DEFAULT_PROTOCOL_MAX_BULK_BYTES,
             description = "Protocol max request payload bytes."
     )
     public int protocolMaxBulkBytes = DEFAULT_PROTOCOL_MAX_BULK_BYTES;
 
     @Option(
-            names = YierdisServerArgNames.PROTOCOL_MAX_ARGS,
+            names = "--protocolMaxArgs",
             defaultValue = "" + DEFAULT_PROTOCOL_MAX_ARGS,
             description = "Protocol max args per command."
     )
     public int protocolMaxArgs = DEFAULT_PROTOCOL_MAX_ARGS;
 
     @Option(
-            names = YierdisServerArgNames.PROTOCOL_MAX_LINE_BYTES,
+            names = "--protocolMaxLineBytes",
             defaultValue = "" + DEFAULT_PROTOCOL_MAX_LINE_BYTES,
             description = "Protocol max header bytes."
     )
     public int protocolMaxLineBytes = DEFAULT_PROTOCOL_MAX_LINE_BYTES;
 
     @Option(
-            names = YierdisServerArgNames.PROTOCOL_MAX_COMMAND_BYTES,
+            names = "--protocolMaxCommandBytes",
             defaultValue = "" + DEFAULT_PROTOCOL_MAX_COMMAND_BYTES,
             description = "Protocol max cumulative bytes per command."
     )
     public int protocolMaxCommandBytes = DEFAULT_PROTOCOL_MAX_COMMAND_BYTES;
 
     @Option(
-            names = YierdisServerArgNames.PROTOCOL_GLOBAL_IN_FLIGHT_BYTES,
+            names = "--protocolGlobalInFlightBytes",
             defaultValue = "0",
             description = "Global RESP ingress in-flight memory limit (0 derives from executor queue bytes)."
     )
     public long protocolGlobalInFlightBytes;
 
     @Option(
-            names = YierdisServerArgNames.CLIENT_IDLE_TIMEOUT_MILLIS,
+            names = "--client-idle-timeout-millis",
             defaultValue = "0",
             description = "Close clients idle for this many milliseconds (0 disables)."
     )
     public long clientIdleTimeoutMillis = 0;
 
     @Option(
-            names = YierdisServerArgNames.CLIENT_OUTPUT_BUFFER_LIMIT_BYTES,
+            names = "--client-output-buffer-limit-bytes",
             defaultValue = "67108864",
             description = "Close slow clients above this outbound buffer size (0 disables)."
     )
     public long clientOutputBufferLimitBytes = 67108864;
 
     @Option(
-            names = YierdisServerArgNames.CLIENT_OUTPUT_BUFFER_OVER_LIMIT_MILLIS,
+            names = "--client-output-buffer-over-limit-millis",
             defaultValue = "10000",
             description = "Slow-client grace period above output buffer limit in milliseconds."
     )
     public long clientOutputBufferOverLimitMillis = 10000;
 
     @Option(
-            names = YierdisServerArgNames.REPLY_GLOBAL_CAPACITY_BYTES,
+            names = "--replyGlobalCapacityBytes",
             defaultValue = "" + DEFAULT_REPLY_GLOBAL_CAPACITY_BYTES,
             description = "Hard global RESP reply capacity in bytes."
     )
     public long replyGlobalCapacityBytes = DEFAULT_REPLY_GLOBAL_CAPACITY_BYTES;
 
     @Option(
-            names = YierdisServerArgNames.REPLY_PER_CONNECTION_CAPACITY_BYTES,
+            names = "--replyPerConnectionCapacityBytes",
             defaultValue = "" + DEFAULT_REPLY_PER_CONNECTION_CAPACITY_BYTES,
             description = "Hard per-connection RESP reply capacity in bytes."
     )
     public long replyPerConnectionCapacityBytes = DEFAULT_REPLY_PER_CONNECTION_CAPACITY_BYTES;
 
     @Option(
-            names = YierdisServerArgNames.REPLY_MAX_TOTAL_BYTES,
+            names = "--replyMaxTotalBytes",
             defaultValue = "" + DEFAULT_REPLY_MAX_TOTAL_BYTES,
             description = "Hard total charge for one top-level RESP reply in bytes."
     )
     public long replyMaxTotalBytes = DEFAULT_REPLY_MAX_TOTAL_BYTES;
 
     @Option(
-            names = YierdisServerArgNames.REPLY_CHUNK_PAYLOAD_BYTES,
+            names = "--replyChunkPayloadBytes",
             defaultValue = "" + DEFAULT_REPLY_CHUNK_PAYLOAD_BYTES,
             description = "Fixed RESP reply chunk payload capacity in bytes."
     )
     public int replyChunkPayloadBytes = DEFAULT_REPLY_CHUNK_PAYLOAD_BYTES;
 
     @Option(
-            names = YierdisServerArgNames.REPLY_CONTROL_RESERVATION_BYTES,
+            names = "--replyControlReservationBytes",
             defaultValue = "" + DEFAULT_REPLY_CONTROL_RESERVATION_BYTES,
             description = "Per-request RESP reply control reservation in bytes."
     )
     public long replyControlReservationBytes = DEFAULT_REPLY_CONTROL_RESERVATION_BYTES;
 
     @Option(
-            names = YierdisServerArgNames.REPLY_DRAIN_TIMEOUT_MILLIS,
+            names = "--replyDrainTimeoutMillis",
             defaultValue = "" + DEFAULT_REPLY_DRAIN_TIMEOUT_MILLIS,
             description = "Graceful RESP reply drain timeout in milliseconds."
     )
     public long replyDrainTimeoutMillis = DEFAULT_REPLY_DRAIN_TIMEOUT_MILLIS;
 
-    @Option(names = YierdisServerArgNames.MAXMEMORY_BYTES, defaultValue = "0", description = "Maxmemory in bytes (0 disables eviction).")
+    @Option(names = "--maxmemoryBytes", defaultValue = "0", description = "Maxmemory in bytes (0 disables eviction).")
     public long maxmemoryBytes = 0;
 
     @Option(
-            names = YierdisServerArgNames.MAXMEMORY_SCOPE,
+            names = "--maxmemoryScope",
             defaultValue = "global",
             description = "Maxmemory scope: global|per-db."
     )
     public String maxmemoryScope = "global";
 
-    @Option(names = YierdisServerArgNames.MAXMEMORY_POLICY, defaultValue = "noeviction", description = "Maxmemory policy string.")
+    @Option(names = "--maxmemoryPolicy", defaultValue = "noeviction", description = "Maxmemory policy string.")
     public String maxmemoryPolicy = "noeviction";
 
-    @Option(names = YierdisServerArgNames.MAXMEMORY_SAMPLES, defaultValue = "5", description = "Maxmemory samples (policy dependent).")
+    @Option(names = "--maxmemorySamples", defaultValue = "5", description = "Maxmemory samples (policy dependent).")
     public int maxmemorySamples = 5;
 
-    @Option(names = YierdisServerArgNames.EVICTION_TIME_LIMIT_MILLIS, defaultValue = "5", description = "Eviction time budget per tick in milliseconds.")
+    @Option(names = "--evictionTimeLimitMillis", defaultValue = "5", description = "Eviction time budget per tick in milliseconds.")
     public long evictionTimeLimitMillis = 5;
 
-    @Option(names = YierdisServerArgNames.EXPIRE_CLEANUP_TIME_LIMIT_MILLIS, defaultValue = "5", description = "Expire cleanup time budget per tick in milliseconds.")
+    @Option(names = "--expireCleanupTimeLimitMillis", defaultValue = "5", description = "Expire cleanup time budget per tick in milliseconds.")
     public long expireCleanupTimeLimitMillis = 5;
 
-    @Option(names = YierdisServerArgNames.NATIVE_DEFRAG_ENABLED, description = "Enable DB native allocator defrag during maintenance ticks.")
+    @Option(names = "--nativeDefragEnabled", description = "Enable DB native allocator defrag during maintenance ticks.")
     public boolean nativeDefragEnabled;
 
     @Option(
-            names = YierdisServerArgNames.NATIVE_DEFRAG_MAX_MOVE_BYTES,
+            names = "--nativeDefragMaxMoveBytes",
             defaultValue = "65536",
             description = "Native defrag max bytes to move per maintenance tick."
     )
     public long nativeDefragMaxMoveBytes = 64L * 1024L;
 
     @Option(
-            names = YierdisServerArgNames.NATIVE_DEFRAG_MAX_OBJECTS,
+            names = "--nativeDefragMaxObjects",
             defaultValue = "64",
             description = "Native defrag max objects to inspect per maintenance tick."
     )
     public long nativeDefragMaxObjects = 64L;
 
     @Option(
-            names = YierdisServerArgNames.NATIVE_DEFRAG_TIME_LIMIT_MILLIS,
+            names = "--nativeDefragTimeLimitMillis",
             defaultValue = "1",
             description = "Native defrag time budget per maintenance tick in milliseconds."
     )
     public long nativeDefragTimeLimitMillis = 1L;
 
     @Option(
-            names = YierdisServerArgNames.NATIVE_SLOT_CAPACITY,
+            names = "--nativeSlotCapacity",
             defaultValue = "0",
             description = "Override DB shared native object slot capacity (0 keeps default)."
     )
     public int nativeSlotCapacity;
 
     @Option(
-            names = YierdisServerArgNames.KEYS_TIME_BUDGET_MILLIS,
+            names = "--keysTimeBudgetMillis",
             defaultValue = "0",
             description = "KEYS time budget in milliseconds (0 disables; use SCAN for large datasets)."
     )
     public long keysTimeBudgetMillis = 0;
 
     @Option(
-            names = YierdisServerArgNames.KEYS_MAX_RESULTS,
+            names = "--keysMaxResults",
             defaultValue = "" + Integer.MAX_VALUE,
             description = "KEYS max results (0 disables KEYS; default unlimited)."
     )

@@ -23,6 +23,7 @@ import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 
@@ -131,7 +132,7 @@ public class YierdisDbConstructionTest {
             AtomicInteger freeCalls = new AtomicInteger();
             StableMemoryBackend backend = recordingFailureBackend(runtime.backend(), operations, freeCalls);
             EntryTable entries = new EntryTable(backend);
-            NativeKeyDirectory directory = new NativeKeyDirectory(backend);
+            NativeKeyDirectory directory = new NativeKeyDirectory(backend, HashSeed.random(), new HashTableMaintenanceRegistry());
             StringRoot strings = new StringRoot(backend);
             NativeKeyDirectory.StagedInsert stagedKey = directory.stageInsert(b("k"));
             EntryHandle entryHandle = entries.allocate(entryRecord(

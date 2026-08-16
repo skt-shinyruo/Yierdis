@@ -41,8 +41,6 @@ transaction state 保存：
 
 生产网络 request 的 retained view 共享不可变 argv 与 reference-counted request-memory lease；heap request 可以通过自身实现提供稳定副本。transaction state 只依赖 `ExecutionRequest.retain()` 和 `retainedBytes()` 合同。
 
-`ExecutionRecord` 属于 change-event API，它把 DB index 与 command record view 绑定起来；transaction queue 不保存 `ExecutionRecord`，也不使用它 replay。
-
 ## `MULTI` 和入队 preflight
 
 `MULTI` 的 handler parse 不访问 session。其 invocation 在 prepare 时检查当前 transaction 是否已 active；正常时返回一个 prepared action。只有 executor 完成 reply reservation 并执行该 action，`tx.begin()` 才清理旧状态、设置 active 并返回 `OK`。
@@ -101,7 +99,7 @@ queue 条数或字节超限由 `TransactionState.tryEnqueue(...)` 返回 `ERR Tr
 
 1. `tx.drain()` 取出 retained requests，同时重置 active、aborted 和 queue accounting；
 2. 对每个 request 取得或动态创建 child `PreparedCommand`；
-3. 每个 child 都使用独立的 `CommandExecutionContext.forRequest(session, request)`；
+3. 每个 child 都使用独立的 `CommandExecutionContext.forSession(session)`；
 4. child execute 返回 `CommandResult`，外层收集其中的语义 `RedisReply`；
 5. child 的顶层 `ControlError` 转成可放入 `EXEC` array 的普通 error；
 6. 所有 child reply 聚合为一个 `RedisReply.Aggregate(ARRAY, ...)`；
@@ -115,7 +113,7 @@ queue 条数或字节超限由 `TransactionState.tryEnqueue(...)` 返回 `ERR Tr
 - 同一个 `CommandArity` 和 `handler.parse(CommandArgs)`；
 - `CommandInvocation.prepare(session)`；
 - `PreparedCommand` validation/execution 语义；reply reservation 由外层 `PreparedExec` 统一拥有；
-- 请求级 `MutationContext` 与 DB commit path。
+- 相同的 DB mutation path。
 
 所以 `EXEC` 没有第二套命令解释器，也没有 child reply writer。child 产生 semantic results，只有外层 executor 的 renderer 接触 `RedisReplyWriter`。
 

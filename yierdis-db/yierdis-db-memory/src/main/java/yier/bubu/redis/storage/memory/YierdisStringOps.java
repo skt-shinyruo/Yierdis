@@ -7,7 +7,6 @@ import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
-import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.PreparedMutation;
@@ -56,28 +55,17 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
     @Override
     public WriteResult<SetStringValue> set(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption) {
-        return set(MutationContext.none(), keyBytes, value, mode, expireOption);
-    }
-
-    WriteResult<SetStringValue> set(
-            MutationContext context,
-            byte[] keyBytes,
-            BytesSlice value,
-            SetMode mode,
-            ExpireOption expireOption
-    ) {
-        return setInternal(context, keyBytes, value, mode, expireOption, false);
+        return setInternal(keyBytes, value, mode, expireOption, false);
     }
 
     private WriteResult<SetStringValue> setInternal(
-            MutationContext context,
             byte[] keyBytes,
             BytesSlice value,
             SetMode mode,
             ExpireOption expireOption,
             boolean returnOldValue
     ) {
-        kernel.execute(DbUse.ownerCheck());
+        kernel.checkOwner();
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
         kernel.reclaimExpiredBeforeMutation(keyBytes, now);
@@ -91,11 +79,6 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
         final long estimatedUpperBound = upperBound;
 
         return kernel.execute(new MutationUse<WriteResult<SetStringValue>>() {
-            @Override
-            public MutationContext context() {
-                return context;
-            }
-
             @Override
             public long upperBoundBytes() {
                 long nativeUpperBound = addSaturating(
@@ -206,7 +189,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
             ExpireOption expireOption,
             boolean returnOldValue
     ) {
-        kernel.execute(DbUse.ownerCheck());
+        kernel.checkOwner();
         Objects.requireNonNull(keyBytes, "keyBytes");
         byte[] preparedKey = Arrays.copyOf(keyBytes, keyBytes.length);
         byte[] preparedValue = bytesOf(value);
@@ -235,43 +218,19 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
     @Override
     public WriteResult<Boolean> setString(byte[] keyBytes, byte[] value, SetMode mode, ExpireOption expireOption) {
-        return setString(MutationContext.none(), keyBytes, value, mode, expireOption);
-    }
-
-    WriteResult<Boolean> setString(
-            MutationContext context,
-            byte[] keyBytes,
-            byte[] value,
-            SetMode mode,
-            ExpireOption expireOption
-    ) {
-        WriteResult<SetStringValue> result = set(context, keyBytes, sliceOf(value), mode, expireOption);
+        WriteResult<SetStringValue> result = set(keyBytes, sliceOf(value), mode, expireOption);
         return WriteResult.of(result.value().applied(), result.mutationOutcome());
     }
 
     @Override
     public WriteResult<Boolean> setString(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption) {
-        return setString(MutationContext.none(), keyBytes, value, mode, expireOption);
-    }
-
-    WriteResult<Boolean> setString(
-            MutationContext context,
-            byte[] keyBytes,
-            BytesSlice value,
-            SetMode mode,
-            ExpireOption expireOption
-    ) {
-        WriteResult<SetStringValue> result = set(context, keyBytes, value, mode, expireOption);
+        WriteResult<SetStringValue> result = set(keyBytes, value, mode, expireOption);
         return WriteResult.of(result.value().applied(), result.mutationOutcome());
     }
 
     @Override
     public WriteResult<Long> append(byte[] keyBytes, BytesSlice value) {
-        return append(MutationContext.none(), keyBytes, value);
-    }
-
-    WriteResult<Long> append(MutationContext context, byte[] keyBytes, BytesSlice value) {
-        kernel.execute(DbUse.ownerCheck());
+        kernel.checkOwner();
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
         kernel.reclaimExpiredBeforeMutation(keyBytes, now);
@@ -281,11 +240,6 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 suffix.length
         );
         return kernel.execute(new MutationUse<WriteResult<Long>>() {
-            @Override
-            public MutationContext context() {
-                return context;
-            }
-
             @Override
             public long upperBoundBytes() {
                 int replacementLength = Math.addExact(
@@ -375,11 +329,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
     @Override
     public WriteResult<Integer> setBit(byte[] keyBytes, long offset, int value) {
-        return setBit(MutationContext.none(), keyBytes, offset, value);
-    }
-
-    WriteResult<Integer> setBit(MutationContext context, byte[] keyBytes, long offset, int value) {
-        kernel.execute(DbUse.ownerCheck());
+        kernel.checkOwner();
         Objects.requireNonNull(keyBytes, "keyBytes");
         validateBitValue(value);
         int requiredLen = requiredBitLength(offset);
@@ -392,11 +342,6 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 (int) growth
         );
         return kernel.execute(new MutationUse<WriteResult<Integer>>() {
-            @Override
-            public MutationContext context() {
-                return context;
-            }
-
             @Override
             public long upperBoundBytes() {
                 return withScopeBookkeeping(Math.max(
@@ -474,21 +419,12 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
     @Override
     public WriteResult<Long> incrBy(byte[] keyBytes, long delta) {
-        return incrBy(MutationContext.none(), keyBytes, delta);
-    }
-
-    WriteResult<Long> incrBy(MutationContext context, byte[] keyBytes, long delta) {
-        kernel.execute(DbUse.ownerCheck());
+        kernel.checkOwner();
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
         kernel.reclaimExpiredBeforeMutation(keyBytes, now);
         long estimatedUpperBound = YierdisDbMemoryEstimator.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, 32);
         return kernel.execute(new MutationUse<WriteResult<Long>>() {
-            @Override
-            public MutationContext context() {
-                return context;
-            }
-
             @Override
             public long upperBoundBytes() {
                 return withScopeBookkeeping(Math.max(
@@ -551,52 +487,52 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
     @Override
     public byte[] getStringBytes(byte[] keyBytes) {
-        return kernel.execute(DbUse.read(scope -> {
+        return kernel.read(scope -> {
             EntryRecord record = liveTouchedStringRecord(scope, keyBytes);
             if (record == null) {
                 return null;
             }
             return copyStringBytes(record);
-        }));
+        });
     }
 
     @Override
     public ByteValue getStringValue(BytesView keyView) {
-        return kernel.execute(DbUse.read(scope -> {
+        return kernel.read(scope -> {
             EntryRecord record = liveTouchedStringRecord(scope, keyView);
             if (record == null) {
                 return ByteValue.nullValue();
             }
             return stringRoot.retainedValue(requireStringHandle(record));
-        }));
+        });
     }
 
     @Override
     public long strlen(BytesView keyView) {
-        return kernel.execute(DbUse.read(scope -> {
+        return kernel.read(scope -> {
             EntryRecord record = liveTouchedStringRecord(scope, keyView);
             if (record == null) {
                 return 0L;
             }
             return (long) stringRoot.length(requireStringHandle(record));
-        }));
+        });
     }
 
     @Override
     public int getBit(BytesView keyView, long offset) {
-        return kernel.execute(DbUse.read(scope -> {
+        return kernel.read(scope -> {
             bitByteIndex(offset);
             EntryRecord record = liveTouchedStringRecord(scope, keyView);
             if (record == null) {
                 return 0;
             }
             return getBit(requireStringHandle(record), offset);
-        }));
+        });
     }
 
     @Override
     public long bitcount(BytesView keyView) {
-        return kernel.execute(DbUse.read(scope -> {
+        return kernel.read(scope -> {
             EntryRecord record = liveTouchedStringRecord(scope, keyView);
             if (record == null) {
                 return 0L;
@@ -606,12 +542,12 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 return 0L;
             }
             return bitcountRange(bytes, 0, bytes.length - 1);
-        }));
+        });
     }
 
     @Override
     public long bitcount(BytesView keyView, long start, long end) {
-        return kernel.execute(DbUse.read(scope -> {
+        return kernel.read(scope -> {
             EntryRecord record = liveTouchedStringRecord(scope, keyView);
             if (record == null) {
                 return 0L;
@@ -643,7 +579,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 return 0L;
             }
             return bitcountRange(bytes, (int) s, (int) ed);
-        }));
+        });
     }
 
     private EntryRecord liveTouchedStringRecord(YierdisDbKernel scope, byte[] keyBytes) {
@@ -1144,7 +1080,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
         @Override
         public boolean isCurrent() {
-            kernel.execute(DbUse.ownerCheck());
+            kernel.checkOwner();
             PreparedEntryState current = preparedEntryState(keyBytes);
             return Objects.equals(expectedState.entryHandle(), current.entryHandle())
                     && expectedState.version() == current.version()
@@ -1152,12 +1088,10 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
         }
 
         @Override
-        public MutationOutcome commit(MutationContext context) {
-            kernel.execute(DbUse.ownerCheck());
-            Objects.requireNonNull(context, "context");
+        public MutationOutcome commit() {
+            kernel.checkOwner();
             requireCommittable();
             WriteResult<SetStringValue> result = set(
-                    context,
                     keyBytes,
                     sliceOf(valueBytes),
                     mode,

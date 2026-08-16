@@ -5,8 +5,6 @@ import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbReads;
 import yier.bubu.redis.storage.api.DbWrites;
 import yier.bubu.redis.storage.api.MemoryOps;
-import yier.bubu.redis.common.command.MutationContext;
-
 import java.util.Objects;
 
 /**
@@ -14,11 +12,9 @@ import java.util.Objects;
  */
 public final class CommandDb {
     private final DbEngine engine;
-    private final MutationContext mutationContext;
 
-    CommandDb(DbEngine engine, MutationContext mutationContext) {
+    CommandDb(DbEngine engine) {
         this.engine = Objects.requireNonNull(engine, "engine");
-        this.mutationContext = mutationContext;
     }
 
     public DbReads reads() {
@@ -26,8 +22,7 @@ public final class CommandDb {
     }
 
     public DbWrites writes() {
-        DbWrites writes = engine.writes();
-        return mutationContext == null ? writes : writes.withMutationContext(mutationContext);
+        return engine.writes();
     }
 
     public MemoryOps memory() {
@@ -35,7 +30,6 @@ public final class CommandDb {
     }
 
     public DbLifecycleOps lifecycle() {
-        DbLifecycleOps lifecycle = engine.lifecycle();
-        return mutationContext == null ? lifecycle : lifecycle.withMutationContext(mutationContext);
+        return engine.lifecycle();
     }
 }

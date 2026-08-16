@@ -27,8 +27,6 @@ public class ProductionHardeningSoakTest {
     private static final long REPLY_GLOBAL_BYTES = 2L * 1024L * 1024L;
     private static final long REPLY_CONNECTION_BYTES = 1L * 1024L * 1024L;
     private static final long REPLY_MAX_BYTES = 512L * 1024L;
-    private static final int COMMIT_MAX_EVENTS = 4_096;
-    private static final long COMMIT_MAX_BYTES = 8L * 1024L * 1024L;
     private static final int LARGE_REPLY_BYTES = 64 * 1024;
     private static final int SOAK_CYCLE_COUNT = 4;
     private static final long WARM_PAGE_BOUND_BYTES = 23L * 64L * 1024L;
@@ -40,7 +38,7 @@ public class ProductionHardeningSoakTest {
         Sample sample = new Sample(
                 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
                 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
-                0L, 0L, 0L, 0L, 0L
+                0L, 0L, 0L
         );
 
         String json = sample.toJson();
@@ -88,7 +86,6 @@ public class ProductionHardeningSoakTest {
         SoakConfig config = SoakConfig.fromSystemProperties();
         List<Sample> samples = new ArrayList<>();
         List<CycleCompletion> completedCycles = new ArrayList<>();
-        AtomicLong delayedCommitCallbacks = new AtomicLong();
         AtomicLong replySequence = new AtomicLong();
         Path report = reportPath(config);
         Throwable failure = null;
@@ -96,14 +93,6 @@ public class ProductionHardeningSoakTest {
 
         YierdisServerBootstrap server = YierdisServerBootstrap.startForTests(
                 executionEngine -> executionEngine,
-                builder -> builder
-                        .changeSink(event -> {
-                            delayedCommitCallbacks.incrementAndGet();
-                            LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1L));
-                        })
-                        .commitStreamMaxEvents(COMMIT_MAX_EVENTS)
-                        .commitStreamMaxRetainedBytes(COMMIT_MAX_BYTES)
-                        .commitStreamShutdownTimeoutMillis(5_000L),
                 serverArgs()
         );
         InboundMemoryBudget inbound = server.inboundMemoryBudgetForTests();
@@ -162,7 +151,6 @@ public class ProductionHardeningSoakTest {
                         }
 
                         cleanupCycle(client, replySequence, prefix);
-                        awaitCommitDrain(client);
                         awaitCycleOwnership(inbound, outbound, replyStats, children);
                         Sample completionSample = sample(
                                 client,
@@ -190,11 +178,9 @@ public class ProductionHardeningSoakTest {
 
                     Assert.assertEquals("worker must stay responsive", "+PONG\r\n", execute(client, "PING"));
                     replySequence.incrementAndGet();
-                    awaitCommitDrain(client);
                     assertNoSustainedMaterialRssGrowth(completedCycles);
                     Assert.assertEquals("soak must complete each configured cycle", SOAK_CYCLE_COUNT, completedCycles.size());
                     Assert.assertTrue("soak must emit multiple samples", samples.size() >= SOAK_CYCLE_COUNT);
-                    Assert.assertTrue("commit sink delay was not exercised", delayedCommitCallbacks.get() > 0L);
                 }
                 awaitTerminalOwnership(inbound, outbound, replyStats, children);
             }
@@ -213,7 +199,6 @@ public class ProductionHardeningSoakTest {
                     samples,
                     completedCycles,
                     replySequence.get(),
-                    delayedCommitCallbacks.get(),
                     finalOwnership,
                     failure
             );
@@ -400,7 +385,6 @@ public class ProductionHardeningSoakTest {
             List<Sample> samples
     ) throws IOException {
         Map<String, Long> memory = numericInfo(execute(client, "INFO", "memory"));
-        Map<String, Long> stats = numericInfo(execute(client, "INFO", "stats"));
         InboundMemoryBudgetStats inboundStats = inbound.stats();
         OutboundMemoryBudgetStats outboundStats = outbound.stats();
         ReplyEgressStats.Snapshot egress = replyStats.snapshot();
@@ -411,18 +395,13 @@ public class ProductionHardeningSoakTest {
                 required(memory, "yierdis_offheap_used_bytes"),
                 required(memory, "yierdis_maxmemory_used_bytes"),
                 inboundStats.reservedBytes(),
-                required(stats, "yierdis_commit_stream_reserved_events"),
-                required(stats, "yierdis_commit_stream_reserved_bytes"),
                 outboundStats.reservedBytes(),
                 outboundStats.allocatedBytes(),
                 outboundStats.activeSlots(),
                 egress.activeSources(),
                 egress.activeChunks(),
                 children.activeChannelCount(),
-                saturatedAdd(
-                        saturatedAdd(inboundStats.rejectedConnections(), outboundStats.capacityRejects()),
-                        required(stats, "yierdis_commit_stream_rejected_writes")
-                ),
+                saturatedAdd(inboundStats.rejectedConnections(), outboundStats.capacityRejects()),
                 replySequence,
                 readRssBytes(),
                 required(memory, "yierdis_native_metadata_committed_bytes"),
@@ -450,10 +429,6 @@ public class ProductionHardeningSoakTest {
                 sample.outboundReservedBytes() <= REPLY_GLOBAL_BYTES);
         Assert.assertTrue("outbound allocated bytes exceeded reservation: " + sample,
                 sample.outboundAllocatedBytes() <= sample.outboundReservedBytes());
-        Assert.assertTrue("commit stream event capacity exceeded: " + sample,
-                sample.commitReservedEvents() <= COMMIT_MAX_EVENTS);
-        Assert.assertTrue("commit stream byte capacity exceeded: " + sample,
-                sample.commitReservedBytes() <= COMMIT_MAX_BYTES);
         Assert.assertTrue("maxmemory usage exceeded configured limit: " + sample,
                 sample.maxmemoryUsedBytes() <= MAXMEMORY_BYTES);
     }
@@ -541,23 +516,6 @@ public class ProductionHardeningSoakTest {
         Assert.fail("slow reader ownership did not converge: outbound=" + outbound.stats()
                 + ", reply=" + replyStats.snapshot()
                 + ", children=" + children.activeChannelCount());
-    }
-
-    private static void awaitCommitDrain(Socket client) throws IOException, InterruptedException {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5L);
-        while (System.nanoTime() < deadline) {
-            String frame = execute(client, "INFO", "stats");
-            String body = RespTcpTestSupport.bulkPayload(frame);
-            Assert.assertFalse("commit stream worker failed: " + body, body.contains("yierdis_commit_stream_state:FAILED"));
-            Map<String, Long> stats = numericInfo(frame);
-            if (required(stats, "yierdis_commit_stream_reserved_events") == 0L
-                    && required(stats, "yierdis_commit_stream_reserved_bytes") == 0L
-                    && required(stats, "yierdis_commit_stream_callback_active") == 0L) {
-                return;
-            }
-            Thread.sleep(10L);
-        }
-        Assert.fail("commit stream did not drain before shutdown");
     }
 
     private static String execute(Socket client, String... command) throws IOException {
@@ -707,7 +665,6 @@ public class ProductionHardeningSoakTest {
             List<Sample> samples,
             List<CycleCompletion> completedCycles,
             long replySequence,
-            long delayedCommitCallbacks,
             FinalOwnership finalOwnership,
             Throwable failure
     ) throws IOException {
@@ -725,7 +682,7 @@ public class ProductionHardeningSoakTest {
         for (CycleCompletion completion : completedCycles) {
             lines.add(completion.toJson());
         }
-        lines.add(finalOwnership.toJson(replySequence, delayedCommitCallbacks, failure));
+        lines.add(finalOwnership.toJson(replySequence, failure));
         Files.write(report, lines, StandardCharsets.UTF_8);
     }
 
@@ -757,8 +714,6 @@ public class ProductionHardeningSoakTest {
             long nativeBytes,
             long maxmemoryUsedBytes,
             long inboundReservedBytes,
-            long commitReservedEvents,
-            long commitReservedBytes,
             long outboundReservedBytes,
             long outboundAllocatedBytes,
             long activeReplySlots,
@@ -777,7 +732,7 @@ public class ProductionHardeningSoakTest {
         private long[] numericValues() {
             return new long[]{
                     elapsedMillis, heapBytes, nativeBytes, maxmemoryUsedBytes, inboundReservedBytes,
-                    commitReservedEvents, commitReservedBytes, outboundReservedBytes, outboundAllocatedBytes,
+                    outboundReservedBytes, outboundAllocatedBytes,
                     activeReplySlots, activeReplySources, activeReplyChunks, childChannels, rejects, orderingSequence,
                     rssBytes, nativeMetadataCommittedBytes, nativeDataCommittedBytes, nativeLiveObjects,
                     nativeLiveRegions, cycle
@@ -788,8 +743,8 @@ public class ProductionHardeningSoakTest {
             return String.format(
                     Locale.ROOT,
                     "{\"type\":\"sample\",\"elapsedMillis\":%d,\"heapBytes\":%d,\"nativeBytes\":%d,"
-                            + "\"maxmemoryUsedBytes\":%d,\"inboundReservedBytes\":%d,\"commitReservedEvents\":%d,"
-                            + "\"commitReservedBytes\":%d,\"outboundReservedBytes\":%d,\"outboundAllocatedBytes\":%d,"
+                            + "\"maxmemoryUsedBytes\":%d,\"inboundReservedBytes\":%d,"
+                            + "\"outboundReservedBytes\":%d,\"outboundAllocatedBytes\":%d,"
                             + "\"activeReplySlots\":%d,\"activeReplySources\":%d,\"activeReplyChunks\":%d,"
                             + "\"childChannels\":%d,\"rejects\":%d,\"orderingSequence\":%d,\"rssBytes\":%d,"
                             + "\"nativeMetadataCommittedBytes\":%d,\"nativeDataCommittedBytes\":%d,"
@@ -799,8 +754,6 @@ public class ProductionHardeningSoakTest {
                     nativeBytes,
                     maxmemoryUsedBytes,
                     inboundReservedBytes,
-                    commitReservedEvents,
-                    commitReservedBytes,
                     outboundReservedBytes,
                     outboundAllocatedBytes,
                     activeReplySlots,
@@ -897,7 +850,7 @@ public class ProductionHardeningSoakTest {
             }
         }
 
-        private String toJson(long replySequence, long delayedCommitCallbacks, Throwable failure) {
+        private String toJson(long replySequence, Throwable failure) {
             return "{\"type\":\"final\",\"inboundReservedBytes\":" + inboundReservedBytes
                     + ",\"inboundReadCreditBytes\":" + inboundReadCreditBytes
                     + ",\"inboundRetainedInputBytes\":" + inboundRetainedInputBytes
@@ -909,7 +862,6 @@ public class ProductionHardeningSoakTest {
                     + ",\"activeReplyChunks\":" + activeReplyChunks
                     + ",\"childChannels\":" + childChannels
                     + ",\"orderingSequence\":" + replySequence
-                    + ",\"delayedCommitCallbacks\":" + delayedCommitCallbacks
                     + ",\"failure\":\"" + json(failure == null ? "" : failure.toString()) + "\"}";
         }
 

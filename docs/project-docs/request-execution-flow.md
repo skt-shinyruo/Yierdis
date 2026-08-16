@@ -100,7 +100,7 @@ CommandExecutor
 3. 让 reply slot 预留 encoded bytes 与 retained source bytes；
 4. 若容量暂时不可用，保留同一个 prepared command，暂停该连接输入并等待恢复；
 5. 容量成功后调用 `validateBeforeExecute()`；若结果为 `STALE`，关闭旧对象并重新 prepare；
-6. 创建仅含 session 与请求级 `MutationContext` 的 `CommandExecutionContext`，执行一次 `PreparedCommand.execute(context)`；
+6. 创建仅含 session 的 `CommandExecutionContext`，执行一次 `PreparedCommand.execute(context)`；
 7. 得到 `CommandResult` 后创建 `RedisReplyWriter`，由 `RedisReplyRenderer` 同步渲染其中的 `RedisReply`；
 8. 根据 `CommandResult.closeAfterReply()` 标记连接与 reply slot，最后关闭 prepared command 和 request。
 
@@ -149,10 +149,10 @@ Netty ByteBuf
 1. `StringCommands` 的 handler 使用 `CommandArgs` 解析 `NX/XX/GET/EX/PX/EXAT/PXAT/KEEPTTL`，得到不可变参数并返回 invocation；
 2. invocation 根据 session 选择 DB，调用 typed write ops 准备 mutation，并从 preview 构造语义 `RedisReply` 与 reservation shape；
 3. executor 预留回复容量并验证 mutation 仍为 current；
-4. `PreparedCommand.execute(...)` 用请求级 `MutationContext` 提交 mutation，返回 `CommandResult`；
+4. `PreparedCommand.execute(...)` 提交 prepared mutation，返回 `CommandResult`；
 5. executor 统一渲染结果，随后关闭 prepared mutation owner。
 
-可见性提交仍由 `YierdisDbMutationExecutor` 与 `YierdisDbKeyLifecycle` 维护 storage、TTL、旧值释放和 change-event reservation；命令层不直接操作 allocator。
+可见性提交仍由 `YierdisDbMutationExecutor` 与 `YierdisDbKeyLifecycle` 维护 storage、TTL、memory ledger 和旧值释放；命令层不直接操作 allocator。
 
 ## 语义 streamed reply 的所有权
 

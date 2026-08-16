@@ -52,10 +52,7 @@ public final class FastTestClient implements AutoCloseable {
                     if (prepared.validateBeforeExecute() == ValidationResult.STALE) {
                         continue;
                     }
-                    CommandResult result;
-                    try (CommandExecutionContext execution = CommandExecutionContext.forRequest(session, request)) {
-                        result = prepared.execute(execution);
-                    }
+                    CommandResult result = prepared.execute(CommandExecutionContext.forSession(session));
                     RedisReplyRenderer.render(result.reply(), writer);
                     if (result.closeAfterReply()) {
                         writer.requestCloseAfterReply();

@@ -11,7 +11,6 @@ flowchart LR
   serverMain["yierdis-server-main"]
   serverExecutor["yierdis-server-executor"]
   serverRuntime["yierdis-server-runtime"]
-  serverRuntimeApi["yierdis-server-runtime-api"]
   serverApi["yierdis-server-api"]
   netty["yierdis-networking-netty"]
   resp["yierdis-networking-resp"]
@@ -30,26 +29,20 @@ flowchart LR
 
   serverMain --> serverApi
   serverMain --> dbApi
-  serverMain --> dbMemory
   serverMain --> commandApi
   serverMain --> commandCore
   serverMain --> commandBuiltin
   serverMain --> resp
   serverMain --> netty
   serverMain --> serverRuntime
-  serverMain --> serverRuntimeApi
   serverMain --> serverExecutor
-  serverMain --> memoryFfm
-  serverMain --> memoryApi
 
   serverExecutor --> serverApi
   serverApi --> commonBytes
   serverApi --> commonCommand
 
-  serverRuntime --> dbApi
-  serverRuntime --> serverRuntimeApi
-  serverRuntimeApi --> serverApi
-  serverRuntimeApi --> dbApi
+  serverRuntime --> dbMemory
+  serverRuntime --> memoryFfm
 
   netty --> resp
   netty --> serverApi
@@ -150,9 +143,9 @@ CommandExecutor
   -> CommandResult -> RedisReplyRenderer
 ```
 
-`yierdis-server-main` 负责最终组装，是真正的 composition root。具体的 `EngineSession` 也位于这里：它是每条连接的 command session owner，持有 DB 选择、客户端 metadata、认证、RESP 协商和事务队列状态，但稳定接口仍由 `yierdis-server-api` 中的 `CommandSession` 定义。`ServerCommandComposition` 在这里把 builtin、server commands、registry 和 `CommandDispatcher` 组装到一起，bootstrap 再把 `dispatcher::prepare` 接到 `CommandExecutor`。生产启动路径也在这里用 `YierdisFfmStableMemoryBackend::new` 构造 `YierdisDbEngineFactory`，再通过 `YierdisInstanceConfig` 注入 runtime；每个 DB create 都得到独立 backend，maxmemory scope 只决定预算协调方式。
+`yierdis-server-main` 负责最终组装，是真正的 composition root。具体的 `EngineSession` 也位于这里：它是每条连接的 command session owner，持有 DB 选择、客户端 metadata、认证、RESP 协商和事务队列状态，但稳定接口仍由 `yierdis-server-api` 中的 `CommandSession` 定义。`ServerCommandComposition` 在这里把 builtin、server commands、registry 和 `CommandDispatcher` 组装到一起，bootstrap 再把 `dispatcher::prepare` 接到 `CommandExecutor`，并把 server 配置映射成 `YierdisInstanceConfig`。
 
-`YierdisInstance.create(config)` 是 strict runtime 入口，要求调用方已经提供 `DbEngineFactory` 或 `EngineFactoryBinding`。embedded/test 同样显式组装这些依赖；runtime 本身不选择默认 DB backend。
+`YierdisInstance.create(config)` 是固定的 runtime 组合入口：它直接使用 `YierdisFfmStableMemoryBackend` 和 `YierdisDbEngineFactory` 创建各 DB；每个 DB 得到独立 backend，maxmemory scope 只决定预算协调方式。
 
 ## command 车道
 

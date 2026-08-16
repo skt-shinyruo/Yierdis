@@ -22,14 +22,6 @@ public final class SetRoot implements TypeRoot {
     private final HashTableMaintenanceRegistry maintenanceRegistry;
     private boolean closed;
 
-    public SetRoot(StableMemoryBackend allocator) {
-        this(allocator, HashSeed.random());
-    }
-
-    public SetRoot(StableMemoryBackend allocator, HashSeed hashSeed) {
-        this(allocator, hashSeed, null);
-    }
-
     public SetRoot(
             StableMemoryBackend allocator,
             HashSeed hashSeed,

@@ -6,6 +6,8 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.api.result.ByteValueSink;
+import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -16,7 +18,7 @@ public class SetValueTest {
     public void hashtableEncodingDoesNotAllocateValueSlots() throws ReflectiveOperationException {
         try (TestBackend runtime = TestBackend.open("set-without-value-slots");
              StableMemoryBackend allocator = runtime.backend()) {
-            SetValue set = new SetValue(allocator);
+            SetValue set = new SetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 List<byte[]> members = List.of(b("alpha"));
                 long heapUpperBound = SetValue.preparedNewHeapUpperBound(members);
@@ -36,7 +38,7 @@ public class SetValueTest {
     public void nativeSetKeepsIntsetMembersAndUpgradesToNativeHashtable() {
         try (TestBackend runtime = TestBackend.open("set-test");
              StableMemoryBackend allocator = runtime.backend()) {
-            SetValue sv = new SetValue(allocator);
+            SetValue sv = new SetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 Assert.assertEquals(ValueEncoding.SET_INTSET, sv.encoding());
 
@@ -61,7 +63,7 @@ public class SetValueTest {
     public void nativeSetStreamsHashtableMembersThroughNativeBytesSlice() {
         try (TestBackend runtime = TestBackend.open("set-stream-test");
              StableMemoryBackend allocator = runtime.backend()) {
-            SetValue sv = new SetValue(allocator);
+            SetValue sv = new SetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 Assert.assertEquals(2, sv.addAll(List.of(b("alpha"), b("beta"))));
                 RecordingSink out = new RecordingSink();

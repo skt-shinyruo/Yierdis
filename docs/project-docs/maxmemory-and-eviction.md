@@ -38,11 +38,9 @@ estimate upper bound
      -> NativeAllocationScope.begin()
      -> plan.prepare()
      -> ledger.reconcile(preparedPeak)
-     -> commitStream.reserve() when required
      -> prepared.commit()
      -> allocationScope.promote()
      -> ledger.commit(actualDelta)
-     -> commitStream.publish()
      -> prepared.releaseSuperseded()
      -> optional native page trim
 ```
@@ -54,14 +52,14 @@ estimate upper bound
 - collection 或 string 可能触发编码升级；
 - 覆盖写可能最终是 shrink、no-op 或负 delta。
 
-`upperBoundBytes()` 解决“能不能先让这次写动起来”，prepare 后实测的 native growth 加 staged heap topology 用来收窄 reservation，`actualDeltaBytes()` 解决“最后到底长了多少/缩了多少”。需要 commit stream 时必须在 commit 前 reserve publication capacity；提交后的固定顺序是 allocation promote、ledger settle、stream publish、release superseded，最后才根据提示尝试 trim。
+`upperBoundBytes()` 解决“能不能先让这次写动起来”，prepare 后实测的 native growth 加 staged heap topology 用来收窄 reservation，`actualDeltaBytes()` 解决“最后到底长了多少/缩了多少”。提交后的固定顺序是 allocation promote、ledger settle、release superseded，最后才根据提示尝试 trim。
 
 `MutationExecutorReservationTest` 覆盖了两个关键点：
 
 - 预算不过关时，`prepare()` 根本不会执行；
-- commit 前 prepare/校验失败时，prepared resources、allocation scope、stream reservation 和 ledger reservation 都会 abort/rollback，不会污染下一次写入。
+- commit 前 prepare/校验失败时，prepared resources、allocation scope 和 ledger reservation 都会 abort/rollback，不会污染下一次写入。
 
-`prepared.commit()` 开始之后不再存在“确认未生效”的安全回滚前提。此后的异常会触发 post-commit settle：executor best-effort promote allocation、settle ledger、release superseded resources，并把未完成的 stream reservation 标为 commit 后失败；DB 进入 degraded，调用方收到 result-unknown，而不是把异常简单映射成一次确定未执行的 OOM。只有 commit 开始前的 capacity rejection 才能安全返回 Redis 风格 OOM。
+`prepared.commit()` 开始之后不再存在“确认未生效”的安全回滚前提。此后的异常会触发 post-commit settle：executor best-effort promote allocation、settle ledger、release superseded resources；DB 进入 degraded，调用方收到 result-unknown，而不是把异常简单映射成一次确定未执行的 OOM。只有 commit 开始前的 capacity rejection 才能安全返回 Redis 风格 OOM。
 
 ## per-DB scope 的判断顺序
 
@@ -116,10 +114,10 @@ maintenance 时的顺序由 `YierdisInstanceRuntimeAccess.maintenanceTick()` 固
 
 还有两条收敛规则：
 
-- cleanup 先于 eviction。候选 key 如果已经过期，会先走 `removeIfExpired(...)`，它算 `EXPIRED`，不是 `EVICTED`。
-- 真正 eviction 时，`YierdisDbMaxmemorySupport` 调用 `YierdisDbKernel.evict(...)`；reclamation plan 在 prepare 阶段复制稳定 key bytes，commit 时移除 directory entry 并释放完整 entry/value/key graph，随后结算 ledger，并通过已预留的 commit stream 发布 synthetic `DEL key`，`kind=EVICTED`。
+- cleanup 先于 eviction。候选 key 如果已经过期，会先走 expiration reclamation，不再进入 victim 淘汰。
+- 真正 eviction 时，`YierdisDbMaxmemorySupport` 调用 `YierdisDbKernel.evict(...)`；reclamation plan 在 prepare 阶段复制稳定 key bytes，commit 时移除 directory entry 并释放完整 entry/value/key graph，随后结算 ledger。
 
-所以“淘汰”和“过期”都会删除 key，但 change-event kind、触发原因和测试入口不同。
+所以“淘汰”和“过期”都会删除 key，但触发原因和测试入口不同。
 
 `PreparedDbMutation.shouldTrimNativePagesAfterCommit()` 和 snapshot 的 `nativeReclaimableBytes` 都只是回收候选提示，不表示相应字节已经离开 committed footprint。`trimMemory(...)` 返回的 `MemoryReclaimResult` 记录本次检查、实际回收和停止原因；admission 仍要在 trim 后重新采样 owned snapshot，不能直接用 reclaimable estimate 或一次 trim hint 推导“已经低于 maxmemory”。
 
@@ -138,7 +136,7 @@ maintenance 时的顺序由 `YierdisInstanceRuntimeAccess.maintenanceTick()` 固
 - commit 开始前不能把半成品 mutation 留在 DB 内部，reservation 必须 rollback；
 - commit 开始后的失败必须走 post-commit settle/result-unknown，不能宣称 mutation 一定未发生。
 
-主动过期、random/LRU eviction candidates 和 synthetic delete 都使用 directory 中的 native-backed key handles。删除前复制稳定 key bytes 是为了 change event 和 output ownership，不表示 DB 内部仍有 heap keyspace。
+主动过期和 random/LRU eviction candidates 都使用 directory 中的 native-backed key handles。删除前复制稳定 key bytes 只服务于本次 reclamation plan，不表示 DB 内部仍有 heap keyspace。
 
 `prepareWrite(0)` 是 maintenance-only enforcement 的关键特例：在 `noeviction` 下它不会因为“当前已经超限”而阻止不增长的维护操作。
 
@@ -153,4 +151,4 @@ maintenance 时的顺序由 `YierdisInstanceRuntimeAccess.maintenanceTick()` 固
 
 ## Independent Capacity Domains
 
-maxmemory protects DB growth and native-backed values. It does not replace ingress admission, bounded commit-stream capacity, or hard outbound reply limits. A successful deletion/eviction can lower DB usage while an existing reply source still owns outbound capacity until its slot reaches a terminal cleanup state. Use [`production-hardening-operations.md`](./production-hardening-operations.md) when correlating `MEMORY STATS` with `INFO stats` during pressure or shutdown.
+maxmemory protects DB growth and native-backed values. It does not replace ingress admission or hard outbound reply limits. A successful deletion/eviction can lower DB usage while an existing reply source still owns outbound capacity until its slot reaches a terminal cleanup state. Use [`production-hardening-operations.md`](./production-hardening-operations.md) when correlating `MEMORY STATS` with `INFO stats` during pressure or shutdown.

@@ -87,23 +87,6 @@ public final class EntryTable implements AutoCloseable {
         backend.free(handle.nativeHandle());
     }
 
-    public int size() {
-        ensureOpen();
-        return Math.toIntExact(backend.stats().objectCount(NativeObjectKind.ENTRY_RECORD));
-    }
-
-    public long nativeBytes() {
-        ensureOpen();
-        return Math.multiplyExact(
-                backend.stats().objectCount(NativeObjectKind.ENTRY_RECORD),
-                NativeStorageLayout.ENTRY_RECORD_BYTES
-        );
-    }
-
-    public void clear() {
-        ensureOpen();
-    }
-
     @Override
     public void close() {
         closed = true;

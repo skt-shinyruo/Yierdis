@@ -13,7 +13,6 @@ import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudgetStats;
-import yier.bubu.redis.runtime.embedded.CommitStreamStats;
 import yier.bubu.redis.runtime.embedded.YierdisInstanceObservability;
 
 import java.nio.charset.StandardCharsets;
@@ -54,16 +53,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     private static final byte[] KEY_INBOUND_BACKPRESSURED = ascii("inbound_backpressured");
     private static final byte[] KEY_INBOUND_REJECTED_CONNECTIONS = ascii("inbound_rejected_connections");
     private static final byte[] KEY_INBOUND_CLOSED = ascii("inbound_closed");
-    private static final byte[] KEY_COMMIT_STREAM_STATE = ascii("commit_stream_state");
-    private static final byte[] KEY_COMMIT_STREAM_RESERVED_EVENTS = ascii("commit_stream_reserved_events");
-    private static final byte[] KEY_COMMIT_STREAM_RESERVED_BYTES = ascii("commit_stream_reserved_bytes");
-    private static final byte[] KEY_COMMIT_STREAM_REJECTED_WRITES = ascii("commit_stream_rejected_writes");
-    private static final byte[] KEY_COMMIT_STREAM_LAST_ASSIGNED_SEQUENCE = ascii("commit_stream_last_assigned_sequence");
-    private static final byte[] KEY_COMMIT_STREAM_LAST_ACKNOWLEDGED_SEQUENCE = ascii("commit_stream_last_acknowledged_sequence");
-    private static final byte[] KEY_COMMIT_STREAM_CALLBACK_ACTIVE = ascii("commit_stream_callback_active");
-    private static final byte[] KEY_COMMIT_STREAM_SHUTDOWN_TIMED_OUT = ascii("commit_stream_shutdown_timed_out");
-    private static final byte[] KEY_COMMIT_STREAM_FIRST_FAILURE_TYPE = ascii("commit_stream_first_failure_type");
-    private static final byte[] KEY_COMMIT_STREAM_FIRST_FAILURE_MESSAGE = ascii("commit_stream_first_failure_message");
     private static final byte[] KEY_REPLY_GLOBAL_CAPACITY_BYTES = ascii("reply_global_capacity_bytes");
     private static final byte[] KEY_REPLY_PER_CONNECTION_CAPACITY_BYTES = ascii("reply_per_connection_capacity_bytes");
     private static final byte[] KEY_REPLY_MAX_TOTAL_BYTES = ascii("reply_max_total_bytes");
@@ -243,9 +232,8 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         addPair(fields, KEY_DEFERRED_FAIR_REPLY_HEADS, stats.deferredFairReplyHeads());
         addPair(fields, KEY_DEFERRED_GLOBAL_REPLY_HEADS, stats.deferredGlobalReplyHeads());
         addInboundStats(fields, snapshot.inbound());
-        addCommitStreamStats(fields, snapshot.commitStream());
         addOutboundStats(fields, snapshot.outbound(), snapshot.egress(), snapshot.liveChildChannels());
-        addHealthPairs(fields, snapshot.health(), snapshot.children(), config.maxClients(), false);
+        addHealthPairs(fields, snapshot.health(), snapshot.children(), config.maxClients());
 
         if (connectionStats == null) {
             return mapReply(fields);
@@ -287,9 +275,8 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         addPair(fields, KEY_DEFERRED_FAIR_REPLY_HEADS, stats.deferredFairReplyHeads());
         addPair(fields, KEY_DEFERRED_GLOBAL_REPLY_HEADS, stats.deferredGlobalReplyHeads());
         addInboundStats(fields, snapshot.inbound());
-        addCommitStreamStats(fields, snapshot.commitStream());
         addOutboundStats(fields, snapshot.outbound(), snapshot.egress(), snapshot.liveChildChannels());
-        addHealthPairs(fields, snapshot.health(), snapshot.children(), config.maxClients(), false);
+        addHealthPairs(fields, snapshot.health(), snapshot.children(), config.maxClients());
         return mapReply(fields);
     }
 
@@ -367,8 +354,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             sb.append("yierdis_native_reclaimable_bytes:").append(memStats.nativeReclaimableBytes()).append("\r\n");
             sb.append("yierdis_native_live_objects:").append(memStats.nativeLiveObjects()).append("\r\n");
             sb.append("yierdis_native_live_regions:").append(memStats.nativeLiveRegions()).append("\r\n");
-            sb.append("yierdis_expired_entries_awaiting_physical_deletion:")
-                    .append(memStats.expiredEntriesAwaitingPhysicalDeletion()).append("\r\n");
             sb.append("yierdis_native_defrag_last_scanned_objects:").append(memStats.nativeDefragLastScannedObjects()).append("\r\n");
             sb.append("yierdis_native_defrag_last_moved_objects:").append(memStats.nativeDefragLastMovedObjects()).append("\r\n");
             sb.append("yierdis_native_defrag_last_moved_bytes:").append(memStats.nativeDefragLastMovedBytes()).append("\r\n");
@@ -386,7 +371,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
 
         if (stats) {
             InboundMemoryBudgetStats inboundStats = snapshot.inbound();
-            CommitStreamStats streamStats = snapshot.commitStream();
             OutboundMemoryBudgetStats outboundStats = snapshot.outbound();
             ReplyEgressStats.Snapshot egressStats = snapshot.egress();
             sb.append("# Stats\r\n");
@@ -404,20 +388,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             sb.append("yierdis_inbound_backpressured:").append(inboundStats.backpressured() ? 1 : 0).append("\r\n");
             sb.append("yierdis_inbound_rejected_connections:").append(inboundStats.rejectedConnections()).append("\r\n");
             sb.append("yierdis_inbound_closed:").append(inboundStats.closed() ? 1 : 0).append("\r\n");
-            sb.append("yierdis_commit_stream_state:").append(streamStats.state()).append("\r\n");
-            sb.append("yierdis_commit_stream_reserved_events:").append(streamStats.reservedEvents()).append("\r\n");
-            sb.append("yierdis_commit_stream_reserved_bytes:").append(streamStats.reservedBytes()).append("\r\n");
-            sb.append("yierdis_commit_stream_rejected_writes:").append(streamStats.rejectedWrites()).append("\r\n");
-            sb.append("yierdis_commit_stream_last_assigned_sequence:").append(streamStats.lastAssignedSequence()).append("\r\n");
-            sb.append("yierdis_commit_stream_last_acknowledged_sequence:")
-                    .append(streamStats.lastAcknowledgedSequence()).append("\r\n");
-            sb.append("yierdis_commit_stream_callback_active:").append(streamStats.callbackActive() ? 1 : 0).append("\r\n");
-            sb.append("yierdis_commit_stream_shutdown_timed_out:")
-                    .append(streamStats.shutdownTimedOut() ? 1 : 0).append("\r\n");
-            sb.append("yierdis_commit_stream_first_failure_type:")
-                    .append(streamStats.firstFailureType() == null ? "" : streamStats.firstFailureType()).append("\r\n");
-            sb.append("yierdis_commit_stream_first_failure_message:")
-                    .append(streamStats.firstFailureMessage() == null ? "" : streamStats.firstFailureMessage()).append("\r\n");
             sb.append("yierdis_reply_global_capacity_bytes:").append(config.replyGlobalCapacityBytes()).append("\r\n");
             sb.append("yierdis_reply_per_connection_capacity_bytes:")
                     .append(config.replyPerConnectionCapacityBytes()).append("\r\n");
@@ -544,9 +514,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         InboundMemoryBudgetStats inbound = inboundStats();
         OutboundMemoryBudgetStats outbound = outboundStats();
         YierdisInstanceObservability runtimeObservability = observability;
-        CommitStreamStats commitStream = runtimeObservability == null
-                ? CommitStreamStats.disabled()
-                : runtimeObservability.commitStreamStats();
         YierdisInstanceObservability.RuntimeHealthSnapshot databaseHealth = runtimeObservability == null
                 ? new YierdisInstanceObservability.RuntimeHealthSnapshot(0, 0, null, null, 0L)
                 : runtimeObservability.healthSnapshot();
@@ -560,12 +527,11 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         if (state == null || state.isBlank()) {
             state = "UNKNOWN";
         }
-        HealthView health = healthView(state, databaseHealth, commitStream, inbound, outbound);
+        HealthView health = healthView(state, databaseHealth, inbound, outbound);
         return new ServerStatsSnapshot(
                 executor.statsSnapshot(),
                 Math.max(0L, System.currentTimeMillis() - startedMillis),
                 inbound,
-                commitStream,
                 outbound,
                 replyEgressStats(),
                 children,
@@ -576,21 +542,17 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     private static HealthView healthView(
             String lifecycleState,
             YierdisInstanceObservability.RuntimeHealthSnapshot databaseHealth,
-            CommitStreamStats commitStream,
             InboundMemoryBudgetStats inbound,
             OutboundMemoryBudgetStats outbound
     ) {
-        boolean commitHealthy = commitStream.state() == yier.bubu.redis.runtime.embedded.CommitStreamState.DISABLED
-                || commitStream.state() == yier.bubu.redis.runtime.embedded.CommitStreamState.RUNNING;
         boolean infrastructureHealthy = "RUNNING".equals(lifecycleState) && !inbound.closed() && !outbound.closed();
-        boolean ready = infrastructureHealthy && databaseHealth.healthy() && commitHealthy;
+        boolean ready = infrastructureHealthy && databaseHealth.healthy();
         return new HealthView(
                 lifecycleState,
                 ready,
                 ready,
                 databaseHealth.databaseCount(),
                 databaseHealth.degradedDatabaseCount(),
-                commitStream.state().name(),
                 databaseHealth.firstFailureType(),
                 databaseHealth.firstFailureMessage()
         );
@@ -598,7 +560,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
 
     private RedisReply healthReply(ServerStatsSnapshot snapshot) {
         List<RedisReply> fields = new ArrayList<>(22);
-        addHealthPairs(fields, snapshot.health(), snapshot.children(), config.maxClients(), true);
+        addHealthPairs(fields, snapshot.health(), snapshot.children(), config.maxClients());
         return mapReply(fields);
     }
 
@@ -606,17 +568,13 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             List<RedisReply> fields,
             HealthView health,
             ChildChannelRegistry.StatsSnapshot child,
-            int maxClients,
-            boolean includeCommitStreamState
+            int maxClients
     ) {
         addPair(fields, KEY_LIFECYCLE_STATE, ascii(health.lifecycleState()));
         addPair(fields, KEY_READY, health.ready ? 1L : 0L);
         addPair(fields, KEY_WRITABLE, health.writable ? 1L : 0L);
         addPair(fields, KEY_DEGRADED_DATABASES, health.degradedDatabases);
         addPair(fields, KEY_DATABASES, health.databases);
-        if (includeCommitStreamState) {
-            addPair(fields, KEY_COMMIT_STREAM_STATE, ascii(health.commitStreamState));
-        }
         addPair(fields, KEY_FIRST_FAILURE_TYPE, ascii(health.firstFailureType));
         addPair(fields, KEY_FIRST_FAILURE_MESSAGE, ascii(health.firstFailureMessage));
         addPair(fields, KEY_TOTAL_CONNECTIONS_RECEIVED, child.acceptedConnections());
@@ -635,7 +593,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         sb.append("writable:").append(health.writable ? 1 : 0).append("\r\n");
         sb.append("databases:").append(health.databases).append("\r\n");
         sb.append("degraded_databases:").append(health.degradedDatabases).append("\r\n");
-        sb.append("commit_stream_state:").append(health.commitStreamState).append("\r\n");
         sb.append("connected_clients:").append(child.activeConnections()).append("\r\n");
         sb.append("total_connections_received:").append(child.acceptedConnections()).append("\r\n");
         sb.append("rejected_connections:").append(child.rejectedConnections()).append("\r\n");
@@ -665,7 +622,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             boolean writable,
             int databases,
             int degradedDatabases,
-            String commitStreamState,
             String firstFailureType,
             String firstFailureMessage
     ) {
@@ -675,7 +631,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             CommandExecutor.StatsSnapshot executor,
             long uptimeMillis,
             InboundMemoryBudgetStats inbound,
-            CommitStreamStats commitStream,
             OutboundMemoryBudgetStats outbound,
             ReplyEgressStats.Snapshot egress,
             ChildChannelRegistry.StatsSnapshot children,
@@ -726,19 +681,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         addPair(fields, KEY_INBOUND_BACKPRESSURED, stats.backpressured() ? 1L : 0L);
         addPair(fields, KEY_INBOUND_REJECTED_CONNECTIONS, stats.rejectedConnections());
         addPair(fields, KEY_INBOUND_CLOSED, stats.closed() ? 1L : 0L);
-    }
-
-    private static void addCommitStreamStats(List<RedisReply> fields, CommitStreamStats stats) {
-        addPair(fields, KEY_COMMIT_STREAM_STATE, ascii(stats.state().name()));
-        addPair(fields, KEY_COMMIT_STREAM_RESERVED_EVENTS, stats.reservedEvents());
-        addPair(fields, KEY_COMMIT_STREAM_RESERVED_BYTES, stats.reservedBytes());
-        addPair(fields, KEY_COMMIT_STREAM_REJECTED_WRITES, stats.rejectedWrites());
-        addPair(fields, KEY_COMMIT_STREAM_LAST_ASSIGNED_SEQUENCE, stats.lastAssignedSequence());
-        addPair(fields, KEY_COMMIT_STREAM_LAST_ACKNOWLEDGED_SEQUENCE, stats.lastAcknowledgedSequence());
-        addPair(fields, KEY_COMMIT_STREAM_CALLBACK_ACTIVE, stats.callbackActive() ? 1L : 0L);
-        addPair(fields, KEY_COMMIT_STREAM_SHUTDOWN_TIMED_OUT, stats.shutdownTimedOut() ? 1L : 0L);
-        addPair(fields, KEY_COMMIT_STREAM_FIRST_FAILURE_TYPE, ascii(stats.firstFailureType()));
-        addPair(fields, KEY_COMMIT_STREAM_FIRST_FAILURE_MESSAGE, ascii(stats.firstFailureMessage()));
     }
 
     private static void addPair(List<RedisReply> fields, byte[] key, byte[] value) {

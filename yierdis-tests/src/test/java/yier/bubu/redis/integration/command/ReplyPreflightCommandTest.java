@@ -563,10 +563,7 @@ public class ReplyPreflightCommandTest {
                 Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
                 ReplyPlan plan = REPLY_SIZER.plan(session, prepared.reservationShape());
                 capacity.reserve(plan);
-                CommandResult result;
-                try (CommandExecutionContext execution = CommandExecutionContext.forRequest(session, request)) {
-                    result = prepared.execute(execution);
-                }
+                CommandResult result = prepared.execute(CommandExecutionContext.forSession(session));
                 RedisReplyRenderer.render(result.reply(), writer);
                 if (result.closeAfterReply()) {
                     writer.requestCloseAfterReply();

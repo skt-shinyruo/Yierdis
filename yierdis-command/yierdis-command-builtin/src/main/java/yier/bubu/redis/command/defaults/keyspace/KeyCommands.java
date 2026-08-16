@@ -56,10 +56,6 @@ public final class KeyCommands implements CommandModule {
             memoryStat("keys_stored_offheap", stats -> stats.keysStoredOffHeap() ? 1L : 0L),
             memoryStat("key_count", YierdisMemoryStats::keyCount),
             memoryStat("expire_count", YierdisMemoryStats::expireCount),
-            memoryStat(
-                    "expired_entries_awaiting_physical_deletion",
-                    YierdisMemoryStats::expiredEntriesAwaitingPhysicalDeletion
-            ),
             memoryStat("keyspace_rehashing", stats -> stats.keyspaceRehashing() ? 1L : 0L),
             memoryStat("keyspace_table0_capacity", YierdisMemoryStats::keyspaceTable0Capacity),
             memoryStat("keyspace_table1_capacity", YierdisMemoryStats::keyspaceTable1Capacity),

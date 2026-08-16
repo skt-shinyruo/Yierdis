@@ -179,15 +179,12 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
                 return ExecutionAttempt.REPREPARE;
             }
 
-            CommandResult result;
-            try (CommandExecutionContext execution = CommandExecutionContext.forRequest(
-                    connection.session(), task.request)) {
-                result = Objects.requireNonNull(
-                        task.prepared.execute(execution),
-                        "prepared command returned null result"
-                );
-                executed = true;
-            }
+            CommandExecutionContext execution = CommandExecutionContext.forSession(connection.session());
+            CommandResult result = Objects.requireNonNull(
+                    task.prepared.execute(execution),
+                    "prepared command returned null result"
+            );
+            executed = true;
             RedisReplyWriter writer = replyWriterFactory.newWriter(
                     connection.session(), task.reply.sink());
             RedisReplyRenderer.render(result.reply(), writer);

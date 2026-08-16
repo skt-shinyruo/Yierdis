@@ -35,6 +35,7 @@ public class FfmPageTrimIntegrationTest {
                     },
                     ignored -> backend.trimEmptyPages(MemoryPressureBudget.unlimited()),
                     () -> backend.memoryUsage().effectiveBytesForMaxmemory(),
+                    () -> null,
                     () -> null
             );
 

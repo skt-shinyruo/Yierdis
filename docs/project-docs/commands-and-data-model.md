@@ -66,7 +66,7 @@ parse 阶段只产生 `CommandInvocation`，不会访问 DB，也不会创建 re
 - `execute(CommandExecutionContext)` 在容量已预留时提交动作，返回 `CommandResult`；
 - `close()` 归还 mutation、DB source、retained request 或其他 owner。
 
-`CommandExecutionContext` 只包含当前 `CommandSession` 与请求级 `MutationContext`。它没有 reply writer。`CommandResult` 则包含语义 `RedisReply` 和 `closeAfterReply` flag。
+`CommandExecutionContext` 只包含当前 `CommandSession`。它没有 reply writer。`CommandResult` 则包含语义 `RedisReply` 和 `closeAfterReply` flag。
 
 `RedisReply.shape()` 是 sealed reply hierarchy 到 `ReplyShape` 的唯一投影权威：根接口用穷尽 switch 覆盖全部 variant，各 variant 只保存语义数据，不再各自重复 shape 映射。`ReplyShapes` 负责 shape 的构造与规范化；`RedisReplyRenderer` 负责遍历语义 reply；RESP sizer 只消费 `ReplyShape`。新增 reply variant 时，这三个职责仍应分别演进。
 
@@ -86,10 +86,10 @@ RESP2 / RESP3 的标量与 aggregate 编码由协议 writer 根据 session versi
 
 ## `CommandSupport` 与 DB capability
 
-`CommandSupport` 是 built-in command 的公共边界。它持有 `YierdisDbRouter`、可选 `ServerInfoProvider` 和 `SlowCommandGovernor`，并提供两种 DB 视图：
+`CommandSupport` 是 built-in command 的公共边界。它持有 `YierdisDbRouter`、可选 `ServerInfoProvider` 和 `SlowCommandGovernor`，并提供两种 DB 选择入口：
 
-- `commandDb(CommandSession)`：prepare 阶段的 DB 选择，不带 mutation context；
-- `commandDb(CommandExecutionContext)`：execute 阶段的 DB 选择，显式携带当前 request 的 mutation context。
+- `commandDb(CommandSession)`：prepare 阶段按 session 的 DB index 选择数据库；
+- `commandDb(CommandExecutionContext)`：execute 阶段从 context 的 session 选择数据库。
 
 `CommandSupport.preparedMutation(...)` 把 `PreparedMutation.isCurrent()` 接到 validation，把 mutation owner 交给 `PreparedCommand`，并在 execute 中把 expected DB error 转成 control result。命令家族依赖 `DbReads`、`DbWrites`、`DbEngine` 和 typed ops，不触碰 native handle 或 RESP bytes。
 

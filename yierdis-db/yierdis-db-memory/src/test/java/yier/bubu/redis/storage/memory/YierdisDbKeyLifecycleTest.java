@@ -47,9 +47,8 @@ public class YierdisDbKeyLifecycleTest {
             Assert.assertNull(lifecycle.unlinkEntry((byte[]) null));
             Assert.assertNull(lifecycle.unlinkEntry((EntryHandle) null));
 
-            lifecycle.resetEntryStateCounters();
+            lifecycle.resetExpireCount();
             Assert.assertEquals(0, lifecycle.expireCount());
-            Assert.assertEquals(0L, lifecycle.expiredEntriesAwaitingPhysicalDeletion());
             Assert.assertThrows(NullPointerException.class,
                     () -> lifecycle.forEachKeyHandle(null));
             Assert.assertThrows(NullPointerException.class,

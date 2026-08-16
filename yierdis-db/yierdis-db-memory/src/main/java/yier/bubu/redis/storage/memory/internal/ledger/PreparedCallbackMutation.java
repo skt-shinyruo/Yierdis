@@ -20,27 +20,6 @@ public final class PreparedCallbackMutation<T> extends AbstractPreparedMutation<
             MutationOutcome outcome,
             Runnable commit,
             Runnable releaseSuperseded,
-            Runnable abort
-    ) {
-        this(
-                result,
-                actualDeltaBytes,
-                stagedNonNativeGrowthBytes,
-                outcome,
-                commit,
-                releaseSuperseded,
-                abort,
-                actualDeltaBytes < 0L
-        );
-    }
-
-    public PreparedCallbackMutation(
-            T result,
-            long actualDeltaBytes,
-            long stagedNonNativeGrowthBytes,
-            MutationOutcome outcome,
-            Runnable commit,
-            Runnable releaseSuperseded,
             Runnable abort,
             boolean trimNativePagesAfterCommit
     ) {

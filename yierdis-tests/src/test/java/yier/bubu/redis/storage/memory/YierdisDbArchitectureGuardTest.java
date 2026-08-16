@@ -38,7 +38,6 @@ public class YierdisDbArchitectureGuardTest {
                 YierdisKeyspaceOps.class,
                 YierdisTtlOps.class,
                 YierdisDbExpirationSupport.class,
-                YierdisDbReads.class,
                 YierdisDbWrites.class,
                 YierdisDbLifecycleOps.class,
                 YierdisDbIntrospection.class,

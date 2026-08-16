@@ -3,8 +3,6 @@ package yier.bubu.redis.runtime.embedded;
 import yier.bubu.redis.storage.api.DbEngine;
 import yier.bubu.redis.storage.api.RuntimeDbEngine;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Objects;
 
 /**
@@ -12,21 +10,15 @@ import java.util.Objects;
  */
 final class YierdisInstanceResources implements AutoCloseable {
     private final RuntimeDbEngine[] dbs;
-    private final List<AutoCloseable> ownedResources;
     private final YierdisGlobalMaxmemoryGovernor globalMaxmemoryGovernor;
-    private final CommitStream commitStream;
 
     YierdisInstanceResources(
             RuntimeDbEngine[] dbs,
-            List<AutoCloseable> ownedResources,
-            YierdisGlobalMaxmemoryGovernor globalMaxmemoryGovernor,
-            CommitStream commitStream
+            YierdisGlobalMaxmemoryGovernor globalMaxmemoryGovernor
     ) {
         Objects.requireNonNull(dbs, "dbs");
         this.dbs = dbs.clone();
-        this.ownedResources = ownedResources == null ? List.of() : List.copyOf(ownedResources);
         this.globalMaxmemoryGovernor = globalMaxmemoryGovernor;
-        this.commitStream = commitStream;
     }
 
     int databases() {
@@ -55,10 +47,6 @@ final class YierdisInstanceResources implements AutoCloseable {
         }
     }
 
-    CommitStream commitStream() {
-        return commitStream;
-    }
-
     void bindToCurrentThread() {
         for (RuntimeDbEngine engine : dbs) {
             if (engine == null) {
@@ -70,15 +58,6 @@ final class YierdisInstanceResources implements AutoCloseable {
 
     void shutdownAll() {
         Throwable failure = null;
-        if (commitStream != null) {
-            try {
-                if (!commitStream.shutdown()) {
-                    failure = recordFailure(failure, new IllegalStateException("commit stream did not drain"));
-                }
-            } catch (Throwable t) {
-                failure = recordFailure(failure, t);
-            }
-        }
         for (RuntimeDbEngine engine : dbs) {
             if (engine == null) {
                 continue;
@@ -90,8 +69,6 @@ final class YierdisInstanceResources implements AutoCloseable {
             }
         }
 
-        failure = closeOwnedResources(failure);
-
         rethrowIfNeeded(failure);
     }
 
@@ -102,9 +79,7 @@ final class YierdisInstanceResources implements AutoCloseable {
 
     static RuntimeException startupFailure(
             Throwable failure,
-            RuntimeDbEngine[] dbs,
-            CommitStream commitStream,
-            List<AutoCloseable> ownedResources
+            RuntimeDbEngine[] dbs
     ) {
         Throwable cleanupFailure = null;
         if (dbs != null) {
@@ -119,14 +94,6 @@ final class YierdisInstanceResources implements AutoCloseable {
                 }
             }
         }
-        if (commitStream != null) {
-            try {
-                commitStream.close();
-            } catch (Throwable t) {
-                cleanupFailure = recordFailure(cleanupFailure, t);
-            }
-        }
-        cleanupFailure = closeOwnedResources(cleanupFailure, ownedResources);
         if (cleanupFailure != null) {
             failure.addSuppressed(cleanupFailure);
         }
@@ -137,29 +104,6 @@ final class YierdisInstanceResources implements AutoCloseable {
             throw error;
         }
         return new IllegalStateException(failure);
-    }
-
-    private Throwable closeOwnedResources(Throwable failure) {
-        return closeOwnedResources(failure, ownedResources);
-    }
-
-    private static Throwable closeOwnedResources(Throwable failure, List<AutoCloseable> resources) {
-        if (resources == null || resources.isEmpty()) {
-            return failure;
-        }
-        List<AutoCloseable> reversed = new ArrayList<>(resources);
-        for (int i = reversed.size() - 1; i >= 0; i--) {
-            AutoCloseable resource = reversed.get(i);
-            if (resource == null) {
-                continue;
-            }
-            try {
-                resource.close();
-            } catch (Throwable t) {
-                failure = recordFailure(failure, t);
-            }
-        }
-        return failure;
     }
 
     private static Throwable recordFailure(Throwable current, Throwable next) {

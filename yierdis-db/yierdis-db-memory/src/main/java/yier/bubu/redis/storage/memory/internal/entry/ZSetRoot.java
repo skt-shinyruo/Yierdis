@@ -26,14 +26,6 @@ public final class ZSetRoot implements TypeRoot {
     private final HashTableMaintenanceRegistry maintenanceRegistry;
     private boolean closed;
 
-    public ZSetRoot(StableMemoryBackend allocator) {
-        this(allocator, HashSeed.random());
-    }
-
-    public ZSetRoot(StableMemoryBackend allocator, HashSeed hashSeed) {
-        this(allocator, hashSeed, null);
-    }
-
     public ZSetRoot(
             StableMemoryBackend allocator,
             HashSeed hashSeed,

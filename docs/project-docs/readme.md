@@ -10,20 +10,20 @@
 | 跟一条请求读源码 | `request-execution-flow.md` -> `main-path-walkthrough.md` -> `core-logic-index.md` |
 | 理解协议和命令 | `protocol-reference.md` -> `commands-and-data-model.md` -> `testing-and-debugging.md` |
 | 理解 DB 和内存 | `db-internals.md` -> `ttl-and-expiration-lifecycle.md` -> `maxmemory-and-eviction.md` -> `native-memory-runtime.md` -> `native-allocator-and-handles.md` -> `offheap-copy-behavior.md` |
-| 理解代理和变更事件 | `change-event-and-proxy-logic.md` -> `core-logic-index.md` -> `development-navigation.md` |
+| 理解代理边界 | `proxy-logic.md` -> `core-logic-index.md` -> `development-navigation.md` |
 | 准备改代码 | `development-navigation.md` -> `testing-and-debugging.md` -> 对应专题文档 |
 
 ## 文档分层
 
 - 入口导读: [`readme.md`](./readme.md), [`project-overview.md`](./project-overview.md)。负责建立入口地图、项目定位、能力边界和第一轮阅读顺序。
 - 系统主线: [`request-execution-flow.md`](./request-execution-flow.md), [`main-path-walkthrough.md`](./main-path-walkthrough.md), [`module-architecture.md`](./module-architecture.md)。负责串起请求执行链、源码主路径和 Maven 模块边界。
-- 专题手册: [`protocol-reference.md`](./protocol-reference.md), [`commands-and-data-model.md`](./commands-and-data-model.md), [`db-internals.md`](./db-internals.md), [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md), [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md), [`executor-and-backpressure.md`](./executor-and-backpressure.md), [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md), [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md), [`configuration-and-operations.md`](./configuration-and-operations.md), [`client-and-bench-internals.md`](./client-and-bench-internals.md), [`ffm-primer.md`](./ffm-primer.md), [`native-memory-runtime.md`](./native-memory-runtime.md), [`native-allocator-and-handles.md`](./native-allocator-and-handles.md), [`offheap-copy-behavior.md`](./offheap-copy-behavior.md)。负责按协议、命令、DB、TTL/maxmemory、执行器、代理/变更事件、bytes、配置、客户端和 native memory 等主题提供深入说明。
+- 专题手册: [`protocol-reference.md`](./protocol-reference.md), [`commands-and-data-model.md`](./commands-and-data-model.md), [`db-internals.md`](./db-internals.md), [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md), [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md), [`executor-and-backpressure.md`](./executor-and-backpressure.md), [`proxy-logic.md`](./proxy-logic.md), [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md), [`configuration-and-operations.md`](./configuration-and-operations.md), [`client-and-bench-internals.md`](./client-and-bench-internals.md), [`ffm-primer.md`](./ffm-primer.md), [`native-memory-runtime.md`](./native-memory-runtime.md), [`native-allocator-and-handles.md`](./native-allocator-and-handles.md), [`offheap-copy-behavior.md`](./offheap-copy-behavior.md)。负责按协议、命令、DB、TTL/maxmemory、执行器、代理、bytes、配置、客户端和 native memory 等主题提供深入说明。
 - 开发导航: [`development-navigation.md`](./development-navigation.md), [`testing-and-debugging.md`](./testing-and-debugging.md)。负责把常见改动类型、排障路径和验证范围连接起来。
 - 参考资料: [`core-logic-index.md`](./core-logic-index.md), [`code-logic-coverage.md`](./code-logic-coverage.md), [`glossary.md`](./glossary.md)。负责集中索引核心类、核心方法、覆盖追踪和高频术语，方便读源码时快速定位。
 
 ## Production Hardening
 
-部署、容量调参、事故排查或发布验收前，先读 [`production-hardening-operations.md`](./production-hardening-operations.md)。它统一说明 ingress、commit-stream、maxmemory 和有界回复的容量口径，result-unknown 关闭语义、graceful shutdown、soak 和四命令性能门槛。
+部署、容量调参、事故排查或发布验收前，先读 [`production-hardening-operations.md`](./production-hardening-operations.md)。它统一说明 ingress、maxmemory 和有界回复的容量口径，result-unknown 关闭语义、graceful shutdown、soak 和四命令性能门槛。
 
 ## 核心命令链路基准
 

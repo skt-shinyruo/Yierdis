@@ -404,12 +404,12 @@ public class YierdisFfmStableMemoryBackendTest {
     }
 
     @Test
-    public void activeSnapshotEpochDelaysFreedSlotReuseUntilClosed() {
+    public void activeScanEpochDelaysFreedSlotReuseUntilClosed() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
              YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 1)) {
 
             NativeHandle first = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
-            NativeEpochScope epoch = allocator.beginEpoch(NativeEpochKind.SNAPSHOT);
+            NativeEpochScope epoch = allocator.beginEpoch(NativeEpochKind.SCAN);
 
             allocator.free(first);
 
@@ -449,9 +449,9 @@ public class YierdisFfmStableMemoryBackendTest {
             NativeHandle first = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
             NativeEpochScope command = allocator.beginEpoch(NativeEpochKind.COMMAND);
             allocator.free(first);
-            NativeEpochScope snapshot = allocator.beginEpoch(NativeEpochKind.SNAPSHOT);
+            NativeEpochScope scan = allocator.beginEpoch(NativeEpochKind.SCAN);
 
-            Assert.assertTrue(command.epoch() < snapshot.epoch());
+            Assert.assertTrue(command.epoch() < scan.epoch());
             Assert.assertEquals(1L, allocator.stats().quarantinedObjects());
 
             command.close();
@@ -464,7 +464,7 @@ public class YierdisFfmStableMemoryBackendTest {
                     YierdisLocalHandleCodec.slotId(second.localRaw())
             );
 
-            snapshot.close();
+            scan.close();
             allocator.free(second);
         }
     }
@@ -984,7 +984,7 @@ public class YierdisFfmStableMemoryBackendTest {
     }
 
     @Test
-    public void activeSnapshotEpochDelaysDefragOldBlockReleaseUntilClosed() {
+    public void activeScanEpochDelaysDefragOldBlockReleaseUntilClosed() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
              YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 1024)) {
 
@@ -992,7 +992,7 @@ public class YierdisFfmStableMemoryBackendTest {
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
                 view.setByte(0, (byte) 7);
             }
-            NativeEpochScope epoch = allocator.beginEpoch(NativeEpochKind.SNAPSHOT);
+            NativeEpochScope epoch = allocator.beginEpoch(NativeEpochKind.SCAN);
 
             NativeDefragResult result = allocator.defragOne(handle, 24);
 
@@ -1241,8 +1241,8 @@ public class YierdisFfmStableMemoryBackendTest {
                 List<NativeEpochScope> epochs = new ArrayList<>();
                 List<NativeHandle> staleHandles = new ArrayList<>();
                 NativeEpochKind[] epochKinds = {
+                        NativeEpochKind.COMMAND,
                         NativeEpochKind.SCAN,
-                        NativeEpochKind.SNAPSHOT,
                         NativeEpochKind.DEFRAG
                 };
 

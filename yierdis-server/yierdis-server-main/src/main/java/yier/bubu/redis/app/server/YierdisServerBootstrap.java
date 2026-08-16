@@ -23,15 +23,11 @@ import yier.bubu.redis.execution.executor.CommandExecutionEngine;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.SerialOwnerExecutor;
-import yier.bubu.redis.memory.api.StableMemoryBackendFactory;
-import yier.bubu.redis.memory.foreign.YierdisFfmStableMemoryBackend;
 import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.DbEngine;
-import yier.bubu.redis.storage.api.DbEngineFactory;
 import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
 import yier.bubu.redis.protocol.resp.RespReplySizer;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
-import yier.bubu.redis.storage.memory.YierdisDbEngineFactory;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.runtime.embedded.YierdisInstanceObservability;
@@ -208,13 +204,13 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 .maxmemorySamples(runtimeConfig.maxmemorySamples())
                 .evictionTimeLimitMillis(runtimeConfig.evictionTimeLimitMillis())
                 .expireCleanupTimeLimitMillis(runtimeConfig.expireCleanupTimeLimitMillis())
+                .nativeSlotCapacity(runtimeConfig.nativeSlotCapacity())
                 .defrag(new DbDefragConfig(
                         runtimeConfig.nativeDefragEnabled(),
                         runtimeConfig.nativeDefragMaxMoveBytes(),
                         runtimeConfig.nativeDefragMaxObjects(),
                         runtimeConfig.nativeDefragTimeLimitMillis()
                 ));
-        configureDefaultDbEngineFactory(instanceConfig, runtimeConfig);
         instanceConfigCustomizer.accept(instanceConfig);
         instance = YierdisInstance.create(instanceConfig.build());
         YierdisInstanceRuntimeAccess runtimeAccess = instance.runtimeAccess();
@@ -323,20 +319,6 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         synchronized (lifecycleLock) {
             lifecycleState = LifecycleState.RUNNING;
         }
-    }
-
-    private static void configureDefaultDbEngineFactory(
-            YierdisInstanceConfig.Builder instanceConfig,
-            YierdisServerRuntimeConfig runtimeConfig
-    ) {
-        StableMemoryBackendFactory backendFactory = YierdisFfmStableMemoryBackend::new;
-        DbEngineFactory engineFactory = new YierdisDbEngineFactory(
-                backendFactory,
-                new yier.bubu.redis.storage.memory.YierdisDbBackendConfig(
-                        runtimeConfig.nativeSlotCapacity()
-                )
-        );
-        instanceConfig.engineFactory(engineFactory);
     }
 
     @Override

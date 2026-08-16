@@ -19,6 +19,8 @@ import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
+import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
@@ -155,7 +157,7 @@ public class YierdisDbMemoryEstimatorTest {
     private static void withNativeKey(String value, KeyAssertion assertion) {
         try (TestBackend runtime = TestBackend.open("memory-estimator-key");
              StableMemoryBackend allocator = runtime.backend();
-             NativeKeyDirectory directory = new NativeKeyDirectory(allocator)) {
+             NativeKeyDirectory directory = new NativeKeyDirectory(allocator, HashSeed.random(), new HashTableMaintenanceRegistry())) {
             EntryHandle entry = new EntryHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
             try {
                 byte[] keyBytes = b(value);

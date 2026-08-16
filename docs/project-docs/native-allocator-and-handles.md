@@ -163,7 +163,7 @@ Java adapter/topology 可以位于 heap，但必须单独计量，并由唯一 o
 
 ## Mutation 与 accounting
 
-增长型 mutation 先 reserve upper bound，再打开 allocation scope 并 prepare。prepare 后用 scope 实测 `NativeAllocationGrowth.effectiveBytes()` 加 staged non-native growth reconcile reservation。成功顺序是 commit、scope promote、logical ledger settle、stream publish、release superseded、optional trim。
+增长型 mutation 先 reserve upper bound，再打开 allocation scope 并 prepare。prepare 后用 scope 实测 `NativeAllocationGrowth.effectiveBytes()` 加 staged non-native growth reconcile reservation。成功顺序是 commit、scope promote、logical ledger settle、release superseded、optional trim。
 
 `NativeAllocatorStats` 区分：
 
@@ -175,4 +175,4 @@ Java adapter/topology 可以位于 heap，但必须单独计量，并由唯一 o
 - realloc/defrag counters；
 - object-kind counts 与 allocation histogram。
 
-runtime/allocator usage 是 DB maxmemory snapshot 的组成部分，不替代 ingress、commit-stream 或 outbound reply 的独立容量账户。详细生产排查边界见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
+runtime/allocator usage 是 DB maxmemory snapshot 的组成部分，不替代 ingress 或 outbound reply 的独立容量账户。详细生产排查边界见 [`production-hardening-operations.md`](./production-hardening-operations.md)。

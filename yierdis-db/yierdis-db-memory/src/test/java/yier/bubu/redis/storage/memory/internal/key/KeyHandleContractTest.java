@@ -6,6 +6,8 @@ import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
+import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 
 import java.nio.charset.StandardCharsets;
@@ -16,7 +18,7 @@ public class KeyHandleContractTest {
         byte[] key = "hello".getBytes(StandardCharsets.US_ASCII);
         try (TestBackend runtime = TestBackend.open("native-key-handle-contract");
              StableMemoryBackend allocator = runtime.backend();
-             NativeKeyDirectory directory = new NativeKeyDirectory(allocator)) {
+             NativeKeyDirectory directory = new NativeKeyDirectory(allocator, HashSeed.random(), new HashTableMaintenanceRegistry())) {
             EntryHandle entry = new EntryHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
             try {
                 directory.compute(key, (ignored, old) -> entry);
@@ -40,7 +42,7 @@ public class KeyHandleContractTest {
     public void keyHandleDistinguishesDifferentKeys() {
         try (TestBackend runtime = TestBackend.open("native-key-handle-distinct");
              StableMemoryBackend allocator = runtime.backend();
-             NativeKeyDirectory directory = new NativeKeyDirectory(allocator)) {
+             NativeKeyDirectory directory = new NativeKeyDirectory(allocator, HashSeed.random(), new HashTableMaintenanceRegistry())) {
             EntryHandle aEntry = new EntryHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
             EntryHandle bEntry = new EntryHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
             try {

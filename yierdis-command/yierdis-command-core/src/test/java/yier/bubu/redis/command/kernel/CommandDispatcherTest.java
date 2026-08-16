@@ -11,7 +11,6 @@ import yier.bubu.redis.command.api.CommandParseException;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
-import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.common.command.ResultUnknownException;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandExecutionContext;
@@ -36,7 +35,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -57,62 +55,6 @@ public class CommandDispatcherTest {
             Assert.assertEquals("LOCAL_OK", reply.simpleString());
             Assert.assertNull(reply.error());
         }
-    }
-
-    @Test
-    public void preparedExecutionScopesTheRequestAsItsExplicitMutationContext() {
-        AtomicReference<MutationContext> successfulContext = new AtomicReference<>();
-        AtomicReference<MutationContext> failedContext = new AtomicReference<>();
-        CommandDispatcher dispatcher = CommandRegistries.dispatcher(registration -> {
-            registration.register(new CommandSpec(
-                    syntax("SCOPED"),
-                    args -> session -> prepared(ReplyShapes.simpleString("OK"), context -> {
-                        Assert.assertSame(args.request(), context.mutationContext().commandRecord());
-                        successfulContext.set(context.mutationContext());
-                        return CommandResult.reply(RedisReplies.simpleString("OK"));
-                    })
-            ));
-            registration.register(new CommandSpec(
-                    syntax("FAIL"),
-                    args -> session -> prepared(ReplyShapes.simpleString("OK"), context -> {
-                        Assert.assertSame(args.request(), context.mutationContext().commandRecord());
-                        failedContext.set(context.mutationContext());
-                        throw new IllegalStateException("injected");
-                    })
-            ));
-        });
-        RecordingSession session = new RecordingSession(false);
-
-        executePrepared(dispatcher, session, request("SCOPED"));
-        Assert.assertFalse(successfulContext.get().hasCommandRecord());
-
-        Assert.assertThrows(
-                IllegalStateException.class,
-                () -> executePrepared(dispatcher, session, request("FAIL"))
-        );
-        Assert.assertFalse(failedContext.get().hasCommandRecord());
-    }
-
-    @Test
-    public void transactionReplayUsesTheQueuedRequestAsItsCurrentMutationRecord() {
-        AtomicReference<MutationContext> replayContext = new AtomicReference<>();
-        CommandDispatcher dispatcher = CommandRegistries.dispatcher(registration -> registration.register(
-                new CommandSpec(
-                        syntax("SCOPED"),
-                        args -> session -> prepared(ReplyShapes.simpleString("OK"), context -> {
-                            Assert.assertSame(args.request(), context.mutationContext().commandRecord());
-                            replayContext.set(context.mutationContext());
-                            return CommandResult.reply(RedisReplies.simpleString("OK"));
-                        })
-                )
-        ));
-        TrackingTransactionState transaction = transactionWith("SCOPED");
-
-        PreparedCommand exec = prepare(dispatcher, new TrackingSession(transaction), "EXEC");
-        executeResult(exec, transaction);
-
-        Assert.assertFalse(replayContext.get().hasCommandRecord());
-        exec.close();
     }
 
     @Test
@@ -431,9 +373,8 @@ public class CommandDispatcherTest {
         RecordingSession activeSession = new RecordingSession(true);
         activeSession.tx.enqueueFailure = enqueueFailure;
         try (ExecutionRequest request = request("WRITE");
-             PreparedCommand prepared = queueDispatcher.prepare(activeSession, request);
-             CommandExecutionContext context = CommandExecutionContext.forRequest(
-                     activeSession, request)) {
+             PreparedCommand prepared = queueDispatcher.prepare(activeSession, request)) {
+            CommandExecutionContext context = CommandExecutionContext.forSession(activeSession);
             Assert.assertSame(enqueueFailure, Assert.assertThrows(
                     IllegalStateException.class,
                     () -> prepared.execute(context)
@@ -1002,7 +943,8 @@ public class CommandDispatcherTest {
             ExecutionRequest request
     ) {
         Assert.assertEquals(ValidationResult.VALID, command.validateBeforeExecute());
-        try (request; CommandExecutionContext context = CommandExecutionContext.forRequest(session, request)) {
+        try (request) {
+            CommandExecutionContext context = CommandExecutionContext.forSession(session);
             return command.execute(context);
         }
     }
@@ -1097,9 +1039,7 @@ public class CommandDispatcherTest {
         try (request;
              PreparedCommand prepared = dispatcher.prepare(session, request)) {
             Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
-            try (CommandExecutionContext context = CommandExecutionContext.forRequest(session, request)) {
-                prepared.execute(context);
-            }
+            prepared.execute(CommandExecutionContext.forSession(session));
         }
     }
 
@@ -1133,9 +1073,7 @@ public class CommandDispatcherTest {
             ExecutionRequest request
     ) {
         Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
-        try (CommandExecutionContext context = CommandExecutionContext.forRequest(session, request)) {
-            return new CapturedReply(prepared.execute(context));
-        }
+        return new CapturedReply(prepared.execute(CommandExecutionContext.forSession(session)));
     }
 
     private static ExecutionRequest request(String... argv) {

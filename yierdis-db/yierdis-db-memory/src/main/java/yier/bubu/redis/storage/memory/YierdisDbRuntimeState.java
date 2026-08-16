@@ -3,7 +3,6 @@ package yier.bubu.redis.storage.memory;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.memory.api.MemoryOwner;
-import yier.bubu.redis.storage.api.DbCommitPublisher;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 
@@ -30,8 +29,6 @@ final class YierdisDbRuntimeState {
 
     private volatile MaxmemoryCoordinator maxmemoryCoordinator;
     private volatile MaxmemoryParticipant maxmemoryParticipant;
-    private volatile DbCommitPublisher commitPublisher = DbCommitPublisher.NOOP;
-    private volatile int commitDbIndex;
     private NativeDefragReport lastNativeDefragReport = EMPTY_NATIVE_DEFRAG_REPORT;
     private long lruClock;
 
@@ -45,7 +42,6 @@ final class YierdisDbRuntimeState {
         this.threadGuard = Objects.requireNonNull(threadGuard, "threadGuard");
         this.lruEnabled = lruEnabled;
         this.nativeDefragOptions = nativeDefragOptions;
-        this.commitDbIndex = this.dbIndex;
     }
 
     int dbIndex() {
@@ -58,22 +54,6 @@ final class YierdisDbRuntimeState {
 
     void attachMaxmemoryCoordinator(MaxmemoryCoordinator coordinator) {
         this.maxmemoryCoordinator = coordinator;
-    }
-
-    void attachCommitPublisher(DbCommitPublisher publisher, int dbIndex) {
-        if (dbIndex < 0) {
-            throw new IllegalArgumentException("dbIndex must be non-negative");
-        }
-        this.commitPublisher = Objects.requireNonNull(publisher, "publisher");
-        this.commitDbIndex = dbIndex;
-    }
-
-    DbCommitPublisher commitPublisher() {
-        return commitPublisher;
-    }
-
-    int commitDbIndex() {
-        return commitDbIndex;
     }
 
     void bindMaxmemoryParticipant(MaxmemoryParticipant participant) {

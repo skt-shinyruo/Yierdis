@@ -54,7 +54,7 @@ final class YierdisDbMemoryReporter {
     }
 
     long memoryUsage(BytesView keyView) {
-        return kernel.execute(DbUse.inspect(scope -> {
+        return kernel.inspect(scope -> {
             KeyHandle keyHandle = scope.keyHandle(keyView);
             EntryRecord record = scope.liveEntryRecord(keyHandle);
             if (record == null) {
@@ -63,11 +63,11 @@ final class YierdisDbMemoryReporter {
             long keyLen = Math.max(0L, (long) keyView.length());
             return metadataEstimatedBytes(keyHandle, record)
                     + estimateNativeBytesForMemoryUsage(scope, keyLen, record);
-        }));
+        });
     }
 
     long memoryUsage(byte[] keyBytes) {
-        return kernel.execute(DbUse.inspect(scope -> {
+        return kernel.inspect(scope -> {
             if (keyBytes == null) {
                 return -1L;
             }
@@ -78,33 +78,32 @@ final class YierdisDbMemoryReporter {
             }
             return metadataEstimatedBytes(keyHandle, record)
                     + estimateNativeBytesForMemoryUsage(scope, keyBytes.length, record);
-        }));
+        });
     }
 
     YierdisMemoryStats memoryStats() {
-        return kernel.execute(DbUse.inspect(scope -> DbMemoryAccounting.snapshot(
+        return kernel.inspect(scope -> DbMemoryAccounting.snapshot(
                 maxmemoryBytes,
                 componentMemoryUsage.snapshot(),
                 ledger.reservedBytes(),
                 scope.keyCount(),
                 scope.expireCount(),
-                scope.expiredEntriesAwaitingPhysicalDeletion(),
                 hashTableMaintenanceRegistry,
                 true,
                 safeNativeAllocatorStats(scope),
                 nativeDefragReportSupplier.get(),
                 safeNativeLiveRegionCount(scope)
-        )));
+        ));
     }
 
     MemoryUsageSnapshot memoryUsage() {
-        return kernel.execute(DbUse.inspect(ignored -> componentMemoryUsage.snapshot()));
+        return kernel.inspect(ignored -> componentMemoryUsage.snapshot());
     }
 
     long usedBytesForMaxmemory() {
-        return kernel.execute(DbUse.inspect(
+        return kernel.inspect(
                 ignored -> componentMemoryUsage.snapshot().effectiveBytesForMaxmemory()
-        ));
+        );
     }
 
     long estimatedUsedBytes() {
@@ -112,7 +111,7 @@ final class YierdisDbMemoryReporter {
     }
 
     int keyCountEstimate() {
-        return kernel.execute(DbUse.inspect(scope -> {
+        return kernel.inspect(scope -> {
             int size;
             try {
                 size = scope.keyCount();
@@ -120,7 +119,7 @@ final class YierdisDbMemoryReporter {
                 size = 0;
             }
             return Math.max(0, size);
-        }));
+        });
     }
 
     private long metadataEstimatedBytes(KeyHandle keyHandle, EntryRecord record) {

@@ -225,48 +225,6 @@ public class NativeStorageRegressionTest {
     }
 
     @Test
-    public void snapshotValueBytesStayStableAfterLaterOverwriteDeleteAndDefrag() {
-        try (TestBackend runtime = TestBackend.open("native-snapshot-stability")) {
-            YierdisDb db = TestDbSupport.open(
-                    runtime,
-                    0,
-                    MaxmemoryPolicy.NOEVICTION,
-                    5,
-                    5,
-                    5,
-                    new NativeDefragOptions(1_000_000L, 1_000L, Long.MAX_VALUE)
-            );
-            db.bindToCurrentThread();
-            try {
-                byte[] key = b("snapshot-stable");
-                byte[] initial = b("value-v1");
-                byte[] updated = b("value-v2");
-                Assert.assertTrue(db.writes().strings().setString(key, initial, SetMode.NORMAL, null).value());
-
-                List<YierdisSnapshotEntry> entries = new ArrayList<>();
-                Assert.assertEquals(0L, db.introspection().snapshot(ScanCursorV2.start(), 2, entries).value());
-                Assert.assertEquals(1, entries.size());
-                YierdisSnapshotEntry entry = entries.get(0);
-                Assert.assertArrayEquals(key, entry.keyBytes());
-                Assert.assertArrayEquals(initial, entry.stringValueBytes());
-
-                Assert.assertTrue(db.writes().strings().setString(key, updated, SetMode.NORMAL, null).value());
-                Assert.assertArrayEquals(updated, db.reads().strings().getStringBytes(key));
-
-                Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(key)).value());
-                Assert.assertNull(db.reads().strings().getStringBytes(key));
-
-                db.defragMaintenance();
-
-                Assert.assertArrayEquals(initial, entry.stringValueBytes());
-                Assert.assertArrayEquals(initial, entries.get(0).stringValueBytes());
-            } finally {
-                db.shutdown();
-            }
-        }
-    }
-
-    @Test
     public void defaultSharedNativeSlotCapacityAutomaticallyGrowsForNinetyThousandStringKeys() {
         try (TestBackend runtime = TestBackend.open("native-string-slot-capacity-default")) {
             YierdisDb db = createNativeRegressionDb(runtime, 0, MaxmemoryPolicy.NOEVICTION);
@@ -598,7 +556,7 @@ public class NativeStorageRegressionTest {
         String[] stringKeys = {"mix:s:0", "mix:s:1", "mix:s:2", "mix:s:3", "mix:s:4"};
         String[] collectionKeys = {"mix:list", "mix:hash", "mix:set", "mix:zset", "mix:hll"};
         boolean expiredTtlCleanup = false;
-        boolean scannedAndSnapshotted = false;
+        boolean scanned = false;
         boolean ranDefragMaintenance = false;
 
         for (int op = 0; op < operationCount; op++) {
@@ -712,11 +670,8 @@ public class NativeStorageRegressionTest {
                         Assert.assertEquals(0L, window.nextCursor().value());
                         strings(window);
                     }
-                    List<YierdisSnapshotEntry> snapshot = new ArrayList<>();
-                    ScanCursorV2 snapshotCursor = db.introspection().snapshot(ScanCursorV2.start(), 32, snapshot);
-                    Assert.assertEquals(0L, snapshotCursor.value());
                     db.defragMaintenance();
-                    scannedAndSnapshotted = true;
+                    scanned = true;
                     ranDefragMaintenance = true;
                 }
                 default -> throw new AssertionError("unexpected op choice " + choice);
@@ -731,7 +686,7 @@ public class NativeStorageRegressionTest {
             assertStringMatchesModel(db, entry.getKey(), entry.getValue());
         }
         Assert.assertTrue("expected TTL expiry cleanup branch", expiredTtlCleanup);
-        Assert.assertTrue("expected scan/snapshot branch", scannedAndSnapshotted);
+        Assert.assertTrue("expected scan branch", scanned);
         Assert.assertTrue("expected defrag maintenance branch", ranDefragMaintenance);
         for (String collectionKey : collectionKeys) {
             trackedKeys.add(collectionKey);

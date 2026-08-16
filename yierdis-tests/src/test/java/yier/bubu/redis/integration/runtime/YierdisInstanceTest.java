@@ -5,50 +5,26 @@ package yier.bubu.redis.integration.runtime;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
-import yier.bubu.redis.common.command.MutationContext;
-import yier.bubu.redis.common.memory.MemoryPressureBudget;
-import yier.bubu.redis.common.memory.MemoryReclaimResult;
-import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.integration.command.TestCommandDispatchers;
-import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.storage.api.DbDefragConfig;
-import yier.bubu.redis.storage.api.DbEngineConfig;
-import yier.bubu.redis.storage.api.DbEngineFactory;
-import yier.bubu.redis.storage.api.DbCommitStreamUnavailableException;
-import yier.bubu.redis.storage.api.DefragmentableDbEngine;
-import yier.bubu.redis.storage.api.DbLifecycleOps;
-import yier.bubu.redis.storage.api.DbReads;
-import yier.bubu.redis.storage.api.DbWrites;
-import yier.bubu.redis.storage.api.GlobalMaxmemoryDbEngine;
-import yier.bubu.redis.storage.api.MaxmemoryCandidate;
-import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
-import yier.bubu.redis.storage.api.MemoryOps;
 import yier.bubu.redis.storage.api.SetMode;
-import yier.bubu.redis.storage.api.RuntimeDbEngine;
 import yier.bubu.redis.storage.api.YierdisCommandException;
-import yier.bubu.redis.runtime.api.YierdisChangeKind;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
-import yier.bubu.redis.runtime.embedded.CommitStreamState;
 import yier.bubu.redis.runtime.embedded.YierdisInstanceObservability;
-import yier.bubu.redis.runtime.embedded.YierdisInstanceRuntimeAccess;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyError;
 import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplyObject;
 import yier.bubu.redis.testutil.ReplySimpleString;
-import yier.bubu.redis.testutil.TestYierdisInstances;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
@@ -66,7 +42,7 @@ public class YierdisInstanceTest {
                 .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
             instance.bindToCurrentThread();
             CommandDispatcher dispatcher = TestCommandDispatchers.forRouter(TestDbRouters.forInstance(instance));
             TestSession session = new TestSession();
@@ -98,7 +74,7 @@ public class YierdisInstanceTest {
                 .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
             instance.bindToCurrentThread();
             CommandDispatcher dispatcher = TestCommandDispatchers.forRouter(TestDbRouters.forInstance(instance));
             try (FastTestClient client = new FastTestClient(dispatcher)) {
@@ -140,7 +116,7 @@ public class YierdisInstanceTest {
                 .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
             instance.bindToCurrentThread();
 
             long db0Before = instance.engine(0).memory().memoryStats().usedBytesForMaxmemory();
@@ -167,7 +143,7 @@ public class YierdisInstanceTest {
                 .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
             instance.bindToCurrentThread();
             byte[] value = new byte[4_000];
             Arrays.fill(value, (byte) 'a');
@@ -199,7 +175,7 @@ public class YierdisInstanceTest {
                 .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
             instance.bindToCurrentThread();
             byte[] value = new byte[4_000];
             Arrays.fill(value, (byte) 'a');
@@ -229,7 +205,7 @@ public class YierdisInstanceTest {
                 .defrag(new DbDefragConfig(true, 1_000_000L, 1_000L, 1_000L))
                 .build();
 
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
             instance.bindToCurrentThread();
             Assert.assertTrue(instance.engine(0).writes().strings().setString(b("k"), b("value"), SetMode.NORMAL, null).value());
 
@@ -237,92 +213,6 @@ public class YierdisInstanceTest {
 
             Assert.assertArrayEquals(b("value"), instance.engine(0).reads().strings().getStringBytes(b("k")));
             Assert.assertTrue(instance.engine(0).memory().memoryStats().nativeDefragLastMovedObjects() > 0L);
-        }
-    }
-
-    @Test
-    public void maintenanceTickEmitsSyntheticDeleteForExpiredKeys() {
-        List<DeliveredChange> events = new ArrayList<>();
-        CountDownLatch delivered = new CountDownLatch(3);
-        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
-                .changeSink(event -> {
-                    synchronized (events) {
-                        events.add(new DeliveredChange(
-                                event.sequence(),
-                                event.synthetic(),
-                                event.kind(),
-                                new String(event.request().toByteArray(0), java.nio.charset.StandardCharsets.US_ASCII),
-                                new String(event.request().toByteArray(1), java.nio.charset.StandardCharsets.US_ASCII)
-                        ));
-                    }
-                    delivered.countDown();
-                })
-                .build();
-
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
-            instance.bindToCurrentThread();
-            try (ExecutionRequest record = ByteArrayExecutionRequest.fromUtf8("SET", List.of("maintenance-expired", "v"))) {
-                Assert.assertTrue(instance.engine(0).writes().withMutationContext(MutationContext.of(record)).strings()
-                        .setString(b("maintenance-expired"), b("v"), SetMode.NORMAL, null)
-                        .value());
-            }
-            try (ExecutionRequest record = ByteArrayExecutionRequest.fromUtf8("PEXPIRE", List.of("maintenance-expired", "1"))) {
-                Assert.assertTrue(instance.engine(0).writes().withMutationContext(MutationContext.of(record)).ttl()
-                        .pexpire(view(b("maintenance-expired")), 1L).value());
-            }
-
-            sleepPastTtl();
-            instance.runtimeAccess().maintenanceTick();
-
-            try {
-                Assert.assertTrue("commit stream did not deliver expiry", delivered.await(5L, TimeUnit.SECONDS));
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                Assert.fail("interrupted while waiting for commit stream");
-            }
-            assertSyntheticDelete(events, "maintenance-expired", YierdisChangeKind.EXPIRED);
-        }
-    }
-
-    @Test
-    public void commitStreamConfigurationControlsAdmissionAndNoopObservability() throws Exception {
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(
-                YierdisInstanceConfig.builder().build()
-        )) {
-            Assert.assertEquals(CommitStreamState.DISABLED, instance.observability().commitStreamStats().state());
-            Assert.assertEquals(0L, instance.observability().commitStreamStats().reservedEvents());
-            Assert.assertEquals(0L, instance.observability().commitStreamStats().reservedBytes());
-        }
-
-        CountDownLatch callbackEntered = new CountDownLatch(1);
-        CountDownLatch releaseCallback = new CountDownLatch(1);
-        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
-                .changeSink(event -> {
-                    callbackEntered.countDown();
-                    try {
-                        Assert.assertTrue(releaseCallback.await(2L, TimeUnit.SECONDS));
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        throw new AssertionError(e);
-                    }
-                })
-                .commitStreamMaxEvents(1)
-                .commitStreamMaxRetainedBytes(1_024L)
-                .commitStreamShutdownTimeoutMillis(100L)
-                .build();
-
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
-            instance.bindToCurrentThread();
-            Assert.assertEquals(CommitStreamState.RUNNING, instance.observability().commitStreamStats().state());
-            try {
-                scopedSet(instance, "first");
-                Assert.assertTrue(callbackEntered.await(2L, TimeUnit.SECONDS));
-
-                Assert.assertThrows(DbCommitStreamUnavailableException.class, () -> scopedSet(instance, "second"));
-                Assert.assertEquals(1L, instance.observability().commitStreamStats().rejectedWrites());
-            } finally {
-                releaseCallback.countDown();
-            }
         }
     }
 
@@ -349,13 +239,6 @@ public class YierdisInstanceTest {
             return Long.MAX_VALUE;
         }
         return left + right;
-    }
-
-    private static void scopedSet(YierdisInstance instance, String key) {
-        try (ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("SET", List.of(key, "v"))) {
-            Assert.assertTrue(instance.engine(0).writes().withMutationContext(MutationContext.of(request)).strings()
-                    .setString(b(key), b("v"), SetMode.NORMAL, null).value());
-        }
     }
 
     private static long minGlobalMaxmemoryThatAllowsSetAndOverwrite(
@@ -407,7 +290,7 @@ public class YierdisInstanceTest {
                 .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
             instance.bindToCurrentThread();
             instance.engine(0).writes().strings().setString(key, initialValue, SetMode.NORMAL, null);
             instance.engine(0).writes().strings().setString(key, overwriteValue, SetMode.NORMAL, null);
@@ -425,7 +308,7 @@ public class YierdisInstanceTest {
                 .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
             instance.bindToCurrentThread();
             instance.engine(0).writes().strings().setString(b("k0"), value, SetMode.NORMAL, null);
             instance.engine(1).writes().strings().setString(b("k1"), value, SetMode.NORMAL, null);
@@ -443,7 +326,7 @@ public class YierdisInstanceTest {
                 .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
             instance.bindToCurrentThread();
             instance.engine(dbIndex).writes().strings().setString(key, value, SetMode.NORMAL, null);
             return true;
@@ -464,51 +347,10 @@ public class YierdisInstanceTest {
         boolean allows(long maxmemoryBytes);
     }
 
-    private static void assertSyntheticDelete(List<DeliveredChange> events, String key, YierdisChangeKind kind) {
-        Assert.assertEquals(3, events.size());
-        DeliveredChange event = events.get(2);
-        Assert.assertTrue(event.synthetic());
-        Assert.assertEquals(kind, event.kind());
-        Assert.assertEquals("DEL", event.command());
-        Assert.assertEquals(key, event.key());
-    }
-
-    private static yier.bubu.redis.bytes.BytesView view(byte[] data) {
-        return new yier.bubu.redis.bytes.BytesView() {
-            @Override
-            public int length() {
-                return data.length;
-            }
-
-            @Override
-            public byte getByte(int index) {
-                return data[index];
-            }
-        };
-    }
-
-    private static void sleepPastTtl() {
-        try {
-            Thread.sleep(20L);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            Assert.fail("interrupted while waiting for TTL to pass");
-        }
-    }
-
-    private record DeliveredChange(
-            long sequence,
-            boolean synthetic,
-            YierdisChangeKind kind,
-            String command,
-            String key
-    ) {
-    }
-
     @Test
     public void unboundOrCrossThreadAccessFailsFast() throws Exception {
         YierdisInstanceConfig config = YierdisInstanceConfig.builder().build();
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
             try {
                 instance.engine(0).memory().memoryStats();
                 Assert.fail("expected fail-fast before bind");
@@ -537,131 +379,12 @@ public class YierdisInstanceTest {
     }
 
     @Test
-    public void closePropagatesDbAndAllocatorFailuresAfterBestEffortCleanup() {
-        List<String> closeOrder = new ArrayList<>();
-        DbEngineFactory factory = config -> new FailingRuntimeDbEngine("db-" + config.dbIndex(), closeOrder);
-
-        YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder()
-                .databases(2)
-                .engineFactory(factory)
-                .build());
-
-        try {
-            instance.close();
-            Assert.fail("expected close failure");
-        } catch (IllegalStateException e) {
-            Assert.assertEquals("db-0", e.getMessage());
-            Assert.assertEquals(Arrays.asList("db-0", "db-1"), closeOrder);
-            Assert.assertEquals(1, e.getSuppressed().length);
-            Assert.assertEquals("db-1", e.getSuppressed()[0].getMessage());
-        }
-    }
-
-    @Test
-    public void createCleansUpAlreadyCreatedEnginesWhenFactoryFailsMidStartup() {
-        List<String> closeOrder = new ArrayList<>();
-        DbEngineFactory factory = new DbEngineFactory() {
-            private int calls;
-
-            @Override
-            public RuntimeDbEngine create(DbEngineConfig config) {
-                if (calls++ == 0) {
-                    return new CloseTrackingRuntimeDbEngine("db-" + config.dbIndex(), closeOrder);
-                }
-                throw new IllegalStateException("boom-create-" + config.dbIndex());
-            }
-        };
-
-        try {
-            YierdisInstance.create(YierdisInstanceConfig.builder()
-                    .databases(2)
-                    .engineFactory(factory)
-                    .build());
-            Assert.fail("expected startup failure");
-        } catch (IllegalStateException e) {
-            Assert.assertEquals("boom-create-1", e.getMessage());
-            Assert.assertEquals(Arrays.asList("db-0"), closeOrder);
-        }
-    }
-
-    @Test
-    public void runtimeAccessExposesOwnerThreadLifecycleHooks() {
-        DefragmentingTrackingRuntimeDbEngine engine = new DefragmentingTrackingRuntimeDbEngine();
-        YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder()
-                .databases(1)
-                .engineFactory(config -> engine)
-                .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.PER_DB)
-                .maxmemoryBytes(128)
-                .defrag(new DbDefragConfig(true, 0L, 0L, 0L))
-                .build());
-
-        try {
-            YierdisInstanceRuntimeAccess runtimeAccess = instance.runtimeAccess();
-            runtimeAccess.bindToCurrentThread();
-            runtimeAccess.maintenanceTick();
-            runtimeAccess.deferredReclamationTick();
-            runtimeAccess.close();
-        } finally {
-            try {
-                instance.close();
-            } catch (Throwable ignored) {
-            }
-        }
-
-        Assert.assertEquals(1, engine.bindCalls);
-        Assert.assertEquals(1, engine.runMaintenanceCalls);
-        Assert.assertEquals(1, engine.deferredReclamationCalls);
-        Assert.assertEquals(1, engine.defragMaintenanceCalls);
-        Assert.assertEquals(1, engine.shutdownCalls);
-    }
-
-    @Test
-    public void maintenanceRunsDbLocalTickForPerDbScope() {
-        TrackingRuntimeDbEngine engine = new TrackingRuntimeDbEngine();
-        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
-                .databases(1)
-                .engineFactory(ignored -> engine)
-                .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.PER_DB)
-                .maxmemoryBytes(128)
-                .build();
-
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
-            instance.bindToCurrentThread();
-            instance.runtimeAccess().maintenanceTick();
-        }
-
-        Assert.assertEquals(1, engine.runMaintenanceCalls);
-    }
-
-    @Test
-    public void globalMaintenanceUsesGovernorAfterEachDbTick() {
-        GlobalTrackingRuntimeDbEngine engine0 = new GlobalTrackingRuntimeDbEngine();
-        GlobalTrackingRuntimeDbEngine engine1 = new GlobalTrackingRuntimeDbEngine();
-        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
-                .databases(2)
-                .engineFactory(configured -> configured.dbIndex() == 0 ? engine0 : engine1)
-                .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
-                .maxmemoryBytes(128)
-                .build();
-
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
-            instance.bindToCurrentThread();
-            instance.runtimeAccess().maintenanceTick();
-        }
-
-        Assert.assertEquals(1, engine0.runMaintenanceCalls);
-        Assert.assertEquals(1, engine1.runMaintenanceCalls);
-        Assert.assertEquals(1, engine0.participantCleanupCalls);
-        Assert.assertEquals(1, engine1.participantCleanupCalls);
-    }
-
-    @Test
     public void observabilityDbSummariesExposePerDbKeysAndExpires() {
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(2)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.PER_DB)
                 .build();
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
             instance.bindToCurrentThread();
             CommandDispatcher dispatcher = TestCommandDispatchers.forRouter(TestDbRouters.forInstance(instance));
             TestSession session = new TestSession();
@@ -792,190 +515,4 @@ public class YierdisInstanceTest {
         }
     }
 
-    private static final class CloseTrackingRuntimeDbEngine implements RuntimeDbEngine {
-        private final String name;
-        private final List<String> closeOrder;
-
-        private CloseTrackingRuntimeDbEngine(String name, List<String> closeOrder) {
-            this.name = name;
-            this.closeOrder = closeOrder;
-        }
-
-        @Override
-        public void bindToCurrentThread() {
-        }
-
-        @Override
-        public void runMaintenance() {
-        }
-
-        @Override
-        public void shutdown() {
-            closeOrder.add(name);
-        }
-
-        @Override
-        public DbReads reads() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public DbWrites writes() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public MemoryOps memory() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public DbLifecycleOps lifecycle() {
-            throw new UnsupportedOperationException();
-        }
-    }
-
-    private static final class FailingRuntimeDbEngine implements RuntimeDbEngine {
-        private final String name;
-        private final List<String> closeOrder;
-
-        private FailingRuntimeDbEngine(String name, List<String> closeOrder) {
-            this.name = name;
-            this.closeOrder = closeOrder;
-        }
-
-        @Override
-        public void bindToCurrentThread() {
-        }
-
-        @Override
-        public void runMaintenance() {
-        }
-
-        @Override
-        public void shutdown() {
-            closeOrder.add(name);
-            throw new IllegalStateException(name);
-        }
-
-        @Override
-        public DbReads reads() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public DbWrites writes() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public MemoryOps memory() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public DbLifecycleOps lifecycle() {
-            throw new UnsupportedOperationException();
-        }
-    }
-
-    private static class TrackingRuntimeDbEngine implements RuntimeDbEngine {
-        protected int bindCalls;
-        protected int runMaintenanceCalls;
-        protected int deferredReclamationCalls;
-        protected int defragMaintenanceCalls;
-        protected int shutdownCalls;
-
-        @Override
-        public void bindToCurrentThread() {
-            bindCalls++;
-        }
-
-        @Override
-        public void runMaintenance() {
-            runMaintenanceCalls++;
-        }
-
-        @Override
-        public void runDeferredReclamation() {
-            deferredReclamationCalls++;
-        }
-
-        @Override
-        public void shutdown() {
-            shutdownCalls++;
-        }
-
-        @Override
-        public DbReads reads() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public DbWrites writes() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public MemoryOps memory() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public DbLifecycleOps lifecycle() {
-            throw new UnsupportedOperationException();
-        }
-    }
-
-    private static final class DefragmentingTrackingRuntimeDbEngine
-            extends TrackingRuntimeDbEngine implements DefragmentableDbEngine {
-        @Override
-        public void defragMaintenance() {
-            defragMaintenanceCalls++;
-        }
-    }
-
-    private static final class GlobalTrackingRuntimeDbEngine
-            extends TrackingRuntimeDbEngine implements GlobalMaxmemoryDbEngine {
-        private int participantCleanupCalls;
-
-        @Override
-        public MemoryUsageSnapshot memoryUsage() {
-            return MemoryUsageSnapshot.zero();
-        }
-
-        @Override
-        public MemoryReclaimResult trimMemory(MemoryPressureBudget budget) {
-            return MemoryReclaimResult.empty();
-        }
-
-        @Override
-        public int keyCountEstimate() {
-            return 0;
-        }
-
-        @Override
-        public void cleanupExpired(long nowMillis) {
-            participantCleanupCalls++;
-        }
-
-        @Override
-        public MaxmemoryCandidate sampleCandidate(MaxmemoryPolicy policy, long nowMillis) {
-            return null;
-        }
-
-        @Override
-        public MaxmemoryCandidate scanBestCandidate(MaxmemoryPolicy policy, long nowMillis) {
-            return null;
-        }
-
-        @Override
-        public boolean evict(MaxmemoryCandidate candidate, long nowMillis) {
-            return false;
-        }
-
-        @Override
-        public void attachMaxmemoryCoordinator(MaxmemoryCoordinator coordinator) {
-        }
-    }
 }

@@ -183,7 +183,6 @@ public class StableMemoryBackendContractTest {
     public void epochKindsCoverAllocatorReadSafetyScopes() {
         Assert.assertEquals(NativeEpochKind.COMMAND, NativeEpochKind.valueOf("COMMAND"));
         Assert.assertEquals(NativeEpochKind.SCAN, NativeEpochKind.valueOf("SCAN"));
-        Assert.assertEquals(NativeEpochKind.SNAPSHOT, NativeEpochKind.valueOf("SNAPSHOT"));
         Assert.assertEquals(NativeEpochKind.DEFRAG, NativeEpochKind.valueOf("DEFRAG"));
     }
 

@@ -4,7 +4,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.common.command.MutationContext;
 
 public class PreparedMutationContractTest {
     @Test
@@ -23,7 +22,7 @@ public class PreparedMutationContractTest {
             }
 
             @Override
-            public MutationOutcome commit(MutationContext context) {
+            public MutationOutcome commit() {
                 mutations.incrementAndGet();
                 return MutationOutcome.NONE;
             }
@@ -37,7 +36,7 @@ public class PreparedMutationContractTest {
         Assert.assertEquals("result", prepared.preview());
         Assert.assertTrue(prepared.isCurrent());
         Assert.assertEquals(0, mutations.get());
-        Assert.assertEquals(MutationOutcome.NONE, prepared.commit(MutationContext.none()));
+        Assert.assertEquals(MutationOutcome.NONE, prepared.commit());
         Assert.assertEquals(1, mutations.get());
         prepared.close();
         prepared.close();

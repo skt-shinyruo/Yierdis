@@ -1,11 +1,6 @@
 package yier.bubu.redis.storage.memory.internal.ledger;
 
 import java.util.Objects;
-import java.util.function.IntSupplier;
-import java.util.function.LongSupplier;
-import java.util.function.Supplier;
-import yier.bubu.redis.common.command.ImmutableCommandRecord;
-import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeAllocationGrowth;
@@ -13,10 +8,6 @@ import yier.bubu.redis.memory.api.NativeAllocationScope;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 import yier.bubu.redis.memory.api.NativeMemoryException;
-import yier.bubu.redis.storage.api.DbCommitKind;
-import yier.bubu.redis.storage.api.DbCommitPublisher;
-import yier.bubu.redis.storage.api.DbCommitReservation;
-import yier.bubu.redis.storage.api.DbCommitStreamUnavailableException;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.PostCommitMutationException;
 import yier.bubu.redis.storage.api.YierdisCommandException;
@@ -27,26 +18,6 @@ public final class YierdisDbMutationExecutor {
     private final MemoryLedger ledger;
     private final StableMemoryBackend stableMemoryBackend;
     private final YierdisDbHealth health;
-    private final Supplier<DbCommitPublisher> commitPublisherSupplier;
-    private final IntSupplier commitDbIndexSupplier;
-    private final LongSupplier clockMillis;
-
-    public YierdisDbMutationExecutor(Runnable threadChecker, MemoryLedger ledger) {
-        this(threadChecker, ledger, null);
-    }
-
-    public YierdisDbMutationExecutor(
-            Runnable threadChecker,
-            MemoryLedger ledger,
-            StableMemoryBackend stableMemoryBackend
-    ) {
-        this(
-                threadChecker,
-                ledger,
-                stableMemoryBackend,
-                new YierdisDbHealth(Objects.requireNonNull(threadChecker, "threadChecker"))
-        );
-    }
 
     public YierdisDbMutationExecutor(
             Runnable threadChecker,
@@ -54,85 +25,30 @@ public final class YierdisDbMutationExecutor {
             StableMemoryBackend stableMemoryBackend,
             YierdisDbHealth health
     ) {
-        this(
-                threadChecker,
-                ledger,
-                stableMemoryBackend,
-                health,
-                () -> DbCommitPublisher.NOOP,
-                () -> 0
-        );
-    }
-
-    public YierdisDbMutationExecutor(
-            Runnable threadChecker,
-            MemoryLedger ledger,
-            StableMemoryBackend stableMemoryBackend,
-            YierdisDbHealth health,
-            Supplier<DbCommitPublisher> commitPublisherSupplier,
-            IntSupplier commitDbIndexSupplier
-    ) {
-        this(
-                threadChecker,
-                ledger,
-                stableMemoryBackend,
-                health,
-                commitPublisherSupplier,
-                commitDbIndexSupplier,
-                System::currentTimeMillis
-        );
-    }
-
-    YierdisDbMutationExecutor(
-            Runnable threadChecker,
-            MemoryLedger ledger,
-            StableMemoryBackend stableMemoryBackend,
-            YierdisDbHealth health,
-            Supplier<DbCommitPublisher> commitPublisherSupplier,
-            IntSupplier commitDbIndexSupplier,
-            LongSupplier clockMillis
-    ) {
         this.threadChecker = Objects.requireNonNull(threadChecker, "threadChecker");
         this.ledger = Objects.requireNonNull(ledger, "ledger");
         this.stableMemoryBackend = stableMemoryBackend;
         this.health = Objects.requireNonNull(health, "health");
-        this.commitPublisherSupplier = Objects.requireNonNull(commitPublisherSupplier, "commitPublisherSupplier");
-        this.commitDbIndexSupplier = Objects.requireNonNull(commitDbIndexSupplier, "commitDbIndexSupplier");
-        this.clockMillis = Objects.requireNonNull(clockMillis, "clockMillis");
     }
 
     public <T> T execute(MutationPlan<T> plan) {
-        return execute(MutationContext.none(), plan);
-    }
-
-    public <T> T execute(MutationContext mutationContext, MutationPlan<T> plan) {
-        Objects.requireNonNull(mutationContext, "mutationContext");
         Objects.requireNonNull(plan, "plan");
         threadChecker.run();
         health.requireWritable();
-        DbCommitPublisher publisher = commitPublisher();
-        requireCommitStreamAvailability(plan, publisher);
         if (stableMemoryBackend == null) {
             throw new IllegalStateException("prepared mutations require a native allocator");
         }
-        return executePrepared(mutationContext, plan, publisher);
+        return executePrepared(plan);
     }
 
-    private <T> T executePrepared(
-            MutationContext mutationContext,
-            MutationPlan<T> plan,
-            DbCommitPublisher publisher
-    ) {
+    private <T> T executePrepared(MutationPlan<T> plan) {
         MemoryReservation reservation = null;
         NativeAllocationScope allocations = null;
         PreparedDbMutation<T> prepared = null;
-        DbCommitReservation commitReservation = null;
-        ImmutableCommandRecord commitRecord = null;
         boolean commitStarted = false;
         boolean allocationsPromoted = false;
         boolean ledgerSettled = false;
         boolean nativePageTrimAttempted = false;
-        boolean publishChanges = plan.requiresCommitStream() && publisher.enabled();
         try {
             boolean reclamation = plan.admissionMode() == MutationPlan.AdmissionMode.RECLAMATION;
             reservation = reclamation ? ledger.beginReclamation() : reserveNormalPlan(plan);
@@ -155,29 +71,12 @@ public final class YierdisDbMutationExecutor {
             }
             requireLedgerDeltaInvariant(ledger.usedBytes(), prepared.actualDeltaBytes());
 
-            if (publishChanges && prepared.outcome().changedAny()) {
-                commitRecord = plan.retainCommitRecord(mutationContext);
-                commitReservation = publisher.reserve(
-                        commitDbIndexSupplier.getAsInt(),
-                        plan.commitKind(),
-                        commitRecord,
-                        prepared.actualDeltaBytes(),
-                        clockMillis.getAsLong()
-                );
-                commitRecord.close();
-                commitRecord = null;
-            }
-
             commitStarted = true;
             T result = prepared.commit();
             allocations.promote();
             allocationsPromoted = true;
             ledger.commit(reservation, prepared.actualDeltaBytes());
             ledgerSettled = true;
-            if (commitReservation != null) {
-                publisher.publish(commitReservation);
-                commitReservation = null;
-            }
             prepared.releaseSuperseded();
             if (ledger.maxmemoryEnabled() && prepared.shouldTrimNativePagesAfterCommit()) {
                 nativePageTrimAttempted = true;
@@ -186,7 +85,7 @@ public final class YierdisDbMutationExecutor {
             return result;
         } catch (MemoryLedgerOutOfMemoryException | NativeCapacityExceededException expected) {
             if (!commitStarted) {
-                abortBeforeCommit(prepared, allocations, commitReservation, reservation, commitRecord, expected);
+                abortBeforeCommit(prepared, allocations, reservation, expected);
                 throw new YierdisCommandException(MaxmemoryErrors.OOM_ERR);
             }
             IllegalStateException invariantFailure = new IllegalStateException(
@@ -202,11 +101,10 @@ public final class YierdisDbMutationExecutor {
                     nativePageTrimAttempted,
                     invariantFailure
             );
-            failPublicationAfterCommit(publisher, commitReservation, invariantFailure);
             throw postCommitFailure(invariantFailure);
         } catch (RuntimeException | Error failure) {
             if (!commitStarted) {
-                abortBeforeCommit(prepared, allocations, commitReservation, reservation, commitRecord, failure);
+                abortBeforeCommit(prepared, allocations, reservation, failure);
                 if (isDegradingInvariantFailure(failure)) {
                     health.recordInvariantFailure(failure);
                 }
@@ -220,7 +118,6 @@ public final class YierdisDbMutationExecutor {
                         nativePageTrimAttempted,
                         failure
                 );
-                failPublicationAfterCommit(publisher, commitReservation, failure);
                 throw postCommitFailure(failure);
             }
             throw failure;
@@ -271,9 +168,7 @@ public final class YierdisDbMutationExecutor {
     private void abortBeforeCommit(
             PreparedDbMutation<?> prepared,
             NativeAllocationScope allocations,
-            DbCommitReservation commitReservation,
             MemoryReservation reservation,
-            ImmutableCommandRecord commitRecord,
             Throwable failure
     ) {
         try {
@@ -291,23 +186,9 @@ public final class YierdisDbMutationExecutor {
             failure.addSuppressed(abortFailure);
         }
         try {
-            if (commitReservation != null) {
-                commitReservation.close();
-            }
-        } catch (RuntimeException | Error abortFailure) {
-            failure.addSuppressed(abortFailure);
-        }
-        try {
             ledger.rollback(reservation);
         } catch (RuntimeException | Error rollbackFailure) {
             failure.addSuppressed(rollbackFailure);
-        }
-        try {
-            if (commitRecord != null) {
-                commitRecord.close();
-            }
-        } catch (RuntimeException | Error closeFailure) {
-            failure.addSuppressed(closeFailure);
         }
     }
 
@@ -357,31 +238,6 @@ public final class YierdisDbMutationExecutor {
         return new PostCommitMutationException("mutation failed after commit started", failure);
     }
 
-    private DbCommitPublisher commitPublisher() {
-        return Objects.requireNonNull(commitPublisherSupplier.get(), "commit publisher");
-    }
-
-    private static void requireCommitStreamAvailability(MutationPlan<?> plan, DbCommitPublisher publisher) {
-        if (plan.requiresCommitStream() && publisher.enabled() && !publisher.available()) {
-            throw new DbCommitStreamUnavailableException();
-        }
-    }
-
-    private static void failPublicationAfterCommit(
-            DbCommitPublisher publisher,
-            DbCommitReservation reservation,
-            Throwable failure
-    ) {
-        if (reservation == null) {
-            return;
-        }
-        try {
-            publisher.failAfterCommit(reservation);
-        } catch (RuntimeException | Error publicationFailure) {
-            failure.addSuppressed(publicationFailure);
-        }
-    }
-
     private static boolean isDegradingInvariantFailure(Throwable failure) {
         return failure instanceof NativeMemoryException || failure instanceof IllegalStateException;
     }
@@ -427,22 +283,6 @@ public final class YierdisDbMutationExecutor {
 
         default AdmissionMode admissionMode() {
             return AdmissionMode.NORMAL;
-        }
-
-        default DbCommitKind commitKind() {
-            return DbCommitKind.USER;
-        }
-
-        default boolean requiresCommitStream() {
-            return true;
-        }
-
-        default ImmutableCommandRecord retainCommitRecord(MutationContext context) {
-            ImmutableCommandRecord record = Objects.requireNonNull(context, "context").retainCommandRecord();
-            if (record == null) {
-                throw new DbCommitStreamUnavailableException();
-            }
-            return record;
         }
 
         PreparedDbMutation<T> prepare();

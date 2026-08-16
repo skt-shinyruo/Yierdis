@@ -2,7 +2,6 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
 
-import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
@@ -109,11 +108,6 @@ final class YierdisDbDataMaintenance {
                 @Override
                 public long upperBoundBytes() {
                     return maintenanceUpperBoundBytes(participant);
-                }
-
-                @Override
-                public CommitSpec commit() {
-                    return CommitSpec.none();
                 }
 
                 @Override
@@ -228,23 +222,17 @@ final class YierdisDbDataMaintenance {
         throwIfFailure(failure);
     }
 
-    MutationOutcome flushDb(MutationContext context) {
-        return flushDb(context, false);
+    MutationOutcome flushDb() {
+        return flushDb(false);
     }
 
-    MutationOutcome flushDbAsync(MutationContext context) {
-        return flushDb(context, true);
+    MutationOutcome flushDbAsync() {
+        return flushDb(true);
     }
 
-    private MutationOutcome flushDb(MutationContext context, boolean async) {
+    private MutationOutcome flushDb(boolean async) {
         health.requireWritable();
-        MutationContext checkedContext = Objects.requireNonNull(context, "context");
         return kernel.execute(new MutationUse<MutationOutcome>() {
-                    @Override
-                    public MutationContext context() {
-                        return checkedContext;
-                    }
-
                     @Override
                     public long upperBoundBytes() {
                         return 0L;
@@ -282,7 +270,7 @@ final class YierdisDbDataMaintenance {
     private void commitFlushDb() {
         runtimeState.checkThread();
         storage.clearData();
-        keyLifecycle.resetEntryStateCounters();
+        keyLifecycle.resetExpireCount();
         expirationSupport.resetCursor();
     }
 
@@ -290,7 +278,7 @@ final class YierdisDbDataMaintenance {
         // 只在 mutation commit 边界发布空目录；旧目录在后续 owner maintenance 中释放，不能再查询当前 keyspace。
         runtimeState.checkThread();
         storage.detachEntries();
-        keyLifecycle.resetEntryStateCounters();
+        keyLifecycle.resetExpireCount();
         expirationSupport.resetCursor();
     }
 

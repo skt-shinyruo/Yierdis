@@ -3,7 +3,6 @@ package yier.bubu.redis.storage.memory;
 import yier.bubu.redis.memory.testkit.HeapStableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.DbEngineConfig;
 import yier.bubu.redis.storage.api.ExpireOption;
@@ -233,7 +232,7 @@ public final class TestDbSupport {
         boolean completed = false;
         try {
             PoppedValueSequence preview = prepared.preview();
-            MutationOutcome outcome = prepared.commit(MutationContext.none());
+            MutationOutcome outcome = prepared.commit();
             completed = true;
             return WriteResult.of(new CommittedPopSource(prepared, preview), outcome);
         } finally {
@@ -260,7 +259,7 @@ public final class TestDbSupport {
         boolean completed = false;
         try {
             StringWriteOps.SetStringValue preview = prepared.preview();
-            MutationOutcome outcome = prepared.commit(MutationContext.none());
+            MutationOutcome outcome = prepared.commit();
             completed = true;
             return WriteResult.of(preview, outcome);
         } finally {

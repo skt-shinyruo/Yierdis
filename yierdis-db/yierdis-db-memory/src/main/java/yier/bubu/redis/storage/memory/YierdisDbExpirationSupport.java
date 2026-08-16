@@ -41,10 +41,10 @@ final class YierdisDbExpirationSupport {
     }
 
     void cleanupExpired(long nowMillis) {
-        kernel.execute(DbUse.maintain(scope -> {
+        kernel.maintain(scope -> {
             cleanupExpired(scope, nowMillis);
             return null;
-        }));
+        });
     }
 
     private void cleanupExpired(MaintenanceScope scope, long nowMillis) {
@@ -127,7 +127,7 @@ final class YierdisDbExpirationSupport {
             throw failure;
         }
 
-        // publication 前失败保留 batchStart；候选全部删除或证实失效后才提交 nextCursor。
+        // 候选处理失败时重试当前批次；全部删除或证实失效后才推进 cursor。
         retainCursor(retryBatch ? batchStart : next, batchTableGeneration);
         if (keyLifecycle.expireCount() == 0) {
             resetCursorState();
@@ -135,10 +135,10 @@ final class YierdisDbExpirationSupport {
     }
 
     void resetCursor() {
-        kernel.execute(DbUse.maintain(ignored -> {
+        kernel.maintain(ignored -> {
             resetCursorState();
             return null;
-        }));
+        });
     }
 
     private void resetCursorState() {

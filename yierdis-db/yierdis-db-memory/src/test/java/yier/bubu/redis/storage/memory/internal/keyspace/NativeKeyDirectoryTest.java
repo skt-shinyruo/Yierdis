@@ -15,6 +15,7 @@ import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.memory.DbThreadGuard;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
@@ -30,7 +31,7 @@ public class NativeKeyDirectoryTest {
         right.bindToCurrentThread();
         NativeHandle leftNative = left.allocate(NativeObjectKind.ENTRY_RECORD, 1);
         NativeHandle rightNative = right.allocate(NativeObjectKind.ENTRY_RECORD, 1);
-        try (NativeKeyDirectory directory = new NativeKeyDirectory(left, FIXED_SEED)) {
+        try (NativeKeyDirectory directory = new NativeKeyDirectory(left, FIXED_SEED, new HashTableMaintenanceRegistry())) {
             EntryHandle local = new EntryHandle(leftNative);
             EntryHandle foreign = new EntryHandle(rightNative);
             directory.compute(b("collision"), (ignored, old) -> local);
@@ -48,7 +49,7 @@ public class NativeKeyDirectoryTest {
     public void directoryOwnsKeyBytesAndRemovesMappingWithoutOwningEntry() {
         try (TestBackend runtime = TestBackend.open("directory-lifecycle")) {
             StableMemoryBackend backend = runtime.backend();
-            NativeKeyDirectory directory = new NativeKeyDirectory(backend, FIXED_SEED);
+            NativeKeyDirectory directory = new NativeKeyDirectory(backend, FIXED_SEED, new HashTableMaintenanceRegistry());
             NativeHandle entryNative = backend.allocate(NativeObjectKind.ENTRY_RECORD, 1);
             EntryHandle entry = new EntryHandle(entryNative);
             try {
@@ -71,7 +72,7 @@ public class NativeKeyDirectoryTest {
     public void rehashAndScanExposeEveryStableEntry() {
         try (TestBackend runtime = TestBackend.open("directory-rehash")) {
             StableMemoryBackend backend = runtime.backend();
-            NativeKeyDirectory directory = new NativeKeyDirectory(backend, FIXED_SEED);
+            NativeKeyDirectory directory = new NativeKeyDirectory(backend, FIXED_SEED, new HashTableMaintenanceRegistry());
             List<NativeHandle> entries = new ArrayList<>();
             try {
                 for (int i = 0; i < 40; i++) {
@@ -107,7 +108,7 @@ public class NativeKeyDirectoryTest {
     public void detachDuringRehashReclaimsEachOldKeyOnceAndKeepsTheNewGeneration() {
         try (TestBackend runtime = TestBackend.open("directory-detach-rehash")) {
             StableMemoryBackend backend = runtime.backend();
-            NativeKeyDirectory directory = new NativeKeyDirectory(backend, FIXED_SEED);
+            NativeKeyDirectory directory = new NativeKeyDirectory(backend, FIXED_SEED, new HashTableMaintenanceRegistry());
             List<NativeHandle> oldEntries = new ArrayList<>();
             NativeHandle newEntry = null;
             try {

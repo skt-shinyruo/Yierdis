@@ -80,10 +80,9 @@ public class CommandVariantCoverageTest {
                             (proxy, method, arguments) -> method.getName().equals("transaction") ? transaction : null
             );
             try (ByteArrayExecutionRequest request = ByteArrayExecutionRequest.copyOf(cmd("QUIT"));
-                    PreparedCommand prepared = dispatcher.prepare(session, request);
-                    CommandExecutionContext execution = CommandExecutionContext.forRequest(session, request)) {
+                    PreparedCommand prepared = dispatcher.prepare(session, request)) {
                 Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
-                CommandResult result = prepared.execute(execution);
+                CommandResult result = prepared.execute(CommandExecutionContext.forSession(session));
                 Assert.assertTrue(result.closeAfterReply());
             }
         });

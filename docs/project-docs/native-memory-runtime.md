@@ -18,10 +18,10 @@ DB graph 保存 `NativeHandle` 或 typed wrapper，不保存 `MemorySegment`、p
 
 ## 启动和所有权
 
-`YierdisServerBootstrap` 通过 `StableMemoryBackendFactory backendFactory = YierdisFfmStableMemoryBackend::new` 创建 `YierdisDbEngineFactory`。每次 `DbEngineFactory.create(...)` 都为对应 DB 创建一个独立 backend；backend 构造自己的 `YierdisFfmMemoryRuntime`，并在 close 时负责关闭它。
+`YierdisInstance.create(...)` 使用 `YierdisFfmStableMemoryBackend::new` 创建内部 `YierdisDbEngineFactory`。每次 `YierdisDbEngineFactory.create(...)` 都为对应 DB 创建一个独立 backend；backend 构造自己的 `YierdisFfmMemoryRuntime`，并在 close 时负责关闭它。
 
 ```text
-YierdisServerBootstrap
+YierdisInstance
   -> YierdisDbEngineFactory
      -> StableMemoryBackendFactory.create("db-N", ...)
         -> YierdisFfmStableMemoryBackend
@@ -84,7 +84,7 @@ FFM-backed storage 主要包括：
 
 ## Maxmemory 与 memory stats
 
-写路径由 `YierdisDbMutationExecutor` reserve upper bound，并用 allocation scope 实测 prepare peak。commit 后依次 promote、settle logical ledger、publish commit stream、release superseded resources，再按提示尝试 trim。
+写路径由 `YierdisDbMutationExecutor` reserve upper bound，并用 allocation scope 实测 prepare peak。commit 后依次 promote、settle logical ledger、release superseded resources，再按提示尝试 trim。
 
 enforcement snapshot 固定为：
 
@@ -112,4 +112,4 @@ native memory 不等于所有路径零复制。当前仍会 materialize 到 heap
 
 ## Operations Cross-Check
 
-native committed/reserved usage 参与 DB 和 maxmemory 诊断，但不会替代 ingress、commit stream 或 outbound reply 的独立容量限制。native allocation failure 仍按 mutation 的 commit 前/后边界决定返回 OOM 或 result-unknown；操作流程见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
+native committed/reserved usage 参与 DB 和 maxmemory 诊断，但不会替代 ingress 或 outbound reply 的独立容量限制。native allocation failure 仍按 mutation 的 commit 前/后边界决定返回 OOM 或 result-unknown；操作流程见 [`production-hardening-operations.md`](./production-hardening-operations.md)。

@@ -1,10 +1,5 @@
 package yier.bubu.redis.storage.memory;
 
-import yier.bubu.redis.common.command.ByteArrayCommandRecord;
-import yier.bubu.redis.common.command.ImmutableCommandRecord;
-import yier.bubu.redis.common.command.MutationContext;
-import yier.bubu.redis.storage.api.DbCommitKind;
-import yier.bubu.redis.storage.api.DbCommitStreamUnavailableException;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.CurrentEntry;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
@@ -16,9 +11,9 @@ import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 
 import java.util.Objects;
+import java.util.function.Function;
 
 final class YierdisDbKernel {
-    private static final byte[] DELETE_COMMAND = new byte[]{'D', 'E', 'L'};
     private final Runnable threadChecker;
     private final YierdisDbMutationExecutor mutationExecutor;
     private final YierdisDbKeyLifecycle keyLifecycle;
@@ -44,22 +39,26 @@ final class YierdisDbKernel {
         return executeMutationUse(use);
     }
 
-    <R> R execute(ReadUse<R> use) {
-        Objects.requireNonNull(use, "use");
+    <R> R read(Function<YierdisDbKernel, R> action) {
+        Objects.requireNonNull(action, "action");
         threadChecker.run();
-        return use.execute(this);
+        return action.apply(this);
     }
 
-    <R> R execute(InspectionUse<R> use) {
-        Objects.requireNonNull(use, "use");
+    <R> R inspect(Function<InspectionScope, R> action) {
+        Objects.requireNonNull(action, "action");
         threadChecker.run();
-        return use.execute(inspectionScope);
+        return action.apply(inspectionScope);
     }
 
-    <R> R execute(MaintenanceUse<R> use) {
-        Objects.requireNonNull(use, "use");
+    <R> R maintain(Function<MaintenanceScope, R> action) {
+        Objects.requireNonNull(action, "action");
         threadChecker.run();
-        return use.execute(maintenanceScope);
+        return action.apply(maintenanceScope);
+    }
+
+    void checkOwner() {
+        threadChecker.run();
     }
 
     void bindToCurrentThread() {
@@ -71,9 +70,7 @@ final class YierdisDbKernel {
     }
 
     private <R> R executeMutationUse(MutationUse<R> use) {
-        MutationContext context = Objects.requireNonNull(use.context(), "mutation context");
-        CommitSpec commit = Objects.requireNonNull(use.commit(), "commit spec");
-        return mutationExecutor.execute(context, new YierdisDbMutationExecutor.MutationPlan<>() {
+        return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return use.upperBoundBytes();
@@ -84,21 +81,6 @@ final class YierdisDbKernel {
                 return use.admission() == Admission.RECLAMATION
                         ? AdmissionMode.RECLAMATION
                         : AdmissionMode.NORMAL;
-            }
-
-            @Override
-            public DbCommitKind commitKind() {
-                return commit.kind();
-            }
-
-            @Override
-            public boolean requiresCommitStream() {
-                return commit.required();
-            }
-
-            @Override
-            public ImmutableCommandRecord retainCommitRecord(MutationContext mutationContext) {
-                return commit.retainRecord(mutationContext);
             }
 
             @Override
@@ -249,32 +231,15 @@ final class YierdisDbKernel {
 
     boolean reclaimExpired(KeyHandle keyHandle, EntryRecord expectedRecord, long nowMillis) {
         Objects.requireNonNull(keyHandle, "keyHandle");
-        ReclamationAttempt attempt = new ReclamationAttempt();
         if (!keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
             return false;
         }
-        try {
-            return reclaim(keyHandle, expectedRecord, DbCommitKind.EXPIRED, nowMillis, true, attempt);
-        } catch (DbCommitStreamUnavailableException unavailable) {
-            if (attempt.entryHandle == null) {
-                attempt.track(
-                        keyLifecycle.entryHandle(keyLifecycle.copyKeyBytes(keyHandle)),
-                        expectedRecord
-                );
-            }
-            keyLifecycle.markExpiredEntryAwaitingPhysicalDeletion(
-                    keyHandle,
-                    attempt.entryHandle,
-                    attempt.record,
-                    nowMillis
-            );
-            return false;
-        }
+        return reclaim(keyHandle, expectedRecord, nowMillis, true);
     }
 
     boolean evict(KeyHandle keyHandle, EntryRecord expectedRecord) {
         Objects.requireNonNull(keyHandle, "keyHandle");
-        return reclaim(keyHandle, expectedRecord, DbCommitKind.EVICTED, 0L, false, null);
+        return reclaim(keyHandle, expectedRecord, 0L, false);
     }
 
     void reclaimExpiredBeforeMutation(byte[] keyBytes, long nowMillis) {
@@ -291,14 +256,10 @@ final class YierdisDbKernel {
     private boolean reclaim(
             KeyHandle keyHandle,
             EntryRecord expectedRecord,
-            DbCommitKind commitKind,
             long nowMillis,
-            boolean requireExpired,
-            ReclamationAttempt attempt
+            boolean requireExpired
     ) {
         return execute(new MutationUse<Boolean>() {
-            private byte[] deletedKey;
-
             @Override
             public long upperBoundBytes() {
                 return 0L;
@@ -307,16 +268,6 @@ final class YierdisDbKernel {
             @Override
             public Admission admission() {
                 return Admission.RECLAMATION;
-            }
-
-            @Override
-            public CommitSpec commit() {
-                return CommitSpec.synthetic(commitKind, () -> {
-                    if (deletedKey == null) {
-                        throw new IllegalStateException("synthetic deletion record is unavailable");
-                    }
-                    return ByteArrayCommandRecord.copyOf(DELETE_COMMAND, deletedKey);
-                });
             }
 
             @Override
@@ -333,11 +284,7 @@ final class YierdisDbKernel {
                 if (entryHandle == null) {
                     return preparedNoDeletion();
                 }
-                if (attempt != null) {
-                    attempt.track(entryHandle, current);
-                }
                 long removalBytes = keyLifecycle.estimatedBytesForRemoval(keyHandle, current);
-                deletedKey = keyBytes;
                 return kernel.delete(
                         Boolean.TRUE,
                         -removalBytes,
@@ -354,13 +301,4 @@ final class YierdisDbKernel {
         });
     }
 
-    private static final class ReclamationAttempt {
-        private EntryHandle entryHandle;
-        private EntryRecord record;
-
-        private void track(EntryHandle entryHandle, EntryRecord record) {
-            this.entryHandle = entryHandle;
-            this.record = record;
-        }
-    }
 }

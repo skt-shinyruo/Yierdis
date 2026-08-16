@@ -38,7 +38,6 @@ public class MemoryStatsCommandTest {
             "keys_stored_offheap",
             "key_count",
             "expire_count",
-            "expired_entries_awaiting_physical_deletion",
             "keyspace_rehashing",
             "keyspace_table0_capacity",
             "keyspace_table1_capacity",

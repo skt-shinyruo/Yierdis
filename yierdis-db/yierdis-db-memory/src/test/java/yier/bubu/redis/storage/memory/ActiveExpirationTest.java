@@ -3,15 +3,10 @@ package yier.bubu.redis.storage.memory;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesView;
-import yier.bubu.redis.common.command.ImmutableCommandRecord;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.storage.api.DbCommitKind;
-import yier.bubu.redis.storage.api.DbCommitPublisher;
-import yier.bubu.redis.storage.api.DbCommitReservation;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
-import yier.bubu.redis.storage.api.PostCommitMutationException;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
@@ -22,13 +17,11 @@ import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 
 import java.lang.reflect.Field;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.function.Consumer;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
@@ -49,61 +42,27 @@ public class ActiveExpirationTest {
     }
 
     @Test
-    public void cleanupExpiredPublishesSyntheticDeleteCommit() {
+    public void staleExpirationCandidateIsRejectedAfterRecordChanges() {
         YierdisDb db = TestDbSupport.open();
-        db.bindToCurrentThread();
-
         try {
-            byte[] key = b("cleanup-event");
-            db.writes().strings().setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(0));
-            RecordingCommitPublisher publisher = new RecordingCommitPublisher();
-            db.attachCommitPublisher(publisher, 0);
+            byte[] key = b("stale");
+            db.writes().strings().setString(key, b("value"), SetMode.NORMAL, ExpireOption.px(0));
+            YierdisDbKeyLifecycle lifecycle = db.keyLifecycle();
+            KeyHandle keyHandle = lifecycle.keyHandle(key);
+            EntryRecord candidate = lifecycle.entryRecord(keyHandle);
 
-            db.cleanupExpired();
+            makePersistentWithoutStartingAnotherMutation(db, key);
 
-            Assert.assertEquals(1, publisher.published);
-            Assert.assertEquals(DbCommitKind.EXPIRED, publisher.kind);
-            Assert.assertEquals("DEL", publisher.command);
-            Assert.assertEquals("cleanup-event", publisher.key);
-            Assert.assertTrue(publisher.reservedOutsideDirectoryScan);
-        } finally {
-            db.shutdown();
-        }
-    }
-
-    @Test
-    public void staleExpirationCandidateDoesNotDeleteRecordChangedAfterScan() {
-        YierdisDb db = TestDbSupport.open(
-                0L,
-                MaxmemoryPolicy.NOEVICTION,
-                5,
-                5L,
-                Long.MAX_VALUE
-        );
-        try {
-            byte[] first = b("stale-first");
-            byte[] second = b("stale-second");
-            db.writes().strings().setString(first, b("v1"), SetMode.NORMAL, ExpireOption.px(0));
-            db.writes().strings().setString(second, b("v2"), SetMode.NORMAL, ExpireOption.px(0));
-            RecordingCommitPublisher publisher = new RecordingCommitPublisher();
-            publisher.onFirstExpiredReserve = deletedKey -> {
-                byte[] retainedKey = Arrays.equals(first, deletedKey) ? second : first;
-                makePersistentWithoutStartingAnotherMutation(db, retainedKey);
-                publisher.rewrittenKey = retainedKey;
-            };
-            db.attachCommitPublisher(publisher, 0);
-
-            db.cleanupExpired(Long.MAX_VALUE);
-
-            Assert.assertEquals(1, publisher.expiredPublished);
+            Assert.assertFalse(lifecycle.isCurrentExpiredCandidate(
+                    key,
+                    keyHandle,
+                    candidate,
+                    Long.MAX_VALUE
+            ));
             Assert.assertEquals(1, db.size());
             Assert.assertEquals(0, db.memory().memoryStats().expireCount());
-            Assert.assertNotNull(publisher.rewrittenKey);
-            Assert.assertArrayEquals(
-                    Arrays.equals(first, publisher.rewrittenKey) ? b("v1") : b("v2"),
-                    db.reads().strings().getStringBytes(publisher.rewrittenKey)
-            );
-            Assert.assertEquals(-1L, db.reads().ttl().ttlMillis(viewOf(publisher.rewrittenKey)));
+            Assert.assertArrayEquals(b("value"), db.reads().strings().getStringBytes(key));
+            Assert.assertEquals(-1L, db.reads().ttl().ttlMillis(viewOf(key)));
         } finally {
             db.shutdown();
         }
@@ -195,54 +154,11 @@ public class ActiveExpirationTest {
             Assert.assertTrue(directory.metrics().rehashing());
             Assert.assertTrue(countDuplicateScanIdentities(db) > 0);
 
-            RecordingCommitPublisher publisher = new RecordingCommitPublisher();
-            db.attachCommitPublisher(publisher, 0);
             int sizeBeforeCleanup = db.size();
 
             db.cleanupExpired(Long.MAX_VALUE);
 
-            Assert.assertEquals(20, publisher.expiredPublished);
             Assert.assertEquals(20, sizeBeforeCleanup - db.size());
-        } finally {
-            db.shutdown();
-        }
-    }
-
-    @Test
-    public void unavailableCommitStreamRetainsBatchForRetry() {
-        YierdisDb db = TestDbSupport.open(
-                0L,
-                MaxmemoryPolicy.NOEVICTION,
-                5,
-                5L,
-                Long.MAX_VALUE
-        );
-        try {
-            for (int i = 0; i < 45; i++) {
-                db.writes().strings().setString(
-                        b("retry-expired-" + i),
-                        b("v"),
-                        SetMode.NORMAL,
-                        ExpireOption.px(0)
-                );
-            }
-            RecordingCommitPublisher publisher = new RecordingCommitPublisher();
-            publisher.available = false;
-            db.attachCommitPublisher(publisher, 0);
-
-            db.cleanupExpired(Long.MAX_VALUE);
-
-            Assert.assertEquals(45, db.size());
-            Assert.assertEquals(45, db.memory().memoryStats().expireCount());
-            Assert.assertEquals(1L, db.memory().memoryStats().expiredEntriesAwaitingPhysicalDeletion());
-            publisher.available = true;
-
-            db.cleanupExpired(Long.MAX_VALUE);
-
-            Assert.assertEquals(25, db.size());
-            Assert.assertEquals(25, db.memory().memoryStats().expireCount());
-            Assert.assertEquals(20, publisher.expiredPublished);
-            Assert.assertEquals(0L, db.memory().memoryStats().expiredEntriesAwaitingPhysicalDeletion());
         } finally {
             db.shutdown();
         }
@@ -297,8 +213,6 @@ public class ActiveExpirationTest {
             Assert.assertNotNull(expectedFromRetainedCursor);
             Assert.assertFalse(Arrays.equals(expectedFromStart, expectedFromRetainedCursor));
 
-            RecordingCommitPublisher publisher = new RecordingCommitPublisher();
-            db.attachCommitPublisher(publisher, 0);
             int retainedWireGeneration = firstBatch.nextCursor().generation();
             advanceFullGenerationKeepingWireToken(directory);
             Assert.assertEquals(
@@ -306,34 +220,11 @@ public class ActiveExpirationTest {
                     (int) (directory.tableGeneration() & 0x1fff_ffffL)
             );
 
+            int sizeBeforeCleanup = db.size();
             db.cleanupExpired(Long.MAX_VALUE);
 
-            Assert.assertArrayEquals(expectedFromStart, publisher.firstExpiredKey);
-        } finally {
-            db.shutdown();
-        }
-    }
-
-    @Test
-    public void publishFailureKeepsDeletionAndDegradesDatabase() {
-        YierdisDb db = TestDbSupport.open();
-        try {
-            db.writes().strings().setString(
-                    b("publish-failure"),
-                    b("v"),
-                    SetMode.NORMAL,
-                    ExpireOption.px(0)
-            );
-            RecordingCommitPublisher publisher = new RecordingCommitPublisher();
-            publisher.failOnPublish = true;
-            db.attachCommitPublisher(publisher, 0);
-
-            Assert.assertThrows(PostCommitMutationException.class, db::cleanupExpired);
-
-            Assert.assertEquals(0, db.size());
-            Assert.assertEquals(1, publisher.published);
-            Assert.assertEquals(1, publisher.failedAfterCommit);
-            Assert.assertTrue(db.health().degraded());
+            Assert.assertEquals(20, sizeBeforeCleanup - db.size());
+            Assert.assertNull(db.keyLifecycle().entryRecord(expectedFromStart));
         } finally {
             db.shutdown();
         }
@@ -550,71 +441,4 @@ public class ActiveExpirationTest {
     private record ExpirationBatch(List<byte[]> keys, ScanCursorV2 nextCursor) {
     }
 
-    private static final class RecordingCommitPublisher implements DbCommitPublisher {
-        private int published;
-        private int expiredPublished;
-        private DbCommitKind kind;
-        private String command;
-        private String key;
-        private byte[] firstExpiredKey;
-        private boolean available = true;
-        private boolean failOnPublish;
-        private boolean reservedOutsideDirectoryScan;
-        private int failedAfterCommit;
-        private Consumer<byte[]> onFirstExpiredReserve;
-        private byte[] rewrittenKey;
-
-        @Override
-        public DbCommitReservation reserve(
-                int dbIndex,
-                DbCommitKind kind,
-                ImmutableCommandRecord record,
-                long committedMemoryDelta,
-                long commitAttemptTimestampMillis
-        ) {
-            reservedOutsideDirectoryScan = StackWalker.getInstance().walk(frames -> frames.noneMatch(
-                    frame -> frame.getClassName().endsWith("NativeKeyDirectory")
-                            && frame.getMethodName().equals("scanWithWork")
-            ));
-            this.kind = kind;
-            this.command = new String(record.toByteArray(0), StandardCharsets.US_ASCII);
-            byte[] reservedKey = record.toByteArray(1);
-            this.key = new String(reservedKey, StandardCharsets.US_ASCII);
-            boolean firstExpiredReservation = kind == DbCommitKind.EXPIRED && firstExpiredKey == null;
-            if (firstExpiredReservation) {
-                firstExpiredKey = Arrays.copyOf(reservedKey, reservedKey.length);
-            }
-            if (firstExpiredReservation && onFirstExpiredReserve != null) {
-                onFirstExpiredReserve.accept(Arrays.copyOf(reservedKey, reservedKey.length));
-            }
-            return DbCommitReservation.NOOP;
-        }
-
-        @Override
-        public long publish(DbCommitReservation reservation) {
-            published++;
-            if (kind == DbCommitKind.EXPIRED) {
-                expiredPublished++;
-            }
-            if (failOnPublish) {
-                throw new IllegalStateException("injected publish failure");
-            }
-            return published;
-        }
-
-        @Override
-        public void failAfterCommit(DbCommitReservation reservation) {
-            failedAfterCommit++;
-        }
-
-        @Override
-        public boolean enabled() {
-            return true;
-        }
-
-        @Override
-        public boolean available() {
-            return available;
-        }
-    }
 }

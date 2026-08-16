@@ -36,11 +36,6 @@ public final class YierdisInstanceObservability {
         this.instance = Objects.requireNonNull(instance, "instance");
     }
 
-    public CommitStreamStats commitStreamStats() {
-        CommitStream stream = instance.commitStream();
-        return stream == null ? CommitStreamStats.disabled() : stream.stats();
-    }
-
     /**
      * 在 DB owner thread 上聚合当前健康状态。
      * <p>
@@ -103,7 +98,6 @@ public final class YierdisInstanceObservability {
         long nativeDefragReclaimedPages = 0;
         long nativeLiveObjects = 0;
         long nativeLiveRegions = 0;
-        long expiredEntriesAwaitingPhysicalDeletion = 0;
         int pendingHashTableCount = 0;
         String lastHashTableMaintenanceStopReason = "COMPLETE";
         boolean sharedNativeRuntime = instance.config().maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.GLOBAL;
@@ -150,10 +144,6 @@ public final class YierdisInstanceObservability {
             nativeStaleHandleDetections = addSaturating(nativeStaleHandleDetections, s.nativeStaleHandleDetections());
             nativeDefragReclaimedPages = addSaturating(nativeDefragReclaimedPages, s.nativeDefragReclaimedPages());
             nativeLiveObjects = addSaturating(nativeLiveObjects, s.nativeLiveObjects());
-            expiredEntriesAwaitingPhysicalDeletion = addSaturating(
-                    expiredEntriesAwaitingPhysicalDeletion,
-                    s.expiredEntriesAwaitingPhysicalDeletion()
-            );
             if (sharedNativeRuntime) {
                 nativeLiveRegions = Math.max(nativeLiveRegions, Math.max(0L, s.nativeLiveRegions()));
             } else {
@@ -212,8 +202,7 @@ public final class YierdisInstanceObservability {
                 pendingHashTableCount,
                 lastHashTableMaintenanceStopReason,
                 nativeLiveObjects,
-                nativeLiveRegions,
-                expiredEntriesAwaitingPhysicalDeletion
+                nativeLiveRegions
         );
     }
 

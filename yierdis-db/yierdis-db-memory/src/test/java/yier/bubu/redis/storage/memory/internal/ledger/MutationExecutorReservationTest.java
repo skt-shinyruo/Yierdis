@@ -32,6 +32,7 @@ import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.memory.TestBackend;
+import yier.bubu.redis.storage.memory.YierdisDbHealth;
 
 import java.nio.charset.StandardCharsets;
 
@@ -49,12 +50,7 @@ public class MutationExecutorReservationTest {
         preparedRuntime = TestBackend.open("prepared-mutation-test");
         preparedAllocator = preparedRuntime.backend();
         preparedAllocator.bindToCurrentThread();
-        preparedExecutor = new YierdisDbMutationExecutor(
-                () -> {
-                },
-                preparedLedger,
-                preparedAllocator
-        );
+        preparedExecutor = executor(preparedLedger, preparedAllocator);
     }
 
     @After
@@ -131,9 +127,7 @@ public class MutationExecutorReservationTest {
     public void zeroDeltaOnlyTrimsNativePagesWhenPreparedMutationRequestsIt() {
         AtomicInteger trimCalls = new AtomicInteger();
         StableMemoryBackend recordingAllocator = allocatorThatCountsTrims(trimCalls);
-        YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(
-                () -> {
-                },
+        YierdisDbMutationExecutor executor = executor(
                 new InMemoryLedger(PREPARED_TEST_UPPER_BOUND_BYTES * 2L),
                 recordingAllocator
         );
@@ -193,9 +187,7 @@ public class MutationExecutorReservationTest {
     public void postCommitSettlementStillTrimsAfterSupersededReleaseFails() {
         AtomicInteger trimCalls = new AtomicInteger();
         AtomicInteger releaseCalls = new AtomicInteger();
-        YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(
-                () -> {
-                },
+        YierdisDbMutationExecutor executor = executor(
                 new InMemoryLedger(PREPARED_TEST_UPPER_BOUND_BYTES * 2L),
                 allocatorThatCountsTrims(trimCalls)
         );
@@ -249,7 +241,8 @@ public class MutationExecutorReservationTest {
                     throw new IllegalStateException("release failed");
                 },
                 () -> {
-                }
+                },
+                false
         );
 
         prepared.commit();
@@ -266,12 +259,7 @@ public class MutationExecutorReservationTest {
                 new InMemoryLedger(0),
                 () -> upperBound.set(20_000L)
         );
-        YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(
-                () -> {
-                },
-                ledger,
-                preparedAllocator
-        );
+        YierdisDbMutationExecutor executor = executor(ledger, preparedAllocator);
         PreparedDbMutation<String> prepared = prepared(
                 0L,
                 0L,
@@ -308,12 +296,7 @@ public class MutationExecutorReservationTest {
                 new InMemoryLedger(0),
                 () -> upperBound.set(10_000L)
         );
-        YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(
-                () -> {
-                },
-                ledger,
-                preparedAllocator
-        );
+        YierdisDbMutationExecutor executor = executor(ledger, preparedAllocator);
         PreparedDbMutation<String> prepared = prepared(
                 0L,
                 0L,
@@ -836,6 +819,20 @@ public class MutationExecutorReservationTest {
         } finally {
             db.shutdown();
         }
+    }
+
+    private static YierdisDbMutationExecutor executor(
+            MemoryLedger ledger,
+            StableMemoryBackend allocator
+    ) {
+        Runnable threadChecker = () -> {
+        };
+        return new YierdisDbMutationExecutor(
+                threadChecker,
+                ledger,
+                allocator,
+                new YierdisDbHealth(threadChecker)
+        );
     }
 
     private static byte[] bytes(String value) {

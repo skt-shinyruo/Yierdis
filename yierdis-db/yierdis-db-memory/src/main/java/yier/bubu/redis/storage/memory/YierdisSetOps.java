@@ -4,7 +4,6 @@ import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
 
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.CurrentEntry;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
-import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.MutationOutcome;
@@ -47,20 +46,11 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
 
     @Override
     public WriteResult<Long> sadd(byte[] keyBytes, List<byte[]> members) {
-        return sadd(MutationContext.none(), keyBytes, members);
-    }
-
-    WriteResult<Long> sadd(MutationContext context, byte[] keyBytes, List<byte[]> members) {
-        kernel.execute(DbUse.ownerCheck());
+        kernel.checkOwner();
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
         kernel.reclaimExpiredBeforeMutation(keyBytes, now);
         return kernel.execute(new MutationUse<WriteResult<Long>>() {
-            @Override
-            public MutationContext context() {
-                return context;
-            }
-
             @Override
             public long upperBoundBytes() {
                 return estimateSetAddUpperBound(keyBytes, members, now);
@@ -141,20 +131,11 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
 
     @Override
     public WriteResult<Long> srem(byte[] keyBytes, List<byte[]> members) {
-        return srem(MutationContext.none(), keyBytes, members);
-    }
-
-    WriteResult<Long> srem(MutationContext context, byte[] keyBytes, List<byte[]> members) {
-        kernel.execute(DbUse.ownerCheck());
+        kernel.checkOwner();
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
         kernel.reclaimExpiredBeforeMutation(keyBytes, now);
         return kernel.execute(new MutationUse<WriteResult<Long>>() {
-            @Override
-            public MutationContext context() {
-                return context;
-            }
-
             @Override
             public long upperBoundBytes() {
                 return 0;
@@ -211,7 +192,7 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
 
     @Override
     public ByteSequenceSource smembers(byte[] keyBytes) {
-        return kernel.execute(DbUse.read(scope -> {
+        return kernel.read(scope -> {
             EntryRecord record = liveSetRecord(scope, keyBytes);
             if (record == null) {
                 return ByteSequenceSources.empty();
@@ -223,34 +204,34 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
                     out -> setRoot.membersInto(handle, SemanticResultSupport.lengthSink(out)),
                     out -> setRoot.membersInto(handle, out)
             );
-        }));
+        });
     }
 
     @Override
     public boolean sismember(byte[] keyBytes, byte[] member) {
-        return kernel.execute(DbUse.read(scope -> {
+        return kernel.read(scope -> {
             EntryRecord record = liveSetRecord(scope, keyBytes);
             if (record == null) {
                 return false;
             }
             return setRoot.contains(requireSetHandle(record), member);
-        }));
+        });
     }
 
     @Override
     public long scard(byte[] keyBytes) {
-        return kernel.execute(DbUse.read(scope -> {
+        return kernel.read(scope -> {
             EntryRecord record = liveSetRecord(scope, keyBytes);
             if (record == null) {
                 return 0L;
             }
             return (long) setRoot.size(requireSetHandle(record));
-        }));
+        });
     }
 
     @Override
     public CollectionScanWindow sscan(byte[] keyBytes, ScanCursorV2 cursor, byte[] globPattern, int count) {
-        return kernel.execute(DbUse.read(scope -> {
+        return kernel.read(scope -> {
             if (count <= 0) {
                 throw new IllegalArgumentException("count must be > 0");
             }
@@ -264,7 +245,7 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
                     globPattern,
                     count
             );
-        }));
+        });
     }
 
     private long estimateSetAddUpperBound(byte[] keyBytes, List<byte[]> members, long nowMillis) {

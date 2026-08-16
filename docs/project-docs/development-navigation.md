@@ -285,36 +285,28 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 - `YierdisDbMemoryReporterTest`
 - `YierdisDbIntrospectionTest`
 
-## 改代理 / DB 提交事件 / AOF replication 起点
+## 改 session / DB 路由 / 观测代理起点
 
 先打开：
 
-- [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)
+- [`proxy-logic.md`](./proxy-logic.md)
 - [`CommandSession.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/CommandSession.java)
 - [`CommandExecutionContext.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/CommandExecutionContext.java)
 - [`YierdisDbRouter.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/YierdisDbRouter.java)
 - [`CommandSupport.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java)
 - [`ServerInfoProvider.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/ServerInfoProvider.java)
-- [`MutationContext.java`](../../yierdis-common/yierdis-common-command/src/main/java/yier/bubu/redis/common/command/MutationContext.java)
-- [`DbCommitPublisher.java`](../../yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/DbCommitPublisher.java)
 - [`YierdisDbMutationExecutor.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java)
-- [`CommitStream.java`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/CommitStream.java)
-- [`YierdisChangeEvent.java`](../../yierdis-server/yierdis-server-runtime-api/src/main/java/yier/bubu/redis/runtime/api/YierdisChangeEvent.java)
 
 继续追：
 
 - 请求主链和 command/session 边界看 [`request-execution-flow.md`](./request-execution-flow.md)。
-- 命令 record scope 和 DB commit publication 的顺序看 [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)。
-- expire / eviction synthetic delete 的 DB lifecycle 看 [`db-internals.md`](./db-internals.md)。
+- DB routing 和观测 provider 的边界看 [`proxy-logic.md`](./proxy-logic.md)。
+- expire / eviction reclamation 的 DB lifecycle 看 [`db-internals.md`](./db-internals.md)。
 
 测试优先级：
 
 - `CommandDispatcherTest`
 - `CommandParseIsolationTest`
-- `DbCommitPublisherTest`
-- `CommitStreamTest`
-- `CommitStreamShutdownTest`
-- `YierdisChangeSinkTest`
 - `ActiveExpirationTest`
 - `YierdisDbConstructionTest`
 - `YierdisServerBootstrapCommandWiringTest`

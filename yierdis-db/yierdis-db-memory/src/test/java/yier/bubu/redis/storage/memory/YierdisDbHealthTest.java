@@ -304,9 +304,7 @@ public class YierdisDbHealthTest {
                 db::checkThread,
                 db.memoryLedger(),
                 KeyLifecycleTestAccess.backend(db),
-                db.healthMonitor(),
-                db::commitPublisher,
-                db::commitDbIndex
+                db.healthMonitor()
         );
     }
 

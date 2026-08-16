@@ -17,15 +17,4 @@
     <name>yierdis-common-command</name>
     <description>Owned immutable command records shared below command, storage, and runtime layers.</description>
 
-    <dependencies>
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-common-bytes</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>junit</groupId>
-            <artifactId>junit</artifactId>
-            <scope>test</scope>
-        </dependency>
-    </dependencies>
 </project>

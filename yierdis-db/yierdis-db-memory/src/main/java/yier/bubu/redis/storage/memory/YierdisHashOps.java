@@ -4,7 +4,6 @@ import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
 
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.CurrentEntry;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
-import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.HashReadOps;
@@ -50,11 +49,7 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
 
     @Override
     public WriteResult<Long> hset(byte[] keyBytes, List<byte[]> fieldValuePairs) {
-        return hset(MutationContext.none(), keyBytes, fieldValuePairs);
-    }
-
-    WriteResult<Long> hset(MutationContext context, byte[] keyBytes, List<byte[]> fieldValuePairs) {
-        kernel.execute(DbUse.ownerCheck());
+        kernel.checkOwner();
         Objects.requireNonNull(keyBytes, "keyBytes");
         if (fieldValuePairs.size() % 2 != 0) {
             throw new IllegalArgumentException("fieldValuePairs must contain field/value pairs");
@@ -64,11 +59,6 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
         return kernel.execute(new MutationUse<WriteResult<Long>>() {
             private HashRoot.SetPlan cachedSetPlan;
             private boolean setPlanInitialized;
-
-            @Override
-            public MutationContext context() {
-                return context;
-            }
 
             @Override
             public long upperBoundBytes() {
@@ -186,18 +176,18 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
 
     @Override
     public ByteValue hget(byte[] keyBytes, byte[] fieldBytes) {
-        return kernel.execute(DbUse.read(scope -> {
+        return kernel.read(scope -> {
             EntryRecord record = liveHashRecord(scope, keyBytes);
             if (record == null) {
                 return ByteValue.nullValue();
             }
             return hashRoot.hgetValue(requireHashHandle(record), fieldBytes);
-        }));
+        });
     }
 
     @Override
     public ByteMapSource hgetall(byte[] keyBytes) {
-        return kernel.execute(DbUse.read(scope -> {
+        return kernel.read(scope -> {
             EntryRecord record = liveHashRecord(scope, keyBytes);
             if (record == null) {
                 return ByteMapSources.empty();
@@ -209,18 +199,18 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
                     out -> hashRoot.hgetallPairsInto(handle, SemanticResultSupport.lengthSink(out)),
                     out -> hashRoot.hgetallPairsInto(handle, out)
             );
-        }));
+        });
     }
 
     @Override
     public long hlen(byte[] keyBytes) {
-        return kernel.execute(DbUse.read(scope -> {
+        return kernel.read(scope -> {
             EntryRecord record = liveHashRecord(scope, keyBytes);
             if (record == null) {
                 return 0L;
             }
             return (long) hashRoot.size(requireHashHandle(record));
-        }));
+        });
     }
 
     @Override
@@ -231,7 +221,7 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
             int count,
             boolean noValues
     ) {
-        return kernel.execute(DbUse.read(scope -> {
+        return kernel.read(scope -> {
             if (count <= 0) {
                 throw new IllegalArgumentException("count must be > 0");
             }
@@ -246,25 +236,16 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
                     count,
                     noValues
             );
-        }));
+        });
     }
 
     @Override
     public WriteResult<Long> hdel(byte[] keyBytes, List<byte[]> fields) {
-        return hdel(MutationContext.none(), keyBytes, fields);
-    }
-
-    WriteResult<Long> hdel(MutationContext context, byte[] keyBytes, List<byte[]> fields) {
-        kernel.execute(DbUse.ownerCheck());
+        kernel.checkOwner();
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
         kernel.reclaimExpiredBeforeMutation(keyBytes, now);
         return kernel.execute(new MutationUse<WriteResult<Long>>() {
-            @Override
-            public MutationContext context() {
-                return context;
-            }
-
             @Override
             public long upperBoundBytes() {
                 return 0;

@@ -41,17 +41,7 @@
         </dependency>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-server-runtime-api</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-server-api</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-server-executor</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

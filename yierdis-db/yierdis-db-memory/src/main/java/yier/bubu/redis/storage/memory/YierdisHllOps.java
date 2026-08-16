@@ -4,7 +4,6 @@ import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
 
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.CurrentEntry;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
-import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.HllReadOps;
 import yier.bubu.redis.storage.api.HllWriteOps;
@@ -45,20 +44,11 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
 
     @Override
     public WriteResult<Integer> pfadd(byte[] keyBytes, List<byte[]> elements) {
-        return pfadd(MutationContext.none(), keyBytes, elements);
-    }
-
-    WriteResult<Integer> pfadd(MutationContext context, byte[] keyBytes, List<byte[]> elements) {
-        kernel.execute(DbUse.ownerCheck());
+        kernel.checkOwner();
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
         kernel.reclaimExpiredBeforeMutation(keyBytes, now);
         return kernel.execute(new MutationUse<WriteResult<Integer>>() {
-            @Override
-            public MutationContext context() {
-                return context;
-            }
-
             @Override
             public long upperBoundBytes() {
                 return estimatePfaddUpperBound(keyBytes, elements, now);
@@ -125,7 +115,7 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
 
     @Override
     public long pfcount(List<byte[]> keys) {
-        return kernel.execute(DbUse.read(scope -> {
+        return kernel.read(scope -> {
             if (keys == null || keys.isEmpty()) {
                 return 0L;
             }
@@ -140,16 +130,12 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
                 YierdisHyperLogLog.mergeHllIntoRegisters(stringRoot.slice(handle), registers);
             }
             return YierdisHyperLogLog.estimateCardinality(registers);
-        }));
+        });
     }
 
     @Override
     public WriteResult<Void> pfmerge(byte[] destKeyBytes, List<byte[]> sourceKeys) {
-        return pfmerge(MutationContext.none(), destKeyBytes, sourceKeys);
-    }
-
-    WriteResult<Void> pfmerge(MutationContext context, byte[] destKeyBytes, List<byte[]> sourceKeys) {
-        kernel.execute(DbUse.ownerCheck());
+        kernel.checkOwner();
         Objects.requireNonNull(destKeyBytes, "destKeyBytes");
         if (sourceKeys == null || sourceKeys.isEmpty()) {
             throw new IllegalArgumentException("sourceKeys must not be empty");
@@ -161,11 +147,6 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
             kernel.reclaimExpiredBeforeMutation(sourceKey, now);
         }
         return kernel.execute(new MutationUse<WriteResult<Void>>() {
-            @Override
-            public MutationContext context() {
-                return context;
-            }
-
             @Override
             public long upperBoundBytes() {
                 return estimatePfmergeUpperBound(destKeyBytes, sourceKeys, now);

@@ -175,10 +175,8 @@ public class PreparedCommandsTest {
 
     private static CommandResult execute(PreparedCommand prepared) {
         ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("TEST", List.of());
-        try (request;
-             CommandExecutionContext context = CommandExecutionContext.forRequest(
-                     new TestSession(), request)) {
-            return prepared.execute(context);
+        try (request) {
+            return prepared.execute(CommandExecutionContext.forSession(new TestSession()));
         }
     }
 

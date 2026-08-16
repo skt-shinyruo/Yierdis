@@ -7,7 +7,6 @@ import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.bytes.BytesView;
-import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.DirectoryState;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.KeyScanResult;
@@ -47,20 +46,11 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
 
     @Override
     public WriteResult<Long> del(Collection<byte[]> keys) {
-        return del(MutationContext.none(), keys);
-    }
-
-    WriteResult<Long> del(MutationContext context, Collection<byte[]> keys) {
-        kernel.execute(DbUse.ownerCheck());
+        kernel.checkOwner();
         Objects.requireNonNull(keys, "keys");
         long nowMillis = System.currentTimeMillis();
         reclaimExpiredBeforeDeletion(keys, nowMillis);
         return kernel.execute(new MutationUse<WriteResult<Long>>() {
-            @Override
-            public MutationContext context() {
-                return context;
-            }
-
             @Override
             public long upperBoundBytes() {
                 return 0L;
@@ -154,24 +144,24 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
 
     @Override
     public ValueType typeOf(BytesView keyView) {
-        return kernel.execute(DbUse.read(scope -> {
+        return kernel.read(scope -> {
             EntryRecord record = scope.liveEntryRecord(keyLifecycle.keyHandle(keyView));
             return record == null ? null : record.type();
-        }));
+        });
     }
 
     @Override
     public boolean existsKey(BytesView keyView) {
-        return kernel.execute(DbUse.read(
+        return kernel.read(
                 scope -> scope.liveEntryRecord(keyLifecycle.keyHandle(keyView)) != null
-        ));
+        );
     }
 
     @Override
     public KeyScanWindow keys(byte[] globPattern, int maxMatches, long timeBudgetNanos) {
-        return kernel.execute(DbUse.read(
+        return kernel.read(
                 ignored -> keysWithinRead(globPattern, maxMatches, timeBudgetNanos)
-        ));
+        );
     }
 
     private KeyScanWindow keysWithinRead(byte[] globPattern, int maxMatches, long timeBudgetNanos) {
@@ -246,7 +236,7 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
 
     @Override
     public KeyScanWindow scan(ScanCursorV2 cursor, byte[] globPattern, int count) {
-        return kernel.execute(DbUse.read(ignored -> scanWithinRead(cursor, globPattern, count)));
+        return kernel.read(ignored -> scanWithinRead(cursor, globPattern, count));
     }
 
     private KeyScanWindow scanWithinRead(ScanCursorV2 cursor, byte[] globPattern, int count) {

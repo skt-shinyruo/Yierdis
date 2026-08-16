@@ -3,42 +3,16 @@ package yier.bubu.redis.execution.api;
 import org.junit.Assert;
 import org.junit.Test;
 
-import java.lang.reflect.Modifier;
 import java.lang.reflect.Method;
 import java.util.List;
 
 public class CoreContractSmokeTest {
     @Test
-    public void executionContextHasNoPublicConstructorAndOneRequestFactory() throws Exception {
-        for (var constructor : CommandExecutionContext.class.getDeclaredConstructors()) {
-            Assert.assertFalse(Modifier.isPublic(constructor.getModifiers()));
-        }
-        Method factory = CommandExecutionContext.class.getMethod(
-                "forRequest", CommandSession.class, ExecutionRequest.class);
-        Assert.assertTrue(Modifier.isPublic(factory.getModifiers()));
-        Assert.assertTrue(Modifier.isStatic(factory.getModifiers()));
-
-        long requestFactories = java.util.Arrays.stream(CommandExecutionContext.class.getMethods())
-                .filter(method -> Modifier.isStatic(method.getModifiers()))
-                .filter(method -> java.util.Arrays.asList(method.getParameterTypes())
-                        .contains(ExecutionRequest.class))
-                .count();
-        Assert.assertEquals(1L, requestFactories);
-    }
-
-    @Test
-    public void executionContextExposesOneScopedMutationBorrow() {
+    public void executionContextExposesItsSession() {
         NarrowSession session = new NarrowSession();
-        ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("PING", List.of());
+        CommandExecutionContext context = CommandExecutionContext.forSession(session);
 
-        try (CommandExecutionContext context = CommandExecutionContext.forRequest(
-                session, request)) {
-            Assert.assertSame(session, context.session());
-            Assert.assertTrue(context.mutationContext().hasCommandRecord());
-            Assert.assertSame(request, context.mutationContext().commandRecord());
-        } finally {
-            request.close();
-        }
+        Assert.assertSame(session, context.session());
     }
 
     @Test

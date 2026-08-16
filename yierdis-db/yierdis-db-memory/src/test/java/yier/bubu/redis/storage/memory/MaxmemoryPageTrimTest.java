@@ -27,6 +27,7 @@ public class MaxmemoryPageTrimTest {
                     physicalUsedBytes.set(80);
                 },
                 physicalUsedBytes::get,
+                () -> null,
                 () -> null
         );
 
@@ -52,6 +53,7 @@ public class MaxmemoryPageTrimTest {
                 },
                 limit -> trimRan.set(true),
                 physicalUsedBytes::get,
+                () -> null,
                 () -> null
         );
 

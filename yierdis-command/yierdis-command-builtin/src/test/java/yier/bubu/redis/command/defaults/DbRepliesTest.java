@@ -147,10 +147,8 @@ public class DbRepliesTest {
         List<String> events = new ArrayList<>();
         RedisReplyWriter writer = recordingWriter(events);
         CommandResult result;
-        try (ByteArrayExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("TEST", List.of());
-             CommandExecutionContext context = CommandExecutionContext.forRequest(
-                     session(), request)) {
-            result = prepared.execute(context);
+        try (ByteArrayExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("TEST", List.of())) {
+            result = prepared.execute(CommandExecutionContext.forSession(session()));
         }
         RedisReplyRenderer.render(result.reply(), writer);
         return events;

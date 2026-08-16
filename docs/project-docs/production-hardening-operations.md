@@ -1,6 +1,6 @@
 # Production Hardening Operations
 
-This guide is the operating contract for the single-node production-hardening program. It describes the runtime limits that are enforced by the server, the conditions under which a reply or mutation result is unknown, and the evidence required before a candidate is called accepted. It does not promise crash durability: the in-process commit-stream is bounded and ordered, but it is not an AOF, RDB, replication, or recovery mechanism.
+This guide is the operating contract for the single-node production-hardening program. It describes the runtime limits that are enforced by the server, the conditions under which a reply or mutation result is unknown, and the evidence required before a candidate is called accepted. It does not promise crash durability or recovery.
 
 Read this together with [`configuration-and-operations.md`](./configuration-and-operations.md), [`executor-and-backpressure.md`](./executor-and-backpressure.md), [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md), [`protocol-reference.md`](./protocol-reference.md), and [`testing-and-debugging.md`](./testing-and-debugging.md).
 
@@ -22,7 +22,7 @@ mvn -DskipTests package
 java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar --port 6378
 ```
 
-Use `INFO`, `INFO stats`, `STATS`, and `MEMORY STATS` to inspect a running process. Do not infer a limit from JVM heap use alone: request, commit-stream, maxmemory/native, and reply ownership are separate bounded domains.
+Use `INFO`, `INFO stats`, `STATS`, and `MEMORY STATS` to inspect a running process. Do not infer a limit from JVM heap use alone: request, maxmemory/native, and reply ownership are separate bounded domains.
 
 ## Admission Limits
 
@@ -47,8 +47,6 @@ The server rejects invalid ordering at startup: control reservation must cover t
 Both gauges are bounded by the same hard admission hierarchy. A DB streamed source is owned by its `PreparedCommand` and is closed after synchronous rendering; its retained-source byte charge remains in the reply-slot lease until terminal slot cleanup. Slot, chunk, write-future, listener, queue, and any resource explicitly transferred to the reply sink remain associated with one reply slot until exactly one terminal cleanup owner releases them. `--clientOutputBufferLimitBytes` and its grace interval remain slow-client policy controls; they are not replacements for the hard reply admission limits above.
 
 Ingress has its own global bound. `--protocolGlobalInFlightBytes` limits admitted parsed request ownership. A positive value is used exactly; `0` derives a bounded value from `--executorQueueMaxBytes` and is not an unlimited mode. The protocol parser also enforces `--protocolMaxBulkBytes`, `--protocolMaxArgs`, `--protocolMaxLineBytes`, and `--protocolMaxCommandBytes` before a request reaches the executor.
-
-The commit-stream is an independent bounded admission domain. Its reserved event and byte counters describe ordered notification work after mutation commit; it is not durable storage. When commit-stream pressure or failure is observed, do not reinterpret it as evidence that a process restart can recover unpersisted mutations.
 
 ## Ordering, Preflight, And Scheduler Policy
 
@@ -81,16 +79,15 @@ Operators should distinguish a result-unknown close from a capacity reject by ch
 | Domain | Fields to inspect |
 | --- | --- |
 | Ingress | `yierdis_inbound_reserved_bytes`, `yierdis_inbound_peak_reserved_bytes`, `yierdis_inbound_waiting_connections`, `yierdis_inbound_rejected_connections` |
-| Commit-stream | `yierdis_commit_stream_state`, `yierdis_commit_stream_reserved_events`, `yierdis_commit_stream_reserved_bytes`, `yierdis_commit_stream_rejected_writes`, `yierdis_commit_stream_shutdown_timed_out` |
 | Reply capacity | `yierdis_reply_global_capacity_bytes`, `yierdis_reply_per_connection_capacity_bytes`, `yierdis_reply_max_total_bytes`, `yierdis_outbound_reserved_bytes`, `yierdis_outbound_allocated_bytes`, `yierdis_outbound_peak_reserved_bytes`, `yierdis_outbound_peak_allocated_bytes` |
 | Reply ownership | `yierdis_outbound_active_connections`, `yierdis_outbound_active_slots`, `yierdis_outbound_active_chunks`, `yierdis_outbound_active_sources`, `yierdis_live_child_channels` |
 | Reply failures and scheduling | `yierdis_outbound_capacity_rejects`, `yierdis_outbound_oversized_replies`, `yierdis_outbound_cancelled_slots`, `yierdis_outbound_failed_slots`, `yierdis_outbound_write_failures`, `yierdis_result_unknown_closes`, `yierdis_deferred_fair_reply_heads`, `yierdis_deferred_global_reply_heads` |
-| Shutdown | `yierdis_reply_shutdown_timeouts`, commit-stream timeout state, inbound closed state, and final ownership gauges |
-| Maxmemory/native | `INFO memory` fields including `yierdis_maxmemory_used_bytes`, `yierdis_maxmemory_effective_used_bytes`, `yierdis_ledger_reserved_bytes`, `yierdis_offheap_used_bytes`, `yierdis_native_metadata_committed_bytes`, `yierdis_native_data_committed_bytes`, `yierdis_native_live_objects`, `yierdis_native_live_regions`, `yierdis_expired_entries_awaiting_physical_deletion`, and native defrag summaries |
+| Shutdown | `yierdis_reply_shutdown_timeouts`, inbound closed state, and final ownership gauges |
+| Maxmemory/native | `INFO memory` fields including `yierdis_maxmemory_used_bytes`, `yierdis_maxmemory_effective_used_bytes`, `yierdis_ledger_reserved_bytes`, `yierdis_offheap_used_bytes`, `yierdis_native_metadata_committed_bytes`, `yierdis_native_data_committed_bytes`, `yierdis_native_live_objects`, `yierdis_native_live_regions`, and native defrag summaries |
 
-During normal steady state, peaks may remain non-zero while current reserved/allocated bytes return to zero. `yierdis_expired_entries_awaiting_physical_deletion` is a current gauge, not a peak: it rises once per logically expired key only when commit-stream admission prevents its synthetic deletion event, and returns to zero when deletion, replacement, or FLUSHDB converges the entry. After a test fixture or successful graceful shutdown, active slots, chunks, sources, child channels, inbound reservation, and commit-stream ownership must converge to zero. A non-zero current gauge after clients disconnect is a leak signal; capture `INFO stats`, `MEMORY STATS`, process logs, the exact workload seed, and the candidate artifact checksum before restarting.
+During normal steady state, peaks may remain non-zero while current reserved/allocated bytes return to zero. After a test fixture or successful graceful shutdown, active slots, chunks, sources, child channels, and inbound reservation must converge to zero. A non-zero current gauge after clients disconnect is a leak signal; capture `INFO stats`, `MEMORY STATS`, process logs, the exact workload seed, and the candidate artifact checksum before restarting.
 
-The soak workload uses one warmup cycle followed by three measured fill/cleanup cycles. At each completed cycle, live native objects and FFM regions must return to the warm baseline, and committed native bytes must remain below the metadata high-water mark plus the configured one-warm-page-per-size-class bound. The main client keeps one fixed inbound read credit while it remains connected; that standing credit is its cycle baseline, while retained input, consolidation, commit records, reply slots, sources, chunks, and outbound reservations must drain. RSS is supplementary evidence: the harness reports it for every sample and fails on uninterrupted growth above 16 MiB across the final three completed cycles. Native counters and ownership gauges remain the required leak assertions.
+The soak workload uses one warmup cycle followed by three measured fill/cleanup cycles. At each completed cycle, live native objects and FFM regions must return to the warm baseline, and committed native bytes must remain below the metadata high-water mark plus the configured one-warm-page-per-size-class bound. The main client keeps one fixed inbound read credit while it remains connected; that standing credit is its cycle baseline, while retained input, consolidation, reply slots, sources, chunks, and outbound reservations must drain. RSS is supplementary evidence: the harness reports it for every sample and fails on uninterrupted growth above 16 MiB across the final three completed cycles. Native counters and ownership gauges remain the required leak assertions.
 
 ## Graceful Shutdown
 
@@ -177,7 +174,6 @@ The focused tests below were rerun under JDK 25 for the pre-rewrite non-performa
 | 3: bounded hash tables | `HashTableMillionOperationChurnTest` and `HashTableMaintenanceTest` passed. |
 | 4: maxmemory convergence | `MaxmemoryScopeTest` passed; the full suite also passed physical-accounting, page-trim, and global-governor coverage. |
 | 5: RESP ingress admission | `RespIngressPressureTest` and `RespIngressFuzzTest` passed with paranoid Netty leak detection enabled. |
-| 6: commit stream convergence | `CommitStreamTest`, `CommitStreamShutdownTest`, `CommitStreamIntegrationTest`, and `CommitStreamExpirationEvictionTest` passed. |
 | 7: bounded ordered egress | `OrderedReplyIntegrationTest`, `OutboundReplyPressureTest`, `ReplyResultUnknownTest`, and the then-current architecture boundary suite passed; package, smoke, and the 600-second soak also passed. |
 | 7: throughput gate | USER-WAIVED: benchmark execution is intentionally disabled and excluded from this acceptance record. No throughput ratio is claimed. |
 
@@ -196,23 +192,23 @@ The non-performance gates below passed for this candidate. This is deliberately 
 | Candidate commit and current artifact SHA-256 | `0e5d527f07ebd15376988e813e15ef7e67e0769c`; `fd4b015a7ebf06fc4f59527e677e23cd89fe17583b09a8e01e4890b7a2d1f6f0` |
 | Baseline commit and artifact SHA-256 | `fb857980^` = `d9d3d36fe9eea93246d4daacd649536508e15d14`; `eb16b734b072131224f82fc72d92a8e2d250a7a1f453af89bb9a7af3bedfecf5` |
 | JDK / OS / CPU | OpenJDK `25.0.3+9-2-24.04.2-Ubuntu`; Linux `6.6.87.2-microsoft-standard-WSL2`; AMD Ryzen 9 9950X, 16 cores / 32 threads |
-| Focused, architecture, and full Maven suites | PASS: allocation-scope, ledger, commit-stream, deferred-expiry, memory-stat, reply, and then-current architecture matrices; every Stage 7 focused-matrix class, with socket bootstrap classes rerun outside network isolation; `mvn -q -pl '!yierdis-benchmark' test` with `1,155` tests, `0` failures, `0` errors |
+| Focused, architecture, and full Maven suites | PASS: allocation-scope, ledger, memory-stat, reply, and then-current architecture matrices; every Stage 7 focused-matrix class, with socket bootstrap classes rerun outside network isolation; `mvn -q -pl '!yierdis-benchmark' test` with `1,155` tests, `0` failures, `0` errors |
 | Smoke and 600-second soak | PASS: `SKIP_BUILD=1 ./scripts/smoke.sh`; soak seed `20260710`, `600033` ms, `5,171` samples, report `target/production-hardening-soak/20260714T183332Z-seed-20260710/soak-20260710-1784054018385.jsonl` |
-| Soak peaks | heap `456178144`; native `1933520`; maxmemory-used `2044780`; inbound reserved `338776`; commit events/bytes `46` / `334104`; outbound reserved/allocated `6970` / `2874`; reply slots/sources/chunks `1` / `0` / `1`; child channels `1`; RSS `692584448` bytes |
+| Soak peaks | heap `456178144`; native `1933520`; maxmemory-used `2044780`; inbound reserved `338776`; outbound reserved/allocated `6970` / `2874`; reply slots/sources/chunks `1` / `0` / `1`; child channels `1`; RSS `692584448` bytes |
 | Cycle baselines | Cycles 0-3 each returned to `0` native live objects, `4` native live regions, `294912` metadata-committed bytes, and `208` data-committed bytes |
 | GET / SET / HSET / ZADD median ratios | NOT RUN: benchmark execution is prohibited by the active task constraint; final performance acceptance remains incomplete |
-| Final inbound, commit-stream, reply, and child ownership counters | All zero: inbound reserved/read-credit/retained/consolidation; outbound reserved/allocated/slots; reply sources/chunks; child channels. Ordering sequence `85701`; delayed commit callbacks `62752`; soak failure empty |
+| Final inbound, reply, and child ownership counters | All zero: inbound reserved/read-credit/retained/consolidation; outbound reserved/allocated/slots; reply sources/chunks; child channels. Ordering sequence `85701`; soak failure empty |
 
 Commands used for this candidate, all under JDK 25:
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
   mvn -q -pl yierdis-tests -am \
-  -Dtest=OutboundMemoryBudgetTest,ConnectionReplySequencerTest,BoundedChunkedReplySinkTest,OrderedReplyPipelineTest,ReplyShutdownTest,OrderedReplyIntegrationTest,OutboundReplyPressureTest,ReplyResultUnknownTest,CommitStreamIntegrationTest,CommitStreamShutdownTest,CommitStreamExpirationEvictionTest,YierdisDbMemoryReporterTest,MemoryStatsCommandTest \
+  -Dtest=OutboundMemoryBudgetTest,ConnectionReplySequencerTest,BoundedChunkedReplySinkTest,OrderedReplyPipelineTest,ReplyShutdownTest,OrderedReplyIntegrationTest,OutboundReplyPressureTest,ReplyResultUnknownTest,YierdisDbMemoryReporterTest,MemoryStatsCommandTest \
   -Dsurefire.failIfNoSpecifiedTests=false test
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
   mvn -q -pl yierdis-tests -am \
-  -Dtest=YierdisChangeSinkTest,CommitStreamTest,YierdisInstanceTest,CommitStreamShutdownTest,YierdisServerBootstrapCloseTest,CommitStreamIntegrationTest,CommitStreamExpirationEvictionTest,CommitAwareMutationFaultInjectionTest,MutationExecutorReservationTest,YierdisDbMemoryReporterTest,MemoryStatsAccountingConsistencyTest,YierdisServerBootstrapCommandWiringTest,MemoryStatsCommandTest \
+  -Dtest=YierdisInstanceTest,YierdisServerBootstrapCloseTest,MutationExecutorReservationTest,YierdisDbMemoryReporterTest,MemoryStatsAccountingConsistencyTest,YierdisServerBootstrapCommandWiringTest,MemoryStatsCommandTest \
   -Dsurefire.failIfNoSpecifiedTests=false test
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
   mvn -q -pl yierdis-tests -am \
@@ -237,13 +233,13 @@ This candidate passed every functional, ownership, smoke, soak, architecture, an
 | Candidate commit and current artifact SHA-256 | `20bf9aca1efbdc4446003e438f40e74814cd5679`; `285f8c783ab3dd8660f4519c7c9b267de6755ac1070ad1b2cd403f34201875fe` |
 | Baseline commit and preserved artifact SHA-256 | `fb857980^` = `d9d3d36fe9eea93246d4daacd649536508e15d14`; `eb16b734b072131224f82fc72d92a8e2d250a7a1f453af89bb9a7af3bedfecf5` |
 | JDK / OS / CPU | OpenJDK `25.0.3`; Linux `6.6.87.2-microsoft-standard-WSL2`; AMD Ryzen 9 9950X, 16 cores / 32 threads |
-| Focused and architecture suites | PASS: `95` tests across the listed egress/commit-stream cases and the then-current architecture boundary suite |
+| Focused and architecture suites | PASS: `95` tests across the listed egress cases and the then-current architecture boundary suite |
 | Full non-benchmark Maven suite | PASS: `mvn -q -pl '!yierdis-benchmark' test`; `981` tests, `0` failures, `0` errors |
 | Package and smoke | PASS: `mvn -q -pl '!yierdis-benchmark' -DskipTests package`; frozen-JAR `SKIP_BUILD=1 ./scripts/smoke.sh` completed `PING`, `SET`, and `GET` |
 | 600-second soak | PASS: seed `20260710`, `600018` ms, `5485` samples, report `target/production-hardening-soak/20260715T042536Z-seed-20260710/soak-20260710-1784089542186.jsonl` |
-| Soak peaks | heap `348196424`; native `1933520`; maxmemory-used `2044780`; inbound reserved `404920`; commit events/bytes `53` / `400632`; outbound reserved/allocated `6974` / `2878`; reply slots/sources/chunks `1` / `0` / `1`; child channels `1`; RSS `554696704` bytes |
+| Soak peaks | heap `348196424`; native `1933520`; maxmemory-used `2044780`; inbound reserved `404920`; outbound reserved/allocated `6974` / `2878`; reply slots/sources/chunks `1` / `0` / `1`; child channels `1`; RSS `554696704` bytes |
 | Cycle baselines | Cycles 0-3 each returned to `0` native live objects, `4` native live regions, `294912` metadata-committed bytes, and `208` data-committed bytes |
-| Final ownership counters | All zero: inbound reserved/read-credit/retained/consolidation; commit-stream reservation; outbound reserved/allocated/slots; reply sources/chunks; child channels. Ordering sequence `90889`; delayed commit callbacks `66526`; soak failure empty |
+| Final ownership counters | All zero: inbound reserved/read-credit/retained/consolidation; outbound reserved/allocated/slots; reply sources/chunks; child channels. Ordering sequence `90889`; soak failure empty |
 | Throughput gate | USER-WAIVED: no benchmark command, output, median, or ratio was used for this candidate |
 
 Commands used for this candidate, all under JDK 25:
@@ -258,7 +254,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
   ./scripts/production-hardening-soak.sh --skip-package --duration-seconds 600 --seed 20260710
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
   mvn -q -pl yierdis-tests -am \
-  -Dtest=OutboundMemoryBudgetTest,ConnectionReplySequencerTest,BoundedChunkedReplySinkTest,OrderedReplyPipelineTest,ReplyShutdownTest,OrderedReplyIntegrationTest,OutboundReplyPressureTest,ReplyResultUnknownTest,CommitStreamIntegrationTest,CommitStreamShutdownTest \
+  -Dtest=OutboundMemoryBudgetTest,ConnectionReplySequencerTest,BoundedChunkedReplySinkTest,OrderedReplyPipelineTest,ReplyShutdownTest,OrderedReplyIntegrationTest,OutboundReplyPressureTest,ReplyResultUnknownTest \
   -Dsurefire.failIfNoSpecifiedTests=false test
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
   mvn -q -pl yierdis-tests -am \

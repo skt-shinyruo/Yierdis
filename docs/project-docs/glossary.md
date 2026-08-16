@@ -10,11 +10,7 @@
 
 ### `ByteArrayExecutionRequest`
 
-以 heap `byte[]` 保存参数的 `ExecutionRequest` 实现。测试、显式 copy、change-event 公开快照和部分适配路径会使用它；事务 replay 保留原请求实现的 retained view。详见 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)。
-
-### `ExecutionRecord`
-
-`dbIndex` + `CommandRecordView` 的 change-event 记录。公开构造入口会归一化 `dbIndex` 并复制 `ExecutionRequest`；runtime 的 `borrowed(...)` 入口交付 callback-scoped view。事务 replay 不使用该类型。详见 [`transaction-and-replay.md`](./transaction-and-replay.md) 和 [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)。
+以 heap `byte[]` 保存参数的 `ExecutionRequest` 实现。测试、显式 copy 和部分适配路径会使用它；事务 replay 保留原请求实现的 retained view。详见 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)。
 
 ### `RedisReply`
 
@@ -78,7 +74,7 @@ CommandExecutor
 
 ### `CommandExecutionContext`
 
-回复容量预留成功后创建的一次命令执行作用域，只包含 `CommandSession` 和请求级 `MutationContext`；关闭时释放 mutation record。回复不通过该上下文写出，而由 `PreparedCommand.execute(...)` 返回 `CommandResult`。
+回复容量预留成功后创建的一次命令执行作用域，只包含 `CommandSession`。回复不通过该上下文写出，而由 `PreparedCommand.execute(...)` 返回 `CommandResult`。
 
 ### command variant
 

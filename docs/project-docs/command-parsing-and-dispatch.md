@@ -103,7 +103,7 @@ execute(CommandExecutionContext)
 
 只读命令可以在 prepare 时取得 DB source，并由 `PreparedCommand` 持有到渲染完成。需要 optimistic preview 的写命令可以准备 `PreparedMutation`，将 `isCurrent()` 接到 `validateBeforeExecute()`，把真正的 commit 留到 execute。无需状态预读的写命令也可以返回带上界 shape 的 action，在 execute 时直接调用 DB capability。
 
-`CommandExecutionContext` 不含 writer。它只持有 `CommandSession` 与从当前 request 创建的 `MutationContext`，作用域结束时关闭后者。command implementation 因而无法绕过 `CommandResult` 直接写协议输出。
+`CommandExecutionContext` 不含 writer。它只持有 `CommandSession`，command implementation 因而无法绕过 `CommandResult` 直接写协议输出。
 
 ## reply reservation 与统一渲染
 
@@ -153,13 +153,13 @@ DB read API 可以返回 `ByteValue`、`ByteSequenceSource`、`ByteMapSource` �
 
 renderer 调用 emitter 时 source 仍然有效，渲染后 executor 才关闭 prepared owner。`EXEC` 会保留每个 child prepared command，直到外层 aggregate 已经渲染，再按逆序关闭 child owner 与 drained request。命令结果本身不负责异步写 transport，也不把 native pin 转交给 Netty event loop。
 
-## 命令记录与 DB 提交边界
+## DB 提交边界
 
-reply capacity 成功后，executor 为当前 request 创建显式 `MutationContext`。写入或管理路径从 `CommandExecutionContext` 取得它，在取得 write/lifecycle capability 时绑定 immutable view，不依赖隐式 `ThreadLocal`；只读路径不会提前访问或绑定未使用的 mutation capability。
+reply capacity 成功后，executor 创建只含当前 session 的 `CommandExecutionContext`。写入和 lifecycle capability 直接来自本次路由得到的 `DbEngine`；只读路径不会提前访问未使用的 mutation capability。
 
-真正的 change-event 发布由 DB mutation path 持有。`YierdisDbMutationExecutor` 只在 mutation 确认有变化后预留 commit record，再完成 storage 与 ledger 提交，最后发布事件。因此 parse error、unknown command、`QUEUED` 和条件写 no-op 都不会产生 commit-stream event。
+真正的 storage 与 ledger 提交由 `YierdisDbMutationExecutor` 持有。parse error、unknown command 和 `QUEUED` 不进入 mutation executor；条件写 no-op 则由 prepared mutation 返回 unchanged outcome。
 
-`EXEC` 的每个 child 都创建自己的 execution context，继续走相同的 DB commit reservation。事务入队成功不代表 mutation 已提交。
+`EXEC` 的每个 child 都使用独立的 execution context，继续走相同的 DB mutation path。事务入队成功不代表 mutation 已提交。
 
 ## 相关测试
 

@@ -47,17 +47,13 @@ public record YierdisMemoryStats(
         int pendingHashTableCount,
         String lastHashTableMaintenanceStopReason,
         long nativeLiveObjects,
-        long nativeLiveRegions,
-        long expiredEntriesAwaitingPhysicalDeletion
+        long nativeLiveRegions
 ) {
     public YierdisMemoryStats {
         if (pendingHashTableCount < 0) {
             throw new IllegalArgumentException("pendingHashTableCount must be >= 0");
         }
         Objects.requireNonNull(lastHashTableMaintenanceStopReason, "lastHashTableMaintenanceStopReason");
-        if (expiredEntriesAwaitingPhysicalDeletion < 0L) {
-            throw new IllegalArgumentException("expiredEntriesAwaitingPhysicalDeletion must be >= 0");
-        }
     }
 
     public static YierdisMemoryStats empty(long maxmemoryBytes, boolean offHeapIncludedInMaxmemory) {
@@ -100,7 +96,6 @@ public record YierdisMemoryStats(
                 0L,
                 0,
                 "COMPLETE",
-                0L,
                 0L,
                 0L
         );

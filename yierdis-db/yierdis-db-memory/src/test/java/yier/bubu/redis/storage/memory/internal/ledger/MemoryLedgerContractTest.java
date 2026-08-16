@@ -87,6 +87,7 @@ public class MemoryLedgerContractTest {
                 () -> { },
                 ignored -> { },
                 () -> 0L,
+                () -> null,
                 () -> null
         );
         MemoryReservation reservation = ledger.reserve(Long.MAX_VALUE - 1L);

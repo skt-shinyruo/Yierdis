@@ -259,7 +259,7 @@ final class TransactionCommands implements CommandModule {
                         addOwnedChild(children, child);
                     }
                     childExecutionStarted = true;
-                    CommandResult result = executeChild(request, child);
+                    CommandResult result = executeChild(child);
                     RedisReply reply = result.reply();
                     if (reply instanceof RedisReply.ControlError controlError) {
                         reply = RedisReplies.error(controlError.message());
@@ -298,14 +298,11 @@ final class TransactionCommands implements CommandModule {
             }
         }
 
-        private CommandResult executeChild(ExecutionRequest request, PreparedCommand child) {
-            try (CommandExecutionContext childContext = CommandExecutionContext.forRequest(
-                    session, request
-            )) {
-                return Objects.requireNonNull(
-                        child.execute(childContext),
-                        "transaction child returned null");
-            }
+        private CommandResult executeChild(PreparedCommand child) {
+            CommandExecutionContext childContext = CommandExecutionContext.forSession(session);
+            return Objects.requireNonNull(
+                    child.execute(childContext),
+                    "transaction child returned null");
         }
 
         @Override

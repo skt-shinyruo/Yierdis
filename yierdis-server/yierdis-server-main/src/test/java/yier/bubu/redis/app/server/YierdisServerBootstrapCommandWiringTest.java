@@ -92,9 +92,6 @@ public class YierdisServerBootstrapCommandWiringTest {
                 Assert.assertTrue("expected INFO to expose reply capacity", info.containsKey("reply_global_capacity_bytes"));
                 Assert.assertTrue("expected INFO to expose reply drain timeout", info.containsKey("reply_drain_timeout_millis"));
                 Assert.assertTrue("expected INFO to expose outbound reservations", info.containsKey("outbound_reserved_bytes"));
-                Assert.assertEquals("DISABLED", asString(info.get("commit_stream_state")));
-                Assert.assertTrue(info.containsKey("commit_stream_reserved_events"));
-                Assert.assertTrue(info.containsKey("commit_stream_first_failure_type"));
 
                 Map<String, Object> stats = respMap(roundTrip(out, in, "STATS"));
                 Assert.assertTrue(stats.containsKey("queued_tasks"));
@@ -108,10 +105,6 @@ public class YierdisServerBootstrapCommandWiringTest {
                 Assert.assertTrue(stats.containsKey("outbound_active_chunks"));
                 Assert.assertTrue(stats.containsKey("live_child_channels"));
                 Assert.assertTrue(stats.containsKey("reply_shutdown_timeouts"));
-                Assert.assertEquals("DISABLED", asString(stats.get("commit_stream_state")));
-                Assert.assertTrue(stats.containsKey("commit_stream_reserved_events"));
-                Assert.assertTrue(stats.containsKey("commit_stream_last_acknowledged_sequence"));
-                Assert.assertTrue(stats.containsKey("commit_stream_first_failure_message"));
                 Assert.assertTrue(asLong(stats.get("conn_commands_enqueued")) > 0L);
                 Assert.assertTrue(asLong(stats.get("conn_commands_executed")) > 0L);
                 Assert.assertTrue(
@@ -140,7 +133,7 @@ public class YierdisServerBootstrapCommandWiringTest {
     }
 
     @Test
-    public void infoHealthKeepsElevenPairsAcrossResp2AndResp3() throws Exception {
+    public void infoHealthKeepsTenPairsAcrossResp2AndResp3() throws Exception {
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
                 "--port", "0",
                 "--maxmemoryBytes", "0",
@@ -162,7 +155,7 @@ public class YierdisServerBootstrapCommandWiringTest {
 
     @Test
     public void serverCommandCompositionBuildsDispatcherWithServerAndDefaultCommands() throws Exception {
-        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(
+        try (YierdisInstance instance = YierdisInstance.create(
                 YierdisInstanceConfig.builder().databases(1).build()
         )) {
             instance.bindToCurrentThread();
@@ -294,7 +287,6 @@ public class YierdisServerBootstrapCommandWiringTest {
                 Assert.assertTrue(memorySection.contains("yierdis_native_defrag_last_scanned_objects:"));
                 Assert.assertTrue(memorySection.contains("yierdis_native_defrag_moved_bytes:"));
                 Assert.assertTrue(memorySection.contains("yierdis_native_stale_handle_detections:"));
-                Assert.assertTrue(memorySection.contains("yierdis_expired_entries_awaiting_physical_deletion:"));
             }
         }
     }
@@ -641,13 +633,12 @@ public class YierdisServerBootstrapCommandWiringTest {
     }
 
     private static void assertHealthInfo(Map<String, Object> health) {
-        Assert.assertEquals(11, health.size());
+        Assert.assertEquals(10, health.size());
         Assert.assertEquals("RUNNING", asString(health.get("lifecycle_state")));
         Assert.assertEquals(1L, asLong(health.get("ready")));
         Assert.assertEquals(1L, asLong(health.get("writable")));
         Assert.assertEquals(0L, asLong(health.get("degraded_databases")));
         Assert.assertEquals(1L, asLong(health.get("databases")));
-        Assert.assertEquals("DISABLED", asString(health.get("commit_stream_state")));
         Assert.assertTrue(health.containsKey("first_failure_type"));
         Assert.assertTrue(health.containsKey("first_failure_message"));
         Assert.assertTrue(asLong(health.get("total_connections_received")) >= 1L);
@@ -768,10 +759,7 @@ public class YierdisServerBootstrapCommandWiringTest {
     ) {
         try (PreparedCommand prepared = dispatcher.prepare(session, request)) {
             Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
-            CommandResult result;
-            try (CommandExecutionContext context = CommandExecutionContext.forRequest(session, request)) {
-                result = prepared.execute(context);
-            }
+            CommandResult result = prepared.execute(CommandExecutionContext.forSession(session));
             RedisReplyRenderer.render(result.reply(), reply);
             if (result.closeAfterReply()) {
                 reply.requestCloseAfterReply();
@@ -1112,7 +1100,7 @@ public class YierdisServerBootstrapCommandWiringTest {
         private final CommandExecutor<NettyExecutionConnection> executor;
 
         private InitializerTestEnv() {
-            this.instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build());
+            this.instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
             CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
             this.replyWriterFactory = new RespReplyWriterFactory();
             this.executor = new CommandExecutor<>(
