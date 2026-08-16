@@ -192,12 +192,10 @@ DB owns storage behavior, not RESP.
 
 ## 统一测试模块
 
-`yierdis-tests` 同时承载跨模块行为测试和聚焦 architecture guards。DB 专用 helper 位于
+`yierdis-tests` 承载跨模块行为测试和少量 API 形状检查。DB 专用 helper 位于
 `yierdis-db-memory/src/test/java`，不再通过独立 testkit artifact 发布。
 
-architecture tests protect dependency direction.
-
-它们主要防几类退化：
+依赖方向主要由 Maven 模块图和 Java 编译器约束。模块关系应保持：
 
 - command 模块不能直接依赖 storage implementation
 - command 实现不能直接依赖 `RedisReplyWriter`，回复必须由 `CommandResult` 进入集中 renderer

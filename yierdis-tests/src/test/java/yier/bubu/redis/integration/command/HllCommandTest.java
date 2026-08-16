@@ -13,7 +13,6 @@ import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplyObject;
 import yier.bubu.redis.testutil.ReplySimpleString;
 
-import java.io.IOException;
 import java.util.Arrays;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
@@ -23,14 +22,6 @@ import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class HllCommandTest {
     private static final long DENSE_HLL_PHYSICAL_MAXMEMORY_BYTES = 700_000L;
-
-    @Test
-    public void hllCommandsUseReadWriteBoundariesInsteadOfLegacyValueOps() throws IOException {
-        String source = CommandSourceFiles.readCommandDefaults("HllCommands.java");
-
-        Assert.assertFalse(source.contains("eviction().prepareWrite("));
-        Assert.assertFalse(source.contains("values().hll()."));
-    }
 
     @Test
     public void pfaddCreatesAndUpdates() {

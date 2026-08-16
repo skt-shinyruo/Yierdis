@@ -11,7 +11,6 @@ import yier.bubu.redis.testutil.ReplyMap;
 import yier.bubu.redis.testutil.ReplyObject;
 import yier.bubu.redis.testutil.ReplySimpleString;
 
-import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 
@@ -21,14 +20,6 @@ import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 import static yier.bubu.redis.testutil.TestDbs.runDefaultFfm;
 
 public class HashCommandTest {
-    @Test
-    public void hashCommandsUseReadWriteBoundariesInsteadOfLegacyValueOps() throws IOException {
-        String source = CommandSourceFiles.readCommandDefaults("HashCommands.java");
-
-        Assert.assertFalse(source.contains("eviction().prepareWrite("));
-        Assert.assertFalse(source.contains("values().hashes()."));
-    }
-
     @Test
     public void hsetHgetHlenAndHgetallAreBinarySafe() {
         forEachDb(db -> {

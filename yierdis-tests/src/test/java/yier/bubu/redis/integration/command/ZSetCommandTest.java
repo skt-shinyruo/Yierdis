@@ -16,7 +16,6 @@ import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplyObject;
 import yier.bubu.redis.testutil.ReplySimpleString;
 
-import java.io.IOException;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
@@ -27,14 +26,6 @@ import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class ZSetCommandTest {
-    @Test
-    public void zsetCommandsUseReadWriteBoundariesInsteadOfLegacyValueOps() throws IOException {
-        String source = CommandSourceFiles.readCommandDefaults("ZSetCommands.java");
-
-        Assert.assertFalse(source.contains("eviction().prepareWrite("));
-        Assert.assertFalse(source.contains("values().zsets()."));
-    }
-
     @Test
     public void zaddRejectsInvalidScores() {
         forEachDb(db -> {

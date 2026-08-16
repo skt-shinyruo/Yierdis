@@ -23,7 +23,7 @@ argv
 
 真正启动发生在 `YierdisServerBootstrap.startInternal()`：
 
-1. `ForeignMemoryAutoModules.ensureFfmAvailable()` 检查 JDK 25 FFM。
+1. JDK 25 编译目标和直接 FFM imports 提供 native-memory 运行前提。
 2. 将 `YierdisServerRuntimeConfig` 映射成 `YierdisInstanceConfig`。
 3. 创建 `YierdisInstance`，并取得 runtime access、maintenance 和 observability。
 4. 创建 `NettyServerInfoProvider`，绑定 instance observability。
@@ -228,7 +228,7 @@ java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SN
 
 - 参数解析失败：picocli 抛 `ParameterException`，`ServerConfig.fromArgs(...)` 打 usage。
 - 参数校验失败：`normalizeAndValidate()` 抛 `IllegalArgumentException`，例如端口越界、watermark 非法、output buffer grace 为 `0`。
-- JDK 不满足要求：`ForeignMemoryAutoModules.ensureFfmAvailable()` 检查不到 JDK 25 FFM。
+- JDK 不满足要求：启动前使用 JDK 25 编译/运行环境；直接 FFM imports 会在不兼容环境中失败。
 - 端口绑定失败：Netty `bind(...)` 报错。
 - DB/native runtime 初始化失败：`YierdisInstance.create(...)` 会 best-effort 关闭已创建 DB 和 factory-owned resources 再抛出启动失败。
 

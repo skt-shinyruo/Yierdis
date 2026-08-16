@@ -69,9 +69,9 @@ ops 不直接组合 directory 与 entry table，也不能从 lifecycle 取出 ba
 
 ## Runtime kernel 与 facade
 
-`YierdisDbKernel` 是 package-private 深模块，调用方只有泛型 `execute(DbUse<R>)` seam。sealed `DbUse` 固定四种 mode：`ReadUse`、`MutationUse`、`InspectionUse` 和 `MaintenanceUse`；kernel 按 mode 传入受限 scope。concrete ops、operation views、scope、memory context、key lifecycle、entry mutation、TTL driver、active-expiration driver、memory reporter 和 maxmemory participant 都保持 package-private，handle、entry record、backend 与 ledger 不进入公开 DB interface。
+`YierdisDbKernel` 是 package-private 深模块，调用方通过 `execute(ReadUse)`、`execute(MutationUse)`、`execute(InspectionUse)` 和 `execute(MaintenanceUse)` 进入四种受限模式。`DbUse` 只提供这些 use 的静态工厂；`ReadUse` 与 `MutationUse` 直接接收 kernel，inspection/maintenance 继续使用各自的受限 scope。concrete ops、operation views、scope、memory context、key lifecycle、entry mutation、TTL driver、active-expiration driver、memory reporter 和 maxmemory participant 都保持 package-private，handle、entry record、backend 与 ledger 不进入公开 DB interface。
 
-`MutationUse` 只声明 context、upper bound、admission、commit spec 和 `prepare(MutationScope)`。`Admission` 区分 normal/reclamation；`CommitSpec` 区分 user、synthetic 和 none；family 返回 opaque `PreparedChange`，由 `MutationScope` 统一构造 unchanged/insert/replace/delete/upsert/callback/batch。只有 kernel 内部 adapter 知道 `YierdisDbMutationExecutor.MutationPlan` 与 `PreparedDbMutation`。`YierdisDbMemoryContext` 继续封装 allocation 估算、epoch、native slice、allocator stats 和 page trim，但不再是可见扩展 seam。请求级 `MutationContext` 不进入长期 DB graph。
+`MutationUse` 只声明 context、upper bound、admission、commit spec 和 `prepare(YierdisDbKernel)`，并直接返回 `PreparedDbMutation`。`Admission` 区分 normal/reclamation；`CommitSpec` 区分 user、synthetic 和 none；family 通过 kernel 的 unchanged/insert/replace/delete/upsert/callback/batch 工厂构造 prepared mutation。只有 kernel 内部 adapter 知道 `YierdisDbMutationExecutor.MutationPlan`。`YierdisDbMemoryContext` 继续封装 allocation 估算、epoch、native slice、allocator stats 和 page trim，但不再是可见扩展 seam。请求级 `MutationContext` 不进入长期 DB graph。
 
 `YierdisDbWrites.withMutationContext(...)` 一次只创建一个 immutable contextual view。这个 view 同时实现八个 family write interface，复用已经构造好的 family implementation，并把 context 显式传给 mutation executor；它不会重建 kernel 或 family modules，也不会临时改写共享字段。因此两个 contextual write/lifecycle views 可以交错使用。`CommandDb` 保留 capability 的惰性访问边界，避免只读路径提前触发 write/lifecycle owner check。
 
@@ -85,7 +85,7 @@ prepared set/pop 的 `commit(context)` 以显式 commit context 为准。lazy ex
 DbReads
   -> Yierdis*Ops
   -> YierdisDbKernel.execute(ReadUse)
-  -> ReadScope.liveEntryRecord(...)
+  -> YierdisDbKernel.liveEntryRecord(...)
   -> type/encoding check
   -> EntryRecord.valueHandle()
   -> type root read
@@ -118,7 +118,7 @@ estimate upper bound
      -> optional page trim
 ```
 
-prepare 完成可能失败的 native allocation、replacement topology 和 source validation。family 通过 `MutationScope` 产生 opaque `PreparedChange`，用 unchanged/insert/replace/delete/upsert/callback/batch 表达转换；scope 在内部映射到 prepared mutation，并只在 value representation 需要时附加 abort、before-publish 或 superseded-release hook。
+prepare 完成可能失败的 native allocation、replacement topology 和 source validation。family 通过 kernel 工厂产生 `PreparedEntryMutation` 或其他 `PreparedDbMutation`，用 unchanged/insert/replace/delete/upsert/callback/batch 表达转换，并按 value representation 附加 abort、before-publish 或 superseded-release hook。
 
 失败边界以 `prepared.commit()` 开始为界：
 
@@ -184,7 +184,7 @@ shutdown 会先重置 ledger、回收 detached entries，再让 key lifecycle �
 - DB 组装：`YierdisDbEngineFactory`、`YierdisDb`、`YierdisDbStorage`、`YierdisDbOperationViews`。
 - 内部能力 seam：`YierdisDbKernel`、`YierdisDbUse`；实现细节：`YierdisDbMemoryContext`、`YierdisDbKeyLifecycle`。
 - key/entry/value 生命周期：`YierdisDbKeyLifecycle`、`EntryTable`、type roots。
-- mutation 与预算：`MutationUse`、`MutationScope`、`PreparedChange`、`YierdisDbMutationExecutor`、`YierdisDbMemoryLedger`。
+- mutation 与预算：`MutationUse`、`YierdisDbKernel`、`PreparedDbMutation`、`YierdisDbMutationExecutor`、`YierdisDbMemoryLedger`。
 - TTL：`YierdisTtlOps`、`YierdisDbExpirationSupport`、`YierdisDbKernel.reclaimExpired(...)`。
 - maxmemory：`YierdisDbMaxmemorySupport`、`YierdisGlobalMaxmemoryGovernor`。
 - memory backend：`YierdisFfmStableMemoryBackend` 与 [`native-memory-runtime.md`](./native-memory-runtime.md)。

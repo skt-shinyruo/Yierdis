@@ -173,7 +173,7 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 - `YierdisTtlOps`
 - `YierdisDbKeyLifecycle`
 - `YierdisDbExpirationSupport`
-- `YierdisDbUse`、`MutationScope`、`MaintenanceScope`
+- `YierdisDbUse`、`MutationUse`、`InspectionScope`、`MaintenanceScope`
 - `YierdisDbKernel.reclaimExpired(...)`
 - `YierdisDbMutationExecutor`
 - `YierdisDbMemoryLedger`
@@ -310,7 +310,6 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 测试优先级：
 
 - `CommandDispatcherTest`
-- `CommandPipelineArchitectureTest`
 - `CommandParseIsolationTest`
 - `DbCommitPublisherTest`
 - `CommitStreamTest`

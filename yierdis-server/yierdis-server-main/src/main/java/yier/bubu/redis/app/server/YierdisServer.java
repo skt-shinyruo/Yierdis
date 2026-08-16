@@ -20,7 +20,6 @@ public final class YierdisServer {
             return;
         }
         try {
-            ForeignMemoryAutoModules.ensureFfmAvailable();
             try (YierdisServerBootstrap server = YierdisServerBootstrap.start(config)) {
                 Thread shutdownHook = new Thread(() -> {
                     try {

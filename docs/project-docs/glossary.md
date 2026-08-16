@@ -224,4 +224,4 @@ native allocator 中记录对象 metadata、generation、pin 状态和 quarantin
 
 ### architecture guard
 
-保护模块依赖方向和边界的测试，例如 RESP DTO 不能进入 command 层、command 层不能依赖 DB internal。
+检查少量无法由编译器直接表达的 API 形状与可见性约束，例如 DB 只有一个公共工厂形状、实现类型保持 package-private。模块依赖方向由 Maven 模块图和 Java 编译器约束。

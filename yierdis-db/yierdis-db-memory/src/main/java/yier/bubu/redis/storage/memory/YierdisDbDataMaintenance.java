@@ -1,5 +1,7 @@
 package yier.bubu.redis.storage.memory;
 
+import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
+
 import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
@@ -115,7 +117,7 @@ final class YierdisDbDataMaintenance {
                 }
 
                 @Override
-                public PreparedChange<Void> prepare(MutationScope scope) {
+                public PreparedDbMutation<Void> prepare(YierdisDbKernel scope) {
                     HashTableMaintenanceRegistry.MaintenancePreparation preparation = participant.prepareMaintenance();
                     if (preparation == null) {
                         return scope.callback(
@@ -254,7 +256,7 @@ final class YierdisDbDataMaintenance {
                     }
 
                     @Override
-                    public PreparedChange<MutationOutcome> prepare(MutationScope scope) {
+                    public PreparedDbMutation<MutationOutcome> prepare(YierdisDbKernel scope) {
                         FlushPreparation preparation = prepareFlushDb();
                         return scope.callback(
                                 preparation.outcome(),

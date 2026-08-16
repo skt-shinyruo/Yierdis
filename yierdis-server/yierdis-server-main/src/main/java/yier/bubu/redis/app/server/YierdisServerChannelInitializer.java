@@ -51,41 +51,6 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
             YierdisServerRuntimeConfig config,
             CommandExecutor<NettyExecutionConnection> executor,
             RedisReplyWriterFactory replyWriterFactory,
-            InboundMemoryBudget inboundMemoryBudget
-    ) {
-        this(
-                config,
-                executor,
-                replyWriterFactory,
-                inboundMemoryBudget,
-                new OutboundMemoryBudget(config.replyGlobalCapacityBytes()),
-                new ChildChannelRegistry(config.maxClients()),
-                ReplyEgressStats.noop()
-        );
-    }
-
-    YierdisServerChannelInitializer(
-            YierdisServerRuntimeConfig config,
-            CommandExecutor<NettyExecutionConnection> executor,
-            RedisReplyWriterFactory replyWriterFactory,
-            InboundMemoryBudget inboundMemoryBudget,
-            OutboundMemoryBudget outboundMemoryBudget
-    ) {
-        this(
-                config,
-                executor,
-                replyWriterFactory,
-                inboundMemoryBudget,
-                outboundMemoryBudget,
-                new ChildChannelRegistry(config.maxClients()),
-                ReplyEgressStats.noop()
-        );
-    }
-
-    YierdisServerChannelInitializer(
-            YierdisServerRuntimeConfig config,
-            CommandExecutor<NettyExecutionConnection> executor,
-            RedisReplyWriterFactory replyWriterFactory,
             InboundMemoryBudget inboundMemoryBudget,
             OutboundMemoryBudget outboundMemoryBudget,
             ChildChannelRegistry childChannelRegistry

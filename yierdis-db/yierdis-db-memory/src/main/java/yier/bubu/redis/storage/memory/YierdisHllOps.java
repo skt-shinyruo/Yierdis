@@ -1,5 +1,7 @@
 package yier.bubu.redis.storage.memory;
 
+import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
+
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.CurrentEntry;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
 import yier.bubu.redis.common.command.MutationContext;
@@ -63,7 +65,7 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
             }
 
             @Override
-            public PreparedChange<WriteResult<Integer>> prepare(MutationScope scope) {
+            public PreparedDbMutation<WriteResult<Integer>> prepare(YierdisDbKernel scope) {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 byte[] currentBytes = null;
@@ -100,7 +102,7 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
                     WriteResult<Integer> result = WriteResult.of(changed ? 1 : 0, outcome);
                     long deltaBytes = estimateRecordBytes(targetKey, next)
                             - estimateRecordBytes(targetKey, current);
-                    PreparedChange<WriteResult<Integer>> prepared = scope.upsert(
+                    PreparedDbMutation<WriteResult<Integer>> prepared = scope.upsert(
                             result,
                             deltaBytes,
                             staged == null ? 0L : staged.stagedHeapBytes(),
@@ -170,7 +172,7 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
             }
 
             @Override
-            public PreparedChange<WriteResult<Void>> prepare(MutationScope scope) {
+            public PreparedDbMutation<WriteResult<Void>> prepare(YierdisDbKernel scope) {
                 MergeRegisters merged = mergeSourceRegisters(sourceKeys, now);
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(destKeyBytes);
                 EntryRecord current = currentEntry.record();
@@ -208,7 +210,7 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
                     WriteResult<Void> result = WriteResult.of(null, outcome);
                     long deltaBytes = estimateRecordBytes(targetKey, next)
                             - estimateRecordBytes(targetKey, current);
-                    PreparedChange<WriteResult<Void>> prepared = scope.upsert(
+                    PreparedDbMutation<WriteResult<Void>> prepared = scope.upsert(
                             result,
                             deltaBytes,
                             staged == null ? 0L : staged.stagedHeapBytes(),
@@ -365,7 +367,7 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
         return new MergeRegisters(registers, copiedBytes);
     }
 
-    private EntryRecord liveStringRecord(ReadScope scope, byte[] keyBytes) {
+    private EntryRecord liveStringRecord(YierdisDbKernel scope, byte[] keyBytes) {
         KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
         EntryRecord record = scope.liveEntryRecord(keyHandle);
         if (record == null) {
@@ -417,8 +419,8 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
         return keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
     }
 
-    private static <T> PreparedChange<T> preparedNoEntry(
-            MutationScope scope,
+    private static <T> PreparedDbMutation<T> preparedNoEntry(
+            YierdisDbKernel scope,
             T result,
             MutationOutcome outcome
     ) {

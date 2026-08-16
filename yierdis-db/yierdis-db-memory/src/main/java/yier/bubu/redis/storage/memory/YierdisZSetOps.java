@@ -1,5 +1,7 @@
 package yier.bubu.redis.storage.memory;
 
+import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
+
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.CurrentEntry;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
 import yier.bubu.redis.common.command.MutationContext;
@@ -84,7 +86,7 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
             }
 
             @Override
-            public PreparedChange<WriteResult<Long>> prepare(MutationScope scope) {
+            public PreparedDbMutation<WriteResult<Long>> prepare(YierdisDbKernel scope) {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current != null) {
@@ -125,7 +127,7 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                     WriteResult<Long> result = WriteResult.of((long) added.added(), outcome);
                     long deltaBytes = estimateRecordBytes(targetKey, next)
                             - estimateRecordBytes(targetKey, current);
-                    PreparedChange<WriteResult<Long>> prepared = scope.upsert(
+                    PreparedEntryMutation<WriteResult<Long>> prepared = scope.upsert(
                             result,
                             deltaBytes,
                             addSaturating(
@@ -174,8 +176,8 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
         });
     }
 
-    private static <T> PreparedChange<T> preparedNoEntry(
-            MutationScope scope,
+    private static <T> PreparedDbMutation<T> preparedNoEntry(
+            YierdisDbKernel scope,
             T result,
             MutationOutcome outcome
     ) {
@@ -527,7 +529,7 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
             }
 
             @Override
-            public PreparedChange<WriteResult<Long>> prepare(MutationScope scope) {
+            public PreparedDbMutation<WriteResult<Long>> prepare(YierdisDbKernel scope) {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current == null) {
@@ -601,7 +603,7 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
         return left + right;
     }
 
-    private EntryRecord liveZSetRecord(ReadScope scope, byte[] keyBytes) {
+    private EntryRecord liveZSetRecord(YierdisDbKernel scope, byte[] keyBytes) {
         KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
         EntryRecord record = scope.liveEntryRecord(keyHandle);
         if (record == null) {
@@ -611,8 +613,8 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
         return keyLifecycle.touchRecord(keyHandle, record);
     }
 
-    private <T> PreparedChange<T> preparedDelete(
-            MutationScope scope,
+    private <T> PreparedDbMutation<T> preparedDelete(
+            YierdisDbKernel scope,
             CurrentEntry currentEntry,
             EntryRecord current,
             T result,

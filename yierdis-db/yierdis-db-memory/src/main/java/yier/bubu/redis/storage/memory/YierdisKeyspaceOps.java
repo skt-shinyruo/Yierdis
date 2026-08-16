@@ -72,7 +72,7 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
             }
 
             @Override
-            public PreparedChange<WriteResult<Long>> prepare(MutationScope scope) {
+            public PreparedDbMutation<WriteResult<Long>> prepare(YierdisDbKernel scope) {
                 PreparedDeletion[] deletions = new PreparedDeletion[keys.size()];
                 int deletionCount = 0;
                 long deltaBytes = 0L;
@@ -95,7 +95,7 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
                     }
                     try {
                         long removalBytes = keyLifecycle.estimatedBytesForRemoval(handle, current);
-                        PreparedChange<Void> mutation = scope.delete(
+                        PreparedDbMutation<Void> mutation = scope.delete(
                                 null,
                                 -removalBytes,
                                 MutationOutcome.VALUE_CHANGED,
@@ -111,7 +111,7 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
                     }
                 }
                 MutationOutcome outcome = deletionCount > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
-                PreparedChange<?>[] changes = new PreparedChange<?>[deletionCount];
+                PreparedDbMutation<?>[] changes = new PreparedDbMutation<?>[deletionCount];
                 for (int index = 0; index < deletionCount; index++) {
                     changes[index] = deletions[index].mutation;
                 }
@@ -345,9 +345,9 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
 
     private static final class PreparedDeletion {
         private final byte[] keyBytes;
-        private final PreparedChange<Void> mutation;
+        private final PreparedDbMutation<Void> mutation;
 
-        private PreparedDeletion(byte[] keyBytes, PreparedChange<Void> mutation) {
+        private PreparedDeletion(byte[] keyBytes, PreparedDbMutation<Void> mutation) {
             this.keyBytes = keyBytes;
             this.mutation = mutation;
         }

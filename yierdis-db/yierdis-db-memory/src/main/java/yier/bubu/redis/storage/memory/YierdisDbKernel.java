@@ -6,9 +6,13 @@ import yier.bubu.redis.common.command.MutationContext;
 import yier.bubu.redis.storage.api.DbCommitKind;
 import yier.bubu.redis.storage.api.DbCommitStreamUnavailableException;
 import yier.bubu.redis.storage.api.MutationOutcome;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.CurrentEntry;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.memory.internal.ledger.PreparedCallbackMutation;
+import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 
 import java.util.Objects;
@@ -18,8 +22,6 @@ final class YierdisDbKernel {
     private final Runnable threadChecker;
     private final YierdisDbMutationExecutor mutationExecutor;
     private final YierdisDbKeyLifecycle keyLifecycle;
-    private final ReadScope readScope;
-    private final MutationScope mutationScope;
     private final InspectionScope inspectionScope;
     private final MaintenanceScope maintenanceScope;
 
@@ -33,28 +35,31 @@ final class YierdisDbKernel {
         this.mutationExecutor = Objects.requireNonNull(mutationExecutor, "mutationExecutor");
         this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
         YierdisDbMemoryContext checkedMemoryContext = Objects.requireNonNull(memoryContext, "memoryContext");
-        this.readScope = new ReadScope(this);
-        this.mutationScope = new MutationScope(keyLifecycle);
         this.inspectionScope = new InspectionScope(this, keyLifecycle, checkedMemoryContext);
         this.maintenanceScope = new MaintenanceScope(this, keyLifecycle, checkedMemoryContext);
     }
 
-    <R> R execute(DbUse<R> use) {
+    <R> R execute(MutationUse<R> use) {
         Objects.requireNonNull(use, "use");
-        if (use instanceof MutationUse<?> mutationUse) {
-            return executeMutationUse(castMutationUse(mutationUse));
-        }
+        return executeMutationUse(use);
+    }
+
+    <R> R execute(ReadUse<R> use) {
+        Objects.requireNonNull(use, "use");
         threadChecker.run();
-        if (use instanceof ReadUse<?> readUse) {
-            return YierdisDbKernel.<R>castReadUse(readUse).execute(readScope);
-        }
-        if (use instanceof InspectionUse<?> inspectionUse) {
-            return YierdisDbKernel.<R>castInspectionUse(inspectionUse).execute(inspectionScope);
-        }
-        if (use instanceof MaintenanceUse<?> maintenanceUse) {
-            return YierdisDbKernel.<R>castMaintenanceUse(maintenanceUse).execute(maintenanceScope);
-        }
-        throw new IllegalArgumentException("unsupported DB use: " + use.getClass().getName());
+        return use.execute(this);
+    }
+
+    <R> R execute(InspectionUse<R> use) {
+        Objects.requireNonNull(use, "use");
+        threadChecker.run();
+        return use.execute(inspectionScope);
+    }
+
+    <R> R execute(MaintenanceUse<R> use) {
+        Objects.requireNonNull(use, "use");
+        threadChecker.run();
+        return use.execute(maintenanceScope);
     }
 
     void bindToCurrentThread() {
@@ -97,34 +102,133 @@ final class YierdisDbKernel {
             }
 
             @Override
-            public yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation<R> prepare() {
-                PreparedChange<R> prepared = Objects.requireNonNull(
-                        use.prepare(mutationScope),
+            public PreparedDbMutation<R> prepare() {
+                return Objects.requireNonNull(
+                        use.prepare(YierdisDbKernel.this),
                         "prepared change"
                 );
-                return prepared.unwrap();
             }
         });
     }
 
-    @SuppressWarnings("unchecked")
-    private static <R> MutationUse<R> castMutationUse(MutationUse<?> use) {
-        return (MutationUse<R>) use;
+    <T> PreparedEntryMutation<T> unchanged(T result, MutationOutcome outcome) {
+        return PreparedEntryMutation.unchanged(keyLifecycle, result, outcome);
     }
 
-    @SuppressWarnings("unchecked")
-    private static <R> ReadUse<R> castReadUse(ReadUse<?> use) {
-        return (ReadUse<R>) use;
+    <T> PreparedEntryMutation<T> insert(
+            T result,
+            long actualDeltaBytes,
+            long stagedNonNativeGrowthBytes,
+            MutationOutcome outcome,
+            StagedEntry stagedEntry,
+            EntryRecord newRecord
+    ) {
+        return PreparedEntryMutation.insert(
+                keyLifecycle,
+                result,
+                actualDeltaBytes,
+                stagedNonNativeGrowthBytes,
+                outcome,
+                stagedEntry,
+                newRecord
+        );
     }
 
-    @SuppressWarnings("unchecked")
-    private static <R> InspectionUse<R> castInspectionUse(InspectionUse<?> use) {
-        return (InspectionUse<R>) use;
+    <T> PreparedEntryMutation<T> replace(
+            T result,
+            long actualDeltaBytes,
+            long stagedNonNativeGrowthBytes,
+            MutationOutcome outcome,
+            EntryHandle existingEntryHandle,
+            EntryRecord oldRecord,
+            EntryRecord newRecord,
+            boolean releaseReplacedValue
+    ) {
+        return PreparedEntryMutation.replace(
+                keyLifecycle,
+                result,
+                actualDeltaBytes,
+                stagedNonNativeGrowthBytes,
+                outcome,
+                existingEntryHandle,
+                oldRecord,
+                newRecord,
+                releaseReplacedValue
+        );
     }
 
-    @SuppressWarnings("unchecked")
-    private static <R> MaintenanceUse<R> castMaintenanceUse(MaintenanceUse<?> use) {
-        return (MaintenanceUse<R>) use;
+    <T> PreparedEntryMutation<T> delete(
+            T result,
+            long actualDeltaBytes,
+            MutationOutcome outcome,
+            EntryHandle existingEntryHandle,
+            EntryRecord oldRecord,
+            boolean releaseReplacedValue
+    ) {
+        return PreparedEntryMutation.delete(
+                keyLifecycle,
+                result,
+                actualDeltaBytes,
+                outcome,
+                existingEntryHandle,
+                oldRecord,
+                releaseReplacedValue
+        );
+    }
+
+    <T> PreparedEntryMutation<T> upsert(
+            T result,
+            long actualDeltaBytes,
+            long stagedNonNativeGrowthBytes,
+            MutationOutcome outcome,
+            CurrentEntry current,
+            StagedEntry staged,
+            EntryRecord newRecord,
+            boolean releaseReplacedValue
+    ) {
+        return PreparedEntryMutation.upsert(
+                keyLifecycle,
+                result,
+                actualDeltaBytes,
+                stagedNonNativeGrowthBytes,
+                outcome,
+                current,
+                staged,
+                newRecord,
+                releaseReplacedValue
+        );
+    }
+
+    <T> PreparedDbMutation<T> callback(
+            T result,
+            long actualDeltaBytes,
+            long stagedNonNativeGrowthBytes,
+            MutationOutcome outcome,
+            Runnable commit,
+            Runnable releaseSuperseded,
+            Runnable abort,
+            boolean trimNativePagesAfterCommit
+    ) {
+        return new PreparedCallbackMutation<>(
+                result,
+                actualDeltaBytes,
+                stagedNonNativeGrowthBytes,
+                outcome,
+                commit,
+                releaseSuperseded,
+                abort,
+                trimNativePagesAfterCommit
+        );
+    }
+
+    <T> PreparedDbMutation<T> batch(
+            PreparedDbMutation<?>[] changes,
+            int count,
+            T result,
+            long actualDeltaBytes,
+            MutationOutcome outcome
+    ) {
+        return new PreparedBatchMutation<>(changes, count, result, actualDeltaBytes, outcome);
     }
 
     EntryRecord liveEntryRecord(KeyHandle keyHandle) {
@@ -216,7 +320,7 @@ final class YierdisDbKernel {
             }
 
             @Override
-            public PreparedChange<Boolean> prepare(MutationScope scope) {
+            public PreparedDbMutation<Boolean> prepare(YierdisDbKernel kernel) {
                 EntryRecord current = keyLifecycle.entryRecord(keyHandle);
                 if (current == null || (expectedRecord != null && !expectedRecord.equals(current))) {
                     return preparedNoDeletion();
@@ -234,7 +338,7 @@ final class YierdisDbKernel {
                 }
                 long removalBytes = keyLifecycle.estimatedBytesForRemoval(keyHandle, current);
                 deletedKey = keyBytes;
-                return scope.delete(
+                return kernel.delete(
                         Boolean.TRUE,
                         -removalBytes,
                         MutationOutcome.VALUE_CHANGED,
@@ -244,8 +348,8 @@ final class YierdisDbKernel {
                 );
             }
 
-            private PreparedChange<Boolean> preparedNoDeletion() {
-                return mutationScope.unchanged(Boolean.FALSE, MutationOutcome.NONE);
+            private PreparedDbMutation<Boolean> preparedNoDeletion() {
+                return unchanged(Boolean.FALSE, MutationOutcome.NONE);
             }
         });
     }

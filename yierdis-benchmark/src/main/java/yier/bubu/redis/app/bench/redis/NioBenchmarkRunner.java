@@ -17,6 +17,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
+import java.util.function.LongSupplier;
 
 public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
     private static final byte[] AUTH = ascii("AUTH");
@@ -26,9 +27,9 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
     private static final ClientWriteFactory DEFAULT_CLIENT_WRITE_FACTORY =
             channel -> channel::write;
 
-    private final BenchmarkClock clock;
+    private final LongSupplier clock;
     private final NioBenchmarkClient.ReplyLimits replyLimits;
-    private final BenchmarkClock progressClock;
+    private final LongSupplier progressClock;
     private final Duration noProgressTimeout;
     private final long noProgressTimeoutNanos;
     private final ClientCleanup clientCleanup;
@@ -36,20 +37,20 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
 
     public NioBenchmarkRunner() {
         this(
-                BenchmarkClock.system(),
+                System::nanoTime,
                 NioBenchmarkClient.ReplyLimits.defaults(),
-                BenchmarkClock.system(),
+                System::nanoTime,
                 DEFAULT_NO_PROGRESS_TIMEOUT,
                 NioBenchmarkClient::close,
                 DEFAULT_CLIENT_WRITE_FACTORY
         );
     }
 
-    public NioBenchmarkRunner(BenchmarkClock clock) {
+    public NioBenchmarkRunner(LongSupplier clock) {
         this(
                 clock,
                 NioBenchmarkClient.ReplyLimits.defaults(),
-                BenchmarkClock.system(),
+                System::nanoTime,
                 DEFAULT_NO_PROGRESS_TIMEOUT,
                 NioBenchmarkClient::close,
                 DEFAULT_CLIENT_WRITE_FACTORY
@@ -57,13 +58,13 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
     }
 
     NioBenchmarkRunner(
-            BenchmarkClock clock,
+            LongSupplier clock,
             NioBenchmarkClient.ReplyLimits replyLimits
     ) {
         this(
                 clock,
                 replyLimits,
-                BenchmarkClock.system(),
+                System::nanoTime,
                 DEFAULT_NO_PROGRESS_TIMEOUT,
                 NioBenchmarkClient::close,
                 DEFAULT_CLIENT_WRITE_FACTORY
@@ -71,9 +72,9 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
     }
 
     NioBenchmarkRunner(
-            BenchmarkClock clock,
+            LongSupplier clock,
             NioBenchmarkClient.ReplyLimits replyLimits,
-            BenchmarkClock progressClock,
+            LongSupplier progressClock,
             Duration noProgressTimeout
     ) {
         this(
@@ -87,9 +88,9 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
     }
 
     NioBenchmarkRunner(
-            BenchmarkClock clock,
+            LongSupplier clock,
             NioBenchmarkClient.ReplyLimits replyLimits,
-            BenchmarkClock progressClock,
+            LongSupplier progressClock,
             Duration noProgressTimeout,
             ClientCleanup clientCleanup
     ) {
@@ -104,9 +105,9 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
     }
 
     NioBenchmarkRunner(
-            BenchmarkClock clock,
+            LongSupplier clock,
             NioBenchmarkClient.ReplyLimits replyLimits,
-            BenchmarkClock progressClock,
+            LongSupplier progressClock,
             Duration noProgressTimeout,
             ClientCleanup clientCleanup,
             ClientWriteFactory clientWriteFactory
@@ -162,8 +163,8 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
                     requiredConfig,
                     requiredRandom
             );
-            state.measuredStartNanos = clock.nanoTime();
-            state.lastProgressNanos = progressClock.nanoTime();
+            state.measuredStartNanos = clock.getAsLong();
+            state.lastProgressNanos = progressClock.getAsLong();
             runSelector(
                     selector,
                     clients,
@@ -357,7 +358,7 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
             }
             state.issued += state.pipeline;
             client.beginBatch(state.pipeline, random);
-            client.batchStartNanos = clock.nanoTime();
+            client.batchStartNanos = clock.getAsLong();
         }
         if (client.phase == NioBenchmarkClient.Phase.WRITING) {
             boolean complete = client.writeBatch();
@@ -383,7 +384,7 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
             RunState state
     ) throws IOException {
         if (client.needsBatchLatency()) {
-            client.captureBatchLatency(clock.nanoTime());
+            client.captureBatchLatency(clock.getAsLong());
         }
         client.ensureReadCapacity();
         int read = client.channel.read(client.readBuffer);
@@ -428,7 +429,7 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
                         );
                     }
                     if (state.thresholdClient == client) {
-                        state.stopNanos = clock.nanoTime();
+                        state.stopNanos = clock.getAsLong();
                         state.stopping = true;
                     } else if (!config.keepAlive()) {
                         replaceClient(
@@ -548,7 +549,7 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
     }
 
     private long remainingProgressNanos(RunState state) throws IOException {
-        long elapsedNanos = progressClock.nanoTime() - state.lastProgressNanos;
+        long elapsedNanos = progressClock.getAsLong() - state.lastProgressNanos;
         if (elapsedNanos >= noProgressTimeoutNanos) {
             throw noProgressTimeout();
         }
@@ -560,7 +561,7 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
     }
 
     private void markProgress(RunState state) {
-        state.lastProgressNanos = progressClock.nanoTime();
+        state.lastProgressNanos = progressClock.getAsLong();
     }
 
     private IOException noProgressTimeout() {

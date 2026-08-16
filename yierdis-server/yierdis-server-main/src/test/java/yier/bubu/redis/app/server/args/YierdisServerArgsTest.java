@@ -111,33 +111,6 @@ public class YierdisServerArgsTest {
     }
 
     @Test
-    public void toArgvRoundTripsNormalizedSettingsUsedByBench() {
-        YierdisServerArgs args = parse(
-                "--port", "6381",
-                "--noCleanup",
-                "--executorSchedulingPolicy", "FAIR",
-                "--maxmemoryScope", "perdb",
-                "--maxmemoryPolicy", "ALLKEYS-LRU",
-                "--keysTimeBudgetMillis", "0",
-                "--keysMaxResults", "0"
-        );
-
-        args.normalizeAndValidate();
-
-        YierdisServerArgs copied = args.copy();
-        Assert.assertFalse(copied.toArgv().contains("--offheapBackend"));
-        Assert.assertFalse(copied.toArgv().contains("--offheapMaxBytes"));
-        Assert.assertFalse(copied.toArgv().contains("--offheapKeysEnabled"));
-        Assert.assertEquals(args.toArgv(), copied.toArgv());
-
-        YierdisServerArgs reparsed = parse(copied.toArgv().toArray(new String[0]));
-        reparsed.normalizeAndValidate();
-
-        Assert.assertEquals(copied.toArgv(), reparsed.toArgv());
-        Assert.assertEquals(copied.toRuntimeConfig(), reparsed.toRuntimeConfig());
-    }
-
-    @Test
     public void clientTimeoutAndOutputBufferArgsAreParsed() {
         YierdisServerArgs args = parse(
                 "--client-idle-timeout-millis", "1000",
@@ -151,7 +124,7 @@ public class YierdisServerArgsTest {
     }
 
     @Test
-    public void replyCapacityArgsRoundTripWithExactDefaultsAndRuntimeConfig() {
+    public void replyCapacityArgsUseExactDefaultsAndRuntimeConfig() {
         YierdisServerArgs defaults = new YierdisServerArgs();
         defaults.normalizeAndValidate();
         YierdisServerRuntimeConfig defaultConfig = defaults.toRuntimeConfig();
@@ -171,12 +144,6 @@ public class YierdisServerArgsTest {
                 "--replyDrainTimeoutMillis", "17"
         );
         args.normalizeAndValidate();
-
-        YierdisServerArgs copy = args.copy();
-        Assert.assertEquals(args.toArgv(), copy.toArgv());
-        YierdisServerArgs reparsed = parse(copy.toArgv().toArray(new String[0]));
-        reparsed.normalizeAndValidate();
-        Assert.assertEquals(copy.toRuntimeConfig(), reparsed.toRuntimeConfig());
 
         YierdisServerRuntimeConfig config = args.toRuntimeConfig();
         Assert.assertEquals(8192L, config.replyGlobalCapacityBytes());
@@ -281,8 +248,6 @@ public class YierdisServerArgsTest {
         args.normalizeAndValidate();
 
         Assert.assertEquals(1234, args.protocolMaxCommandBytes);
-        Assert.assertEquals(1234, args.copy().protocolMaxCommandBytes);
-        Assert.assertTrue(args.toArgv().contains("--protocolMaxCommandBytes"));
         Assert.assertEquals(1234, args.toRuntimeConfig().protocolMaxCommandBytes());
     }
 
@@ -295,8 +260,6 @@ public class YierdisServerArgsTest {
         explicit.normalizeAndValidate();
 
         Assert.assertEquals(1048576L, explicit.protocolGlobalInFlightBytes);
-        Assert.assertEquals(1048576L, explicit.copy().protocolGlobalInFlightBytes);
-        Assert.assertTrue(explicit.toArgv().contains("--protocolGlobalInFlightBytes"));
         Assert.assertEquals(1048576L, explicit.toRuntimeConfig().protocolGlobalInFlightBytes());
 
         YierdisServerArgs minimum = parse("--executorQueueMaxBytes", "67108864");
@@ -317,14 +280,12 @@ public class YierdisServerArgsTest {
     }
 
     @Test
-    public void nativeSlotCapacityParsesCopiesAndRoundTrips() {
+    public void nativeSlotCapacityParsesAndExportsToRuntimeConfig() {
         YierdisServerArgs args = parse("--nativeSlotCapacity", "2097152");
 
         args.normalizeAndValidate();
 
         Assert.assertEquals(2_097_152, args.nativeSlotCapacity);
-        Assert.assertEquals(2_097_152, args.copy().nativeSlotCapacity);
-        Assert.assertTrue(args.toArgv().contains("--nativeSlotCapacity"));
         Assert.assertEquals(2_097_152, args.toRuntimeConfig().nativeSlotCapacity());
     }
 

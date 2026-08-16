@@ -20,7 +20,7 @@ Yierdis 的测试大致分成七层：
 | native/internal | handle、backend、keyspace、root/value、ledger | `NativeHandleTest`, `YierdisFfmStableMemoryBackendTest`, `StringRootTest`, `MemoryLedgerContractTest` |
 | executor / server | owner thread、队列、背压、Netty 适配 | `CommandExecutorTest`, `CommandExecutorBackpressureTest`, `RespProtocolIntegrationTest` |
 | CLI / bench | 客户端、catalog、NIO runner、storage footprint、脚本和输出契约 | `YierdisClientTest`, `RedisBenchmarkCatalogTest`, `NioBenchmarkRunnerTest`, `BenchmarkOutputRendererTest`, `StorageBenchmarkRunnerTest`, `BenchScriptContractTest` |
-| architecture guard | 模块边界和协议边界 | `ArchitectureDependencyRuleTest`, `RespBoundaryGuardTest` |
+| architecture guard | command、DB 和 runtime 边界 | `CommandBuiltinDbAccessBoundaryTest`, `CommandParseIsolationTest`, `YierdisDbArchitectureGuardTest` |
 
 查找入口：开发路径看 [`development-navigation.md`](./development-navigation.md)，源码职责看 [`core-logic-index.md`](./core-logic-index.md)。
 
@@ -184,11 +184,9 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 当改动可能触碰协议边界、command/internal 边界或 runtime 访问约束时，优先补护栏测试：
 
-- `ArchitectureDependencyRuleTest`：检查 production module 的依赖方向不越界。
-- `RespBoundaryGuardTest`：检查 retired protocol package/artifact 不回到 production source/POM；网络边界改动再连同 `RespRequestDecoderTest` 一起跑。
-- `CommandPipelineArchitectureTest`：逐个检查 builtin 命令家族只注册 `CommandSpec`，不恢复旧参数/回复合同或直接 writer 调用。
+- `CommandBuiltinDbAccessBoundaryTest`：检查 builtin 命令通过 `CommandDb` 门面访问数据库。
 - `CommandParseIsolationTest` / `ServerCommandParseIsolationTest`：检查全部生产注册都有 parse-only fixture，parse 不访问 DB router 或 provider。
-- `YierdisDbArchitectureGuardTest`：检查 DB 不导入 FFM implementation，并保持 factory-only composition；必要时连同 `DbEngineReadWriteBoundaryTest` 一起跑。
+- `YierdisDbArchitectureGuardTest`：检查 DB 保持单一公开 factory，并且实现类型不公开；必要时连同 `DbEngineReadWriteBoundaryTest` 一起跑。
 
 排障顺序：先确认是 boundary regression 还是功能 regression，再决定是去 protocol / command / DB 文档还是直接补 guard 测试。
 

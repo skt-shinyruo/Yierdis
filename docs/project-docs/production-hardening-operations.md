@@ -117,12 +117,12 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
   -Dsurefire.rerunFailingTestsCount=3 test
 ```
 
-Run the architecture guard after code or documentation changes:
+Run the DB API-shape check after changing its public factory or implementation visibility:
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
   mvn -pl yierdis-tests -am \
-  -Dtest=ArchitectureDependencyRuleTest,RespBoundaryGuardTest,YierdisDbArchitectureGuardTest \
+  -Dtest=YierdisDbArchitectureGuardTest \
   -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
@@ -216,7 +216,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
   -Dsurefire.failIfNoSpecifiedTests=false test
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
   mvn -q -pl yierdis-tests -am \
-  -Dtest=ArchitectureDependencyRuleTest,RespBoundaryGuardTest,YierdisDbArchitectureGuardTest \
+  -Dtest=YierdisDbArchitectureGuardTest \
   -Dsurefire.failIfNoSpecifiedTests=false test
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
   mvn -q -pl '!yierdis-benchmark' -DskipTests package
@@ -262,7 +262,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
   -Dsurefire.failIfNoSpecifiedTests=false test
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
   mvn -q -pl yierdis-tests -am \
-  -Dtest=ArchitectureDependencyRuleTest,RespBoundaryGuardTest,YierdisDbArchitectureGuardTest \
+  -Dtest=YierdisDbArchitectureGuardTest \
   -Dsurefire.failIfNoSpecifiedTests=false test
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
   mvn -q -pl '!yierdis-benchmark' test

@@ -22,6 +22,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 
 public class NioBenchmarkRunnerTest {
     private static final Duration SERVER_WAIT = Duration.ofSeconds(5);
@@ -43,7 +44,7 @@ public class NioBenchmarkRunnerTest {
                     2,
                     2,
                     false,
-                    BenchmarkClock.system(),
+                    System::nanoTime,
                     NioBenchmarkClient.ReplyLimits.defaults()
             );
 
@@ -66,7 +67,7 @@ public class NioBenchmarkRunnerTest {
                     2,
                     2,
                     false,
-                    BenchmarkClock.system(),
+                    System::nanoTime,
                     NioBenchmarkClient.ReplyLimits.defaults(),
                     "benchmark-user",
                     "secret",
@@ -123,7 +124,7 @@ public class NioBenchmarkRunnerTest {
                     1,
                     1,
                     true,
-                    BenchmarkClock.system(),
+                    System::nanoTime,
                     NioBenchmarkClient.ReplyLimits.defaults(),
                     "",
                     "password-only",
@@ -152,7 +153,7 @@ public class NioBenchmarkRunnerTest {
                     20,
                     4,
                     3,
-                    BenchmarkClock.system()
+                    System::nanoTime
             );
             List<Integer> perConnection =
                     server.awaitCommandCountsPerConnection(21, 4, SERVER_WAIT);
@@ -212,7 +213,7 @@ public class NioBenchmarkRunnerTest {
                     1,
                     2,
                     true,
-                    BenchmarkClock.system(),
+                    System::nanoTime,
                     NioBenchmarkClient.ReplyLimits.defaults(),
                     "benchmark-user",
                     "secret",
@@ -297,7 +298,7 @@ public class NioBenchmarkRunnerTest {
         try (ScriptedRespServer server = ScriptedRespServer.coalescedPongAndExtraReply()) {
             BenchmarkExecutionException failure = Assert.assertThrows(
                     BenchmarkExecutionException.class,
-                    () -> execute(server, 1, 1, 1, BenchmarkClock.system())
+                    () -> execute(server, 1, 1, 1, System::nanoTime)
             );
 
             Assert.assertEquals(1, failure.completedReplies());
@@ -325,7 +326,7 @@ public class NioBenchmarkRunnerTest {
                             1,
                             2,
                             true,
-                            BenchmarkClock.system(),
+                            System::nanoTime,
                             NioBenchmarkClient.ReplyLimits.defaults(),
                             "default",
                             "bad",
@@ -352,7 +353,7 @@ public class NioBenchmarkRunnerTest {
                             1,
                             1,
                             true,
-                            BenchmarkClock.system(),
+                            System::nanoTime,
                             NioBenchmarkClient.ReplyLimits.defaults(),
                             "",
                             "",
@@ -376,9 +377,9 @@ public class NioBenchmarkRunnerTest {
     public void cleanupFailureIsSuppressedWithoutMaskingPrimaryFailure() throws Exception {
         IOException cleanupFailure = new IOException("cleanup boom");
         NioBenchmarkRunner runner = new NioBenchmarkRunner(
-                BenchmarkClock.system(),
+                System::nanoTime,
                 NioBenchmarkClient.ReplyLimits.defaults(),
-                BenchmarkClock.system(),
+                System::nanoTime,
                 Duration.ofSeconds(30),
                 client -> {
                     client.close();
@@ -397,7 +398,7 @@ public class NioBenchmarkRunnerTest {
                             1,
                             1,
                             true,
-                            BenchmarkClock.system(),
+                            System::nanoTime,
                             NioBenchmarkClient.ReplyLimits.defaults(),
                             "",
                             "",
@@ -483,7 +484,7 @@ public class NioBenchmarkRunnerTest {
     @Test(timeout = 5_000)
     public void pipelineOneCompletesConfiguredRequestsAcrossClients() throws Exception {
         try (ScriptedRespServer server = ScriptedRespServer.immediatePong(3)) {
-            BenchmarkStatistics statistics = execute(server, 11, 3, 1, BenchmarkClock.system());
+            BenchmarkStatistics statistics = execute(server, 11, 3, 1, System::nanoTime);
             List<Integer> perConnection =
                     server.awaitCommandCountsPerConnection(11, 3, SERVER_WAIT);
 
@@ -497,7 +498,7 @@ public class NioBenchmarkRunnerTest {
     @Test(timeout = 5_000)
     public void finalPipelineIsFullButOnlyConfiguredSamplesAreRecorded() throws Exception {
         try (ScriptedRespServer server = ScriptedRespServer.batchedPong(1, 4)) {
-            BenchmarkStatistics statistics = execute(server, 10, 1, 4, BenchmarkClock.system());
+            BenchmarkStatistics statistics = execute(server, 10, 1, 4, System::nanoTime);
 
             Assert.assertEquals(
                     List.of(12),
@@ -536,7 +537,7 @@ public class NioBenchmarkRunnerTest {
     public void stopDrainsThresholdClientButDoesNotWaitForAnotherOutstandingClient()
             throws Exception {
         try (ScriptedRespServer server = ScriptedRespServer.thresholdBoundaryScenario()) {
-            BenchmarkClock clock = server.coordinatedClock(BenchmarkClock.system());
+            LongSupplier clock = server.coordinatedClock(System::nanoTime);
             BenchmarkStatistics statistics = execute(server, 7, 3, 3, clock);
 
             Assert.assertEquals(
@@ -560,7 +561,7 @@ public class NioBenchmarkRunnerTest {
                     1,
                     1,
                     1,
-                    BenchmarkClock.system(),
+                    System::nanoTime,
                     SMALL_REPLY_LIMITS
             );
 
@@ -584,7 +585,7 @@ public class NioBenchmarkRunnerTest {
                     1,
                     1,
                     1,
-                    BenchmarkClock.system(),
+                    System::nanoTime,
                     SMALL_REPLY_LIMITS
             );
 
@@ -601,7 +602,7 @@ public class NioBenchmarkRunnerTest {
             int requests,
             int clients,
             int pipeline,
-            BenchmarkClock clock
+            LongSupplier clock
     ) throws Exception {
         return execute(
                 server,
@@ -629,7 +630,7 @@ public class NioBenchmarkRunnerTest {
                 clients,
                 pipeline,
                 true,
-                BenchmarkClock.system(),
+                System::nanoTime,
                 NioBenchmarkClient.ReplyLimits.defaults(),
                 "",
                 "",
@@ -644,7 +645,7 @@ public class NioBenchmarkRunnerTest {
             int requests,
             int clients,
             int pipeline,
-            BenchmarkClock clock,
+            LongSupplier clock,
             NioBenchmarkClient.ReplyLimits replyLimits
     ) throws Exception {
         return execute(
@@ -666,7 +667,7 @@ public class NioBenchmarkRunnerTest {
             int clients,
             int pipeline,
             boolean keepAlive,
-            BenchmarkClock clock,
+            LongSupplier clock,
             NioBenchmarkClient.ReplyLimits replyLimits
     ) throws Exception {
         return execute(
@@ -691,7 +692,7 @@ public class NioBenchmarkRunnerTest {
             int clients,
             int pipeline,
             boolean keepAlive,
-            BenchmarkClock clock,
+            LongSupplier clock,
             NioBenchmarkClient.ReplyLimits replyLimits,
             String username,
             String password,
@@ -720,7 +721,7 @@ public class NioBenchmarkRunnerTest {
             int clients,
             int pipeline,
             boolean keepAlive,
-            BenchmarkClock clock,
+            LongSupplier clock,
             NioBenchmarkClient.ReplyLimits replyLimits,
             String username,
             String password,
@@ -742,7 +743,7 @@ public class NioBenchmarkRunnerTest {
                 new NioBenchmarkRunner(
                         clock,
                         replyLimits,
-                        BenchmarkClock.system(),
+                        System::nanoTime,
                         noProgressTimeout
                 )
         );
@@ -755,7 +756,7 @@ public class NioBenchmarkRunnerTest {
             int clients,
             int pipeline,
             boolean keepAlive,
-            BenchmarkClock clock,
+            LongSupplier clock,
             NioBenchmarkClient.ReplyLimits replyLimits,
             String username,
             String password,
@@ -811,9 +812,9 @@ public class NioBenchmarkRunnerTest {
             NioBenchmarkRunner.ClientCleanup clientCleanup
     ) {
         return new NioBenchmarkRunner(
-                BenchmarkClock.system(),
+                System::nanoTime,
                 NioBenchmarkClient.ReplyLimits.defaults(),
-                BenchmarkClock.system(),
+                System::nanoTime,
                 Duration.ofSeconds(30),
                 clientCleanup
         );
@@ -823,9 +824,9 @@ public class NioBenchmarkRunnerTest {
             NioBenchmarkRunner.ClientWriteFactory clientWriteFactory
     ) {
         return new NioBenchmarkRunner(
-                BenchmarkClock.system(),
+                System::nanoTime,
                 NioBenchmarkClient.ReplyLimits.defaults(),
-                BenchmarkClock.system(),
+                System::nanoTime,
                 Duration.ofSeconds(30),
                 NioBenchmarkClient::close,
                 clientWriteFactory
@@ -869,7 +870,7 @@ public class NioBenchmarkRunnerTest {
         try (server) {
             BenchmarkExecutionException failure = Assert.assertThrows(
                     BenchmarkExecutionException.class,
-                    () -> execute(server, 3, 1, 1, BenchmarkClock.system())
+                    () -> execute(server, 3, 1, 1, System::nanoTime)
             );
 
             Assert.assertEquals(expectedCompletedReplies, failure.completedReplies());
@@ -893,12 +894,12 @@ public class NioBenchmarkRunnerTest {
         Assert.assertEquals(samples, statistics.latency().count());
     }
 
-    private static final class ManualClock implements BenchmarkClock {
+    private static final class ManualClock implements LongSupplier {
         private final AtomicLong nanos = new AtomicLong();
         private final AtomicInteger calls = new AtomicInteger();
 
         @Override
-        public long nanoTime() {
+        public long getAsLong() {
             calls.incrementAndGet();
             return nanos.get();
         }

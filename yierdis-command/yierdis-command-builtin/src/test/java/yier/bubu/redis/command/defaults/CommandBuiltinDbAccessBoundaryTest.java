@@ -49,41 +49,6 @@ public class CommandBuiltinDbAccessBoundaryTest {
         }
     }
 
-    @Test
-    public void ordinaryCommandsUsePreparedCommandContracts() throws IOException {
-        Path mainRoot = mainSourceRoot();
-        List<String> offenders = new ArrayList<>();
-        List<String> forbidden = List.of(
-                legacy("Command", "Context"),
-                legacy("Reply", "Plans"),
-                "require" + "Reply",
-                "write" + "MeasuredBulkString",
-                "transfer" + "ReplyOwnership"
-        );
-
-        try (Stream<Path> files = Files.walk(mainRoot)) {
-            for (Path file : files.filter(Files::isRegularFile)
-                    .filter(path -> path.getFileName().toString().endsWith(".java"))
-                    .toList()) {
-                String source = Files.readString(file);
-                String relative = mainRoot.relativize(file).toString();
-                for (String forbiddenReference : forbidden) {
-                    if (source.contains(forbiddenReference)) {
-                        offenders.add(relative + " retains " + forbiddenReference);
-                    }
-                }
-            }
-        }
-
-        if (!offenders.isEmpty()) {
-            Assert.fail(String.join("\n", offenders));
-        }
-    }
-
-    private static String legacy(String prefix, String suffix) {
-        return prefix + suffix;
-    }
-
     private static Path mainSourceRoot() {
         Path moduleRelative = Path.of("src/main/java/yier/bubu/redis/command/defaults");
         if (Files.exists(moduleRelative)) {

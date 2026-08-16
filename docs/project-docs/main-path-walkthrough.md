@@ -40,10 +40,9 @@ YierdisServer
 
 先看 [`YierdisServer.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServer.java)。
 
-它只做三件事：
+它只做两件事：
 
 - 解析启动参数
-- 检查 FFM 可用性
 - 启动 `YierdisServerBootstrap`
 
 这里不放业务逻辑。`main` 只是启动壳。

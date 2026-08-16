@@ -9,21 +9,12 @@ import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplySimpleString;
 
-import java.io.IOException;
 import java.util.Arrays;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class SetCommandTest {
-    @Test
-    public void setCommandsUseReadWriteBoundariesInsteadOfLegacyValueOps() throws IOException {
-        String source = CommandSourceFiles.readCommandDefaults("SetCommands.java");
-
-        Assert.assertFalse(source.contains("eviction().prepareWrite("));
-        Assert.assertFalse(source.contains("values().sets()."));
-    }
-
     @Test
     public void upgradeFromIntsetKeepsExistingMembers() {
         forEachDb(db -> {

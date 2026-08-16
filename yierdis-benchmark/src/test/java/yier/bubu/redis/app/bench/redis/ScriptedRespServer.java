@@ -25,6 +25,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongSupplier;
 
 final class ScriptedRespServer implements AutoCloseable {
     private static final byte[] PONG = ascii("+PONG\r\n");
@@ -213,10 +214,10 @@ final class ScriptedRespServer implements AutoCloseable {
         return responseScript.stallWasReleased();
     }
 
-    BenchmarkClock coordinatedClock(BenchmarkClock delegate) {
+    LongSupplier coordinatedClock(LongSupplier delegate) {
         Objects.requireNonNull(delegate, "delegate");
         return () -> {
-            long now = delegate.nanoTime();
+            long now = delegate.getAsLong();
             clockCalls.incrementAndGet();
             signalStateChanged();
             return now;

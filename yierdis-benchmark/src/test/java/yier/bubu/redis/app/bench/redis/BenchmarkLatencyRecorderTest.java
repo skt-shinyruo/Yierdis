@@ -4,9 +4,6 @@ import org.HdrHistogram.Histogram;
 import org.junit.Assert;
 import org.junit.Test;
 
-import java.lang.reflect.Modifier;
-import java.util.Arrays;
-
 public class BenchmarkLatencyRecorderTest {
     @Test
     public void histogramClampsAtThreeSecondsAndProducesSummary() {
@@ -153,23 +150,6 @@ public class BenchmarkLatencyRecorderTest {
         new BenchmarkLatencyRecorder.Summary(1, 0.0, 0, 0, 0, 0, 0);
         new BenchmarkLatencyRecorder.Summary(1, 10.0, 10, 10, 15, 20, 20);
         new BenchmarkLatencyRecorder.Summary(1, 20.0, 10, 10, 15, 20, 20);
-    }
-
-    @Test
-    public void benchmarkClockHasOneInjectableMethodAndASystemImplementation() {
-        long abstractMethodCount = Arrays.stream(BenchmarkClock.class.getDeclaredMethods())
-                .filter(method -> Modifier.isAbstract(method.getModifiers()))
-                .count();
-        BenchmarkClock injected = () -> 123_456_789L;
-
-        Assert.assertEquals(1, abstractMethodCount);
-        Assert.assertEquals(123_456_789L, injected.nanoTime());
-
-        long before = System.nanoTime();
-        long systemTime = BenchmarkClock.system().nanoTime();
-        long after = System.nanoTime();
-        Assert.assertTrue(systemTime >= before);
-        Assert.assertTrue(systemTime <= after);
     }
 
     @Test

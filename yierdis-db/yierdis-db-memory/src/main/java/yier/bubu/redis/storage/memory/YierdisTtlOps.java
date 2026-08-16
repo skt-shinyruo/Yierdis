@@ -1,5 +1,7 @@
 package yier.bubu.redis.storage.memory;
 
+import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
+
 import java.util.Objects;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.common.command.MutationContext;
@@ -148,7 +150,7 @@ final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             }
 
             @Override
-            public PreparedChange<WriteResult<Boolean>> prepare(MutationScope scope) {
+            public PreparedDbMutation<WriteResult<Boolean>> prepare(YierdisDbKernel scope) {
                 EntryHandle entryHandle = keyLifecycle.entryHandle(keyLifecycle.copyKeyBytes(handle));
                 EntryRecord current = entryHandle == null ? null : keyLifecycle.entryRecord(entryHandle);
                 if (current == null || !record.equals(current) || current.expireAtMillis() < 0L) {
@@ -238,7 +240,7 @@ final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             }
 
             @Override
-            public PreparedChange<WriteResult<Boolean>> prepare(MutationScope scope) {
+            public PreparedDbMutation<WriteResult<Boolean>> prepare(YierdisDbKernel scope) {
                 EntryHandle entryHandle = keyLifecycle.entryHandle(keyLifecycle.copyKeyBytes(handle));
                 EntryRecord current = entryHandle == null ? null : keyLifecycle.entryRecord(entryHandle);
                 if (current == null || !record.equals(current)) {
@@ -275,7 +277,7 @@ final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             }
 
             @Override
-            public PreparedChange<WriteResult<Boolean>> prepare(MutationScope scope) {
+            public PreparedDbMutation<WriteResult<Boolean>> prepare(YierdisDbKernel scope) {
                 EntryHandle entryHandle = keyLifecycle.entryHandle(keyLifecycle.copyKeyBytes(handle));
                 EntryRecord current = entryHandle == null ? null : keyLifecycle.entryRecord(entryHandle);
                 if (current == null || !record.equals(current)) {
@@ -297,8 +299,8 @@ final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
         });
     }
 
-    private static <T> PreparedChange<T> preparedNoEntry(
-            MutationScope scope,
+    private static <T> PreparedDbMutation<T> preparedNoEntry(
+            YierdisDbKernel scope,
             T result,
             MutationOutcome outcome
     ) {

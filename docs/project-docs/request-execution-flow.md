@@ -49,7 +49,7 @@ CommandExecutor
 
 ## 启动和连接状态
 
-`YierdisServer.main(...)` 只做启动参数解析、FFM 可用性检查和 `YierdisServerBootstrap.start(...)`。
+`YierdisServer.main(...)` 只做启动参数解析和 `YierdisServerBootstrap.start(...)`。
 
 `YierdisServerBootstrap` 是 composition root。它创建 `YierdisInstance`，通过 `ServerCommandComposition` 创建并注册默认命令、事务命令和 server-only 命令的 `CommandDispatcher`，再把 `dispatcher::prepare` 作为 `CommandExecutionEngine` 交给 `CommandExecutor`。之后才创建 Netty groups 和 `ServerBootstrap`。
 

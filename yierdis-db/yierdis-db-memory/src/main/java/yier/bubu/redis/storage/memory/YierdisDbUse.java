@@ -13,20 +13,19 @@ import yier.bubu.redis.storage.api.DbCommitKind;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
-import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.CurrentEntry;
-import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
-import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.ledger.AbstractPreparedMutation;
-import yier.bubu.redis.storage.memory.internal.ledger.PreparedCallbackMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
 
-sealed interface DbUse<R> permits ReadUse, MutationUse, InspectionUse, MaintenanceUse {
+final class DbUse {
+    private DbUse() {
+    }
+
     static ReadUse<Void> ownerCheck() {
         return ignored -> null;
     }
 
-    static <R> ReadUse<R> read(Function<ReadScope, R> action) {
+    static <R> ReadUse<R> read(Function<YierdisDbKernel, R> action) {
         Objects.requireNonNull(action, "action");
         return action::apply;
     }
@@ -43,14 +42,14 @@ sealed interface DbUse<R> permits ReadUse, MutationUse, InspectionUse, Maintenan
 }
 
 @FunctionalInterface
-non-sealed interface ReadUse<R> extends DbUse<R> {
-    R execute(ReadScope scope);
+interface ReadUse<R> {
+    R execute(YierdisDbKernel kernel);
 }
 
-non-sealed interface MutationUse<R> extends DbUse<R> {
+interface MutationUse<R> {
     long upperBoundBytes();
 
-    PreparedChange<R> prepare(MutationScope scope);
+    PreparedDbMutation<R> prepare(YierdisDbKernel kernel);
 
     default MutationContext context() {
         return MutationContext.none();
@@ -66,12 +65,12 @@ non-sealed interface MutationUse<R> extends DbUse<R> {
 }
 
 @FunctionalInterface
-non-sealed interface InspectionUse<R> extends DbUse<R> {
+interface InspectionUse<R> {
     R execute(InspectionScope scope);
 }
 
 @FunctionalInterface
-non-sealed interface MaintenanceUse<R> extends DbUse<R> {
+interface MaintenanceUse<R> {
     R execute(MaintenanceScope scope);
 }
 
@@ -132,19 +131,6 @@ final class CommitSpec {
     ImmutableCommandRecord retainRecord(MutationContext context) {
         return recordFactory.apply(Objects.requireNonNull(context, "context"));
     }
-}
-
-final class ReadScope {
-    private final YierdisDbKernel kernel;
-
-    ReadScope(YierdisDbKernel kernel) {
-        this.kernel = Objects.requireNonNull(kernel, "kernel");
-    }
-
-    EntryRecord liveEntryRecord(yier.bubu.redis.storage.memory.internal.key.KeyHandle keyHandle) {
-        return kernel.liveEntryRecord(keyHandle);
-    }
-
 }
 
 final class InspectionScope {
@@ -335,195 +321,12 @@ final class MaintenanceScope {
     }
 }
 
-final class MutationScope {
-    private final YierdisDbKeyLifecycle keyLifecycle;
-
-    MutationScope(YierdisDbKeyLifecycle keyLifecycle) {
-        this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
-    }
-
-    <T> PreparedChange<T> unchanged(T result, MutationOutcome outcome) {
-        return new PreparedChange<>(PreparedEntryMutation.unchanged(keyLifecycle, result, outcome));
-    }
-
-    <T> PreparedChange<T> insert(
-            T result,
-            long actualDeltaBytes,
-            long stagedNonNativeGrowthBytes,
-            MutationOutcome outcome,
-            StagedEntry stagedEntry,
-            EntryRecord newRecord
-    ) {
-        return new PreparedChange<>(PreparedEntryMutation.insert(
-                keyLifecycle,
-                result,
-                actualDeltaBytes,
-                stagedNonNativeGrowthBytes,
-                outcome,
-                stagedEntry,
-                newRecord
-        ));
-    }
-
-    <T> PreparedChange<T> replace(
-            T result,
-            long actualDeltaBytes,
-            long stagedNonNativeGrowthBytes,
-            MutationOutcome outcome,
-            EntryHandle existingEntryHandle,
-            EntryRecord oldRecord,
-            EntryRecord newRecord,
-            boolean releaseReplacedValue
-    ) {
-        return new PreparedChange<>(PreparedEntryMutation.replace(
-                keyLifecycle,
-                result,
-                actualDeltaBytes,
-                stagedNonNativeGrowthBytes,
-                outcome,
-                existingEntryHandle,
-                oldRecord,
-                newRecord,
-                releaseReplacedValue
-        ));
-    }
-
-    <T> PreparedChange<T> delete(
-            T result,
-            long actualDeltaBytes,
-            MutationOutcome outcome,
-            EntryHandle existingEntryHandle,
-            EntryRecord oldRecord,
-            boolean releaseReplacedValue
-    ) {
-        return new PreparedChange<>(PreparedEntryMutation.delete(
-                keyLifecycle,
-                result,
-                actualDeltaBytes,
-                outcome,
-                existingEntryHandle,
-                oldRecord,
-                releaseReplacedValue
-        ));
-    }
-
-    <T> PreparedChange<T> upsert(
-            T result,
-            long actualDeltaBytes,
-            long stagedNonNativeGrowthBytes,
-            MutationOutcome outcome,
-            CurrentEntry current,
-            StagedEntry staged,
-            EntryRecord newRecord,
-            boolean releaseReplacedValue
-    ) {
-        return new PreparedChange<>(PreparedEntryMutation.upsert(
-                keyLifecycle,
-                result,
-                actualDeltaBytes,
-                stagedNonNativeGrowthBytes,
-                outcome,
-                current,
-                staged,
-                newRecord,
-                releaseReplacedValue
-        ));
-    }
-
-    <T> PreparedChange<T> callback(
-            T result,
-            long actualDeltaBytes,
-            long stagedNonNativeGrowthBytes,
-            MutationOutcome outcome,
-            Runnable commit,
-            Runnable releaseSuperseded,
-            Runnable abort,
-            boolean trimNativePagesAfterCommit
-    ) {
-        return new PreparedChange<>(new PreparedCallbackMutation<>(
-                result,
-                actualDeltaBytes,
-                stagedNonNativeGrowthBytes,
-                outcome,
-                commit,
-                releaseSuperseded,
-                abort,
-                trimNativePagesAfterCommit
-        ));
-    }
-
-    <T> PreparedChange<T> batch(
-            PreparedChange<?>[] changes,
-            int count,
-            T result,
-            long actualDeltaBytes,
-            MutationOutcome outcome
-    ) {
-        return new PreparedChange<>(new PreparedBatchMutation<>(
-                changes,
-                count,
-                result,
-                actualDeltaBytes,
-                outcome
-        ));
-    }
-}
-
-final class PreparedChange<T> {
-    private final PreparedDbMutation<T> prepared;
-
-    PreparedChange(PreparedDbMutation<T> prepared) {
-        this.prepared = Objects.requireNonNull(prepared, "prepared");
-    }
-
-    PreparedChange<T> releaseReplacedValueWith(Runnable hook) {
-        entryMutation().releaseReplacedValueWith(hook);
-        return this;
-    }
-
-    PreparedChange<T> closeOnAbort(AutoCloseable resource) {
-        entryMutation().closeOnAbort(resource);
-        return this;
-    }
-
-    PreparedChange<T> releaseNewValueOnAbortWith(Runnable hook) {
-        entryMutation().releaseNewValueOnAbortWith(hook);
-        return this;
-    }
-
-    PreparedChange<T> beforeEntryPublish(Runnable hook) {
-        entryMutation().beforeEntryPublish(hook);
-        return this;
-    }
-
-    PreparedChange<T> requestNativePageTrimAfterCommit() {
-        entryMutation().requestNativePageTrimAfterCommit();
-        return this;
-    }
-
-    void abort() {
-        prepared.abort();
-    }
-
-    PreparedDbMutation<T> unwrap() {
-        return prepared;
-    }
-
-    @SuppressWarnings("unchecked")
-    private PreparedEntryMutation<T> entryMutation() {
-        if (prepared instanceof PreparedEntryMutation<?> entryMutation) {
-            return (PreparedEntryMutation<T>) entryMutation;
-        }
-        throw new IllegalStateException("prepared change is not an entry mutation");
-    }
-}
-
 final class PreparedBatchMutation<T> extends AbstractPreparedMutation<T> {
     private final PreparedDbMutation<?>[] changes;
     private final T result;
 
     PreparedBatchMutation(
-            PreparedChange<?>[] changes,
+            PreparedDbMutation<?>[] changes,
             int count,
             T result,
             long actualDeltaBytes,
@@ -536,7 +339,7 @@ final class PreparedBatchMutation<T> extends AbstractPreparedMutation<T> {
         }
         this.changes = new PreparedDbMutation<?>[count];
         for (int index = 0; index < count; index++) {
-            this.changes[index] = Objects.requireNonNull(changes[index], "change").unwrap();
+            this.changes[index] = Objects.requireNonNull(changes[index], "change");
         }
         this.result = result;
     }

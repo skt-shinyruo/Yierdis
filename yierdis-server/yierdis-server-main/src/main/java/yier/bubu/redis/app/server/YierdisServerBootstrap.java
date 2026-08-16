@@ -194,7 +194,6 @@ public final class YierdisServerBootstrap implements AutoCloseable {
     }
 
     private void startInternal() throws Exception {
-        ForeignMemoryAutoModules.ensureFfmAvailable();
         log.info("native memory backend: foreign (JDK 25 FFM)");
         int databases = Math.max(1, runtimeConfig.databases());
         YierdisInstanceConfig.MaxmemoryScope scope =

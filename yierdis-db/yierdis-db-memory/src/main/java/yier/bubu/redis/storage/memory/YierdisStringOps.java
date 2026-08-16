@@ -1,5 +1,7 @@
 package yier.bubu.redis.storage.memory;
 
+import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
+
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.CurrentEntry;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
 import yier.bubu.redis.bytes.BytesSink;
@@ -107,7 +109,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
             }
 
             @Override
-            public PreparedChange<WriteResult<SetStringValue>> prepare(MutationScope scope) {
+            public PreparedDbMutation<WriteResult<SetStringValue>> prepare(YierdisDbKernel scope) {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (mode == SetMode.NX && current != null) {
@@ -164,7 +166,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                             outcome
                     );
                     long deltaBytes = estimateRecordBytes(targetKey, next) - estimateRecordBytes(targetKey, current);
-                    PreparedChange<WriteResult<SetStringValue>> prepared = scope.upsert(
+                    PreparedEntryMutation<WriteResult<SetStringValue>> prepared = scope.upsert(
                             result,
                             deltaBytes,
                             staged == null ? 0L : staged.stagedHeapBytes(),
@@ -297,7 +299,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
             }
 
             @Override
-            public PreparedChange<WriteResult<Long>> prepare(MutationScope scope) {
+            public PreparedDbMutation<WriteResult<Long>> prepare(YierdisDbKernel scope) {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 StagedEntry staged = null;
@@ -344,7 +346,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                             : WriteResult.unchanged((long) newLen);
                     MutationOutcome outcome = result.mutationOutcome();
                     long deltaBytes = estimateRecordBytes(targetKey, next) - estimateRecordBytes(targetKey, current);
-                    PreparedChange<WriteResult<Long>> prepared = scope.upsert(
+                    PreparedEntryMutation<WriteResult<Long>> prepared = scope.upsert(
                             result,
                             deltaBytes,
                             staged == null ? 0L : staged.stagedHeapBytes(),
@@ -404,7 +406,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
             }
 
             @Override
-            public PreparedChange<WriteResult<Integer>> prepare(MutationScope scope) {
+            public PreparedDbMutation<WriteResult<Integer>> prepare(YierdisDbKernel scope) {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 StagedEntry staged = null;
@@ -446,7 +448,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                             : WriteResult.unchanged(oldBit);
                     MutationOutcome outcome = result.mutationOutcome();
                     long deltaBytes = estimateRecordBytes(targetKey, next) - estimateRecordBytes(targetKey, current);
-                    PreparedChange<WriteResult<Integer>> prepared = scope.upsert(
+                    PreparedEntryMutation<WriteResult<Integer>> prepared = scope.upsert(
                             result,
                             deltaBytes,
                             staged == null ? 0L : staged.stagedHeapBytes(),
@@ -496,7 +498,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
             }
 
             @Override
-            public PreparedChange<WriteResult<Long>> prepare(MutationScope scope) {
+            public PreparedDbMutation<WriteResult<Long>> prepare(YierdisDbKernel scope) {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 StagedEntry staged = null;
@@ -523,7 +525,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     );
                     WriteResult<Long> writeResult = WriteResult.of(result, MutationOutcome.VALUE_CHANGED);
                     long deltaBytes = estimateRecordBytes(targetKey, next) - estimateRecordBytes(targetKey, current);
-                    PreparedChange<WriteResult<Long>> prepared = scope.upsert(
+                    PreparedEntryMutation<WriteResult<Long>> prepared = scope.upsert(
                             writeResult,
                             deltaBytes,
                             staged == null ? 0L : staged.stagedHeapBytes(),
@@ -644,17 +646,17 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
         }));
     }
 
-    private EntryRecord liveTouchedStringRecord(ReadScope scope, byte[] keyBytes) {
+    private EntryRecord liveTouchedStringRecord(YierdisDbKernel scope, byte[] keyBytes) {
         KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
         return liveTouchedStringRecord(scope, keyHandle);
     }
 
-    private EntryRecord liveTouchedStringRecord(ReadScope scope, BytesView keyView) {
+    private EntryRecord liveTouchedStringRecord(YierdisDbKernel scope, BytesView keyView) {
         KeyHandle keyHandle = keyLifecycle.keyHandle(keyView);
         return liveTouchedStringRecord(scope, keyHandle);
     }
 
-    private EntryRecord liveTouchedStringRecord(ReadScope scope, KeyHandle keyHandle) {
+    private EntryRecord liveTouchedStringRecord(YierdisDbKernel scope, KeyHandle keyHandle) {
         EntryRecord record = scope.liveEntryRecord(keyHandle);
         if (record == null) {
             return null;
@@ -750,8 +752,8 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
         return before != null;
     }
 
-    private static <T> PreparedChange<T> preparedNoEntry(
-            MutationScope scope,
+    private static <T> PreparedDbMutation<T> preparedNoEntry(
+            YierdisDbKernel scope,
             T result,
             MutationOutcome outcome
     ) {

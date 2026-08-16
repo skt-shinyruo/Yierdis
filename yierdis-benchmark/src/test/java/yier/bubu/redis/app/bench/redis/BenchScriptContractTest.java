@@ -28,23 +28,6 @@ public class BenchScriptContractTest {
     public final TemporaryFolder temporaryFolder = new TemporaryFolder();
 
     @Test
-    public void benchScriptBuildsOnlyTheClientAndTargetsAnExistingServer() throws IOException {
-        String script = Files.readString(repoRoot().resolve("scripts/bench.sh"));
-
-        Assert.assertTrue(script.contains("-pl yierdis-benchmark -am"));
-        Assert.assertTrue(script.contains("--host"));
-        Assert.assertTrue(script.contains("--port"));
-        Assert.assertTrue(script.contains("--requests"));
-        Assert.assertTrue(script.contains("--clients"));
-        Assert.assertTrue(script.contains("--data-size"));
-        Assert.assertTrue(script.contains("--pipeline"));
-        Assert.assertFalse(script.contains("--serverJar"));
-        Assert.assertFalse(script.contains("currentServerJar"));
-        Assert.assertFalse(script.contains("baselineServerJar"));
-        Assert.assertFalse(script.contains("--suite"));
-    }
-
-    @Test
     public void defaultInvocationBuildsBenchmarkAndIgnoresNewerClassifiedJars() throws Exception {
         ScriptFixture fixture = createScriptFixture(true, true);
 
@@ -126,64 +109,6 @@ public class BenchScriptContractTest {
         Assert.assertTrue(result.output(), result.output().contains("shaded yierdis-benchmark jar not found"));
         Assert.assertFalse("java must not run without the main jar", Files.exists(fixture.javaLog()));
         Assert.assertFalse("mvn must not run when SKIP_BUILD=1", Files.exists(fixture.mvnLog()));
-    }
-
-    @Test
-    public void currentBenchmarkDocumentationDoesNotClaimRetiredPerformanceGate() throws IOException {
-        String documentation = Files.readString(
-                repoRoot().resolve("docs/project-docs/testing-and-debugging.md")
-        );
-
-        Assert.assertFalse(documentation.contains("四命令 `0.90` benchmark gate"));
-    }
-
-    @Test
-    public void currentBenchmarkDocumentationNamesTheActualReplyDecoder() throws IOException {
-        String documentation = Files.readString(
-                repoRoot().resolve("docs/project-docs/client-and-bench-internals.md")
-        );
-
-        Assert.assertFalse(documentation.contains("benchmark 用它写 workload frame 和读 reply"));
-        Assert.assertTrue(documentation.contains("IncrementalRespReplyDecoder"));
-    }
-
-    @Test
-    public void currentScriptDocumentationAdvertisesPortableUsernameEnvironment() throws IOException {
-        String readme = Files.readString(repoRoot().resolve("README.md"));
-        String internals = Files.readString(
-                repoRoot().resolve("docs/project-docs/client-and-bench-internals.md")
-        );
-
-        Assert.assertTrue(readme.contains("`BENCH_USERNAME`"));
-        Assert.assertTrue(internals.contains("`BENCH_USERNAME`"));
-    }
-
-    @Test
-    public void currentOperationsDocumentationHasNoBenchmarkServerLifecycle() throws IOException {
-        String documentation = Files.readString(
-                repoRoot().resolve("docs/project-docs/configuration-and-operations.md")
-        );
-
-        Assert.assertFalse(documentation.contains("YierdisBenchServerArgs"));
-        Assert.assertFalse(documentation.contains("ServerProcess.stop()"));
-        Assert.assertTrue(documentation.contains("benchmark 不持有 server 参数或生命周期模型"));
-    }
-
-    @Test
-    public void currentCoverageDocumentationUsesLiveBenchmarkClassesAndTests() throws IOException {
-        String documentation = Files.readString(
-                repoRoot().resolve("docs/project-docs/code-logic-coverage.md")
-        );
-
-        Assert.assertFalse(documentation.contains("YierdisBenchComparisonExecutionTest"));
-        Assert.assertFalse(documentation.contains("YierdisBenchSummaryFormatTest"));
-        Assert.assertFalse(documentation.contains("strictReplies"));
-        Assert.assertTrue(documentation.contains("RedisBenchmarkCommand"));
-        Assert.assertTrue(documentation.contains("RedisBenchmarkOptionsTest"));
-        Assert.assertTrue(documentation.contains("RedisBenchmarkCatalogTest"));
-        Assert.assertTrue(documentation.contains("RedisBenchmarkCommandTemplateTest"));
-        Assert.assertTrue(documentation.contains("NioBenchmarkRunnerTest"));
-        Assert.assertTrue(documentation.contains("BenchmarkOutputRendererTest"));
     }
 
     @Test

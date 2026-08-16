@@ -5,9 +5,6 @@ import picocli.CommandLine.Option;
 import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
-import java.util.ArrayList;
-import java.util.List;
-
 @Command(
         name = "yierdis",
         description = "A simplified Redis RESP server (teaching-oriented).",
@@ -304,57 +301,6 @@ public final class YierdisServerArgs {
         toRuntimeConfig().executorConfig();
     }
 
-    public YierdisServerArgs copy() {
-        YierdisServerArgs out = new YierdisServerArgs();
-        out.help = help;
-        out.bind = bind;
-        out.port = port;
-        out.maxClients = maxClients;
-        out.databases = databases;
-        out.cleanupIntervalMillis = cleanupIntervalMillis;
-        out.noCleanup = noCleanup;
-        out.ioThreads = ioThreads;
-        out.executorQueueCapacity = executorQueueCapacity;
-        out.executorQueueMaxBytes = executorQueueMaxBytes;
-        out.executorSchedulingPolicy = executorSchedulingPolicy;
-        out.backpressureHighWatermark = backpressureHighWatermark;
-        out.backpressureLowWatermark = backpressureLowWatermark;
-        out.backpressureBytesHighWatermark = backpressureBytesHighWatermark;
-        out.backpressureBytesLowWatermark = backpressureBytesLowWatermark;
-        out.executorMaxDrainCommands = executorMaxDrainCommands;
-        out.executorDrainTimeLimitMillis = executorDrainTimeLimitMillis;
-        out.transactionQueueMaxCommands = transactionQueueMaxCommands;
-        out.transactionQueueMaxBytes = transactionQueueMaxBytes;
-        out.protocolMaxBulkBytes = protocolMaxBulkBytes;
-        out.protocolMaxArgs = protocolMaxArgs;
-        out.protocolMaxLineBytes = protocolMaxLineBytes;
-        out.protocolMaxCommandBytes = protocolMaxCommandBytes;
-        out.protocolGlobalInFlightBytes = protocolGlobalInFlightBytes;
-        out.clientIdleTimeoutMillis = clientIdleTimeoutMillis;
-        out.clientOutputBufferLimitBytes = clientOutputBufferLimitBytes;
-        out.clientOutputBufferOverLimitMillis = clientOutputBufferOverLimitMillis;
-        out.replyGlobalCapacityBytes = replyGlobalCapacityBytes;
-        out.replyPerConnectionCapacityBytes = replyPerConnectionCapacityBytes;
-        out.replyMaxTotalBytes = replyMaxTotalBytes;
-        out.replyChunkPayloadBytes = replyChunkPayloadBytes;
-        out.replyControlReservationBytes = replyControlReservationBytes;
-        out.replyDrainTimeoutMillis = replyDrainTimeoutMillis;
-        out.maxmemoryBytes = maxmemoryBytes;
-        out.maxmemoryScope = maxmemoryScope;
-        out.maxmemoryPolicy = maxmemoryPolicy;
-        out.maxmemorySamples = maxmemorySamples;
-        out.evictionTimeLimitMillis = evictionTimeLimitMillis;
-        out.expireCleanupTimeLimitMillis = expireCleanupTimeLimitMillis;
-        out.nativeDefragEnabled = nativeDefragEnabled;
-        out.nativeDefragMaxMoveBytes = nativeDefragMaxMoveBytes;
-        out.nativeDefragMaxObjects = nativeDefragMaxObjects;
-        out.nativeDefragTimeLimitMillis = nativeDefragTimeLimitMillis;
-        out.nativeSlotCapacity = nativeSlotCapacity;
-        out.keysTimeBudgetMillis = keysTimeBudgetMillis;
-        out.keysMaxResults = keysMaxResults;
-        return out;
-    }
-
     /**
      * Convert normalized CLI args into the canonical runtime config.
      * <p>
@@ -407,88 +353,6 @@ public final class YierdisServerArgs {
                 keysMaxResults,
                 deriveProtocolGlobalInFlightBytes(executorQueueMaxBytes, protocolGlobalInFlightBytes)
         );
-    }
-
-    /**
-     * 将当前参数对象转换为可执行的命令行 argv（flag + value），用于工具/脚本复用同一份 SSOT。
-     * <p>
-     * 说明：该方法不会隐式调用 {@link #normalizeAndValidate()}；调用方应先完成校验以保证输出稳定。
-     */
-    public List<String> toArgv() {
-        List<String> out = new ArrayList<>();
-        if (help) {
-            out.add("--help");
-            return out;
-        }
-
-        addArg(out, YierdisServerArgNames.BIND, bind);
-        addArg(out, YierdisServerArgNames.PORT, port);
-        addArg(out, YierdisServerArgNames.MAX_CLIENTS, maxClients);
-        addArg(out, YierdisServerArgNames.DATABASES, databases);
-
-        if (noCleanup) {
-            out.add(YierdisServerArgNames.NO_CLEANUP);
-        } else {
-            addArg(out, YierdisServerArgNames.CLEANUP_INTERVAL_MILLIS, cleanupIntervalMillis);
-        }
-
-        addArg(out, YierdisServerArgNames.IO_THREADS, ioThreads);
-        addArg(out, YierdisServerArgNames.EXECUTOR_QUEUE_CAPACITY, executorQueueCapacity);
-        addArg(out, YierdisServerArgNames.EXECUTOR_QUEUE_MAX_BYTES, executorQueueMaxBytes);
-        addArg(out, YierdisServerArgNames.EXECUTOR_SCHEDULING_POLICY, executorSchedulingPolicy);
-        addArg(out, YierdisServerArgNames.BACKPRESSURE_HIGH, backpressureHighWatermark);
-        addArg(out, YierdisServerArgNames.BACKPRESSURE_LOW, backpressureLowWatermark);
-        addArg(out, YierdisServerArgNames.BACKPRESSURE_BYTES_HIGH, backpressureBytesHighWatermark);
-        addArg(out, YierdisServerArgNames.BACKPRESSURE_BYTES_LOW, backpressureBytesLowWatermark);
-        addArg(out, YierdisServerArgNames.EXECUTOR_MAX_DRAIN, executorMaxDrainCommands);
-        addArg(out, YierdisServerArgNames.EXECUTOR_DRAIN_MILLIS, executorDrainTimeLimitMillis);
-        addArg(out, YierdisServerArgNames.TRANSACTION_QUEUE_MAX_COMMANDS, transactionQueueMaxCommands);
-        addArg(out, YierdisServerArgNames.TRANSACTION_QUEUE_MAX_BYTES, transactionQueueMaxBytes);
-        addArg(out, YierdisServerArgNames.PROTOCOL_MAX_BULK_BYTES, protocolMaxBulkBytes);
-        addArg(out, YierdisServerArgNames.PROTOCOL_MAX_ARGS, protocolMaxArgs);
-        addArg(out, YierdisServerArgNames.PROTOCOL_MAX_LINE_BYTES, protocolMaxLineBytes);
-        addArg(out, YierdisServerArgNames.PROTOCOL_MAX_COMMAND_BYTES, protocolMaxCommandBytes);
-        addArg(out, YierdisServerArgNames.PROTOCOL_GLOBAL_IN_FLIGHT_BYTES, protocolGlobalInFlightBytes);
-        addArg(out, YierdisServerArgNames.CLIENT_IDLE_TIMEOUT_MILLIS, clientIdleTimeoutMillis);
-        addArg(out, YierdisServerArgNames.CLIENT_OUTPUT_BUFFER_LIMIT_BYTES, clientOutputBufferLimitBytes);
-        addArg(out, YierdisServerArgNames.CLIENT_OUTPUT_BUFFER_OVER_LIMIT_MILLIS, clientOutputBufferOverLimitMillis);
-        addArg(out, YierdisServerArgNames.REPLY_GLOBAL_CAPACITY_BYTES, replyGlobalCapacityBytes);
-        addArg(out, YierdisServerArgNames.REPLY_PER_CONNECTION_CAPACITY_BYTES, replyPerConnectionCapacityBytes);
-        addArg(out, YierdisServerArgNames.REPLY_MAX_TOTAL_BYTES, replyMaxTotalBytes);
-        addArg(out, YierdisServerArgNames.REPLY_CHUNK_PAYLOAD_BYTES, replyChunkPayloadBytes);
-        addArg(out, YierdisServerArgNames.REPLY_CONTROL_RESERVATION_BYTES, replyControlReservationBytes);
-        addArg(out, YierdisServerArgNames.REPLY_DRAIN_TIMEOUT_MILLIS, replyDrainTimeoutMillis);
-        addArg(out, YierdisServerArgNames.MAXMEMORY_BYTES, maxmemoryBytes);
-        addArg(out, YierdisServerArgNames.MAXMEMORY_SCOPE, maxmemoryScope);
-        addArg(out, YierdisServerArgNames.MAXMEMORY_POLICY, maxmemoryPolicy);
-        addArg(out, YierdisServerArgNames.MAXMEMORY_SAMPLES, maxmemorySamples);
-        addArg(out, YierdisServerArgNames.EVICTION_TIME_LIMIT_MILLIS, evictionTimeLimitMillis);
-        addArg(out, YierdisServerArgNames.EXPIRE_CLEANUP_TIME_LIMIT_MILLIS, expireCleanupTimeLimitMillis);
-
-        if (nativeDefragEnabled) {
-            out.add(YierdisServerArgNames.NATIVE_DEFRAG_ENABLED);
-        }
-        addArg(out, YierdisServerArgNames.NATIVE_DEFRAG_MAX_MOVE_BYTES, nativeDefragMaxMoveBytes);
-        addArg(out, YierdisServerArgNames.NATIVE_DEFRAG_MAX_OBJECTS, nativeDefragMaxObjects);
-        addArg(out, YierdisServerArgNames.NATIVE_DEFRAG_TIME_LIMIT_MILLIS, nativeDefragTimeLimitMillis);
-        addArg(out, YierdisServerArgNames.NATIVE_SLOT_CAPACITY, nativeSlotCapacity);
-        addArg(out, YierdisServerArgNames.KEYS_TIME_BUDGET_MILLIS, keysTimeBudgetMillis);
-        addArg(out, YierdisServerArgNames.KEYS_MAX_RESULTS, keysMaxResults);
-
-        return out;
-    }
-
-    private static void addArg(List<String> argv, String name, String value) {
-        argv.add(name);
-        argv.add(value);
-    }
-
-    private static void addArg(List<String> argv, String name, int value) {
-        addArg(argv, name, Integer.toString(value));
-    }
-
-    private static void addArg(List<String> argv, String name, long value) {
-        addArg(argv, name, Long.toString(value));
     }
 
     private static String normalizeExecutorSchedulingPolicy(String rawValue) {

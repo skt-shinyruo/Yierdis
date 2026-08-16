@@ -1,5 +1,7 @@
 package yier.bubu.redis.storage.memory;
 
+import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -142,7 +144,7 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
             }
 
             @Override
-            public PreparedChange<WriteResult<Long>> prepare(MutationScope scope) {
+            public PreparedDbMutation<WriteResult<Long>> prepare(YierdisDbKernel scope) {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current != null) {
@@ -172,7 +174,7 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
                     );
                     WriteResult<Long> result = WriteResult.of((long) len, MutationOutcome.VALUE_CHANGED);
                     long deltaBytes = estimateRecordBytes(targetKey, next);
-                    PreparedChange<WriteResult<Long>> prepared = scope.insert(
+                    PreparedDbMutation<WriteResult<Long>> prepared = scope.insert(
                             result,
                             deltaBytes,
                             MemoryUsageSnapshot.addSaturating(
@@ -229,7 +231,7 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
             }
 
             @Override
-            public PreparedChange<WriteResult<PoppedValueSequence>> prepare(MutationScope scope) {
+            public PreparedDbMutation<WriteResult<PoppedValueSequence>> prepare(YierdisDbKernel scope) {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current == null) {
@@ -283,8 +285,8 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
         });
     }
 
-    private PreparedChange<WriteResult<Long>> prepareExistingPush(
-            MutationScope scope,
+    private PreparedDbMutation<WriteResult<Long>> prepareExistingPush(
+            YierdisDbKernel scope,
             CurrentEntry currentEntry,
             EntryRecord current,
             List<byte[]> values,
@@ -329,8 +331,8 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
         }
     }
 
-    private PreparedChange<WriteResult<PoppedValueSequence>> prepareExistingPop(
-            MutationScope scope,
+    private PreparedDbMutation<WriteResult<PoppedValueSequence>> prepareExistingPop(
+            YierdisDbKernel scope,
             CurrentEntry currentEntry,
             EntryRecord current,
             ValueHandle handle,
@@ -489,7 +491,7 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
         return sizes;
     }
 
-    private EntryRecord liveListRecord(ReadScope scope, byte[] keyBytes) {
+    private EntryRecord liveListRecord(YierdisDbKernel scope, byte[] keyBytes) {
         KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
         EntryRecord record = scope.liveEntryRecord(keyHandle);
         if (record == null) {
@@ -548,16 +550,16 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
         return new PreparedEntryState(entryHandle, record, record == null ? 0L : record.version(), expired);
     }
 
-    private static <T> PreparedChange<T> preparedNoEntry(
-            MutationScope scope,
+    private static <T> PreparedDbMutation<T> preparedNoEntry(
+            YierdisDbKernel scope,
             T result,
             MutationOutcome outcome
     ) {
         return scope.unchanged(result, outcome);
     }
 
-    private <T> PreparedChange<T> preparedDelete(
-            MutationScope scope,
+    private <T> PreparedDbMutation<T> preparedDelete(
+            YierdisDbKernel scope,
             CurrentEntry currentEntry,
             EntryRecord current,
             T result,
@@ -575,8 +577,8 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
         );
     }
 
-    private <T> PreparedChange<T> preparedDelete(
-            MutationScope scope,
+    private <T> PreparedDbMutation<T> preparedDelete(
+            YierdisDbKernel scope,
             CurrentEntry currentEntry,
             EntryRecord current,
             T result,
@@ -585,7 +587,7 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
             Runnable releaseReplacedValueHook
     ) {
         long deltaBytes = -estimateRecordBytes(currentEntry.keyHandle(), current);
-        PreparedChange<T> prepared = scope.delete(
+        PreparedEntryMutation<T> prepared = scope.delete(
                 result,
                 deltaBytes,
                 outcome,

@@ -1,5 +1,7 @@
 package yier.bubu.redis.storage.memory;
 
+import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
+
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.CurrentEntry;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
 import yier.bubu.redis.common.command.MutationContext;
@@ -65,7 +67,7 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
             }
 
             @Override
-            public PreparedChange<WriteResult<Long>> prepare(MutationScope scope) {
+            public PreparedDbMutation<WriteResult<Long>> prepare(YierdisDbKernel scope) {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current != null) {
@@ -113,7 +115,7 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
                     WriteResult<Long> result = WriteResult.of((long) added, outcome);
                     long deltaBytes = estimateRecordBytes(targetKey, next)
                             - estimateRecordBytes(targetKey, current);
-                    PreparedChange<WriteResult<Long>> prepared = scope.upsert(
+                    PreparedDbMutation<WriteResult<Long>> prepared = scope.upsert(
                             result,
                             deltaBytes,
                             MemoryUsageSnapshot.addSaturating(
@@ -164,7 +166,7 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
             }
 
             @Override
-            public PreparedChange<WriteResult<Long>> prepare(MutationScope scope) {
+            public PreparedDbMutation<WriteResult<Long>> prepare(YierdisDbKernel scope) {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current == null) {
@@ -343,7 +345,7 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
         return sizes;
     }
 
-    private EntryRecord liveSetRecord(ReadScope scope, byte[] keyBytes) {
+    private EntryRecord liveSetRecord(YierdisDbKernel scope, byte[] keyBytes) {
         KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
         EntryRecord record = scope.liveEntryRecord(keyHandle);
         if (record == null) {
@@ -382,16 +384,16 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
         return keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
     }
 
-    private static <T> PreparedChange<T> preparedNoEntry(
-            MutationScope scope,
+    private static <T> PreparedDbMutation<T> preparedNoEntry(
+            YierdisDbKernel scope,
             T result,
             MutationOutcome outcome
     ) {
         return scope.unchanged(result, outcome);
     }
 
-    private <T> PreparedChange<T> preparedDelete(
-            MutationScope scope,
+    private <T> PreparedDbMutation<T> preparedDelete(
+            YierdisDbKernel scope,
             CurrentEntry currentEntry,
             EntryRecord current,
             T result,
