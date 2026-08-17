@@ -6,10 +6,6 @@ package yier.bubu.redis.memory.api;
  * scope 沿用后端 owner，必须在后端前关闭，重复关闭无效果。
  */
 public interface NativeEpochScope extends AutoCloseable {
-    NativeEpochKind kind();
-
-    long epoch();
-
     @Override
     void close();
 }

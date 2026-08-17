@@ -5,10 +5,10 @@ import yier.bubu.redis.common.memory.MemoryReclaimResult;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 
 /**
- * 提供稳定对象、独立区域、回收和统计能力的 owner-bound 后端。
+ * 提供稳定对象、回收和统计能力的 owner-bound 后端。
  * 每个实例具有进程内不复用的正 {@code allocatorId}；句柄必须先校验该身份，
- * 再由所属后端解释 {@code localRaw}。内存访问须显式绑定，所有视图、scope、epoch、
- * 显式 pin 和 region 都须在后端关闭前结束。
+ * 再由所属后端解释 {@code localRaw}。内存访问须显式绑定，所有视图、scope、epoch
+ * 和显式 pin 都须在后端关闭前结束。
  */
 public interface StableMemoryBackend extends AutoCloseable {
     long allocatorId();
@@ -28,7 +28,7 @@ public interface StableMemoryBackend extends AutoCloseable {
 
     void unpin(NativeHandle handle);
 
-    NativeEpochScope beginEpoch(NativeEpochKind kind);
+    NativeEpochScope beginEpoch();
 
     NativeAllocationScope beginAllocationScope();
 
@@ -43,8 +43,6 @@ public interface StableMemoryBackend extends AutoCloseable {
      */
     NativeObjectView resolvePinned(NativeHandle handle, NativeAccessMode mode);
 
-    StableMemoryRegion allocateRegion(String owner, int bytes);
-
     NativeDefragResult defragOne(NativeHandle handle, long maxMoveBytes);
 
     NativeDefragReport defragCycle(NativeDefragOptions options);
@@ -53,15 +51,11 @@ public interface StableMemoryBackend extends AutoCloseable {
 
     NativeAllocatorStats stats();
 
-    NativeAllocatorMetadataStats metadataStats();
-
     MemoryUsageSnapshot memoryUsage();
 
     MemoryReclaimResult trimEmptyPages(MemoryPressureBudget budget);
 
     NativeAllocationGrowth estimateAdditionalGrowth(int... requestedBytes);
-
-    NativeAllocationGrowth estimateConservativeAdditionalGrowth(int... requestedBytes);
 
     long liveRegionCount();
 

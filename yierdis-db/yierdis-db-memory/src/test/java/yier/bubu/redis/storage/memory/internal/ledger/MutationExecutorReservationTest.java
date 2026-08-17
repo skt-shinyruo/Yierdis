@@ -22,7 +22,6 @@ import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
-import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.PostCommitMutationException;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.WrongTypeException;
@@ -69,7 +68,6 @@ public class MutationExecutorReservationTest {
         PreparedDbMutation<String> prepared = prepared(
                 7,
                 0,
-                MutationOutcome.VALUE_CHANGED,
                 () -> "ok",
                 () -> {
                 },
@@ -102,7 +100,6 @@ public class MutationExecutorReservationTest {
         PreparedDbMutation<String> prepared = prepared(
                 7,
                 0,
-                MutationOutcome.VALUE_CHANGED,
                 () -> {
                     order.add("commit");
                     return "ok";
@@ -135,7 +132,6 @@ public class MutationExecutorReservationTest {
         PreparedDbMutation<String> noTrim = prepared(
                 0L,
                 0L,
-                MutationOutcome.NONE,
                 () -> "noop",
                 () -> {
                 },
@@ -147,8 +143,7 @@ public class MutationExecutorReservationTest {
 
         PreparedDbMutation<String> requestedTrim = new AbstractPreparedMutation<>(
                 0L,
-                0L,
-                MutationOutcome.VALUE_CHANGED
+                0L
         ) {
             @Override
             public boolean shouldTrimNativePagesAfterCommit() {
@@ -174,7 +169,6 @@ public class MutationExecutorReservationTest {
         Assert.assertTrue(prepared(
                 -1L,
                 0L,
-                MutationOutcome.VALUE_CHANGED,
                 () -> "shrink",
                 () -> {
                 },
@@ -193,8 +187,7 @@ public class MutationExecutorReservationTest {
         );
         PreparedDbMutation<String> prepared = new AbstractPreparedMutation<>(
                 0L,
-                0L,
-                MutationOutcome.VALUE_CHANGED
+                0L
         ) {
             @Override
             public boolean shouldTrimNativePagesAfterCommit() {
@@ -233,7 +226,6 @@ public class MutationExecutorReservationTest {
                 "ok",
                 0L,
                 0L,
-                MutationOutcome.NONE,
                 () -> {
                 },
                 () -> {
@@ -263,7 +255,6 @@ public class MutationExecutorReservationTest {
         PreparedDbMutation<String> prepared = prepared(
                 0L,
                 0L,
-                MutationOutcome.NONE,
                 () -> "ok",
                 () -> {
                 },
@@ -300,7 +291,6 @@ public class MutationExecutorReservationTest {
         PreparedDbMutation<String> prepared = prepared(
                 0L,
                 0L,
-                MutationOutcome.NONE,
                 () -> "ok",
                 () -> {
                 },
@@ -332,7 +322,6 @@ public class MutationExecutorReservationTest {
         PreparedDbMutation<String> prepared = prepared(
                 -7,
                 0,
-                MutationOutcome.VALUE_CHANGED,
                 () -> "removed",
                 () -> {
                 },
@@ -384,7 +373,6 @@ public class MutationExecutorReservationTest {
         PreparedDbMutation<String> prepared = prepared(
                 0,
                 0,
-                MutationOutcome.NONE,
                 () -> {
                     committed.set(true);
                     return "committed";
@@ -457,7 +445,6 @@ public class MutationExecutorReservationTest {
         PreparedDbMutation<String> prepared = prepared(
                 0,
                 PREPARED_TEST_UPPER_BOUND_BYTES + 1L,
-                MutationOutcome.NONE,
                 () -> "unused",
                 () -> {
                 },
@@ -484,7 +471,6 @@ public class MutationExecutorReservationTest {
         PreparedDbMutation<String> prepared = prepared(
                 -1,
                 0,
-                MutationOutcome.VALUE_CHANGED,
                 () -> {
                     committed.set(true);
                     return "committed";
@@ -513,7 +499,6 @@ public class MutationExecutorReservationTest {
         PreparedDbMutation<String> prepared = prepared(
                 actualDeltaBytes,
                 stagedNonNativeGrowthBytes,
-                MutationOutcome.VALUE_CHANGED,
                 () -> "committed",
                 () -> {
                 },
@@ -545,12 +530,11 @@ public class MutationExecutorReservationTest {
     private static <T> PreparedDbMutation<T> prepared(
             long actualDeltaBytes,
             long stagedNonNativeGrowthBytes,
-            MutationOutcome outcome,
             Supplier<T> commit,
             Runnable releaseSuperseded,
             Runnable abort
     ) {
-        return new AbstractPreparedMutation<T>(actualDeltaBytes, stagedNonNativeGrowthBytes, outcome) {
+        return new AbstractPreparedMutation<T>(actualDeltaBytes, stagedNonNativeGrowthBytes) {
             @Override
             protected T commitPrepared() {
                 return commit.get();

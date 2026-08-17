@@ -63,9 +63,7 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
 
     public static ByteArrayExecutionRequest wrapReadOnly(byte[][] argv, int retainedBytes) {
         Objects.requireNonNull(argv, "argv");
-        byte[][] owned = new byte[argv.length][];
-        System.arraycopy(argv, 0, owned, 0, argv.length);
-        return new ByteArrayExecutionRequest(owned, Math.max(0, retainedBytes), true);
+        return new ByteArrayExecutionRequest(argv.clone(), Math.max(0, retainedBytes), true);
     }
 
     public static ByteArrayExecutionRequest fromUtf8(String commandName, List<String> args) {
@@ -164,21 +162,14 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
         lease.close();
     }
 
-    private static final class SharedArgv {
-        private final byte[][] values;
-        private final int retainedBytes;
-        private final long admittedMemoryBytes;
-
+    private record SharedArgv(byte[][] values, int retainedBytes, long admittedMemoryBytes) {
         private SharedArgv(byte[][] values, int retainedBytes) {
-            this.values = values;
-            this.retainedBytes = retainedBytes;
-            this.admittedMemoryBytes = admittedMemoryBytes(values);
+            this(values, retainedBytes, ByteArrayExecutionRequest.admittedMemoryBytes(values));
         }
     }
 
     private static long admittedMemoryBytes(byte[][] argv) {
-        long total = 48L;
-        total = saturatedAdd(total, saturatedMultiply(argv.length, 8L));
+        long total = saturatedAdd(48L, argv.length * 8L);
         for (byte[] arg : argv) {
             if (arg != null) {
                 total = saturatedAdd(total, 16L);
@@ -189,24 +180,10 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
     }
 
     private static long align8(int length) {
-        long value = Math.max(0, length);
-        return (value + 7L) & ~7L;
-    }
-
-    private static long saturatedMultiply(long left, long right) {
-        if (left <= 0L || right <= 0L) {
-            return 0L;
-        }
-        if (left > Long.MAX_VALUE / right) {
-            return Long.MAX_VALUE;
-        }
-        return left * right;
+        return ((long) length + 7L) & ~7L;
     }
 
     private static long saturatedAdd(long left, long right) {
-        if (left >= Long.MAX_VALUE - right) {
-            return Long.MAX_VALUE;
-        }
-        return left + right;
+        return left >= Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
     }
 }

@@ -8,7 +8,7 @@ import yier.bubu.redis.memory.api.*;
 public class YierdisFfmStableMemoryBackendOwnershipTest {
     @Test
     public void firstAccessDoesNotBindOwnerImplicitly() {
-        TestOwner owner = new TestOwner();
+        FfmTestOwner owner = new FfmTestOwner();
         try (StableMemoryBackend backend = backend("unbound", owner)) {
             Assert.assertThrows(
                     IllegalStateException.class,
@@ -23,8 +23,8 @@ public class YierdisFfmStableMemoryBackendOwnershipTest {
 
     @Test
     public void sameLocalRawFromTwoBackendsCannotAlias() {
-        TestOwner firstOwner = new TestOwner();
-        TestOwner secondOwner = new TestOwner();
+        FfmTestOwner firstOwner = new FfmTestOwner();
+        FfmTestOwner secondOwner = new FfmTestOwner();
         try (StableMemoryBackend first = backend("first", firstOwner);
              StableMemoryBackend second = backend("second", secondOwner)) {
             first.bindToCurrentThread();
@@ -43,7 +43,7 @@ public class YierdisFfmStableMemoryBackendOwnershipTest {
 
     @Test
     public void ownershipIsCheckedBeforeMalformedLocalRaw() {
-        TestOwner owner = new TestOwner();
+        FfmTestOwner owner = new FfmTestOwner();
         try (StableMemoryBackend backend = backend("order", owner)) {
             backend.bindToCurrentThread();
             NativeHandle foreignMalformed = new NativeHandle(backend.allocatorId() + 1L, Long.MIN_VALUE);
@@ -61,7 +61,7 @@ public class YierdisFfmStableMemoryBackendOwnershipTest {
 
     @Test
     public void everyDerivedResourceOperationChecksTheBoundOwner() throws Exception {
-        TestOwner owner = new TestOwner();
+        FfmTestOwner owner = new FfmTestOwner();
         try (StableMemoryBackend backend = backend("derived-owner", owner)) {
             backend.bindToCurrentThread();
             NativeHandle handle = backend.allocate(NativeObjectKind.GENERIC, 16);
@@ -98,33 +98,15 @@ public class YierdisFfmStableMemoryBackendOwnershipTest {
                     () -> backend.resolve(scoped, NativeAccessMode.READ_ONLY)
             );
 
-            NativeEpochScope epochScope = backend.beginEpoch(NativeEpochKind.COMMAND);
-            assertWrongThreadRejected(epochScope::kind);
-            assertWrongThreadRejected(epochScope::epoch);
+            NativeEpochScope epochScope = backend.beginEpoch();
             assertWrongThreadRejected(epochScope::close);
             epochScope.close();
-
-            StableMemoryRegion region = backend.allocateRegion("derived-region", 16);
-            assertWrongThreadRejected(region::size);
-            assertWrongThreadRejected(() -> region.getByte(0));
-            assertWrongThreadRejected(() -> region.setByte(0, (byte) 1));
-            assertWrongThreadRejected(() -> region.getIntLittleEndian(0));
-            assertWrongThreadRejected(() -> region.setIntLittleEndian(0, 1));
-            assertWrongThreadRejected(() -> region.getLongLittleEndian(0));
-            assertWrongThreadRejected(() -> region.setLongLittleEndian(0, 1L));
-            assertWrongThreadRejected(() -> region.getBytes(0, new byte[1], 0, 1));
-            assertWrongThreadRejected(() -> region.setBytes(0, new byte[1], 0, 1));
-            assertWrongThreadRejected(() -> region.copyTo(0, region, 1, 1));
-            assertWrongThreadRejected(region::close);
-            Assert.assertEquals(16, region.size());
-            Assert.assertEquals(0, region.getByte(0));
-            region.close();
         }
     }
 
     @Test
     public void pinnedViewsAreReadOnlyAndDoNotOwnTheCallersPin() {
-        TestOwner owner = new TestOwner();
+        FfmTestOwner owner = new FfmTestOwner();
         try (StableMemoryBackend backend = backend("pinned-view", owner)) {
             backend.bindToCurrentThread();
             NativeHandle handle = backend.allocate(NativeObjectKind.GENERIC, 8);
@@ -153,100 +135,11 @@ public class YierdisFfmStableMemoryBackendOwnershipTest {
     }
 
     @Test
-    public void regionProvidesBackendNeutralTypedAccessAndCopy() {
-        TestOwner owner = new TestOwner();
-        try (StableMemoryBackend backend = backend("regions", owner)) {
-            backend.bindToCurrentThread();
-            try (StableMemoryRegion source = backend.allocateRegion("source", 32);
-                 StableMemoryRegion target = backend.allocateRegion("target", 32)) {
-                source.setByte(0, (byte) 7);
-                source.setIntLittleEndian(4, 0x78563412);
-                source.setLongLittleEndian(8, 0x0102030405060708L);
-                byte[] sourceBytes = new byte[12];
-                source.getBytes(4, sourceBytes, 0, sourceBytes.length);
-                Assert.assertArrayEquals(
-                        new byte[]{
-                                0x12, 0x34, 0x56, 0x78,
-                                0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01
-                        },
-                        sourceBytes
-                );
-                source.copyTo(0, target, 0, 16);
-
-                Assert.assertEquals(7, target.getByte(0));
-                Assert.assertEquals(0x78563412, target.getIntLittleEndian(4));
-                Assert.assertEquals(0x0102030405060708L, target.getLongLittleEndian(8));
-                byte[] targetBytes = new byte[12];
-                target.getBytes(4, targetBytes, 0, targetBytes.length);
-                Assert.assertArrayEquals(sourceBytes, targetBytes);
-                Assert.assertTrue(backend.liveRegionCount() >= 2L);
-            }
-        }
-    }
-
-    @Test
-    public void sameRegionCopyIsOverlapSafeAcrossPortableChunkBoundary() {
-        TestOwner owner = new TestOwner();
-        try (StableMemoryBackend backend = backend("overlap", owner)) {
-            backend.bindToCurrentThread();
-            try (StableMemoryRegion region = backend.allocateRegion("overlap", 16_384)) {
-                byte[] original = new byte[16_384];
-                for (int index = 0; index < original.length; index++) {
-                    original[index] = (byte) (index % 251);
-                }
-                region.setBytes(0, original, 0, original.length);
-
-                region.copyTo(0, region, 4_096, 12_000);
-
-                byte[] expected = original.clone();
-                System.arraycopy(original, 0, expected, 4_096, 12_000);
-                byte[] actual = new byte[expected.length];
-                region.getBytes(0, actual, 0, actual.length);
-                Assert.assertArrayEquals(expected, actual);
-            }
-        }
-    }
-
-    @Test
-    public void regionRejectsUseAfterClose() {
-        TestOwner owner = new TestOwner();
-        try (StableMemoryBackend backend = backend("closed-region", owner)) {
-            backend.bindToCurrentThread();
-            StableMemoryRegion region = backend.allocateRegion("closed", 16);
-            region.close();
-
-            Assert.assertThrows(IllegalStateException.class, region::size);
-            Assert.assertThrows(IllegalStateException.class, () -> region.getByte(0));
-            Assert.assertThrows(
-                    IllegalStateException.class,
-                    () -> region.setIntLittleEndian(0, 1)
-            );
-        }
-    }
-
-    @Test
-    public void externallyAllocatedRegionIsCountedOnce() {
-        TestOwner owner = new TestOwner();
-        try (StableMemoryBackend backend = backend("accounting", owner)) {
-            backend.bindToCurrentThread();
-            long before = backend.memoryUsage().nativeDataCommittedBytes();
-            try (StableMemoryRegion ignored = backend.allocateRegion("index", 257)) {
-                Assert.assertEquals(
-                        257L,
-                        backend.memoryUsage().nativeDataCommittedBytes() - before
-                );
-            }
-            Assert.assertEquals(before, backend.memoryUsage().nativeDataCommittedBytes());
-        }
-    }
-
-    @Test
-    public void closeReportsAllocatorFailureBeforeRuntimeLeak() {
-        TestOwner owner = new TestOwner();
+    public void closeReportsAllocatorFailure() {
+        FfmTestOwner owner = new FfmTestOwner();
         StableMemoryBackend backend = backend("close-order", owner);
         backend.bindToCurrentThread();
         backend.allocate(NativeObjectKind.GENERIC, 8);
-        StableMemoryRegion region = backend.allocateRegion("live-region", 32);
         try {
             IllegalStateException failure = Assert.assertThrows(
                     IllegalStateException.class,
@@ -254,20 +147,18 @@ public class YierdisFfmStableMemoryBackendOwnershipTest {
             );
 
             Assert.assertTrue(failure.getMessage().contains("live objects"));
-            Assert.assertEquals(1, failure.getSuppressed().length);
-            Assert.assertTrue(failure.getSuppressed()[0].getMessage().contains("live regions"));
+            Assert.assertEquals(0, failure.getSuppressed().length);
         } finally {
-            region.close();
             backend.close();
         }
     }
 
     @Test
     public void closeReportsActiveEpochAndStillCleansRuntime() {
-        TestOwner owner = new TestOwner();
+        FfmTestOwner owner = new FfmTestOwner();
         StableMemoryBackend backend = backend("active-epoch-close", owner);
         backend.bindToCurrentThread();
-        NativeEpochScope epoch = backend.beginEpoch(NativeEpochKind.SCAN);
+        NativeEpochScope epoch = backend.beginEpoch();
         try {
             IllegalStateException failure = Assert.assertThrows(
                     IllegalStateException.class,
@@ -304,7 +195,7 @@ public class YierdisFfmStableMemoryBackendOwnershipTest {
         );
     }
 
-    private static StableMemoryBackend backend(String name, TestOwner owner) {
+    private static StableMemoryBackend backend(String name, FfmTestOwner owner) {
         return new YierdisFfmStableMemoryBackend(name, 128, owner);
     }
 
@@ -329,34 +220,6 @@ public class YierdisFfmStableMemoryBackendOwnershipTest {
         );
     }
 
-    private static final class TestOwner implements MemoryOwner {
-        private final AtomicReference<Thread> owner = new AtomicReference<>();
-
-        @Override
-        public void bindToCurrentThread() {
-            Thread current = Thread.currentThread();
-            Thread existing = owner.get();
-            if (existing == current) return;
-            if (existing != null || !owner.compareAndSet(null, current)) {
-                throw new IllegalStateException("memory owner already belongs to another thread");
-            }
-        }
-
-        @Override
-        public void checkCurrentThread() {
-            if (owner.get() != Thread.currentThread()) {
-                throw new IllegalStateException("memory access is outside the owner thread");
-            }
-        }
-
-        @Override
-        public void checkCurrentThreadForShutdown() {
-            Thread existing = owner.get();
-            if (existing != null && existing != Thread.currentThread()) {
-                throw new IllegalStateException("memory shutdown is outside the owner thread");
-            }
-        }
-    }
 }
 
 final class FfmTestOwner implements MemoryOwner {

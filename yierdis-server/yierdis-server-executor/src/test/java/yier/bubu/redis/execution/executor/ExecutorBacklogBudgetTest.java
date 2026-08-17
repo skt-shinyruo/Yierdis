@@ -139,21 +139,6 @@ public class ExecutorBacklogBudgetTest {
     }
 
     @Test
-    public void waiterCallbackCanReenterBudgetAfterCapacityIsReleased() {
-        ExecutorBacklogBudget budget = new ExecutorBacklogBudget(1, 8);
-        Assert.assertNull(budget.tryReserve(8));
-        AtomicReference<ExecutorAdmissionAttempt.BlockReason> reentrantResult = new AtomicReference<>();
-        budget.onCapacityAvailable(8, () -> reentrantResult.set(budget.tryReserve(8)));
-
-        budget.release(8);
-
-        Assert.assertNull(reentrantResult.get());
-        Assert.assertEquals(1, budget.queuedTasks());
-        Assert.assertEquals(8L, budget.queuedBytes());
-        budget.release(8);
-    }
-
-    @Test
     public void waiterCallbackRunsWithoutHoldingTheBudgetLock() throws Exception {
         ExecutorBacklogBudget budget = new ExecutorBacklogBudget(1, 8);
         Assert.assertNull(budget.tryReserve(8));

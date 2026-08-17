@@ -11,19 +11,16 @@ import yier.bubu.redis.memory.api.MemoryOwner;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocationGrowth;
 import yier.bubu.redis.memory.api.NativeAllocationScope;
-import yier.bubu.redis.memory.api.NativeAllocatorMetadataStats;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.memory.api.NativeDefragResult;
-import yier.bubu.redis.memory.api.NativeEpochKind;
 import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
-import yier.bubu.redis.memory.api.StableMemoryRegion;
 import yier.bubu.redis.memory.testkit.HeapStableMemoryBackend;
 
 public class YierdisDbLifecycleContractTest {
@@ -138,8 +135,8 @@ public class YierdisDbLifecycleContractTest {
         }
 
         @Override
-        public NativeEpochScope beginEpoch(NativeEpochKind kind) {
-            return delegate.beginEpoch(kind);
+        public NativeEpochScope beginEpoch() {
+            return delegate.beginEpoch();
         }
 
         @Override
@@ -163,11 +160,6 @@ public class YierdisDbLifecycleContractTest {
         }
 
         @Override
-        public StableMemoryRegion allocateRegion(String owner, int bytes) {
-            return delegate.allocateRegion(owner, bytes);
-        }
-
-        @Override
         public NativeDefragResult defragOne(NativeHandle handle, long maxMoveBytes) {
             return delegate.defragOne(handle, maxMoveBytes);
         }
@@ -188,11 +180,6 @@ public class YierdisDbLifecycleContractTest {
         }
 
         @Override
-        public NativeAllocatorMetadataStats metadataStats() {
-            return delegate.metadataStats();
-        }
-
-        @Override
         public MemoryUsageSnapshot memoryUsage() {
             return delegate.memoryUsage();
         }
@@ -205,11 +192,6 @@ public class YierdisDbLifecycleContractTest {
         @Override
         public NativeAllocationGrowth estimateAdditionalGrowth(int... requestedBytes) {
             return delegate.estimateAdditionalGrowth(requestedBytes);
-        }
-
-        @Override
-        public NativeAllocationGrowth estimateConservativeAdditionalGrowth(int... requestedBytes) {
-            return delegate.estimateConservativeAdditionalGrowth(requestedBytes);
         }
 
         @Override

@@ -16,13 +16,11 @@ import yier.bubu.redis.memory.api.MemoryOwner;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocationGrowth;
 import yier.bubu.redis.memory.api.NativeAllocationScope;
-import yier.bubu.redis.memory.api.NativeAllocatorMetadataStats;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.memory.api.NativeDefragResult;
-import yier.bubu.redis.memory.api.NativeEpochKind;
 import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeHandleOwnershipException;
@@ -33,7 +31,6 @@ import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.StableMemoryBackendIds;
-import yier.bubu.redis.memory.api.StableMemoryRegion;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
 
 public final class HeapStableMemoryBackend implements StableMemoryBackend {
@@ -46,11 +43,9 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
     private final Map<Long, Integer> pinCounts = new HashMap<>();
     private final Set<Long> quarantined = new HashSet<>();
     private final Set<HeapView> views = Collections.newSetFromMap(new IdentityHashMap<>());
-    private final Set<HeapRegion> regions = Collections.newSetFromMap(new IdentityHashMap<>());
     private final Set<HeapEpochScope> epochs = Collections.newSetFromMap(new IdentityHashMap<>());
 
     private HeapAllocationScope activeAllocationScope;
-    private long externalRegionBytes;
     private boolean closed;
 
     public HeapStableMemoryBackend(String name, int maxSlots, MemoryOwner owner) {
@@ -161,12 +156,9 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
     }
 
     @Override
-    public NativeEpochScope beginEpoch(NativeEpochKind kind) {
+    public NativeEpochScope beginEpoch() {
         checkOpen();
-        HeapEpochScope scope = new HeapEpochScope(
-                Objects.requireNonNull(kind, "kind"),
-                nextEpoch.getAndIncrement()
-        );
+        HeapEpochScope scope = new HeapEpochScope(nextEpoch.getAndIncrement());
         epochs.add(scope);
         return scope;
     }
@@ -214,19 +206,6 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
         HeapView view = new HeapView(handle, mode, false);
         views.add(view);
         return view;
-    }
-
-    @Override
-    public StableMemoryRegion allocateRegion(String regionOwner, int bytes) {
-        checkOpen();
-        Objects.requireNonNull(regionOwner, "regionOwner");
-        if (bytes <= 0) {
-            throw new IllegalArgumentException("bytes must be > 0");
-        }
-        HeapRegion region = new HeapRegion(new byte[bytes]);
-        regions.add(region);
-        externalRegionBytes = addSaturating(externalRegionBytes, bytes);
-        return region;
     }
 
     @Override
@@ -288,21 +267,18 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
                 0L,
                 0L,
                 objectKindCounts(),
-                yier.bubu.redis.memory.api.NativeAllocationLatencyHistogram.empty()
+                0L,
+                0L,
+                maxSlots == 0 ? 0L : Math.max(0L, (long) maxSlots - objects.size()),
+                0L,
+                objects.size()
         );
-    }
-
-    @Override
-    public NativeAllocatorMetadataStats metadataStats() {
-        checkOpen();
-        long freeSlots = maxSlots == 0 ? 0L : Math.max(0L, (long) maxSlots - objects.size());
-        return new NativeAllocatorMetadataStats(0L, freeSlots);
     }
 
     @Override
     public MemoryUsageSnapshot memoryUsage() {
         checkOpen();
-        long dataBytes = addSaturating(objectBytes(), externalRegionBytes);
+        long dataBytes = objectBytes();
         return new MemoryUsageSnapshot(0L, 0L, dataBytes, dataBytes, 0L);
     }
 
@@ -320,15 +296,9 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
     }
 
     @Override
-    public NativeAllocationGrowth estimateConservativeAdditionalGrowth(int... requestedBytes) {
-        checkOpen();
-        return new NativeAllocationGrowth(0L, 0L, requestedByteTotal(requestedBytes));
-    }
-
-    @Override
     public long liveRegionCount() {
         checkOpen();
-        return regions.size();
+        return 0L;
     }
 
     @Override
@@ -339,9 +309,6 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
         }
         if (!views.isEmpty() || !pinCounts.isEmpty() || !epochs.isEmpty() || activeAllocationScope != null) {
             throw new IllegalStateException("heap stable memory backend still has active derived resources");
-        }
-        if (!regions.isEmpty()) {
-            throw new IllegalStateException("heap stable memory backend still has live regions");
         }
         if (!objects.isEmpty()) {
             throw new IllegalStateException("heap stable memory backend still has live objects");
@@ -461,36 +428,6 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
         }
     }
 
-    private static int readIntLittleEndian(byte[] bytes, int offset) {
-        return (bytes[offset] & 0xff)
-                | ((bytes[offset + 1] & 0xff) << 8)
-                | ((bytes[offset + 2] & 0xff) << 16)
-                | ((bytes[offset + 3] & 0xff) << 24);
-    }
-
-    private static void writeIntLittleEndian(byte[] bytes, int offset, int value) {
-        for (int index = 0; index < Integer.BYTES; index++) {
-            bytes[offset + index] = (byte) (value >>> (index * 8));
-        }
-    }
-
-    private static long readLongLittleEndian(byte[] bytes, int offset) {
-        return ((long) bytes[offset] & 0xff)
-                | (((long) bytes[offset + 1] & 0xff) << 8)
-                | (((long) bytes[offset + 2] & 0xff) << 16)
-                | (((long) bytes[offset + 3] & 0xff) << 24)
-                | (((long) bytes[offset + 4] & 0xff) << 32)
-                | (((long) bytes[offset + 5] & 0xff) << 40)
-                | (((long) bytes[offset + 6] & 0xff) << 48)
-                | (((long) bytes[offset + 7] & 0xff) << 56);
-    }
-
-    private static void writeLongLittleEndian(byte[] bytes, int offset, long value) {
-        for (int index = 0; index < Long.BYTES; index++) {
-            bytes[offset + index] = (byte) (value >>> (index * 8));
-        }
-    }
-
     private static final class HeapObject {
         private final NativeObjectKind kind;
         private byte[] bytes;
@@ -595,132 +532,12 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
         }
     }
 
-    private final class HeapRegion implements StableMemoryRegion {
-        private final byte[] bytes;
-        private boolean closed;
-
-        private HeapRegion(byte[] bytes) {
-            this.bytes = bytes;
-        }
-
-        @Override
-        public int size() {
-            checkRegionOpen();
-            return bytes.length;
-        }
-
-        @Override
-        public byte getByte(int offset) {
-            checkRegionOpen();
-            requireRange(bytes.length, offset, 1);
-            return bytes[offset];
-        }
-
-        @Override
-        public void setByte(int offset, byte value) {
-            checkRegionOpen();
-            requireRange(bytes.length, offset, 1);
-            bytes[offset] = value;
-        }
-
-        @Override
-        public int getIntLittleEndian(int offset) {
-            checkRegionOpen();
-            requireRange(bytes.length, offset, Integer.BYTES);
-            return readIntLittleEndian(bytes, offset);
-        }
-
-        @Override
-        public void setIntLittleEndian(int offset, int value) {
-            checkRegionOpen();
-            requireRange(bytes.length, offset, Integer.BYTES);
-            writeIntLittleEndian(bytes, offset, value);
-        }
-
-        @Override
-        public long getLongLittleEndian(int offset) {
-            checkRegionOpen();
-            requireRange(bytes.length, offset, Long.BYTES);
-            return readLongLittleEndian(bytes, offset);
-        }
-
-        @Override
-        public void setLongLittleEndian(int offset, long value) {
-            checkRegionOpen();
-            requireRange(bytes.length, offset, Long.BYTES);
-            writeLongLittleEndian(bytes, offset, value);
-        }
-
-        @Override
-        public void getBytes(int offset, byte[] dst, int dstOffset, int length) {
-            checkRegionOpen();
-            Objects.requireNonNull(dst, "dst");
-            requireRange(bytes.length, offset, length);
-            requireRange(dst.length, dstOffset, length);
-            System.arraycopy(bytes, offset, dst, dstOffset, length);
-        }
-
-        @Override
-        public void setBytes(int offset, byte[] src, int srcOffset, int length) {
-            checkRegionOpen();
-            Objects.requireNonNull(src, "src");
-            requireRange(bytes.length, offset, length);
-            requireRange(src.length, srcOffset, length);
-            System.arraycopy(src, srcOffset, bytes, offset, length);
-        }
-
-        @Override
-        public void copyTo(int sourceOffset, StableMemoryRegion target, int targetOffset, int length) {
-            checkRegionOpen();
-            Objects.requireNonNull(target, "target");
-            requireRange(bytes.length, sourceOffset, length);
-            if (target instanceof HeapStableMemoryBackend.HeapRegion heapTarget) {
-                heapTarget.checkRegionOpen();
-                requireRange(heapTarget.bytes.length, targetOffset, length);
-                System.arraycopy(bytes, sourceOffset, heapTarget.bytes, targetOffset, length);
-                return;
-            }
-            byte[] copy = new byte[length];
-            System.arraycopy(bytes, sourceOffset, copy, 0, length);
-            target.setBytes(targetOffset, copy, 0, length);
-        }
-
-        @Override
-        public void close() {
-            owner.checkCurrentThread();
-            if (!closed) {
-                closed = true;
-                regions.remove(this);
-                externalRegionBytes -= bytes.length;
-            }
-        }
-
-        private void checkRegionOpen() {
-            checkOpen();
-            if (closed) {
-                throw new IllegalStateException("stable memory region is closed");
-            }
-        }
-    }
-
     private final class HeapEpochScope implements NativeEpochScope {
-        private final NativeEpochKind kind;
         private final long epoch;
         private boolean closed;
 
-        private HeapEpochScope(NativeEpochKind kind, long epoch) {
-            this.kind = kind;
+        private HeapEpochScope(long epoch) {
             this.epoch = epoch;
-        }
-
-        @Override
-        public NativeEpochKind kind() {
-            return kind;
-        }
-
-        @Override
-        public long epoch() {
-            return epoch;
         }
 
         @Override

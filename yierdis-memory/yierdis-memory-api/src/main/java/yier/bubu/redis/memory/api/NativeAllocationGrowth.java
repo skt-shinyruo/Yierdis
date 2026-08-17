@@ -1,6 +1,5 @@
 package yier.bubu.redis.memory.api;
 
-import java.util.Objects;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 
 public record NativeAllocationGrowth(
@@ -20,18 +19,6 @@ public record NativeAllocationGrowth(
         return MemoryUsageSnapshot.addSaturating(
                 MemoryUsageSnapshot.addSaturating(heapEstimatedBytes, nativeMetadataCommittedBytes),
                 nativeDataCommittedBytes
-        );
-    }
-
-    public NativeAllocationGrowth plus(NativeAllocationGrowth other) {
-        Objects.requireNonNull(other, "other");
-        return new NativeAllocationGrowth(
-                MemoryUsageSnapshot.addSaturating(heapEstimatedBytes, other.heapEstimatedBytes),
-                MemoryUsageSnapshot.addSaturating(
-                        nativeMetadataCommittedBytes,
-                        other.nativeMetadataCommittedBytes
-                ),
-                MemoryUsageSnapshot.addSaturating(nativeDataCommittedBytes, other.nativeDataCommittedBytes)
         );
     }
 

@@ -20,8 +20,6 @@ import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.storage.api.PreparedMutation;
-import yier.bubu.redis.storage.api.WrongTypeException;
-import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
 import yier.bubu.redis.storage.api.result.PoppedValueSequence;
 
@@ -52,15 +50,11 @@ public final class ListCommands implements CommandModule {
     private CommandInvocation push(CommandArgs args, boolean left) {
         byte[] key = args.bytes(1);
         List<byte[]> values = args.byteArraysFrom(2);
-        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
-            try {
-                long length = (left
-                        ? support.commandDb(execution).writes().lists().lpush(key, values)
-                        : support.commandDb(execution).writes().lists().rpush(key, values)).value();
-                return CommandResult.reply(RedisReplies.integer(length));
-            } catch (WrongTypeException | YierdisCommandException failure) {
-                return CommandResult.controlError(failure.getMessage());
-            }
+        return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
+            long length = (left
+                    ? support.commandDb(execution).writes().lists().lpush(key, values)
+                    : support.commandDb(execution).writes().lists().rpush(key, values)).value();
+            return CommandResult.reply(RedisReplies.integer(length));
         });
     }
 

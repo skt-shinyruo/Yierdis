@@ -1,6 +1,5 @@
 package yier.bubu.redis.storage.memory;
 
-import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.CurrentEntry;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
@@ -11,50 +10,25 @@ import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 
 import java.util.Objects;
-import java.util.function.Function;
 
 final class YierdisDbKernel {
     private final Runnable threadChecker;
     private final YierdisDbMutationExecutor mutationExecutor;
     private final YierdisDbKeyLifecycle keyLifecycle;
-    private final InspectionScope inspectionScope;
-    private final MaintenanceScope maintenanceScope;
 
     YierdisDbKernel(
             Runnable threadChecker,
             YierdisDbMutationExecutor mutationExecutor,
-            YierdisDbKeyLifecycle keyLifecycle,
-            YierdisDbMemoryContext memoryContext
+            YierdisDbKeyLifecycle keyLifecycle
     ) {
         this.threadChecker = Objects.requireNonNull(threadChecker, "threadChecker");
         this.mutationExecutor = Objects.requireNonNull(mutationExecutor, "mutationExecutor");
         this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
-        YierdisDbMemoryContext checkedMemoryContext = Objects.requireNonNull(memoryContext, "memoryContext");
-        this.inspectionScope = new InspectionScope(this, keyLifecycle, checkedMemoryContext);
-        this.maintenanceScope = new MaintenanceScope(this, keyLifecycle, checkedMemoryContext);
     }
 
     <R> R execute(MutationUse<R> use) {
         Objects.requireNonNull(use, "use");
         return executeMutationUse(use);
-    }
-
-    <R> R read(Function<YierdisDbKernel, R> action) {
-        Objects.requireNonNull(action, "action");
-        threadChecker.run();
-        return action.apply(this);
-    }
-
-    <R> R inspect(Function<InspectionScope, R> action) {
-        Objects.requireNonNull(action, "action");
-        threadChecker.run();
-        return action.apply(inspectionScope);
-    }
-
-    <R> R maintain(Function<MaintenanceScope, R> action) {
-        Objects.requireNonNull(action, "action");
-        threadChecker.run();
-        return action.apply(maintenanceScope);
     }
 
     void checkOwner() {
@@ -93,15 +67,14 @@ final class YierdisDbKernel {
         });
     }
 
-    <T> PreparedEntryMutation<T> unchanged(T result, MutationOutcome outcome) {
-        return PreparedEntryMutation.unchanged(keyLifecycle, result, outcome);
+    <T> PreparedEntryMutation<T> unchanged(T result) {
+        return PreparedEntryMutation.unchanged(keyLifecycle, result);
     }
 
     <T> PreparedEntryMutation<T> insert(
             T result,
             long actualDeltaBytes,
             long stagedNonNativeGrowthBytes,
-            MutationOutcome outcome,
             StagedEntry stagedEntry,
             EntryRecord newRecord
     ) {
@@ -110,7 +83,6 @@ final class YierdisDbKernel {
                 result,
                 actualDeltaBytes,
                 stagedNonNativeGrowthBytes,
-                outcome,
                 stagedEntry,
                 newRecord
         );
@@ -120,7 +92,6 @@ final class YierdisDbKernel {
             T result,
             long actualDeltaBytes,
             long stagedNonNativeGrowthBytes,
-            MutationOutcome outcome,
             EntryHandle existingEntryHandle,
             EntryRecord oldRecord,
             EntryRecord newRecord,
@@ -131,7 +102,6 @@ final class YierdisDbKernel {
                 result,
                 actualDeltaBytes,
                 stagedNonNativeGrowthBytes,
-                outcome,
                 existingEntryHandle,
                 oldRecord,
                 newRecord,
@@ -142,7 +112,6 @@ final class YierdisDbKernel {
     <T> PreparedEntryMutation<T> delete(
             T result,
             long actualDeltaBytes,
-            MutationOutcome outcome,
             EntryHandle existingEntryHandle,
             EntryRecord oldRecord,
             boolean releaseReplacedValue
@@ -151,7 +120,6 @@ final class YierdisDbKernel {
                 keyLifecycle,
                 result,
                 actualDeltaBytes,
-                outcome,
                 existingEntryHandle,
                 oldRecord,
                 releaseReplacedValue
@@ -162,7 +130,6 @@ final class YierdisDbKernel {
             T result,
             long actualDeltaBytes,
             long stagedNonNativeGrowthBytes,
-            MutationOutcome outcome,
             CurrentEntry current,
             StagedEntry staged,
             EntryRecord newRecord,
@@ -173,7 +140,6 @@ final class YierdisDbKernel {
                 result,
                 actualDeltaBytes,
                 stagedNonNativeGrowthBytes,
-                outcome,
                 current,
                 staged,
                 newRecord,
@@ -185,7 +151,6 @@ final class YierdisDbKernel {
             T result,
             long actualDeltaBytes,
             long stagedNonNativeGrowthBytes,
-            MutationOutcome outcome,
             Runnable commit,
             Runnable releaseSuperseded,
             Runnable abort,
@@ -195,7 +160,6 @@ final class YierdisDbKernel {
                 result,
                 actualDeltaBytes,
                 stagedNonNativeGrowthBytes,
-                outcome,
                 commit,
                 releaseSuperseded,
                 abort,
@@ -207,10 +171,9 @@ final class YierdisDbKernel {
             PreparedDbMutation<?>[] changes,
             int count,
             T result,
-            long actualDeltaBytes,
-            MutationOutcome outcome
+            long actualDeltaBytes
     ) {
-        return new PreparedBatchMutation<>(changes, count, result, actualDeltaBytes, outcome);
+        return new PreparedBatchMutation<>(changes, count, result, actualDeltaBytes);
     }
 
     EntryRecord liveEntryRecord(KeyHandle keyHandle) {
@@ -288,7 +251,6 @@ final class YierdisDbKernel {
                 return kernel.delete(
                         Boolean.TRUE,
                         -removalBytes,
-                        MutationOutcome.VALUE_CHANGED,
                         entryHandle,
                         current,
                         true
@@ -296,7 +258,7 @@ final class YierdisDbKernel {
             }
 
             private PreparedDbMutation<Boolean> preparedNoDeletion() {
-                return unchanged(Boolean.FALSE, MutationOutcome.NONE);
+                return unchanged(Boolean.FALSE);
             }
         });
     }

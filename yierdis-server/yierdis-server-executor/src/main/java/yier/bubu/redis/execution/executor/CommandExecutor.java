@@ -11,22 +11,12 @@ import java.util.concurrent.TimeUnit;
 public final class CommandExecutor<C extends ExecutionConnection> implements AutoCloseable {
     private final Runnable bindToCurrentThread;
     public enum SubmitRejectReason {
-        NOT_RUNNING("not_running"),
-        CONNECTION_CLOSING("connection_closing"),
-        QUEUE_FULL("queue_full"),
-        BYTES_BUDGET("bytes_budget"),
-        REQUEST_TOO_LARGE("request_too_large"),
-        OFFER_FAILED("offer_failed");
-
-        private final String code;
-
-        SubmitRejectReason(String code) {
-            this.code = code == null ? "unknown" : code;
-        }
-
-        public String code() {
-            return code;
-        }
+        NOT_RUNNING,
+        CONNECTION_CLOSING,
+        QUEUE_FULL,
+        BYTES_BUDGET,
+        REQUEST_TOO_LARGE,
+        OFFER_FAILED
     }
 
     private final SerialOwnerExecutor ownerExecutor;
@@ -127,7 +117,6 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
                 submitter.submitRejectedClosing(),
                 submitter.submitRejectedQueueFull(),
                 submitter.submitRejectedBytesBudget(),
-                submitter.submitRejectedRequestTooLarge(),
                 submitter.submitRejectedOfferFailed(),
                 executionSupport.closeAfterReply(),
                 backpressureController.backpressureEnter(),
@@ -216,7 +205,6 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
             long submitRejectedClosing,
             long submitRejectedQueueFull,
             long submitRejectedBytesBudget,
-            long submitRejectedRequestTooLarge,
             long submitRejectedOfferFailed,
             long closeAfterReply,
             long backpressureEnter,

@@ -23,8 +23,6 @@ import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.PreparedMutation;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.StringWriteOps;
-import yier.bubu.redis.storage.api.WrongTypeException;
-import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.result.ByteValue;
 
 public final class StringCommands implements CommandModule {
@@ -176,13 +174,9 @@ public final class StringCommands implements CommandModule {
     private CommandInvocation append(CommandArgs args) {
         byte[] key = args.bytes(1);
         BytesSlice value = args.slice(2);
-        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
-            try {
-                long length = support.commandDb(execution).writes().strings().append(key, value).value();
-                return CommandResult.reply(RedisReplies.integer(length));
-            } catch (WrongTypeException | YierdisCommandException failure) {
-                return CommandResult.controlError(failure.getMessage());
-            }
+        return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
+            long length = support.commandDb(execution).writes().strings().append(key, value).value();
+            return CommandResult.reply(RedisReplies.integer(length));
         });
     }
 
@@ -201,14 +195,10 @@ public final class StringCommands implements CommandModule {
             throw new CommandParseException(STRING_TOO_LARGE);
         }
         SetBitArgs parsed = new SetBitArgs(args.bytes(1), offset, (int) value);
-        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
-            try {
-                int previous = support.commandDb(execution).writes().strings()
-                        .setBit(parsed.key(), parsed.offset(), parsed.value()).value();
-                return CommandResult.reply(RedisReplies.integer(previous));
-            } catch (WrongTypeException | YierdisCommandException failure) {
-                return CommandResult.controlError(failure.getMessage());
-            }
+        return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
+            int previous = support.commandDb(execution).writes().strings()
+                    .setBit(parsed.key(), parsed.offset(), parsed.value()).value();
+            return CommandResult.reply(RedisReplies.integer(previous));
         });
     }
 
@@ -234,13 +224,9 @@ public final class StringCommands implements CommandModule {
 
     private CommandInvocation incrBy(CommandArgs args, long delta) {
         byte[] key = args.bytes(1);
-        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
-            try {
-                long value = support.commandDb(execution).writes().strings().incrBy(key, delta).value();
-                return CommandResult.reply(RedisReplies.integer(value));
-            } catch (WrongTypeException | YierdisCommandException failure) {
-                return CommandResult.controlError(failure.getMessage());
-            }
+        return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
+            long value = support.commandDb(execution).writes().strings().incrBy(key, delta).value();
+            return CommandResult.reply(RedisReplies.integer(value));
         });
     }
 

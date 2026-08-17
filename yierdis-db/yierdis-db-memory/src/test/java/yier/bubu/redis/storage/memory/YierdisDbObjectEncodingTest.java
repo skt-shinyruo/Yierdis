@@ -9,7 +9,7 @@ import yier.bubu.redis.storage.api.SetMode;
 
 import java.nio.charset.StandardCharsets;
 
-public class YierdisDbIntrospectionTest {
+public class YierdisDbObjectEncodingTest {
     @Test
     public void objectEncodingReadsNativeEntryEncoding() {
         try (TestBackend runtime = TestBackend.open("introspection-encoding")) {

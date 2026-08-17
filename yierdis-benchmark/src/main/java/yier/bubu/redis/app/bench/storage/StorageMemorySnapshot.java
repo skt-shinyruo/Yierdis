@@ -12,7 +12,6 @@ public record StorageMemorySnapshot(
         long nativeDataCommittedBytes,
         long nativeDataLiveBytes,
         long nativeReclaimableBytes,
-        long accountedBytes,
         long liveObjectCount,
         int pendingHashTableCount,
         int keyCount,
@@ -24,7 +23,6 @@ public record StorageMemorySnapshot(
         requireNonNegative(nativeDataCommittedBytes, "nativeDataCommittedBytes");
         requireNonNegative(nativeDataLiveBytes, "nativeDataLiveBytes");
         requireNonNegative(nativeReclaimableBytes, "nativeReclaimableBytes");
-        requireNonNegative(accountedBytes, "accountedBytes");
         requireNonNegative(liveObjectCount, "liveObjectCount");
         if (pendingHashTableCount < 0) {
             throw new IllegalArgumentException("pendingHashTableCount must be >= 0");
@@ -35,16 +33,6 @@ public record StorageMemorySnapshot(
         rssBytes = Objects.requireNonNull(rssBytes, "rssBytes");
         if (rssBytes.isPresent() && rssBytes.getAsLong() < 0L) {
             throw new IllegalArgumentException("rssBytes must be >= 0 when present");
-        }
-        long expectedAccounted = MemoryUsageSnapshot.addSaturating(
-                heapEstimatedBytes,
-                MemoryUsageSnapshot.addSaturating(
-                        nativeMetadataCommittedBytes,
-                        nativeDataCommittedBytes
-                )
-        );
-        if (accountedBytes != expectedAccounted) {
-            throw new IllegalArgumentException("accountedBytes must equal heap + native metadata + native data");
         }
     }
 
@@ -61,11 +49,20 @@ public record StorageMemorySnapshot(
                 requiredUsage.nativeDataCommittedBytes(),
                 requiredUsage.nativeDataLiveBytes(),
                 requiredUsage.nativeReclaimableBytes(),
-                requiredUsage.effectiveBytesForMaxmemory(),
                 requiredStats.nativeLiveObjects(),
                 requiredStats.pendingHashTableCount(),
                 requiredStats.keyCount(),
                 rssBytes
+        );
+    }
+
+    public long accountedBytes() {
+        return MemoryUsageSnapshot.addSaturating(
+                heapEstimatedBytes,
+                MemoryUsageSnapshot.addSaturating(
+                        nativeMetadataCommittedBytes,
+                        nativeDataCommittedBytes
+                )
         );
     }
 

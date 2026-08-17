@@ -14,7 +14,6 @@ record YierdisNativeObjectMeta(
         int kindCode,
         int flags,
         int pinCount,
-        int ownerShardId,
         long allocEpoch,
         long freeEpoch,
         int state

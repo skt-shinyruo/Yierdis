@@ -101,10 +101,8 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
                     if (!preparedSet.changedAny()) {
                         preparedSet.close();
                         preparedSet = null;
-                        return preparedNoEntry(
-                                scope,
-                                WriteResult.of((long) setPlan(sourceHandle).added(), MutationOutcome.NONE),
-                                MutationOutcome.NONE
+                        return scope.unchanged(
+                                WriteResult.of((long) setPlan(sourceHandle).added(), MutationOutcome.NONE)
                         );
                     }
                     boolean stableHandle = preparedSet.stableHandle();
@@ -132,7 +130,6 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
                                             preparedSet.stagedHeapBytes()
                                     )
                             ),
-                            MutationOutcome.VALUE_CHANGED,
                             currentEntry,
                             staged,
                             next,
@@ -176,41 +173,38 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
 
     @Override
     public ByteValue hget(byte[] keyBytes, byte[] fieldBytes) {
-        return kernel.read(scope -> {
-            EntryRecord record = liveHashRecord(scope, keyBytes);
-            if (record == null) {
-                return ByteValue.nullValue();
-            }
-            return hashRoot.hgetValue(requireHashHandle(record), fieldBytes);
-        });
+        kernel.checkOwner();
+        EntryRecord record = liveHashRecord(kernel, keyBytes);
+        if (record == null) {
+            return ByteValue.nullValue();
+        }
+        return hashRoot.hgetValue(requireHashHandle(record), fieldBytes);
     }
 
     @Override
     public ByteMapSource hgetall(byte[] keyBytes) {
-        return kernel.read(scope -> {
-            EntryRecord record = liveHashRecord(scope, keyBytes);
-            if (record == null) {
-                return ByteMapSources.empty();
-            }
-            ValueHandle handle = requireHashHandle(record);
-            return ByteMapSources.of(
-                    hashRoot.size(handle),
-                    0L,
-                    out -> hashRoot.hgetallPairsInto(handle, SemanticResultSupport.lengthSink(out)),
-                    out -> hashRoot.hgetallPairsInto(handle, out)
-            );
-        });
+        kernel.checkOwner();
+        EntryRecord record = liveHashRecord(kernel, keyBytes);
+        if (record == null) {
+            return ByteMapSources.empty();
+        }
+        ValueHandle handle = requireHashHandle(record);
+        return ByteMapSources.of(
+                hashRoot.size(handle),
+                0L,
+                out -> hashRoot.hgetallPairsInto(handle, SemanticResultSupport.lengthSink(out)),
+                out -> hashRoot.hgetallPairsInto(handle, out)
+        );
     }
 
     @Override
     public long hlen(byte[] keyBytes) {
-        return kernel.read(scope -> {
-            EntryRecord record = liveHashRecord(scope, keyBytes);
-            if (record == null) {
-                return 0L;
-            }
-            return (long) hashRoot.size(requireHashHandle(record));
-        });
+        kernel.checkOwner();
+        EntryRecord record = liveHashRecord(kernel, keyBytes);
+        if (record == null) {
+            return 0L;
+        }
+        return (long) hashRoot.size(requireHashHandle(record));
     }
 
     @Override
@@ -221,22 +215,21 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
             int count,
             boolean noValues
     ) {
-        return kernel.read(scope -> {
-            if (count <= 0) {
-                throw new IllegalArgumentException("count must be > 0");
-            }
-            EntryRecord record = liveHashRecord(scope, keyBytes);
-            if (record == null) {
-                return new MaterializedCollectionScanWindow(ScanCursorV2.start(), List.of());
-            }
-            return hashRoot.hscan(
-                    requireHashHandle(record),
-                    cursor == null ? ScanCursorV2.start() : cursor,
-                    globPattern,
-                    count,
-                    noValues
-            );
-        });
+        kernel.checkOwner();
+        if (count <= 0) {
+            throw new IllegalArgumentException("count must be > 0");
+        }
+        EntryRecord record = liveHashRecord(kernel, keyBytes);
+        if (record == null) {
+            return new MaterializedCollectionScanWindow(ScanCursorV2.start(), List.of());
+        }
+        return hashRoot.hscan(
+                requireHashHandle(record),
+                cursor == null ? ScanCursorV2.start() : cursor,
+                globPattern,
+                count,
+                noValues
+        );
     }
 
     @Override
@@ -261,19 +254,25 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current == null) {
-                    return preparedNoEntry(scope, WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
+                    return scope.unchanged(WriteResult.of(0L, MutationOutcome.NONE));
                 }
                 requireHash(current);
                 ValueHandle handle = requireHashHandle(current);
                 int removed = hashRoot.countExistingFields(handle, fields);
                 if (removed == 0) {
-                    return preparedNoEntry(scope, WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
+                    return scope.unchanged(WriteResult.of(0L, MutationOutcome.NONE));
                 }
 
                 MutationOutcome outcome = MutationOutcome.VALUE_CHANGED;
                 WriteResult<Long> result = WriteResult.of((long) removed, outcome);
                 if (removed >= hashRoot.size(handle)) {
-                    return preparedDelete(scope, currentEntry, current, result, outcome, true);
+                    return scope.delete(
+                            result,
+                            -estimateRecordBytes(currentEntry.keyHandle(), current),
+                            currentEntry.entryHandle(),
+                            current,
+                            true
+                    );
                 }
 
                 EntryRecord next = hashRecord(currentEntry.keyHandle(), handle, current.expireAtMillis(), current);
@@ -283,7 +282,6 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
                         result,
                         deltaBytes,
                         0L,
-                        outcome,
                         () -> {
                             int actualRemoved = hashRoot.hdel(handle, fields);
                             if (actualRemoved != removed) {
@@ -405,33 +403,6 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
 
     private long estimateRecordBytes(KeyHandle keyHandle, EntryRecord record) {
         return keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
-    }
-
-    private static <T> PreparedDbMutation<T> preparedNoEntry(
-            YierdisDbKernel scope,
-            T result,
-            MutationOutcome outcome
-    ) {
-        return scope.unchanged(result, outcome);
-    }
-
-    private <T> PreparedDbMutation<T> preparedDelete(
-            YierdisDbKernel scope,
-            CurrentEntry currentEntry,
-            EntryRecord current,
-            T result,
-            MutationOutcome outcome,
-            boolean releaseOldValue
-    ) {
-        long deltaBytes = -estimateRecordBytes(currentEntry.keyHandle(), current);
-        return scope.delete(
-                result,
-                deltaBytes,
-                outcome,
-                currentEntry.entryHandle(),
-                current,
-                releaseOldValue
-        );
     }
 
     private void abortStaged(

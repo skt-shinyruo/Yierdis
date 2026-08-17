@@ -202,7 +202,7 @@ native allocator 中记录对象 metadata、generation、pin 状态和 quarantin
 
 ### stable memory backend
 
-提供稳定 handle、resolve view、realloc、epoch、pin/quarantine、region 和 active defrag 的 owner-bound backend。生产实现是 `YierdisFfmStableMemoryBackend`；对象移动时完整 handle 保持稳定。
+提供稳定 handle、resolve view、realloc、epoch、pin/quarantine 和 active defrag 的 owner-bound backend。region ownership 是 FFM 实现的内部职责；对象移动时完整 handle 保持稳定。
 
 ### pin
 

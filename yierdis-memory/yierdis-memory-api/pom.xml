@@ -12,9 +12,6 @@
     </parent>
 
     <artifactId>yierdis-memory-api</artifactId>
-    <packaging>jar</packaging>
-
-    <name>yierdis-memory-api</name>
     <description>Neutral off-heap memory API contracts for Yierdis.</description>
 
     <dependencies>

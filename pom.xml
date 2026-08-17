@@ -9,15 +9,12 @@
     <version>0.1.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
-    <name>yierdis-parent</name>
     <description>Parent and aggregator for Yierdis modules.</description>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.release>25</maven.compiler.release>
         <netty.version>4.1.109.Final</netty.version>
-        <slf4j.version>2.0.17</slf4j.version>
-        <logback.version>1.5.18</logback.version>
         <junit.version>4.13.2</junit.version>
         <jacoco.version>0.8.14</jacoco.version>
         <shade.version>3.6.0</shade.version>
@@ -53,16 +50,6 @@
                 <groupId>io.netty</groupId>
                 <artifactId>netty-all</artifactId>
                 <version>${netty.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.slf4j</groupId>
-                <artifactId>slf4j-api</artifactId>
-                <version>${slf4j.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>ch.qos.logback</groupId>
-                <artifactId>logback-classic</artifactId>
-                <version>${logback.version}</version>
             </dependency>
             <dependency>
                 <groupId>junit</groupId>

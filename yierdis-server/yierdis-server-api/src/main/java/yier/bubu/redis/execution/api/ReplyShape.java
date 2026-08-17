@@ -24,7 +24,9 @@ public sealed interface ReplyShape permits
         ReplyShape.ByteMap,
         ReplyShape.Maximum {
 
-    long retainedSourceBytes();
+    default long retainedSourceBytes() {
+        return 0L;
+    }
 
     @FunctionalInterface
     interface PayloadLengths {
@@ -43,53 +45,26 @@ public sealed interface ReplyShape permits
         public SimpleString {
             requireNonNegative(payloadLength, "payloadLength");
         }
-
-        @Override
-        public long retainedSourceBytes() {
-            return 0L;
-        }
     }
 
     record Error(int payloadLength) implements ReplyShape {
         public Error {
             requireNonNegative(payloadLength, "payloadLength");
         }
-
-        @Override
-        public long retainedSourceBytes() {
-            return 0L;
-        }
     }
 
     record IntegerValue(long value) implements ReplyShape {
-        @Override
-        public long retainedSourceBytes() {
-            return 0L;
-        }
     }
 
     record BooleanValue(boolean value) implements ReplyShape {
-        @Override
-        public long retainedSourceBytes() {
-            return 0L;
-        }
     }
 
     record DoubleValue(double value) implements ReplyShape {
-        @Override
-        public long retainedSourceBytes() {
-            return 0L;
-        }
     }
 
     record BigNumber(int asciiLength) implements ReplyShape {
         public BigNumber {
             requireNonNegative(asciiLength, "asciiLength");
-        }
-
-        @Override
-        public long retainedSourceBytes() {
-            return 0L;
         }
     }
 
@@ -98,21 +73,11 @@ public sealed interface ReplyShape permits
             requireNonNegative(formatLength, "formatLength");
             requireNonNegative(payloadLength, "payloadLength");
         }
-
-        @Override
-        public long retainedSourceBytes() {
-            return 0L;
-        }
     }
 
     record BlobError(int payloadLength) implements ReplyShape {
         public BlobError {
             requireNonNegative(payloadLength, "payloadLength");
-        }
-
-        @Override
-        public long retainedSourceBytes() {
-            return 0L;
         }
     }
 
@@ -124,17 +89,9 @@ public sealed interface ReplyShape permits
     }
 
     record NullValue() implements ReplyShape {
-        @Override
-        public long retainedSourceBytes() {
-            return 0L;
-        }
     }
 
     record NullArray() implements ReplyShape {
-        @Override
-        public long retainedSourceBytes() {
-            return 0L;
-        }
     }
 
     record Aggregate(
@@ -191,10 +148,6 @@ public sealed interface ReplyShape permits
     }
 
     record Maximum() implements ReplyShape {
-        @Override
-        public long retainedSourceBytes() {
-            return 0L;
-        }
     }
 
     private static void requireNonNegative(long value, String name) {

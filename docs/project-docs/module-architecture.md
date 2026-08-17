@@ -4,7 +4,7 @@
 
 ## 一眼看懂的依赖方向
 
-下面的箭头表示当前 POM 中的仓库内部 production 直接依赖方向：左侧模块依赖右侧模块。这里不列测试 scope 依赖，也不列 Netty、picocli、slf4j、logback、JUnit 等第三方依赖。
+下面的箭头表示当前 POM 中的仓库内部 production 直接依赖方向：左侧模块依赖右侧模块。这里不列测试 scope 和第三方依赖。
 
 ```mermaid
 flowchart LR
@@ -111,7 +111,6 @@ memory 车道负责 native memory contract 和 FFM backend，不拥有 DB 语义
 - `NativeDefrag*`
 - `NativeEpoch*`
 - `NativeAllocatorStats`
-- `NativeAllocationLatencyHistogram`
 - `NativeDefragOptions`
 - `NativeReallocPolicy`
 

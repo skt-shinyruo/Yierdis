@@ -39,8 +39,6 @@ public class YierdisDbArchitectureGuardTest {
                 YierdisTtlOps.class,
                 YierdisDbExpirationSupport.class,
                 YierdisDbWrites.class,
-                YierdisDbLifecycleOps.class,
-                YierdisDbIntrospection.class,
                 YierdisDbMemoryReporter.class,
                 YierdisDbMemoryEstimator.class,
                 YierdisDbMaxmemorySupport.class

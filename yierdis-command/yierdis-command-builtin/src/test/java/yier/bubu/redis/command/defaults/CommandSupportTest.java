@@ -50,6 +50,17 @@ public class CommandSupportTest {
     }
 
     @Test
+    public void preparedActionTranslatesExpectedStorageFailures() {
+        PreparedCommand prepared = CommandSupport.preparedAction(
+                ReplyShapes.maximum(), context -> {
+                    throw new YierdisCommandException("ERR semantic failure");
+                });
+
+        Assert.assertEquals(List.of("control:ERR semantic failure"), render(prepared));
+        prepared.close();
+    }
+
+    @Test
     public void preparedMutationLeavesIllegalArgumentExceptionUntouched() {
         TrackingMutation mutation = new TrackingMutation(true);
         IllegalArgumentException failure = new IllegalArgumentException("programming failure");

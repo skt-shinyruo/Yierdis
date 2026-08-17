@@ -7,7 +7,6 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
-import yier.bubu.redis.memory.api.NativeEpochKind;
 import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmStableMemoryBackend;
@@ -31,7 +30,7 @@ public class FfmDbEpochLifecycleIntegrationTest {
             byte[] key = b("epoch-key");
             Assert.assertTrue(db.writes().strings().setString(key, b("epoch-value"), SetMode.NORMAL, null).value());
 
-            try (NativeEpochScope ignored = YierdisDbTestAccess.backend(db).beginEpoch(NativeEpochKind.SCAN)) {
+            try (NativeEpochScope ignored = YierdisDbTestAccess.backend(db).beginEpoch()) {
                 Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(key)).value());
 
                 NativeAllocatorStats during = YierdisDbTestAccess.backend(db).stats();
@@ -92,7 +91,7 @@ public class FfmDbEpochLifecycleIntegrationTest {
             Assert.assertEquals(Long.valueOf(1L), db.writes().sets().sadd(b("set"), List.of(b("m"))).value());
             Assert.assertEquals(Long.valueOf(1L), db.writes().zsets().zadd(b("zset"), List.of(b("1"), b("m"))).value());
 
-            try (NativeEpochScope ignored = YierdisDbTestAccess.backend(db).beginEpoch(NativeEpochKind.SCAN)) {
+            try (NativeEpochScope ignored = YierdisDbTestAccess.backend(db).beginEpoch()) {
                 Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(b("cleanup:string"))).value());
                 Assert.assertTrue(db.memory().memoryStats().nativeDefragQuarantinedObjects() > 0L);
             }

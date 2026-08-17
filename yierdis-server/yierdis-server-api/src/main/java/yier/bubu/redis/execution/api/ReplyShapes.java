@@ -145,7 +145,7 @@ public final class ReplyShapes {
         return (value == null ? "" : value).getBytes(StandardCharsets.UTF_8).length;
     }
 
-    private static String normalizeError(String message) {
+    public static String normalizeError(String message) {
         String value = sanitizeSimple(message == null ? "ERR error" : message);
         if (!hasRedisErrorPrefix(value)) {
             value = "ERR " + value;
@@ -153,11 +153,11 @@ public final class ReplyShapes {
         return truncateUtf8(value, MAX_NORMALIZED_ERROR_BYTES);
     }
 
-    private static String sanitizeSimple(String value) {
+    public static String sanitizeSimple(String value) {
         return value == null ? "" : value.replace('\r', ' ').replace('\n', ' ');
     }
 
-    private static String sanitizeVerbatimFormat(String format) {
+    public static String sanitizeVerbatimFormat(String format) {
         String value = sanitizeSimple(format == null ? "txt" : format.trim());
         if (value.length() < 3) {
             return "txt";

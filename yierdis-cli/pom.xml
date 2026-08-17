@@ -12,9 +12,6 @@
     </parent>
 
     <artifactId>yierdis-cli</artifactId>
-    <packaging>jar</packaging>
-
-    <name>yierdis-cli</name>
     <description>RESP client and CLI for Yierdis.</description>
 
     <dependencies>

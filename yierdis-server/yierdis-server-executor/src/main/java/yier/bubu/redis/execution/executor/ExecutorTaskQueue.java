@@ -25,18 +25,17 @@ final class ExecutorTaskQueue<K, T> {
         this.schedulingPolicy = schedulingPolicy == null ? SchedulingPolicy.FAIR : schedulingPolicy;
     }
 
-    boolean offer(K key, T task) {
+    void offer(K key, T task) {
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(task, "task");
         synchronized (lock) {
             if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
                 globalQueue.addLast(task);
-                return true;
+                return;
             }
             FairState<T> state = fairStateLocked(key);
             state.queue.addLast(task);
             scheduleFairStateLocked(key, state);
-            return true;
         }
     }
 
@@ -63,15 +62,6 @@ final class ExecutorTaskQueue<K, T> {
     T poll() {
         synchronized (lock) {
             return schedulingPolicy == SchedulingPolicy.GLOBAL ? pollGlobalLocked() : pollFairLocked();
-        }
-    }
-
-    boolean hasPendingTasks() {
-        synchronized (lock) {
-            if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
-                return globalBlockedHead != null || !globalQueue.isEmpty();
-            }
-            return !fairStates.isEmpty();
         }
     }
 

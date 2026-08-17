@@ -4,7 +4,9 @@ import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.common.memory.MemoryReclaimResult;
 
 public interface GlobalMaxmemoryDbEngine
-        extends RuntimeDbEngine, MaxmemoryParticipant, MaxmemoryCoordinatorAware {
+        extends RuntimeDbEngine, MaxmemoryParticipant {
+    void attachMaxmemoryCoordinator(MaxmemoryCoordinator coordinator);
+
     @Override
     MaxmemoryCandidate scanBestCandidate(MaxmemoryPolicy policy, long nowMillis);
 

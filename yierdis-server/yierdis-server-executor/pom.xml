@@ -12,9 +12,6 @@
     </parent>
 
     <artifactId>yierdis-server-executor</artifactId>
-    <packaging>jar</packaging>
-
-    <name>yierdis-server-executor</name>
     <description>Netty-free executor core (scheduling/backpressure decisions).</description>
 
     <dependencies>

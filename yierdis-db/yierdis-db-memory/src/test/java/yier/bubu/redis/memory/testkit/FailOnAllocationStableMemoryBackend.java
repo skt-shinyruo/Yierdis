@@ -10,28 +10,23 @@ import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocationGrowth;
 import yier.bubu.redis.memory.api.NativeAllocationScope;
-import yier.bubu.redis.memory.api.NativeAllocatorMetadataStats;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.memory.api.NativeDefragResult;
-import yier.bubu.redis.memory.api.NativeEpochKind;
 import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
-import yier.bubu.redis.memory.api.StableMemoryRegion;
 
 public final class FailOnAllocationStableMemoryBackend implements StableMemoryBackend {
     private final StableMemoryBackend delegate;
     private final AtomicLong attempts = new AtomicLong();
-    private final AtomicLong regionAttempts = new AtomicLong();
     private final Map<NativeHandle, Integer> knownCapacities = new ConcurrentHashMap<>();
     private volatile long failAt = -1L;
-    private volatile long failRegionAt = -1L;
 
     public FailOnAllocationStableMemoryBackend(StableMemoryBackend delegate) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
@@ -54,25 +49,6 @@ public final class FailOnAllocationStableMemoryBackend implements StableMemoryBa
 
     public long allocationAttempts() {
         return attempts.get();
-    }
-
-    public void failOnRegionAllocation(long oneBasedIndex) {
-        if (oneBasedIndex <= 0L) {
-            throw new IllegalArgumentException("oneBasedIndex must be > 0");
-        }
-        failRegionAt = oneBasedIndex;
-    }
-
-    public void disableRegionFailures() {
-        failRegionAt = -1L;
-    }
-
-    public void resetRegionAttempts() {
-        regionAttempts.set(0L);
-    }
-
-    public long regionAllocationAttempts() {
-        return regionAttempts.get();
     }
 
     @Override
@@ -123,8 +99,8 @@ public final class FailOnAllocationStableMemoryBackend implements StableMemoryBa
     }
 
     @Override
-    public NativeEpochScope beginEpoch(NativeEpochKind kind) {
-        return delegate.beginEpoch(kind);
+    public NativeEpochScope beginEpoch() {
+        return delegate.beginEpoch();
     }
 
     @Override
@@ -148,12 +124,6 @@ public final class FailOnAllocationStableMemoryBackend implements StableMemoryBa
     }
 
     @Override
-    public StableMemoryRegion allocateRegion(String owner, int bytes) {
-        checkRegionAllocationAttempt();
-        return delegate.allocateRegion(owner, bytes);
-    }
-
-    @Override
     public NativeDefragResult defragOne(NativeHandle handle, long maxMoveBytes) {
         return delegate.defragOne(handle, maxMoveBytes);
     }
@@ -174,11 +144,6 @@ public final class FailOnAllocationStableMemoryBackend implements StableMemoryBa
     }
 
     @Override
-    public NativeAllocatorMetadataStats metadataStats() {
-        return delegate.metadataStats();
-    }
-
-    @Override
     public MemoryUsageSnapshot memoryUsage() {
         return delegate.memoryUsage();
     }
@@ -191,11 +156,6 @@ public final class FailOnAllocationStableMemoryBackend implements StableMemoryBa
     @Override
     public NativeAllocationGrowth estimateAdditionalGrowth(int... requestedBytes) {
         return delegate.estimateAdditionalGrowth(requestedBytes);
-    }
-
-    @Override
-    public NativeAllocationGrowth estimateConservativeAdditionalGrowth(int... requestedBytes) {
-        return delegate.estimateConservativeAdditionalGrowth(requestedBytes);
     }
 
     @Override
@@ -214,15 +174,6 @@ public final class FailOnAllocationStableMemoryBackend implements StableMemoryBa
         if (attempt == failAt) {
             throw new NativeCapacityExceededException(
                     "injected stable memory allocation failure at attempt " + attempt
-            );
-        }
-    }
-
-    private void checkRegionAllocationAttempt() {
-        long attempt = regionAttempts.incrementAndGet();
-        if (attempt == failRegionAt) {
-            throw new NativeCapacityExceededException(
-                    "injected stable memory region allocation failure at attempt " + attempt
             );
         }
     }

@@ -68,7 +68,7 @@ ops 不直接组合 directory 与 entry table，也不能从 lifecycle 取出 ba
 
 ## Runtime kernel 与 facade
 
-`YierdisDbKernel` 是 package-private 深模块。普通读取通过 `read(Function)`，mutation 通过 `execute(MutationUse)`，inspection/maintenance 分别通过 `inspect(Function)` 和 `maintain(Function)` 进入受限 scope。concrete ops、scope、memory context、key lifecycle、entry mutation、TTL driver、active-expiration driver、memory reporter 和 maxmemory participant 都保持 package-private，handle、entry record、backend 与 ledger 不进入公开 DB interface。
+`YierdisDbKernel` 是 package-private 深模块。普通读取由 concrete ops 在 owner 检查后直接执行，mutation 通过 `execute(MutationUse)` 进入统一 executor；不再保留只转发的 read/inspect/maintain scope 包装。concrete ops、scope、memory context、key lifecycle、entry mutation、TTL driver、active-expiration driver、memory reporter 和 maxmemory participant 都保持 package-private，handle、entry record、backend 与 ledger 不进入公开 DB interface。
 
 `MutationUse` 只声明 upper bound、admission 和 `prepare(YierdisDbKernel)`，并直接返回 `PreparedDbMutation`。`Admission` 区分 normal/reclamation；family 通过 kernel 的 unchanged/insert/replace/delete/upsert/callback/batch 工厂构造 prepared mutation。只有 kernel 内部 adapter 知道 `YierdisDbMutationExecutor.MutationPlan`。`YierdisDbMemoryContext` 继续封装 allocation 估算、epoch、native slice、allocator stats 和 page trim，但不再是可见扩展点。
 
@@ -81,7 +81,7 @@ ops 不直接组合 directory 与 entry table，也不能从 lifecycle 取出 ba
 ```text
 DbReads
   -> Yierdis*Ops
-  -> YierdisDbKernel.read(Function)
+  -> YierdisDbKernel.checkOwner()
   -> YierdisDbKernel.liveEntryRecord(...)
   -> type/encoding check
   -> EntryRecord.valueHandle()
@@ -90,7 +90,7 @@ DbReads
 
 `liveEntryRecord(...)` 比较 `expireAtMillis`。live record 正常返回；过期 record 触发 `reclaimExpired(...)` 并对调用方隐藏。reclamation 是完整 mutation，会删除 graph 并结算 ledger。只有成功取得 live record 的 LRU 路径才 touch clock。
 
-普通查询从参数检查、live-entry 解析到结果视图构造都在同一个 `read(Function)` 调用内完成。prepared mutation 会跨越一次调用的生命周期，因此在创建、状态检查与提交入口使用 `YierdisDbKernel.checkOwner()`；scan/result view 则按各自契约持有 epoch 或结果资源。实际变更仍只能通过 `MutationUse` 进入 executor。
+普通查询从参数检查、live-entry 解析到结果视图构造都在同一个 owner 检查后的调用内完成。prepared mutation 会跨越一次调用的生命周期，因此在创建、状态检查与提交入口使用 `YierdisDbKernel.checkOwner()`；scan/result view 则按各自契约持有 epoch 或结果资源。实际变更仍只能通过 `MutationUse` 进入 executor。
 
 需要拥有结果的 API 会复制 bytes；callback-scoped streaming 可以使用短生命周期 native view。`SCAN` 的 `KeyWindow` 先在 bounded epoch 内 discovery，再按同一 cursor/window 同步 replay 到 sink；window close 后 epoch 才释放，不能让 slice 或 view 逃逸。
 
@@ -153,7 +153,7 @@ per-db scope 先 cleanup expired，再按 `maxmemoryBytes - estimatedExtraBytes`
 
 ## Memory 与 introspection
 
-`YierdisDbMemoryReporter` 和 `YierdisDbIntrospection` 通过 `YierdisDbKernel.inspect(Function)` 获取 storage-neutral encoding 和 memory state。`MEMORY USAGE` / `MEMORY STATS` 是 explainable estimate，不是 JVM instrumentation object graph。
+`YierdisDb` 直接读取 entry encoding，`YierdisDbMemoryReporter` 直接聚合 key lifecycle、ledger 和 native allocator 状态。`MEMORY USAGE` / `MEMORY STATS` 是 explainable estimate，不是 JVM instrumentation object graph。
 
 主要口径包括：
 

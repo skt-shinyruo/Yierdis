@@ -1,6 +1,5 @@
 package yier.bubu.redis.execution.api;
 
-import yier.bubu.redis.bytes.BytesSource;
 import yier.bubu.redis.common.command.ImmutableCommandRecord;
 
 /**
@@ -10,19 +9,6 @@ import yier.bubu.redis.common.command.ImmutableCommandRecord;
  * Arguments may be {@code null} to represent a null bulk string.
  */
 public interface ExecutionRequest extends ImmutableCommandRecord {
-    int argc();
-
-    boolean isNull(int index);
-
-    int len(int index);
-
-    byte byteAt(int index, int offset);
-
-    void copyToByteArray(int index, byte[] dst, int dstOff);
-
-    @Override
-    byte[] toByteArray(int index);
-
     /**
      * Read-only argv access for hot paths that can consume immutable heap-backed bytes without copying.
      * <p>
@@ -31,20 +17,6 @@ public interface ExecutionRequest extends ImmutableCommandRecord {
      */
     default byte[] readOnlyByteArray(int index) {
         return toByteArray(index);
-    }
-
-    /**
-     * Optional backing bytes for implementations that can expose a zero-copy frame.
-     */
-    default BytesSource frame() {
-        return null;
-    }
-
-    /**
-     * Optional argument offset within {@link #frame()}.
-     */
-    default int argOffset(int index) {
-        return -1;
     }
 
     /**
@@ -75,7 +47,4 @@ public interface ExecutionRequest extends ImmutableCommandRecord {
     default ExecutionRequest retain() {
         return ByteArrayExecutionRequest.copyOf(this);
     }
-
-    @Override
-    void close();
 }

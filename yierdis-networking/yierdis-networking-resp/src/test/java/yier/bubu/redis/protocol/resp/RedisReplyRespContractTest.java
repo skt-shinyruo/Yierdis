@@ -4,16 +4,15 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.execution.api.CommandSession;
-import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.execution.api.RedisReplyRenderer;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.ReplyReservationSink;
-import yier.bubu.redis.execution.api.TransactionState;
 
 import java.io.ByteArrayOutputStream;
+import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -52,7 +51,7 @@ public class RedisReplyRespContractTest {
                 "OOM command not allowed when used memory > 'maxmemory'.");
 
         for (int version : new int[]{2, 3}) {
-            MutableSession session = new MutableSession(version);
+            CommandSession session = session(version);
             ReplyPlan plan = sizer.plan(session, reply.shape());
             ControlTrackingSink sink = new ControlTrackingSink();
             RedisReplyWriter writer = writerFactory.newWriter(session, sink);
@@ -98,7 +97,7 @@ public class RedisReplyRespContractTest {
     }
 
     private void assertExactContract(ReplyFixture fixture, int version, String expectedWire) {
-        MutableSession session = new MutableSession(version);
+        CommandSession session = session(version);
         ReplyPlan plan = sizer.plan(session, fixture.reply().shape());
         ByteArraySink sink = new ByteArraySink();
         RedisReplyWriter writer = writerFactory.newWriter(session, sink);
@@ -270,6 +269,18 @@ public class RedisReplyRespContractTest {
         return value.getBytes(StandardCharsets.UTF_8);
     }
 
+    private static CommandSession session(int version) {
+        return (CommandSession) Proxy.newProxyInstance(
+                CommandSession.class.getClassLoader(),
+                new Class<?>[]{CommandSession.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("respVersion")) {
+                        return version;
+                    }
+                    throw new UnsupportedOperationException(method.toString());
+                });
+    }
+
     private record ReplyFixture(
             String name,
             RedisReply reply,
@@ -315,63 +326,4 @@ public class RedisReplyRespContractTest {
         }
     }
 
-    private static final class MutableSession implements CommandSession {
-        private int respVersion;
-
-        private MutableSession(int respVersion) {
-            this.respVersion = respVersion;
-        }
-
-        @Override
-        public int dbIndex() {
-            return 0;
-        }
-
-        @Override
-        public void setDbIndex(int dbIndex) {
-        }
-
-        @Override
-        public long clientId() {
-            return 0L;
-        }
-
-        @Override
-        public String clientName() {
-            return null;
-        }
-
-        @Override
-        public void setClientName(String clientName) {
-        }
-
-        @Override
-        public boolean authenticated() {
-            return false;
-        }
-
-        @Override
-        public void setAuthenticated(boolean authenticated) {
-        }
-
-        @Override
-        public TransactionState transaction() {
-            return null;
-        }
-
-        @Override
-        public ConnectionStatsView connectionStats() {
-            return null;
-        }
-
-        @Override
-        public int respVersion() {
-            return respVersion;
-        }
-
-        @Override
-        public void setRespVersion(int respVersion) {
-            this.respVersion = respVersion;
-        }
-    }
 }

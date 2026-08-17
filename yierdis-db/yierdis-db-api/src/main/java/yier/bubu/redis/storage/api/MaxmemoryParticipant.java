@@ -1,11 +1,21 @@
 package yier.bubu.redis.storage.api;
 
+import yier.bubu.redis.common.memory.MemoryPressureBudget;
+import yier.bubu.redis.common.memory.MemoryReclaimResult;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
+
 /**
  * 全局 maxmemory governor 使用的参与者视图。
  *
  * 每个参与者必须报告其独占的物理内存快照；全局 governor 将各快照相加，不能再补充共享运行时计数。
  */
-public interface MaxmemoryParticipant extends MemoryUsageParticipant {
+public interface MaxmemoryParticipant {
+    MemoryUsageSnapshot memoryUsage();
+
+    default MemoryReclaimResult trimMemory(MemoryPressureBudget budget) {
+        return MemoryReclaimResult.empty();
+    }
+
     /**
      * Returns a non-negative estimate of evictable keys currently held by this participant.
      * <p>

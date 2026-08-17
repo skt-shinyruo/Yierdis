@@ -676,10 +676,6 @@ public class ReplyPreflightCommandTest {
         }
 
         @Override
-        public void emptyArray() {
-        }
-
-        @Override
         public void mapHeader(int pairs) {
             int elements = pairs * 2;
             emittedResp2Bytes += 3L + Integer.toString(elements).length();

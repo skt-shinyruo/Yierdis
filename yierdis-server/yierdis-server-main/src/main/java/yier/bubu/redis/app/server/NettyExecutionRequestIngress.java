@@ -3,8 +3,6 @@ package yier.bubu.redis.app.server;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.handler.codec.DecoderException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import yier.bubu.redis.execution.api.CapacityRegistration;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
@@ -19,7 +17,7 @@ import java.util.ArrayDeque;
 import java.util.Objects;
 
 public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAdapter {
-    private static final Logger log = LoggerFactory.getLogger(NettyExecutionRequestIngress.class);
+    private static final System.Logger LOG = System.getLogger(NettyExecutionRequestIngress.class.getName());
     private static final String DEFERRED_BUSY_ERROR = "ERR busy queue_full";
 
     private final CommandExecutor<NettyExecutionConnection> executor;
@@ -115,7 +113,7 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
 
         NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
         if (root instanceof IOException) {
-            log.debug("Transport closed from {}: {}", remote, logMessage);
+            LOG.log(System.Logger.Level.DEBUG, "Transport closed from {0}: {1}", remote, logMessage);
             cancelCapacityWait();
             clearPendingSubmissions();
             if (connection != null && connection.markClosing()) {
@@ -125,7 +123,7 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
             return;
         }
 
-        log.error("Internal error from {}: {}", remote, logMessage, root);
+        LOG.log(System.Logger.Level.ERROR, "Internal error from " + remote + ": " + logMessage, root);
         if (connection == null || connection.replyGate() == null) {
             cancelCapacityWait();
             clearPendingSubmissions();

@@ -91,10 +91,10 @@ block 对外只暴露 backend 所需的 capacity、page identity/class 和 byte 
 - `allocate` / `reallocate` / `free`；
 - `resolve` / `resolvePinned`；
 - `pin` / `unpin`；
-- command/scan/snapshot/defrag epochs；
+- active epoch barriers；
 - allocation scopes；
 - single-object 与 cycle defrag；
-- regions、growth estimate、trim、usage 和 stats。
+- internal region ownership、growth estimate、trim、usage 和 stats。
 
 每个普通操作先校验 owner 与 backend open。`resolve(...)` 返回拥有自身 retain 的 view，close 时释放；`resolvePinned(...)` 只允许 read-only，并借用调用方已持有的 pin。
 
@@ -116,7 +116,7 @@ FFM `NativeObjectView` 在 copy/comparison/typed default 前完成 lifecycle、w
 pin 保护当前 object，epoch 保护一个批量观察窗口：
 
 - live view 或显式 `pin(...)` 增加 object pin count；
-- command/scan/snapshot/defrag epoch 记录可能仍观察旧 location 的范围；
+- active epoch 记录可能仍观察旧 location 的范围；
 - free 一个仍 pinned 的 object 时，slot/block 进入 quarantine；
 - move 发布后的旧 block 在所有相关 active epochs 结束前进入 retired list。
 
@@ -173,6 +173,6 @@ Java adapter/topology 可以位于 heap，但必须单独计量，并由唯一 o
 - internal/external fragmentation；
 - live/pinned/quarantined objects；
 - realloc/defrag counters；
-- object-kind counts 与 allocation histogram。
+- object-kind counts。
 
 runtime/allocator usage 是 DB maxmemory snapshot 的组成部分，不替代 ingress 或 outbound reply 的独立容量账户。详细生产排查边界见 [`production-hardening-operations.md`](./production-hardening-operations.md)。

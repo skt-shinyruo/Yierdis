@@ -35,10 +35,12 @@ public final class ExecutorBacklogBudget {
         this.queueCapacity = queueCapacity;
         this.queueMaxBytes = queueMaxBytes;
 
-        int globalHigh = defaultGlobalBackpressureHighWatermark(queueCapacity);
-        int globalLow = defaultGlobalBackpressureLowWatermark(globalHigh);
-        long globalBytesHigh = defaultGlobalBackpressureBytesHighWatermark(queueMaxBytes);
-        long globalBytesLow = defaultGlobalBackpressureBytesLowWatermark(globalBytesHigh);
+        int globalHigh = queueCapacity - queueCapacity / 4;
+        int globalLow = globalHigh / 2;
+        long globalBytesHigh = queueMaxBytes == 0L
+                ? 0L
+                : Math.max(1L, (queueMaxBytes / 4L) * 3L + ((queueMaxBytes % 4L) * 3L) / 4L);
+        long globalBytesLow = globalBytesHigh / 2L;
 
         this.globalBackpressureHighWatermark = globalHigh;
         this.globalBackpressureLowWatermark = globalLow;
@@ -222,53 +224,4 @@ public final class ExecutorBacklogBudget {
         }
     }
 
-    private static int defaultGlobalBackpressureHighWatermark(int queueCapacity) {
-        if (queueCapacity <= 0) {
-            return 1;
-        }
-        int high = queueCapacity - queueCapacity / 4;
-        if (high <= 0) {
-            high = 1;
-        }
-        if (high > queueCapacity) {
-            high = queueCapacity;
-        }
-        return high;
-    }
-
-    private static int defaultGlobalBackpressureLowWatermark(int globalHigh) {
-        if (globalHigh <= 1) {
-            return 0;
-        }
-        int low = globalHigh / 2;
-        if (low >= globalHigh) {
-            low = globalHigh - 1;
-        }
-        return Math.max(0, low);
-    }
-
-    private static long defaultGlobalBackpressureBytesHighWatermark(long queueMaxBytes) {
-        if (queueMaxBytes <= 0) {
-            return 0;
-        }
-        long high = (queueMaxBytes / 4) * 3 + ((queueMaxBytes % 4) * 3) / 4;
-        if (high <= 0) {
-            return queueMaxBytes;
-        }
-        if (high > queueMaxBytes) {
-            return queueMaxBytes;
-        }
-        return high;
-    }
-
-    private static long defaultGlobalBackpressureBytesLowWatermark(long globalBytesHigh) {
-        if (globalBytesHigh <= 0) {
-            return 0;
-        }
-        long low = globalBytesHigh / 2;
-        if (low >= globalBytesHigh) {
-            low = globalBytesHigh - 1;
-        }
-        return Math.max(0, low);
-    }
 }

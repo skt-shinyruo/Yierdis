@@ -41,13 +41,7 @@ final class YierdisDbExpirationSupport {
     }
 
     void cleanupExpired(long nowMillis) {
-        kernel.maintain(scope -> {
-            cleanupExpired(scope, nowMillis);
-            return null;
-        });
-    }
-
-    private void cleanupExpired(MaintenanceScope scope, long nowMillis) {
+        kernel.checkOwner();
         if (keyLifecycle.expireCount() == 0) {
             resetCursorState();
             return;
@@ -107,7 +101,7 @@ final class YierdisDbExpirationSupport {
                 )) {
                     continue;
                 }
-                if (scope.reclaimExpired(candidate.keyHandle(), candidate.record(), nowFixed)) {
+                if (kernel.reclaimExpired(candidate.keyHandle(), candidate.record(), nowFixed)) {
                     continue;
                 }
                 if (keyLifecycle.hasCurrentExpiredEntry(
@@ -135,10 +129,8 @@ final class YierdisDbExpirationSupport {
     }
 
     void resetCursor() {
-        kernel.maintain(ignored -> {
-            resetCursorState();
-            return null;
-        });
+        kernel.checkOwner();
+        resetCursorState();
     }
 
     private void resetCursorState() {

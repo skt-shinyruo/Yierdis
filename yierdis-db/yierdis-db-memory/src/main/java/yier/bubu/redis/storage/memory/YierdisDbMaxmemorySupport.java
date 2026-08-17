@@ -8,62 +8,58 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
-import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
+import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
 import java.util.Objects;
-import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
-import java.util.function.Supplier;
 
-final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
+final class YierdisDbMaxmemorySupport {
     private final YierdisDbKernel kernel;
+    private final YierdisDbMemoryContext memoryContext;
+    private final YierdisDbKeyLifecycle keyLifecycle;
     private final LongSupplier usedBytesForMaxmemory;
-    private final Supplier<MemoryUsageSnapshot> memoryUsageSupplier;
-    private final LongConsumer cleanupExpired;
     private final MaxmemoryPolicy maxmemoryPolicy;
     private final int maxmemorySamples;
     private final long evictionTimeLimitNanos;
 
     YierdisDbMaxmemorySupport(
             YierdisDbKernel kernel,
+            YierdisDbMemoryContext memoryContext,
+            YierdisDbKeyLifecycle keyLifecycle,
             LongSupplier usedBytesForMaxmemory,
-            Supplier<MemoryUsageSnapshot> memoryUsageSupplier,
-            LongConsumer cleanupExpired,
             MaxmemoryPolicy maxmemoryPolicy,
             int maxmemorySamples,
             long evictionTimeLimitNanos
     ) {
         this.kernel = Objects.requireNonNull(kernel, "kernel");
+        this.memoryContext = Objects.requireNonNull(memoryContext, "memoryContext");
+        this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
         this.usedBytesForMaxmemory = Objects.requireNonNull(usedBytesForMaxmemory, "usedBytesForMaxmemory");
-        this.memoryUsageSupplier = Objects.requireNonNull(memoryUsageSupplier, "memoryUsageSupplier");
-        this.cleanupExpired = Objects.requireNonNull(cleanupExpired, "cleanupExpired");
         this.maxmemoryPolicy = Objects.requireNonNull(maxmemoryPolicy, "maxmemoryPolicy");
         this.maxmemorySamples = maxmemorySamples;
         this.evictionTimeLimitNanos = evictionTimeLimitNanos;
     }
 
     void evictUntilUnder(long limitBytes) {
-        kernel.maintain(scope -> {
-            evictUntilUnder(scope, limitBytes);
-            return null;
-        });
+        kernel.checkOwner();
+        evictUntilUnderChecked(limitBytes);
     }
 
-    private void evictUntilUnder(MaintenanceScope scope, long requestedLimitBytes) {
+    private void evictUntilUnderChecked(long requestedLimitBytes) {
         long limitBytes = requestedLimitBytes;
         if (limitBytes < 0) {
             limitBytes = 0;
         }
-        scope.trimEmptyNativePages();
+        trimEmptyNativePages();
         if (usedBytesForMaxmemory() <= limitBytes) {
             return;
         }
 
         int attempts = 0;
-        int maxAttempts = Math.max(64, scope.keyCount() * 2);
+        int maxAttempts = Math.max(64, keyLifecycle.keyCount() * 2);
         long nowMillis = System.currentTimeMillis();
         long deadline = System.nanoTime() + evictionTimeLimitNanos;
         // 维护任务在调用线程内执行，必须同时用时间窗口和尝试次数限制淘汰循环，避免一次写入拖垮 event loop。
@@ -71,109 +67,81 @@ final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
             if (System.nanoTime() >= deadline) {
                 break;
             }
-            KeyHandle victim = pickEvictionKey(scope, nowMillis);
+            KeyHandle victim = pickEvictionKey(nowMillis);
             if (victim == null) {
                 break;
             }
-            EntryRecord record = scope.entryRecord(victim);
+            EntryRecord record = keyLifecycle.entryRecord(victim);
             if (record == null) {
                 continue;
             }
-            if (scope.reclaimExpired(victim, record, nowMillis)) {
-                scope.trimEmptyNativePages();
+            if (kernel.reclaimExpired(victim, record, nowMillis)) {
+                trimEmptyNativePages();
                 if (usedBytesForMaxmemory() <= limitBytes) {
                     return;
                 }
                 continue;
             }
-            if (scope.evict(victim, record)) {
-                scope.trimEmptyNativePages();
+            if (kernel.evict(victim, record)) {
+                trimEmptyNativePages();
             }
         }
-        scope.trimEmptyNativePages();
+        trimEmptyNativePages();
         if (usedBytesForMaxmemory() <= limitBytes) {
             return;
         }
     }
 
-    @Override
-    public MemoryUsageSnapshot memoryUsage() {
-        return kernel.maintain(ignored -> memoryUsageSupplier.get());
-    }
-
-    public long usedBytesForMaxmemory() {
-        return kernel.maintain(ignored -> usedBytesForMaxmemory.getAsLong());
-    }
-
-    @Override
-    public int keyCountEstimate() {
-        return kernel.maintain(scope -> Math.max(0, scope.keyCount()));
-    }
-
-    @Override
-    public void cleanupExpired(long nowMillis) {
-        kernel.maintain(ignored -> {
-            cleanupExpired.accept(nowMillis);
-            return null;
-        });
-    }
-
-    @Override
-    public MaxmemoryCandidate sampleCandidate(MaxmemoryPolicy policy, long nowMillis) {
-        return kernel.maintain(scope -> sampleCandidate(scope, policy, nowMillis));
-    }
-
-    private MaxmemoryCandidate sampleCandidate(
-            MaintenanceScope scope,
+    MaxmemoryCandidate sampleCandidate(
+            MaxmemoryParticipant owner,
             MaxmemoryPolicy policy,
             long nowMillis
     ) {
+        kernel.checkOwner();
+        Objects.requireNonNull(owner, "owner");
         if (policy == null || policy == MaxmemoryPolicy.NOEVICTION) {
             return null;
         }
-        if (scope.keyCount() == 0) {
+        if (keyLifecycle.keyCount() == 0) {
             return null;
         }
 
-        KeyHandle keyHandle = scope.randomKeyHandle();
+        KeyHandle keyHandle = keyLifecycle.randomKeyHandle();
         if (keyHandle == null) {
             return null;
         }
-        EntryRecord record = scope.entryRecord(keyHandle);
+        EntryRecord record = keyLifecycle.entryRecord(keyHandle);
         if (record == null) {
             return null;
         }
-        if (scope.isKeyExpired(keyHandle, nowMillis)) {
+        if (keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
             return null;
         }
 
         long lruClock = policy == MaxmemoryPolicy.ALLKEYS_LRU ? record.lruOrLfu() : 0L;
-        return new MaxmemoryCandidate(this, keyHandle, lruClock);
+        return new MaxmemoryCandidate(owner, keyHandle, lruClock);
     }
 
-    @Override
-    public MaxmemoryCandidate scanBestCandidate(MaxmemoryPolicy policy, long nowMillis) {
-        return kernel.maintain(scope -> scanBestCandidate(scope, policy, nowMillis));
-    }
-
-    private MaxmemoryCandidate scanBestCandidate(
-            MaintenanceScope scope,
+    MaxmemoryCandidate scanBestCandidate(
+            MaxmemoryParticipant owner,
             MaxmemoryPolicy policy,
             long nowMillis
     ) {
+        kernel.checkOwner();
+        Objects.requireNonNull(owner, "owner");
         if (policy != MaxmemoryPolicy.ALLKEYS_LRU) {
             return null;
         }
-        if (scope.keyCount() == 0) {
+        if (keyLifecycle.keyCount() == 0) {
             return null;
         }
 
         BestLruCandidate best = new BestLruCandidate();
-        scope.forEachKeyHandle((k, record) -> {
+        keyLifecycle.forEachKeyHandle((k, record) -> {
             if (k == null || record == null) {
                 return;
             }
-            if (scope.isKeyExpired(k, nowMillis)) {
+            if (keyLifecycle.isKeyExpired(k, nowMillis)) {
                 return;
             }
             best.consider(k, record);
@@ -183,46 +151,42 @@ final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
         if (bestKeyHandle == null) {
             return null;
         }
-        return new MaxmemoryCandidate(this, bestKeyHandle, best.lru());
+        return new MaxmemoryCandidate(owner, bestKeyHandle, best.lru());
     }
 
-    @Override
-    public boolean evict(MaxmemoryCandidate candidate, long nowMillis) {
-        return kernel.maintain(scope -> evict(scope, candidate, nowMillis));
-    }
-
-    private boolean evict(MaintenanceScope scope, MaxmemoryCandidate candidate, long nowMillis) {
-        if (candidate == null || candidate.owner() != this) {
+    boolean evict(MaxmemoryParticipant owner, MaxmemoryCandidate candidate, long nowMillis) {
+        kernel.checkOwner();
+        if (candidate == null || candidate.owner() != owner) {
             return false;
         }
 
         if (!(candidate.keyHandle() instanceof KeyHandle key)) {
             return false;
         }
-        EntryRecord record = scope.entryRecord(key);
+        EntryRecord record = keyLifecycle.entryRecord(key);
         if (record == null) {
             return false;
         }
-        if (scope.reclaimExpired(key, record, nowMillis)) {
+        if (kernel.reclaimExpired(key, record, nowMillis)) {
             return true;
         }
-        return scope.evict(key, record);
+        return kernel.evict(key, record);
     }
 
-    private KeyHandle pickEvictionKey(MaintenanceScope scope, long nowMillis) {
-        if (scope.keyCount() == 0) {
+    private KeyHandle pickEvictionKey(long nowMillis) {
+        if (keyLifecycle.keyCount() == 0) {
             return null;
         }
 
         if (maxmemoryPolicy == MaxmemoryPolicy.ALLKEYS_RANDOM) {
-            return scope.randomKeyHandle();
+            return keyLifecycle.randomKeyHandle();
         }
 
         if (maxmemoryPolicy != MaxmemoryPolicy.ALLKEYS_LRU) {
             return null;
         }
 
-        int total = scope.keyCount();
+        int total = keyLifecycle.keyCount();
         KeyHandle bestKey = null;
         long bestLru = Long.MAX_VALUE;
         int samples = Math.max(1, maxmemorySamples);
@@ -230,8 +194,8 @@ final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
         if (samples >= total) {
             // 样本数覆盖全量时退化为完整扫描，避免随机抽样在小 keyspace 上错过最旧 key。
             BestLruCandidate best = new BestLruCandidate();
-            scope.forEachKeyHandle((k, record) -> {
-                if (scope.isKeyExpired(k, nowMillis)) {
+            keyLifecycle.forEachKeyHandle((k, record) -> {
+                if (keyLifecycle.isKeyExpired(k, nowMillis)) {
                     return;
                 }
                 if (record == null) {
@@ -243,15 +207,15 @@ final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
         }
 
         for (int i = 0; i < samples; i++) {
-            KeyHandle key = scope.randomKeyHandle();
+            KeyHandle key = keyLifecycle.randomKeyHandle();
             if (key == null) {
                 break;
             }
-            EntryRecord record = scope.entryRecord(key);
+            EntryRecord record = keyLifecycle.entryRecord(key);
             if (record == null) {
                 continue;
             }
-            if (scope.isKeyExpired(key, nowMillis)) {
+            if (keyLifecycle.isKeyExpired(key, nowMillis)) {
                 continue;
             }
             long lru = record.lruOrLfu();
@@ -261,6 +225,14 @@ final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
             }
         }
         return bestKey;
+    }
+
+    private long usedBytesForMaxmemory() {
+        return usedBytesForMaxmemory.getAsLong();
+    }
+
+    private void trimEmptyNativePages() {
+        memoryContext.trimEmptyNativePages(MemoryPressureBudget.unlimited());
     }
 
     private static final class BestLruCandidate {

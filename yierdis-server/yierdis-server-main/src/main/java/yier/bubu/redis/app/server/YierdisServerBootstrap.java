@@ -11,8 +11,6 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutorGroup;
 import io.netty.util.concurrent.ScheduledFuture;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.api.YierdisDbRouter;
@@ -50,7 +48,7 @@ import java.util.function.UnaryOperator;
  * This allows tests/tools to start/stop the server without duplicating Netty/DB setup logic.
  */
 public final class YierdisServerBootstrap implements AutoCloseable {
-    private static final Logger log = LoggerFactory.getLogger(YierdisServerBootstrap.class);
+    private static final System.Logger LOG = System.getLogger(YierdisServerBootstrap.class.getName());
     private static final long DEFERRED_RECLAMATION_INTERVAL_MILLIS = 1_000L;
 
     enum LifecycleState {
@@ -190,7 +188,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
     }
 
     private void startInternal() throws Exception {
-        log.info("native memory backend: foreign (JDK 25 FFM)");
+        LOG.log(System.Logger.Level.INFO, "native memory backend: foreign (JDK 25 FFM)");
         int databases = Math.max(1, runtimeConfig.databases());
         YierdisInstanceConfig.MaxmemoryScope scope =
                 runtimeConfig.maxmemoryScope() == YierdisServerRuntimeConfig.MaxmemoryScope.PER_DB
@@ -293,7 +291,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 try {
                     scheduledMaintenance.run();
                 } catch (Exception e) {
-                    log.debug("Maintenance error", e);
+                    LOG.log(System.Logger.Level.DEBUG, "Maintenance error", e);
                 } finally {
                     maintenancePending.set(false);
                 }

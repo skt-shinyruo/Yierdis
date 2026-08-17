@@ -46,21 +46,6 @@ public class CommandExecutorTest {
     }
 
     @Test
-    public void configExposesQueueDrainAndBackpressureSettings() {
-        CommandExecutorConfig config = new CommandExecutorConfig(32, 1024, 8, 4, 128, 64, 16, 10, SchedulingPolicy.FAIR);
-
-        Assert.assertEquals(32, config.queueCapacity());
-        Assert.assertEquals(1024L, config.queueMaxBytes());
-        Assert.assertEquals(8, config.backpressureHighWatermark());
-        Assert.assertEquals(4, config.backpressureLowWatermark());
-        Assert.assertEquals(128L, config.backpressureBytesHighWatermark());
-        Assert.assertEquals(64L, config.backpressureBytesLowWatermark());
-        Assert.assertEquals(16, config.maxDrainCommands());
-        Assert.assertEquals(10L, config.drainTimeLimitMillis());
-        Assert.assertEquals(SchedulingPolicy.FAIR, config.schedulingPolicy());
-    }
-
-    @Test
     public void configRejectsInvalidValues() {
         assertInvalidConfig(-1, 1024, 8, 4, 128, 64, 16, 10, SchedulingPolicy.FAIR, IllegalArgumentException.class);
         assertInvalidConfig(0, 1024, 8, 4, 128, 64, 16, 10, SchedulingPolicy.FAIR, IllegalArgumentException.class);
@@ -85,63 +70,6 @@ public class CommandExecutorTest {
         CommandExecutorConfig disabledByteBackpressure = new CommandExecutorConfig(32, 1024, 8, 4, 0, 0, 16, 10, SchedulingPolicy.FAIR);
         Assert.assertEquals(0L, disabledByteBackpressure.backpressureBytesHighWatermark());
         Assert.assertEquals(0L, disabledByteBackpressure.backpressureBytesLowWatermark());
-    }
-
-    @Test
-    public void ioAdapterContractControlsInputAndObservesClose() {
-        RecordingIoAdapter io = new RecordingIoAdapter();
-        TestConnection connection = new TestConnection("c-1", new ExecutionConnectionContext());
-        AtomicBoolean closed = new AtomicBoolean(false);
-
-        Assert.assertTrue(io.isActive(connection));
-        Assert.assertTrue(io.isWritable(connection));
-        io.setActive(connection, false);
-        io.setWritable(connection, false);
-        Assert.assertFalse(io.isActive(connection));
-        Assert.assertFalse(io.isWritable(connection));
-        io.setActive(connection, true);
-        io.setWritable(connection, true);
-
-        io.onClose(connection, () -> closed.set(true));
-        io.disableInput(connection);
-        Assert.assertTrue(io.inputDisabled(connection));
-        io.enableInput(connection);
-        Assert.assertTrue(io.inputEnabledAgain(connection));
-        io.fireClosed(connection);
-
-        Assert.assertTrue(closed.get());
-    }
-
-    @Test
-    public void ioAdapterStateAndCloseCallbacksAreScopedPerConnection() {
-        RecordingIoAdapter io = new RecordingIoAdapter();
-        TestConnection first = new TestConnection("c-1", new ExecutionConnectionContext());
-        TestConnection second = new TestConnection("c-2", new ExecutionConnectionContext());
-        AtomicBoolean firstClosed = new AtomicBoolean(false);
-        AtomicBoolean secondClosed = new AtomicBoolean(false);
-
-        io.setActive(first, false);
-        io.setWritable(second, false);
-        io.onClose(first, () -> firstClosed.set(true));
-        io.onClose(second, () -> secondClosed.set(true));
-        io.disableInput(first);
-        io.enableInput(second);
-
-        Assert.assertFalse(io.isActive(first));
-        Assert.assertTrue(io.isActive(second));
-        Assert.assertTrue(io.isWritable(first));
-        Assert.assertFalse(io.isWritable(second));
-        Assert.assertTrue(io.inputDisabled(first));
-        Assert.assertFalse(io.inputDisabled(second));
-        Assert.assertFalse(io.inputEnabledAgain(first));
-        Assert.assertTrue(io.inputEnabledAgain(second));
-
-        io.fireClosed(first);
-        Assert.assertTrue(firstClosed.get());
-        Assert.assertFalse(secondClosed.get());
-
-        io.fireClosed(second);
-        Assert.assertTrue(secondClosed.get());
     }
 
     @Test

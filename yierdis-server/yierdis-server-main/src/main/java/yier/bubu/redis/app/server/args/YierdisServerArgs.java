@@ -316,7 +316,7 @@ public final class YierdisServerArgs {
                 ioThreads,
                 executorQueueCapacity,
                 executorQueueMaxBytes,
-                YierdisServerRuntimeConfig.ExecutorSchedulingPolicy.fromArgvValue(executorSchedulingPolicy),
+                parseExecutorSchedulingPolicy(executorSchedulingPolicy),
                 backpressureHighWatermark,
                 backpressureLowWatermark,
                 backpressureBytesHighWatermark,
@@ -356,7 +356,22 @@ public final class YierdisServerArgs {
     }
 
     private static String normalizeExecutorSchedulingPolicy(String rawValue) {
-        return YierdisServerRuntimeConfig.ExecutorSchedulingPolicy.parseCliValue(rawValue).argvValue();
+        return parseExecutorSchedulingPolicy(rawValue).name().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private static yier.bubu.redis.execution.executor.SchedulingPolicy parseExecutorSchedulingPolicy(
+            String rawValue
+    ) {
+        if (rawValue == null || rawValue.isBlank()) {
+            throw new IllegalArgumentException("executorSchedulingPolicy must not be blank");
+        }
+        try {
+            return yier.bubu.redis.execution.executor.SchedulingPolicy.valueOf(
+                    rawValue.trim().toUpperCase(java.util.Locale.ROOT)
+            );
+        } catch (IllegalArgumentException ignored) {
+            throw new IllegalArgumentException("unsupported executorSchedulingPolicy: " + rawValue);
+        }
     }
 
     private static String normalizeMaxmemoryScope(String rawValue) {

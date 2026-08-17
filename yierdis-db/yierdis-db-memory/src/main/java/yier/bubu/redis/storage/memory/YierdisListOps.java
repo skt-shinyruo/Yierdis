@@ -68,20 +68,19 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
 
     @Override
     public ByteSequenceSource lrange(byte[] keyBytes, int start, int stop) {
-        return kernel.read(scope -> {
-            EntryRecord record = liveListRecord(scope, keyBytes);
-            if (record == null) {
-                return ByteSequenceSources.empty();
-            }
-            ValueHandle handle = requireListHandle(record);
-            int count = listRoot.rangeCount(handle, start, stop);
-            return ByteSequenceSources.of(
-                    count,
-                    0L,
-                    out -> listRoot.rangeInto(handle, start, stop, SemanticResultSupport.lengthSink(out)),
-                    out -> listRoot.rangeInto(handle, start, stop, out)
-            );
-        });
+        kernel.checkOwner();
+        EntryRecord record = liveListRecord(kernel, keyBytes);
+        if (record == null) {
+            return ByteSequenceSources.empty();
+        }
+        ValueHandle handle = requireListHandle(record);
+        int count = listRoot.rangeCount(handle, start, stop);
+        return ByteSequenceSources.of(
+                count,
+                0L,
+                out -> listRoot.rangeInto(handle, start, stop, SemanticResultSupport.lengthSink(out)),
+                out -> listRoot.rangeInto(handle, start, stop, out)
+        );
     }
 
     @Override
@@ -166,7 +165,6 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
                                     staged == null ? 0L : staged.stagedHeapBytes(),
                                     listRoot.positiveRetainedHeapGrowthBytes(rootHeapBefore)
                             ),
-                            MutationOutcome.VALUE_CHANGED,
                             staged,
                             next
                     );
@@ -214,10 +212,8 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current == null) {
-                    return preparedNoEntry(
-                            scope,
-                            WriteResult.unchanged(PreparedPoppedValueSequence.nullValue()),
-                            MutationOutcome.NONE
+                    return scope.unchanged(
+                            WriteResult.unchanged(PreparedPoppedValueSequence.nullValue())
                     );
                 }
 
@@ -228,7 +224,7 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
                     WriteResult<PoppedValueSequence> result = WriteResult.unchanged(
                             PreparedPoppedValueSequence.empty()
                     );
-                    return preparedDelete(scope, currentEntry, current, result, MutationOutcome.NONE, true);
+                    return preparedDelete(scope, currentEntry, current, result, true);
                 }
 
                 int popCount = Math.min(count, oldSize);
@@ -244,7 +240,6 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
                             currentEntry,
                             current,
                             result,
-                            MutationOutcome.VALUE_CHANGED,
                             false,
                             releaseOldListToPopped
                     );
@@ -273,11 +268,7 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
     ) {
         ValueHandle handle = requireListHandle(current);
         if (values.isEmpty()) {
-            return preparedNoEntry(
-                    scope,
-                    WriteResult.unchanged((long) listRoot.size(handle)),
-                    MutationOutcome.NONE
-            );
+            return scope.unchanged(WriteResult.unchanged((long) listRoot.size(handle)));
         }
         ListValue.PreparedMutation valueMutation = null;
         try {
@@ -296,7 +287,6 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
                     WriteResult.of((long) valueMutation.size(), MutationOutcome.VALUE_CHANGED),
                     deltaBytes,
                     valueMutation.stagedHeapBytes(),
-                    MutationOutcome.VALUE_CHANGED,
                     currentEntry.entryHandle(),
                     current,
                     next,
@@ -337,7 +327,6 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
                     result,
                     deltaBytes,
                     valueMutation.stagedHeapBytes(),
-                    MutationOutcome.VALUE_CHANGED,
                     currentEntry.entryHandle(),
                     current,
                     next,
@@ -529,20 +518,11 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
         return new PreparedEntryState(entryHandle, record, record == null ? 0L : record.version(), expired);
     }
 
-    private static <T> PreparedDbMutation<T> preparedNoEntry(
-            YierdisDbKernel scope,
-            T result,
-            MutationOutcome outcome
-    ) {
-        return scope.unchanged(result, outcome);
-    }
-
     private <T> PreparedDbMutation<T> preparedDelete(
             YierdisDbKernel scope,
             CurrentEntry currentEntry,
             EntryRecord current,
             T result,
-            MutationOutcome outcome,
             boolean releaseOldValue
     ) {
         return preparedDelete(
@@ -550,7 +530,6 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
                 currentEntry,
                 current,
                 result,
-                outcome,
                 releaseOldValue,
                 null
         );
@@ -561,7 +540,6 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
             CurrentEntry currentEntry,
             EntryRecord current,
             T result,
-            MutationOutcome outcome,
             boolean releaseOldValue,
             Runnable releaseReplacedValueHook
     ) {
@@ -569,7 +547,6 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
         PreparedEntryMutation<T> prepared = scope.delete(
                 result,
                 deltaBytes,
-                outcome,
                 currentEntry.entryHandle(),
                 current,
                 releaseOldValue

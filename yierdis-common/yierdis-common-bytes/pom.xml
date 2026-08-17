@@ -12,9 +12,6 @@
     </parent>
 
     <artifactId>yierdis-common-bytes</artifactId>
-    <packaging>jar</packaging>
-
-    <name>yierdis-common-bytes</name>
     <description>Neutral bytes abstractions shared by protocol/off-heap/netty adapters.</description>
 
 </project>

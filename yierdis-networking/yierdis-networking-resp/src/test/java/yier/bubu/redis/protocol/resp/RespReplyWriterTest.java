@@ -188,7 +188,7 @@ public class RespReplyWriterTest {
     @Test
     public void collectionHeadersUseNativeResp3TypesAndResp2Fallbacks() {
         Assert.assertEquals("*0\r\n*-1\r\n", write2(w -> {
-            w.emptyArray();
+            w.arrayHeader(0);
             w.nullArray();
         }));
         Assert.assertEquals("*0\r\n*0\r\n*0\r\n*0\r\n", write2(w -> {

@@ -12,9 +12,6 @@
     </parent>
 
     <artifactId>yierdis-server-runtime</artifactId>
-    <packaging>jar</packaging>
-
-    <name>yierdis-server-runtime</name>
     <description>Embedded runtime assembly and lifecycle for Yierdis.</description>
 
     <dependencies>

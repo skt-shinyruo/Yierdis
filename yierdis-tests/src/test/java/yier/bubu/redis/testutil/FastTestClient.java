@@ -226,11 +226,6 @@ public final class FastTestClient implements AutoCloseable {
         }
 
         @Override
-        public void emptyArray() {
-            arrayHeader(0);
-        }
-
-        @Override
         public void mapHeader(int pairs) {
             int n = Math.max(0, pairs);
             if (n == 0) {

@@ -12,9 +12,6 @@
     </parent>
 
     <artifactId>yierdis-memory-ffm</artifactId>
-    <packaging>jar</packaging>
-
-    <name>yierdis-memory-ffm</name>
     <description>Foreign Memory API backend for Yierdis (JDK 25 FFM).</description>
 
     <dependencies>
@@ -29,17 +26,4 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
-
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <configuration>
-                    <release>${maven.compiler.release}</release>
-                    <encoding>${project.build.sourceEncoding}</encoding>
-                </configuration>
-            </plugin>
-        </plugins>
-    </build>
 </project>

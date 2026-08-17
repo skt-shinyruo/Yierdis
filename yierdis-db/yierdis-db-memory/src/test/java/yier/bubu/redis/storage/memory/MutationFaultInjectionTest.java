@@ -501,8 +501,7 @@ public class MutationFaultInjectionTest {
                     () -> {
                     },
                     executor,
-                    keyLifecycle,
-                    memoryContext
+                    keyLifecycle
             );
             YierdisStringOps stringOps = new YierdisStringOps(kernel, keyLifecycle, memoryContext, stringRoot);
             YierdisListOps listOps = new YierdisListOps(kernel, keyLifecycle, memoryContext, listRoot);
@@ -752,7 +751,6 @@ public class MutationFaultInjectionTest {
         @Override
         public void close() {
             allocator.disableFailures();
-            allocator.disableRegionFailures();
             keyLifecycle.close();
         }
     }

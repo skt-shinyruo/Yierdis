@@ -52,7 +52,6 @@ final class YierdisNativeObjectTable implements AutoCloseable {
     private final YierdisFfmMemoryRuntime runtime;
     private final int maxSlots;
     private final int maxSegments;
-    private final int ownerShardId;
     private final CapacityResolver capacityResolver;
     private final long[] stateCounts = new long[STATE_COUNT];
 
@@ -67,7 +66,6 @@ final class YierdisNativeObjectTable implements AutoCloseable {
     public YierdisNativeObjectTable(
             YierdisFfmMemoryRuntime runtime,
             int maxSlots,
-            int ownerShardId,
             CapacityResolver capacityResolver
     ) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
@@ -77,7 +75,6 @@ final class YierdisNativeObjectTable implements AutoCloseable {
         this.maxSlots = maxSlots == 0 ? AUTOMATIC_MAX_SLOTS : maxSlots;
         this.maxSegments = (int) ((this.maxSlots + (long) YierdisNativeObjectSegment.SLOTS_PER_SEGMENT - 1L)
                 / YierdisNativeObjectSegment.SLOTS_PER_SEGMENT);
-        this.ownerShardId = ownerShardId;
         this.capacityResolver = Objects.requireNonNull(capacityResolver, "capacityResolver");
     }
 
@@ -604,7 +601,6 @@ final class YierdisNativeObjectTable implements AutoCloseable {
                 unpack(packedMetadata, KIND_SHIFT, KIND_MASK),
                 unpack(packedMetadata, FLAGS_SHIFT, FLAGS_MASK),
                 slot.segment.readInt(slot.offset, PIN_COUNT_OFFSET),
-                ownerShardId,
                 slot.segment.readLong(slot.offset, ALLOC_EPOCH_OFFSET),
                 slot.segment.readLong(slot.offset, FREE_EPOCH_OFFSET),
                 unpack(packedMetadata, STATE_SHIFT, STATE_MASK)

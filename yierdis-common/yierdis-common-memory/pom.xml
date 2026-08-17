@@ -12,9 +12,6 @@
     </parent>
 
     <artifactId>yierdis-common-memory</artifactId>
-    <packaging>jar</packaging>
-
-    <name>yierdis-common-memory</name>
     <description>Neutral memory accounting contracts shared by allocator and storage modules.</description>
 
     <dependencies>

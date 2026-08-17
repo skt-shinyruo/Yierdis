@@ -5,21 +5,16 @@ import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.common.memory.MemoryReclaimResult;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocationGrowth;
 import yier.bubu.redis.memory.api.NativeAllocationScope;
-import yier.bubu.redis.memory.api.NativeAllocationLatencyHistogram;
-import yier.bubu.redis.memory.api.NativeAllocatorMetadataStats;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.memory.api.NativeDefragResult;
-import yier.bubu.redis.memory.api.NativeEpochKind;
 import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.MemoryOwner;
@@ -29,7 +24,6 @@ import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
-import yier.bubu.redis.memory.api.StableMemoryRegion;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
 
 public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend {
@@ -46,7 +40,6 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
     private final long allocatorId;
     private final MemoryOwner owner;
     private final YierdisFfmMemoryRuntime runtime;
-    private final AtomicLong externalRegionBytes = new AtomicLong();
     private final List<AllocatorEpochScope> activeEpochScopes = new ArrayList<>();
     private final List<RetiredBlock> retiredBlocks = new ArrayList<>();
 
@@ -62,14 +55,6 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
     private long defragSkippedPinnedObjects;
     private long doubleFreeDetections;
     private long defragReclaimedPages;
-    private long allocationCount;
-    private long allocationTotalNanos;
-    private long allocationMaxNanos;
-    private long allocationUnder1Micros;
-    private long allocationUnder10Micros;
-    private long allocationUnder100Micros;
-    private long allocationUnder1Millis;
-    private long allocationAtLeast1Millis;
     private AllocatorAllocationScope activeAllocationScope;
 
     public YierdisFfmStableMemoryBackend(String name, int maxSlots, MemoryOwner owner) {
@@ -109,7 +94,7 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
         this.owner = Objects.requireNonNull(owner, "owner");
         this.defragValidator = Objects.requireNonNull(defragValidator, "defragValidator");
         this.pageAllocator = new YierdisNativePageAllocator(runtime);
-        this.objectTable = new YierdisNativeObjectTable(runtime, maxSlots, 0, pageAllocator);
+        this.objectTable = new YierdisNativeObjectTable(runtime, maxSlots, pageAllocator);
     }
 
     public long allocatorId() {
@@ -124,7 +109,6 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
         ensureOpen();
         Objects.requireNonNull(kind, "kind");
 
-        long startedNanos = System.nanoTime();
         YierdisNativeBlock block = pageAllocator.allocate(physicalAllocationBytes(size));
         boolean allocated = false;
         try {
@@ -151,7 +135,6 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
             }
             return publicHandle(localRaw);
         } finally {
-            recordAllocationLatency(System.nanoTime() - startedNanos);
             if (!allocated) {
                 block.close();
             }
@@ -271,12 +254,9 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
         }
     }
 
-    public NativeEpochScope beginEpoch(NativeEpochKind kind) {
+    public NativeEpochScope beginEpoch() {
         ensureOpen();
-        AllocatorEpochScope scope = new AllocatorEpochScope(
-                Objects.requireNonNull(kind, "kind"),
-                nextEpoch()
-        );
+        AllocatorEpochScope scope = new AllocatorEpochScope(nextEpoch());
         activeEpochScopes.add(scope);
         return scope;
     }
@@ -359,17 +339,6 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
     }
 
     @Override
-    public StableMemoryRegion allocateRegion(String regionOwner, int bytes) {
-        ensureOpen();
-        Objects.requireNonNull(regionOwner, "regionOwner");
-        if (bytes <= 0) {
-            throw new IllegalArgumentException("bytes must be > 0");
-        }
-        YierdisFfmRegion region = runtime.allocateRegion(regionOwner, bytes);
-        externalRegionBytes.addAndGet(bytes);
-        return new TrackingRegion(region, bytes);
-    }
-
     public NativeDefragResult defragOne(NativeHandle handle, long maxMoveBytes) {
         ensureOpen();
         long localRaw = requireOwned(handle);
@@ -392,11 +361,16 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
         ensureOpen();
         Objects.requireNonNull(options, "options");
 
-        YierdisNativeDefragPlanner planner = new YierdisNativeDefragPlanner(options);
+        long startedNanos = System.nanoTime();
+        long scannedObjects = 0L;
         long movedObjects = 0L;
+        long movedBytes = 0L;
         long skippedPinnedObjects = 0L;
         long skippedBudgetObjects = 0L;
         long failedMoves = 0L;
+        boolean stoppedByByteBudget = false;
+        boolean stoppedByObjectBudget = false;
+        boolean stoppedByTimeBudget = false;
 
         for (int slotId = objectTable.firstOccupiedSlot(); slotId != 0;
              slotId = objectTable.nextOccupiedSlot(slotId)) {
@@ -411,17 +385,23 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
                     && meta.state() != YierdisNativeObjectTable.STATE_PINNED) {
                 continue;
             }
-            if (!planner.canInspectNext()) {
+            if (scannedObjects >= options.maxObjects()) {
+                stoppedByObjectBudget = true;
                 break;
             }
-            planner.onCandidateInspected();
+            if (System.nanoTime() - startedNanos >= options.timeBudgetNanos()) {
+                stoppedByTimeBudget = true;
+                break;
+            }
+            scannedObjects++;
 
             if (meta.pinCount() > 0) {
                 skippedPinnedObjects++;
                 defragSkippedPinnedObjects++;
                 continue;
             }
-            if (!planner.canMove(meta.size())) {
+            if (meta.size() > options.maxMoveBytes() - movedBytes) {
+                stoppedByByteBudget = true;
                 skippedBudgetObjects++;
                 break;
             }
@@ -431,7 +411,7 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
                 NativeDefragResult result = moveLiveObject(localRaw);
                 if (result.moved()) {
                     movedObjects++;
-                    planner.onMoved(result.movedBytes());
+                    movedBytes += result.movedBytes();
                 }
             } catch (RuntimeException e) {
                 failedMoves++;
@@ -440,15 +420,15 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
 
         reclaimEligibleQuarantine();
         return new NativeDefragReport(
-                planner.scannedObjects(),
+                scannedObjects,
                 movedObjects,
-                planner.movedBytes(),
+                movedBytes,
                 skippedPinnedObjects,
                 skippedBudgetObjects,
                 failedMoves,
-                planner.stoppedByByteBudget(),
-                planner.stoppedByObjectBudget(),
-                planner.stoppedByTimeBudget()
+                stoppedByByteBudget,
+                stoppedByObjectBudget,
+                stoppedByTimeBudget
         );
     }
 
@@ -487,19 +467,12 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
                 doubleFreeDetections,
                 defragReclaimedPages,
                 objectKindCounts(),
-                allocationLatencyHistogram(),
                 tableStats.metadataCommittedBytes(),
                 tableStats.activeSegments(),
                 tableStats.freeSlots(),
                 tableStats.retiredSlots(),
                 tableStats.peakLiveSlots()
         );
-    }
-
-    public NativeAllocatorMetadataStats metadataStats() {
-        ensureOpen();
-        YierdisNativeObjectTableStats tableStats = objectTable.stats();
-        return new NativeAllocatorMetadataStats(tableStats.activeSegments(), tableStats.freeSlots());
     }
 
     public MemoryUsageSnapshot memoryUsage() {
@@ -524,8 +497,7 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
                 pageStats.usedBytes(),
                 (long) pageStats.emptySmallPages() * YierdisNativePageAllocator.PAGE_BYTES
         );
-        long regionBytes = externalRegionBytes.get();
-        return usage.plus(new MemoryUsageSnapshot(0L, 0L, regionBytes, regionBytes, 0L));
+        return usage;
     }
 
     @Override
@@ -552,22 +524,6 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
                 * YierdisNativeObjectSegment.SLOTS_PER_SEGMENT
                 * YierdisNativeObjectTable.META_BYTES;
         YierdisNativePageAllocator.PageGrowth pageGrowth = pageAllocator.estimateAdditionalGrowth(requestedBytes);
-        long heapBytes = MemoryUsageSnapshot.addSaturating(
-                objectTable.estimateAdditionalHeapBytes(requestedBytes.length),
-                pageGrowth.heapEstimatedBytes()
-        );
-        return new NativeAllocationGrowth(heapBytes, metadataBytes, pageGrowth.nativeDataCommittedBytes());
-    }
-
-    public NativeAllocationGrowth estimateConservativeAdditionalGrowth(int... requestedBytes) {
-        ensureOpen();
-        validateRequestedBytes(requestedBytes);
-        int additionalSegments = objectTable.estimateAdditionalSegments(requestedBytes.length);
-        long metadataBytes = (long) additionalSegments
-                * YierdisNativeObjectSegment.SLOTS_PER_SEGMENT
-                * YierdisNativeObjectTable.META_BYTES;
-        YierdisNativePageAllocator.PageGrowth pageGrowth =
-                pageAllocator.estimateConservativeAdditionalGrowth(requestedBytes);
         long heapBytes = MemoryUsageSnapshot.addSaturating(
                 objectTable.estimateAdditionalHeapBytes(requestedBytes.length),
                 pageGrowth.heapEstimatedBytes()
@@ -911,37 +867,6 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
         );
     }
 
-    private NativeAllocationLatencyHistogram allocationLatencyHistogram() {
-        return new NativeAllocationLatencyHistogram(
-                allocationCount,
-                allocationTotalNanos,
-                allocationMaxNanos,
-                allocationUnder1Micros,
-                allocationUnder10Micros,
-                allocationUnder100Micros,
-                allocationUnder1Millis,
-                allocationAtLeast1Millis
-        );
-    }
-
-    private void recordAllocationLatency(long nanos) {
-        long safeNanos = Math.max(0L, nanos);
-        allocationCount++;
-        allocationTotalNanos += safeNanos;
-        allocationMaxNanos = Math.max(allocationMaxNanos, safeNanos);
-        if (safeNanos < 1_000L) {
-            allocationUnder1Micros++;
-        } else if (safeNanos < 10_000L) {
-            allocationUnder10Micros++;
-        } else if (safeNanos < 100_000L) {
-            allocationUnder100Micros++;
-        } else if (safeNanos < 1_000_000L) {
-            allocationUnder1Millis++;
-        } else {
-            allocationAtLeast1Millis++;
-        }
-    }
-
     private static NativeObjectKind kindFor(YierdisNativeObjectMeta meta) {
         for (NativeObjectKind kind : OBJECT_KINDS) {
             if (kind.domain() == meta.domain() && kind.code() == meta.kindCode()) {
@@ -1005,25 +930,11 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
     }
 
     private final class AllocatorEpochScope implements NativeEpochScope {
-        private final NativeEpochKind kind;
         private final long epoch;
         private boolean closedScope;
 
-        private AllocatorEpochScope(NativeEpochKind kind, long epoch) {
-            this.kind = kind;
+        private AllocatorEpochScope(long epoch) {
             this.epoch = epoch;
-        }
-
-        @Override
-        public NativeEpochKind kind() {
-            owner.checkCurrentThread();
-            return kind;
-        }
-
-        @Override
-        public long epoch() {
-            owner.checkCurrentThread();
-            return epoch;
         }
 
         @Override
@@ -1370,103 +1281,6 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
         private void checkRange(int index, int len, int size) {
             if (len < 0 || index < 0 || index > size - len) {
                 throw new IndexOutOfBoundsException();
-            }
-        }
-    }
-
-    private final class TrackingRegion implements StableMemoryRegion {
-        private final YierdisFfmRegion delegate;
-        private final int bytes;
-        private final AtomicBoolean closedRegion = new AtomicBoolean();
-
-        private TrackingRegion(YierdisFfmRegion delegate, int bytes) {
-            this.delegate = delegate;
-            this.bytes = bytes;
-        }
-
-        @Override
-        public int size() {
-            checkOpen();
-            return delegate.size();
-        }
-
-        @Override
-        public byte getByte(int offset) {
-            checkOpen();
-            return delegate.getByte(offset);
-        }
-
-        @Override
-        public void setByte(int offset, byte value) {
-            checkOpen();
-            delegate.setByte(offset, value);
-        }
-
-        @Override
-        public int getIntLittleEndian(int offset) {
-            checkOpen();
-            return delegate.getIntLittleEndian(offset);
-        }
-
-        @Override
-        public void setIntLittleEndian(int offset, int value) {
-            checkOpen();
-            delegate.setIntLittleEndian(offset, value);
-        }
-
-        @Override
-        public long getLongLittleEndian(int offset) {
-            checkOpen();
-            return delegate.getLongLittleEndian(offset);
-        }
-
-        @Override
-        public void setLongLittleEndian(int offset, long value) {
-            checkOpen();
-            delegate.setLongLittleEndian(offset, value);
-        }
-
-        @Override
-        public void getBytes(int offset, byte[] dst, int dstOffset, int length) {
-            checkOpen();
-            delegate.getBytes(offset, dst, dstOffset, length);
-        }
-
-        @Override
-        public void setBytes(int offset, byte[] src, int srcOffset, int length) {
-            checkOpen();
-            delegate.setBytes(offset, src, srcOffset, length);
-        }
-
-        @Override
-        public void copyTo(int sourceOffset, StableMemoryRegion target, int targetOffset, int length) {
-            checkOpen();
-            Objects.requireNonNull(target, "target");
-            if (target instanceof TrackingRegion trackingTarget) {
-                trackingTarget.checkOpen();
-                delegate.copyTo(sourceOffset, trackingTarget.delegate, targetOffset, length);
-                return;
-            }
-            delegate.copyTo(sourceOffset, target, targetOffset, length);
-        }
-
-        @Override
-        public void close() {
-            owner.checkCurrentThread();
-            if (!closedRegion.compareAndSet(false, true)) {
-                return;
-            }
-            delegate.close();
-            long remaining = externalRegionBytes.addAndGet(-bytes);
-            if (remaining < 0L) {
-                throw new IllegalStateException("external region accounting underflow");
-            }
-        }
-
-        private void checkOpen() {
-            owner.checkCurrentThread();
-            if (closedRegion.get()) {
-                throw new IllegalStateException("stable memory region is closed");
             }
         }
     }

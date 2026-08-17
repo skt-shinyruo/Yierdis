@@ -64,7 +64,7 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
                     requireSet(current);
                     int expectedAdditions = setRoot.countAdditions(requireSetHandle(current), members);
                     if (expectedAdditions == 0) {
-                        return preparedNoEntry(scope, WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
+                        return scope.unchanged(WriteResult.of(0L, MutationOutcome.NONE));
                     }
                 }
 
@@ -94,7 +94,7 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
                             staged.close();
                             staged = null;
                         }
-                        return preparedNoEntry(scope, result, outcome);
+                        return scope.unchanged(result);
                     }
                     EntryRecord next = setRecord(
                             targetKey,
@@ -112,7 +112,6 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
                                     staged == null ? 0L : staged.stagedHeapBytes(),
                                     setRoot.positiveRetainedHeapGrowthBytes(rootHeapBefore)
                             ),
-                            outcome,
                             currentEntry,
                             staged,
                             next,
@@ -151,19 +150,25 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current == null) {
-                    return preparedNoEntry(scope, WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
+                    return scope.unchanged(WriteResult.of(0L, MutationOutcome.NONE));
                 }
                 requireSet(current);
                 ValueHandle handle = requireSetHandle(current);
                 int removed = setRoot.countExistingMembers(handle, members);
                 if (removed == 0) {
-                    return preparedNoEntry(scope, WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
+                    return scope.unchanged(WriteResult.of(0L, MutationOutcome.NONE));
                 }
 
                 MutationOutcome outcome = MutationOutcome.VALUE_CHANGED;
                 WriteResult<Long> result = WriteResult.of((long) removed, outcome);
                 if (removed >= setRoot.size(handle)) {
-                    return preparedDelete(scope, currentEntry, current, result, outcome, true);
+                    return scope.delete(
+                            result,
+                            -estimateRecordBytes(currentEntry.keyHandle(), current),
+                            currentEntry.entryHandle(),
+                            current,
+                            true
+                    );
                 }
 
                 EntryRecord next = setRecord(currentEntry.keyHandle(), handle, current.expireAtMillis(), current);
@@ -173,7 +178,6 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
                         result,
                         deltaBytes,
                         0L,
-                        outcome,
                         () -> {
                             int actualRemoved = setRoot.srem(handle, members);
                             if (actualRemoved != removed) {
@@ -192,60 +196,56 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
 
     @Override
     public ByteSequenceSource smembers(byte[] keyBytes) {
-        return kernel.read(scope -> {
-            EntryRecord record = liveSetRecord(scope, keyBytes);
-            if (record == null) {
-                return ByteSequenceSources.empty();
-            }
-            ValueHandle handle = requireSetHandle(record);
-            return ByteSequenceSources.of(
-                    setRoot.size(handle),
-                    0L,
-                    out -> setRoot.membersInto(handle, SemanticResultSupport.lengthSink(out)),
-                    out -> setRoot.membersInto(handle, out)
-            );
-        });
+        kernel.checkOwner();
+        EntryRecord record = liveSetRecord(kernel, keyBytes);
+        if (record == null) {
+            return ByteSequenceSources.empty();
+        }
+        ValueHandle handle = requireSetHandle(record);
+        return ByteSequenceSources.of(
+                setRoot.size(handle),
+                0L,
+                out -> setRoot.membersInto(handle, SemanticResultSupport.lengthSink(out)),
+                out -> setRoot.membersInto(handle, out)
+        );
     }
 
     @Override
     public boolean sismember(byte[] keyBytes, byte[] member) {
-        return kernel.read(scope -> {
-            EntryRecord record = liveSetRecord(scope, keyBytes);
-            if (record == null) {
-                return false;
-            }
-            return setRoot.contains(requireSetHandle(record), member);
-        });
+        kernel.checkOwner();
+        EntryRecord record = liveSetRecord(kernel, keyBytes);
+        if (record == null) {
+            return false;
+        }
+        return setRoot.contains(requireSetHandle(record), member);
     }
 
     @Override
     public long scard(byte[] keyBytes) {
-        return kernel.read(scope -> {
-            EntryRecord record = liveSetRecord(scope, keyBytes);
-            if (record == null) {
-                return 0L;
-            }
-            return (long) setRoot.size(requireSetHandle(record));
-        });
+        kernel.checkOwner();
+        EntryRecord record = liveSetRecord(kernel, keyBytes);
+        if (record == null) {
+            return 0L;
+        }
+        return (long) setRoot.size(requireSetHandle(record));
     }
 
     @Override
     public CollectionScanWindow sscan(byte[] keyBytes, ScanCursorV2 cursor, byte[] globPattern, int count) {
-        return kernel.read(scope -> {
-            if (count <= 0) {
-                throw new IllegalArgumentException("count must be > 0");
-            }
-            EntryRecord record = liveSetRecord(scope, keyBytes);
-            if (record == null) {
-                return new MaterializedCollectionScanWindow(ScanCursorV2.start(), List.of());
-            }
-            return setRoot.sscan(
-                    requireSetHandle(record),
-                    cursor == null ? ScanCursorV2.start() : cursor,
-                    globPattern,
-                    count
-            );
-        });
+        kernel.checkOwner();
+        if (count <= 0) {
+            throw new IllegalArgumentException("count must be > 0");
+        }
+        EntryRecord record = liveSetRecord(kernel, keyBytes);
+        if (record == null) {
+            return new MaterializedCollectionScanWindow(ScanCursorV2.start(), List.of());
+        }
+        return setRoot.sscan(
+                requireSetHandle(record),
+                cursor == null ? ScanCursorV2.start() : cursor,
+                globPattern,
+                count
+        );
     }
 
     private long estimateSetAddUpperBound(byte[] keyBytes, List<byte[]> members, long nowMillis) {
@@ -363,33 +363,6 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
 
     private long estimateRecordBytes(KeyHandle keyHandle, EntryRecord record) {
         return keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
-    }
-
-    private static <T> PreparedDbMutation<T> preparedNoEntry(
-            YierdisDbKernel scope,
-            T result,
-            MutationOutcome outcome
-    ) {
-        return scope.unchanged(result, outcome);
-    }
-
-    private <T> PreparedDbMutation<T> preparedDelete(
-            YierdisDbKernel scope,
-            CurrentEntry currentEntry,
-            EntryRecord current,
-            T result,
-            MutationOutcome outcome,
-            boolean releaseOldValue
-    ) {
-        long deltaBytes = -estimateRecordBytes(currentEntry.keyHandle(), current);
-        return scope.delete(
-                result,
-                deltaBytes,
-                outcome,
-                currentEntry.entryHandle(),
-                current,
-                releaseOldValue
-        );
     }
 
     private void abortStaged(

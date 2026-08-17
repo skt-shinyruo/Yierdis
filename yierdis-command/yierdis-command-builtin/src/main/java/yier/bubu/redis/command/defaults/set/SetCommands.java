@@ -19,8 +19,6 @@ import yier.bubu.redis.execution.api.PreparedCommands;
 import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.execution.api.ReplyShapes;
-import yier.bubu.redis.storage.api.WrongTypeException;
-import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
 
 public final class SetCommands implements CommandModule {
@@ -50,15 +48,11 @@ public final class SetCommands implements CommandModule {
     private CommandInvocation change(CommandArgs args, boolean add) {
         byte[] key = args.bytes(1);
         List<byte[]> members = args.byteArraysFrom(2);
-        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
-            try {
-                long changed = (add
-                        ? support.commandDb(execution).writes().sets().sadd(key, members)
-                        : support.commandDb(execution).writes().sets().srem(key, members)).value();
-                return CommandResult.reply(RedisReplies.integer(changed));
-            } catch (WrongTypeException | YierdisCommandException failure) {
-                return CommandResult.controlError(failure.getMessage());
-            }
+        return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
+            long changed = (add
+                    ? support.commandDb(execution).writes().sets().sadd(key, members)
+                    : support.commandDb(execution).writes().sets().srem(key, members)).value();
+            return CommandResult.reply(RedisReplies.integer(changed));
         });
     }
 

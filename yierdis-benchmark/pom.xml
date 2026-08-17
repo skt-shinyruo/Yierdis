@@ -12,9 +12,6 @@
     </parent>
 
     <artifactId>yierdis-benchmark</artifactId>
-    <packaging>jar</packaging>
-
-    <name>yierdis-benchmark</name>
     <description>Pure Java benchmark tool for Yierdis (no external redis-benchmark dependency).</description>
 
     <dependencies>

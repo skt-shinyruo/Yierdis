@@ -12,9 +12,6 @@
     </parent>
 
     <artifactId>yierdis-common-command</artifactId>
-    <packaging>jar</packaging>
-
-    <name>yierdis-common-command</name>
     <description>Owned immutable command records shared below command, storage, and runtime layers.</description>
 
 </project>

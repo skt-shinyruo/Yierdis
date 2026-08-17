@@ -22,8 +22,6 @@ import yier.bubu.redis.execution.api.PreparedCommands;
 import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.execution.api.ReplyShapes;
-import yier.bubu.redis.storage.api.WrongTypeException;
-import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
 
 public final class ZSetCommands implements CommandModule {
@@ -66,13 +64,9 @@ public final class ZSetCommands implements CommandModule {
         }
         byte[] key = args.bytes(1);
         List<byte[]> pairs = args.byteArraysFrom(2);
-        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
-            try {
-                long added = support.commandDb(execution).writes().zsets().zadd(key, pairs).value();
-                return CommandResult.reply(RedisReplies.integer(added));
-            } catch (WrongTypeException | YierdisCommandException failure) {
-                return CommandResult.controlError(failure.getMessage());
-            }
+        return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
+            long added = support.commandDb(execution).writes().zsets().zadd(key, pairs).value();
+            return CommandResult.reply(RedisReplies.integer(added));
         });
     }
 
@@ -179,41 +173,29 @@ public final class ZSetCommands implements CommandModule {
     private CommandInvocation zremrangebyscore(CommandArgs args) throws CommandParseException {
         ScoreRemovalArgs parsed = new ScoreRemovalArgs(
                 args.bytes(1), parseScoreBound(args.bytes(2)), parseScoreBound(args.bytes(3)));
-        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
-            try {
-                long removed = support.commandDb(execution).writes().zsets().zremrangeByScore(
-                        parsed.key(), parsed.min().value(), parsed.min().exclusive(),
-                        parsed.max().value(), parsed.max().exclusive()).value();
-                return CommandResult.reply(RedisReplies.integer(removed));
-            } catch (WrongTypeException | YierdisCommandException failure) {
-                return CommandResult.controlError(failure.getMessage());
-            }
+        return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
+            long removed = support.commandDb(execution).writes().zsets().zremrangeByScore(
+                    parsed.key(), parsed.min().value(), parsed.min().exclusive(),
+                    parsed.max().value(), parsed.max().exclusive()).value();
+            return CommandResult.reply(RedisReplies.integer(removed));
         });
     }
 
     private CommandInvocation zremrangebyrank(CommandArgs args) throws CommandParseException {
         RankRemovalArgs parsed = new RankRemovalArgs(args.bytes(1), args.longAt(2), args.longAt(3));
-        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
-            try {
-                long removed = support.commandDb(execution).writes().zsets()
-                        .zremrangeByRank(parsed.key(), parsed.start(), parsed.stop()).value();
-                return CommandResult.reply(RedisReplies.integer(removed));
-            } catch (WrongTypeException | YierdisCommandException failure) {
-                return CommandResult.controlError(failure.getMessage());
-            }
+        return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
+            long removed = support.commandDb(execution).writes().zsets()
+                    .zremrangeByRank(parsed.key(), parsed.start(), parsed.stop()).value();
+            return CommandResult.reply(RedisReplies.integer(removed));
         });
     }
 
     private CommandInvocation zrem(CommandArgs args) {
         byte[] key = args.bytes(1);
         List<byte[]> members = args.byteArraysFrom(2);
-        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
-            try {
-                long removed = support.commandDb(execution).writes().zsets().zrem(key, members).value();
-                return CommandResult.reply(RedisReplies.integer(removed));
-            } catch (WrongTypeException | YierdisCommandException failure) {
-                return CommandResult.controlError(failure.getMessage());
-            }
+        return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
+            long removed = support.commandDb(execution).writes().zsets().zrem(key, members).value();
+            return CommandResult.reply(RedisReplies.integer(removed));
         });
     }
 

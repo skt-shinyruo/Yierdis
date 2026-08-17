@@ -1,7 +1,6 @@
 package yier.bubu.redis.storage.memory.internal.ledger;
 
 import java.util.Objects;
-import yier.bubu.redis.storage.api.MutationOutcome;
 
 public final class PreparedCallbackMutation<T> extends AbstractPreparedMutation<T> {
     private static final Runnable NOOP = () -> {
@@ -17,13 +16,12 @@ public final class PreparedCallbackMutation<T> extends AbstractPreparedMutation<
             T result,
             long actualDeltaBytes,
             long stagedNonNativeGrowthBytes,
-            MutationOutcome outcome,
             Runnable commit,
             Runnable releaseSuperseded,
             Runnable abort,
             boolean trimNativePagesAfterCommit
     ) {
-        super(actualDeltaBytes, stagedNonNativeGrowthBytes, outcome);
+        super(actualDeltaBytes, stagedNonNativeGrowthBytes);
         this.result = result;
         this.commit = Objects.requireNonNull(commit, "commit");
         this.trimNativePagesAfterCommit = trimNativePagesAfterCommit;

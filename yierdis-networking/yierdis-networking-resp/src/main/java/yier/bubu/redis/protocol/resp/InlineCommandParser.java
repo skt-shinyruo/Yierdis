@@ -140,7 +140,7 @@ public final class InlineCommandParser {
         if (argc == 0) {
             throw new IllegalArgumentException("Protocol error: empty inline command");
         }
-        return new Decoded(decoded, outPos, argc, offsets, lengths);
+        return new Decoded(decoded, argc, offsets, lengths);
     }
 
     public static List<byte[]> splitUtf8(String line, int maxArgs) {
@@ -148,73 +148,29 @@ public final class InlineCommandParser {
             throw new IllegalArgumentException("line must not be null");
         }
         byte[] input = line.getBytes(StandardCharsets.UTF_8);
-        Decoded decoded = parse(input, 0, input.length, maxArgs);
-        List<byte[]> out = new ArrayList<>(decoded.argc());
-        for (int i = 0; i < decoded.argc(); i++) {
-            out.add(decoded.copyArg(i));
-        }
-        return out;
+        return new ArrayList<>(Arrays.asList(parse(input, 0, input.length, maxArgs).copyArgs()));
     }
 
     public static final class Decoded {
         private final byte[] decoded;
-        private final int decodedLen;
         private final int argc;
         private final int[] offsets;
         private final int[] lengths;
 
-        private Decoded(byte[] decoded, int decodedLen, int argc, int[] offsets, int[] lengths) {
+        private Decoded(byte[] decoded, int argc, int[] offsets, int[] lengths) {
             this.decoded = decoded;
-            this.decodedLen = decodedLen;
             this.argc = argc;
             this.offsets = offsets;
             this.lengths = lengths;
         }
 
-        public byte[] decoded() {
-            return decoded;
-        }
-
-        public int decodedLen() {
-            return decodedLen;
-        }
-
-        public int argc() {
-            return argc;
-        }
-
-        public int offset(int arg) {
-            checkArg(arg);
-            return offsets[arg];
-        }
-
-        public int length(int arg) {
-            checkArg(arg);
-            return lengths[arg];
-        }
-
-        public int retainedBytes() {
-            return decodedLen;
-        }
-
-        public byte[] copyArg(int arg) {
-            checkArg(arg);
-            int start = offsets[arg];
-            return Arrays.copyOfRange(decoded, start, start + lengths[arg]);
-        }
-
         public byte[][] copyArgs() {
             byte[][] out = new byte[argc][];
             for (int i = 0; i < argc; i++) {
-                out[i] = copyArg(i);
+                int start = offsets[i];
+                out[i] = Arrays.copyOfRange(decoded, start, start + lengths[i]);
             }
             return out;
-        }
-
-        private void checkArg(int arg) {
-            if (arg < 0 || arg >= argc) {
-                throw new IndexOutOfBoundsException();
-            }
         }
     }
 

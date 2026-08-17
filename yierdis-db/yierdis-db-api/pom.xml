@@ -12,9 +12,6 @@
     </parent>
 
     <artifactId>yierdis-db-api</artifactId>
-    <packaging>jar</packaging>
-
-    <name>yierdis-db-api</name>
     <description>Neutral storage API contracts for Yierdis.</description>
 
     <dependencies>

@@ -12,9 +12,6 @@
     </parent>
 
     <artifactId>yierdis-networking-resp</artifactId>
-    <packaging>jar</packaging>
-
-    <name>yierdis-networking-resp</name>
     <description>RESP wire protocol model, codecs, and reply writer.</description>
 
     <dependencies>

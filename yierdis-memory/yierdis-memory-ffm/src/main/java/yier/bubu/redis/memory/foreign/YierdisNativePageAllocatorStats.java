@@ -16,29 +16,4 @@ record YierdisNativePageAllocatorStats(
         long liveSpanDescriptors,
         long pageRegistryHeapBytes
 ) {
-    public YierdisNativePageAllocatorStats(
-            long committedBytes,
-            long usedBytes,
-            long freeBytes,
-            long liveSmallPages,
-            long liveMediumSpanPages,
-            long liveLargeSpanPages
-    ) {
-        this(
-                committedBytes,
-                usedBytes,
-                freeBytes,
-                liveSmallPages,
-                liveMediumSpanPages,
-                liveLargeSpanPages,
-                freeBytes,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0
-        );
-    }
 }

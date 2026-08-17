@@ -4,6 +4,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.server.args.YierdisCliException;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
+import yier.bubu.redis.execution.executor.SchedulingPolicy;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
 import java.io.ByteArrayOutputStream;
@@ -110,7 +111,7 @@ public class ServerConfigArgsTest {
         Assert.assertEquals(4, runtimeConfig.get("ioThreads"));
         Assert.assertEquals(2048, runtimeConfig.get("executorQueueCapacity"));
         Assert.assertEquals(4096L, runtimeConfig.get("executorQueueMaxBytes"));
-        Assert.assertEquals(YierdisServerRuntimeConfig.ExecutorSchedulingPolicy.GLOBAL, runtimeConfig.get("executorSchedulingPolicy"));
+        Assert.assertEquals(SchedulingPolicy.GLOBAL, runtimeConfig.get("executorSchedulingPolicy"));
         Assert.assertEquals(512, runtimeConfig.get("backpressureHighWatermark"));
         Assert.assertEquals(64, runtimeConfig.get("backpressureLowWatermark"));
         Assert.assertEquals(8192L, runtimeConfig.get("backpressureBytesHighWatermark"));

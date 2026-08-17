@@ -3,6 +3,7 @@ package yier.bubu.redis.app.server;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
+import yier.bubu.redis.execution.executor.SchedulingPolicy;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
@@ -35,7 +36,7 @@ final class TestCommandDispatchers {
                 1,
                 1024,
                 1024L * 1024L,
-                YierdisServerRuntimeConfig.ExecutorSchedulingPolicy.FAIR,
+                SchedulingPolicy.FAIR,
                 256,
                 128,
                 0L,

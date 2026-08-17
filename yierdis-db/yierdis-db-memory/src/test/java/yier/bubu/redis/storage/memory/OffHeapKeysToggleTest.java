@@ -34,10 +34,6 @@ public class OffHeapKeysToggleTest {
             db.bindToCurrentThread();
             db.shutdown();
             Assert.assertThrows(IllegalStateException.class, runtime::usedBytes);
-            Assert.assertThrows(
-                    IllegalStateException.class,
-                    () -> runtime.allocateRegion("probe", 1)
-            );
         }
     }
 

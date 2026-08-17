@@ -3,15 +3,9 @@ package yier.bubu.redis.memory.foreign;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.nio.ByteOrder;
 import java.util.Objects;
-import yier.bubu.redis.memory.api.StableMemoryRegion;
 
-final class YierdisFfmRegion implements StableMemoryRegion {
-    private static final ValueLayout.OfInt LITTLE_ENDIAN_INT =
-            ValueLayout.JAVA_INT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
-    private static final ValueLayout.OfLong LITTLE_ENDIAN_LONG =
-            ValueLayout.JAVA_LONG_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
+final class YierdisFfmRegion implements AutoCloseable {
     private final YierdisFfmMemoryRuntime runtime;
     private final Arena arena;
     private final MemorySegment segment;
@@ -34,21 +28,13 @@ final class YierdisFfmRegion implements StableMemoryRegion {
         this.size = size;
     }
 
-    @Override
-    public int size() {
-        ensureOpen();
-        return size;
-    }
-
-    @Override
-    public byte getByte(int offset) {
+    byte getByte(int offset) {
         ensureOpen();
         checkRange(offset, 1);
         return segment.get(ValueLayout.JAVA_BYTE, offset);
     }
 
-    @Override
-    public void setByte(int offset, byte value) {
+    void setByte(int offset, byte value) {
         ensureOpen();
         checkRange(offset, 1);
         segment.set(ValueLayout.JAVA_BYTE, offset, value);
@@ -78,36 +64,7 @@ final class YierdisFfmRegion implements StableMemoryRegion {
         segment.set(ValueLayout.JAVA_INT_UNALIGNED, offset, value);
     }
 
-    @Override
-    public int getIntLittleEndian(int offset) {
-        ensureOpen();
-        checkRange(offset, Integer.BYTES);
-        return segment.get(LITTLE_ENDIAN_INT, offset);
-    }
-
-    @Override
-    public void setIntLittleEndian(int offset, int value) {
-        ensureOpen();
-        checkRange(offset, Integer.BYTES);
-        segment.set(LITTLE_ENDIAN_INT, offset, value);
-    }
-
-    @Override
-    public long getLongLittleEndian(int offset) {
-        ensureOpen();
-        checkRange(offset, Long.BYTES);
-        return segment.get(LITTLE_ENDIAN_LONG, offset);
-    }
-
-    @Override
-    public void setLongLittleEndian(int offset, long value) {
-        ensureOpen();
-        checkRange(offset, Long.BYTES);
-        segment.set(LITTLE_ENDIAN_LONG, offset, value);
-    }
-
-    @Override
-    public void getBytes(int offset, byte[] destination, int destinationOffset, int length) {
+    void getBytes(int offset, byte[] destination, int destinationOffset, int length) {
         ensureOpen();
         checkArrayRange(destination, destinationOffset, length, "destination");
         checkRange(offset, length);
@@ -121,8 +78,7 @@ final class YierdisFfmRegion implements StableMemoryRegion {
         );
     }
 
-    @Override
-    public void setBytes(int offset, byte[] source, int sourceOffset, int length) {
+    void setBytes(int offset, byte[] source, int sourceOffset, int length) {
         ensureOpen();
         checkArrayRange(source, sourceOffset, length, "source");
         checkRange(offset, length);
@@ -136,25 +92,18 @@ final class YierdisFfmRegion implements StableMemoryRegion {
         );
     }
 
-    @Override
     public void copyTo(
             int sourceOffset,
-            StableMemoryRegion target,
+            YierdisFfmRegion target,
             int targetOffset,
             int length
     ) {
         Objects.requireNonNull(target, "target");
         ensureOpen();
         checkRange(sourceOffset, length);
-        if (target instanceof YierdisFfmRegion ffmTarget) {
-            ffmTarget.ensureOpen();
-            ffmTarget.checkRange(targetOffset, length);
-            MemorySegment.copy(segment, sourceOffset, ffmTarget.segment, targetOffset, length);
-            return;
-        }
-        byte[] snapshot = new byte[length];
-        getBytes(sourceOffset, snapshot, 0, length);
-        target.setBytes(targetOffset, snapshot, 0, length);
+        target.ensureOpen();
+        target.checkRange(targetOffset, length);
+        MemorySegment.copy(segment, sourceOffset, target.segment, targetOffset, length);
     }
 
     void ensureOpen() {

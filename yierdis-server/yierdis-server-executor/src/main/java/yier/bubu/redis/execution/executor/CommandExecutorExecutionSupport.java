@@ -56,80 +56,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
     }
 
     ExecutionAttempt execute(CommandExecutorTask<C> task) {
-        if (task == null) {
-            return ExecutionAttempt.CONNECTION_CLOSED;
-        }
-
-        return executeWithReply(task);
-    }
-
-    void recycleAndRelease(CommandExecutorTask<C> task) {
-        if (task == null) {
-            return;
-        }
-        try {
-            task.cancelCapacityRegistration();
-        } catch (Throwable ignored) {
-            // reply 提供的容量监听取消失败时，request、reply 与 backlog 所有权仍必须继续归还。
-        }
-        closePrepared(task);
-        closeRequest(task.request);
-        cancelReply(task.reply);
-        if (task.connection != null) {
-            task.connection.context().clearInputPausedByReply();
-            finishTask(task.connection, task.retainedBytes, false);
-            return;
-        }
-        releaseReservedBudget(task.retainedBytes);
-    }
-
-    void recoverInputIfPossible(C connection) {
-        maybeRecoverInput(connection);
-    }
-
-    void onConnectionClosed(C connection, Runnable callback) {
-        if (connection == null || callback == null) {
-            return;
-        }
-        try {
-            ioAdapter.onClose(connection, callback);
-        } catch (Throwable ignored) {
-            // 连接关闭监听失败时，后续 shutdown 仍会回收队列中的任务。
-        }
-    }
-
-    long commandsExecuted() {
-        return commandsExecuted.sum();
-    }
-
-    long commandsSkippedClosing() {
-        return commandsSkippedClosing.sum();
-    }
-
-    long closeAfterReply() {
-        return closeAfterReply.sum();
-    }
-
-    private void finishTask(C connection, int retainedBytes, boolean executed) {
-        try {
-            connection.context().recordCommandFinished(retainedBytes, executed);
-        } finally {
-            releaseReservedBudget(retainedBytes);
-        }
-        maybeRecoverInput(connection);
-    }
-
-    private ExecutionAttempt executeWithReply(CommandExecutorTask<C> task) {
         C connection = task.connection;
-        if (connection == null) {
-            task.cancelCapacityRegistration();
-            closePrepared(task);
-            closeRequest(task.request);
-            cancelReply(task.reply);
-            releaseReservedBudget(task.retainedBytes);
-            return ExecutionAttempt.CONNECTION_CLOSED;
-        }
-
         ExecutionConnectionContext context = connection.context();
         if (context.isClosing()) {
             context.recordSkippedClosing();
@@ -167,7 +94,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
                 return ExecutionAttempt.CONNECTION_CLOSED;
             }
             if (reservation == ReplyReservationResult.TOO_LARGE) {
-                closeOversizedReply(connection, context, task.reply);
+                closeOversizedReply(connection, task.reply);
                 terminal = true;
                 return ExecutionAttempt.CONNECTION_CLOSED;
             }
@@ -203,7 +130,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
                 commandsExecuted.increment();
             }
             if (executed || isResultUnknownFailure(failure)) {
-                closeResultUnknown(connection, context, task.reply, failure);
+                closeResultUnknown(connection, task.reply, failure);
                 return ExecutionAttempt.CONNECTION_CLOSED;
             }
             handleReplyExecutionFailure(connection, context, task.reply);
@@ -219,10 +146,53 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         return ExecutionAttempt.CONNECTION_CLOSED;
     }
 
-    private static void closePrepared(CommandExecutorTask<?> task) {
-        if (task == null) {
-            return;
+    void recycleAndRelease(CommandExecutorTask<C> task) {
+        try {
+            task.cancelCapacityRegistration();
+        } catch (Throwable ignored) {
+            // reply 提供的容量监听取消失败时，request、reply 与 backlog 所有权仍必须继续归还。
         }
+        closePrepared(task);
+        closeRequest(task.request);
+        cancelReply(task.reply);
+        task.connection.context().clearInputPausedByReply();
+        finishTask(task.connection, task.retainedBytes, false);
+    }
+
+    void recoverInputIfPossible(C connection) {
+        maybeRecoverInput(connection);
+    }
+
+    void onConnectionClosed(C connection, Runnable callback) {
+        try {
+            ioAdapter.onClose(connection, callback);
+        } catch (Throwable ignored) {
+            // 连接关闭监听失败时，后续 shutdown 仍会回收队列中的任务。
+        }
+    }
+
+    long commandsExecuted() {
+        return commandsExecuted.sum();
+    }
+
+    long commandsSkippedClosing() {
+        return commandsSkippedClosing.sum();
+    }
+
+    long closeAfterReply() {
+        return closeAfterReply.sum();
+    }
+
+    private void finishTask(C connection, int retainedBytes, boolean executed) {
+        try {
+            connection.context().recordCommandFinished(retainedBytes, executed);
+        } finally {
+            releaseReservedBudget(retainedBytes);
+        }
+        maybeRecoverInput(connection);
+    }
+
+    private static void closePrepared(CommandExecutorTask<?> task) {
         try {
             task.closePrepared();
         } catch (Throwable ignored) {
@@ -235,7 +205,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
     }
 
     private void maybeRecoverInput(C connection) {
-        if (connection == null || !running.getAsBoolean()) {
+        if (!running.getAsBoolean()) {
             return;
         }
         ExecutionConnectionContext context = connection.context();
@@ -283,7 +253,6 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
 
     private void closeResultUnknown(
             C connection,
-            ExecutionConnectionContext context,
             ExecutionReply reply,
             Throwable primaryFailure
     ) {
@@ -309,7 +278,6 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
 
     private void closeOversizedReply(
             C connection,
-            ExecutionConnectionContext context,
             ExecutionReply reply
     ) {
         try {
@@ -341,9 +309,6 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
     }
 
     private static void closeRequest(yier.bubu.redis.execution.api.ExecutionRequest request) {
-        if (request == null) {
-            return;
-        }
         try {
             request.close();
         } catch (Throwable ignored) {
@@ -352,9 +317,6 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
     }
 
     private static void cancelReply(ExecutionReply reply) {
-        if (reply == null) {
-            return;
-        }
         try {
             reply.cancel();
         } catch (Throwable ignored) {

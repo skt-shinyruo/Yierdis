@@ -65,23 +65,23 @@ public final class RedisReplies {
     }
 
     public static RedisReply array(List<RedisReply> elements) {
-        return aggregate(ReplyShape.AggregateKind.ARRAY, elements);
+        return new RedisReply.Aggregate(ReplyShape.AggregateKind.ARRAY, elements);
     }
 
     public static RedisReply map(List<RedisReply> fieldValues) {
-        return aggregate(ReplyShape.AggregateKind.MAP, fieldValues);
+        return new RedisReply.Aggregate(ReplyShape.AggregateKind.MAP, fieldValues);
     }
 
     public static RedisReply set(List<RedisReply> elements) {
-        return aggregate(ReplyShape.AggregateKind.SET, elements);
+        return new RedisReply.Aggregate(ReplyShape.AggregateKind.SET, elements);
     }
 
     public static RedisReply push(List<RedisReply> elements) {
-        return aggregate(ReplyShape.AggregateKind.PUSH, elements);
+        return new RedisReply.Aggregate(ReplyShape.AggregateKind.PUSH, elements);
     }
 
     public static RedisReply attribute(List<RedisReply> fieldValues) {
-        return aggregate(ReplyShape.AggregateKind.ATTRIBUTE, fieldValues);
+        return new RedisReply.Aggregate(ReplyShape.AggregateKind.ATTRIBUTE, fieldValues);
     }
 
     public static RedisReply sequence(
@@ -110,12 +110,5 @@ public final class RedisReplies {
             RedisReply.PayloadEmitter emitter
     ) {
         return new RedisReply.ByteMap(pairCount, retainedSourceBytes, payloadLengths, emitter);
-    }
-
-    private static RedisReply aggregate(
-            ReplyShape.AggregateKind kind,
-            List<RedisReply> elements
-    ) {
-        return new RedisReply.Aggregate(kind, elements);
     }
 }

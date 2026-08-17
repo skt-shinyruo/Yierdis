@@ -681,7 +681,7 @@ public class YierdisServerBootstrapCommandWiringTest {
                 1,
                 1024,
                 0,
-                YierdisServerRuntimeConfig.ExecutorSchedulingPolicy.FAIR,
+                SchedulingPolicy.FAIR,
                 256,
                 128,
                 0,
@@ -853,10 +853,6 @@ public class YierdisServerBootstrapCommandWiringTest {
             List<Object> values = new ArrayList<>(count);
             this.arrayValues = values;
             this.activeAggregate = values;
-        }
-
-        @Override
-        public void emptyArray() {
         }
 
         @Override

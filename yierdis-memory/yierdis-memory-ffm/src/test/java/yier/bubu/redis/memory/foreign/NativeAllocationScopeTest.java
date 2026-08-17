@@ -75,7 +75,6 @@ public class NativeAllocationScopeTest {
              YierdisNativeObjectTable table = new YierdisNativeObjectTable(
                      runtime,
                      128,
-                     0,
                      (pageId, pageOffset, pageClass) -> 1
             )) {
             YierdisNativeObjectTable.AllocationScopeCheckpoint checkpoint = table.allocationScopeCheckpoint();
@@ -96,7 +95,6 @@ public class NativeAllocationScopeTest {
              YierdisNativeObjectTable table = new YierdisNativeObjectTable(
                      runtime,
                      1,
-                     0,
                      (pageId, pageOffset, pageClass) -> 1
              )) {
             long first = table.allocate(NativeObjectKind.STRING_BYTES, 1, 1, 0, 0L, 0, 0L);
@@ -195,16 +193,16 @@ public class NativeAllocationScopeTest {
                 retained[i] = allocator.allocate(NativeObjectKind.STRING_BYTES, 1);
             }
             MemoryUsageSnapshot before = allocator.memoryUsage();
-            Assert.assertEquals(1L, allocator.metadataStats().activeMetadataSegments());
+            Assert.assertEquals(1L, allocator.stats().activeMetadataSegments());
 
             try (NativeAllocationScope scope = allocator.beginAllocationScope()) {
                 allocator.allocate(NativeObjectKind.STRING_BYTES, 1);
-                Assert.assertEquals(2L, allocator.metadataStats().activeMetadataSegments());
+                Assert.assertEquals(2L, allocator.stats().activeMetadataSegments());
                 scope.abort();
             }
 
             Assert.assertEquals(before, allocator.memoryUsage());
-            Assert.assertEquals(1L, allocator.metadataStats().activeMetadataSegments());
+            Assert.assertEquals(1L, allocator.stats().activeMetadataSegments());
             for (NativeHandle handle : retained) {
                 allocator.free(handle);
             }

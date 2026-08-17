@@ -1,6 +1,6 @@
 package yier.bubu.redis.execution.api;
 
-import java.util.List;
+import java.lang.reflect.Proxy;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Assert;
 import org.junit.Test;
@@ -174,113 +174,11 @@ public class PreparedCommandsTest {
     }
 
     private static CommandResult execute(PreparedCommand prepared) {
-        ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("TEST", List.of());
-        try (request) {
-            return prepared.execute(CommandExecutionContext.forSession(new TestSession()));
-        }
-    }
-
-    private static final class TestSession implements CommandSession {
-        private final TransactionState transaction = new TestTransactionState();
-
-        @Override
-        public int dbIndex() {
-            return 0;
-        }
-
-        @Override
-        public void setDbIndex(int dbIndex) {
-        }
-
-        @Override
-        public long clientId() {
-            return 1L;
-        }
-
-        @Override
-        public String clientName() {
-            return null;
-        }
-
-        @Override
-        public void setClientName(String clientName) {
-        }
-
-        @Override
-        public boolean authenticated() {
-            return false;
-        }
-
-        @Override
-        public void setAuthenticated(boolean authenticated) {
-        }
-
-        @Override
-        public TransactionState transaction() {
-            return transaction;
-        }
-
-        @Override
-        public ConnectionStatsView connectionStats() {
-            return null;
-        }
-
-        @Override
-        public int respVersion() {
-            return 2;
-        }
-
-        @Override
-        public void setRespVersion(int respVersion) {
-        }
-    }
-
-    private static final class TestTransactionState implements TransactionState {
-        @Override
-        public boolean active() {
-            return false;
-        }
-
-        @Override
-        public boolean aborted() {
-            return false;
-        }
-
-        @Override
-        public void begin() {
-        }
-
-        @Override
-        public void markAborted() {
-        }
-
-        @Override
-        public String tryEnqueue(ExecutionRequest request) {
-            return null;
-        }
-
-        @Override
-        public int size() {
-            return 0;
-        }
-
-        @Override
-        public void forEachQueued(
-                java.util.function.Consumer<? super ExecutionRequest> visitor
-        ) {
-        }
-
-        @Override
-        public List<ExecutionRequest> drain() {
-            return List.of();
-        }
-
-        @Override
-        public void discard() {
-        }
-
-        @Override
-        public void close() {
-        }
+        CommandSession session = (CommandSession) Proxy.newProxyInstance(
+                CommandSession.class.getClassLoader(),
+                new Class<?>[]{CommandSession.class},
+                (proxy, method, args) -> null
+        );
+        return prepared.execute(CommandExecutionContext.forSession(session));
     }
 }

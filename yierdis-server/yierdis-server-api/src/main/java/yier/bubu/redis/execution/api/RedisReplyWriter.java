@@ -69,8 +69,6 @@ public interface RedisReplyWriter extends ReplySink {
 
     void arrayHeader(int count);
 
-    void emptyArray();
-
     void mapHeader(int pairs);
 
     void setHeader(int count);

@@ -15,8 +15,6 @@ import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.PreparedCommands;
 import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.ReplyShapes;
-import yier.bubu.redis.storage.api.WrongTypeException;
-import yier.bubu.redis.storage.api.YierdisCommandException;
 
 public final class HllCommands implements CommandModule {
     private static final CommandKeySpec KEY = new CommandKeySpec(1, 1, 1);
@@ -43,13 +41,9 @@ public final class HllCommands implements CommandModule {
     private CommandInvocation pfadd(CommandArgs args) {
         byte[] key = args.bytes(1);
         List<byte[]> elements = args.byteArraysFrom(2);
-        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
-            try {
-                long changed = support.commandDb(execution).writes().hll().pfadd(key, elements).value();
-                return CommandResult.reply(RedisReplies.integer(changed));
-            } catch (WrongTypeException | YierdisCommandException failure) {
-                return CommandResult.controlError(failure.getMessage());
-            }
+        return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
+            long changed = support.commandDb(execution).writes().hll().pfadd(key, elements).value();
+            return CommandResult.reply(RedisReplies.integer(changed));
         });
     }
 
@@ -62,13 +56,9 @@ public final class HllCommands implements CommandModule {
     private CommandInvocation pfmerge(CommandArgs args) {
         byte[] destination = args.bytes(1);
         List<byte[]> sources = args.byteArraysFrom(2);
-        return session -> PreparedCommands.action(ReplyShapes.simpleString("OK"), execution -> {
-            try {
-                support.commandDb(execution).writes().hll().pfmerge(destination, sources);
-                return CommandResult.reply(RedisReplies.simpleString("OK"));
-            } catch (WrongTypeException | YierdisCommandException failure) {
-                return CommandResult.controlError(failure.getMessage());
-            }
+        return session -> CommandSupport.preparedAction(ReplyShapes.simpleString("OK"), execution -> {
+            support.commandDb(execution).writes().hll().pfmerge(destination, sources);
+            return CommandResult.reply(RedisReplies.simpleString("OK"));
         });
     }
 }

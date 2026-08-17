@@ -12,9 +12,6 @@
     </parent>
 
     <artifactId>yierdis-server-api</artifactId>
-    <packaging>jar</packaging>
-
-    <name>yierdis-server-api</name>
     <description>Transport-neutral execution API contracts for Yierdis.</description>
 
     <dependencies>

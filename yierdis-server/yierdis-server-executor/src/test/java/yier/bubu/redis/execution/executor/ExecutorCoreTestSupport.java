@@ -185,8 +185,7 @@ final class TestConnection implements ExecutionConnection {
         this.context = context;
     }
 
-    @Override
-    public String connectionId() {
+    String connectionId() {
         return connectionId;
     }
 
@@ -679,11 +678,6 @@ final class SimpleReplyWriter implements RedisReplyWriter {
     }
 
     @Override
-    public void emptyArray() {
-        write("[]");
-    }
-
-    @Override
     public void mapHeader(int pairs) {
         throw new UnsupportedOperationException("mapHeader");
     }
@@ -715,7 +709,7 @@ final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
 
     @Override
     public boolean isActive(TestConnection connection) {
-        return state(connection).active;
+        return true;
     }
 
     @Override
@@ -781,10 +775,6 @@ final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
         closeFailure = Objects.requireNonNull(failure, "failure");
     }
 
-    void setActive(TestConnection connection, boolean active) {
-        state(connection).active = active;
-    }
-
     void setWritable(TestConnection connection, boolean writable) {
         state(connection).writable = writable;
     }
@@ -800,7 +790,6 @@ final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
     private static final class ConnectionState {
         private Runnable closeCallback = () -> {};
         private IoExecutionReply readyReply;
-        private boolean active = true;
         private boolean writable = true;
         private boolean inputDisabled;
         private boolean inputEnabledAgain;

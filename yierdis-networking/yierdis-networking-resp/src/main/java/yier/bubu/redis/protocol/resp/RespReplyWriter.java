@@ -4,6 +4,7 @@ import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.ReplyReservationSink;
+import yier.bubu.redis.execution.api.ReplyShapes;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
@@ -38,12 +39,12 @@ public final class RespReplyWriter implements RedisReplyWriter {
 
     @Override
     public void simpleString(String value) {
-        writeAsciiLine('+', sanitizeSimple(value));
+        writeAsciiLine('+', ReplyShapes.sanitizeSimple(value));
     }
 
     @Override
     public void error(String message) {
-        writeAsciiLine('-', normalizeError(message));
+        writeAsciiLine('-', ReplyShapes.normalizeError(message));
     }
 
     @Override
@@ -114,7 +115,7 @@ public final class RespReplyWriter implements RedisReplyWriter {
 
     @Override
     public void bigNumberAscii(String value) {
-        String normalized = sanitizeSimple(value == null ? "" : value.trim());
+        String normalized = ReplyShapes.sanitizeSimple(value == null ? "" : value.trim());
         if (version() == RespProtocolVersion.RESP3) {
             writeAsciiLine('(', normalized);
         } else {
@@ -126,7 +127,7 @@ public final class RespReplyWriter implements RedisReplyWriter {
     public void verbatimString(String format, byte[] data) {
         byte[] body = data == null ? new byte[0] : data;
         if (version() == RespProtocolVersion.RESP3) {
-            String f = sanitizeVerbatimFormat(format);
+            String f = ReplyShapes.sanitizeVerbatimFormat(format);
             writeAscii("=" + (f.length() + 1 + body.length) + "\r\n" + f + ":");
             out.writeBytes(body, 0, body.length);
             writeCrlf();
@@ -137,7 +138,7 @@ public final class RespReplyWriter implements RedisReplyWriter {
 
     @Override
     public void blobError(String message) {
-        String normalized = normalizeError(message);
+        String normalized = ReplyShapes.normalizeError(message);
         if (version() == RespProtocolVersion.RESP3) {
             byte[] bytes = normalized.getBytes(StandardCharsets.UTF_8);
             writeAscii("!" + bytes.length + "\r\n");
@@ -213,11 +214,6 @@ public final class RespReplyWriter implements RedisReplyWriter {
     }
 
     @Override
-    public void emptyArray() {
-        arrayHeader(0);
-    }
-
-    @Override
     public void mapHeader(int pairs) {
         if (version() == RespProtocolVersion.RESP3) {
             writeAsciiLine('%', Integer.toString(Math.max(0, pairs)));
@@ -268,76 +264,5 @@ public final class RespReplyWriter implements RedisReplyWriter {
 
     private void writeCrlf() {
         out.writeBytes(CRLF, 0, CRLF.length);
-    }
-
-    private static String sanitizeSimple(String value) {
-        if (value == null) {
-            return "";
-        }
-        return value.replace('\r', ' ').replace('\n', ' ');
-    }
-
-    private static String normalizeError(String message) {
-        String value = sanitizeSimple(message == null ? "ERR error" : message);
-        if (!hasRedisErrorPrefix(value)) {
-            value = "ERR " + value;
-        }
-
-        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
-        if (bytes.length <= 512) {
-            return value;
-        }
-
-        int end = 0;
-        int used = 0;
-        while (end < value.length()) {
-            int cp = value.codePointAt(end);
-            int cpBytes = utf8Length(cp);
-            if (used + cpBytes > 512) {
-                break;
-            }
-            used += cpBytes;
-            end += Character.charCount(cp);
-        }
-        return value.substring(0, end);
-    }
-
-    private static int utf8Length(int codePoint) {
-        if (codePoint <= 0x7F) {
-            return 1;
-        }
-        if (codePoint <= 0x7FF) {
-            return 2;
-        }
-        if (codePoint <= 0xFFFF) {
-            return 3;
-        }
-        return 4;
-    }
-
-    private static boolean hasRedisErrorPrefix(String value) {
-        if (value == null || value.isEmpty()) {
-            return false;
-        }
-        int end = 0;
-        while (end < value.length()) {
-            char ch = value.charAt(end);
-            if (Character.isWhitespace(ch)) {
-                break;
-            }
-            if (!(ch == '-' || ch == '_' || Character.isDigit(ch) || Character.isUpperCase(ch))) {
-                return false;
-            }
-            end++;
-        }
-        return end > 0 && (end == value.length() || Character.isWhitespace(value.charAt(end)));
-    }
-
-    private static String sanitizeVerbatimFormat(String format) {
-        String value = sanitizeSimple(format == null ? "txt" : format.trim());
-        if (value.length() < 3) {
-            return "txt";
-        }
-        return value.substring(0, 3);
     }
 }

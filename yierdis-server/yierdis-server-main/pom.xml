@@ -12,9 +12,6 @@
     </parent>
 
     <artifactId>yierdis-server-main</artifactId>
-    <packaging>jar</packaging>
-
-    <name>yierdis-server-main</name>
     <description>Yierdis server application composition root (RESP, Netty).</description>
 
     <dependencies>
@@ -71,15 +68,6 @@
         <dependency>
             <groupId>info.picocli</groupId>
             <artifactId>picocli</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-api</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>ch.qos.logback</groupId>
-            <artifactId>logback-classic</artifactId>
         </dependency>
 
         <dependency>

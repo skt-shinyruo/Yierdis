@@ -11,7 +11,6 @@ import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.api.DbHealthSnapshot;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
-import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.PostCommitMutationException;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.ValueType;
@@ -232,7 +231,6 @@ public class YierdisDbHealthTest {
                         null,
                         0L,
                         0L,
-                        MutationOutcome.VALUE_CHANGED,
                         existingEntryHandle,
                         oldRecord,
                         newRecord,
@@ -269,8 +267,7 @@ public class YierdisDbHealthTest {
                 EntryRecord record = stringRecord(keyLifecycle, stagedKey.keyHandle(), valueHandle, null);
                 return new AbstractPreparedMutation<>(
                         DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE,
-                        0L,
-                        MutationOutcome.VALUE_CHANGED
+                        0L
                 ) {
                     @Override
                     protected Void commitPrepared() {

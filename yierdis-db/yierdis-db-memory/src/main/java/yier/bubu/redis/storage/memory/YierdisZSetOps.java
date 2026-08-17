@@ -101,7 +101,7 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                     if (preparedAdd.stableHandle() && !preparedAdd.changedAny()) {
                         preparedAdd.close();
                         preparedAdd = null;
-                        return preparedNoEntry(scope, WriteResult.of(0L, outcome), outcome);
+                        return scope.unchanged(WriteResult.of(0L, outcome));
                     }
 
                     boolean stableHandle = preparedAdd.stableHandle();
@@ -124,7 +124,6 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                                     staged == null ? 0L : staged.stagedHeapBytes(),
                                     preparedAdd.stagedNonNativeGrowthBytes()
                             ),
-                            outcome,
                             currentEntry,
                             staged,
                             next,
@@ -164,14 +163,6 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                 return cachedAddPlan;
             }
         });
-    }
-
-    private static <T> PreparedDbMutation<T> preparedNoEntry(
-            YierdisDbKernel scope,
-            T result,
-            MutationOutcome outcome
-    ) {
-        return scope.unchanged(result, outcome);
     }
 
     private void abortStaged(StagedEntry staged, ValueHandle replacement, Throwable failure) {
@@ -273,40 +264,38 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
 
     @Override
     public ByteSequenceSource zrange(byte[] keyBytes, long start, long stop, boolean withScores) {
-        return kernel.read(scope -> {
-            EntryRecord record = liveZSetRecord(scope, keyBytes);
-            if (record == null) {
-                return ByteSequenceSources.empty();
-            }
-            ValueHandle handle = requireZSetHandle(record);
-            return ByteSequenceSources.of(
-                    zsetRoot.zrangeCount(handle, start, stop, withScores),
-                    0L,
-                    out -> zsetRoot.zrangeWriteTo(
-                            handle, start, stop, withScores, SemanticResultSupport.lengthSink(out)
-                    ),
-                    out -> zsetRoot.zrangeWriteTo(handle, start, stop, withScores, out)
-            );
-        });
+        kernel.checkOwner();
+        EntryRecord record = liveZSetRecord(kernel, keyBytes);
+        if (record == null) {
+            return ByteSequenceSources.empty();
+        }
+        ValueHandle handle = requireZSetHandle(record);
+        return ByteSequenceSources.of(
+                zsetRoot.zrangeCount(handle, start, stop, withScores),
+                0L,
+                out -> zsetRoot.zrangeWriteTo(
+                        handle, start, stop, withScores, SemanticResultSupport.lengthSink(out)
+                ),
+                out -> zsetRoot.zrangeWriteTo(handle, start, stop, withScores, out)
+        );
     }
 
     @Override
     public ByteSequenceSource zrevrange(byte[] keyBytes, long start, long stop, boolean withScores) {
-        return kernel.read(scope -> {
-            EntryRecord record = liveZSetRecord(scope, keyBytes);
-            if (record == null) {
-                return ByteSequenceSources.empty();
-            }
-            ValueHandle handle = requireZSetHandle(record);
-            return ByteSequenceSources.of(
-                    zsetRoot.zrevrangeCount(handle, start, stop, withScores),
-                    0L,
-                    out -> zsetRoot.zrevrangeWriteTo(
-                            handle, start, stop, withScores, SemanticResultSupport.lengthSink(out)
-                    ),
-                    out -> zsetRoot.zrevrangeWriteTo(handle, start, stop, withScores, out)
-            );
-        });
+        kernel.checkOwner();
+        EntryRecord record = liveZSetRecord(kernel, keyBytes);
+        if (record == null) {
+            return ByteSequenceSources.empty();
+        }
+        ValueHandle handle = requireZSetHandle(record);
+        return ByteSequenceSources.of(
+                zsetRoot.zrevrangeCount(handle, start, stop, withScores),
+                0L,
+                out -> zsetRoot.zrevrangeWriteTo(
+                        handle, start, stop, withScores, SemanticResultSupport.lengthSink(out)
+                ),
+                out -> zsetRoot.zrevrangeWriteTo(handle, start, stop, withScores, out)
+        );
     }
 
     @Override
@@ -320,41 +309,40 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
             long offset,
             long count
     ) {
-        return kernel.read(scope -> {
-            EntryRecord record = liveZSetRecord(scope, keyBytes);
-            if (record == null) {
-                return ByteSequenceSources.empty();
-            }
-            ValueHandle handle = requireZSetHandle(record);
-            return ByteSequenceSources.of(
-                    zsetRoot.zrangeByScoreCount(
-                            handle, min, minExclusive, max, maxExclusive, withScores, offset, count
-                    ),
-                    0L,
-                    out -> zsetRoot.zrangeByScoreWriteTo(
-                            handle,
-                            min,
-                            minExclusive,
-                            max,
-                            maxExclusive,
-                            withScores,
-                            offset,
-                            count,
-                            SemanticResultSupport.lengthSink(out)
-                    ),
-                    out -> zsetRoot.zrangeByScoreWriteTo(
-                            handle,
-                            min,
-                            minExclusive,
-                            max,
-                            maxExclusive,
-                            withScores,
-                            offset,
-                            count,
-                            out
-                    )
-            );
-        });
+        kernel.checkOwner();
+        EntryRecord record = liveZSetRecord(kernel, keyBytes);
+        if (record == null) {
+            return ByteSequenceSources.empty();
+        }
+        ValueHandle handle = requireZSetHandle(record);
+        return ByteSequenceSources.of(
+                zsetRoot.zrangeByScoreCount(
+                        handle, min, minExclusive, max, maxExclusive, withScores, offset, count
+                ),
+                0L,
+                out -> zsetRoot.zrangeByScoreWriteTo(
+                        handle,
+                        min,
+                        minExclusive,
+                        max,
+                        maxExclusive,
+                        withScores,
+                        offset,
+                        count,
+                        SemanticResultSupport.lengthSink(out)
+                ),
+                out -> zsetRoot.zrangeByScoreWriteTo(
+                        handle,
+                        min,
+                        minExclusive,
+                        max,
+                        maxExclusive,
+                        withScores,
+                        offset,
+                        count,
+                        out
+                )
+        );
     }
 
     @Override
@@ -368,60 +356,58 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
             long offset,
             long count
     ) {
-        return kernel.read(scope -> {
-            EntryRecord record = liveZSetRecord(scope, keyBytes);
-            if (record == null) {
-                return ByteSequenceSources.empty();
-            }
-            ValueHandle handle = requireZSetHandle(record);
-            return ByteSequenceSources.of(
-                    zsetRoot.zrevrangeByScoreCount(
-                            handle, min, minExclusive, max, maxExclusive, withScores, offset, count
-                    ),
-                    0L,
-                    out -> zsetRoot.zrevrangeByScoreWriteTo(
-                            handle,
-                            min,
-                            minExclusive,
-                            max,
-                            maxExclusive,
-                            withScores,
-                            offset,
-                            count,
-                            SemanticResultSupport.lengthSink(out)
-                    ),
-                    out -> zsetRoot.zrevrangeByScoreWriteTo(
-                            handle,
-                            min,
-                            minExclusive,
-                            max,
-                            maxExclusive,
-                            withScores,
-                            offset,
-                            count,
-                            out
-                    )
-            );
-        });
+        kernel.checkOwner();
+        EntryRecord record = liveZSetRecord(kernel, keyBytes);
+        if (record == null) {
+            return ByteSequenceSources.empty();
+        }
+        ValueHandle handle = requireZSetHandle(record);
+        return ByteSequenceSources.of(
+                zsetRoot.zrevrangeByScoreCount(
+                        handle, min, minExclusive, max, maxExclusive, withScores, offset, count
+                ),
+                0L,
+                out -> zsetRoot.zrevrangeByScoreWriteTo(
+                        handle,
+                        min,
+                        minExclusive,
+                        max,
+                        maxExclusive,
+                        withScores,
+                        offset,
+                        count,
+                        SemanticResultSupport.lengthSink(out)
+                ),
+                out -> zsetRoot.zrevrangeByScoreWriteTo(
+                        handle,
+                        min,
+                        minExclusive,
+                        max,
+                        maxExclusive,
+                        withScores,
+                        offset,
+                        count,
+                        out
+                )
+        );
     }
 
     @Override
     public CollectionScanWindow zscan(byte[] keyBytes, ScanCursorV2 cursor, byte[] globPattern, int count) {
-        return kernel.read(scope -> {
-            if (count <= 0) {
-                throw new IllegalArgumentException("count must be > 0");
-            }
-            EntryRecord record = liveZSetRecord(scope, keyBytes);
-            if (record == null) {
-                return new MaterializedCollectionScanWindow(ScanCursorV2.start(), List.of());
-            }
-            return zsetRoot.zscan(
-                    requireZSetHandle(record),
-                    cursor == null ? ScanCursorV2.start() : cursor,
-                    globPattern,
-                    count
-            );
-        });
+        kernel.checkOwner();
+        if (count <= 0) {
+            throw new IllegalArgumentException("count must be > 0");
+        }
+        EntryRecord record = liveZSetRecord(kernel, keyBytes);
+        if (record == null) {
+            return new MaterializedCollectionScanWindow(ScanCursorV2.start(), List.of());
+        }
+        return zsetRoot.zscan(
+                requireZSetHandle(record),
+                cursor == null ? ScanCursorV2.start() : cursor,
+                globPattern,
+                count
+        );
     }
 
     @Override
@@ -498,19 +484,25 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current == null) {
-                    return preparedNoEntry(scope, WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
+                    return scope.unchanged(WriteResult.of(0L, MutationOutcome.NONE));
                 }
                 requireZSet(current);
                 ValueHandle handle = requireZSetHandle(current);
                 int removed = removal.count(handle);
                 if (removed == 0) {
-                    return preparedNoEntry(scope, WriteResult.of(0L, MutationOutcome.NONE), MutationOutcome.NONE);
+                    return scope.unchanged(WriteResult.of(0L, MutationOutcome.NONE));
                 }
 
                 MutationOutcome outcome = MutationOutcome.VALUE_CHANGED;
                 WriteResult<Long> result = WriteResult.of((long) removed, outcome);
                 if (removed >= zsetRoot.size(handle)) {
-                    return preparedDelete(scope, currentEntry, current, result, outcome);
+                    return scope.delete(
+                            result,
+                            -estimateRecordBytes(currentEntry.keyHandle(), current),
+                            currentEntry.entryHandle(),
+                            current,
+                            true
+                    );
                 }
 
                 EntryRecord next = zsetRecord(
@@ -528,7 +520,6 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                         result,
                         deltaBytes,
                         0L,
-                        outcome,
                         () -> {
                             int actualRemoved = removal.remove(handle);
                             if (actualRemoved != removed) {
@@ -576,23 +567,6 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
         }
         requireZSet(record);
         return keyLifecycle.touchRecord(keyHandle, record);
-    }
-
-    private <T> PreparedDbMutation<T> preparedDelete(
-            YierdisDbKernel scope,
-            CurrentEntry currentEntry,
-            EntryRecord current,
-            T result,
-            MutationOutcome outcome
-    ) {
-        return scope.delete(
-                result,
-                -estimateRecordBytes(currentEntry.keyHandle(), current),
-                outcome,
-                currentEntry.entryHandle(),
-                current,
-                true
-        );
     }
 
     private EntryRecord zsetRecord(KeyHandle keyHandle, ValueHandle handle, long expireAtMillis, EntryRecord previous) {

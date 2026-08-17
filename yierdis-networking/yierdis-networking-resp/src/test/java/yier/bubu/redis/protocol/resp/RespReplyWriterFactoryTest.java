@@ -4,11 +4,10 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.execution.api.CommandSession;
-import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
-import yier.bubu.redis.execution.api.TransactionState;
 
 import java.io.ByteArrayOutputStream;
+import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 
 public class RespReplyWriterFactoryTest {
@@ -17,7 +16,7 @@ public class RespReplyWriterFactoryTest {
         ByteArraySink sink = new ByteArraySink();
         RespReplyWriterFactory factory = new RespReplyWriterFactory();
 
-        RedisReplyWriter writer = factory.newWriter(serverSession(3), sink);
+        RedisReplyWriter writer = factory.newWriter(session(3), sink);
         writer.booleanValue(true);
 
         Assert.assertEquals("#t\r\n", sink.utf8());
@@ -27,7 +26,7 @@ public class RespReplyWriterFactoryTest {
     public void sessionBackedWriterObservesProtocolChangesBeforeReplyIsWritten() {
         ByteArraySink sink = new ByteArraySink();
         RespReplyWriterFactory factory = new RespReplyWriterFactory();
-        MutableSession session = new MutableSession(2);
+        CommandSession session = session(2);
 
         RedisReplyWriter writer = factory.newWriter(session, sink);
         session.setRespVersion(3);
@@ -43,74 +42,25 @@ public class RespReplyWriterFactoryTest {
         ByteArraySink sink = new ByteArraySink();
         RespReplyWriterFactory factory = new RespReplyWriterFactory();
 
-        RedisReplyWriter writer = factory.newWriter(serverSession(2), sink);
+        RedisReplyWriter writer = factory.newWriter(session(2), sink);
         writer.booleanValue(true);
 
         Assert.assertEquals(":1\r\n", sink.utf8());
     }
 
-    private static CommandSession serverSession(int respVersion) {
-        return new MutableSession(respVersion);
-    }
-
-    private static final class MutableSession implements CommandSession {
-        private int respVersion;
-
-        private MutableSession(int respVersion) {
-            this.respVersion = respVersion;
-        }
-
-        @Override
-        public int dbIndex() {
-            return 0;
-        }
-
-        @Override
-        public void setDbIndex(int dbIndex) {
-        }
-
-        @Override
-        public long clientId() {
-            return 0L;
-        }
-
-        @Override
-        public String clientName() {
-            return null;
-        }
-
-        @Override
-        public void setClientName(String clientName) {
-        }
-
-        @Override
-        public boolean authenticated() {
-            return false;
-        }
-
-        @Override
-        public void setAuthenticated(boolean authenticated) {
-        }
-
-        @Override
-        public TransactionState transaction() {
-            return null;
-        }
-
-        @Override
-        public ConnectionStatsView connectionStats() {
-            return null;
-        }
-
-        @Override
-        public int respVersion() {
-            return respVersion;
-        }
-
-        @Override
-        public void setRespVersion(int respVersion) {
-            this.respVersion = respVersion;
-        }
+    private static CommandSession session(int version) {
+        int[] activeVersion = {version};
+        return (CommandSession) Proxy.newProxyInstance(
+                CommandSession.class.getClassLoader(),
+                new Class<?>[]{CommandSession.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "respVersion" -> activeVersion[0];
+                    case "setRespVersion" -> {
+                        activeVersion[0] = (int) args[0];
+                        yield null;
+                    }
+                    default -> throw new UnsupportedOperationException(method.toString());
+                });
     }
 
     private static final class ByteArraySink implements BytesSink {

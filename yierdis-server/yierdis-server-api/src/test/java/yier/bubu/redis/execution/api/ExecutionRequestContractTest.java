@@ -3,12 +3,9 @@ package yier.bubu.redis.execution.api;
 import org.junit.Assert;
 import org.junit.Test;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import yier.bubu.redis.common.command.ImmutableCommandRecord;
 
 public class ExecutionRequestContractTest {
     @Test
@@ -36,23 +33,11 @@ public class ExecutionRequestContractTest {
     }
 
     @Test
-    public void executionRequestIsAnOwnedImmutableCommandRecord() {
-        boolean found = false;
-        for (Class<?> type : ExecutionRequest.class.getInterfaces()) {
-            found |= type == ImmutableCommandRecord.class;
-        }
-        Assert.assertTrue(found);
-        ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("SET", List.of("key"));
-        Assert.assertEquals(request.admittedMemoryBytes(), request.retainedMemoryBytes());
-        request.close();
-    }
-
-    @Test
     public void heapBackedRequestsExposeStableReadOnlyFastPath() {
         ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("SET", List.of("key"));
 
-        byte[] first = readOnlyByteArray(request, 0);
-        byte[] second = readOnlyByteArray(request, 0);
+        byte[] first = request.readOnlyByteArray(0);
+        byte[] second = request.readOnlyByteArray(0);
 
         Assert.assertSame(first, second);
         Assert.assertArrayEquals(ascii("SET"), first);
@@ -63,12 +48,12 @@ public class ExecutionRequestContractTest {
     public void genericRequestsKeepReadOnlyFastPathDefensiveByDefault() {
         MutableExecutionRequest request = new MutableExecutionRequest("SET", "key");
 
-        byte[] first = readOnlyByteArray(request, 0);
-        byte[] second = readOnlyByteArray(request, 0);
+        byte[] first = request.readOnlyByteArray(0);
+        byte[] second = request.readOnlyByteArray(0);
         first[0] = (byte) 'N';
 
         Assert.assertNotSame(first, second);
-        Assert.assertArrayEquals(ascii("SET"), readOnlyByteArray(request, 0));
+        Assert.assertArrayEquals(ascii("SET"), request.readOnlyByteArray(0));
     }
 
     @Test
@@ -81,8 +66,8 @@ public class ExecutionRequestContractTest {
                 cmd.length + key.length
         );
 
-        Assert.assertSame(cmd, readOnlyByteArray(request, 0));
-        Assert.assertSame(key, readOnlyByteArray(request, 1));
+        Assert.assertSame(cmd, request.readOnlyByteArray(0));
+        Assert.assertSame(key, request.readOnlyByteArray(1));
         Assert.assertTrue(request.isNull(2));
     }
 
@@ -96,18 +81,6 @@ public class ExecutionRequestContractTest {
 
     private static byte[] ascii(String value) {
         return value.getBytes(StandardCharsets.US_ASCII);
-    }
-
-    private static byte[] readOnlyByteArray(ExecutionRequest request, int index) {
-        try {
-            Method method = ExecutionRequest.class.getMethod("readOnlyByteArray", int.class);
-            return (byte[]) method.invoke(request, index);
-        } catch (NoSuchMethodException e) {
-            Assert.fail("missing ExecutionRequest.readOnlyByteArray(int) fast path");
-            return null;
-        } catch (IllegalAccessException | InvocationTargetException e) {
-            throw new AssertionError("failed to invoke ExecutionRequest.readOnlyByteArray(int)", e);
-        }
     }
 
     private static final class MutableExecutionRequest implements ExecutionRequest {
@@ -148,23 +121,7 @@ public class ExecutionRequestContractTest {
         }
 
         @Override
-        public byte[] toByteArray(int index) {
-            byte[] arg = argv[index];
-            return arg == null ? null : arg.clone();
-        }
-
-        @Override
-        public int retainedBytes() {
-            int retained = 0;
-            for (byte[] arg : argv) {
-                retained += arg == null ? 0 : arg.length;
-            }
-            return retained;
-        }
-
-        @Override
         public void close() {
-            // no-op
         }
     }
 }

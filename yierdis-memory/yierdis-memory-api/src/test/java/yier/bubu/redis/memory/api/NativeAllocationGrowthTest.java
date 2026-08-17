@@ -5,17 +5,9 @@ import org.junit.Test;
 
 public class NativeAllocationGrowthTest {
     @Test
-    public void effectiveBytesAndPlusSaturate() {
+    public void effectiveBytesSaturate() {
         NativeAllocationGrowth max = new NativeAllocationGrowth(Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE);
         Assert.assertEquals(Long.MAX_VALUE, max.effectiveBytes());
-        Assert.assertEquals(max, max.plus(new NativeAllocationGrowth(1, 2, 3)));
-    }
-
-    @Test
-    public void zeroIsTheAdditiveIdentity() {
-        NativeAllocationGrowth growth = new NativeAllocationGrowth(1, 2, 3);
-        Assert.assertEquals(growth, growth.plus(NativeAllocationGrowth.zero()));
-        Assert.assertEquals(growth, NativeAllocationGrowth.zero().plus(growth));
     }
 
     @Test(expected = IllegalArgumentException.class)

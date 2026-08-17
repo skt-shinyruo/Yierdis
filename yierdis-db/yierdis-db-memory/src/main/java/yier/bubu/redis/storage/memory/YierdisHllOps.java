@@ -66,7 +66,7 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
                 byte[] replacementBytes = YierdisHyperLogLog.prepareAdd(currentBytes, elements);
                 boolean changed = replacementBytes != null;
                 if (current != null && !changed) {
-                    return preparedNoEntry(scope, WriteResult.of(0, MutationOutcome.NONE), MutationOutcome.NONE);
+                    return scope.unchanged(WriteResult.of(0, MutationOutcome.NONE));
                 }
                 if (current == null && replacementBytes == null) {
                     replacementBytes = YierdisHyperLogLog.newSparse();
@@ -96,7 +96,6 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
                             result,
                             deltaBytes,
                             staged == null ? 0L : staged.stagedHeapBytes(),
-                            outcome,
                             currentEntry,
                             staged,
                             next,
@@ -115,22 +114,21 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
 
     @Override
     public long pfcount(List<byte[]> keys) {
-        return kernel.read(scope -> {
-            if (keys == null || keys.isEmpty()) {
-                return 0L;
-            }
+        kernel.checkOwner();
+        if (keys == null || keys.isEmpty()) {
+            return 0L;
+        }
 
-            int[] registers = new int[YierdisHyperLogLog.REGISTERS];
-            for (byte[] keyBytes : keys) {
-                EntryRecord record = liveStringRecord(scope, keyBytes);
-                if (record == null) {
-                    continue;
-                }
-                ValueHandle handle = requireHllHandle(record);
-                YierdisHyperLogLog.mergeHllIntoRegisters(stringRoot.slice(handle), registers);
+        int[] registers = new int[YierdisHyperLogLog.REGISTERS];
+        for (byte[] keyBytes : keys) {
+            EntryRecord record = liveStringRecord(kernel, keyBytes);
+            if (record == null) {
+                continue;
             }
-            return YierdisHyperLogLog.estimateCardinality(registers);
-        });
+            ValueHandle handle = requireHllHandle(record);
+            YierdisHyperLogLog.mergeHllIntoRegisters(stringRoot.slice(handle), registers);
+        }
+        return YierdisHyperLogLog.estimateCardinality(registers);
     }
 
     @Override
@@ -170,7 +168,7 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
                 boolean ttlChanged = current != null && current.expireAtMillis() >= 0L;
                 MutationOutcome outcome = MutationOutcome.of(valueChanged, ttlChanged);
                 if (current != null && !outcome.changedAny()) {
-                    return preparedNoEntry(scope, WriteResult.<Void>unchanged(null), MutationOutcome.NONE);
+                    return scope.unchanged(WriteResult.<Void>unchanged(null));
                 }
 
                 StagedEntry staged = null;
@@ -195,7 +193,6 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
                             result,
                             deltaBytes,
                             staged == null ? 0L : staged.stagedHeapBytes(),
-                            outcome,
                             currentEntry,
                             staged,
                             next,
@@ -398,14 +395,6 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
 
     private long estimateRecordBytes(KeyHandle keyHandle, EntryRecord record) {
         return keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
-    }
-
-    private static <T> PreparedDbMutation<T> preparedNoEntry(
-            YierdisDbKernel scope,
-            T result,
-            MutationOutcome outcome
-    ) {
-        return scope.unchanged(result, outcome);
     }
 
     private void abortStaged(

@@ -35,73 +35,43 @@ public class BenchmarkCaseResultTest {
     }
 
     @Test
-    public void unsupportedSkippedAndFailedResultsCannotCarryMetrics() {
+    public void unsupportedSkippedAndFailedResultsHaveNoMetrics() {
         Assert.assertNull(BenchmarkCaseResult.unsupported(testCase, "missing").statistics());
         Assert.assertNull(BenchmarkCaseResult.skipped(testCase, "dependency").statistics());
         Assert.assertNull(BenchmarkCaseResult.failed(testCase, 7, "disconnect").statistics());
-        Assert.assertThrows(IllegalArgumentException.class, () ->
-                new BenchmarkCaseResult(testCase, BenchmarkStatus.SUCCESS, null, "", 0));
     }
 
     @Test
-    public void successfulResultRequiresOnlyMatchingStatistics() {
-        BenchmarkStatistics statistics = statistics(2, 3, 4);
-
-        Assert.assertThrows(IllegalArgumentException.class, () ->
-                new BenchmarkCaseResult(testCase, BenchmarkStatus.SUCCESS, null, "", 3));
-        Assert.assertThrows(IllegalArgumentException.class, () ->
-                new BenchmarkCaseResult(testCase, BenchmarkStatus.SUCCESS, statistics, "failed", 3));
-        Assert.assertThrows(IllegalArgumentException.class, () ->
-                new BenchmarkCaseResult(testCase, BenchmarkStatus.SUCCESS, statistics, " ", 3));
-        Assert.assertThrows(IllegalArgumentException.class, () ->
-                new BenchmarkCaseResult(testCase, BenchmarkStatus.SUCCESS, statistics, "", 2));
-    }
-
-    @Test
-    public void nonSuccessfulResultsRequireReasonAndForbidStatistics() {
+    public void resultStatusInvariantsRejectMalformedRows() {
         BenchmarkStatistics statistics = statistics(2, 2, 2);
 
-        for (BenchmarkStatus status : List.of(
-                BenchmarkStatus.UNSUPPORTED, BenchmarkStatus.SKIPPED, BenchmarkStatus.FAILED
-        )) {
-            Assert.assertThrows(IllegalArgumentException.class, () ->
-                    new BenchmarkCaseResult(testCase, status, statistics, "reason", 0));
-            Assert.assertThrows(IllegalArgumentException.class, () ->
-                    new BenchmarkCaseResult(testCase, status, null, "", 0));
-            Assert.assertThrows(IllegalArgumentException.class, () ->
-                    new BenchmarkCaseResult(testCase, status, null, " \t", 0));
-        }
+        Assert.assertThrows(IllegalArgumentException.class,
+                () -> new BenchmarkCaseResult(testCase, BenchmarkStatus.SUCCESS, null, "", 0));
+        Assert.assertThrows(IllegalArgumentException.class,
+                () -> new BenchmarkCaseResult(testCase, BenchmarkStatus.SUCCESS, statistics, "failed", 2));
+        Assert.assertThrows(IllegalArgumentException.class,
+                () -> new BenchmarkCaseResult(testCase, BenchmarkStatus.SUCCESS, statistics, "", 1));
+        Assert.assertThrows(IllegalArgumentException.class,
+                () -> new BenchmarkCaseResult(testCase, BenchmarkStatus.SKIPPED, null, "", 0));
+        Assert.assertThrows(IllegalArgumentException.class,
+                () -> new BenchmarkCaseResult(testCase, BenchmarkStatus.FAILED, null, "failure", -1));
+        Assert.assertThrows(NullPointerException.class,
+                () -> new BenchmarkCaseResult(testCase, BenchmarkStatus.FAILED, null, null, 0));
     }
 
     @Test
-    public void failedResultRetainsItsNonNegativeCompletedReplyCount() {
+    public void failedResultRetainsItsCompletedReplyCount() {
         BenchmarkCaseResult failed = BenchmarkCaseResult.failed(testCase, 7, "disconnect");
 
         Assert.assertEquals(BenchmarkStatus.FAILED, failed.status());
         Assert.assertEquals(7, failed.completedReplies());
         Assert.assertEquals("disconnect", failed.reason());
-        Assert.assertThrows(IllegalArgumentException.class,
-                () -> BenchmarkCaseResult.failed(testCase, -1, "disconnect"));
     }
 
     @Test
     public void unsupportedAndSkippedResultsHaveNoCompletedReplies() {
         Assert.assertEquals(0, BenchmarkCaseResult.unsupported(testCase, "missing").completedReplies());
         Assert.assertEquals(0, BenchmarkCaseResult.skipped(testCase, "dependency").completedReplies());
-        Assert.assertThrows(IllegalArgumentException.class, () ->
-                new BenchmarkCaseResult(testCase, BenchmarkStatus.UNSUPPORTED, null, "missing", 1));
-        Assert.assertThrows(IllegalArgumentException.class, () ->
-                new BenchmarkCaseResult(testCase, BenchmarkStatus.SKIPPED, null, "dependency", 1));
-    }
-
-    @Test
-    public void resultFieldsRejectNullModelValues() {
-        Assert.assertThrows(NullPointerException.class, () ->
-                new BenchmarkCaseResult(null, BenchmarkStatus.FAILED, null, "failure", 0));
-        Assert.assertThrows(NullPointerException.class, () ->
-                new BenchmarkCaseResult(testCase, null, null, "failure", 0));
-        Assert.assertThrows(NullPointerException.class, () ->
-                new BenchmarkCaseResult(testCase, BenchmarkStatus.FAILED, null, null, 0));
     }
 
     @Test

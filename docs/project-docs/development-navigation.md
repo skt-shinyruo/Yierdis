@@ -173,7 +173,7 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 - `YierdisTtlOps`
 - `YierdisDbKeyLifecycle`
 - `YierdisDbExpirationSupport`
-- `YierdisDbUse`、`MutationUse`、`InspectionScope`、`MaintenanceScope`
+- `YierdisDbUse`、`MutationUse`、`YierdisDbKernel`
 - `YierdisDbKernel.reclaimExpired(...)`
 - `YierdisDbMutationExecutor`
 - `YierdisDbMemoryLedger`
@@ -283,7 +283,7 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 - `YierdisServerBootstrapCommandWiringTest`
 - `MemoryStatsCommandTest`
 - `YierdisDbMemoryReporterTest`
-- `YierdisDbIntrospectionTest`
+- `YierdisDbObjectEncodingTest`
 
 ## 改 session / DB 路由 / 观测代理起点
 

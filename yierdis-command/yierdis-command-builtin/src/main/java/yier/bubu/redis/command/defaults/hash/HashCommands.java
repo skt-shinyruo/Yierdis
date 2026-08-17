@@ -19,8 +19,6 @@ import yier.bubu.redis.execution.api.PreparedCommands;
 import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.execution.api.ReplyShapes;
-import yier.bubu.redis.storage.api.WrongTypeException;
-import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.result.ByteMapSource;
 import yier.bubu.redis.storage.api.result.ByteValue;
 
@@ -51,13 +49,9 @@ public final class HashCommands implements CommandModule {
     private CommandInvocation hset(CommandArgs args) {
         byte[] key = args.bytes(1);
         List<byte[]> pairs = args.byteArraysFrom(2);
-        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
-            try {
-                long added = support.commandDb(execution).writes().hashes().hset(key, pairs).value();
-                return CommandResult.reply(RedisReplies.integer(added));
-            } catch (WrongTypeException | YierdisCommandException failure) {
-                return CommandResult.controlError(failure.getMessage());
-            }
+        return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
+            long added = support.commandDb(execution).writes().hashes().hset(key, pairs).value();
+            return CommandResult.reply(RedisReplies.integer(added));
         });
     }
 
@@ -88,13 +82,9 @@ public final class HashCommands implements CommandModule {
     private CommandInvocation hdel(CommandArgs args) {
         byte[] key = args.bytes(1);
         List<byte[]> fields = args.byteArraysFrom(2);
-        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
-            try {
-                long deleted = support.commandDb(execution).writes().hashes().hdel(key, fields).value();
-                return CommandResult.reply(RedisReplies.integer(deleted));
-            } catch (WrongTypeException | YierdisCommandException failure) {
-                return CommandResult.controlError(failure.getMessage());
-            }
+        return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
+            long deleted = support.commandDb(execution).writes().hashes().hdel(key, fields).value();
+            return CommandResult.reply(RedisReplies.integer(deleted));
         });
     }
 

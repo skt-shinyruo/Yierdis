@@ -10,16 +10,6 @@ import org.junit.Test;
 
 public class RedisReplyTest {
     @Test
-    public void shapeProjectionIsDefinedOnlyByRedisReply() throws NoSuchMethodException {
-        Assert.assertTrue(RedisReply.class.getDeclaredMethod("shape").isDefault());
-        for (Class<?> variant : RedisReply.class.getPermittedSubclasses()) {
-            for (java.lang.reflect.Method method : variant.getDeclaredMethods()) {
-                Assert.assertNotEquals(variant.getSimpleName(), "shape", method.getName());
-            }
-        }
-    }
-
-    @Test
     public void exactRepliesCarryTheirOwnDataAndShape() {
         byte[] verbatimData = bytes("body");
         byte[] bulkData = bytes("value");

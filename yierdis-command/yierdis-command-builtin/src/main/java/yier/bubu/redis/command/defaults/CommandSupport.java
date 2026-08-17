@@ -63,6 +63,16 @@ public final class CommandSupport {
         );
     }
 
+    public static PreparedCommand preparedAction(
+            ReplyShape reservationShape,
+            Function<CommandExecutionContext, CommandResult> action
+    ) {
+        return PreparedCommands.action(
+                reservationShape,
+                context -> translateExpectedCommandFailure(() -> action.apply(context))
+        );
+    }
+
     static CommandResult translateExpectedCommandFailure(Supplier<CommandResult> action) {
         try {
             return action.get();

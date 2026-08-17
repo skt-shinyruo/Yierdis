@@ -29,8 +29,6 @@ import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.execution.api.ValidationResult;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
-import yier.bubu.redis.storage.api.WrongTypeException;
-import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.api.result.KeyScanWindow;
 
@@ -288,13 +286,9 @@ public final class KeyCommands implements CommandModule {
 
     private CommandInvocation del(CommandArgs args) {
         List<byte[]> keys = args.byteArraysFrom(1);
-        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
-            try {
-                long deleted = support.commandDb(execution).writes().keyspace().del(keys).value();
-                return CommandResult.reply(RedisReplies.integer(deleted));
-            } catch (WrongTypeException | YierdisCommandException failure) {
-                return CommandResult.controlError(failure.getMessage());
-            }
+        return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
+            long deleted = support.commandDb(execution).writes().keyspace().del(keys).value();
+            return CommandResult.reply(RedisReplies.integer(deleted));
         });
     }
 
@@ -319,51 +313,35 @@ public final class KeyCommands implements CommandModule {
 
     private CommandInvocation expire(CommandArgs args) throws CommandParseException {
         TtlArgs parsed = ttlArgs(args);
-        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
-            try {
-                boolean applied = support.commandDb(execution).writes().ttl().expire(parsed.key(), parsed.value()).value();
-                return CommandResult.reply(RedisReplies.integer(applied ? 1L : 0L));
-            } catch (WrongTypeException | YierdisCommandException failure) {
-                return CommandResult.controlError(failure.getMessage());
-            }
+        return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
+            boolean applied = support.commandDb(execution).writes().ttl().expire(parsed.key(), parsed.value()).value();
+            return CommandResult.reply(RedisReplies.integer(applied ? 1L : 0L));
         });
     }
 
     private CommandInvocation pexpire(CommandArgs args) throws CommandParseException {
         TtlArgs parsed = ttlArgs(args);
-        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
-            try {
-                boolean applied = support.commandDb(execution).writes().ttl().pexpire(parsed.key(), parsed.value()).value();
-                return CommandResult.reply(RedisReplies.integer(applied ? 1L : 0L));
-            } catch (WrongTypeException | YierdisCommandException failure) {
-                return CommandResult.controlError(failure.getMessage());
-            }
+        return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
+            boolean applied = support.commandDb(execution).writes().ttl().pexpire(parsed.key(), parsed.value()).value();
+            return CommandResult.reply(RedisReplies.integer(applied ? 1L : 0L));
         });
     }
 
     private CommandInvocation expireat(CommandArgs args) throws CommandParseException {
         TtlArgs parsed = ttlArgs(args);
-        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
-            try {
-                boolean applied = support.commandDb(execution).writes().ttl()
-                        .expireAtSeconds(parsed.key(), parsed.value()).value();
-                return CommandResult.reply(RedisReplies.integer(applied ? 1L : 0L));
-            } catch (WrongTypeException | YierdisCommandException failure) {
-                return CommandResult.controlError(failure.getMessage());
-            }
+        return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
+            boolean applied = support.commandDb(execution).writes().ttl()
+                    .expireAtSeconds(parsed.key(), parsed.value()).value();
+            return CommandResult.reply(RedisReplies.integer(applied ? 1L : 0L));
         });
     }
 
     private CommandInvocation pexpireat(CommandArgs args) throws CommandParseException {
         TtlArgs parsed = ttlArgs(args);
-        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
-            try {
-                boolean applied = support.commandDb(execution).writes().ttl()
-                        .expireAtMillis(parsed.key(), parsed.value()).value();
-                return CommandResult.reply(RedisReplies.integer(applied ? 1L : 0L));
-            } catch (WrongTypeException | YierdisCommandException failure) {
-                return CommandResult.controlError(failure.getMessage());
-            }
+        return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
+            boolean applied = support.commandDb(execution).writes().ttl()
+                    .expireAtMillis(parsed.key(), parsed.value()).value();
+            return CommandResult.reply(RedisReplies.integer(applied ? 1L : 0L));
         });
     }
 
@@ -373,13 +351,9 @@ public final class KeyCommands implements CommandModule {
 
     private CommandInvocation persist(CommandArgs args) {
         BytesSlice key = args.slice(1);
-        return session -> PreparedCommands.action(ReplyShapes.integerUpperBound(), execution -> {
-            try {
-                boolean applied = support.commandDb(execution).writes().ttl().persist(key).value();
-                return CommandResult.reply(RedisReplies.integer(applied ? 1L : 0L));
-            } catch (WrongTypeException | YierdisCommandException failure) {
-                return CommandResult.controlError(failure.getMessage());
-            }
+        return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
+            boolean applied = support.commandDb(execution).writes().ttl().persist(key).value();
+            return CommandResult.reply(RedisReplies.integer(applied ? 1L : 0L));
         });
     }
 

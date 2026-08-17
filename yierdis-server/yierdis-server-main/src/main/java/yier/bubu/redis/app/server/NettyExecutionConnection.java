@@ -89,11 +89,6 @@ final class NettyExecutionConnection implements ExecutionConnection {
     }
 
     @Override
-    public String connectionId() {
-        return channel.id().asShortText();
-    }
-
-    @Override
     public EngineSession session() {
         return session;
     }

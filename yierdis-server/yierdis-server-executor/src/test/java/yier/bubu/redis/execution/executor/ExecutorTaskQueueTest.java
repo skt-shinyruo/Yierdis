@@ -11,9 +11,9 @@ public class ExecutorTaskQueueTest {
     public void globalQueuePreservesFifoOrder() {
         ExecutorTaskQueue<String, String> queue = globalQueue();
 
-        Assert.assertTrue(queue.offer("a", "a1"));
-        Assert.assertTrue(queue.offer("b", "b1"));
-        Assert.assertTrue(queue.offer("a", "a2"));
+        queue.offer("a", "a1");
+        queue.offer("b", "b1");
+        queue.offer("a", "a2");
 
         Assert.assertEquals("a1", queue.poll());
         Assert.assertEquals("b1", queue.poll());
@@ -69,7 +69,6 @@ public class ExecutorTaskQueueTest {
         Assert.assertTrue(queue.resumeBlocked("a", blocked));
         Assert.assertEquals("a1", queue.poll());
         Assert.assertEquals("a2", queue.poll());
-        Assert.assertFalse(queue.hasPendingTasks());
         Assert.assertEquals(0, queue.fairStateCount());
     }
 
@@ -160,7 +159,6 @@ public class ExecutorTaskQueueTest {
         Assert.assertTrue(queue.block("a", blocked));
         Assert.assertTrue(queue.cancelBlocked("a", blocked));
 
-        Assert.assertFalse(queue.hasPendingTasks());
         Assert.assertFalse(queue.hasRunnableTasks());
         Assert.assertEquals(0, queue.fairStateCount());
     }
@@ -186,7 +184,6 @@ public class ExecutorTaskQueueTest {
 
         Assert.assertTrue(queue.remove("a", "a1"));
 
-        Assert.assertFalse(queue.hasPendingTasks());
         Assert.assertFalse(queue.hasRunnableTasks());
         Assert.assertEquals(0, queue.fairStateCount());
     }
@@ -205,7 +202,6 @@ public class ExecutorTaskQueueTest {
 
         Assert.assertEquals(3, recycled.size());
         Assert.assertTrue(recycled.containsAll(List.of("a1", "a2", "b1")));
-        Assert.assertFalse(queue.hasPendingTasks());
         Assert.assertFalse(queue.hasRunnableTasks());
         Assert.assertEquals(0, queue.deferredFairHeads());
         Assert.assertEquals(0, queue.fairStateCount());
@@ -237,7 +233,6 @@ public class ExecutorTaskQueueTest {
         Assert.assertSame(firstFailure, thrown);
         Assert.assertArrayEquals(new Throwable[]{secondFailure}, thrown.getSuppressed());
         Assert.assertEquals(List.of("a1", "b1", "c1"), attempted);
-        Assert.assertFalse(queue.hasPendingTasks());
         Assert.assertFalse(queue.hasRunnableTasks());
         Assert.assertEquals(0, queue.deferredGlobalHeads());
     }

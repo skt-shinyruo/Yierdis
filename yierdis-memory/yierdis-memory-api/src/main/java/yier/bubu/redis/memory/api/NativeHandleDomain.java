@@ -9,8 +9,6 @@ public enum NativeHandleDomain {
     INDEX_NODE(5),
     ALLOCATOR_METADATA(6);
 
-    private static final NativeHandleDomain[] BY_CODE = lookupByCode();
-
     private final int code;
 
     NativeHandleDomain(int code) {
@@ -22,28 +20,15 @@ public enum NativeHandleDomain {
     }
 
     public static NativeHandleDomain fromCode(int code) {
-        if (code >= 0 && code < BY_CODE.length) {
-            NativeHandleDomain domain = BY_CODE[code];
-            if (domain != null) {
-                return domain;
-            }
-        }
-        throw new IllegalArgumentException("unknown native handle domain: " + code);
-    }
-
-    private static NativeHandleDomain[] lookupByCode() {
-        NativeHandleDomain[] domains = values();
-        int highestCode = -1;
-        for (NativeHandleDomain domain : domains) {
-            highestCode = Math.max(highestCode, domain.code);
-        }
-        NativeHandleDomain[] byCode = new NativeHandleDomain[highestCode + 1];
-        for (NativeHandleDomain domain : domains) {
-            if (byCode[domain.code] != null) {
-                throw new IllegalStateException("duplicate native handle domain code: " + domain.code);
-            }
-            byCode[domain.code] = domain;
-        }
-        return byCode;
+        return switch (code) {
+            case 0 -> RESERVED;
+            case 1 -> STORAGE_OBJECT;
+            case 2 -> ENTRY_OBJECT;
+            case 3 -> KEY_BYTES;
+            case 4 -> TYPE_ROOT;
+            case 5 -> INDEX_NODE;
+            case 6 -> ALLOCATOR_METADATA;
+            default -> throw new IllegalArgumentException("unknown native handle domain: " + code);
+        };
     }
 }

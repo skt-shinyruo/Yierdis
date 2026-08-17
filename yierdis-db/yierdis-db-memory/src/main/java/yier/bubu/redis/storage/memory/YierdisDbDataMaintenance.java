@@ -118,7 +118,6 @@ final class YierdisDbDataMaintenance {
                                 null,
                                 0L,
                                 0L,
-                                MutationOutcome.NONE,
                                 () -> {
                                 },
                                 null,
@@ -130,7 +129,6 @@ final class YierdisDbDataMaintenance {
                             null,
                             0L,
                             preparation.stagedNonNativeGrowthBytes(),
-                            MutationOutcome.NONE,
                             preparation::commit,
                             null,
                             preparation::abort,
@@ -180,21 +178,18 @@ final class YierdisDbDataMaintenance {
 
     MaxmemoryCandidate sampleCandidate(MaxmemoryParticipant publicOwner, MaxmemoryPolicy policy, long nowMillis) {
         runtimeState.checkThread();
-        return publicCandidate(publicOwner, maxmemorySupport.sampleCandidate(policy, nowMillis));
+        return maxmemorySupport.sampleCandidate(publicOwner, policy, nowMillis);
     }
 
     MaxmemoryCandidate scanBestCandidate(MaxmemoryParticipant publicOwner, MaxmemoryPolicy policy, long nowMillis) {
         runtimeState.checkThread();
-        return publicCandidate(publicOwner, maxmemorySupport.scanBestCandidate(policy, nowMillis));
+        return maxmemorySupport.scanBestCandidate(publicOwner, policy, nowMillis);
     }
 
     boolean evict(MaxmemoryParticipant publicOwner, MaxmemoryCandidate candidate, long nowMillis) {
         runtimeState.checkThread();
         health.requireWritable();
-        if (candidate == null || candidate.owner() != publicOwner) {
-            return false;
-        }
-        return maxmemorySupport.evict(internalCandidate(candidate), nowMillis);
+        return maxmemorySupport.evict(publicOwner, candidate, nowMillis);
     }
 
     void shutdown() {
@@ -250,7 +245,6 @@ final class YierdisDbDataMaintenance {
                                 preparation.outcome(),
                                 preparation.committedMemoryDelta(),
                                 0L,
-                                preparation.outcome(),
                                 async
                                         ? YierdisDbDataMaintenance.this::commitFlushDbAsync
                                         : YierdisDbDataMaintenance.this::commitFlushDb,
@@ -369,15 +363,4 @@ final class YierdisDbDataMaintenance {
     private record FlushPreparation(MutationOutcome outcome, long committedMemoryDelta) {
     }
 
-    private MaxmemoryCandidate publicCandidate(MaxmemoryParticipant publicOwner, MaxmemoryCandidate candidate) {
-        Objects.requireNonNull(publicOwner, "publicOwner");
-        if (candidate == null) {
-            return null;
-        }
-        return new MaxmemoryCandidate(publicOwner, candidate.keyHandle(), candidate.lruClock());
-    }
-
-    private MaxmemoryCandidate internalCandidate(MaxmemoryCandidate candidate) {
-        return new MaxmemoryCandidate(maxmemorySupport, candidate.keyHandle(), candidate.lruClock());
-    }
 }

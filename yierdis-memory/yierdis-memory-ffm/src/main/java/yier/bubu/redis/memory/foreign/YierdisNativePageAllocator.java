@@ -131,10 +131,6 @@ final class YierdisNativePageAllocator
         return estimateGrowth(requestedBytes);
     }
 
-    PageGrowth estimateConservativeAdditionalGrowth(int... requestedBytes) {
-        return estimateGrowth(requestedBytes);
-    }
-
     private PageGrowth estimateGrowth(int... requestedBytes) {
         Objects.requireNonNull(requestedBytes, "requestedBytes");
         long[] availableBlocks = availableSmallBlocks();

@@ -12,9 +12,6 @@
     </parent>
 
     <artifactId>yierdis-command-core</artifactId>
-    <packaging>jar</packaging>
-
-    <name>yierdis-command-core</name>
     <description>Command registry, dispatch, transaction queueing, and processor lifecycle.</description>
 
     <dependencies>

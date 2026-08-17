@@ -12,9 +12,6 @@
     </parent>
 
     <artifactId>yierdis-command-builtin</artifactId>
-    <packaging>jar</packaging>
-
-    <name>yierdis-command-builtin</name>
     <description>Default transport-neutral Yierdis command bundle.</description>
 
     <dependencies>

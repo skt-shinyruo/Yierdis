@@ -12,9 +12,6 @@
     </parent>
 
     <artifactId>yierdis-command-api</artifactId>
-    <packaging>jar</packaging>
-
-    <name>yierdis-command-api</name>
     <description>Transport-neutral command contracts and command composition ports.</description>
 
     <dependencies>

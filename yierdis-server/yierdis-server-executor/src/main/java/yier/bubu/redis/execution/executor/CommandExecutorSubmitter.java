@@ -21,7 +21,6 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
     private final LongAdder submitRejectedClosing = new LongAdder();
     private final LongAdder submitRejectedQueueFull = new LongAdder();
     private final LongAdder submitRejectedBytesBudget = new LongAdder();
-    private final LongAdder submitRejectedRequestTooLarge = new LongAdder();
     private final LongAdder submitRejectedOfferFailed = new LongAdder();
 
     CommandExecutorSubmitter(
@@ -63,7 +62,6 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
         }
         if (!backlogBudget.canEverReserveQueuedBytes(retainedBytes)) {
             context.recordCommandRejected();
-            submitRejectedRequestTooLarge.increment();
             return new ExecutorAdmissionAttempt.Rejected<>(CommandExecutor.SubmitRejectReason.REQUEST_TOO_LARGE);
         }
 
@@ -97,9 +95,7 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
         try {
             connection.context().recordCommandEnqueued(retainedBytes);
             recorded = true;
-            if (!taskQueue.offer(connection, task)) {
-                throw new IllegalStateException("reserved executor admission could not be published");
-            }
+            taskQueue.offer(connection, task);
             offered = true;
             ExecutionConnectionContext context = connection.context();
             if (context.pending() >= backpressureHighWatermark) {
@@ -196,10 +192,6 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
 
     long submitRejectedBytesBudget() {
         return submitRejectedBytesBudget.sum();
-    }
-
-    long submitRejectedRequestTooLarge() {
-        return submitRejectedRequestTooLarge.sum();
     }
 
     long submitRejectedOfferFailed() {

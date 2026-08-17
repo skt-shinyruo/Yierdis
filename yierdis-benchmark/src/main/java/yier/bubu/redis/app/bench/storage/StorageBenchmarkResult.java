@@ -6,13 +6,9 @@ import java.util.OptionalLong;
 public record StorageBenchmarkResult(
         int completedOperations,
         long elapsedNanos,
-        double operationsPerSecond,
         StorageLatencyRecorder.Summary latency,
         StorageMemorySnapshot baseline,
-        StorageMemorySnapshot loaded,
-        long accountedDeltaBytes,
-        double accountedDeltaBytesPerKey,
-        OptionalLong rssDeltaBytes
+        StorageMemorySnapshot loaded
 ) {
     public StorageBenchmarkResult {
         if (completedOperations <= 0) {
@@ -21,24 +17,19 @@ public record StorageBenchmarkResult(
         if (elapsedNanos < 0L) {
             throw new IllegalArgumentException("elapsedNanos must be >= 0");
         }
-        if (!Double.isFinite(operationsPerSecond) || operationsPerSecond < 0.0) {
-            throw new IllegalArgumentException("operationsPerSecond must be finite and >= 0");
-        }
         latency = Objects.requireNonNull(latency, "latency");
         baseline = Objects.requireNonNull(baseline, "baseline");
         loaded = Objects.requireNonNull(loaded, "loaded");
-        rssDeltaBytes = Objects.requireNonNull(rssDeltaBytes, "rssDeltaBytes");
         if (latency.count() != completedOperations) {
             throw new IllegalArgumentException("latency count must equal completedOperations");
         }
         if (loaded.keyCount() != completedOperations) {
             throw new IllegalArgumentException("loaded key count must equal completedOperations");
         }
-        if (accountedDeltaBytes < 0L) {
-            throw new IllegalArgumentException("accountedDeltaBytes must be >= 0");
-        }
-        if (!Double.isFinite(accountedDeltaBytesPerKey) || accountedDeltaBytesPerKey < 0.0) {
-            throw new IllegalArgumentException("accountedDeltaBytesPerKey must be finite and >= 0");
+        if (loaded.accountedBytes() < baseline.accountedBytes()) {
+            throw new IllegalArgumentException(
+                    "loaded accounted footprint must not be smaller than the baseline"
+            );
         }
     }
 
@@ -52,22 +43,31 @@ public record StorageBenchmarkResult(
         if (loaded.accountedBytes() < baseline.accountedBytes()) {
             throw new IllegalStateException("loaded accounted footprint is smaller than the empty baseline");
         }
-        long delta = loaded.accountedBytes() - baseline.accountedBytes();
-        double operationsPerSecond = elapsedNanos == 0L
-                ? 0.0
-                : completedOperations * 1_000_000_000.0 / elapsedNanos;
-        OptionalLong rssDelta = rssDelta(baseline.rssBytes(), loaded.rssBytes());
         return new StorageBenchmarkResult(
                 completedOperations,
                 elapsedNanos,
-                operationsPerSecond,
                 latency,
                 baseline,
-                loaded,
-                delta,
-                delta / (double) completedOperations,
-                rssDelta
+                loaded
         );
+    }
+
+    public double operationsPerSecond() {
+        return elapsedNanos == 0L
+                ? 0.0
+                : completedOperations * 1_000_000_000.0 / elapsedNanos;
+    }
+
+    public long accountedDeltaBytes() {
+        return loaded.accountedBytes() - baseline.accountedBytes();
+    }
+
+    public double accountedDeltaBytesPerKey() {
+        return accountedDeltaBytes() / (double) completedOperations;
+    }
+
+    public OptionalLong rssDeltaBytes() {
+        return rssDelta(baseline.rssBytes(), loaded.rssBytes());
     }
 
     private static OptionalLong rssDelta(OptionalLong before, OptionalLong after) {

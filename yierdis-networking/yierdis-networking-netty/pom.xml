@@ -12,9 +12,6 @@
     </parent>
 
     <artifactId>yierdis-networking-netty</artifactId>
-    <packaging>jar</packaging>
-
-    <name>yierdis-networking-netty</name>
     <description>Netty codecs and handlers for RESP.</description>
 
     <dependencies>

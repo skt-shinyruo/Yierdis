@@ -63,6 +63,13 @@ public class NativeHandleTest {
     }
 
     @Test
+    public void exhaustedBackendIdsStayExhausted() {
+        Assert.assertEquals(2L, StableMemoryBackendIds.advance(1L));
+        Assert.assertEquals(0L, StableMemoryBackendIds.advance(0L));
+        Assert.assertEquals(0L, StableMemoryBackendIds.advance(Long.MAX_VALUE));
+    }
+
+    @Test
     public void backendIdsArePositiveAndUniqueAcrossConcurrentCallers() throws Exception {
         int workerCount = 8;
         int idsPerWorker = 1_000;
@@ -94,16 +101,6 @@ public class NativeHandleTest {
             executor.shutdownNow();
             Assert.assertTrue(executor.awaitTermination(5L, TimeUnit.SECONDS));
         }
-    }
-
-    @Test
-    public void backendIdExhaustionIsPermanentInAnIsolatedSequence() {
-        StableMemoryBackendIdSequence sequence =
-                new StableMemoryBackendIdSequence(Long.MAX_VALUE);
-
-        Assert.assertEquals(Long.MAX_VALUE, sequence.nextId());
-        Assert.assertThrows(IllegalStateException.class, sequence::nextId);
-        Assert.assertThrows(IllegalStateException.class, sequence::nextId);
     }
 
     @Test

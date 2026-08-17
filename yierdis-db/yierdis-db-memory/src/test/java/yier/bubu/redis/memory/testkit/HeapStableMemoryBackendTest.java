@@ -8,12 +8,11 @@ import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
-import yier.bubu.redis.memory.api.StableMemoryRegion;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
 
 public class HeapStableMemoryBackendTest {
     @Test
-    public void keepsFullHandleIdentityAndOwnerBoundObjectAndRegionState() {
+    public void keepsFullHandleIdentityAndOwnerBoundObjectState() {
         TestOwner owner = new TestOwner();
         HeapStableMemoryBackend backend = new HeapStableMemoryBackend("heap", 8, owner);
         backend.bindToCurrentThread();
@@ -27,13 +26,6 @@ public class HeapStableMemoryBackendTest {
         try (NativeObjectView view = backend.resolve(handle, NativeAccessMode.READ_ONLY)) {
             Assert.assertEquals(0x0102030405060708L, view.getLongLittleEndian(0));
         }
-
-        StableMemoryRegion region = backend.allocateRegion("expire-index", Long.BYTES);
-        region.setLongLittleEndian(0, 0x1112131415161718L);
-        Assert.assertEquals(0x1112131415161718L, region.getLongLittleEndian(0));
-        Assert.assertEquals(1L, backend.liveRegionCount());
-        region.close();
-        Assert.assertEquals(0L, backend.liveRegionCount());
 
         backend.free(handle);
         backend.close();

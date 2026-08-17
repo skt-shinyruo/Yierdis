@@ -4,28 +4,28 @@ import org.junit.Assert;
 import org.junit.Test;
 
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.List;
 
 public class InlineCommandParserTest {
     @Test
     public void decodesQuotedEscapesAndHexBytes() {
         InlineCommandParser.Decoded decoded = parse("SET \"a\\x20b\" \"\\x41\\n\"");
+        byte[][] args = decoded.copyArgs();
 
-        Assert.assertEquals(3, decoded.argc());
-        Assert.assertArrayEquals(bytes("SET"), decoded.copyArg(0));
-        Assert.assertArrayEquals(bytes("a b"), decoded.copyArg(1));
-        Assert.assertArrayEquals(new byte[]{'A', '\n'}, decoded.copyArg(2));
-        Assert.assertEquals(8, decoded.retainedBytes());
+        Assert.assertEquals(3, args.length);
+        Assert.assertArrayEquals(bytes("SET"), args[0]);
+        Assert.assertArrayEquals(bytes("a b"), args[1]);
+        Assert.assertArrayEquals(new byte[]{'A', '\n'}, args[2]);
     }
 
     @Test
     public void parseUnlimitedAllowsCallersToApplyTheirOwnLimit() {
         InlineCommandParser.Decoded decoded = InlineCommandParser.parseUnlimited(bytes("A B"), 0, 3);
+        byte[][] args = decoded.copyArgs();
 
-        Assert.assertEquals(2, decoded.argc());
-        Assert.assertArrayEquals(bytes("A"), decoded.copyArg(0));
-        Assert.assertArrayEquals(bytes("B"), decoded.copyArg(1));
+        Assert.assertEquals(2, args.length);
+        Assert.assertArrayEquals(bytes("A"), args[0]);
+        Assert.assertArrayEquals(bytes("B"), args[1]);
     }
 
     @Test
@@ -78,44 +78,33 @@ public class InlineCommandParserTest {
 
     @Test
     public void decodesSingleQuotesAndEverySupportedDoubleQuoteEscape() {
-        InlineCommandParser.Decoded singleQuoted = parse("ECHO 'it\\'s' ''");
-        Assert.assertArrayEquals(bytes("it's"), singleQuoted.copyArg(1));
-        Assert.assertArrayEquals(new byte[0], singleQuoted.copyArg(2));
+        byte[][] singleQuoted = parse("ECHO 'it\\'s' ''").copyArgs();
+        Assert.assertArrayEquals(bytes("it's"), singleQuoted[1]);
+        Assert.assertArrayEquals(new byte[0], singleQuoted[2]);
 
-        InlineCommandParser.Decoded escaped = parse("ECHO \"\\n\\r\\t\\b\\a\\z\\x41\\x4a\\x4A\"");
+        byte[][] escaped = parse("ECHO \"\\n\\r\\t\\b\\a\\z\\x41\\x4a\\x4A\"").copyArgs();
         Assert.assertArrayEquals(
                 new byte[]{'\n', '\r', '\t', '\b', 7, 'z', 'A', 'J', 'J'},
-                escaped.copyArg(1)
+                escaped[1]
         );
     }
 
     @Test
-    public void growsMetadataPastSixteenArgumentsAndChecksEveryAccessorBoundary() {
-        List<String> expected = new ArrayList<>();
+    public void growsMetadataPastSixteenArguments() {
         StringBuilder line = new StringBuilder();
         for (int index = 0; index < 21; index++) {
-            String argument = "a" + index;
-            expected.add(argument);
             if (index > 0) {
                 line.append(' ');
             }
-            line.append(argument);
+            line.append('a').append(index);
         }
 
         byte[] input = bytes(line.toString());
         InlineCommandParser.Decoded decoded = InlineCommandParser.parseUnlimited(input, 0, input.length);
+        byte[][] args = decoded.copyArgs();
 
-        Assert.assertEquals(expected.size(), decoded.argc());
-        int retainedBytes = expected.stream().mapToInt(String::length).sum();
-        Assert.assertEquals(retainedBytes, decoded.decodedLen());
-        Assert.assertEquals(retainedBytes, decoded.retainedBytes());
-        Assert.assertSame(decoded.decoded(), decoded.decoded());
-        Assert.assertEquals(0, decoded.offset(0));
-        Assert.assertEquals(2, decoded.length(0));
-        Assert.assertArrayEquals(bytes("a20"), decoded.copyArgs()[20]);
-        Assert.assertThrows(IndexOutOfBoundsException.class, () -> decoded.offset(-1));
-        Assert.assertThrows(IndexOutOfBoundsException.class, () -> decoded.length(decoded.argc()));
-        Assert.assertThrows(IndexOutOfBoundsException.class, () -> decoded.copyArg(decoded.argc()));
+        Assert.assertEquals(21, args.length);
+        Assert.assertArrayEquals(bytes("a20"), args[20]);
     }
 
     private static InlineCommandParser.Decoded parse(String value) {

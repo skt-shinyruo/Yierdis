@@ -30,7 +30,7 @@ public final class RetainedRespExecutionRequest implements ExecutionRequest {
 
     static long estimatedMemoryBytes(byte[][] argv) {
         long total = 48L;
-        total = saturatedAdd(total, saturatedMultiply(argv.length, 8L));
+        total = saturatedAdd(total, argv.length * 8L);
         for (byte[] arg : argv) {
             if (arg != null) {
                 total = saturatedAdd(total, 16L);
@@ -108,14 +108,7 @@ public final class RetainedRespExecutionRequest implements ExecutionRequest {
     }
 
     private static long align8(int length) {
-        return ((long) Math.max(0, length) + 7L) & ~7L;
-    }
-
-    private static long saturatedMultiply(long left, long right) {
-        if (left <= 0L || right <= 0L) {
-            return 0L;
-        }
-        return left > Long.MAX_VALUE / right ? Long.MAX_VALUE : left * right;
+        return ((long) length + 7L) & ~7L;
     }
 
     private static long saturatedAdd(long left, long right) {

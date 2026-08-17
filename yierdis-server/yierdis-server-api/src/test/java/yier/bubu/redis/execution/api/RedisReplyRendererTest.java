@@ -216,11 +216,6 @@ public class RedisReplyRendererTest {
         }
 
         @Override
-        public void emptyArray() {
-            events.add("empty-array");
-        }
-
-        @Override
         public void mapHeader(int pairs) {
             events.add("map:" + pairs);
         }

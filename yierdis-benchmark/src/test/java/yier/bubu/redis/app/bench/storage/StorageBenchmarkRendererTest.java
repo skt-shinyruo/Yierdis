@@ -11,7 +11,7 @@ public class StorageBenchmarkRendererTest {
     public void humanOutputNamesThroughputLatencyAndEveryFootprintCategory() {
         String rendered = new StorageBenchmarkRenderer().render(
                 config(BenchmarkFormat.HUMAN),
-                result(OptionalLong.of(9_000L), OptionalLong.of(8_000L))
+                result(OptionalLong.of(9_000L))
         );
 
         Assert.assertTrue(rendered.contains("throughput: 10.00 ops/s"));
@@ -31,7 +31,7 @@ public class StorageBenchmarkRendererTest {
     public void csvOutputHasStableColumnsAndLeavesUnavailableRssBlank() {
         String rendered = new StorageBenchmarkRenderer().render(
                 config(BenchmarkFormat.CSV),
-                result(OptionalLong.empty(), OptionalLong.empty())
+                result(OptionalLong.empty())
         );
         String[] lines = rendered.split("\\R");
 
@@ -45,32 +45,50 @@ public class StorageBenchmarkRendererTest {
         Assert.assertTrue(lines[1].endsWith(",,"));
     }
 
+    @Test
+    public void publicResultsRejectMalformedMetrics() {
+        Assert.assertThrows(IllegalArgumentException.class,
+                () -> new StorageLatencyRecorder.Summary(1L, Double.NaN, 0L, 0L, 0L));
+        Assert.assertThrows(IllegalArgumentException.class,
+                () -> new StorageLatencyRecorder.Summary(1L, 1.0, 2L, 1L, 1L));
+
+        StorageMemorySnapshot baseline = new StorageMemorySnapshot(
+                100L, 200L, 300L, 250L, 50L, 0L, 0, 0, OptionalLong.empty()
+        );
+        StorageMemorySnapshot loaded = new StorageMemorySnapshot(
+                90L, 200L, 300L, 250L, 50L, 10L, 0, 10, OptionalLong.empty()
+        );
+        Assert.assertThrows(IllegalArgumentException.class, () -> new StorageBenchmarkResult(
+                10,
+                1_000_000_000L,
+                new StorageLatencyRecorder.Summary(10L, 100.0, 80L, 200L, 250L),
+                baseline,
+                loaded
+        ));
+    }
+
     private static StorageBenchmarkConfig config(BenchmarkFormat format) {
         return new StorageBenchmarkConfig(10, 4, 8, 3, 3, format);
     }
 
-    private static StorageBenchmarkResult result(OptionalLong rss, OptionalLong rssDelta) {
+    private static StorageBenchmarkResult result(OptionalLong rss) {
         StorageMemorySnapshot baseline = new StorageMemorySnapshot(
-                100L, 200L, 300L, 250L, 50L, 600L, 0L, 0, 0, OptionalLong.of(1_000L)
+                100L, 200L, 300L, 250L, 50L, 0L, 0, 0, OptionalLong.of(1_000L)
         );
         if (rss.isEmpty()) {
             baseline = new StorageMemorySnapshot(
-                    100L, 200L, 300L, 250L, 50L, 600L, 0L, 0, 0, OptionalLong.empty()
+                    100L, 200L, 300L, 250L, 50L, 0L, 0, 0, OptionalLong.empty()
             );
         }
         StorageMemorySnapshot loaded = new StorageMemorySnapshot(
-                1_100L, 2_200L, 3_300L, 3_000L, 300L, 6_600L, 30L, 0, 10, rss
+                1_100L, 2_200L, 3_300L, 3_000L, 300L, 30L, 0, 10, rss
         );
         return new StorageBenchmarkResult(
                 10,
                 1_000_000_000L,
-                10.0,
                 new StorageLatencyRecorder.Summary(10L, 100.0, 80L, 200L, 250L),
                 baseline,
-                loaded,
-                6_000L,
-                600.0,
-                rssDelta
+                loaded
         );
     }
 }

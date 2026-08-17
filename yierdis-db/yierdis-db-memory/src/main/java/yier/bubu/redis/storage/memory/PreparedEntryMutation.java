@@ -1,7 +1,6 @@
 package yier.bubu.redis.storage.memory;
 
 import java.util.Objects;
-import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.CurrentEntry;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
@@ -27,15 +26,13 @@ final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
 
     static <T> PreparedEntryMutation<T> unchanged(
             YierdisDbKeyLifecycle keyLifecycle,
-            T result,
-            MutationOutcome outcome
+            T result
     ) {
         return new PreparedEntryMutation<>(
                 keyLifecycle,
                 result,
                 0L,
                 0L,
-                outcome,
                 null,
                 null,
                 null,
@@ -49,7 +46,6 @@ final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
             T result,
             long actualDeltaBytes,
             long stagedNonNativeGrowthBytes,
-            MutationOutcome outcome,
             StagedEntry stagedEntry,
             EntryRecord newRecord
     ) {
@@ -58,7 +54,6 @@ final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
                 result,
                 actualDeltaBytes,
                 stagedNonNativeGrowthBytes,
-                outcome,
                 null,
                 stagedEntry,
                 null,
@@ -72,7 +67,6 @@ final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
             T result,
             long actualDeltaBytes,
             long stagedNonNativeGrowthBytes,
-            MutationOutcome outcome,
             EntryHandle existingEntryHandle,
             EntryRecord oldRecord,
             EntryRecord newRecord,
@@ -83,7 +77,6 @@ final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
                 result,
                 actualDeltaBytes,
                 stagedNonNativeGrowthBytes,
-                outcome,
                 existingEntryHandle,
                 null,
                 oldRecord,
@@ -96,7 +89,6 @@ final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
             YierdisDbKeyLifecycle keyLifecycle,
             T result,
             long actualDeltaBytes,
-            MutationOutcome outcome,
             EntryHandle existingEntryHandle,
             EntryRecord oldRecord,
             boolean releaseReplacedValue
@@ -106,7 +98,6 @@ final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
                 result,
                 actualDeltaBytes,
                 0L,
-                outcome,
                 existingEntryHandle,
                 null,
                 oldRecord,
@@ -120,7 +111,6 @@ final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
             T result,
             long actualDeltaBytes,
             long stagedNonNativeGrowthBytes,
-            MutationOutcome outcome,
             CurrentEntry current,
             StagedEntry staged,
             EntryRecord newRecord,
@@ -133,7 +123,6 @@ final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
                     result,
                     actualDeltaBytes,
                     stagedNonNativeGrowthBytes,
-                    outcome,
                     Objects.requireNonNull(staged, "staged"),
                     newRecord
             );
@@ -143,7 +132,6 @@ final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
                 result,
                 actualDeltaBytes,
                 stagedNonNativeGrowthBytes,
-                outcome,
                 current.entryHandle(),
                 current.record(),
                 newRecord,
@@ -156,7 +144,6 @@ final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
             T result,
             long actualDeltaBytes,
             long stagedNonNativeGrowthBytes,
-            MutationOutcome outcome,
             EntryHandle existingEntryHandle,
             StagedEntry stagedEntry,
             EntryRecord oldRecord,
@@ -165,8 +152,7 @@ final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
     ) {
         super(
                 actualDeltaBytes,
-                Math.max(0L, stagedNonNativeGrowthBytes),
-                outcome
+                Math.max(0L, stagedNonNativeGrowthBytes)
         );
         this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
         this.result = result;

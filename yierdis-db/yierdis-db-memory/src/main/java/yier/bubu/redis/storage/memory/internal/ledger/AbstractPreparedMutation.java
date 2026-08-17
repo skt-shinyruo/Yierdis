@@ -1,25 +1,19 @@
 package yier.bubu.redis.storage.memory.internal.ledger;
 
-import java.util.Objects;
-import yier.bubu.redis.storage.api.MutationOutcome;
-
 public abstract class AbstractPreparedMutation<T> implements PreparedDbMutation<T> {
     private final long actualDeltaBytes;
     private final long stagedNonNativeGrowthBytes;
-    private final MutationOutcome outcome;
     private State state = State.PREPARED;
 
     protected AbstractPreparedMutation(
             long actualDeltaBytes,
-            long stagedNonNativeGrowthBytes,
-            MutationOutcome outcome
+            long stagedNonNativeGrowthBytes
     ) {
         if (stagedNonNativeGrowthBytes < 0) {
             throw new IllegalArgumentException("stagedNonNativeGrowthBytes must be >= 0");
         }
         this.actualDeltaBytes = actualDeltaBytes;
         this.stagedNonNativeGrowthBytes = stagedNonNativeGrowthBytes;
-        this.outcome = Objects.requireNonNull(outcome, "outcome");
     }
 
     @Override
@@ -30,11 +24,6 @@ public abstract class AbstractPreparedMutation<T> implements PreparedDbMutation<
     @Override
     public final long stagedNonNativeGrowthBytes() {
         return stagedNonNativeGrowthBytes;
-    }
-
-    @Override
-    public final MutationOutcome outcome() {
-        return outcome;
     }
 
     @Override

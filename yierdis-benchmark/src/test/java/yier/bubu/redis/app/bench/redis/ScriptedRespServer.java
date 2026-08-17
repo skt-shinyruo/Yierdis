@@ -84,7 +84,12 @@ final class ScriptedRespServer implements AutoCloseable {
     }
 
     static ScriptedRespServer immediate(int expectedClients, byte[] reply) throws IOException {
-        return new ScriptedRespServer(expectedClients, new ImmediateScript(reply));
+        byte[] response = Objects.requireNonNull(reply, "reply").clone();
+        return new ScriptedRespServer(
+                expectedClients,
+                (connection, command, connectionCount, totalCount) ->
+                        connection.sendReplies(response, 1)
+        );
     }
 
     static ScriptedRespServer respondingWith(String reply) throws IOException {
@@ -114,13 +119,13 @@ final class ScriptedRespServer implements AutoCloseable {
     }
 
     static ScriptedRespServer rejectingAuth(String reply) throws IOException {
-        return new ScriptedRespServer(
-                1,
-                new RejectingAuthScript(
-                        Objects.requireNonNull(reply, "reply")
-                                .getBytes(StandardCharsets.US_ASCII)
-                )
-        );
+        byte[] response = Objects.requireNonNull(reply, "reply")
+                .getBytes(StandardCharsets.US_ASCII);
+        return new ScriptedRespServer(1, (connection, command, connectionCount, totalCount) -> {
+            if (command.name().equals("AUTH")) {
+                connection.sendReplies(response, 1);
+            }
+        });
     }
 
     static ScriptedRespServer neverResponding() throws IOException {
@@ -134,9 +139,19 @@ final class ScriptedRespServer implements AutoCloseable {
             int batchSize,
             Runnable immediatelyBeforeResponse
     ) throws IOException {
+        byte[] response = Objects.requireNonNull(reply, "reply").clone();
+        if (batchSize <= 0) {
+            throw new IllegalArgumentException("batchSize must be > 0");
+        }
+        Objects.requireNonNull(immediatelyBeforeResponse, "immediatelyBeforeResponse");
         return new ScriptedRespServer(
                 expectedClients,
-                new BatchedScript(reply, batchSize, immediatelyBeforeResponse)
+                (connection, command, connectionCount, totalCount) -> {
+                    if (connectionCount % batchSize == 0) {
+                        immediatelyBeforeResponse.run();
+                        connection.sendReplies(response, batchSize);
+                    }
+                }
         );
     }
 
@@ -146,19 +161,29 @@ final class ScriptedRespServer implements AutoCloseable {
             int splitAt,
             Runnable betweenFragments
     ) throws IOException {
+        Objects.requireNonNull(reply, "reply");
+        if (splitAt <= 0 || splitAt >= reply.length) {
+            throw new IllegalArgumentException("splitAt must be within reply");
+        }
+        byte[] first = new byte[splitAt];
+        byte[] second = new byte[reply.length - splitAt];
+        System.arraycopy(reply, 0, first, 0, first.length);
+        System.arraycopy(reply, splitAt, second, 0, second.length);
+        Objects.requireNonNull(betweenFragments, "betweenFragments");
         return new ScriptedRespServer(
                 expectedClients,
-                new FragmentedScript(reply, splitAt, betweenFragments)
+                (connection, command, connectionCount, totalCount) ->
+                        connection.sendFragments(first, second, betweenFragments)
         );
     }
 
     static ScriptedRespServer fragmentingEveryByte(String reply) throws IOException {
+        byte[] response = Objects.requireNonNull(reply, "reply")
+                .getBytes(StandardCharsets.US_ASCII);
         return new ScriptedRespServer(
                 1,
-                new EveryByteFragmentedScript(
-                        Objects.requireNonNull(reply, "reply")
-                                .getBytes(StandardCharsets.US_ASCII)
-                )
+                (connection, command, connectionCount, totalCount) ->
+                        connection.sendEveryByte(response)
         );
     }
 
@@ -171,9 +196,16 @@ final class ScriptedRespServer implements AutoCloseable {
             int expectedClients,
             int connectionCommandNumber
     ) throws IOException {
+        if (connectionCommandNumber <= 0) {
+            throw new IllegalArgumentException("connectionCommandNumber must be > 0");
+        }
         return new ScriptedRespServer(
                 expectedClients,
-                new CloseScript(connectionCommandNumber)
+                (connection, command, connectionCount, totalCount) -> {
+                    if (connectionCount == connectionCommandNumber) {
+                        connection.close();
+                    }
+                }
         );
     }
 
@@ -690,24 +722,6 @@ final class ScriptedRespServer implements AutoCloseable {
         }
     }
 
-    private static final class ImmediateScript implements ResponseScript {
-        private final byte[] reply;
-
-        private ImmediateScript(byte[] reply) {
-            this.reply = Objects.requireNonNull(reply, "reply").clone();
-        }
-
-        @Override
-        public void onCommand(
-                Connection connection,
-                Command command,
-                int connectionCommandCount,
-                int totalCommandCount
-        ) throws IOException {
-            connection.sendReplies(reply, 1);
-        }
-    }
-
     private static final class AuthAndSelectScript implements ResponseScript {
         private static final Duration COORDINATION_TIMEOUT = Duration.ofSeconds(5);
 
@@ -751,126 +765,6 @@ final class ScriptedRespServer implements AutoCloseable {
             beforePrefixReply.run();
             connection.sendReplies(OK, 1);
             server.awaitClockCallAfter(observedClockCalls, COORDINATION_TIMEOUT);
-        }
-    }
-
-    private static final class RejectingAuthScript implements ResponseScript {
-        private final byte[] reply;
-
-        private RejectingAuthScript(byte[] reply) {
-            this.reply = Objects.requireNonNull(reply, "reply").clone();
-        }
-
-        @Override
-        public void onCommand(
-                Connection connection,
-                Command command,
-                int connectionCommandCount,
-                int totalCommandCount
-        ) throws IOException {
-            if (command.name().equals("AUTH")) {
-                connection.sendReplies(reply, 1);
-            }
-        }
-    }
-
-    private static final class BatchedScript implements ResponseScript {
-        private final byte[] reply;
-        private final int batchSize;
-        private final Runnable immediatelyBeforeResponse;
-
-        private BatchedScript(byte[] reply, int batchSize, Runnable immediatelyBeforeResponse) {
-            this.reply = Objects.requireNonNull(reply, "reply").clone();
-            if (batchSize <= 0) {
-                throw new IllegalArgumentException("batchSize must be > 0");
-            }
-            this.batchSize = batchSize;
-            this.immediatelyBeforeResponse = Objects.requireNonNull(
-                    immediatelyBeforeResponse,
-                    "immediatelyBeforeResponse"
-            );
-        }
-
-        @Override
-        public void onCommand(
-                Connection connection,
-                Command command,
-                int connectionCommandCount,
-                int totalCommandCount
-        ) throws IOException {
-            if (connectionCommandCount % batchSize == 0) {
-                immediatelyBeforeResponse.run();
-                connection.sendReplies(reply, batchSize);
-            }
-        }
-    }
-
-    private static final class FragmentedScript implements ResponseScript {
-        private final byte[] first;
-        private final byte[] second;
-        private final Runnable betweenFragments;
-
-        private FragmentedScript(byte[] reply, int splitAt, Runnable betweenFragments) {
-            Objects.requireNonNull(reply, "reply");
-            if (splitAt <= 0 || splitAt >= reply.length) {
-                throw new IllegalArgumentException("splitAt must be within reply");
-            }
-            this.first = new byte[splitAt];
-            this.second = new byte[reply.length - splitAt];
-            System.arraycopy(reply, 0, first, 0, first.length);
-            System.arraycopy(reply, splitAt, second, 0, second.length);
-            this.betweenFragments = Objects.requireNonNull(betweenFragments, "betweenFragments");
-        }
-
-        @Override
-        public void onCommand(
-                Connection connection,
-                Command command,
-                int connectionCommandCount,
-                int totalCommandCount
-        ) throws IOException {
-            connection.sendFragments(first, second, betweenFragments);
-        }
-    }
-
-    private static final class EveryByteFragmentedScript implements ResponseScript {
-        private final byte[] reply;
-
-        private EveryByteFragmentedScript(byte[] reply) {
-            this.reply = Objects.requireNonNull(reply, "reply").clone();
-        }
-
-        @Override
-        public void onCommand(
-                Connection connection,
-                Command command,
-                int connectionCommandCount,
-                int totalCommandCount
-        ) throws IOException {
-            connection.sendEveryByte(reply);
-        }
-    }
-
-    private static final class CloseScript implements ResponseScript {
-        private final int connectionCommandNumber;
-
-        private CloseScript(int connectionCommandNumber) {
-            if (connectionCommandNumber <= 0) {
-                throw new IllegalArgumentException("connectionCommandNumber must be > 0");
-            }
-            this.connectionCommandNumber = connectionCommandNumber;
-        }
-
-        @Override
-        public void onCommand(
-                Connection connection,
-                Command command,
-                int connectionCommandCount,
-                int totalCommandCount
-        ) throws IOException {
-            if (connectionCommandCount == connectionCommandNumber) {
-                connection.close();
-            }
         }
     }
 

@@ -1,11 +1,9 @@
 package yier.bubu.redis.app.server;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import yier.bubu.redis.app.server.args.YierdisCliException;
 
 public final class YierdisServer {
-    private static final Logger log = LoggerFactory.getLogger(YierdisServer.class);
+    private static final System.Logger LOG = System.getLogger(YierdisServer.class.getName());
 
     public static void main(String[] args) throws Exception {
         final ServerConfig config;
@@ -25,12 +23,13 @@ public final class YierdisServer {
                     try {
                         server.close();
                     } catch (Throwable failure) {
-                        log.error("shutdown hook failed", failure);
+                        LOG.log(System.Logger.Level.ERROR, "shutdown hook failed", failure);
                     }
                 }, "yierdis-shutdown-hook");
                 Runtime.getRuntime().addShutdownHook(shutdownHook);
                 try {
-                    log.info("yierdis started on {}:{} (RESP)", config.runtimeConfig().bind(), server.port());
+                    LOG.log(System.Logger.Level.INFO, "yierdis started on {0}:{1} (RESP)",
+                            config.runtimeConfig().bind(), server.port());
                     server.awaitClose();
                 } finally {
                     try {

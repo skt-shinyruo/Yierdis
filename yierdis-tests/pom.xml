@@ -12,9 +12,6 @@
     </parent>
 
     <artifactId>yierdis-tests</artifactId>
-    <packaging>jar</packaging>
-
-    <name>yierdis-tests</name>
     <description>Cross-module behavior and architecture tests for Yierdis.</description>
 
     <dependencies>

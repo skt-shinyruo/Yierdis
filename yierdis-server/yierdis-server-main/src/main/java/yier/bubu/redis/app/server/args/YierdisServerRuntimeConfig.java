@@ -17,7 +17,7 @@ public record YierdisServerRuntimeConfig(
         int ioThreads,
         int executorQueueCapacity,
         long executorQueueMaxBytes,
-        ExecutorSchedulingPolicy executorSchedulingPolicy,
+        SchedulingPolicy executorSchedulingPolicy,
         int backpressureHighWatermark,
         int backpressureLowWatermark,
         long backpressureBytesHighWatermark,
@@ -164,10 +164,7 @@ public record YierdisServerRuntimeConfig(
                 backpressureBytesLowWatermark,
                 executorMaxDrainCommands,
                 executorDrainTimeLimitMillis,
-                switch (executorSchedulingPolicy) {
-                    case GLOBAL -> SchedulingPolicy.GLOBAL;
-                    case FAIR -> SchedulingPolicy.FAIR;
-                }
+                executorSchedulingPolicy
         );
     }
 
@@ -194,41 +191,6 @@ public record YierdisServerRuntimeConfig(
             return Long.MAX_VALUE;
         }
         return left + right;
-    }
-
-    public enum ExecutorSchedulingPolicy {
-        GLOBAL("global"),
-        FAIR("fair");
-
-        private final String argvValue;
-
-        ExecutorSchedulingPolicy(String argvValue) {
-            this.argvValue = argvValue;
-        }
-
-        public String argvValue() {
-            return argvValue;
-        }
-
-        public static ExecutorSchedulingPolicy parseCliValue(String rawValue) {
-            if (rawValue == null || rawValue.isBlank()) {
-                throw new IllegalArgumentException("executorSchedulingPolicy must not be blank");
-            }
-            String normalized = rawValue.trim().toLowerCase(Locale.ROOT);
-            return switch (normalized) {
-                case "global" -> GLOBAL;
-                case "fair" -> FAIR;
-                default -> throw new IllegalArgumentException("unsupported executorSchedulingPolicy: " + rawValue);
-            };
-        }
-
-        public static ExecutorSchedulingPolicy fromArgvValue(String argvValue) {
-            return switch (argvValue) {
-                case "global" -> GLOBAL;
-                case "fair" -> FAIR;
-                default -> throw new IllegalStateException("executorSchedulingPolicy is not normalized: " + argvValue);
-            };
-        }
     }
 
     public enum MaxmemoryScope {

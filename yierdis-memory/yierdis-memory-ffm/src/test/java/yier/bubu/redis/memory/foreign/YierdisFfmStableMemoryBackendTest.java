@@ -16,7 +16,6 @@ import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 import yier.bubu.redis.memory.api.NativeDefragResult;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeDefragReport;
-import yier.bubu.redis.memory.api.NativeEpochKind;
 import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeMemoryException;
@@ -124,11 +123,11 @@ public class YierdisFfmStableMemoryBackendTest {
     public void automaticSlotCapacityStartsLazyAndAllocatesNormally() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-auto-capacity");
              YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 0)) {
-            Assert.assertEquals(0L, allocator.metadataStats().activeMetadataSegments());
+            Assert.assertEquals(0L, allocator.stats().activeMetadataSegments());
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 1);
 
-            Assert.assertEquals(1L, allocator.metadataStats().activeMetadataSegments());
+            Assert.assertEquals(1L, allocator.stats().activeMetadataSegments());
             allocator.free(handle);
         }
     }
@@ -371,7 +370,7 @@ public class YierdisFfmStableMemoryBackendTest {
              YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 1)) {
 
             NativeHandle first = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
-            NativeEpochScope epoch = allocator.beginEpoch(NativeEpochKind.SCAN);
+            NativeEpochScope epoch = allocator.beginEpoch();
 
             allocator.free(first);
 
@@ -409,7 +408,7 @@ public class YierdisFfmStableMemoryBackendTest {
              YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 1)) {
 
             NativeHandle first = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
-            NativeEpochScope epoch = allocator.beginEpoch(NativeEpochKind.SCAN);
+            NativeEpochScope epoch = allocator.beginEpoch();
 
             allocator.free(first);
 
@@ -447,11 +446,9 @@ public class YierdisFfmStableMemoryBackendTest {
              YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 1)) {
 
             NativeHandle first = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
-            NativeEpochScope command = allocator.beginEpoch(NativeEpochKind.COMMAND);
+            NativeEpochScope command = allocator.beginEpoch();
             allocator.free(first);
-            NativeEpochScope scan = allocator.beginEpoch(NativeEpochKind.SCAN);
-
-            Assert.assertTrue(command.epoch() < scan.epoch());
+            NativeEpochScope scan = allocator.beginEpoch();
             Assert.assertEquals(1L, allocator.stats().quarantinedObjects());
 
             command.close();
@@ -834,7 +831,7 @@ public class YierdisFfmStableMemoryBackendTest {
              YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 1024)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 16);
-            NativeEpochScope epoch = allocator.beginEpoch(NativeEpochKind.COMMAND);
+            NativeEpochScope epoch = allocator.beginEpoch();
 
             allocator.reallocate(handle, 24, NativeReallocPolicy.PRESERVE_PREFIX);
 
@@ -966,7 +963,7 @@ public class YierdisFfmStableMemoryBackendTest {
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
                 view.setByte(0, (byte) 1);
             }
-            NativeEpochScope epoch = allocator.beginEpoch(NativeEpochKind.DEFRAG);
+            NativeEpochScope epoch = allocator.beginEpoch();
 
             NativeDefragResult result = allocator.defragOne(handle, 24);
 
@@ -992,7 +989,7 @@ public class YierdisFfmStableMemoryBackendTest {
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
                 view.setByte(0, (byte) 7);
             }
-            NativeEpochScope epoch = allocator.beginEpoch(NativeEpochKind.SCAN);
+            NativeEpochScope epoch = allocator.beginEpoch();
 
             NativeDefragResult result = allocator.defragOne(handle, 24);
 
@@ -1133,7 +1130,6 @@ public class YierdisFfmStableMemoryBackendTest {
             Assert.assertEquals(0L, allocated.mediumFreeBytes());
             Assert.assertEquals(0L, allocated.largeFreeBytes());
             Assert.assertEquals(0L, allocated.freePages());
-            Assert.assertTrue(allocated.allocationLatencyHistogram().allocationCount() >= 2L);
 
             long reclaimedPages = allocator.objectMeta(entry.localRaw(), false).capacity()
                     / YierdisNativePageAllocator.PAGE_BYTES;
@@ -1214,7 +1210,6 @@ public class YierdisFfmStableMemoryBackendTest {
             Assert.assertEquals(0L, stats.liveObjects());
             Assert.assertTrue(stats.staleHandleDetections() > 0L);
             Assert.assertTrue(stats.defragSkippedPinnedObjects() > 0L);
-            Assert.assertTrue(stats.allocationLatencyHistogram().allocationCount() > 0L);
         }
     }
 
@@ -1240,12 +1235,6 @@ public class YierdisFfmStableMemoryBackendTest {
                 List<LiveObject> live = new ArrayList<>();
                 List<NativeEpochScope> epochs = new ArrayList<>();
                 List<NativeHandle> staleHandles = new ArrayList<>();
-                NativeEpochKind[] epochKinds = {
-                        NativeEpochKind.COMMAND,
-                        NativeEpochKind.SCAN,
-                        NativeEpochKind.DEFRAG
-                };
-
                 try {
                     for (int i = 0; i < 240; i++) {
                         int op = live.isEmpty() ? 0 : random.nextInt(100);
@@ -1300,7 +1289,7 @@ public class YierdisFfmStableMemoryBackendTest {
                             }
                         } else if (op < 72) {
                             if (epochs.isEmpty() || random.nextBoolean()) {
-                                epochs.add(allocator.beginEpoch(epochKinds[random.nextInt(epochKinds.length)]));
+                                epochs.add(allocator.beginEpoch());
                             } else {
                                 epochs.remove(random.nextInt(epochs.size())).close();
                             }
@@ -1375,7 +1364,6 @@ public class YierdisFfmStableMemoryBackendTest {
                 Assert.assertEquals(0L, stats.liveObjects());
                 Assert.assertTrue(stats.staleHandleDetections() > 0L);
                 Assert.assertTrue(stats.defragSkippedPinnedObjects() > 0L);
-                Assert.assertTrue(stats.allocationLatencyHistogram().allocationCount() > 0L);
             }
 
             Assert.assertEquals(0L, runtime.usedBytes());

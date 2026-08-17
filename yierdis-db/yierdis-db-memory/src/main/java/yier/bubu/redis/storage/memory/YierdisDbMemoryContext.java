@@ -5,7 +5,6 @@ import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.common.memory.MemoryReclaimResult;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
-import yier.bubu.redis.memory.api.NativeEpochKind;
 import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
@@ -50,7 +49,7 @@ final class YierdisDbMemoryContext {
     }
 
     NativeEpochScope beginScanEpoch() {
-        return stableMemoryBackend.beginEpoch(NativeEpochKind.SCAN);
+        return stableMemoryBackend.beginEpoch();
     }
 
     NativeBytesSlice keyBytesSlice(KeyHandle keyHandle) {

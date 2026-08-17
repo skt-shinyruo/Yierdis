@@ -12,9 +12,6 @@
     </parent>
 
     <artifactId>yierdis-db-memory</artifactId>
-    <packaging>jar</packaging>
-
-    <name>yierdis-db-memory</name>
     <description>In-memory storage implementation for Yierdis.</description>
 
     <dependencies>

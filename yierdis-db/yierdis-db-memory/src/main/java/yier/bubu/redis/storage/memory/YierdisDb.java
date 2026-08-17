@@ -35,22 +35,23 @@ import yier.bubu.redis.storage.api.ZSetReadOps;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceResult;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMemoryLedger;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
+import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 /**
  * 基于稳定内存后端的单 owner DB；只能由 {@link YierdisDbEngineFactory} 组合。
  */
 public final class YierdisDb
-        implements GlobalMaxmemoryDbEngine, DefragmentableDbEngine, MemoryOps, DbReads, AutoCloseable {
+        implements GlobalMaxmemoryDbEngine, DefragmentableDbEngine, MemoryOps, DbReads,
+        DbLifecycleOps, AutoCloseable {
     private final YierdisDbRuntimeState runtimeState;
     private final YierdisDbStorage storage;
     private final YierdisDbKernel kernel;
     private final YierdisDbHealth health;
-    private final DbComponentMemoryUsage memoryUsage;
     private final YierdisDbMemoryLedger ledger;
-    private final YierdisDbIntrospection introspection;
     private final YierdisDbMemoryReporter memoryReporter;
     private final YierdisDbDataMaintenance maintenance;
     private final StringReadOps strings;
@@ -62,7 +63,6 @@ public final class YierdisDb
     private final KeyspaceReadOps keyspace;
     private final TtlReadOps ttl;
     private final DbWrites writes;
-    private final DbLifecycleOps lifecycle;
 
     static YierdisDb create(
             DbEngineConfig config,
@@ -129,14 +129,7 @@ public final class YierdisDb
             YierdisDbKernel kernel = new YierdisDbKernel(
                     threadChecker,
                     mutationExecutor,
-                    keyLifecycle,
-                    memoryContext
-            );
-            DbComponentMemoryUsage memoryUsage = new DbComponentMemoryUsage(
-                    threadChecker,
-                    memoryContext,
-                    keyLifecycle,
-                    storage.hashTableMaintenanceRegistry()
+                    keyLifecycle
             );
             YierdisDbExpirationSupport expirationSupport = new YierdisDbExpirationSupport(
                     kernel,
@@ -153,19 +146,19 @@ public final class YierdisDb
             YierdisKeyspaceOps keyspaceOps = new YierdisKeyspaceOps(kernel, keyLifecycle, memoryContext);
             YierdisDbMemoryReporter memoryReporter = new YierdisDbMemoryReporter(
                     kernel,
-                    memoryUsage,
+                    memoryContext,
+                    keyLifecycle,
                     storage.hashTableMaintenanceRegistry(),
                     maxmemoryBytes,
                     ledger,
                     new YierdisDbMemoryEstimator(),
                     runtimeState::lastNativeDefragReport
             );
-            YierdisDbIntrospection introspection = new YierdisDbIntrospection(kernel);
             YierdisDbMaxmemorySupport maxmemorySupport = new YierdisDbMaxmemorySupport(
                     kernel,
+                    memoryContext,
+                    keyLifecycle,
                     memoryReporter::usedBytesForMaxmemory,
-                    memoryReporter::memoryUsage,
-                    expirationSupport::cleanupExpired,
                     maxmemoryPolicy,
                     checkedConfig.maxmemorySamples(),
                     evictionTimeLimitNanos
@@ -198,19 +191,11 @@ public final class YierdisDb
                     keyspaceOps,
                     ttlOps
             );
-            DbLifecycleOps lifecycle = new YierdisDbLifecycleOps(
-                    threadChecker,
-                    maintenance::flushDb,
-                    maintenance::flushDbAsync
-            );
-
             this.runtimeState = runtimeState;
             this.storage = storage;
             this.kernel = kernel;
             this.health = health;
-            this.memoryUsage = memoryUsage;
             this.ledger = ledger;
-            this.introspection = introspection;
             this.memoryReporter = memoryReporter;
             this.maintenance = maintenance;
             this.strings = stringOps;
@@ -222,7 +207,6 @@ public final class YierdisDb
             this.keyspace = keyspaceOps;
             this.ttl = ttlOps;
             this.writes = writes;
-            this.lifecycle = lifecycle;
             runtimeState.bindMaxmemoryParticipant(this);
         } catch (Throwable failure) {
             try {
@@ -317,12 +301,15 @@ public final class YierdisDb
 
     @Override
     public String objectEncoding(BytesView keyView) {
-        return introspection.objectEncoding(keyView);
+        kernel.checkOwner();
+        KeyHandle keyHandle = storage.keyLifecycle().keyHandle(keyView);
+        EntryRecord record = kernel.liveEntryRecord(keyHandle);
+        return record == null ? null : encodingName(record.encoding());
     }
 
     @Override
     public DbLifecycleOps lifecycle() {
-        return lifecycle;
+        return this;
     }
 
     @Override
@@ -396,7 +383,7 @@ public final class YierdisDb
 
     @Override
     public MemoryUsageSnapshot memoryUsage() {
-        return memoryUsage.snapshot();
+        return memoryReporter.memoryUsage();
     }
 
     @Override
@@ -455,8 +442,14 @@ public final class YierdisDb
         storage.keyLifecycle().disarmMemoryUsageIterationTrapsForTesting();
     }
 
-    MutationOutcome flushDb() {
+    @Override
+    public MutationOutcome flushDb() {
         return maintenance.flushDb();
+    }
+
+    @Override
+    public MutationOutcome flushDbAsync() {
+        return maintenance.flushDbAsync();
     }
 
     int size() {
@@ -486,5 +479,21 @@ public final class YierdisDb
 
     YierdisDbKeyLifecycle keyLifecycle() {
         return storage.keyLifecycle();
+    }
+
+    private static String encodingName(ValueEncoding encoding) {
+        if (encoding == null) {
+            return "unknown";
+        }
+        return switch (encoding) {
+            case STRING_INT -> "int";
+            case STRING_EMBSTR -> "embstr";
+            case STRING_RAW -> "raw";
+            case HASH_PACKED, LIST_PACKED, ZSET_PACKED -> "listpack";
+            case HASH_HT, SET_HT -> "hashtable";
+            case SET_INTSET -> "intset";
+            case LIST_QUICKLIST -> "quicklist";
+            case ZSET_SKIPLIST -> "skiplist";
+        };
     }
 }
