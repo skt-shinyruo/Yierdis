@@ -8,8 +8,16 @@ import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.ledger.AbstractPreparedMutation;
 
 final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
+    enum Operation {
+        UNCHANGED,
+        INSERT,
+        REPLACE,
+        DELETE
+    }
+
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final T result;
+    private final Operation operation;
     private final EntryRecord oldRecord;
     private final EntryRecord newRecord;
     private final boolean releaseReplacedValue;
@@ -31,6 +39,7 @@ final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
         return new PreparedEntryMutation<>(
                 keyLifecycle,
                 result,
+                Operation.UNCHANGED,
                 0L,
                 0L,
                 null,
@@ -49,9 +58,12 @@ final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
             StagedEntry stagedEntry,
             EntryRecord newRecord
     ) {
+        Objects.requireNonNull(stagedEntry, "stagedEntry");
+        Objects.requireNonNull(newRecord, "newRecord");
         return new PreparedEntryMutation<>(
                 keyLifecycle,
                 result,
+                Operation.INSERT,
                 actualDeltaBytes,
                 stagedNonNativeGrowthBytes,
                 null,
@@ -72,9 +84,13 @@ final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
             EntryRecord newRecord,
             boolean releaseReplacedValue
     ) {
+        Objects.requireNonNull(existingEntryHandle, "existingEntryHandle");
+        Objects.requireNonNull(oldRecord, "oldRecord");
+        Objects.requireNonNull(newRecord, "newRecord");
         return new PreparedEntryMutation<>(
                 keyLifecycle,
                 result,
+                Operation.REPLACE,
                 actualDeltaBytes,
                 stagedNonNativeGrowthBytes,
                 existingEntryHandle,
@@ -93,9 +109,12 @@ final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
             EntryRecord oldRecord,
             boolean releaseReplacedValue
     ) {
+        Objects.requireNonNull(existingEntryHandle, "existingEntryHandle");
+        Objects.requireNonNull(oldRecord, "oldRecord");
         return new PreparedEntryMutation<>(
                 keyLifecycle,
                 result,
+                Operation.DELETE,
                 actualDeltaBytes,
                 0L,
                 existingEntryHandle,
@@ -127,6 +146,9 @@ final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
                     newRecord
             );
         }
+        if (staged != null) {
+            throw new IllegalArgumentException("replacement upsert must not have a staged entry");
+        }
         return replace(
                 keyLifecycle,
                 result,
@@ -142,6 +164,7 @@ final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
     private PreparedEntryMutation(
             YierdisDbKeyLifecycle keyLifecycle,
             T result,
+            Operation operation,
             long actualDeltaBytes,
             long stagedNonNativeGrowthBytes,
             EntryHandle existingEntryHandle,
@@ -156,11 +179,16 @@ final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
         );
         this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
         this.result = result;
+        this.operation = Objects.requireNonNull(operation, "operation");
         this.existingEntryHandle = existingEntryHandle;
         this.stagedEntry = stagedEntry;
         this.oldRecord = oldRecord;
         this.newRecord = newRecord;
         this.releaseReplacedValue = releaseReplacedValue;
+    }
+
+    Operation operation() {
+        return operation;
     }
 
     PreparedEntryMutation<T> releaseReplacedValueWith(Runnable hook) {
@@ -207,26 +235,34 @@ final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> {
 
     @Override
     protected T commitPrepared() {
-        boolean deletingEntry = newRecord == null && existingEntryHandle != null;
-        if (newRecord != null) {
-            if (beforeEntryPublishHook != null) {
-                Runnable hook = beforeEntryPublishHook;
-                beforeEntryPublishHook = null;
-                hook.run();
+        switch (operation) {
+            case UNCHANGED -> {
             }
-            if (existingEntryHandle != null) {
-                keyLifecycle.replaceEntry(existingEntryHandle, oldRecord, newRecord);
-                entryPublished = true;
-            } else if (stagedEntry != null) {
+            case INSERT -> {
+                runBeforeEntryPublishHook();
                 keyLifecycle.publishStagedEntry(stagedEntry, newRecord);
                 stagedEntry = null;
                 entryPublished = true;
             }
-        } else if (deletingEntry) {
-            keyLifecycle.deleteEntry(existingEntryHandle, oldRecord);
-            entryPublished = true;
+            case REPLACE -> {
+                runBeforeEntryPublishHook();
+                keyLifecycle.replaceEntry(existingEntryHandle, oldRecord, newRecord);
+                entryPublished = true;
+            }
+            case DELETE -> {
+                keyLifecycle.deleteEntry(existingEntryHandle, oldRecord);
+                entryPublished = true;
+            }
         }
         return result;
+    }
+
+    private void runBeforeEntryPublishHook() {
+        if (beforeEntryPublishHook != null) {
+            Runnable hook = beforeEntryPublishHook;
+            beforeEntryPublishHook = null;
+            hook.run();
+        }
     }
 
     @Override
