@@ -17,7 +17,7 @@ argv
 
 `YierdisServerArgs` 用 picocli 声明 server 参数、默认值和 usage。`normalizeAndValidate()` 只处理 CLI 归一化和派生语义，例如 `--noCleanup` 会把 `cleanupIntervalMillis` 归零，字符串枚举会归一化成稳定 argv 值。网络、协议、reply、内存和 maintenance 约束由 `YierdisServerRuntimeConfig` 的构造器统一校验；executor 队列与背压约束由 `CommandExecutorConfig` 校验。`normalizeAndValidate()` 通过构造这两个领域配置触发校验，避免 CLI、bootstrap 和 embedded 路径各维护一套规则。
 
-`toRuntimeConfig()` 把已归一化参数转成 `YierdisServerRuntimeConfig` record。这个 record 是 server-main 内部后续组装的稳定配置对象，字段已经是 enum、number 和 boolean，不再携带原始 CLI 字符串；`executorConfig()` 直接生成 executor 领域配置。
+`toRuntimeConfig()` 把已归一化参数转成 `YierdisServerRuntimeConfig` record。这个 record 是 `yierdis-server` 内部后续组装的稳定配置对象，字段已经是 enum、number 和 boolean，不再携带原始 CLI 字符串；`executorConfig()` 直接生成 executor 领域配置。
 
 `ServerConfig.fromArgs(...)` 是 CLI 到组合根的边界：解析失败或校验失败时打印 usage，并抛 `YierdisCliException.usageError(...)`；`--help` 打印 usage 并返回 `null`。`YierdisServerBootstrap.start(String... args)` 收到 `null` 会视为没有可启动配置。
 
@@ -27,23 +27,23 @@ argv
 2. 将 `YierdisServerRuntimeConfig` 映射成 `YierdisInstanceConfig`。
 3. 创建 `YierdisInstance`，并取得 runtime access、maintenance 和 observability。
 4. 创建 `NettyServerInfoProvider`，绑定 instance observability。
-5. 由 `ServerCommandComposition` 注册命令模块并创建 `CommandDispatcher`。
+5. 由 bootstrap 调用 `CommandRegistries.dispatcher(...)` 注册默认命令和 server-only 命令。
 6. 创建单线程 `DefaultEventExecutorGroup(1)` 与 `CommandExecutor`。
 7. `executor.start()` 在 owner thread 上绑定 runtime。
 8. 按需在 Netty worker event loop 上调度 maintenance tick，但 DB 逻辑仍通过 `executeMaintenance(...)` 回到 owner thread。
 9. 创建 boss/worker Netty group，并由 `YierdisServerChannelInitializer` 装配连接 pipeline。
 10. `bind(port)`。
 
-`YierdisInstance` 在这个过程中不是“随手可用的 DB 容器”。`YierdisInstance.create(config)` 直接组装固定的 FFM DB backend；`bindToCurrentThread()` 要先把当前线程标成 owner thread，后续 DB access 才会被允许；`close()` 负责按拥有关系关闭 runtime、allocator 和 DB resources。bootstrap 失败时会 best-effort 清掉已经创建的对象，避免留下半初始化实例。
+`YierdisInstance` 在这个过程中不是“随手可用的 DB 容器”。`YierdisInstance.create(config)` 直接组装固定的 FFM DB backend；`runtimeAccess().bindToCurrentThread()` 要先把当前线程标成 owner thread，后续 DB access 才会被允许；`close()` 负责按拥有关系关闭 runtime、allocator 和 DB resources。bootstrap 失败时会 best-effort 清掉已经创建的对象，避免留下半初始化实例。
 
 注意：benchmark 不持有 server 参数或生命周期模型，只连接由操作者单独管理的 Yierdis。client idle/output-buffer 等 server-only 参数必须在启动目标 Yierdis 时直接配置。
 
 源码入口：
 
-- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/args/YierdisServerArgs.java`
-- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/args/YierdisServerRuntimeConfig.java`
-- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/ServerConfig.java`
-- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
+- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/args/YierdisServerArgs.java`
+- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/args/YierdisServerRuntimeConfig.java`
+- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/ServerConfig.java`
+- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
 
 ## 网络和实例规模
 
@@ -61,7 +61,7 @@ argv
 
 ```bash
 mvn -q -DskipTests package
-java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar --port 6378 --maxmemoryBytes 0
+java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 6378 --maxmemoryBytes 0
 ```
 
 然后可以用 `redis-cli` 或项目 CLI：
@@ -126,7 +126,7 @@ bootstrap 使用 Netty worker event loop 做定时器，但定时器只提交 `e
 
 `nativeDefragEnabled` 只是给 `YierdisDb.defragMaintenance()` 提供预算闸门；更细的移动、pin、quarantine 和 object table 语义看 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 
-`KEYS` 的预算来自 `SlowCommandGovernor`，由 `DefaultCommandModules.create(...)` 注入命令模块。大 keyspace 运行时优先使用 `SCAN`，把 `KEYS` 当成受限诊断工具。
+`KEYS` 的时间和结果数预算由 bootstrap 转成 `SlowCommandLimits`，再通过 `DefaultCommandModules.create(...)` 注入命令模块。大 keyspace 运行时优先使用 `SCAN`，把 `KEYS` 当成受限诊断工具。
 
 连接空闲超时 `--clientIdleTimeoutMillis` 默认 `0`，表示不因空闲主动断开；不可信或资源紧张的部署可以显式设置正值。
 
@@ -214,7 +214,7 @@ REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
 maxmemory 调试场景，先决定 scope。想模拟实例级 Redis 风格预算，用默认 `--maxmemoryScope global`；想验证每个 DB 独立预算，用 `--maxmemoryScope per-db`。例如：
 
 ```bash
-java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar \
+java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar \
   --port 6378 \
   --maxmemoryBytes 10485760 \
   --maxmemoryScope global \

@@ -3,9 +3,8 @@ package yier.bubu.redis.testutil;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
-import yier.bubu.redis.execution.api.CommandExecutionContext;
-import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.CommandSession;
+import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.RedisReplyRenderer;
@@ -24,7 +23,7 @@ import java.util.Objects;
  * <p>
  * 该路径不经过执行器的容量预留和网络协议编码，因此只用于验证命令语义。
  */
-public final class FastTestClient implements AutoCloseable {
+public final class FastTestClient {
     private final CommandDispatcher dispatcher;
     private final CommandSession session;
 
@@ -52,11 +51,8 @@ public final class FastTestClient implements AutoCloseable {
                     if (prepared.validateBeforeExecute() == ValidationResult.STALE) {
                         continue;
                     }
-                    CommandResult result = prepared.execute(CommandExecutionContext.forSession(session));
+                    CommandResult result = prepared.execute(session);
                     RedisReplyRenderer.render(result.reply(), writer);
-                    if (result.closeAfterReply()) {
-                        writer.requestCloseAfterReply();
-                    }
                     return writer.root();
                 }
             }
@@ -65,13 +61,7 @@ public final class FastTestClient implements AutoCloseable {
         }
     }
 
-    @Override
-    public void close() {
-    }
-
     private static final class CapturingReplyWriter implements RedisReplyWriter {
-        private boolean closeAfterReplyRequested;
-
         private ReplyObject root;
         private final Deque<Container> stack = new ArrayDeque<>(8);
 
@@ -105,21 +95,6 @@ public final class FastTestClient implements AutoCloseable {
                 throw new AssertionError("reply container not finished");
             }
             return root;
-        }
-
-        @Override
-        public void requestCloseAfterReply() {
-            closeAfterReplyRequested = true;
-        }
-
-        @Override
-        public boolean closeAfterReplyRequested() {
-            return closeAfterReplyRequested;
-        }
-
-        @Override
-        public void protocolError(String message) {
-            addValue(new ReplyError(ReplyError.Kind.PROTOCOL, message == null ? "ERR error" : message));
         }
 
         @Override
@@ -320,7 +295,6 @@ public final class FastTestClient implements AutoCloseable {
     private static final class DefaultTestSession implements CommandSession {
         private int dbIndex;
         private String clientName;
-        private boolean authenticated;
         private final TransactionState tx = new DefaultTransactionState();
 
         @Override
@@ -334,11 +308,6 @@ public final class FastTestClient implements AutoCloseable {
         }
 
         @Override
-        public long clientId() {
-            return 1L;
-        }
-
-        @Override
         public String clientName() {
             return clientName;
         }
@@ -346,16 +315,6 @@ public final class FastTestClient implements AutoCloseable {
         @Override
         public void setClientName(String clientName) {
             this.clientName = clientName;
-        }
-
-        @Override
-        public boolean authenticated() {
-            return authenticated;
-        }
-
-        @Override
-        public void setAuthenticated(boolean authenticated) {
-            this.authenticated = authenticated;
         }
 
         @Override
@@ -441,11 +400,6 @@ public final class FastTestClient implements AutoCloseable {
             active = false;
             aborted = false;
             return out;
-        }
-
-        @Override
-        public synchronized void close() {
-            discard();
         }
 
         private void closeQueued() {

@@ -1,5 +1,7 @@
 package yier.bubu.redis.integration.command;
 
+import java.util.function.IntConsumer;
+
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Assert;
@@ -8,7 +10,7 @@ import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
-import yier.bubu.redis.execution.api.CommandExecutionContext;
+import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
@@ -22,18 +24,24 @@ import yier.bubu.redis.execution.engine.EngineSession;
 import yier.bubu.redis.protocol.resp.RespReplySizer;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
 import yier.bubu.redis.storage.api.DbEngine;
-import yier.bubu.redis.storage.api.DbReads;
-import yier.bubu.redis.storage.api.KeyspaceReadOps;
+import yier.bubu.redis.storage.api.HashOps;
+import yier.bubu.redis.storage.api.HllOps;
+import yier.bubu.redis.storage.api.KeyspaceOps;
+import yier.bubu.redis.storage.api.ListOps;
 import yier.bubu.redis.storage.api.ScanCursorV2;
+import yier.bubu.redis.storage.api.SetOps;
+import yier.bubu.redis.storage.api.StringOps;
+import yier.bubu.redis.storage.api.TtlOps;
 import yier.bubu.redis.storage.api.ValueType;
+import yier.bubu.redis.storage.api.ZSetOps;
 import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.KeyScanWindow;
-import yier.bubu.redis.storage.api.result.PayloadLengthSink;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestBytes.cmd;
+import static yier.bubu.redis.testutil.TestBytes.stringValue;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class ReplyPreflightCommandTest {
@@ -42,8 +50,9 @@ public class ReplyPreflightCommandTest {
     @Test
     public void setGetCapacityRejectionLeavesTheExistingValueUntouched() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 client.execute(cmd("SET", "key", "old"));
 
                 EngineSession session = new EngineSession(16, 16 * 1024L);
@@ -60,7 +69,7 @@ public class ReplyPreflightCommandTest {
                         () -> execute(dispatcher, session, capacity, writer, cmd("SET", "key", "new", "GET"))
                 );
 
-                Assert.assertArrayEquals(b("old"), db.reads().strings().getStringBytes(b("key")));
+                Assert.assertArrayEquals(b("old"), stringValue(db.strings(), b("key")));
                 Assert.assertEquals(expectedOldValuePlan, capacity.reservedPlan());
             }
         });
@@ -69,8 +78,9 @@ public class ReplyPreflightCommandTest {
     @Test
     public void setNxGetCapacityRejectionReservesTheExistingValueReply() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 client.execute(cmd("SET", "key", "old"));
 
                 EngineSession session = new EngineSession(16, 16 * 1024L);
@@ -87,7 +97,7 @@ public class ReplyPreflightCommandTest {
                         () -> execute(dispatcher, session, capacity, writer, cmd("SET", "key", "new", "NX", "GET"))
                 );
 
-                Assert.assertArrayEquals(b("old"), db.reads().strings().getStringBytes(b("key")));
+                Assert.assertArrayEquals(b("old"), stringValue(db.strings(), b("key")));
                 Assert.assertEquals(expectedOldValuePlan, capacity.reservedPlan());
             }
         });
@@ -96,8 +106,9 @@ public class ReplyPreflightCommandTest {
     @Test
     public void countedPopCapacityRejectionLeavesTheListUntouched() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 client.execute(cmd("RPUSH", "list", "a", "bb"));
 
                 EngineSession session = new EngineSession(16, 16 * 1024L);
@@ -108,7 +119,7 @@ public class ReplyPreflightCommandTest {
                         () -> execute(dispatcher, session, capacity, writer, cmd("LPOP", "list", "2"))
                 );
 
-                try (ByteSequenceSource values = db.reads().lists().lrange(b("list"), 0, -1)) {
+                try (ByteSequenceSource values = db.lists().lrange(b("list"), 0, -1)) {
                     Assert.assertEquals(2, values.elementCount());
                 }
                 Assert.assertEquals(19L, capacity.reservedPlan().encodedUpperBoundBytes());
@@ -119,8 +130,9 @@ public class ReplyPreflightCommandTest {
     @Test
     public void uncountedPopCapacityRejectionLeavesTheListUntouched() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 client.execute(cmd("RPUSH", "list", "value"));
 
                 EngineSession session = new EngineSession(16, 16 * 1024L);
@@ -131,7 +143,7 @@ public class ReplyPreflightCommandTest {
                         () -> execute(dispatcher, session, capacity, writer, cmd("LPOP", "list"))
                 );
 
-                try (ByteSequenceSource values = db.reads().lists().lrange(b("list"), 0, -1)) {
+                try (ByteSequenceSource values = db.lists().lrange(b("list"), 0, -1)) {
                     Assert.assertEquals(1, values.elementCount());
                 }
                 Assert.assertEquals(11L, capacity.reservedPlan().encodedUpperBoundBytes());
@@ -143,8 +155,9 @@ public class ReplyPreflightCommandTest {
     @Test
     public void getHgetAndEchoPrepareTheirSemanticReplySources() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 client.execute(cmd("SET", "string", "value"));
                 client.execute(cmd("HSET", "hash", "field", "value"));
 
@@ -157,7 +170,7 @@ public class ReplyPreflightCommandTest {
                 long retainedBytes = echo.admittedMemoryBytes();
                 ReplyPlan plan = execute(dispatcher, session, echoWriter, echo);
                 Assert.assertEquals(
-                        REPLY_SIZER.plan(session, ReplyShapes.bulkString(7, retainedBytes)),
+                        REPLY_SIZER.apply(session, ReplyShapes.bulkString(7, retainedBytes)),
                         plan
                 );
             }
@@ -167,8 +180,9 @@ public class ReplyPreflightCommandTest {
     @Test
     public void aggregateRepliesReserveTheirExactWireShapeBeforeWriting() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 client.execute(cmd("RPUSH", "list", "a", "bb"));
                 client.execute(cmd("HSET", "hash", "field", "value"));
                 client.execute(cmd("SADD", "set", "a", "bb"));
@@ -185,7 +199,7 @@ public class ReplyPreflightCommandTest {
     @Test
     public void memoryStatsPreflightMatchesItsResp2WireShape() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TrackingReplyWriter writer = new TrackingReplyWriter();
             EngineSession session = new EngineSession(16, 16 * 1024L);
 
@@ -199,8 +213,9 @@ public class ReplyPreflightCommandTest {
     @Test
     public void keyDiscoveryRepliesReserveBeforeWritingTheirNestedWireShape() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 client.execute(cmd("SET", "key", "value"));
 
                 assertAggregatePreflight(dispatcher, cmd("KEYS", "*"), 13L);
@@ -214,10 +229,11 @@ public class ReplyPreflightCommandTest {
         forEachDb(db -> {
             AtomicInteger firstWindowCloses = new AtomicInteger();
             AtomicInteger scanCalls = new AtomicInteger();
-            KeyspaceReadOps keyspace = staleFirstScan(db.reads().keyspace(), scanCalls, firstWindowCloses);
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(withKeyspaceReads(db, keyspace));
+            KeyspaceOps keyspace = staleFirstScan(db.keyspace(), scanCalls, firstWindowCloses);
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(withKeyspaceReads(db, keyspace));
 
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 ReplyArray reply = (ReplyArray) client.execute(cmd("SCAN", "0"));
                 Assert.assertNotNull(reply.values());
             }
@@ -230,8 +246,9 @@ public class ReplyPreflightCommandTest {
     @Test
     public void collectionScanReservesItsNestedShapeAndMaterializedWindow() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 client.execute(cmd("HSET", "hash", "field", "value"));
 
                 EngineSession session = new EngineSession(16, 16 * 1024L);
@@ -250,8 +267,9 @@ public class ReplyPreflightCommandTest {
     @Test
     public void nativeCollectionScanChargesPinnedPayloadAndRejectsBeforeEmission() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 String largeMember = "x".repeat(256 * 1024);
                 client.execute(cmd("SADD", "large-set", largeMember));
 
@@ -279,7 +297,7 @@ public class ReplyPreflightCommandTest {
     @Test
     public void execCapacityRejectionDoesNotDrainOrExecuteTheQueuedTransaction() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             EngineSession session = new EngineSession(16, 16 * 1024L);
             TrackingReplyWriter accepting = new TrackingReplyWriter();
 
@@ -297,7 +315,7 @@ public class ReplyPreflightCommandTest {
 
             Assert.assertTrue(session.transaction().active());
             Assert.assertEquals(1, session.transaction().size());
-            Assert.assertNull(db.reads().strings().getStringBytes(b("queued")));
+            Assert.assertNull(stringValue(db.strings(), b("queued")));
             Assert.assertEquals(ReplyPlan.maximum(), capacity.reservedPlan());
             session.discardTransaction();
         });
@@ -306,7 +324,7 @@ public class ReplyPreflightCommandTest {
     @Test
     public void execWithStateDependentQueuedReadReservesMaximumBeforeMutating() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             EngineSession session = new EngineSession(16, 16 * 1024L);
             TrackingReplyWriter accepting = new TrackingReplyWriter();
 
@@ -324,7 +342,7 @@ public class ReplyPreflightCommandTest {
 
             Assert.assertEquals(ReplyPlan.maximum(), capacity.reservedPlan());
             Assert.assertEquals(2, session.transaction().size());
-            Assert.assertNull(db.reads().strings().getStringBytes(b("queued")));
+            Assert.assertNull(stringValue(db.strings(), b("queued")));
             Assert.assertEquals(0, rejecting.arrayHeaderCalls());
             session.discardTransaction();
         });
@@ -338,72 +356,71 @@ public class ReplyPreflightCommandTest {
         EngineSession session = new EngineSession(16, 16 * 1024L);
         ReplyPlan plan = execute(dispatcher, session, new TrackingReplyWriter(), command);
         Assert.assertEquals(
-                REPLY_SIZER.plan(session, ReplyShapes.bulkString(payloadLength, plan.retainedSourceBytes())),
+                REPLY_SIZER.apply(session, ReplyShapes.bulkString(payloadLength, plan.retainedSourceBytes())),
                 plan
         );
     }
 
-    private static DbEngine withKeyspaceReads(DbEngine delegate, KeyspaceReadOps keyspace) {
+    private static DbEngine withKeyspaceReads(DbEngine delegate, KeyspaceOps keyspace) {
         return new DbEngine() {
             @Override
-            public DbReads reads() {
-                DbReads reads = delegate.reads();
-                return new DbReads() {
-                    @Override
-                    public yier.bubu.redis.storage.api.StringReadOps strings() {
-                        return reads.strings();
-                    }
-
-                    @Override
-                    public yier.bubu.redis.storage.api.HashReadOps hashes() {
-                        return reads.hashes();
-                    }
-
-                    @Override
-                    public yier.bubu.redis.storage.api.ListReadOps lists() {
-                        return reads.lists();
-                    }
-
-                    @Override
-                    public yier.bubu.redis.storage.api.SetReadOps sets() {
-                        return reads.sets();
-                    }
-
-                    @Override
-                    public yier.bubu.redis.storage.api.ZSetReadOps zsets() {
-                        return reads.zsets();
-                    }
-
-                    @Override
-                    public yier.bubu.redis.storage.api.HllReadOps hll() {
-                        return reads.hll();
-                    }
-
-                    @Override
-                    public KeyspaceReadOps keyspace() {
-                        return keyspace;
-                    }
-
-                    @Override
-                    public yier.bubu.redis.storage.api.TtlReadOps ttl() {
-                        return reads.ttl();
-                    }
-                };
+            public StringOps strings() {
+                return delegate.strings();
             }
 
             @Override
-            public yier.bubu.redis.storage.api.DbWrites writes() {
-                return delegate.writes();
+            public HashOps hashes() {
+                return delegate.hashes();
             }
 
             @Override
-            public yier.bubu.redis.storage.api.MemoryOps memory() {
-                return delegate.memory();
+            public ListOps lists() {
+                return delegate.lists();
             }
 
             @Override
-            public yier.bubu.redis.storage.api.DbLifecycleOps lifecycle() {
-                return delegate.lifecycle();
+            public SetOps sets() {
+                return delegate.sets();
+            }
+
+            @Override
+            public ZSetOps zsets() {
+                return delegate.zsets();
+            }
+
+            @Override
+            public HllOps hll() {
+                return delegate.hll();
+            }
+
+            @Override
+            public KeyspaceOps keyspace() {
+                return keyspace;
+            }
+
+            @Override
+            public TtlOps ttl() {
+                return delegate.ttl();
+            }
+
+            @Override
+            public long memoryUsage(BytesView keyView) {
+                return delegate.memoryUsage(keyView);
+            }
+
+            @Override
+            public yier.bubu.redis.storage.api.YierdisMemoryStats memoryStats() {
+                return delegate.memoryStats();
+            }
+
+            @Override
+            public String objectEncoding(BytesView keyView) {
+                return delegate.objectEncoding(keyView);
+            }
+
+            @Override
+            public yier.bubu.redis.storage.api.MutationOutcome flushDb() {
+                return delegate.flushDb();
             }
 
             @Override
@@ -413,12 +430,12 @@ public class ReplyPreflightCommandTest {
         };
     }
 
-    private static KeyspaceReadOps staleFirstScan(
-            KeyspaceReadOps delegate,
+    private static KeyspaceOps staleFirstScan(
+            KeyspaceOps delegate,
             AtomicInteger scanCalls,
             AtomicInteger firstWindowCloses
     ) {
-        return new KeyspaceReadOps() {
+        return new KeyspaceOps() {
             @Override
             public ValueType typeOf(BytesView keyView) {
                 return delegate.typeOf(keyView);
@@ -442,6 +459,11 @@ public class ReplyPreflightCommandTest {
                 }
                 KeyScanWindow window = delegate.scan(cursor, globPattern, count);
                 return call == 1 ? staleAfterPreparation(window, firstWindowCloses) : window;
+            }
+
+            @Override
+            public yier.bubu.redis.storage.api.WriteResult<Long> del(java.util.Collection<byte[]> keys) {
+                return delegate.del(keys);
             }
         };
     }
@@ -487,7 +509,7 @@ public class ReplyPreflightCommandTest {
             }
 
             @Override
-            public void visitElementLengths(PayloadLengthSink out) {
+            public void visitElementLengths(IntConsumer out) {
                 delegate.visitElementLengths(out);
             }
 
@@ -561,13 +583,10 @@ public class ReplyPreflightCommandTest {
         try {
             try (PreparedCommand prepared = dispatcher.prepare(session, request)) {
                 Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
-                ReplyPlan plan = REPLY_SIZER.plan(session, prepared.reservationShape());
+                ReplyPlan plan = REPLY_SIZER.apply(session, prepared.reservationShape());
                 capacity.reserve(plan);
-                CommandResult result = prepared.execute(CommandExecutionContext.forSession(session));
+                CommandResult result = prepared.execute(session);
                 RedisReplyRenderer.render(result.reply(), writer);
-                if (result.closeAfterReply()) {
-                    writer.requestCloseAfterReply();
-                }
                 return plan;
             }
         } finally {
@@ -606,7 +625,6 @@ public class ReplyPreflightCommandTest {
     }
 
     private static final class TrackingReplyWriter implements RedisReplyWriter {
-        private boolean closeAfterReply;
         private int arrayHeaderCalls;
         private long emittedResp2Bytes;
 
@@ -616,16 +634,6 @@ public class ReplyPreflightCommandTest {
 
         long emittedResp2Bytes() {
             return emittedResp2Bytes;
-        }
-
-        @Override
-        public void requestCloseAfterReply() {
-            closeAfterReply = true;
-        }
-
-        @Override
-        public boolean closeAfterReplyRequested() {
-            return closeAfterReply;
         }
 
         @Override

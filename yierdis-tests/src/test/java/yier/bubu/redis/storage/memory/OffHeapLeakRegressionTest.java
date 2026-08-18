@@ -9,13 +9,10 @@ import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.StableMemoryBackendFactory;
 import yier.bubu.redis.memory.foreign.YierdisFfmStableMemoryBackend;
-import yier.bubu.redis.runtime.embedded.TestCommandDispatchers;
+import yier.bubu.redis.integration.command.TestCommandComposition;
 import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.DbEngineConfig;
-import yier.bubu.redis.storage.api.GlobalMaxmemoryDbEngine;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
-import yier.bubu.redis.storage.api.RuntimeDbEngine;
-import yier.bubu.redis.storage.memory.YierdisDbBackendConfig;
 import yier.bubu.redis.storage.memory.YierdisDbEngineFactory;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyError;
@@ -43,8 +40,9 @@ public class OffHeapLeakRegressionTest {
             MemoryUsageSnapshot baseline = backend.memoryUsage();
             long baselineLiveRegions = backend.liveRegionCount();
             MemoryUsageSnapshot highWater = baseline;
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 byte[] spanValue = repeat((byte) 'x', SPAN_VALUE_BYTES);
 
                 ReplyObject firstSet = client.execute(List.of(b("SET"), b("a"), spanValue));
@@ -52,7 +50,7 @@ public class OffHeapLeakRegressionTest {
                 MemoryUsageSnapshot afterA = backend.memoryUsage();
                 highWater = highWater(highWater, afterA);
                 Assert.assertTrue(afterA.nativeDataLiveBytes() > baseline.nativeDataLiveBytes());
-                assertGlobalMemoryIncludesBackend(afterA, fixture.globalEngine().memoryUsage());
+                assertGlobalMemoryIncludesBackend(afterA, db.memoryUsage());
 
                 Assert.assertTrue(client.execute(List.of(b("SET"), b("b"), spanValue)) instanceof ReplySimpleString);
                 ReplyInteger exists = (ReplyInteger) client.execute(cmd("EXISTS", "a", "b"));
@@ -84,8 +82,9 @@ public class OffHeapLeakRegressionTest {
             MemoryUsageSnapshot baseline = backend.memoryUsage();
             long baselineLiveRegions = backend.liveRegionCount();
             MemoryUsageSnapshot highWater = baseline;
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 byte[] spanValue = repeat((byte) 'x', SPAN_VALUE_BYTES);
 
                 ReplyObject firstSet = client.execute(Arrays.asList(b("SET"), b("a"), spanValue));
@@ -119,9 +118,9 @@ public class OffHeapLeakRegressionTest {
             createdBackends.add(backend);
             return backend;
         };
-        RuntimeDbEngine engine = new YierdisDbEngineFactory(
+        YierdisDb db = new YierdisDbEngineFactory(
                 backendFactory,
-                new YierdisDbBackendConfig(0)
+                0
         ).create(new DbEngineConfig(
                 0,
                 maxmemoryBytes,
@@ -131,16 +130,8 @@ public class OffHeapLeakRegressionTest {
                 5L,
                 new DbDefragConfig(false, 0L, 0L, 0L)
         ));
-        if (!(engine instanceof GlobalMaxmemoryDbEngine globalEngine)) {
-            engine.shutdown();
-            throw new IllegalStateException("FFM test DB must expose GlobalMaxmemoryDbEngine");
-        }
-        if (!(engine instanceof YierdisDb db)) {
-            engine.shutdown();
-            throw new IllegalStateException("YierdisDbEngineFactory did not create YierdisDb");
-        }
         Assert.assertEquals(1, createdBackends.size());
-        return new FfmDbFixture(db, globalEngine, createdBackends.get(0));
+        return new FfmDbFixture(db, createdBackends.get(0));
     }
 
     private static void assertTrimmedToBaseline(
@@ -149,7 +140,7 @@ public class OffHeapLeakRegressionTest {
             long baselineLiveRegions,
             MemoryUsageSnapshot highWater
     ) {
-        backend.trimEmptyPages(MemoryPressureBudget.unlimited());
+        backend.trimEmptyPages(MemoryPressureBudget.UNLIMITED);
         MemoryUsageSnapshot afterTrim = backend.memoryUsage();
         Assert.assertEquals(baseline.nativeDataLiveBytes(), afterTrim.nativeDataLiveBytes());
         Assert.assertEquals(
@@ -164,7 +155,7 @@ public class OffHeapLeakRegressionTest {
     private static void warmMetadataBaseline(YierdisFfmStableMemoryBackend backend) {
         NativeHandle handle = backend.allocate(NativeObjectKind.GENERIC, 1);
         backend.free(handle);
-        backend.trimEmptyPages(MemoryPressureBudget.unlimited());
+        backend.trimEmptyPages(MemoryPressureBudget.UNLIMITED);
     }
 
     private static void assertGlobalMemoryIncludesBackend(
@@ -193,7 +184,6 @@ public class OffHeapLeakRegressionTest {
 
     private record FfmDbFixture(
             YierdisDb db,
-            GlobalMaxmemoryDbEngine globalEngine,
             YierdisFfmStableMemoryBackend backend
     ) implements AutoCloseable {
         @Override

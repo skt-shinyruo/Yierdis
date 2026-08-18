@@ -2,6 +2,8 @@ package yier.bubu.redis.execution.api;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
+import java.util.function.IntConsumer;
 
 public final class RedisReplies {
     private RedisReplies() {
@@ -23,26 +25,6 @@ public final class RedisReplies {
         return new RedisReply.IntegerValue(value);
     }
 
-    public static RedisReply booleanValue(boolean value) {
-        return new RedisReply.BooleanValue(value);
-    }
-
-    public static RedisReply doubleValue(double value) {
-        return new RedisReply.DoubleValue(value);
-    }
-
-    public static RedisReply bigNumber(String ascii) {
-        return new RedisReply.BigNumber(ascii);
-    }
-
-    public static RedisReply verbatimString(String format, byte[] data) {
-        return new RedisReply.VerbatimString(format, data);
-    }
-
-    public static RedisReply blobError(String message) {
-        return new RedisReply.BlobError(message);
-    }
-
     public static RedisReply bulkString(byte[] data) {
         byte[] captured = Objects.requireNonNull(data, "data").clone();
         return bulkString(captured.length, 0L, sink -> sink.bulkString(captured));
@@ -51,7 +33,7 @@ public final class RedisReplies {
     public static RedisReply bulkString(
             int payloadLength,
             long retainedSourceBytes,
-            RedisReply.PayloadEmitter emitter
+            Consumer<ReplySink> emitter
     ) {
         return new RedisReply.BulkString(payloadLength, retainedSourceBytes, emitter);
     }
@@ -72,23 +54,11 @@ public final class RedisReplies {
         return new RedisReply.Aggregate(ReplyShape.AggregateKind.MAP, fieldValues);
     }
 
-    public static RedisReply set(List<RedisReply> elements) {
-        return new RedisReply.Aggregate(ReplyShape.AggregateKind.SET, elements);
-    }
-
-    public static RedisReply push(List<RedisReply> elements) {
-        return new RedisReply.Aggregate(ReplyShape.AggregateKind.PUSH, elements);
-    }
-
-    public static RedisReply attribute(List<RedisReply> fieldValues) {
-        return new RedisReply.Aggregate(ReplyShape.AggregateKind.ATTRIBUTE, fieldValues);
-    }
-
     public static RedisReply sequence(
             int elementCount,
             long retainedSourceBytes,
-            ReplyShape.PayloadLengths payloadLengths,
-            RedisReply.PayloadEmitter emitter
+            Consumer<IntConsumer> payloadLengths,
+            Consumer<ReplySink> emitter
     ) {
         return new RedisReply.ByteSequence(
                 elementCount, retainedSourceBytes, payloadLengths, emitter);
@@ -97,8 +67,8 @@ public final class RedisReplies {
     public static RedisReply byteSet(
             int elementCount,
             long retainedSourceBytes,
-            ReplyShape.PayloadLengths payloadLengths,
-            RedisReply.PayloadEmitter emitter
+            Consumer<IntConsumer> payloadLengths,
+            Consumer<ReplySink> emitter
     ) {
         return new RedisReply.ByteSet(elementCount, retainedSourceBytes, payloadLengths, emitter);
     }
@@ -106,8 +76,8 @@ public final class RedisReplies {
     public static RedisReply byteMap(
             int pairCount,
             long retainedSourceBytes,
-            ReplyShape.PayloadLengths payloadLengths,
-            RedisReply.PayloadEmitter emitter
+            Consumer<IntConsumer> payloadLengths,
+            Consumer<ReplySink> emitter
     ) {
         return new RedisReply.ByteMap(pairCount, retainedSourceBytes, payloadLengths, emitter);
     }

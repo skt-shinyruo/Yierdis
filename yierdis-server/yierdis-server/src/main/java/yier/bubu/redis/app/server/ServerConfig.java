@@ -1,0 +1,44 @@
+package yier.bubu.redis.app.server;
+
+import picocli.CommandLine;
+import yier.bubu.redis.app.server.args.YierdisCliException;
+import yier.bubu.redis.app.server.args.YierdisServerArgs;
+import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
+
+final class ServerConfig {
+    private ServerConfig() {
+    }
+
+    static YierdisServerRuntimeConfig fromArgs(String[] args) {
+        YierdisServerArgs parsed = new YierdisServerArgs();
+        CommandLine cmd = new CommandLine(parsed);
+        try {
+            CommandLine.ParseResult parseResult = cmd.parseArgs(args);
+            if (!parsed.help && !parseResult.hasMatchedOption("--maxmemoryBytes")) {
+                throw new CommandLine.ParameterException(
+                        cmd,
+                        "--maxmemoryBytes must be specified explicitly (use 0 to acknowledge unlimited memory)"
+                );
+            }
+        } catch (CommandLine.ParameterException e) {
+            System.err.println(e.getMessage());
+            cmd.usage(System.err);
+            throw YierdisCliException.usageError(e.getMessage(), e);
+        }
+
+        if (parsed.help) {
+            cmd.usage(System.out);
+            return null;
+        }
+
+        try {
+            parsed.normalizeAndValidate();
+        } catch (IllegalArgumentException e) {
+            System.err.println(e.getMessage());
+            cmd.usage(System.err);
+            throw YierdisCliException.usageError(e.getMessage(), e);
+        }
+
+        return parsed.toRuntimeConfig();
+    }
+}

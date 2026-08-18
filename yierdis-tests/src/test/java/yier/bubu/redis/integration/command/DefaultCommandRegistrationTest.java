@@ -58,7 +58,8 @@ public class DefaultCommandRegistrationTest {
     public void testCommandCompositionListsEveryDefaultCommandIncludingTransactions() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 assertInteger(DEFAULT_COMMANDS.size(), client.execute(cmd("COMMAND", "COUNT")));
             }
         });
@@ -186,7 +187,8 @@ public class DefaultCommandRegistrationTest {
     private static void withClient(ClientCase test) {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 test.run(client);
             }
         });

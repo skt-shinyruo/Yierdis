@@ -7,7 +7,6 @@ import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.DbEngineConfig;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.RuntimeDbEngine;
-import yier.bubu.redis.storage.memory.YierdisDbBackendConfig;
 import yier.bubu.redis.storage.memory.YierdisDbEngineFactory;
 
 import java.util.Objects;
@@ -69,7 +68,7 @@ public final class TestDbs {
         StableMemoryBackendFactory backendFactory = YierdisFfmStableMemoryBackend::new;
         RuntimeDbEngine engine = new YierdisDbEngineFactory(
                 backendFactory,
-                new YierdisDbBackendConfig(nativeSlotCapacity)
+                nativeSlotCapacity
         ).create(Objects.requireNonNull(config, "config"));
         if (engine instanceof YierdisDb db) {
             return db;

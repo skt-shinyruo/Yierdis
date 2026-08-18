@@ -29,7 +29,7 @@ public class TtlMaxmemoryTest {
     public void expireUpdatesDeadlineWithoutPhysicalGrowthUnderNoeviction() {
         assertTtlMutationKeepsPhysicalUsageStable(
                 List.of(b("EXPIRE"), b("k"), b("60")),
-                db -> db.writes().ttl().expire(view(b("k")), 60L).value()
+                db -> db.ttl().expire(view(b("k")), 60L).value()
         );
     }
 
@@ -37,7 +37,7 @@ public class TtlMaxmemoryTest {
     public void pexpireUpdatesDeadlineWithoutPhysicalGrowthUnderNoeviction() {
         assertTtlMutationKeepsPhysicalUsageStable(
                 List.of(b("PEXPIRE"), b("k"), b("60000")),
-                db -> db.writes().ttl().pexpire(view(b("k")), 60_000L).value()
+                db -> db.ttl().pexpire(view(b("k")), 60_000L).value()
         );
     }
 
@@ -46,7 +46,7 @@ public class TtlMaxmemoryTest {
         long unixMillis = System.currentTimeMillis() + 60_000L;
         assertTtlMutationKeepsPhysicalUsageStable(
                 List.of(b("PEXPIREAT"), b("k"), b(Long.toString(unixMillis))),
-                db -> db.writes().ttl().expireAtMillis(view(b("k")), unixMillis).value()
+                db -> db.ttl().expireAtMillis(view(b("k")), unixMillis).value()
         );
     }
 
@@ -59,8 +59,9 @@ public class TtlMaxmemoryTest {
         YierdisDb db = openFfm(maxmemoryBytes);
         db.bindToCurrentThread();
 
-        CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-        try (FastTestClient client = new FastTestClient(dispatcher)) {
+        CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+        try {
+            FastTestClient client = new FastTestClient(dispatcher);
             ReplyObject set = client.execute(List.of(b("SET"), key, value, b("EX"), b("60")));
             Assert.assertTrue(set instanceof ReplyError);
             Assert.assertEquals(MaxmemoryErrors.OOM_ERR, ((ReplyError) set).message());
@@ -83,21 +84,22 @@ public class TtlMaxmemoryTest {
         YierdisDb db = openFfm(maxmemoryBytes);
         db.bindToCurrentThread();
 
-        CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-        try (FastTestClient client = new FastTestClient(dispatcher)) {
+        CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+        try {
+            FastTestClient client = new FastTestClient(dispatcher);
             Assert.assertTrue(client.execute(List.of(b("SET"), key, value)) instanceof ReplySimpleString);
-            long usedBefore = db.memory().memoryStats().usedBytesForMaxmemory();
-            long nativeDataBefore = db.memory().memoryStats().nativeDataCommittedBytes();
+            long usedBefore = db.memoryStats().usedBytesForMaxmemory();
+            long nativeDataBefore = db.memoryStats().nativeDataCommittedBytes();
 
             ReplyObject expire = client.execute(ttlCommand);
             Assert.assertTrue(expire instanceof ReplyInteger);
             Assert.assertEquals(1L, ((ReplyInteger) expire).value());
 
-            long usedAfter = db.memory().memoryStats().usedBytesForMaxmemory();
-            long nativeDataAfter = db.memory().memoryStats().nativeDataCommittedBytes();
+            long usedAfter = db.memoryStats().usedBytesForMaxmemory();
+            long nativeDataAfter = db.memoryStats().nativeDataCommittedBytes();
             Assert.assertEquals(usedBefore, usedAfter);
             Assert.assertEquals(nativeDataBefore, nativeDataAfter);
-            Assert.assertEquals(1, db.memory().memoryStats().expireCount());
+            Assert.assertEquals(1, db.memoryStats().expireCount());
             Assert.assertTrue("physical usage must stay within the admitted maxmemory budget", usedAfter <= maxmemoryBytes);
 
             ReplyObject get = client.execute(List.of(b("GET"), key));
@@ -151,7 +153,7 @@ public class TtlMaxmemoryTest {
         YierdisDb db = openFfm(maxmemoryBytes);
         try {
             db.bindToCurrentThread();
-            return db.writes().strings().setString(key, value, SetMode.NORMAL, ExpireOption.px(60_000L)).value();
+            return db.strings().setString(key, value, SetMode.NORMAL, ExpireOption.px(60_000L)).value();
         } catch (YierdisCommandException e) {
             if (MaxmemoryErrors.OOM_ERR.equals(e.getMessage())) {
                 return false;
@@ -171,7 +173,7 @@ public class TtlMaxmemoryTest {
         YierdisDb db = openFfm(maxmemoryBytes);
         try {
             db.bindToCurrentThread();
-            return db.writes().strings().setString(key, value, SetMode.NORMAL, null).value()
+            return db.strings().setString(key, value, SetMode.NORMAL, null).value()
                     && ttlMutation.apply(db);
         } catch (YierdisCommandException e) {
             if (MaxmemoryErrors.OOM_ERR.equals(e.getMessage())) {

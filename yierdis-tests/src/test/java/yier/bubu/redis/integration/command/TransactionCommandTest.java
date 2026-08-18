@@ -10,6 +10,8 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.PreparedCommands;
+import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
@@ -19,7 +21,6 @@ import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplyNull;
 import yier.bubu.redis.testutil.ReplyObject;
 import yier.bubu.redis.testutil.ReplySimpleString;
-import yier.bubu.redis.testutil.TestPreparedCommands;
 
 import java.util.Arrays;
 import java.util.ArrayList;
@@ -37,7 +38,8 @@ public class TransactionCommandTest {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
                 Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), b("k"), b("v")))).value());
                 Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(Arrays.asList(b("GET"), b("k")))).value());
@@ -58,7 +60,8 @@ public class TransactionCommandTest {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
                 List<byte[]> push = List.of(
                         b("RPUSH"), b("streamed:list"), b("one"), b("two"));
@@ -83,7 +86,8 @@ public class TransactionCommandTest {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
                 ReplyObject exec = client.execute(Arrays.asList(b("EXEC")));
                 Assert.assertTrue(exec instanceof ReplyError);
                 Assert.assertEquals("ERR EXEC without MULTI", ((ReplyError) exec).message());
@@ -100,7 +104,8 @@ public class TransactionCommandTest {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
 
                 ReplyObject nested = client.execute(Arrays.asList(b("MULTI")));
@@ -117,7 +122,8 @@ public class TransactionCommandTest {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
 
                 byte[] key = b("k");
@@ -151,11 +157,12 @@ public class TransactionCommandTest {
                     registration -> registration.register(new CommandSpec(
                             new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
                                     TransactionPolicy.DISALLOWED_IN_MULTI),
-                            args -> session -> TestPreparedCommands.simpleString("HELLO")
+                            args -> session -> PreparedCommands.ready(RedisReplies.simpleString("HELLO"))
                     ))
             );
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
 
                 ReplyObject hello = client.execute(Arrays.asList(b("HELLO")));
@@ -177,11 +184,12 @@ public class TransactionCommandTest {
                     registration -> registration.register(new CommandSpec(
                             new CommandSyntax("STRICT", CommandArity.exact(2), CommandKeySpec.NONE,
                                     TransactionPolicy.QUEUEABLE),
-                            args -> session -> TestPreparedCommands.simpleString("OK")
+                            args -> session -> PreparedCommands.ready(RedisReplies.simpleString("OK"))
                     ))
             );
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
 
                 ReplyObject wrongArity = client.execute(Arrays.asList(b("STRICT")));
@@ -201,7 +209,8 @@ public class TransactionCommandTest {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
 
                 ReplyObject unknown = client.execute(Arrays.asList(b("NO_SUCH_COMMAND")));
@@ -221,7 +230,8 @@ public class TransactionCommandTest {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
 
                 ReplyObject wrongArity = client.execute(Arrays.asList(b("GET")));
@@ -241,7 +251,8 @@ public class TransactionCommandTest {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
 
                 ReplyObject badSet = client.execute(Arrays.asList(b("SET"), b("k"), b("v"), b("NX"), b("XX")));
@@ -261,7 +272,8 @@ public class TransactionCommandTest {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
 
                 ReplyObject invalid = client.execute(Arrays.asList(b("SETBIT"), b("k"), b("0"), b("nope")));
@@ -300,7 +312,8 @@ public class TransactionCommandTest {
             )) {
                 CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
                 TestSession session = new TestSession();
-                try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+                {
+                    FastTestClient client = new FastTestClient(dispatcher, session);
                     Assert.assertEquals(
                             "OK",
                             ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value()
@@ -334,7 +347,8 @@ public class TransactionCommandTest {
             )) {
                 CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
                 TestSession session = new TestSession();
-                try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+                {
+                    FastTestClient client = new FastTestClient(dispatcher, session);
                     Assert.assertEquals(
                             "OK",
                             ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value()
@@ -379,7 +393,8 @@ public class TransactionCommandTest {
             )) {
                 CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
                 TestSession session = new TestSession();
-                try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+                {
+                    FastTestClient client = new FastTestClient(dispatcher, session);
                     Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
 
                     ReplyObject failure = client.execute(invalid.args());
@@ -403,7 +418,8 @@ public class TransactionCommandTest {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
 
                 ReplyObject badNull = client.execute(Arrays.asList(b("SET"), b("k"), null));
@@ -425,7 +441,8 @@ public class TransactionCommandTest {
                 CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
                 TestSession session = new TestSession();
                 byte[] key = b("dirty:" + control.toLowerCase(java.util.Locale.ROOT));
-                try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+                {
+                    FastTestClient client = new FastTestClient(dispatcher, session);
                     Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
                     Assert.assertEquals(
                             "QUEUED",
@@ -456,7 +473,8 @@ public class TransactionCommandTest {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("DISCARD")))).value());
             }
@@ -466,7 +484,8 @@ public class TransactionCommandTest {
     @Test
     public void bareAuthOutsideMultiUsesTheSyntaxArity() {
         forEachDb(db -> {
-            try (FastTestClient client = new FastTestClient(TestCommandComposition.createDispatcher(db))) {
+            {
+                FastTestClient client = new FastTestClient(TestCommandComposition.createDispatcher(db));
                 ReplyError error = (ReplyError) client.execute(List.of(b("AUTH")));
                 Assert.assertEquals("ERR wrong number of arguments for 'auth' command", error.message());
             }
@@ -476,7 +495,8 @@ public class TransactionCommandTest {
     @Test
     public void bareAuthInsideMultiMarksDirtyAndExecDoesNotApplyQueuedWrites() {
         forEachDb(db -> {
-            try (FastTestClient client = new FastTestClient(TestCommandComposition.createDispatcher(db))) {
+            {
+                FastTestClient client = new FastTestClient(TestCommandComposition.createDispatcher(db));
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
                 Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(List.of(b("SET"), b("k"), b("v")))).value());
                 ReplyError arity = (ReplyError) client.execute(List.of(b("AUTH")));
@@ -499,7 +519,6 @@ public class TransactionCommandTest {
     private static final class TestSession implements yier.bubu.redis.execution.api.CommandSession {
         private int dbIndex;
         private String clientName;
-        private boolean authenticated;
         private final TestTransactionState tx = new TestTransactionState();
 
         @Override
@@ -513,11 +532,6 @@ public class TransactionCommandTest {
         }
 
         @Override
-        public long clientId() {
-            return 1L;
-        }
-
-        @Override
         public String clientName() {
             return clientName;
         }
@@ -525,16 +539,6 @@ public class TransactionCommandTest {
         @Override
         public void setClientName(String clientName) {
             this.clientName = clientName;
-        }
-
-        @Override
-        public boolean authenticated() {
-            return authenticated;
-        }
-
-        @Override
-        public void setAuthenticated(boolean authenticated) {
-            this.authenticated = authenticated;
         }
 
         @Override
@@ -626,11 +630,6 @@ public class TransactionCommandTest {
 
         private ExecutionRequest queued(int index) {
             return queue.get(index);
-        }
-
-        @Override
-        public void close() {
-            discard();
         }
 
         private void closeQueued() {

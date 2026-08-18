@@ -29,11 +29,6 @@ public final class ReferenceCountedRequestMemoryLease implements RequestMemoryLe
     }
 
     @Override
-    public boolean released() {
-        return state.references.get() == 0;
-    }
-
-    @Override
     public RequestMemoryLease retain() {
         if (closed.get()) {
             throw new IllegalStateException("request memory lease view is closed");

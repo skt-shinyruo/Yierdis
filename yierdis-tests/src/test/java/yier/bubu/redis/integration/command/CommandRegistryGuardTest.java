@@ -23,7 +23,8 @@ public class CommandRegistryGuardTest {
     public void minimalCommandSetIsRegistered() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 assertNotUnknown(client.execute(cmd("PING")));
 
                 assertNotUnknown(client.execute(cmd("SET", "k", "v")));

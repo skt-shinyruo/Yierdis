@@ -8,7 +8,8 @@ import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.testutil.TestPreparedCommands;
+import yier.bubu.redis.execution.api.PreparedCommands;
+import yier.bubu.redis.execution.api.RedisReplies;
 
 import java.util.Locale;
 
@@ -96,7 +97,7 @@ public class CommandRegistryTest {
                         CommandKeySpec.NONE,
                         TransactionPolicy.QUEUEABLE
                 ),
-                args -> session -> TestPreparedCommands.simpleString("OK")
+                args -> session -> PreparedCommands.ready(RedisReplies.simpleString("OK"))
         ));
     }
 

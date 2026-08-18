@@ -3,6 +3,8 @@ package yier.bubu.redis.execution.api;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
+import java.util.function.IntConsumer;
 
 public sealed interface RedisReply permits
         RedisReply.SimpleString, RedisReply.Error, RedisReply.ControlError,
@@ -33,11 +35,6 @@ public sealed interface RedisReply permits
             case ByteMap value -> ReplyShapes.byteMap(
                     value.pairCount, value.retainedSourceBytes, value.payloadLengths);
         };
-    }
-
-    @FunctionalInterface
-    interface PayloadEmitter {
-        void emit(ReplySink sink);
     }
 
     record SimpleString(String value) implements RedisReply {
@@ -78,7 +75,7 @@ public sealed interface RedisReply permits
     record BulkString(
             int payloadLength,
             long retainedSourceBytes,
-            PayloadEmitter emitter
+            Consumer<ReplySink> emitter
     ) implements RedisReply {
         public BulkString {
             requireNonNegative(payloadLength, "payloadLength");
@@ -103,8 +100,8 @@ public sealed interface RedisReply permits
     record ByteSequence(
             int elementCount,
             long retainedSourceBytes,
-            ReplyShape.PayloadLengths payloadLengths,
-            PayloadEmitter emitter
+            Consumer<IntConsumer> payloadLengths,
+            Consumer<ReplySink> emitter
     ) implements RedisReply {
         public ByteSequence {
             requireNonNegative(elementCount, "elementCount");
@@ -117,8 +114,8 @@ public sealed interface RedisReply permits
     record ByteSet(
             int elementCount,
             long retainedSourceBytes,
-            ReplyShape.PayloadLengths payloadLengths,
-            PayloadEmitter emitter
+            Consumer<IntConsumer> payloadLengths,
+            Consumer<ReplySink> emitter
     ) implements RedisReply {
         public ByteSet {
             requireNonNegative(elementCount, "elementCount");
@@ -131,8 +128,8 @@ public sealed interface RedisReply permits
     record ByteMap(
             int pairCount,
             long retainedSourceBytes,
-            ReplyShape.PayloadLengths payloadLengths,
-            PayloadEmitter emitter
+            Consumer<IntConsumer> payloadLengths,
+            Consumer<ReplySink> emitter
     ) implements RedisReply {
         public ByteMap {
             requireNonNegative(pairCount, "pairCount");

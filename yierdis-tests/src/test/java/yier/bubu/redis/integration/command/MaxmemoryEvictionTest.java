@@ -41,18 +41,19 @@ public class MaxmemoryEvictionTest {
         byte[] value = repeat((byte) 'x', 40_000);
         long maxmemoryBytes = minMaxmemoryThatAllowsSetKeys(value, List.of(b("a")));
         forEachDbWithMaxmemory(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
             Assert.assertTrue(client.execute(List.of(b("SET"), b("a"), value)) instanceof ReplySimpleString);
 
             EngineSession session = new EngineSession(16, 16 * 1024L);
             try (ExecutionRequest request = ByteArrayExecutionRequest.copyOf(List.of(b("SET"), b("b"), value));
                  PreparedCommand prepared = dispatcher.prepare(session, request)) {
-                ReplyPlan plan = new RespReplySizer().plan(session, prepared.reservationShape());
+                ReplyPlan plan = new RespReplySizer().apply(session, prepared.reservationShape());
                 Assert.assertEquals(
                         "SET successful reply must keep its exact preflight charge",
-                        new RespReplySizer().plan(session, ReplyShapes.simpleString("OK")),
+                        new RespReplySizer().apply(session, ReplyShapes.simpleString("OK")),
                         plan
                 );
             }
@@ -75,8 +76,9 @@ public class MaxmemoryEvictionTest {
         long maxmemoryBytes = maxmemoryThatAllowsSetAndOverwrite(key, largeValue, smallValue);
 
         forEachDbWithMaxmemory(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 Assert.assertTrue(client.execute(List.of(b("SET"), key, largeValue)) instanceof ReplySimpleString);
                 long usedBefore = usedBytesForMaxmemory(db);
                 Assert.assertTrue(usedBefore <= maxmemoryBytes);
@@ -85,7 +87,7 @@ public class MaxmemoryEvictionTest {
 
                 Assert.assertTrue(reply instanceof ReplySimpleString);
                 Assert.assertArrayEquals(smallValue, ((ReplyBulkString) client.execute(List.of(b("GET"), key))).data());
-                var after = db.memory().memoryStats();
+                var after = db.memoryStats();
                 Assert.assertTrue(
                         "shrinking command should reduce used bytes: before=" + usedBefore
                                 + ", after=" + after.usedBytesForMaxmemory()
@@ -106,8 +108,9 @@ public class MaxmemoryEvictionTest {
         long maxmemoryBytes = maxmemoryThatAllowsSetAndOverwrite(key, largeValue, smallValue);
 
         forEachDbWithMaxmemory(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 Assert.assertTrue(client.execute(List.of(b("SET"), key, largeValue)) instanceof ReplySimpleString);
                 long usedBefore = usedBytesForMaxmemory(db);
 
@@ -118,7 +121,7 @@ public class MaxmemoryEvictionTest {
                 Assert.assertArrayEquals(smallValue, ((ReplyBulkString) client.execute(List.of(b("GET"), key))).data());
                 Assert.assertTrue(
                         "SET GET should reclaim pages after its retained old value closes",
-                        db.memory().memoryStats().usedBytesForMaxmemory() < usedBefore
+                        db.memoryStats().usedBytesForMaxmemory() < usedBefore
                 );
             }
         });
@@ -127,8 +130,9 @@ public class MaxmemoryEvictionTest {
     @Test
     public void noevictionRejectsCollectionGrowthWritesBeforeTheyMutate() {
         forEachDbWithMaxmemory(1, MaxmemoryPolicy.NOEVICTION, 5, db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 assertCollectionWriteRejected(client, List.of(b("LPUSH"), b("l"), b("a")), b("l"));
                 assertCollectionWriteRejected(client, List.of(b("HSET"), b("h"), b("f"), b("v")), b("h"));
                 assertCollectionWriteRejected(client, List.of(b("SADD"), b("s"), b("m")), b("s"));
@@ -146,23 +150,23 @@ public class MaxmemoryEvictionTest {
         byte[] zsetMember = repeat((byte) 'z', 256);
 
         assertCollectionWriteUsesRealBoundedMaxmemory(
-                db -> db.writes().lists().rpush(b("l"), List.of(b("a"), b("b"), b("c"), b("d"))).value(),
-                db -> db.writes().lists().lpush(b("l"), List.of(listValue)).value(),
+                db -> db.lists().rpush(b("l"), List.of(b("a"), b("b"), b("c"), b("d"))).value(),
+                db -> db.lists().lpush(b("l"), List.of(listValue)).value(),
                 List.of(b("LPUSH"), b("l"), listValue)
         );
         assertCollectionWriteUsesRealBoundedMaxmemory(
-                db -> db.writes().hashes().hset(b("h"), List.of(b("f1"), b("v1"), b("f2"), b("v2"))).value(),
-                db -> db.writes().hashes().hset(b("h"), List.of(b("f3"), hashValue)).value(),
+                db -> db.hashes().hset(b("h"), List.of(b("f1"), b("v1"), b("f2"), b("v2"))).value(),
+                db -> db.hashes().hset(b("h"), List.of(b("f3"), hashValue)).value(),
                 List.of(b("HSET"), b("h"), b("f3"), hashValue)
         );
         assertCollectionWriteUsesRealBoundedMaxmemory(
-                db -> db.writes().sets().sadd(b("s"), List.of(b("alpha"), b("beta"), b("gamma"))).value(),
-                db -> db.writes().sets().sadd(b("s"), List.of(setMember)).value(),
+                db -> db.sets().sadd(b("s"), List.of(b("alpha"), b("beta"), b("gamma"))).value(),
+                db -> db.sets().sadd(b("s"), List.of(setMember)).value(),
                 List.of(b("SADD"), b("s"), setMember)
         );
         assertCollectionWriteUsesRealBoundedMaxmemory(
-                db -> db.writes().zsets().zadd(b("z"), List.of(b("1"), b("alpha"), b("2"), b("beta"), b("3"), b("gamma"))).value(),
-                db -> db.writes().zsets().zadd(b("z"), List.of(b("4"), zsetMember)).value(),
+                db -> db.zsets().zadd(b("z"), List.of(b("1"), b("alpha"), b("2"), b("beta"), b("3"), b("gamma"))).value(),
+                db -> db.zsets().zadd(b("z"), List.of(b("4"), zsetMember)).value(),
                 List.of(b("ZADD"), b("z"), b("4"), zsetMember)
         );
     }
@@ -170,7 +174,7 @@ public class MaxmemoryEvictionTest {
     @Test
     public void boundedFixtureUsesConfiguredMaxmemoryForStats() {
         try (DbFixture fixture = new DbFixture(1234)) {
-            Assert.assertEquals(1234, fixture.db.memory().memoryStats().maxmemoryBytes());
+            Assert.assertEquals(1234, fixture.db.memoryStats().maxmemoryBytes());
         }
     }
 
@@ -179,8 +183,9 @@ public class MaxmemoryEvictionTest {
         byte[] value = repeat((byte) 'x', 40_000);
         long maxmemoryBytes = minMaxmemoryThatAllowsSetAfterDeletion(value);
         forEachDbWithMaxmemory(maxmemoryBytes, MaxmemoryPolicy.ALLKEYS_RANDOM, 5, db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
             Assert.assertTrue(client.execute(List.of(b("SET"), b("a"), value)) instanceof ReplySimpleString);
             long usedBeforeCandidate = usedBytesForMaxmemory(db);
@@ -190,7 +195,7 @@ public class MaxmemoryEvictionTest {
                             + ", usedBefore=" + usedBeforeCandidate
                             + ", usedAfter=" + usedBytesForMaxmemory(db)
                             + ", limit=" + maxmemoryBytes
-                            + ", keyCount=" + db.memory().memoryStats().keyCount(),
+                            + ", keyCount=" + db.memoryStats().keyCount(),
                     candidateSet instanceof ReplySimpleString
             );
 
@@ -213,8 +218,9 @@ public class MaxmemoryEvictionTest {
                 boundary.residentKeys().size(),
                 100,
                 db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 for (byte[] key : boundary.residentKeys()) {
                     Assert.assertTrue(client.execute(List.of(b("SET"), key, value)) instanceof ReplySimpleString);
                 }
@@ -251,8 +257,9 @@ public class MaxmemoryEvictionTest {
     @Test
     public void objectEncodingAndMemoryUsageAreExposed() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
         Assert.assertTrue(client.execute(cmd("SET", "k", "1")) instanceof ReplySimpleString);
         Assert.assertEquals("int", ((ReplyBulkString) client.execute(cmd("OBJECT", "ENCODING", "k"))).asString());
@@ -332,8 +339,8 @@ public class MaxmemoryEvictionTest {
         YierdisDb db = openFfm(maxmemoryBytes);
         try {
             db.bindToCurrentThread();
-            return db.writes().strings().setString(key, initialValue, SetMode.NORMAL, null).value()
-                    && db.writes().strings().setString(key, overwriteValue, SetMode.NORMAL, null).value();
+            return db.strings().setString(key, initialValue, SetMode.NORMAL, null).value()
+                    && db.strings().setString(key, overwriteValue, SetMode.NORMAL, null).value();
         } catch (YierdisCommandException e) {
             if (MaxmemoryErrors.OOM_ERR.equals(e.getMessage())) {
                 return false;
@@ -425,7 +432,7 @@ public class MaxmemoryEvictionTest {
         try {
             db.bindToCurrentThread();
             for (byte[] key : keys) {
-                if (!db.writes().strings().setString(key, value, SetMode.NORMAL, null).value()) {
+                if (!db.strings().setString(key, value, SetMode.NORMAL, null).value()) {
                     return false;
                 }
             }
@@ -444,13 +451,13 @@ public class MaxmemoryEvictionTest {
         YierdisDb db = openFfm(maxmemoryBytes);
         try {
             db.bindToCurrentThread();
-            if (!db.writes().strings().setString(b("a"), value, SetMode.NORMAL, null).value()) {
+            if (!db.strings().setString(b("a"), value, SetMode.NORMAL, null).value()) {
                 return false;
             }
-            if (db.writes().keyspace().del(List.of(b("a"))).value() != 1L) {
+            if (db.keyspace().del(List.of(b("a"))).value() != 1L) {
                 throw new AssertionError("test setup did not delete the resident key");
             }
-            return db.writes().strings().setString(b("b"), value, SetMode.NORMAL, null).value();
+            return db.strings().setString(b("b"), value, SetMode.NORMAL, null).value();
         } catch (YierdisCommandException e) {
             if (MaxmemoryErrors.OOM_ERR.equals(e.getMessage())) {
                 return false;
@@ -535,8 +542,9 @@ public class MaxmemoryEvictionTest {
             }
 
             long usedBefore = usedBytesForMaxmemory(fixture.db);
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(fixture.db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(fixture.db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 ReplyObject reply = client.execute(commandWrite);
                 long usedAfter = usedBytesForMaxmemory(fixture.db);
                 if (reply instanceof ReplyError err) {
@@ -572,7 +580,7 @@ public class MaxmemoryEvictionTest {
     }
 
     private static long usedBytesForMaxmemory(YierdisDb db) {
-        return db.memory().memoryStats().usedBytesForMaxmemory();
+        return db.memoryStats().usedBytesForMaxmemory();
     }
 
     private static YierdisDb openFfm(long maxmemoryBytes) {

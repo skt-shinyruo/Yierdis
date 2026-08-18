@@ -23,7 +23,7 @@ public final class PreparedCommands {
 
     public static PreparedCommand action(
             ReplyShape reservationShape,
-            Function<CommandExecutionContext, CommandResult> action
+            Function<CommandSession, CommandResult> action
     ) {
         return create(
                 reservationShape,
@@ -45,7 +45,7 @@ public final class PreparedCommands {
             ReplyShape reservationShape,
             AutoCloseable owner,
             Supplier<ValidationResult> validation,
-            Function<CommandExecutionContext, CommandResult> action
+            Function<CommandSession, CommandResult> action
     ) {
         return create(
                 reservationShape,
@@ -58,11 +58,11 @@ public final class PreparedCommands {
             ReplyShape reservationShape,
             AutoCloseable owner,
             Supplier<ValidationResult> validation,
-            Function<CommandExecutionContext, CommandResult> action
+            Function<CommandSession, CommandResult> action
     ) {
         ReplyShape shape = Objects.requireNonNull(reservationShape, "reservationShape");
         Supplier<ValidationResult> validator = Objects.requireNonNull(validation, "validation");
-        Function<CommandExecutionContext, CommandResult> execution =
+        Function<CommandSession, CommandResult> execution =
                 Objects.requireNonNull(action, "action");
         return new PreparedCommand() {
             private AutoCloseable owned = owner;
@@ -80,8 +80,8 @@ public final class PreparedCommands {
             }
 
             @Override
-            public CommandResult execute(CommandExecutionContext context) {
-                CommandExecutionContext executionContext =
+            public CommandResult execute(CommandSession context) {
+                CommandSession executionContext =
                         Objects.requireNonNull(context, "context");
                 return Objects.requireNonNull(
                         execution.apply(executionContext),

@@ -3,18 +3,18 @@ package yier.bubu.redis.runtime.embedded;
 import yier.bubu.redis.command.api.YierdisDbRouter;
 import yier.bubu.redis.storage.api.DbEngine;
 
-final class TestDbRouters {
+public final class TestDbRouters {
     private TestDbRouters() {
     }
 
-    static YierdisDbRouter forInstance(YierdisInstance instance) {
+    public static YierdisDbRouter forInstance(YierdisInstance instance) {
         if (instance == null) {
             throw new NullPointerException("instance");
         }
         DbEngine[] engines = instance.engines();
         return new YierdisDbRouter() {
             @Override
-            public DbEngine dbFor(yier.bubu.redis.execution.api.DbIndexSession session) {
+            public DbEngine dbFor(yier.bubu.redis.execution.api.CommandSession session) {
                 if (engines.length == 0) {
                     throw new IllegalStateException("no dbs");
                 }

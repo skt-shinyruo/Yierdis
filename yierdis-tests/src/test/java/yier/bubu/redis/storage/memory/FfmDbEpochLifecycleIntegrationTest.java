@@ -8,7 +8,6 @@ import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeEpochScope;
-import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmStableMemoryBackend;
 import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.DbEngineConfig;
@@ -21,6 +20,7 @@ import yier.bubu.redis.storage.api.result.KeyScanWindow;
 import yier.bubu.redis.testutil.TestDbs;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
+import static yier.bubu.redis.testutil.TestBytes.stringValue;
 
 public class FfmDbEpochLifecycleIntegrationTest {
     @Test
@@ -28,10 +28,10 @@ public class FfmDbEpochLifecycleIntegrationTest {
         YierdisDb db = openFfm();
         try {
             byte[] key = b("epoch-key");
-            Assert.assertTrue(db.writes().strings().setString(key, b("epoch-value"), SetMode.NORMAL, null).value());
+            Assert.assertTrue(db.strings().setString(key, b("epoch-value"), SetMode.NORMAL, null).value());
 
             try (NativeEpochScope ignored = YierdisDbTestAccess.backend(db).beginEpoch()) {
-                Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(key)).value());
+                Assert.assertEquals(Long.valueOf(1L), db.keyspace().del(List.of(key)).value());
 
                 NativeAllocatorStats during = YierdisDbTestAccess.backend(db).stats();
                 Assert.assertTrue(during.logicalUsedBytes() > 0L);
@@ -39,7 +39,7 @@ public class FfmDbEpochLifecycleIntegrationTest {
                 Assert.assertTrue(during.quarantinedObjects() > 0L);
                 Assert.assertTrue(during.liveObjects() > 0L);
 
-                YierdisMemoryStats memoryDuring = db.memory().memoryStats();
+                YierdisMemoryStats memoryDuring = db.memoryStats();
                 Assert.assertTrue(memoryDuring.nativeDefragQuarantinedObjects() > 0L);
                 Assert.assertTrue(memoryDuring.nativeDefragQuarantineBytes() > 0L);
             }
@@ -59,14 +59,14 @@ public class FfmDbEpochLifecycleIntegrationTest {
         YierdisDb db = openFfm();
         try {
             byte[] key = b("scan-keep");
-            Assert.assertTrue(db.writes().strings().setString(key, b("value"), SetMode.NORMAL, null).value());
+            Assert.assertTrue(db.strings().setString(key, b("value"), SetMode.NORMAL, null).value());
 
             List<byte[]> scanned = new ArrayList<>();
-            try (KeyScanWindow window = db.reads().keyspace().scan(ScanCursorV2.start(), b("scan-*"), 2)) {
+            try (KeyScanWindow window = db.keyspace().scan(ScanCursorV2.start(), b("scan-*"), 2)) {
                 Assert.assertEquals(0L, window.nextCursor().value());
                 window.emitTo(new CapturingSink(scanned, () -> {
-                    Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(key)).value());
-                    YierdisMemoryStats during = db.memory().memoryStats();
+                    Assert.assertEquals(Long.valueOf(1L), db.keyspace().del(List.of(key)).value());
+                    YierdisMemoryStats during = db.memoryStats();
                     Assert.assertTrue(during.nativeDefragQuarantinedObjects() > 0L);
                     Assert.assertTrue(during.nativeDefragQuarantineBytes() > 0L);
                 }));
@@ -74,7 +74,7 @@ public class FfmDbEpochLifecycleIntegrationTest {
 
             Assert.assertEquals(1, scanned.size());
             Assert.assertArrayEquals(key, scanned.get(0));
-            Assert.assertNull(db.reads().strings().getStringBytes(key));
+            Assert.assertNull(stringValue(db.strings(), key));
             assertNoQuarantine(db);
         } finally {
             db.shutdown();
@@ -85,23 +85,21 @@ public class FfmDbEpochLifecycleIntegrationTest {
     public void shutdownReleasesCollectionsAfterACompletedEpoch() {
         YierdisDb db = openFfm();
         try {
-            Assert.assertTrue(db.writes().strings().setString(b("cleanup:string"), b("value"), SetMode.NORMAL, null).value());
-            Assert.assertEquals(Long.valueOf(1L), db.writes().lists().rpush(b("list"), List.of(b("a"))).value());
-            Assert.assertEquals(Long.valueOf(1L), db.writes().hashes().hset(b("hash"), List.of(b("f"), b("v"))).value());
-            Assert.assertEquals(Long.valueOf(1L), db.writes().sets().sadd(b("set"), List.of(b("m"))).value());
-            Assert.assertEquals(Long.valueOf(1L), db.writes().zsets().zadd(b("zset"), List.of(b("1"), b("m"))).value());
+            Assert.assertTrue(db.strings().setString(b("cleanup:string"), b("value"), SetMode.NORMAL, null).value());
+            Assert.assertEquals(Long.valueOf(1L), db.lists().rpush(b("list"), List.of(b("a"))).value());
+            Assert.assertEquals(Long.valueOf(1L), db.hashes().hset(b("hash"), List.of(b("f"), b("v"))).value());
+            Assert.assertEquals(Long.valueOf(1L), db.sets().sadd(b("set"), List.of(b("m"))).value());
+            Assert.assertEquals(Long.valueOf(1L), db.zsets().zadd(b("zset"), List.of(b("1"), b("m"))).value());
 
             try (NativeEpochScope ignored = YierdisDbTestAccess.backend(db).beginEpoch()) {
-                Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(b("cleanup:string"))).value());
-                Assert.assertTrue(db.memory().memoryStats().nativeDefragQuarantinedObjects() > 0L);
+                Assert.assertEquals(Long.valueOf(1L), db.keyspace().del(List.of(b("cleanup:string"))).value());
+                Assert.assertTrue(db.memoryStats().nativeDefragQuarantinedObjects() > 0L);
             }
 
-            Assert.assertEquals(Long.valueOf(4L), db.writes().keyspace().del(List.of(
+            Assert.assertEquals(Long.valueOf(4L), db.keyspace().del(List.of(
                     b("list"), b("hash"), b("set"), b("zset")
             )).value());
             NativeAllocatorStats stats = YierdisDbTestAccess.backend(db).stats();
-            Assert.assertEquals(0L, stats.objectCount(NativeObjectKind.KEY_BYTES));
-            Assert.assertEquals(0L, stats.objectCount(NativeObjectKind.ENTRY_RECORD));
             Assert.assertEquals(0L, stats.liveObjects());
         } finally {
             db.shutdown();
@@ -127,7 +125,7 @@ public class FfmDbEpochLifecycleIntegrationTest {
     }
 
     private static void assertNoQuarantine(YierdisDb db) {
-        YierdisMemoryStats after = db.memory().memoryStats();
+        YierdisMemoryStats after = db.memoryStats();
         Assert.assertEquals(0L, after.nativeDefragQuarantinedObjects());
         Assert.assertEquals(0L, after.nativeDefragQuarantineBytes());
     }

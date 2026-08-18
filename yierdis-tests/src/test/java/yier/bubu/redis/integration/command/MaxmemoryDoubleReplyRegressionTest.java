@@ -30,8 +30,9 @@ public class MaxmemoryDoubleReplyRegressionTest {
         ), 0);
         try {
             db.bindToCurrentThread();
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 ReplyObject reply = client.execute(Arrays.asList(
                         b("APPEND"),
                         b("k"),
@@ -61,8 +62,9 @@ public class MaxmemoryDoubleReplyRegressionTest {
         ), 0);
         try {
             db.bindToCurrentThread();
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 ReplyObject reply = client.execute(Arrays.asList(
                         b("SETBIT"),
                         b("k"),

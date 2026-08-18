@@ -155,28 +155,6 @@ final class ScriptedRespServer implements AutoCloseable {
         );
     }
 
-    static ScriptedRespServer fragmented(
-            int expectedClients,
-            byte[] reply,
-            int splitAt,
-            Runnable betweenFragments
-    ) throws IOException {
-        Objects.requireNonNull(reply, "reply");
-        if (splitAt <= 0 || splitAt >= reply.length) {
-            throw new IllegalArgumentException("splitAt must be within reply");
-        }
-        byte[] first = new byte[splitAt];
-        byte[] second = new byte[reply.length - splitAt];
-        System.arraycopy(reply, 0, first, 0, first.length);
-        System.arraycopy(reply, splitAt, second, 0, second.length);
-        Objects.requireNonNull(betweenFragments, "betweenFragments");
-        return new ScriptedRespServer(
-                expectedClients,
-                (connection, command, connectionCount, totalCount) ->
-                        connection.sendFragments(first, second, betweenFragments)
-        );
-    }
-
     static ScriptedRespServer fragmentingEveryByte(String reply) throws IOException {
         byte[] response = Objects.requireNonNull(reply, "reply")
                 .getBytes(StandardCharsets.US_ASCII);
@@ -689,19 +667,6 @@ final class ScriptedRespServer implements AutoCloseable {
                 output.flush();
             }
             sentReplies.addAndGet(count);
-            signalStateChanged();
-        }
-
-        void sendFragments(byte[] first, byte[] second, Runnable betweenFragments)
-                throws IOException {
-            synchronized (writeLock) {
-                output.write(first);
-                output.flush();
-                betweenFragments.run();
-                output.write(second);
-                output.flush();
-            }
-            sentReplies.incrementAndGet();
             signalStateChanged();
         }
 

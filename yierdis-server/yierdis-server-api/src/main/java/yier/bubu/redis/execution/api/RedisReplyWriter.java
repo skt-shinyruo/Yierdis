@@ -8,40 +8,11 @@ package yier.bubu.redis.execution.api;
  */
 public interface RedisReplyWriter extends ReplySink {
     /**
-     * 请求在当前控制回复写完后关闭连接；普通命令的关闭语义由 {@link CommandResult} 携带。
-     */
-    void requestCloseAfterReply();
-
-    /**
-     * 返回协议或执行器控制路径是否已请求在当前回复后关闭连接。
-     */
-    boolean closeAfterReplyRequested();
-
-    /**
      * 用当前槽位的控制额度替换尚未写出的预检成功回复，并输出错误。
      *
      * <p>仅用于执行期失败；已经写出业务回复后调用方必须关闭连接，不能替换客户端可见结果。</p>
      */
     default void controlError(String message) {
-        error(message);
-    }
-
-    /**
-     * Marks the current reply as a protocol-level error.
-     * <p>
-     * This is distinct from command-layer {@link #error(String)} values, which are part of the command semantics and
-     * may appear inside aggregates (e.g. EXEC's result array).
-     */
-    default void protocolError(String message) {
-        error(message);
-    }
-
-    /**
-     * Marks the current reply as an internal/server error.
-     * <p>
-     * Protocol implementations may encode this differently from command errors ({@link #error(String)}).
-     */
-    default void internalError(String message) {
         error(message);
     }
 

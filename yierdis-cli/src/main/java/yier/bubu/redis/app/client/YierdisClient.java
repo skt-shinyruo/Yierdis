@@ -9,8 +9,6 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -84,15 +82,6 @@ public final class YierdisClient implements AutoCloseable {
                 throw new IllegalStateException("Invalid RESP reply (connection closed to prevent desync)", e);
             }
         }
-    }
-
-    public RespClientCodec.RespReply executeUtf8(List<String> args, long timeoutMillis) throws InterruptedException {
-        Objects.requireNonNull(args, "args");
-        List<byte[]> out = new ArrayList<>(args.size());
-        for (String a : args) {
-            out.add(a == null ? null : a.getBytes(StandardCharsets.UTF_8));
-        }
-        return execute(out, timeoutMillis);
     }
 
     @Override

@@ -1,18 +1,19 @@
 package yier.bubu.redis.protocol.resp;
 
+import java.util.function.BiFunction;
+
 import java.util.List;
 import java.util.Objects;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.ReplyShape;
-import yier.bubu.redis.execution.api.ReplySizer;
 
 /**
  * RESP 协议对语义回复形状的唯一容量计算实现。
  */
-public final class RespReplySizer implements ReplySizer {
+public final class RespReplySizer implements BiFunction<CommandSession, ReplyShape, ReplyPlan> {
     @Override
-    public ReplyPlan plan(CommandSession session, ReplyShape shape) {
+    public ReplyPlan apply(CommandSession session, ReplyShape shape) {
         Objects.requireNonNull(session, "session");
         Objects.requireNonNull(shape, "shape");
         if (requiresMaximumReservation(shape)) {
@@ -95,14 +96,14 @@ public final class RespReplySizer implements ReplySizer {
 
     private static long byteSequenceBytes(ReplyShape.ByteSequence sequence, RespProtocolVersion version) {
         PayloadAccumulator payloads = new PayloadAccumulator(sequence.elementCount(), version);
-        sequence.payloadLengths().visit(payloads::accept);
+        sequence.payloadLengths().accept(payloads::accept);
         payloads.verifyComplete("sequence");
         return saturatedAdd(aggregateHeaderBytes('*', sequence.elementCount()), payloads.encodedBytes());
     }
 
     private static long byteSetBytes(ReplyShape.ByteSet set, RespProtocolVersion version) {
         PayloadAccumulator payloads = new PayloadAccumulator(set.elementCount(), version);
-        set.payloadLengths().visit(payloads::accept);
+        set.payloadLengths().accept(payloads::accept);
         payloads.verifyComplete("set");
         char prefix = version == RespProtocolVersion.RESP3 ? '~' : '*';
         return saturatedAdd(aggregateHeaderBytes(prefix, set.elementCount()), payloads.encodedBytes());
@@ -111,7 +112,7 @@ public final class RespReplySizer implements ReplySizer {
     private static long byteMapBytes(ReplyShape.ByteMap map, RespProtocolVersion version) {
         long expectedValues = Math.multiplyExact((long) map.pairCount(), 2L);
         PayloadAccumulator payloads = new PayloadAccumulator(expectedValues, version);
-        map.payloadLengths().visit(payloads::accept);
+        map.payloadLengths().accept(payloads::accept);
         payloads.verifyComplete("map");
         long header = version == RespProtocolVersion.RESP3
                 ? aggregateHeaderBytes('%', map.pairCount())

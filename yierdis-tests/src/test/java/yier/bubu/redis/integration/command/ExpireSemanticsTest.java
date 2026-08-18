@@ -20,8 +20,9 @@ public class ExpireSemanticsTest {
     @Test
     public void expireZeroRemovesListAndSubsequentWritesRecreate() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
             byte[] key = b("list");
             Assert.assertEquals(2L, ((ReplyInteger) client.execute(Arrays.asList(b("RPUSH"), key, b("a"), b("b")))).value());
@@ -43,8 +44,9 @@ public class ExpireSemanticsTest {
     @Test
     public void expireZeroRemovesHashAndSubsequentWritesRecreate() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
             byte[] key = b("hash");
             Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("HSET"), key, b("f"), b("v")))).value());
@@ -66,8 +68,9 @@ public class ExpireSemanticsTest {
     @Test
     public void expireZeroRemovesSetAndSubsequentWritesRecreate() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
             byte[] key = b("set");
             Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("SADD"), key, b("a")))).value());
@@ -89,8 +92,9 @@ public class ExpireSemanticsTest {
     @Test
     public void expireZeroRemovesZsetAndSubsequentWritesRecreate() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
             byte[] key = b("zset");
             Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("ZADD"), key, b("1"), b("a")))).value());

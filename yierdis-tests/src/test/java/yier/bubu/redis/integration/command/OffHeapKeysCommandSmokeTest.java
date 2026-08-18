@@ -34,8 +34,9 @@ public class OffHeapKeysCommandSmokeTest {
         ), 0);
         try {
             db.bindToCurrentThread();
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 byte[] v = b("v");
                 byte[] a1 = b("a1");
                 byte[] b1 = b("b1");

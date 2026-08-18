@@ -13,7 +13,7 @@ Yierdis 把“收包”和“执行命令”分开：Netty I/O 线程只解析�
 - `ExecutorBacklogBudget`：全局 backlog 预算，限制 queue capacity 和 queued bytes，并给全局背压提供高低水位。
 - `ExecutorTaskQueue`：调度队列，支持 `GLOBAL` 和 `FAIR`。
 - `CommandExecutorDrainLoop`：cooperative drain loop，真正 poll task 并执行命令。
-- `CommandExecutorExecutionSupport`：把 executor 任务接到生产环境中的 `CommandDispatcher` 准备入口、`RedisReplyRenderer`、`RedisReplyWriterFactory` 和 I/O adapter。
+- `CommandExecutorExecutionSupport`：把 executor 任务接到生产环境中的 `CommandDispatcher` 准备入口、`RedisReplyRenderer`、`RedisReplyWriter` 和 I/O adapter。
 - `ExecutorBackpressureController`：直接读取 `ExecutionConnectionContext` 并通过真实 `ExecutionIoAdapter` 执行输入 disable/enable、关闭监听和 global recovery，不再经过投影 adapter。
 - `ExecutionConnectionContext`：每个连接的 executor 状态，包括 pending count、pending bytes、closing、独立暂停原因和统计；它不持有调度队列。
 - `NettyExecutionConnection`：Netty channel 到 executor connection 的 adapter，挂载 `EngineSession` 和 `ExecutionConnectionContext`。
@@ -90,7 +90,7 @@ admission 时在同一个临界区检查 task 与 byte 上限，两项都满足�
 2. 通过 `CommandDispatcher.prepare(session, request)` 准备 `PreparedCommand`，并根据 reservation shape 生成 reply plan。
 3. 尝试预留 reply capacity；暂时不足时保留 prepared state 并等待容量回调。
 4. 调用 `validateBeforeExecute()`；stale 时关闭并重新 prepare。
-5. 创建不含 writer 的 `CommandExecutionContext`，执行 prepared command并取得 `CommandResult`。
+5. 把同一个 `CommandSession` 交给 `PreparedCommand.execute(...)`，并取得 `CommandResult`。
 6. 执行成功后创建 `RedisReplyWriter`，由 `RedisReplyRenderer` 渲染 `CommandResult.reply()`；`closeAfterReply` 为真时先把连接标为 closing，再把 reply 标为 ready。
 7. 终态 finally 中释放 prepared command、request、backlog budget 和 connection pending 状态。
 
@@ -98,13 +98,13 @@ executor 不直接 write 或 flush transport。命令把 reply slot 标记为 RE
 
 ## 执行支持和回包写出
 
-`CommandExecutorExecutionSupport` 是 executor 与命令准备、语义结果和 I/O adapter 的连接层。生产环境把 `CommandDispatcher::prepare` 作为窄的 `CommandExecutionEngine` 端口注入；这个端口只隔离 executor 与 command-core，不再承载另一套 engine 实现。它负责：
+`CommandExecutorExecutionSupport` 是 executor 与命令准备、语义结果和 I/O adapter 的连接层。生产环境直接把 `CommandDispatcher::prepare` 作为 `BiFunction<CommandSession, ExecutionRequest, PreparedCommand>` 注入 executor。它负责：
 
 - 通过 reply slot 的 sink 写入语义结果；通过 I/O adapter 注册连接关闭监听，并在结果未知等终止路径关闭 transport。
 - 从 `ExecutionConnection` 获取 `EngineSession`。
 - 调用 `CommandDispatcher.prepare(session, request)`，并按 `PreparedCommand.reservationShape()` 规划/预留容量。
-- 容量成功后建立请求级执行上下文，校验并执行 `PreparedCommand`，得到一个 `CommandResult`。
-- 执行成功后才通过 `RedisReplyWriterFactory` 创建 writer，并由 `RedisReplyRenderer` 完成唯一一次命令结果渲染。
+- 容量成功后校验 `PreparedCommand`，再使用当前 `CommandSession` 执行，得到一个 `CommandResult`。
+- 执行成功后才为当前 session 和 reply sink 创建 `RedisReplyWriter`，并由 `RedisReplyRenderer` 完成唯一一次命令结果渲染。
 - 命令结束后释放 `ExecutorBacklogBudget` 中的 slot/queued bytes。
 - 更新 `ExecutionConnectionContext.recordCommandFinished(...)`。
 - 在连接 pending、本地 bytes 和全局 backlog 都恢复后尝试恢复 `autoRead`。

@@ -12,18 +12,18 @@ public final class InlineCommandParser {
     private InlineCommandParser() {
     }
 
-    public static Decoded parse(byte[] input, int off, int len, int maxArgs) {
+    static byte[][] parse(byte[] input, int off, int len, int maxArgs) {
         if (maxArgs <= 0) {
             throw new IllegalArgumentException("maxArgs must be > 0");
         }
         return parseInternal(input, off, len, maxArgs);
     }
 
-    public static Decoded parseUnlimited(byte[] input, int off, int len) {
+    public static byte[][] parseUnlimited(byte[] input, int off, int len) {
         return parseInternal(input, off, len, 0);
     }
 
-    private static Decoded parseInternal(byte[] input, int off, int len, int maxArgs) {
+    private static byte[][] parseInternal(byte[] input, int off, int len, int maxArgs) {
         if (input == null) {
             throw new IllegalArgumentException("input must not be null");
         }
@@ -140,7 +140,11 @@ public final class InlineCommandParser {
         if (argc == 0) {
             throw new IllegalArgumentException("Protocol error: empty inline command");
         }
-        return new Decoded(decoded, argc, offsets, lengths);
+        byte[][] args = new byte[argc][];
+        for (int i = 0; i < argc; i++) {
+            args[i] = Arrays.copyOfRange(decoded, offsets[i], offsets[i] + lengths[i]);
+        }
+        return args;
     }
 
     public static List<byte[]> splitUtf8(String line, int maxArgs) {
@@ -148,30 +152,7 @@ public final class InlineCommandParser {
             throw new IllegalArgumentException("line must not be null");
         }
         byte[] input = line.getBytes(StandardCharsets.UTF_8);
-        return new ArrayList<>(Arrays.asList(parse(input, 0, input.length, maxArgs).copyArgs()));
-    }
-
-    public static final class Decoded {
-        private final byte[] decoded;
-        private final int argc;
-        private final int[] offsets;
-        private final int[] lengths;
-
-        private Decoded(byte[] decoded, int argc, int[] offsets, int[] lengths) {
-            this.decoded = decoded;
-            this.argc = argc;
-            this.offsets = offsets;
-            this.lengths = lengths;
-        }
-
-        public byte[][] copyArgs() {
-            byte[][] out = new byte[argc][];
-            for (int i = 0; i < argc; i++) {
-                int start = offsets[i];
-                out[i] = Arrays.copyOfRange(decoded, start, start + lengths[i]);
-            }
-            return out;
-        }
+        return new ArrayList<>(Arrays.asList(parse(input, 0, input.length, maxArgs)));
     }
 
     private static boolean isSpace(byte b) {

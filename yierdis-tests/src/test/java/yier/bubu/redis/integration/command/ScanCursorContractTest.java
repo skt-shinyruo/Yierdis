@@ -17,8 +17,9 @@ public class ScanCursorContractTest {
     @Test
     public void cursorTerminatesAtZeroAndMakesProgress() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 for (int i = 0; i < 50; i++) {
                     client.execute(Arrays.asList(b("SET"), b("k" + i), b("v")));
                 }
@@ -47,8 +48,9 @@ public class ScanCursorContractTest {
     @Test
     public void countAndMatchNeverDeadlockEvenWhenNoKeyMatches() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 for (int i = 0; i < 20; i++) {
                     client.execute(Arrays.asList(b("SET"), b("k" + i), b("v")));
                 }
@@ -74,8 +76,9 @@ public class ScanCursorContractTest {
     @Test
     public void cursorTerminatesEvenWhenDatasetMutatesDuringRehash() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 // Fill enough keys to trigger growth/rehash at least once.
                 for (int i = 0; i < 200; i++) {
                     client.execute(Arrays.asList(b("SET"), b("k" + i), b("v")));

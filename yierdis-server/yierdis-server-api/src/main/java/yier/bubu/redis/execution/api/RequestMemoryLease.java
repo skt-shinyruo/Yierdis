@@ -8,8 +8,6 @@ public interface RequestMemoryLease extends AutoCloseable {
 
     long reservedBytes();
 
-    boolean released();
-
     RequestMemoryLease retain();
 
     @Override
@@ -20,11 +18,6 @@ final class NoopRequestMemoryLease implements RequestMemoryLease {
     @Override
     public long reservedBytes() {
         return 0L;
-    }
-
-    @Override
-    public boolean released() {
-        return false;
     }
 
     @Override

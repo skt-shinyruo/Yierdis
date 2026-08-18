@@ -3,8 +3,6 @@ package yier.bubu.redis.integration.command;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.command.api.CommandArgs;
 import yier.bubu.redis.command.api.ServerInfoProvider;
-import yier.bubu.redis.command.defaults.DefaultCommandModules;
-import yier.bubu.redis.command.kernel.CommandRegistries;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.execution.api.CommandSession;
@@ -49,8 +47,9 @@ public class MemoryStatsCommandTest {
     @Test
     public void memoryStatsReturnsStableKeyValuePairs() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 ReplyObject resp = client.execute(cmd("MEMORY", "STATS"));
                 Assert.assertTrue(resp instanceof ReplyMap);
                 List<ReplyMap.Entry> entries = ((ReplyMap) resp).entries();
@@ -73,18 +72,19 @@ public class MemoryStatsCommandTest {
     public void memoryStatsUsesGlobalProviderOnlyWhenItSuppliesAGlobalSnapshot() {
         forEachDb(db -> {
             YierdisMemoryStats global = YierdisMemoryStats.empty(31_337L, false);
-            CommandDispatcher globalDispatcher = CommandRegistries.dispatcher(
-                    DefaultCommandModules.create(db, new MemoryStatsProvider(global)));
-            CommandDispatcher perDbDispatcher = CommandRegistries.dispatcher(
-                    DefaultCommandModules.create(db, new MemoryStatsProvider(null)));
+            CommandDispatcher globalDispatcher = TestCommandComposition.createDispatcher(
+                    db, new MemoryStatsProvider(global));
+            CommandDispatcher perDbDispatcher = TestCommandComposition.createDispatcher(
+                    db, new MemoryStatsProvider(null));
 
             Assert.assertEquals(31_337L, maxmemoryBytes(globalDispatcher));
-            Assert.assertEquals(db.memory().memoryStats().maxmemoryBytes(), maxmemoryBytes(perDbDispatcher));
+            Assert.assertEquals(db.memoryStats().maxmemoryBytes(), maxmemoryBytes(perDbDispatcher));
         });
     }
 
     private static long maxmemoryBytes(CommandDispatcher dispatcher) {
-        try (FastTestClient client = new FastTestClient(dispatcher)) {
+        {
+            FastTestClient client = new FastTestClient(dispatcher);
             ReplyMap map = (ReplyMap) client.execute(cmd("MEMORY", "STATS"));
             for (ReplyMap.Entry entry : map.entries()) {
                 if ("maxmemory_bytes".equals(((ReplyBulkString) entry.key()).asString())) {

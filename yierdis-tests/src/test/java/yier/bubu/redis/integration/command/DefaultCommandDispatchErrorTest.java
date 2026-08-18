@@ -117,8 +117,9 @@ public class DefaultCommandDispatchErrorTest {
 
     private static void withClient(ClientCase test) {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 test.run(client);
             }
         });

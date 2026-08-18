@@ -1,0 +1,202 @@
+package yier.bubu.redis.storage.memory;
+
+import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReference;
+import org.junit.Assert;
+import org.junit.Test;
+import yier.bubu.redis.common.memory.MemoryPressureBudget;
+import yier.bubu.redis.common.memory.MemoryReclaimResult;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
+import yier.bubu.redis.memory.api.MemoryOwner;
+import yier.bubu.redis.memory.api.NativeAccessMode;
+import yier.bubu.redis.memory.api.NativeAllocationGrowth;
+import yier.bubu.redis.memory.api.NativeAllocationScope;
+import yier.bubu.redis.memory.api.NativeAllocatorStats;
+import yier.bubu.redis.memory.api.NativeDefragOptions;
+import yier.bubu.redis.memory.api.NativeDefragReport;
+import yier.bubu.redis.memory.api.NativeEpochScope;
+import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.memory.api.NativeObjectView;
+import yier.bubu.redis.memory.api.NativeReallocPolicy;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
+import yier.bubu.redis.memory.testkit.HeapStableMemoryBackend;
+
+public class YierdisDbLifecycleContractTest {
+    @Test
+    public void unboundDatabaseCanShutdownIdempotently() {
+        YierdisDb engine = (YierdisDb) new YierdisDbEngineFactory(
+                HeapStableMemoryBackend::new,
+                64
+        ).create(TestDbSupport.config());
+
+        engine.shutdown();
+        engine.shutdown();
+    }
+
+    @Test
+    public void failedShutdownClosesPublicAccessAndDoesNotReleaseResourcesTwice() {
+        AtomicReference<YierdisDb> engineReference = new AtomicReference<>();
+        AtomicReference<CallbackAndFailingCloseBackend> backendReference = new AtomicReference<>();
+        YierdisDbEngineFactory factory = new YierdisDbEngineFactory(
+                (name, slots, owner) -> {
+                    CallbackAndFailingCloseBackend backend = new CallbackAndFailingCloseBackend(
+                            new HeapStableMemoryBackend(name, slots, owner),
+                            () -> {
+                                YierdisDb engine = engineReference.get();
+                                Assert.assertNotNull("database must be available during backend close", engine);
+                                IllegalStateException failure = Assert.assertThrows(
+                                        IllegalStateException.class,
+                                        engine::runMaintenance
+                                );
+                                Assert.assertTrue(failure.getMessage().contains("CLOSING"));
+                            }
+                    );
+                    backendReference.set(backend);
+                    return backend;
+                },
+                64
+        );
+        YierdisDb engine = (YierdisDb) factory.create(TestDbSupport.config());
+        engineReference.set(engine);
+        engine.bindToCurrentThread();
+
+        IllegalStateException failure = Assert.assertThrows(
+                IllegalStateException.class,
+                engine::shutdown
+        );
+
+        Assert.assertEquals("injected backend close failure", failure.getMessage());
+        IllegalStateException closedFailure = Assert.assertThrows(
+                IllegalStateException.class,
+                engine::runMaintenance
+        );
+        Assert.assertTrue(closedFailure.getMessage().contains("CLOSED"));
+        Assert.assertEquals(1, backendReference.get().closeCalls());
+
+        engine.shutdown();
+
+        Assert.assertEquals(1, backendReference.get().closeCalls());
+    }
+
+    private static final class CallbackAndFailingCloseBackend implements StableMemoryBackend {
+        private final StableMemoryBackend delegate;
+        private final Runnable closeCallback;
+        private boolean failFirstClose = true;
+        private int closeCalls;
+
+        private CallbackAndFailingCloseBackend(StableMemoryBackend delegate, Runnable closeCallback) {
+            this.delegate = Objects.requireNonNull(delegate, "delegate");
+            this.closeCallback = Objects.requireNonNull(closeCallback, "closeCallback");
+        }
+
+        int closeCalls() {
+            return closeCalls;
+        }
+
+        @Override
+        public long allocatorId() {
+            return delegate.allocatorId();
+        }
+
+        @Override
+        public void bindToCurrentThread() {
+            delegate.bindToCurrentThread();
+        }
+
+        @Override
+        public NativeHandle allocate(NativeObjectKind kind, int size) {
+            return delegate.allocate(kind, size);
+        }
+
+        @Override
+        public NativeHandle reallocate(
+                NativeHandle handle,
+                int newSize,
+                NativeReallocPolicy policy
+        ) {
+            return delegate.reallocate(handle, newSize, policy);
+        }
+
+        @Override
+        public void free(NativeHandle handle) {
+            delegate.free(handle);
+        }
+
+        @Override
+        public void pin(NativeHandle handle) {
+            delegate.pin(handle);
+        }
+
+        @Override
+        public void unpin(NativeHandle handle) {
+            delegate.unpin(handle);
+        }
+
+        @Override
+        public NativeEpochScope beginEpoch() {
+            return delegate.beginEpoch();
+        }
+
+        @Override
+        public NativeAllocationScope beginAllocationScope() {
+            return delegate.beginAllocationScope();
+        }
+
+        @Override
+        public long estimateAllocationScopeBookkeepingBytes(int expectedAllocationCount) {
+            return delegate.estimateAllocationScopeBookkeepingBytes(expectedAllocationCount);
+        }
+
+        @Override
+        public NativeObjectView resolve(NativeHandle handle, NativeAccessMode mode) {
+            return delegate.resolve(handle, mode);
+        }
+
+        @Override
+        public NativeObjectView resolvePinned(NativeHandle handle, NativeAccessMode mode) {
+            return delegate.resolvePinned(handle, mode);
+        }
+
+        @Override
+        public NativeDefragReport defragCycle(NativeDefragOptions options) {
+            return delegate.defragCycle(options);
+        }
+
+        @Override
+        public NativeAllocatorStats stats() {
+            return delegate.stats();
+        }
+
+        @Override
+        public MemoryUsageSnapshot memoryUsage() {
+            return delegate.memoryUsage();
+        }
+
+        @Override
+        public MemoryReclaimResult trimEmptyPages(MemoryPressureBudget budget) {
+            return delegate.trimEmptyPages(budget);
+        }
+
+        @Override
+        public NativeAllocationGrowth estimateAdditionalGrowth(int... requestedBytes) {
+            return delegate.estimateAdditionalGrowth(requestedBytes);
+        }
+
+        @Override
+        public long liveRegionCount() {
+            return delegate.liveRegionCount();
+        }
+
+        @Override
+        public void close() {
+            closeCalls++;
+            closeCallback.run();
+            delegate.close();
+            if (failFirstClose) {
+                failFirstClose = false;
+                throw new IllegalStateException("injected backend close failure");
+            }
+        }
+    }
+}

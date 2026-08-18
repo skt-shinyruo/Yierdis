@@ -32,7 +32,7 @@ public class CommandMetadataRegressionTest {
     @Test
     public void commandInfoKeepsMetadataForBuiltInAndExtraCommands() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(
                     db,
                     registration -> registration.register(new CommandSpec(
                             new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
@@ -40,7 +40,8 @@ public class CommandMetadataRegressionTest {
                             args -> session -> PreparedCommands.ready(RedisReplies.simpleString("OK"))
                     ))
             );
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 ReplyArray info = (ReplyArray) client.execute(Arrays.asList(
                         b("COMMAND"),
                         b("INFO"),

@@ -24,7 +24,7 @@
 | 覆盖状态 | `covered` / `partial` / `missing` |
 | 备注 | 实现现状、文档缺口或待确认点 |
 
-## server-main / bootstrap / connection
+## yierdis-server / bootstrap / connection
 
 | 类 | 关键方法/逻辑块 | 行为职责 | 关键分支/状态/不变量 | 线程/内存边界 | 相关测试 | 文档归属 | 覆盖状态 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -33,7 +33,7 @@
 | `NettyExecutionRequestIngress` | admission / publish path | 把 registered request 与 reply slot 提交给 `CommandExecutor` | capacity wait、terminal reject、protocol/internal error、closing | I/O 线程不执行命令 | `ClosingSkipSideEffectsIntegrationTest`, `NettyExecutionAdapterIntegrationTest`, `RespProtocolErrorIntegrationTest` | [`request-execution-flow.md`](./request-execution-flow.md), [`executor-and-backpressure.md`](./executor-and-backpressure.md) | `covered` | 两阶段 admission、顺序回包和直接回错边界已补齐 |
 | `NettyExecutionConnection` | request/reply/close 适配块 | 把 Netty channel 状态收敛成 executor 可消费的连接抽象 | 关闭后跳过副作用、reply 写回失败处理 | Channel 生命周期与 executor connection state 对接 | `ClosingSkipSideEffectsIntegrationTest`, `NettyExecutionAdapterIntegrationTest` | [`request-execution-flow.md`](./request-execution-flow.md), [`executor-and-backpressure.md`](./executor-and-backpressure.md) | `covered` | Channel root、closing 和事务丢弃边界已补齐 |
 
-## networking-resp / networking-netty
+## networking-resp / Netty adapter
 
 | 类 | 关键方法/逻辑块 | 行为职责 | 关键分支/状态/不变量 | 线程/内存边界 | 相关测试 | 文档归属 | 覆盖状态 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -54,10 +54,10 @@
 | 类 | 关键方法/逻辑块 | 行为职责 | 关键分支/状态/不变量 | 线程/内存边界 | 相关测试 | 文档归属 | 覆盖状态 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `CommandExecutorExecutionSupport` | prepare / reserve / validate / execute / render | 把 dispatcher、reply reservation、请求级执行作用域和中央 renderer 串成一条命令主链 | stale reprepare、result unknown、result-based close、owner 清理 | 只在 owner thread 执行 DB 命令；writer 在执行成功后创建 | `CommandExecutorTest`, `ReplyCapacityBlockedSchedulingTest` | [`request-execution-flow.md`](./request-execution-flow.md), [`executor-and-backpressure.md`](./executor-and-backpressure.md), [`proxy-logic.md`](./proxy-logic.md) | `covered` | 最终 prepare-to-result 链路及失败所有权已有回归覆盖 |
-| `EngineSession` | session accessors, `DefaultTransactionState` | 维护 DB index、protocol version、transaction queue 和 client metadata | `MULTI/EXEC/DISCARD` 状态机、abort 标记、selected DB 持续性 | session 状态只在单连接执行上下文中读写 | `EngineSessionTest`, `TransactionQueueCleanupTest` | [`transaction-and-replay.md`](./transaction-and-replay.md), [`commands-and-data-model.md`](./commands-and-data-model.md) | `covered` | 事务状态机、retained request queue 和 cleanup 路线已有独立文档 |
+| `EngineSession` | session accessors, `DefaultTransactionState` | 维护 DB index、protocol version、transaction queue 和 client name | `MULTI/EXEC/DISCARD` 状态机、abort 标记、selected DB 持续性 | session 状态只在单连接执行上下文中读写 | `EngineSessionTest`, `TransactionQueueCleanupTest` | [`transaction-and-replay.md`](./transaction-and-replay.md), [`commands-and-data-model.md`](./commands-and-data-model.md) | `covered` | 事务状态机、retained request queue 和 cleanup 路线已有独立文档 |
 | `TransactionState` | queue / replay lifecycle | `MULTI/EXEC/DISCARD` 状态机 | queue 限制、abort、replay 顺序 | 事务拥有 retained request views，并在 drain/discard 后关闭 | `TransactionCommandTest`, `EngineSessionTest`, `TransactionQueueCleanupTest` | [`transaction-and-replay.md`](./transaction-and-replay.md) | `covered` | 已补独立状态机文档 |
 
-## command-api / command-core / builtin commands
+## yierdis-command
 
 | 类 | 关键方法/逻辑块 | 行为职责 | 关键分支/状态/不变量 | 线程/内存边界 | 相关测试 | 文档归属 | 覆盖状态 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -69,11 +69,11 @@
 
 | 类 | 关键方法/逻辑块 | 行为职责 | 关键分支/状态/不变量 | 线程/内存边界 | 相关测试 | 文档归属 | 覆盖状态 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `YierdisInstance` | `create(...)`, `engine(int)`, `bindToCurrentThread()`, `close()` | 管理多 DB 生命周期、owner thread 绑定和 runtime 资源 | strict create 注入要求、DB index 边界、关闭幂等性 | runtime access 绑定 executor owner thread | `YierdisInstanceTest`, `YierdisInstanceBoundaryTest` | [`db-internals.md`](./db-internals.md), [`configuration-and-operations.md`](./configuration-and-operations.md), [`request-execution-flow.md`](./request-execution-flow.md) | `covered` | strict create、owner-thread binding 和 reverse close 已补齐 |
+| `YierdisInstance` | `create(...)`, `engines()`, `runtimeAccess()`, `close()` | 管理多 DB 生命周期、能力视图和 runtime 资源 | 固定 FFM 组合、defensive engine array、关闭幂等性 | runtime access 绑定 executor owner thread | `YierdisInstanceTest`, `YierdisInstanceBoundaryTest` | [`db-internals.md`](./db-internals.md), [`configuration-and-operations.md`](./configuration-and-operations.md), [`request-execution-flow.md`](./request-execution-flow.md) | `covered` | owner-thread binding 由 `YierdisInstanceRuntimeAccess` 提供 |
 | `YierdisInstanceRuntimeAccess` | maintenance tick path | 驱动 expire cleanup、defrag 和 maintenance 协调 | tick coalescing、逐 DB 扫描顺序、per-db 与 global enforce 时机 | maintenance 在 runtime owner 上下文运行 | `YierdisDbDefragMaintenanceTest`, `ActiveExpirationTest` | [`configuration-and-operations.md`](./configuration-and-operations.md), [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md), [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md) | `covered` | tick 顺序、coalescing 和 native defrag budget cross-link 已补齐 |
 | `YierdisGlobalMaxmemoryGovernor` | cross-db arbitration / eviction loop | 在多 DB 之间协调全局 maxmemory 压力和淘汰 | cleanup-first、owned physical snapshots、victim 选择、全局限制收敛 | 协调器跨 DB 观察 memory participant，但不直接越过 DB API | `YierdisGlobalMaxmemoryGovernorTest`, `GlobalMaxmemoryLruAcrossDbsTest`, `TtlMaxmemoryTest` | [`configuration-and-operations.md`](./configuration-and-operations.md), [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md) | `covered` | global scope 的 prepareWrite、maintenance 和跨 DB LRU 已有专门说明 |
 
-## db-api / db-memory
+## yierdis-db
 
 | 类 | 关键方法/逻辑块 | 行为职责 | 关键分支/状态/不变量 | 线程/内存边界 | 相关测试 | 文档归属 | 覆盖状态 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |

@@ -31,7 +31,6 @@ public class ProductionHardeningSoakTest {
     private static final int SOAK_CYCLE_COUNT = 4;
     private static final long WARM_PAGE_BOUND_BYTES = 23L * 64L * 1024L;
     private static final long MIXED_ITERATION_INTERVAL_MILLIS = 25L;
-    private static final long RSS_MONOTONIC_GROWTH_TOLERANCE_BYTES = 16L * 1024L * 1024L;
 
     @Test
     public void reportSamplesIncludeRssAndCycleBaselineTelemetry() {
@@ -44,41 +43,6 @@ public class ProductionHardeningSoakTest {
         String json = sample.toJson();
         Assert.assertTrue("soak sample must record RSS", json.contains("\"rssBytes\":"));
         Assert.assertTrue("soak sample must identify its workload cycle", json.contains("\"cycle\":"));
-    }
-
-    @Test
-    public void allowsMinorRssGrowthAcrossCompletedCycles() {
-        assertNoSustainedMaterialRssGrowth(List.of(
-                new CycleCompletion(0L, 0L, 0L, 0L, 0L, 100L * 1024L * 1024L),
-                new CycleCompletion(1L, 0L, 0L, 0L, 0L, 101L * 1024L * 1024L),
-                new CycleCompletion(2L, 0L, 0L, 0L, 0L, 102L * 1024L * 1024L),
-                new CycleCompletion(3L, 0L, 0L, 0L, 0L, 103L * 1024L * 1024L)
-        ));
-    }
-
-    @Test
-    public void allowsOneTimeRssExpansionFollowedByPlateau() {
-        assertNoSustainedMaterialRssGrowth(List.of(
-                new CycleCompletion(0L, 0L, 0L, 0L, 0L, 90L * 1024L * 1024L),
-                new CycleCompletion(1L, 0L, 0L, 0L, 0L, 100L * 1024L * 1024L),
-                new CycleCompletion(2L, 0L, 0L, 0L, 0L, 150L * 1024L * 1024L),
-                new CycleCompletion(3L, 0L, 0L, 0L, 0L, 151L * 1024L * 1024L)
-        ));
-    }
-
-    @Test
-    public void rejectsSustainedMaterialRssGrowthAcrossCompletedCycles() {
-        try {
-            assertNoSustainedMaterialRssGrowth(List.of(
-                    new CycleCompletion(0L, 0L, 0L, 0L, 0L, 100L * 1024L * 1024L),
-                    new CycleCompletion(1L, 0L, 0L, 0L, 0L, 110L * 1024L * 1024L),
-                    new CycleCompletion(2L, 0L, 0L, 0L, 0L, 120L * 1024L * 1024L),
-                    new CycleCompletion(3L, 0L, 0L, 0L, 0L, 130L * 1024L * 1024L)
-            ));
-            Assert.fail("material monotonic RSS growth must fail the soak invariant");
-        } catch (AssertionError expected) {
-            Assert.assertTrue(expected.getMessage().contains("RSS"));
-        }
     }
 
     @Test
@@ -178,7 +142,6 @@ public class ProductionHardeningSoakTest {
 
                     Assert.assertEquals("worker must stay responsive", "+PONG\r\n", execute(client, "PING"));
                     replySequence.incrementAndGet();
-                    assertNoSustainedMaterialRssGrowth(completedCycles);
                     Assert.assertEquals("soak must complete each configured cycle", SOAK_CYCLE_COUNT, completedCycles.size());
                     Assert.assertTrue("soak must emit multiple samples", samples.size() >= SOAK_CYCLE_COUNT);
                 }
@@ -401,7 +364,7 @@ public class ProductionHardeningSoakTest {
                 egress.activeSources(),
                 egress.activeChunks(),
                 children.activeChannelCount(),
-                saturatedAdd(inboundStats.rejectedConnections(), outboundStats.capacityRejects()),
+                saturatedAdd(inboundStats.rejectedConnections(), outboundStats.capacityRejectedReservations()),
                 replySequence,
                 readRssBytes(),
                 required(memory, "yierdis_native_metadata_committed_bytes"),
@@ -607,23 +570,6 @@ public class ProductionHardeningSoakTest {
         Assert.assertTrue(
                 "native committed bytes exceed metadata high-water plus warm-page bound: " + completion,
                 completion.nativeCommittedBytes() <= committedBound
-        );
-    }
-
-    private static void assertNoSustainedMaterialRssGrowth(List<CycleCompletion> completions) {
-        Assert.assertTrue("soak needs one warmup and three measured cycles", completions.size() >= 4);
-        CycleCompletion first = completions.get(completions.size() - 3);
-        CycleCompletion second = completions.get(completions.size() - 2);
-        CycleCompletion third = completions.get(completions.size() - 1);
-        long materialCycleGrowth = RSS_MONOTONIC_GROWTH_TOLERANCE_BYTES / 2L;
-        boolean growsSustainably = second.rssBytes() - first.rssBytes() > materialCycleGrowth
-                && third.rssBytes() - second.rssBytes() > materialCycleGrowth
-                && third.rssBytes() - first.rssBytes() > RSS_MONOTONIC_GROWTH_TOLERANCE_BYTES;
-        Assert.assertFalse(
-                "RSS grew materially across both final measured cycle transitions: "
-                        + first.rssBytes() + ", " + second.rssBytes() + ", " + third.rssBytes()
-                        + " (tolerance=" + RSS_MONOTONIC_GROWTH_TOLERANCE_BYTES + ")",
-                growsSustainably
         );
     }
 

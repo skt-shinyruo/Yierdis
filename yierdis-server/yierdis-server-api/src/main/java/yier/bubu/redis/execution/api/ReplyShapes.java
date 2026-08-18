@@ -3,6 +3,8 @@ package yier.bubu.redis.execution.api;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
+import java.util.function.IntConsumer;
 
 /**
  * 构造协议无关回复形状的工厂。
@@ -89,7 +91,7 @@ public final class ReplyShapes {
     public static ReplyShape sequence(
             int count,
             long retainedSourceBytes,
-            ReplyShape.PayloadLengths lengths
+            Consumer<IntConsumer> lengths
     ) {
         return new ReplyShape.ByteSequence(count, lengths, retainedSourceBytes);
     }
@@ -97,7 +99,7 @@ public final class ReplyShapes {
     public static ReplyShape byteSet(
             int count,
             long retainedSourceBytes,
-            ReplyShape.PayloadLengths lengths
+            Consumer<IntConsumer> lengths
     ) {
         return new ReplyShape.ByteSet(count, lengths, retainedSourceBytes);
     }
@@ -105,7 +107,7 @@ public final class ReplyShapes {
     public static ReplyShape byteMap(
             int pairCount,
             long retainedSourceBytes,
-            ReplyShape.PayloadLengths lengths
+            Consumer<IntConsumer> lengths
     ) {
         return new ReplyShape.ByteMap(pairCount, lengths, retainedSourceBytes);
     }

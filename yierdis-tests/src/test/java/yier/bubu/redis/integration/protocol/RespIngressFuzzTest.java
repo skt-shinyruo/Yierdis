@@ -25,7 +25,6 @@ public class RespIngressFuzzTest {
 
         for (int i = 0; i < CASES; i++) {
             InboundConnectionMemory connection = new InboundConnectionMemory(
-                    "fuzz-" + i,
                     65_536,
                     Runnable::run,
                     () -> { }
@@ -57,7 +56,6 @@ public class RespIngressFuzzTest {
     public void oneHundredThousandOneByteFragmentsConsolidateWithoutLeaking() {
         InboundMemoryBudget budget = new InboundMemoryBudget(GLOBAL_CAPACITY_BYTES);
         InboundConnectionMemory connection = new InboundConnectionMemory(
-                "one-byte",
                 256 * 1024L,
                 Runnable::run,
                 () -> { }

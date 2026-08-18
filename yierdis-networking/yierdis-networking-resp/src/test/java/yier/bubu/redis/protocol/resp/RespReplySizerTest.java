@@ -13,11 +13,11 @@ public class RespReplySizerTest {
         CommandSession session = session(2);
         RespReplySizer sizer = new RespReplySizer();
 
-        Assert.assertThrows(IllegalArgumentException.class, () -> sizer.plan(
+        Assert.assertThrows(IllegalArgumentException.class, () -> sizer.apply(
                 session,
                 new ReplyShape.ByteSequence(1, consumer -> consumer.accept(-2), 0)
         ));
-        Assert.assertThrows(IllegalArgumentException.class, () -> sizer.plan(
+        Assert.assertThrows(IllegalArgumentException.class, () -> sizer.apply(
                 session,
                 new ReplyShape.ByteMap(1, consumer -> consumer.accept(1), 0)
         ));

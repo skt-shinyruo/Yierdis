@@ -42,7 +42,7 @@ Command:
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
 java -jar yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar \
-  --serverJar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar \
+  --serverJar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar \
   --javaCmd /usr/lib/jvm/java-25-openjdk-amd64/bin/java \
   --xms 512m --xmx 512m --maxDirectMemory 1g \
   --portBase 17378 --keyspace 2000 --requests 4000 --clients 16 --pipeline 8 \
@@ -68,7 +68,7 @@ Command:
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
 java -jar yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar \
-  --serverJar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar \
+  --serverJar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar \
   --javaCmd /usr/lib/jvm/java-25-openjdk-amd64/bin/java \
   --xms 512m --xmx 512m --maxDirectMemory 1g \
   --portBase 17578 --keyspace 1000 --requests 1000 --clients 8 --pipeline 4 \
@@ -93,8 +93,8 @@ Track 1 adds an explicit jar-only comparison mode to `yierdis-benchmark`. Exampl
 ```bash
 java -jar yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar \
   --comparisonMode \
-  --baselineServerJar artifacts/baseline-79228e3/yierdis-server-main-0.1.0-SNAPSHOT.jar \
-  --currentServerJar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar \
+  --baselineServerJar artifacts/baseline-79228e3/yierdis-server-0.1.0-SNAPSHOT.jar \
+  --currentServerJar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar \
   --portBase 17378 \
   --skipLatency
 ```

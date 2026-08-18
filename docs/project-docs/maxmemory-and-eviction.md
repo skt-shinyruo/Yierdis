@@ -32,8 +32,8 @@ entry 中的 TTL 字段和 collection topology 已进入 owned snapshot，不能
 
 ```text
 estimate upper bound
-  -> YierdisDbKernel.execute(MutationUse)
-  -> internal YierdisDbMutationExecutor adapter
+  -> YierdisDbKernel.execute(MutationPlan)
+  -> YierdisDbMutationExecutor.execute(plan)
      -> ledger.reserve(upperBound)
      -> NativeAllocationScope.begin()
      -> plan.prepare()

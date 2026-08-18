@@ -60,14 +60,14 @@ report_dir="$ROOT_DIR/target/production-hardening-soak/${timestamp}-seed-${SEED}
 mkdir -p "$report_dir"
 
 candidate_commit="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || printf unknown)"
-server_jar="$ROOT_DIR/yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar"
+server_jar="$ROOT_DIR/yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar"
 
 if [[ "$SKIP_PACKAGE" == "0" ]]; then
   printf '[production-hardening-soak] packaging current candidate\n'
   (
     cd "$ROOT_DIR"
     mvn -q \
-      -pl yierdis-server/yierdis-server-main,yierdis-tests \
+      -pl yierdis-server/yierdis-server,yierdis-tests \
       -am \
       -DskipTests package
   ) 2>&1 | tee "$report_dir/package.log"

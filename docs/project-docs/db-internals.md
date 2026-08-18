@@ -4,7 +4,7 @@
 
 ## 组合边界
 
-command 层只依赖 `DbEngine` 及其 reads/writes/expiration/memory/lifecycle 能力。runtime 直接使用唯一的具体组合入口 `YierdisDbEngineFactory` 创建 `YierdisDb`。
+command 层只依赖 `DbEngine`。它直接暴露合并读写后的 `StringOps`、`HashOps`、`ListOps`、`SetOps`、`ZSetOps`、`HllOps`、`KeyspaceOps` 和 `TtlOps`，以及 memory/lifecycle 方法。runtime 使用 `YierdisDbEngineFactory` 创建 `YierdisDb`。
 
 ```text
 YierdisInstance
@@ -68,18 +68,18 @@ ops 不直接组合 directory 与 entry table，也不能从 lifecycle 取出 ba
 
 ## Runtime kernel 与 facade
 
-`YierdisDbKernel` 是 package-private 深模块。普通读取由 concrete ops 在 owner 检查后直接执行，mutation 通过 `execute(MutationUse)` 进入统一 executor；不再保留只转发的 read/inspect/maintain scope 包装。concrete ops、scope、memory context、key lifecycle、entry mutation、TTL driver、active-expiration driver、memory reporter 和 maxmemory participant 都保持 package-private，handle、entry record、backend 与 ledger 不进入公开 DB interface。
+`YierdisDbKernel` 是 package-private 深模块。普通读取由 concrete ops 在 owner 检查后直接执行，mutation 通过 `execute(MutationPlan)` 进入统一 executor。concrete ops、memory context、key lifecycle、entry mutation、TTL driver、active-expiration driver、memory reporter 和 maxmemory participant 都保持 package-private，handle、entry record、backend 与 ledger 不进入公开 DB interface。
 
-`MutationUse` 只声明 upper bound、admission 和 `prepare(YierdisDbKernel)`，并直接返回 `PreparedDbMutation`。`Admission` 区分 normal/reclamation；family 通过 kernel 的 unchanged/insert/replace/delete/upsert/callback/batch 工厂构造 prepared mutation。只有 kernel 内部 adapter 知道 `YierdisDbMutationExecutor.MutationPlan`。`YierdisDbMemoryContext` 继续封装 allocation 估算、epoch、native slice、allocator stats 和 page trim，但不再是可见扩展点。
+`YierdisDbMutationExecutor.MutationPlan` 直接声明 upper bound、`AdmissionMode` 和无参 `prepare()`，并返回 `PreparedDbMutation`。family 通过 kernel 的 unchanged/insert/replace/delete/upsert/callback/batch 方法构造 prepared mutation；批量组合由 `PreparedBatchMutation` 提交、释放或中止子 mutation。`YierdisDbMemoryContext` 继续封装 allocation 估算、epoch、native slice、allocator stats 和 page trim，但不是可见扩展点。
 
-`CommandDb` 只保存路由选中的 `DbEngine`，并直接转发 `reads()`、`writes()`、`memory()` 和 `lifecycle()` capability。prepared set/pop 使用无参数 `commit()`；lazy expiry、active expiry 和 eviction 也进入同一个 mutation executor。
+`CommandSupport.commandDb(session)` 直接返回路由选中的 `DbEngine`；命令通过 typed ops 或 `memoryUsage(...)`、`memoryStats()`、`objectEncoding(...)`、`flushDb()` 直接调用。prepared set/pop 使用无参数 `commit()`；lazy expiry、active expiry 和 eviction 也进入同一个 mutation executor。
 
 ## 读路径
 
 常规读路径是：
 
 ```text
-DbReads
+DbEngine.strings()/hashes()/lists()/sets()/zsets()/hll()/keyspace()/ttl()
   -> Yierdis*Ops
   -> YierdisDbKernel.checkOwner()
   -> YierdisDbKernel.liveEntryRecord(...)
@@ -90,7 +90,7 @@ DbReads
 
 `liveEntryRecord(...)` 比较 `expireAtMillis`。live record 正常返回；过期 record 触发 `reclaimExpired(...)` 并对调用方隐藏。reclamation 是完整 mutation，会删除 graph 并结算 ledger。只有成功取得 live record 的 LRU 路径才 touch clock。
 
-普通查询从参数检查、live-entry 解析到结果视图构造都在同一个 owner 检查后的调用内完成。prepared mutation 会跨越一次调用的生命周期，因此在创建、状态检查与提交入口使用 `YierdisDbKernel.checkOwner()`；scan/result view 则按各自契约持有 epoch 或结果资源。实际变更仍只能通过 `MutationUse` 进入 executor。
+普通查询从参数检查、live-entry 解析到结果视图构造都在同一个 owner 检查后的调用内完成。prepared mutation 会跨越一次调用的生命周期，因此在创建、状态检查与提交入口使用 `YierdisDbKernel.checkOwner()`；scan/result view 则按各自契约持有 epoch 或结果资源。实际变更仍只能通过 `MutationPlan` 进入 executor。
 
 需要拥有结果的 API 会复制 bytes；callback-scoped streaming 可以使用短生命周期 native view。`SCAN` 的 `KeyWindow` 先在 bounded epoch 内 discovery，再按同一 cursor/window 同步 replay 到 sink；window close 后 epoch 才释放，不能让 slice 或 view 逃逸。
 
@@ -100,8 +100,8 @@ DbReads
 
 ```text
 estimate upper bound
-  -> YierdisDbKernel.execute(MutationUse)
-     -> internal MutationPlan adapter
+  -> YierdisDbKernel.execute(MutationPlan)
+     -> YierdisDbMutationExecutor.execute(plan)
      -> ledger.reserve(upperBound)
      -> NativeAllocationScope.begin()
      -> plan.prepare()
@@ -177,9 +177,9 @@ shutdown 会先重置 ledger、回收 detached entries，再让 key lifecycle �
 ## 修改导航
 
 - DB 组装：`YierdisDbEngineFactory`、`YierdisDb`、`YierdisDbStorage`。
-- 内部执行入口：`YierdisDbKernel`、`MutationUse`；实现细节：`YierdisDbMemoryContext`、`YierdisDbKeyLifecycle`。
+- 内部执行入口：`YierdisDbKernel`、`YierdisDbMutationExecutor.MutationPlan`；实现细节：`YierdisDbMemoryContext`、`YierdisDbKeyLifecycle`。
 - key/entry/value 生命周期：`YierdisDbKeyLifecycle`、`EntryTable`、type roots。
-- mutation 与预算：`MutationUse`、`YierdisDbKernel`、`PreparedDbMutation`、`YierdisDbMutationExecutor`、`YierdisDbMemoryLedger`。
+- mutation 与预算：`MutationPlan`、`YierdisDbKernel`、`PreparedDbMutation`、`PreparedBatchMutation`、`YierdisDbMutationExecutor`、`YierdisDbMemoryLedger`。
 - TTL：`YierdisTtlOps`、`YierdisDbExpirationSupport`、`YierdisDbKernel.reclaimExpired(...)`。
 - maxmemory：`YierdisDbMaxmemorySupport`、`YierdisGlobalMaxmemoryGovernor`。
 - memory backend：`YierdisFfmStableMemoryBackend` 与 [`native-memory-runtime.md`](./native-memory-runtime.md)。

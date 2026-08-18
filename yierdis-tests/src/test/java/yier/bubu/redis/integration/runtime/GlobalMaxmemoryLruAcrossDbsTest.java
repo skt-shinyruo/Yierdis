@@ -3,13 +3,14 @@ package yier.bubu.redis.integration.runtime;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
-import yier.bubu.redis.integration.command.TestCommandDispatchers;
+import yier.bubu.redis.integration.command.TestCommandComposition;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
+import yier.bubu.redis.runtime.embedded.TestDbRouters;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyNull;
@@ -38,10 +39,11 @@ public class GlobalMaxmemoryLruAcrossDbsTest {
                 .build();
 
         try (YierdisInstance instance = YierdisInstance.create(config)) {
-            instance.bindToCurrentThread();
-            CommandDispatcher dispatcher = TestCommandDispatchers.forRouter(TestDbRouters.forInstance(instance));
+            instance.runtimeAccess().bindToCurrentThread();
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(TestDbRouters.forInstance(instance));
 
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), b("a"), value))).value());
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), b("b"), value))).value());
 
@@ -96,9 +98,9 @@ public class GlobalMaxmemoryLruAcrossDbsTest {
                 .build();
 
         try (YierdisInstance instance = YierdisInstance.create(probeConfig)) {
-            instance.bindToCurrentThread();
+            instance.runtimeAccess().bindToCurrentThread();
             for (int i = 0; i < count; i++) {
-                instance.engine(i % 2).writes().strings().setString(b("probe-" + i), value, SetMode.NORMAL, null);
+                instance.engines()[i % 2].strings().setString(b("probe-" + i), value, SetMode.NORMAL, null);
             }
             return true;
         } catch (YierdisCommandException e) {

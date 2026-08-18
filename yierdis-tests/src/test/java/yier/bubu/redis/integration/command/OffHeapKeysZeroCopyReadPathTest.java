@@ -29,10 +29,11 @@ public class OffHeapKeysZeroCopyReadPathTest {
         ), 0);
         try {
             db.bindToCurrentThread();
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 Assert.assertTrue(client.execute(cmd("SET", "k", "v")) instanceof ReplySimpleString);
-                Assert.assertTrue(db.memory().memoryStats().keysStoredOffHeap());
+                Assert.assertTrue(db.memoryStats().keysStoredOffHeap());
 
                 ReplyBulkString v = (ReplyBulkString) client.execute(cmd("GET", "k"));
                 Assert.assertEquals("v", v.asString());

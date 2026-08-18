@@ -2,7 +2,7 @@ package yier.bubu.redis.app.server;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.execution.api.CommandExecutionContext;
+import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.ReplyShape;
@@ -20,7 +20,7 @@ public class ReplyResultUnknownTest {
         AtomicBoolean failAfterFirstCommand = new AtomicBoolean(true);
         YierdisServerBootstrap server = YierdisServerBootstrap.startForTests(
                 delegate -> (session, request) -> {
-                    PreparedCommand prepared = delegate.prepare(session, request);
+                    PreparedCommand prepared = delegate.apply(session, request);
                     return new PreparedCommand() {
                         @Override
                         public ReplyShape reservationShape() {
@@ -33,7 +33,7 @@ public class ReplyResultUnknownTest {
                         }
 
                         @Override
-                        public CommandResult execute(CommandExecutionContext context) {
+                        public CommandResult execute(CommandSession context) {
                             CommandResult result = prepared.execute(context);
                             if (failAfterFirstCommand.compareAndSet(true, false)) {
                                 throw new PostCommitMutationException(

@@ -2,10 +2,10 @@ package yier.bubu.redis.execution.api;
 
 import yier.bubu.redis.bytes.BytesSink;
 
-public interface ExecutionReply extends AutoCloseable {
+public interface ExecutionReply {
     ReplyReservationResult tryReserve(ReplyPlan plan);
 
-    CapacityRegistration onCapacityAvailable(Runnable wakeup);
+    Runnable onCapacityAvailable(Runnable wakeup);
 
     BytesSink sink();
 
@@ -17,6 +17,4 @@ public interface ExecutionReply extends AutoCloseable {
 
     void markResultUnknown();
 
-    @Override
-    void close();
 }

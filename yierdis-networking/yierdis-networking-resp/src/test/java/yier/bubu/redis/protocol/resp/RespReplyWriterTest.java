@@ -49,20 +49,9 @@ public class RespReplyWriterTest {
     }
 
     @Test
-    public void internalErrorUsesGivenMessageWithoutDoublePrefix() {
-        ByteArraySink sink = new ByteArraySink();
-        RespReplyWriter writer = new RespReplyWriter(sink, RespProtocolVersion.RESP2);
-
-        writer.internalError("ERR internal error");
-
-        Assert.assertEquals("-ERR internal error\r\n", sink.utf8());
-        Assert.assertFalse(writer.closeAfterReplyRequested());
-    }
-
-    @Test
     public void controlErrorUsesTheReservationSinkControlPathBeforeEncoding() {
         ControlTrackingSink sink = new ControlTrackingSink();
-        RespReplyWriter writer = new RespReplyWriter(sink, RespProtocolVersion.RESP2);
+        RespReplyWriter writer = new RespReplyWriter(sink, () -> 2);
 
         writer.controlError("OOM command not allowed when used memory > 'maxmemory'.");
 
@@ -81,17 +70,6 @@ public class RespReplyWriterTest {
     }
 
     @Test
-    public void protocolErrorRequestsCloseAfterReply() {
-        ByteArraySink sink = new ByteArraySink();
-        RespReplyWriter writer = new RespReplyWriter(sink, RespProtocolVersion.RESP2);
-
-        writer.protocolError("ERR Protocol error");
-
-        Assert.assertEquals("-ERR Protocol error\r\n", sink.utf8());
-        Assert.assertTrue(writer.closeAfterReplyRequested());
-    }
-
-    @Test
     public void resp3EncodesNonFiniteDoublesNativelyAndResp2DowngradesToBulkStrings() {
         Assert.assertEquals(",nan\r\n", write3(w -> w.doubleValue(Double.NaN)));
         Assert.assertEquals(",inf\r\n", write3(w -> w.doubleValue(Double.POSITIVE_INFINITY)));
@@ -104,7 +82,7 @@ public class RespReplyWriterTest {
     @Test
     public void bulkStringSliceRejectsNegativeLength() {
         ByteArraySink sink = new ByteArraySink();
-        RespReplyWriter writer = new RespReplyWriter(sink, RespProtocolVersion.RESP2);
+        RespReplyWriter writer = new RespReplyWriter(sink, () -> 2);
 
         Assert.assertThrows(IllegalArgumentException.class, () -> writer.bulkString(new BytesSlice() {
             @Override
@@ -125,15 +103,9 @@ public class RespReplyWriterTest {
     }
 
     @Test
-    public void nullProtocolDefaultsToResp2AndConstructorsRejectMissingDependencies() {
-        ByteArraySink sink = new ByteArraySink();
-        RespReplyWriter writer = new RespReplyWriter(sink, (RespProtocolVersion) null);
-
-        writer.nullValue();
-
-        Assert.assertEquals("$-1\r\n", sink.utf8());
+    public void constructorRejectsMissingDependencies() {
         Assert.assertThrows(NullPointerException.class,
-                () -> new RespReplyWriter(null, RespProtocolVersion.RESP2));
+                () -> new RespReplyWriter(null, () -> 2));
         Assert.assertThrows(NullPointerException.class,
                 () -> new RespReplyWriter(new ByteArraySink(), (java.util.function.IntSupplier) null));
     }
@@ -214,7 +186,7 @@ public class RespReplyWriterTest {
         String retained = "ERR " + "a".repeat(496) + "\u00e9\u754c\ud83d\ude00";
         String oversized = retained + "\ud83d\ude00";
         ByteArraySink sink = new ByteArraySink();
-        new RespReplyWriter(sink, RespProtocolVersion.RESP3).blobError(oversized);
+        new RespReplyWriter(sink, () -> 3).blobError(oversized);
 
         byte[] body = retained.getBytes(StandardCharsets.UTF_8);
         Assert.assertEquals(509, body.length);
@@ -232,7 +204,7 @@ public class RespReplyWriterTest {
 
     private static String write(RespProtocolVersion version, WriterAction action) {
         ByteArraySink sink = new ByteArraySink();
-        RespReplyWriter writer = new RespReplyWriter(sink, version);
+        RespReplyWriter writer = new RespReplyWriter(sink, version::wireValue);
         action.write(writer);
         return sink.utf8();
     }

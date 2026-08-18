@@ -2,6 +2,8 @@ package yier.bubu.redis.execution.api;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
+import java.util.function.IntConsumer;
 
 /**
  * 已完成命令语义所需的回复形状，不包含任何具体协议的编码大小。
@@ -26,11 +28,6 @@ public sealed interface ReplyShape permits
 
     default long retainedSourceBytes() {
         return 0L;
-    }
-
-    @FunctionalInterface
-    interface PayloadLengths {
-        void visit(java.util.function.IntConsumer consumer);
     }
 
     enum AggregateKind {
@@ -113,7 +110,7 @@ public sealed interface ReplyShape permits
 
     record ByteSequence(
             int elementCount,
-            PayloadLengths payloadLengths,
+            Consumer<IntConsumer> payloadLengths,
             long retainedSourceBytes
     ) implements ReplyShape {
         public ByteSequence {
@@ -125,7 +122,7 @@ public sealed interface ReplyShape permits
 
     record ByteSet(
             int elementCount,
-            PayloadLengths payloadLengths,
+            Consumer<IntConsumer> payloadLengths,
             long retainedSourceBytes
     ) implements ReplyShape {
         public ByteSet {
@@ -137,7 +134,7 @@ public sealed interface ReplyShape permits
 
     record ByteMap(
             int pairCount,
-            PayloadLengths payloadLengths,
+            Consumer<IntConsumer> payloadLengths,
             long retainedSourceBytes
     ) implements ReplyShape {
         public ByteMap {

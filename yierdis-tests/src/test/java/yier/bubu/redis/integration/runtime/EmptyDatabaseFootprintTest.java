@@ -12,11 +12,11 @@ public class EmptyDatabaseFootprintTest {
                 .databases(16)
                 .nativeSlotCapacity(262_144)
                 .build())) {
-            instance.bindToCurrentThread();
+            instance.runtimeAccess().bindToCurrentThread();
             for (int db = 0; db < 16; db++) {
                 Assert.assertEquals(
                         0L,
-                        instance.engine(db).memory().memoryStats().nativeMetadataCommittedBytes()
+                        instance.engines()[db].memoryStats().nativeMetadataCommittedBytes()
                 );
             }
         }

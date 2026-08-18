@@ -4,13 +4,12 @@ import yier.bubu.redis.memory.api.StableMemoryBackendFactory;
 import yier.bubu.redis.memory.foreign.YierdisFfmStableMemoryBackend;
 import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.DbEngineConfig;
-import yier.bubu.redis.storage.api.GlobalMaxmemoryDbEngine;
+import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.RuntimeDbEngine;
 import yier.bubu.redis.storage.api.SetMode;
-import yier.bubu.redis.storage.api.StringWriteOps;
+import yier.bubu.redis.storage.api.StringOps;
 import yier.bubu.redis.storage.api.WriteResult;
-import yier.bubu.redis.storage.memory.YierdisDbBackendConfig;
 import yier.bubu.redis.storage.memory.YierdisDbEngineFactory;
 
 import java.util.Arrays;
@@ -49,7 +48,7 @@ public final class StorageBenchmarkRunner {
             StorageLatencyRecorder latency = new StorageLatencyRecorder(requiredConfig.precision());
             byte[] key = keyBuffer(requiredConfig.keySizeBytes());
             byte[] value = value(requiredConfig.valueSizeBytes());
-            StringWriteOps strings = engine.writes().strings();
+            StringOps strings = engine.strings();
             StorageMemorySnapshot baseline = snapshot(engine);
 
             long measuredStart = nanoClock.getAsLong();
@@ -58,7 +57,7 @@ public final class StorageBenchmarkRunner {
                 long operationStart = nanoClock.getAsLong();
                 WriteResult<Boolean> write = strings.setString(key, value, SetMode.NORMAL, null);
                 long operationStop = nanoClock.getAsLong();
-                if (!Boolean.TRUE.equals(write.value()) || !write.changedAny()) {
+                if (!Boolean.TRUE.equals(write.value()) || !write.mutationOutcome().changedAny()) {
                     throw new IllegalStateException("SET did not store key index " + index);
                 }
                 latency.recordNanos(Math.max(0L, operationStop - operationStart));
@@ -95,7 +94,7 @@ public final class StorageBenchmarkRunner {
         try (EngineLease lease = openEngine()) {
             byte[] key = keyBuffer(config.keySizeBytes());
             byte[] value = value(config.valueSizeBytes());
-            StringWriteOps strings = lease.engine().writes().strings();
+            StringOps strings = lease.engine().strings();
             for (int operation = 0; operation < config.warmupOperations(); operation++) {
                 encodeKeyIndex(key, operation % config.keys());
                 WriteResult<Boolean> write = strings.setString(key, value, SetMode.NORMAL, null);
@@ -121,7 +120,7 @@ public final class StorageBenchmarkRunner {
     }
 
     private StorageMemorySnapshot snapshot(RuntimeDbEngine engine) {
-        GlobalMaxmemoryDbEngine globalEngine = requirePhysicalMemoryCapability(engine);
+        MaxmemoryParticipant participant = requirePhysicalMemoryCapability(engine);
         OptionalLong rss;
         try {
             rss = Objects.requireNonNull(rssReader.get(), "rssReader result");
@@ -129,27 +128,27 @@ public final class StorageBenchmarkRunner {
             rss = OptionalLong.empty();
         }
         return StorageMemorySnapshot.from(
-                globalEngine.memoryUsage(),
-                engine.memory().memoryStats(),
+                participant.memoryUsage(),
+                engine.memoryStats(),
                 rss
         );
     }
 
-    static GlobalMaxmemoryDbEngine requirePhysicalMemoryCapability(RuntimeDbEngine engine) {
+    private static MaxmemoryParticipant requirePhysicalMemoryCapability(RuntimeDbEngine engine) {
         Objects.requireNonNull(engine, "engine");
-        if (engine instanceof GlobalMaxmemoryDbEngine globalEngine) {
-            return globalEngine;
+        if (engine instanceof MaxmemoryParticipant participant) {
+            return participant;
         }
-        throw new IllegalStateException("storage benchmark requires GlobalMaxmemoryDbEngine");
+        throw new IllegalStateException("storage benchmark requires MaxmemoryParticipant");
     }
 
     private static void stabilizeHashTables(RuntimeDbEngine engine) {
-        int pendingTableCount = engine.memory().memoryStats().pendingHashTableCount();
+        int pendingTableCount = engine.memoryStats().pendingHashTableCount();
         for (int tick = 0;
                 pendingTableCount != 0 && tick < MAX_HASH_TABLE_STABILIZATION_TICKS;
                 tick++) {
             engine.runMaintenance();
-            pendingTableCount = engine.memory().memoryStats().pendingHashTableCount();
+            pendingTableCount = engine.memoryStats().pendingHashTableCount();
         }
         if (pendingTableCount != 0) {
             throw new IllegalStateException(
@@ -198,7 +197,7 @@ public final class StorageBenchmarkRunner {
         StableMemoryBackendFactory backendFactory = YierdisFfmStableMemoryBackend::new;
         YierdisDbEngineFactory factory = new YierdisDbEngineFactory(
                 backendFactory,
-                new YierdisDbBackendConfig(0)
+                0
         );
         DbEngineConfig engineConfig = new DbEngineConfig(
                 0,

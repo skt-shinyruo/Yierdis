@@ -40,9 +40,9 @@
 CommandExecutor
   -> CommandDispatcher.prepare(session, request)
   -> CommandSpec.handler().parse(CommandArgs)
-  -> CommandInvocation.prepare(session)
+  -> Function<CommandSession, PreparedCommand>.apply(session)
   -> PreparedCommand
-  -> reserve -> validate -> execute(context)
+  -> reserve -> validate -> execute(session)
   -> CommandResult -> RedisReplyRenderer
 ```
 
@@ -52,7 +52,7 @@ CommandExecutor
 
 ### `CommandSpec`
 
-命令最终注册单元，由 `CommandSyntax` 和 `CommandHandler` 组成。syntax 保存名称、arity、key metadata 和 `TransactionPolicy`；handler 的 `parse(CommandArgs)` 返回 `CommandInvocation`。
+命令最终注册单元，由 `CommandSyntax` 和 `CommandHandler` 组成。syntax 保存名称、arity、key metadata 和 `TransactionPolicy`；handler 的 `parse(CommandArgs)` 返回 `Function<CommandSession, PreparedCommand>`。
 
 ### `CommandRegistry`
 
@@ -60,21 +60,17 @@ CommandExecutor
 
 ### `CommandDispatcher`
 
-执行请求到命令契约的统一入口。它检查命令名、null、arity 和事务策略，调用 `CommandSpec.handler().parse(CommandArgs)`，再调用 `CommandInvocation.prepare(session)` 返回 `PreparedCommand`。
+执行请求到命令契约的统一入口。它检查命令名、null、arity 和事务策略，调用 `CommandSpec.handler().parse(CommandArgs)`，再对返回的函数调用 `apply(session)` 得到 `PreparedCommand`。
 
 事务 active 时，queueable 命令只运行 handler parse 做 preflight，不提前 prepare；容量预留成功后事务队列 retain 原 `ExecutionRequest`。`EXEC` replay 通过同一 dispatcher 准备子 `PreparedCommand`，并负责关闭子命令和 retained requests。
 
-### `CommandInvocation`
+### `Function<CommandSession, PreparedCommand>`
 
-解析成功后的命令调用描述。它通过 `prepare(CommandSession)` 读取连接 session，并把命令准备成容量预留前可持有资源的 `PreparedCommand`。
+handler 解析成功后返回的准备函数。它在 `apply(CommandSession)` 时读取连接 session，并把命令准备成容量预留前可持有资源的 `PreparedCommand`。
 
 ### `PreparedCommand`
 
-容量预留前完成读取和准备、预留后执行一次的工作单元。它提供 `reservationShape()`、`validateBeforeExecute()` 和 `execute(CommandExecutionContext)`；若校验结果为 stale，执行器关闭并重新准备。其回复引用的资源必须保留到 `RedisReplyRenderer` 消费完成。
-
-### `CommandExecutionContext`
-
-回复容量预留成功后创建的一次命令执行作用域，只包含 `CommandSession`。回复不通过该上下文写出，而由 `PreparedCommand.execute(...)` 返回 `CommandResult`。
+容量预留前完成读取和准备、预留后执行一次的工作单元。它提供 `reservationShape()`、`validateBeforeExecute()` 和 `execute(CommandSession)`；若校验结果为 stale，执行器关闭并重新准备。其回复引用的资源必须保留到 `RedisReplyRenderer` 消费完成。
 
 ### command variant
 
@@ -84,11 +80,11 @@ CommandExecutor
 
 ### `EngineSession`
 
-每条连接的 `CommandSession` owner，持有 DB index、client metadata、认证状态、RESP version、connection stats view 和事务队列。名称中的 Engine 只是保留的包/类型名；它不拥有命令解析、分发、执行或回复渲染。
+每条连接的 `CommandSession` owner，持有 DB index、client name、RESP version、connection stats view 和事务队列。名称中的 Engine 只是保留的包/类型名；它不拥有命令解析、分发、执行或回复渲染。
 
 ### `DbEngine`
 
-DB 的能力聚合接口，提供 `reads()`、`writes()`、`memory()`、`lifecycle()`。TTL 查询与修改分别属于 typed read/write ops，主动过期清理由 runtime maintenance 调度。command 层依赖它，而不是依赖 `YierdisDb` internal。详见 [`db-internals.md`](./db-internals.md)。
+DB 的能力聚合接口，直接提供 `strings()`、`hashes()`、`lists()`、`sets()`、`zsets()`、`hll()`、`keyspace()`、`ttl()`、`memoryUsage(...)`、`memoryStats()`、`objectEncoding(...)` 和 `flushDb()`。主动过期清理由 runtime maintenance 调度。command 层依赖它，而不是依赖 `YierdisDb` internal。详见 [`db-internals.md`](./db-internals.md)。
 
 ### `YierdisDb`
 

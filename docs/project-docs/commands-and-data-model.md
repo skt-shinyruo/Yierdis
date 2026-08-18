@@ -4,15 +4,15 @@
 
 ## 命令层职责
 
-命令层位于协议和 DB 之间。它接收 transport-neutral 的 `ExecutionRequest`，选择 `CommandSpec`，用 `CommandArgs` 解析参数，通过 invocation 准备 DB 操作，最后返回语义 `CommandResult`。
+命令层位于协议和 DB 之间。它接收 transport-neutral 的 `ExecutionRequest`，选择 `CommandSpec`，用 `CommandArgs` 解析参数，通过 handler 返回的准备函数准备 DB 操作，最后返回语义 `CommandResult`。
 
 ```text
 CommandExecutor
   -> CommandDispatcher.prepare(session, request)
   -> CommandSpec.handler().parse(CommandArgs)
-  -> CommandInvocation.prepare(session)
+  -> Function<CommandSession, PreparedCommand>.apply(session)
   -> PreparedCommand
-  -> reserve -> validate -> execute(context)
+  -> reserve -> validate -> execute(session)
   -> CommandResult -> RedisReplyRenderer
 ```
 
@@ -28,16 +28,16 @@ CommandExecutor
 
 ## `CommandRegistry`、`CommandSpec` 和 handler
 
-`ServerCommandComposition` 通过 `CommandRegistries.dispatcher(...)` 创建 `CommandRegistry` 与 `CommandDispatcher`。事务控制命令先注册，随后注册 `DefaultCommandModules` 和 `ServerCommandModule`，最后 seal registry。
+`YierdisServerBootstrap` 通过 `CommandRegistries.dispatcher(...)` 创建 `CommandRegistry` 与 `CommandDispatcher`。registry 依次接收 `DefaultCommandModules` 和 `ServerCommandModule`，其中事务控制命令由 registry helper 先注册，最后 seal。
 
 `CommandRegistry` 是 upper-case command name 到 `CommandSpec` 的单一映射。`CommandSpec` 包含：
 
 - `CommandSyntax`：name、`CommandArity`、`CommandKeySpec` 和 `TransactionPolicy`；
-- `CommandHandler`：`parse(CommandArgs)`，成功时返回 `CommandInvocation`。
+- `CommandHandler`：`parse(CommandArgs)`，成功时返回 `Function<CommandSession, PreparedCommand>`。
 
 dispatcher 先做命令名、null argument、lookup 和 arity 检查，再调用 handler。handler 只读取 argv 并生成不可变的解析结果；它不能读取 session、路由 DB 或调用 server provider。这个限制让普通执行与 `MULTI` 入队 preflight 复用同一个 parse 行为。
 
-`CommandInvocation.prepare(CommandSession)` 是参数解析与状态访问之间的边界。它可以根据当前 DB index 和连接状态：
+handler 返回的准备函数是参数解析与状态访问之间的边界。它在 `apply(CommandSession)` 时可以根据当前 DB index 和连接状态：
 
 - 准备带 validation 的 mutation；
 - 执行只读查询并取得有所有权的 result source；
@@ -55,7 +55,7 @@ dispatcher 先做命令名、null argument、lookup 和 arity 检查，再调用
 
 wrong arity 由 dispatcher 在 handler 前统一生成。命令特有的 option、subcommand、cursor、score 和 integer 约束由 handler 检查，并抛出带最终 Redis error message 的 `CommandParseException`。
 
-parse 阶段只产生 `CommandInvocation`，不会访问 DB，也不会创建 reply source。对于 `MULTI` 中的 queueable command，dispatcher 会运行同一个 handler parse；成功后只 retain request 并返回 `QUEUED`，invocation 要到 `EXEC` replay 才 prepare。
+parse 阶段只产生 `Function<CommandSession, PreparedCommand>`，不会访问 DB，也不会创建 reply source。对于 `MULTI` 中的 queueable command，dispatcher 会运行同一个 handler parse；成功后只 retain request 并返回 `QUEUED`，准备函数要到 `EXEC` replay 才会应用。
 
 ## 准备、执行和语义结果
 
@@ -63,10 +63,10 @@ parse 阶段只产生 `CommandInvocation`，不会访问 DB，也不会创建 re
 
 - `reservationShape()` 给出 encoded reply 与 retained source 的容量上界；
 - `validateBeforeExecute()` 检查 prepare 时观察的状态是否仍可执行；
-- `execute(CommandExecutionContext)` 在容量已预留时提交动作，返回 `CommandResult`；
+- `execute(CommandSession)` 在容量已预留时提交动作，返回 `CommandResult`；
 - `close()` 归还 mutation、DB source、retained request 或其他 owner。
 
-`CommandExecutionContext` 只包含当前 `CommandSession`。它没有 reply writer。`CommandResult` 则包含语义 `RedisReply` 和 `closeAfterReply` flag。
+executor 把当前 `CommandSession` 直接传给 `PreparedCommand.execute(...)`。command API 没有 reply writer；`CommandResult` 包含语义 `RedisReply` 和 `closeAfterReply` flag。
 
 `RedisReply.shape()` 是 sealed reply hierarchy 到 `ReplyShape` 的唯一投影权威：根接口用穷尽 switch 覆盖全部 variant，各 variant 只保存语义数据，不再各自重复 shape 映射。`ReplyShapes` 负责 shape 的构造与规范化；`RedisReplyRenderer` 负责遍历语义 reply；RESP sizer 只消费 `ReplyShape`。新增 reply variant 时，这三个职责仍应分别演进。
 
@@ -76,7 +76,7 @@ executor 的固定顺序是：
 PreparedCommand
   -> reserve reservationShape
   -> validateBeforeExecute
-  -> execute(CommandExecutionContext)
+  -> execute(CommandSession)
   -> CommandResult
   -> RedisReplyRenderer.render(reply, RedisReplyWriter)
   -> close PreparedCommand
@@ -86,12 +86,11 @@ RESP2 / RESP3 的标量与 aggregate 编码由协议 writer 根据 session versi
 
 ## `CommandSupport` 与 DB capability
 
-`CommandSupport` 是 built-in command 的公共边界。它持有 `YierdisDbRouter`、可选 `ServerInfoProvider` 和 `SlowCommandGovernor`，并提供两种 DB 选择入口：
+`CommandSupport` 是 built-in command 的公共边界。它持有 `YierdisDbRouter`、可选 `ServerInfoProvider` 和不可变的 `SlowCommandLimits`，并提供 DB 选择入口：
 
-- `commandDb(CommandSession)`：prepare 阶段按 session 的 DB index 选择数据库；
-- `commandDb(CommandExecutionContext)`：execute 阶段从 context 的 session 选择数据库。
+- `commandDb(CommandSession)`：prepare 和 execute 阶段都按 session 的 DB index 选择数据库。
 
-`CommandSupport.preparedMutation(...)` 把 `PreparedMutation.isCurrent()` 接到 validation，把 mutation owner 交给 `PreparedCommand`，并在 execute 中把 expected DB error 转成 control result。命令家族依赖 `DbReads`、`DbWrites`、`DbEngine` 和 typed ops，不触碰 native handle 或 RESP bytes。
+`CommandSupport.preparedMutation(...)` 把 `PreparedMutation.isCurrent()` 接到 validation，把 mutation owner 交给 `PreparedCommand`，并在 execute 中把 expected DB error 转成 control result。命令家族通过 `DbEngine` 直接访问 typed ops、memory 查询和 flush 操作，不触碰 native handle 或 RESP bytes。
 
 ## semantic streamed reply source
 
@@ -155,11 +154,11 @@ dictionary window 只 pin 被选中的 native payload，并把延迟回收量放
 
 ## `StringCommands` 主路线
 
-`SET`、`GET`、`APPEND`、`INCR` 等命令先由 handler 解析 argv，再由 invocation 或 prepared action 使用 typed string ops。
+`SET`、`GET`、`APPEND`、`INCR` 等命令先由 handler 解析 argv，再由准备函数或 prepared action 使用 typed string ops。
 
 - `SET` 在 prepare 阶段创建 `PreparedMutation` 与 preview reply，executor 预留和 validation 后才 commit；
 - `GET` 在 prepare 阶段取得 `ByteValue`，用 semantic bulk reply 引用 source，渲染后释放；
-- `APPEND`、`SETBIT` 等已知 reply 上界的动作在 execute 阶段访问 write ops，并返回 integer/control result。
+- `APPEND`、`SETBIT` 等已知 reply 上界的动作在 execute 阶段访问 string typed ops，并返回 integer/control result。
 
 bitmap 是 string bytes 的一种视图，因此 `SETBIT`、`GETBIT`、`BITCOUNT` 与普通 string 命令共享 `ValueType.STRING` 和 wrong-type 约束。写路径仍经过 DB mutation、TTL 和 memory ledger；读路径返回 `RedisReply`，不直接编码 RESP。
 
@@ -218,7 +217,7 @@ HLL 也没有独立 `ValueType`。命令层由 `HllCommands` 表达语义，DB �
 1. 确认命令 family，或实现新的 `CommandModule`。
 2. 注册 `CommandSpec(CommandSyntax, CommandHandler)`，补齐 arity、key spec 和 transaction policy。
 3. 在 `handler.parse(CommandArgs)` 中完成纯 argv 解析；错误抛 `CommandParseException`，不得访问 session 或 DB。
-4. 返回 `CommandInvocation`，在 `prepare(session)` 中取得当前 DB、准备 mutation/source，并构造 `PreparedCommand`。
+4. 返回 `Function<CommandSession, PreparedCommand>`，在 `apply(session)` 中取得当前 DB、准备 mutation/source，并构造 `PreparedCommand`。
 5. 为 prepared command 给出真实 reservation shape；可变 preview 接上 validation，可见 mutation 留在 execute。
 6. execute 返回 `CommandResult` 与语义 `RedisReply`；不要引用或调用 `RedisReplyWriter`。
 7. streamed source 使用 `PreparedCommands.owned(...)` 或 `ownedAction(...)` 明确生命周期与 retained memory charge。

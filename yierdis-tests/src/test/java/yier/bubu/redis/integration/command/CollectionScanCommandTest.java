@@ -27,8 +27,9 @@ public class CollectionScanCommandTest {
     @Test
     public void collectionScansImplementCursorOptionsAndRedisReplyShapes() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 assertEmpty(scan(client, "HSCAN", "missing", "0"));
                 assertEmpty(scan(client, "SSCAN", "missing", "0"));
                 assertEmpty(scan(client, "ZSCAN", "missing", "0"));
@@ -84,8 +85,9 @@ public class CollectionScanCommandTest {
     @Test
     public void hashTableScanTerminatesAndCoversStableFields() {
         runDefaultFfm(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 int fieldCount = 513;
                 List<byte[]> hset = new ArrayList<>(2 + fieldCount * 2);
                 hset.add(b("HSET"));
@@ -118,8 +120,9 @@ public class CollectionScanCommandTest {
     @Test
     public void compactEncodingsCompleteInOneCallEvenWithSmallCountHint() {
         runDefaultFfm(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 client.execute(cmd("HSET", "hash", "f1", "v1", "f2", "v2", "f3", "v3"));
                 ScanReply hash = scan(client, "HSCAN", "hash", "0", "COUNT", "1");
                 Assert.assertEquals("0", hash.cursor());
@@ -141,8 +144,9 @@ public class CollectionScanCommandTest {
     @Test
     public void hashTableScansKeepCoveringPersistentElementsAcrossDeletesAndScoreUpdates() {
         runDefaultFfm(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 int memberCount = 300;
                 List<byte[]> sadd = new ArrayList<>(memberCount + 2);
                 sadd.add(b("SADD"));
@@ -183,8 +187,9 @@ public class CollectionScanCommandTest {
     @Test
     public void hugeCountRemainsABoundedHintForHashTableEncoding() {
         runDefaultFfm(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 int memberCount = 1_500;
                 List<byte[]> sadd = new ArrayList<>(memberCount + 2);
                 sadd.add(b("SADD"));

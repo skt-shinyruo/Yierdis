@@ -3,6 +3,7 @@ package yier.bubu.redis.runtime.embedded;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
+import yier.bubu.redis.integration.command.TestCommandComposition;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
@@ -34,11 +35,14 @@ public class ContractsIntegrationSmokeTest {
                 .build();
 
         try (YierdisInstance instance = YierdisInstance.create(config)) {
-            instance.bindToCurrentThread();
-            CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
+            instance.runtimeAccess().bindToCurrentThread();
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(
+                    TestDbRouters.forInstance(instance)
+            );
             TestSession session = new TestSession();
 
-            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
                 // TTL family: basic Redis-like conventions.
                 Assert.assertEquals(-2L, ((ReplyInteger) client.execute(Arrays.asList(b("TTL"), b("missing")))).value());
 
@@ -113,26 +117,12 @@ public class ContractsIntegrationSmokeTest {
         }
 
         @Override
-        public long clientId() {
-            return 1L;
-        }
-
-        @Override
         public String clientName() {
             return null;
         }
 
         @Override
         public void setClientName(String clientName) {
-        }
-
-        @Override
-        public boolean authenticated() {
-            return false;
-        }
-
-        @Override
-        public void setAuthenticated(boolean authenticated) {
         }
 
         @Override
@@ -198,8 +188,5 @@ public class ContractsIntegrationSmokeTest {
             return java.util.Collections.emptyList();
         }
 
-        @Override
-        public void close() {
-        }
     }
 }

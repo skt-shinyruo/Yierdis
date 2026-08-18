@@ -9,12 +9,13 @@ import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.kernel.CommandRegistry;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
+import yier.bubu.redis.execution.api.PreparedCommands;
+import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
 import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplyObject;
-import yier.bubu.redis.testutil.TestPreparedCommands;
 
 import java.lang.reflect.Field;
 import java.util.Arrays;
@@ -34,9 +35,7 @@ public class CommandSyntaxRegistryTest {
         );
         registry.register(new CommandSpec(
                 syntax,
-                args -> session -> yier.bubu.redis.execution.api.PreparedCommands.ready(
-                        yier.bubu.redis.execution.api.RedisReplies.simpleString("OK")
-                )
+                args -> session -> PreparedCommands.ready(RedisReplies.simpleString("OK"))
         ));
         registry.seal();
 
@@ -51,7 +50,7 @@ public class CommandSyntaxRegistryTest {
     @Test
     public void commandInfoUsesSyntaxFromRegistryRegistration() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(
                     db,
                     registration -> registration.register(new CommandSpec(
                             new CommandSyntax(
@@ -60,11 +59,12 @@ public class CommandSyntaxRegistryTest {
                                     new CommandKeySpec(2, 2, 1),
                                     TransactionPolicy.QUEUEABLE
                             ),
-                            args -> session -> TestPreparedCommands.simpleString("OK")
+                            args -> session -> PreparedCommands.ready(RedisReplies.simpleString("OK"))
                     ))
             );
 
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 ReplyArray info = (ReplyArray) client.execute(Arrays.asList(
                         b("COMMAND"),
                         b("INFO"),
@@ -81,18 +81,18 @@ public class CommandSyntaxRegistryTest {
     @Test
     public void registrySpecsRemainAuthoritativeForBuiltInAndExtraMetadata() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(
                     db,
                     registration -> {
                         registration.register(new CommandSpec(
                                 new CommandSyntax("INFO", CommandArity.min(1), CommandKeySpec.NONE,
                                         TransactionPolicy.QUEUEABLE),
-                                args -> session -> TestPreparedCommands.simpleString("OK")
+                                args -> session -> PreparedCommands.ready(RedisReplies.simpleString("OK"))
                         ));
                         registration.register(new CommandSpec(
                                 new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
                                         TransactionPolicy.DISALLOWED_IN_MULTI),
-                                args -> session -> TestPreparedCommands.simpleString("OK")
+                                args -> session -> PreparedCommands.ready(RedisReplies.simpleString("OK"))
                         ));
                     }
             );

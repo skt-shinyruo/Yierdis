@@ -6,16 +6,11 @@ import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.common.memory.MemoryReclaimResult;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.runtime.embedded.YierdisGlobalMaxmemoryGovernor;
-import yier.bubu.redis.storage.api.DbLifecycleOps;
-import yier.bubu.redis.storage.api.DbReads;
-import yier.bubu.redis.storage.api.DbWrites;
-import yier.bubu.redis.storage.api.GlobalMaxmemoryDbEngine;
 import yier.bubu.redis.storage.api.KeyHandle;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
-import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
+import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
-import yier.bubu.redis.storage.api.MemoryOps;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -23,9 +18,9 @@ public class MaxmemoryPhysicalProgressTest {
     @Test
     public void globalEvictionStopsWhenVictimsDoNotReducePhysicalUsage() {
         AtomicInteger evictions = new AtomicInteger(0);
-        GlobalMaxmemoryDbEngine participant = new PhysicalProgressEngine(evictions);
+        MaxmemoryParticipant participant = new PhysicalProgressParticipant(evictions);
         YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
-                new GlobalMaxmemoryDbEngine[]{participant},
+                new MaxmemoryParticipant[]{participant},
                 100,
                 MaxmemoryPolicy.ALLKEYS_RANDOM,
                 5,
@@ -42,43 +37,11 @@ public class MaxmemoryPhysicalProgressTest {
         Assert.assertEquals("one full candidate pass should be enough for a single-key DB", 1, evictions.get());
     }
 
-    private static final class PhysicalProgressEngine implements GlobalMaxmemoryDbEngine {
+    private static final class PhysicalProgressParticipant implements MaxmemoryParticipant {
         private final AtomicInteger evictions;
 
-        private PhysicalProgressEngine(AtomicInteger evictions) {
+        private PhysicalProgressParticipant(AtomicInteger evictions) {
             this.evictions = evictions;
-        }
-
-        @Override
-        public DbReads reads() {
-            return null;
-        }
-
-        @Override
-        public DbWrites writes() {
-            return null;
-        }
-
-        @Override
-        public MemoryOps memory() {
-            return null;
-        }
-
-        @Override
-        public DbLifecycleOps lifecycle() {
-            return null;
-        }
-
-        @Override
-        public void bindToCurrentThread() {
-        }
-
-        @Override
-        public void runMaintenance() {
-        }
-
-        @Override
-        public void shutdown() {
         }
 
         @Override
@@ -88,7 +51,7 @@ public class MaxmemoryPhysicalProgressTest {
 
         @Override
         public MemoryReclaimResult trimMemory(MemoryPressureBudget budget) {
-            return MemoryReclaimResult.empty();
+            return MemoryReclaimResult.EMPTY;
         }
 
         @Override
@@ -116,9 +79,6 @@ public class MaxmemoryPhysicalProgressTest {
             return true;
         }
 
-        @Override
-        public void attachMaxmemoryCoordinator(MaxmemoryCoordinator coordinator) {
-        }
     }
 
     private static KeyHandle handle(byte[] key) {
@@ -133,14 +93,6 @@ public class MaxmemoryPhysicalProgressTest {
                 return key[index];
             }
 
-            @Override
-            public int dictHash() {
-                int h = 1;
-                for (byte b : key) {
-                    h = 31 * h + b;
-                }
-                return h;
-            }
         };
     }
 }

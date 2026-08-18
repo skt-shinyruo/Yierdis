@@ -21,8 +21,9 @@ public class ListCommandTest {
     @Test
     public void lpopRpopCountVariantsAndDeleteWhenEmpty() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
             byte[] key = new byte[]{'l', 0, (byte) 0xFF};
             byte[] a = new byte[]{0};
@@ -60,8 +61,9 @@ public class ListCommandTest {
     @Test
     public void lrangeClampsIndicesAndHandlesOutOfRange() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
             byte[] key = b("mylist");
             client.execute(Arrays.asList(b("RPUSH"), key, b("a"), b("b"), b("c")));
@@ -95,8 +97,9 @@ public class ListCommandTest {
     @Test
     public void listUpgradesAfterManyElementsAndKeepsOrder() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
             byte[] key = b("big-list");
             int n = 129; // > ListValue.LISTPACK_MAX_ENTRIES
@@ -130,8 +133,9 @@ public class ListCommandTest {
     @Test
     public void lrangeDoesNotOverflowOnHugePositiveIndices() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
             byte[] key = b("list:huge-index");
             client.execute(Arrays.asList(b("RPUSH"), key, b("a"), b("b"), b("c")));
@@ -148,8 +152,9 @@ public class ListCommandTest {
     @Test
     public void lpopRpopDoNotOverflowOnHugeCount() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
             byte[] key = b("list:huge-count");
             client.execute(Arrays.asList(b("RPUSH"), key, b("a"), b("b"), b("c")));

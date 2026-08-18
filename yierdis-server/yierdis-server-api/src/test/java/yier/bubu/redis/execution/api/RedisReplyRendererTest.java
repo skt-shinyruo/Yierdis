@@ -18,11 +18,11 @@ public class RedisReplyRendererTest {
                 RedisReplies.simpleString("OK"),
                 RedisReplies.error("bad"),
                 RedisReplies.integer(-7),
-                RedisReplies.booleanValue(true),
-                RedisReplies.doubleValue(1.5D),
-                RedisReplies.bigNumber("12345678901234567890"),
-                RedisReplies.verbatimString("txt", bytes("body")),
-                RedisReplies.blobError("blob"),
+                new RedisReply.BooleanValue(true),
+                new RedisReply.DoubleValue(1.5D),
+                new RedisReply.BigNumber("12345678901234567890"),
+                new RedisReply.VerbatimString("txt", bytes("body")),
+                new RedisReply.BlobError("blob"),
                 bulk,
                 RedisReplies.nullValue(),
                 RedisReplies.nullArray()
@@ -51,10 +51,12 @@ public class RedisReplyRendererTest {
     public void rendererWritesAllAggregateHeadersAndChildrenInOrder() {
         RedisReply reply = RedisReplies.array(List.of(
                 RedisReplies.map(List.of(RedisReplies.simpleString("key"), RedisReplies.integer(1))),
-                RedisReplies.set(List.of(RedisReplies.integer(2), RedisReplies.integer(3))),
-                RedisReplies.push(List.of(RedisReplies.simpleString("message"))),
-                RedisReplies.attribute(List.of(
-                        RedisReplies.simpleString("meta"), RedisReplies.booleanValue(false)))
+                new RedisReply.Aggregate(ReplyShape.AggregateKind.SET,
+                        List.of(RedisReplies.integer(2), RedisReplies.integer(3))),
+                new RedisReply.Aggregate(ReplyShape.AggregateKind.PUSH,
+                        List.of(RedisReplies.simpleString("message"))),
+                new RedisReply.Aggregate(ReplyShape.AggregateKind.ATTRIBUTE, List.of(
+                        RedisReplies.simpleString("meta"), new RedisReply.BooleanValue(false)))
         ));
         RecordingWriter writer = new RecordingWriter();
 
@@ -143,16 +145,6 @@ public class RedisReplyRendererTest {
 
         List<String> events() {
             return List.copyOf(events);
-        }
-
-        @Override
-        public void requestCloseAfterReply() {
-            events.add("close");
-        }
-
-        @Override
-        public boolean closeAfterReplyRequested() {
-            return events.contains("close");
         }
 
         @Override

@@ -1,5 +1,7 @@
 package yier.bubu.redis.protocol.resp;
 
+import java.util.function.BiFunction;
+
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
@@ -10,6 +12,7 @@ import yier.bubu.redis.execution.api.RedisReplyRenderer;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.ReplyReservationSink;
+import yier.bubu.redis.execution.api.ReplyShape;
 
 import java.io.ByteArrayOutputStream;
 import java.lang.reflect.Proxy;
@@ -22,7 +25,7 @@ import java.util.Set;
 
 public class RedisReplyRespContractTest {
     private final RespReplySizer sizer = new RespReplySizer();
-    private final RespReplyWriterFactory writerFactory = new RespReplyWriterFactory();
+    private final BiFunction<CommandSession, BytesSink, RedisReplyWriter> writerFactory = RespReplyWriter::new;
 
     @Test
     public void scalarBulkAndNullRepliesHaveExactRespPlans() {
@@ -52,9 +55,9 @@ public class RedisReplyRespContractTest {
 
         for (int version : new int[]{2, 3}) {
             CommandSession session = session(version);
-            ReplyPlan plan = sizer.plan(session, reply.shape());
+            ReplyPlan plan = sizer.apply(session, reply.shape());
             ControlTrackingSink sink = new ControlTrackingSink();
-            RedisReplyWriter writer = writerFactory.newWriter(session, sink);
+            RedisReplyWriter writer = writerFactory.apply(session, sink);
 
             RedisReplyRenderer.render(reply, writer);
 
@@ -98,9 +101,9 @@ public class RedisReplyRespContractTest {
 
     private void assertExactContract(ReplyFixture fixture, int version, String expectedWire) {
         CommandSession session = session(version);
-        ReplyPlan plan = sizer.plan(session, fixture.reply().shape());
+        ReplyPlan plan = sizer.apply(session, fixture.reply().shape());
         ByteArraySink sink = new ByteArraySink();
-        RedisReplyWriter writer = writerFactory.newWriter(session, sink);
+        RedisReplyWriter writer = writerFactory.apply(session, sink);
 
         RedisReplyRenderer.render(fixture.reply(), writer);
 
@@ -132,15 +135,15 @@ public class RedisReplyRespContractTest {
                         "-ERR wrong\r\n", "-ERR wrong\r\n"),
                 fixture("integer", RedisReplies.integer(-42L),
                         ":-42\r\n", ":-42\r\n"),
-                fixture("boolean", RedisReplies.booleanValue(true),
+                fixture("boolean", new RedisReply.BooleanValue(true),
                         ":1\r\n", "#t\r\n"),
-                fixture("double", RedisReplies.doubleValue(1.5D),
+                fixture("double", new RedisReply.DoubleValue(1.5D),
                         "$3\r\n1.5\r\n", ",1.5\r\n"),
-                fixture("big number", RedisReplies.bigNumber(" 123 "),
+                fixture("big number", new RedisReply.BigNumber(" 123 "),
                         "$3\r\n123\r\n", "(123\r\n"),
-                fixture("verbatim string", RedisReplies.verbatimString("markdown", bytes("doc")),
+                fixture("verbatim string", new RedisReply.VerbatimString("markdown", bytes("doc")),
                         "$3\r\ndoc\r\n", "=7\r\nmar:doc\r\n"),
-                fixture("blob error", RedisReplies.blobError("bad"),
+                fixture("blob error", new RedisReply.BlobError("bad"),
                         "-ERR bad\r\n", "!7\r\nERR bad\r\n"),
                 fixture("retained bulk string",
                         RedisReplies.bulkString(4, 13L, sink -> sink.bulkString(bytes("data"))),
@@ -157,7 +160,7 @@ public class RedisReplyRespContractTest {
                 RedisReplies.simpleString("root"),
                 RedisReplies.map(List.of(
                         RedisReplies.bulkString(bytes("items")),
-                        RedisReplies.set(List.of(
+                        new RedisReply.Aggregate(ReplyShape.AggregateKind.SET, List.of(
                                 RedisReplies.bulkString(bytes("a")),
                                 RedisReplies.array(List.of(
                                         RedisReplies.integer(2L),
@@ -176,21 +179,21 @@ public class RedisReplyRespContractTest {
                         "*2\r\n$3\r\nkey\r\n:7\r\n",
                         "%1\r\n$3\r\nkey\r\n:7\r\n"),
                 fixture("set",
-                        RedisReplies.set(List.of(
+                        new RedisReply.Aggregate(ReplyShape.AggregateKind.SET, List.of(
                                 RedisReplies.bulkString(bytes("a")),
                                 RedisReplies.bulkString(bytes("b"))
                         )),
                         "*2\r\n$1\r\na\r\n$1\r\nb\r\n",
                         "~2\r\n$1\r\na\r\n$1\r\nb\r\n"),
                 fixture("push",
-                        RedisReplies.push(List.of(
+                        new RedisReply.Aggregate(ReplyShape.AggregateKind.PUSH, List.of(
                                 RedisReplies.simpleString("message"),
                                 RedisReplies.bulkString(bytes("x"))
                         )),
                         "*2\r\n+message\r\n$1\r\nx\r\n",
                         ">2\r\n+message\r\n$1\r\nx\r\n"),
                 fixture("attribute",
-                        RedisReplies.attribute(List.of(
+                        new RedisReply.Aggregate(ReplyShape.AggregateKind.ATTRIBUTE, List.of(
                                 RedisReplies.bulkString(bytes("ttl")),
                                 RedisReplies.integer(10L)
                         )),

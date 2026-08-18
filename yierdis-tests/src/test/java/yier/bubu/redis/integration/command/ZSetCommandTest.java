@@ -2,12 +2,9 @@ package yier.bubu.redis.integration.command;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.defaults.DefaultCommandModules;
-import yier.bubu.redis.command.kernel.CommandRegistries;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.storage.api.DbEngine;
-import yier.bubu.redis.storage.api.DbReads;
-import yier.bubu.redis.storage.api.ZSetReadOps;
+import yier.bubu.redis.storage.api.ZSetOps;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
 import yier.bubu.redis.testutil.ReplyBulkString;
@@ -29,9 +26,9 @@ public class ZSetCommandTest {
     @Test
     public void zaddRejectsInvalidScores() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            FastTestClient client = new FastTestClient(dispatcher);
-            try {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 byte[] key = b("z");
 
                 ReplyObject err1 = client.execute(Arrays.asList(b("ZADD"), key, b("NaN"), b("a")));
@@ -45,8 +42,6 @@ public class ZSetCommandTest {
                 ReplyObject err3 = client.execute(Arrays.asList(b("ZADD"), key, b("nope"), b("a")));
                 Assert.assertTrue(err3 instanceof ReplyError);
                 Assert.assertEquals("ERR value is not a valid float", ((ReplyError) err3).message());
-            } finally {
-                client.close();
             }
         });
     }
@@ -54,8 +49,9 @@ public class ZSetCommandTest {
     @Test
     public void zrevrangeParsesRanksBeforeOptions() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 ReplyError error = (ReplyError) client.execute(
                         List.of(b("ZREVRANGE"), b("z"), b("bad"), b("-1"), b("UNKNOWN")));
 
@@ -67,7 +63,8 @@ public class ZSetCommandTest {
     @Test
     public void oversizedRangePreparationRemainsACommandError() {
         CommandDispatcher dispatcher = oversizedRangeDispatcher();
-        try (FastTestClient client = new FastTestClient(dispatcher)) {
+        {
+            FastTestClient client = new FastTestClient(dispatcher);
             for (List<byte[]> command : List.of(
                     List.of(b("ZRANGE"), b("z"), b("0"), b("-1"), b("WITHSCORES")),
                     List.of(b("ZRANGEBYSCORE"), b("z"), b("-inf"), b("+inf"), b("WITHSCORES"))
@@ -83,8 +80,9 @@ public class ZSetCommandTest {
     @Test
     public void zrangeTieBreakIsRawByteLexAndBoundsWork() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
         byte[] key = new byte[]{'z', 0};
 
@@ -136,8 +134,9 @@ public class ZSetCommandTest {
     @Test
     public void zrevrangeAndZrangeRevReturnReverseOrder() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
         byte[] key = b("zrev");
 
@@ -184,8 +183,9 @@ public class ZSetCommandTest {
     @Test
     public void zremDeletesKeyWhenEmpty() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
         byte[] key = new byte[]{0, 'z'};
         byte[] member = new byte[]{0, 1, 2};
@@ -209,8 +209,9 @@ public class ZSetCommandTest {
     @Test
     public void zsetUpgradesAfterManyElementsAndKeepsOrder() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
         byte[] key = b("big-zset");
         int n = 129; // > ZSetValue.LISTPACK_MAX_ENTRIES
@@ -243,8 +244,9 @@ public class ZSetCommandTest {
     @Test
     public void zsetUpgradesWhenMemberIsTooLargeForListpack() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
         byte[] key = b("zset:big-member");
         byte[] small = b("a");
@@ -270,8 +272,9 @@ public class ZSetCommandTest {
     @Test
     public void zrangeByScoreRespectsBoundsLimitAndWithScores() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
         byte[] key = b("zbyscore");
         client.execute(Arrays.asList(
@@ -327,8 +330,9 @@ public class ZSetCommandTest {
     @Test
     public void zremrangeByScoreRemovesAndDeletesKeyWhenEmpty() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
         byte[] key = b("zrembyscore");
         client.execute(Arrays.asList(
@@ -358,8 +362,9 @@ public class ZSetCommandTest {
     @Test
     public void zrangeByScoreWorksAfterUpgradeToSkiplist() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
         byte[] key = b("zbyscore:upgrade");
         byte[] big = new byte[65];
@@ -384,8 +389,9 @@ public class ZSetCommandTest {
     @Test
     public void zrevrangeByScoreRespectsBoundsLimitAndWithScores() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
         byte[] key = b("zrevbyscore");
         client.execute(Arrays.asList(
@@ -438,8 +444,9 @@ public class ZSetCommandTest {
     @Test
     public void scoreRangeLimitNegativeCountReturnsAllRemainingMembers() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
         byte[] key = b("zrangebyscore:unbounded-limit");
         client.execute(Arrays.asList(
@@ -479,22 +486,16 @@ public class ZSetCommandTest {
     }
 
     private static CommandDispatcher oversizedRangeDispatcher() {
-        ZSetReadOps zsets = interfaceProxy(ZSetReadOps.class, (proxy, method, args) -> {
+        ZSetOps zsets = interfaceProxy(ZSetOps.class, (proxy, method, args) -> {
             throw new IllegalArgumentException("response is too large");
         });
-        DbReads reads = interfaceProxy(DbReads.class, (proxy, method, args) -> {
+        DbEngine engine = interfaceProxy(DbEngine.class, (proxy, method, args) -> {
             if ("zsets".equals(method.getName())) {
                 return zsets;
             }
-            throw new AssertionError("unexpected DB read: " + method.getName());
-        });
-        DbEngine engine = interfaceProxy(DbEngine.class, (proxy, method, args) -> {
-            if ("reads".equals(method.getName())) {
-                return reads;
-            }
             throw new AssertionError("unexpected DB access: " + method.getName());
         });
-        return CommandRegistries.dispatcher(DefaultCommandModules.create(engine));
+        return TestCommandComposition.createDispatcher(engine);
     }
 
     private static <T> T interfaceProxy(Class<T> type, InvocationHandler handler) {
@@ -507,8 +508,9 @@ public class ZSetCommandTest {
     @Test
     public void zremrangeByRankRemovesAndDeletesKeyWhenEmpty() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
         byte[] key = b("zrembyrank");
         client.execute(Arrays.asList(
@@ -543,8 +545,9 @@ public class ZSetCommandTest {
     @Test
     public void zrevrangeByScoreAndZremrangeByRankWorkAfterUpgradeToSkiplist() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
         byte[] key = b("zrange:upgrade2");
         byte[] big = new byte[65];

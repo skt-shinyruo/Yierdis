@@ -4,9 +4,8 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
-import yier.bubu.redis.execution.api.CommandExecutionContext;
-import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.CommandSession;
+import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.ValidationResult;
 import yier.bubu.redis.testutil.FastTestClient;
@@ -29,8 +28,9 @@ public class CommandVariantCoverageTest {
     @Test
     public void connectionCommandsCoverPingEchoQuitAndSelectValidation() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 ReplySimpleString ping = (ReplySimpleString) client.execute(cmd("PING"));
                 Assert.assertEquals("PONG", ping.value());
 
@@ -56,8 +56,9 @@ public class CommandVariantCoverageTest {
     @Test
     public void connectionCommandsAcceptNullBulkMessages() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 Assert.assertTrue(client.execute(java.util.Arrays.asList(b("PING"), null)) instanceof ReplyNull);
                 Assert.assertTrue(client.execute(java.util.Arrays.asList(b("ECHO"), null)) instanceof ReplyNull);
             }
@@ -67,7 +68,7 @@ public class CommandVariantCoverageTest {
     @Test
     public void quitRequestsCloseAfterReply() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             yier.bubu.redis.execution.api.TransactionState transaction =
                     (yier.bubu.redis.execution.api.TransactionState) java.lang.reflect.Proxy.newProxyInstance(
                             yier.bubu.redis.execution.api.TransactionState.class.getClassLoader(),
@@ -82,7 +83,7 @@ public class CommandVariantCoverageTest {
             try (ByteArrayExecutionRequest request = ByteArrayExecutionRequest.copyOf(cmd("QUIT"));
                     PreparedCommand prepared = dispatcher.prepare(session, request)) {
                 Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
-                CommandResult result = prepared.execute(CommandExecutionContext.forSession(session));
+                CommandResult result = prepared.execute(session);
                 Assert.assertTrue(result.closeAfterReply());
             }
         });
@@ -91,8 +92,9 @@ public class CommandVariantCoverageTest {
     @Test
     public void commandVariantsCoverBaseCountInfoAndUnknownName() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 ReplyArray base = (ReplyArray) client.execute(cmd("COMMAND"));
                 Assert.assertFalse(base.values().isEmpty());
 
@@ -114,8 +116,9 @@ public class CommandVariantCoverageTest {
     @Test
     public void clientUnknownSubcommandReturnsRedisStyleError() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 ReplyError error = (ReplyError) client.execute(cmd("CLIENT", "BOGUS"));
                 Assert.assertEquals("ERR unknown subcommand 'BOGUS'. Try CLIENT HELP.", error.message());
             }
@@ -125,8 +128,9 @@ public class CommandVariantCoverageTest {
     @Test
     public void scanVariantsCoverInvalidCursorAndDuplicateOptions() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 Assert.assertTrue(client.execute(cmd("SET", "scan:1", "v")) instanceof ReplySimpleString);
                 Assert.assertTrue(client.execute(cmd("SET", "scan:2", "v")) instanceof ReplySimpleString);
 
@@ -147,8 +151,9 @@ public class CommandVariantCoverageTest {
     @Test
     public void setVariantsCoverXxPxExatPxatAndConflicts() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 Assert.assertTrue(client.execute(cmd("SET", "k", "v", "XX")) instanceof ReplyNull);
 
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(cmd("SET", "k", "v1", "PX", "60000"))).value());
@@ -175,8 +180,9 @@ public class CommandVariantCoverageTest {
     @Test
     public void bitcountInvalidBoundsRejectNonIntegerRanges() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 ReplyError error = (ReplyError) client.execute(cmd("BITCOUNT", "k", "zero", "1"));
                 Assert.assertEquals("ERR value is not an integer or out of range", error.message());
             }
@@ -186,8 +192,9 @@ public class CommandVariantCoverageTest {
     @Test
     public void rpopCountVariantsCoverNullArrayEmptyArrayAndNegativeCount() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 Assert.assertTrue(client.execute(cmd("RPOP", "missing")) instanceof ReplyNull);
                 Assert.assertTrue(client.execute(cmd("RPOP", "missing", "2")) instanceof ReplyNullArray);
 
@@ -203,8 +210,9 @@ public class CommandVariantCoverageTest {
     @Test
     public void zrevrangeInvalidOptionIsSyntaxError() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 ReplyError error = (ReplyError) client.execute(cmd("ZREVRANGE", "z", "0", "-1", "BAD"));
                 Assert.assertEquals("ERR syntax error", error.message());
             }
@@ -214,28 +222,29 @@ public class CommandVariantCoverageTest {
     @Test
     public void flushdbVariantsCoverDefaultSyncAsyncAndInvalidMode() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 Assert.assertTrue(client.execute(cmd("SET", "k", "v")) instanceof ReplySimpleString);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(cmd("FLUSHDB"))).value());
                 Assert.assertTrue(client.execute(cmd("GET", "k")) instanceof ReplyNull);
-                Assert.assertEquals(0L, db.memory().memoryStats().nativeLiveObjects());
+                Assert.assertEquals(0L, db.memoryStats().nativeLiveObjects());
 
                 Assert.assertTrue(client.execute(cmd("SET", "k", "v")) instanceof ReplySimpleString);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(cmd("FLUSHDB", "SYNC"))).value());
                 Assert.assertTrue(client.execute(cmd("GET", "k")) instanceof ReplyNull);
-                Assert.assertEquals(0L, db.memory().memoryStats().nativeLiveObjects());
+                Assert.assertEquals(0L, db.memoryStats().nativeLiveObjects());
 
                 Assert.assertTrue(client.execute(cmd("SET", "k", "before-async")) instanceof ReplySimpleString);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(cmd("FLUSHDB", "ASYNC"))).value());
                 Assert.assertTrue(client.execute(cmd("GET", "k")) instanceof ReplyNull);
-                long detachedNativeObjects = db.memory().memoryStats().nativeLiveObjects();
+                long detachedNativeObjects = db.memoryStats().nativeLiveObjects();
                 Assert.assertTrue(detachedNativeObjects > 0L);
                 Assert.assertTrue(client.execute(cmd("SET", "k", "after-async")) instanceof ReplySimpleString);
-                long nativeObjectsBeforeReclaim = db.memory().memoryStats().nativeLiveObjects();
+                long nativeObjectsBeforeReclaim = db.memoryStats().nativeLiveObjects();
                 Assert.assertTrue(nativeObjectsBeforeReclaim > detachedNativeObjects);
                 db.runMaintenance();
-                Assert.assertTrue(db.memory().memoryStats().nativeLiveObjects() < nativeObjectsBeforeReclaim);
+                Assert.assertTrue(db.memoryStats().nativeLiveObjects() < nativeObjectsBeforeReclaim);
                 Assert.assertEquals(
                         "after-async",
                         ((ReplyBulkString) client.execute(cmd("GET", "k"))).asString()

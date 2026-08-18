@@ -16,29 +16,18 @@
         <maven.compiler.release>25</maven.compiler.release>
         <netty.version>4.1.109.Final</netty.version>
         <junit.version>4.13.2</junit.version>
-        <jacoco.version>0.8.14</jacoco.version>
         <shade.version>3.6.0</shade.version>
         <picocli.version>4.7.6</picocli.version>
         <hdrhistogram.version>2.2.2</hdrhistogram.version>
     </properties>
 
     <modules>
-        <module>yierdis-common/yierdis-common-bytes</module>
-        <module>yierdis-common/yierdis-common-memory</module>
-        <module>yierdis-common/yierdis-common-command</module>
-        <module>yierdis-memory/yierdis-memory-api</module>
-        <module>yierdis-memory/yierdis-memory-ffm</module>
+        <module>yierdis-common/yierdis-common</module>
         <module>yierdis-networking/yierdis-networking-resp</module>
-        <module>yierdis-networking/yierdis-networking-netty</module>
         <module>yierdis-server/yierdis-server-api</module>
-        <module>yierdis-server/yierdis-server-executor</module>
-        <module>yierdis-server/yierdis-server-runtime</module>
-        <module>yierdis-server/yierdis-server-main</module>
-        <module>yierdis-command/yierdis-command-api</module>
-        <module>yierdis-command/yierdis-command-core</module>
-        <module>yierdis-command/yierdis-command-builtin</module>
-        <module>yierdis-db/yierdis-db-api</module>
-        <module>yierdis-db/yierdis-db-memory</module>
+        <module>yierdis-server/yierdis-server</module>
+        <module>yierdis-command/yierdis-command</module>
+        <module>yierdis-db/yierdis-db</module>
         <module>yierdis-cli</module>
         <module>yierdis-benchmark</module>
         <module>yierdis-tests</module>
@@ -48,7 +37,12 @@
         <dependencies>
             <dependency>
                 <groupId>io.netty</groupId>
-                <artifactId>netty-all</artifactId>
+                <artifactId>netty-transport</artifactId>
+                <version>${netty.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-handler</artifactId>
                 <version>${netty.version}</version>
             </dependency>
             <dependency>
@@ -69,28 +63,13 @@
 
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-networking-netty</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
                 <artifactId>yierdis-networking-resp</artifactId>
                 <version>${project.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-common-bytes</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-common-memory</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-common-command</artifactId>
+                <artifactId>yierdis-common</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
@@ -100,58 +79,29 @@
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-db-api</artifactId>
+                <artifactId>yierdis-db</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-db-memory</artifactId>
+                <artifactId>yierdis-command</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-command-api</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-command-core</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-command-builtin</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-server-runtime</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-memory-ffm</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-memory-api</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-server-executor</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-server-main</artifactId>
+                <artifactId>yierdis-server</artifactId>
                 <version>${project.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
 
     <build>
         <plugins>
@@ -159,10 +109,6 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.13.0</version>
-                <configuration>
-                    <release>${maven.compiler.release}</release>
-                    <encoding>${project.build.sourceEncoding}</encoding>
-                </configuration>
             </plugin>
 
             <plugin>
@@ -171,26 +117,6 @@
                 <version>3.3.1</version>
             </plugin>
 
-            <plugin>
-                <groupId>org.jacoco</groupId>
-                <artifactId>jacoco-maven-plugin</artifactId>
-                <version>${jacoco.version}</version>
-                <executions>
-                    <execution>
-                        <id>prepare-agent</id>
-                        <goals>
-                            <goal>prepare-agent</goal>
-                        </goals>
-                    </execution>
-                    <execution>
-                        <id>report</id>
-                        <phase>test</phase>
-                        <goals>
-                            <goal>report</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
         </plugins>
     </build>
 

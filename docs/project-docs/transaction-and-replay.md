@@ -8,13 +8,13 @@
 CommandExecutor
   -> CommandDispatcher.prepare(session, request)
   -> CommandSpec.handler().parse(CommandArgs)
-  -> CommandInvocation.prepare(session)
+  -> Function<CommandSession, PreparedCommand>.apply(session)
   -> PreparedCommand
-  -> reserve -> validate -> execute(context)
+  -> reserve -> validate -> execute(session)
   -> CommandResult -> RedisReplyRenderer
 ```
 
-transaction replay 把 dispatcher 入口替换为 `prepareReplay(...)` 以关闭再次排队，并复用查表、parse、invocation prepare、validation 和 execute；child 不单独 reserve 或 render，外层 `PreparedExec` 统一预留并在聚合后交给 renderer。下面的 queue path 是 transaction active 时的 preflight 分支：它在 handler parse 后暂停，不调用 invocation prepare；`EXEC` 才让 retained request 进入上述 child replay 路径。
+transaction replay 把 dispatcher 入口替换为 `prepareReplay(...)` 以关闭再次排队，并复用查表、parse、准备函数应用、validation 和 execute；child 不单独 reserve 或 render，外层 `PreparedExec` 统一预留并在聚合后交给 renderer。下面的 queue path 是 transaction active 时的 preflight 分支：它在 handler parse 后暂停，不应用返回的准备函数；`EXEC` 才让 retained request 进入上述 child replay 路径。
 
 ## 事务状态属于连接 session
 
@@ -37,13 +37,13 @@ transaction state 保存：
 这样做有两个原因：
 
 1. 当前 task 在返回 `QUEUED` 后会关闭自己的 request owner，transaction queue 必须拥有可独立关闭的 view；
-2. `EXEC` 要复用普通命令链。保留 `ExecutionRequest` 就能再次走 lookup、arity、handler parse、invocation prepare 和 prepared execution。
+2. `EXEC` 要复用普通命令链。保留 `ExecutionRequest` 就能再次走 lookup、arity、handler parse、准备函数应用和 prepared execution。
 
 生产网络 request 的 retained view 共享不可变 argv 与 reference-counted request-memory lease；heap request 可以通过自身实现提供稳定副本。transaction state 只依赖 `ExecutionRequest.retain()` 和 `retainedBytes()` 合同。
 
 ## `MULTI` 和入队 preflight
 
-`MULTI` 的 handler parse 不访问 session。其 invocation 在 prepare 时检查当前 transaction 是否已 active；正常时返回一个 prepared action。只有 executor 完成 reply reservation 并执行该 action，`tx.begin()` 才清理旧状态、设置 active 并返回 `OK`。
+`MULTI` 的 handler parse 不访问 session。返回的准备函数在 `apply(session)` 时检查当前 transaction 是否已 active；正常时返回一个 prepared action。只有 executor 完成 reply reservation 并执行该 action，`tx.begin()` 才清理旧状态、设置 active 并返回 `OK`。
 
 之后 queueable command 的主线是：
 
@@ -56,7 +56,7 @@ CommandExecutor
      -> TransactionPolicy.QUEUEABLE
      -> CommandSpec.handler().parse(CommandArgs)
      -> queued PreparedCommand
-  -> reserve -> validate -> execute(context)
+  -> reserve -> validate -> execute(session)
      -> TransactionState.tryEnqueue(request)
      -> CommandResult(QUEUED or queue-full error)
   -> RedisReplyRenderer
@@ -66,7 +66,7 @@ CommandExecutor
 
 - preflight 复用普通执行的 registry、arity 和 handler parse；
 - parse 只解释 argv，不调用 session、DB router 或任何 provider；
-- preflight 成功后不会调用 `CommandInvocation.prepare(session)`，所以不会读取 DB、准备 mutation 或创建 reply source；
+- preflight 成功后不会应用 handler 返回的准备函数，所以不会读取 DB、准备 mutation 或创建 reply source；
 - `tryEnqueue` 是 session mutation，必须等 executor 预留回复容量后在 queued prepared action 中发生。
 
 下列前置错误会返回 error，并在该 error action 执行时标记 transaction aborted：
@@ -76,11 +76,11 @@ CommandExecutor
 - wrong arity 或 handler parse error；
 - `TransactionPolicy.DISALLOWED_IN_MULTI`。
 
-queue 条数或字节超限由 `TransactionState.tryEnqueue(...)` 返回 `ERR Transaction queue is full` 并标记 aborted。`TRANSACTION_CONTROL` 命令不进入 queueable 分支；`MULTI/EXEC/DISCARD` 立即走各自 invocation。
+queue 条数或字节超限由 `TransactionState.tryEnqueue(...)` 返回 `ERR Transaction queue is full` 并标记 aborted。`TRANSACTION_CONTROL` 命令不进入 queueable 分支；`MULTI/EXEC/DISCARD` 立即应用各自的准备函数。
 
 ## `EXEC` prepare 的两种策略
 
-`EXEC` invocation 先查看 transaction state：
+`EXEC` 的准备函数先查看 transaction state：
 
 - 未 active：返回 `ERR EXEC without MULTI`；
 - 已 aborted：准备一个 error action，执行时 `discard()`，返回 `EXECABORT Transaction discarded because of previous errors.`；
@@ -99,7 +99,7 @@ queue 条数或字节超限由 `TransactionState.tryEnqueue(...)` 返回 `ERR Tr
 
 1. `tx.drain()` 取出 retained requests，同时重置 active、aborted 和 queue accounting；
 2. 对每个 request 取得或动态创建 child `PreparedCommand`；
-3. 每个 child 都使用独立的 `CommandExecutionContext.forSession(session)`；
+3. 每个 child 都把当前 `CommandSession` 直接传给 `execute(session)`；
 4. child execute 返回 `CommandResult`，外层收集其中的语义 `RedisReply`；
 5. child 的顶层 `ControlError` 转成可放入 `EXEC` array 的普通 error；
 6. 所有 child reply 聚合为一个 `RedisReply.Aggregate(ARRAY, ...)`；
@@ -111,7 +111,7 @@ queue 条数或字节超限由 `TransactionState.tryEnqueue(...)` 返回 `ERR Tr
 - 空命令、null argument 与 name 安全检查；
 - 同一个 `CommandRegistry` 与 `CommandSpec`；
 - 同一个 `CommandArity` 和 `handler.parse(CommandArgs)`；
-- `CommandInvocation.prepare(session)`；
+- handler 返回的准备函数及其 `apply(session)`；
 - `PreparedCommand` validation/execution 语义；reply reservation 由外层 `PreparedExec` 统一拥有；
 - 相同的 DB mutation path。
 
@@ -119,7 +119,7 @@ queue 条数或字节超限由 `TransactionState.tryEnqueue(...)` 返回 `ERR Tr
 
 ## streamed child reply 的所有权
 
-child invocation 可能从 DB 取得 `ByteValue`、`ByteSequenceSource`、`ByteMapSource` 或 `CollectionScanWindow`。这类 source 由 child `PreparedCommand` 通过 `PreparedCommands.owned(...)` 持有；其 semantic `RedisReply` 的 emitter 在 source 存活期间有效。
+child 准备函数可能从 DB 取得 `ByteValue`、`ByteSequenceSource`、`ByteMapSource` 或 `CollectionScanWindow`。这类 source 由 child `PreparedCommand` 通过 `PreparedCommands.owned(...)` 持有；其 semantic `RedisReply` 的 emitter 在 source 存活期间有效。
 
 `PreparedExec` 持有所有 child prepared commands，并在 execute 后继续存活。executor 先渲染外层 aggregate；renderer 递归访问 child reply 并同步调用 source emitter。只有渲染成功或 task 进入 terminal cleanup 后，外层 `close()` 才按 queue index 逆序执行：同一索引先关闭 child owner，再关闭 drained request。
 

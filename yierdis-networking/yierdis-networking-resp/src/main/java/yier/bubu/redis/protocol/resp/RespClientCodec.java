@@ -230,14 +230,6 @@ public final class RespClientCodec {
             return kind == Kind.NULL;
         }
 
-        public boolean isSimpleString(String expected) {
-            return kind == Kind.SIMPLE_STRING && Objects.equals(text, expected);
-        }
-
-        public int bulkLength() {
-            return bytes == null ? -1 : bytes.length;
-        }
-
         public byte[] bytes() {
             return bytes == null ? null : bytes.clone();
         }

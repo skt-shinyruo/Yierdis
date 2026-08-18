@@ -19,8 +19,8 @@ TTL 写命令和 `SET ... EX/PX/EXAT/PXAT/KEEPTTL` 最终都通过 mutation exec
 ```text
 command
   -> YierdisTtlOps / YierdisStringOps
-  -> YierdisDbKernel.execute(MutationUse)
-  -> internal YierdisDbMutationExecutor adapter
+  -> YierdisDbKernel.execute(MutationPlan)
+  -> YierdisDbMutationExecutor.execute(plan)
      -> reserve upper bound
      -> prepare replacement or deletion
      -> commit EntryRecord
@@ -92,7 +92,7 @@ Netty worker timer
 - 不要在 entry lifecycle 之外直接改写 `expireAtMillis`；`expireCount` 必须随 entry publish/replace/release 一起更新。
 - discovery callback 内不要删除目录项；候选必须在扫描返回后重新验证并回放。
 - 不要只保存 cursor 的编码值；必须同时比较完整 `tableGeneration`。
-- expiration reclamation 必须使用 `Admission.RECLAMATION`，upper bound 为 `0`，且不得产生正增长。
+- expiration reclamation 必须使用 `AdmissionMode.RECLAMATION`，upper bound 为 `0`，且不得产生正增长。
 
 ## 相关测试
 

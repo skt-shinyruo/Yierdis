@@ -37,7 +37,7 @@ public class YierdisClientTest {
     public void pingReturnsSimpleStringPongOverResp() throws Exception {
         try (TestServer server = TestServer.start();
              YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-            RespClientCodec.RespReply reply = client.executeUtf8(List.of("PING"), 1000);
+            RespClientCodec.RespReply reply = client.execute(List.of("PING".getBytes(StandardCharsets.UTF_8)), 1000);
             Assert.assertEquals(RespClientCodec.RespReply.Kind.SIMPLE_STRING, reply.kind());
             Assert.assertEquals("PONG", reply.text());
         }

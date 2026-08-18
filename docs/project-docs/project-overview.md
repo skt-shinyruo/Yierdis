@@ -23,13 +23,13 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 - Java 25：语言版本和 `java.lang.foreign` FFM API 的运行前提。
 - Netty：TCP server、channel pipeline、I/O 线程和 write-back。
 - RESP：请求解码、reply 编码和 RESP2/基础 RESP3 wire model。
-- Maven multi-module：用模块边界隔离 common、memory、networking、server、command、DB、CLI、benchmark 和 tests。
+- Maven multi-module：九个 leaf module 隔离 common、RESP、server API、server、command、DB、CLI、benchmark 和 tests。
 
 运行时主线也很明确：
 
 - Netty I/O 线程负责收包、解码、提交和写回，不直接修改 DB。
 - `CommandExecutor` 负责排队、背压预算和 owner-thread 命令执行。
-- `CommandDispatcher` 负责请求检查、registry 查找、事务策略和命令分发；`CommandSpec` handler 只解析 `CommandArgs`，再由 `CommandInvocation` 按连接 session 准备命令。
+- `CommandDispatcher` 负责请求检查、registry 查找、事务策略和命令分发；`CommandSpec` handler 只解析 `CommandArgs`，返回的 `Function<CommandSession, PreparedCommand>` 再应用于连接 session。
 - `PreparedCommand` 暴露回复预留形状，在预留后完成校验和执行，并返回 `CommandResult`；执行器随后通过 `RedisReplyRenderer` 集中渲染语义回复。
 - DB 层通过能力接口暴露读写语义，内存实现持有 keyspace、expires、数据族和内存账本。
 - JDK FFM runtime 支撑默认 native-memory path，并参与 maxmemory 相关约束。
@@ -44,25 +44,15 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 
 | 模块区域 | 主要职责 |
 | --- | --- |
-| `yierdis-common/yierdis-common-bytes` | 共享 byte/key 工具、字节视图和底层数据转换。 |
-| `yierdis-common/yierdis-common-memory` | 共享 memory snapshot、pressure budget 和 reclaim result 契约。 |
-| `yierdis-common/yierdis-common-command` | 共享 command record 和 result-unknown 契约。 |
-| `yierdis-memory/yierdis-memory-api` | memory 抽象、handle 和访问边界。 |
-| `yierdis-memory/yierdis-memory-ffm` | JDK FFM allocator/runtime、native segment 管理和 stable handle 支撑。 |
-| `yierdis-networking/yierdis-networking-resp` | RESP reply model、`RespReplyWriter` 和 inline command parsing。 |
-| `yierdis-networking/yierdis-networking-netty` | Netty decoder、带 admission lease 的 `RetainedRespExecutionRequest`、channel handler、protocol error 和 TCP write-back。 |
+| `yierdis-common/yierdis-common` | 共享 bytes、memory 和 command 小型值类型与基础契约。 |
+| `yierdis-networking/yierdis-networking-resp` | RESP wire model、客户端 codec、`RespReplyWriter` 和 inline command parsing。 |
 | `yierdis-server/yierdis-server-api` | `ExecutionRequest`、`PreparedCommand`、`CommandResult`、语义 `RedisReply`、`RedisReplyRenderer` 和渲染端口 `RedisReplyWriter` 等执行层公共契约。 |
-| `yierdis-server/yierdis-server-executor` | `CommandExecutor`、队列、背压、回复预留和集中执行/渲染。 |
-| `yierdis-server/yierdis-server-runtime` | `YierdisInstance`、多 DB 装配、runtime config、maxmemory governor 和 maintenance。 |
-| `yierdis-server/yierdis-server-main` | `main()`、CLI 参数、`EngineSession`、server bootstrap、`CommandDispatcher` 和 Netty pipeline 装配。 |
-| `yierdis-command/yierdis-command-api` | `CommandSpec`、`CommandSyntax`、`CommandArgs`、`CommandInvocation` 等命令契约。 |
-| `yierdis-command/yierdis-command-core` | `CommandRegistry`、`CommandDispatcher`、事务排队预检与 replay。 |
-| `yierdis-command/yierdis-command-builtin` | Redis 风格内置命令实现。 |
-| `yierdis-db/yierdis-db-api` | DB 能力接口、reads/writes view 和数据层契约。 |
-| `yierdis-db/yierdis-db-memory` | 单机内存 DB、数据族 ops、TTL、maxmemory、native-backed keyspace/value paths。 |
+| `yierdis-server/yierdis-server` | 进程入口、embedded runtime、executor、Netty transport、连接状态和最终组装。 |
+| `yierdis-command/yierdis-command` | 命令契约、registry/dispatcher、事务和 Redis 风格内建命令。 |
+| `yierdis-db/yierdis-db` | storage API、内存 DB、TTL/maxmemory、FFM backend 和 stable native handle。 |
 | `yierdis-cli` | 项目自带 RESP 客户端入口。 |
 | `yierdis-benchmark` | 基准压测入口和请求生成。 |
-| `yierdis-tests` | 跨模块行为测试和聚焦架构边界测试；DB 级 helper 归属 `yierdis-db-memory/src/test/java`。 |
+| `yierdis-tests` | 跨模块行为和架构测试；DB 级 helper 归属 `yierdis-db/yierdis-db/src/test/java`。 |
 
 更完整的模块依赖方向看 [`module-architecture.md`](./module-architecture.md)。
 
@@ -74,9 +64,9 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 CommandExecutor
   -> CommandDispatcher.prepare(session, request)
   -> CommandSpec.handler().parse(CommandArgs)
-  -> CommandInvocation.prepare(session)
+  -> Function<CommandSession, PreparedCommand>.apply(session)
   -> PreparedCommand
-  -> reserve -> validate -> execute(context)
+  -> reserve -> validate -> execute(session)
   -> CommandResult -> RedisReplyRenderer
 ```
 
@@ -89,11 +79,11 @@ CommandExecutor
 - `CommandExecutor` 把请求从 I/O 线程切到执行线程，并施加队列和背压约束。
 - `CommandDispatcher` 完成命令名、null、arity 和事务策略检查；普通命令依次解析 `CommandArgs` 并按 `CommandSession` 准备为 `PreparedCommand`。
 - 事务中的 queueable 命令只调用 handler 解析做 preflight，不提前执行 session/DB 准备；排队动作在回复预留成功后保留请求。`EXEC` 通过 dispatcher replay 重新准备子命令，并负责关闭子 `PreparedCommand` 和 retained request。
-- 执行器按 `PreparedCommand.reservationShape()` 预留容量，校验仍有效后用 `CommandExecutionContext` 执行。准备和执行阶段通过 DB API 完成真实读写。
+- 执行器按 `PreparedCommand.reservationShape()` 预留容量，校验仍有效后直接传入 `CommandSession` 执行。准备和执行阶段通过 DB API 完成真实读写。
 - 命令返回 `CommandResult`，其中 `RedisReply` 描述语义回复；bulk、byte sequence 和 byte map 可以持有语义流式 source/emitter，相关 owner 保持到 renderer 消费完成后才关闭。
 - `QUIT` 不接触 writer，而是通过 `CommandResult.closeAfterReply(...)` 携带关闭意图；执行器在结果渲染并发布后关闭连接。
 - `RedisReplyWriter` 只是 `RedisReplyRenderer` 面向 RESP 编码器的输出端口。`RespReplyWriter` 按 session 的 RESP 版本编码，最后由 Netty write-back 发回客户端。
-- `EngineSession` 只拥有每条连接的 DB 选择、客户端 metadata、认证、RESP 版本和事务队列等 session 状态，不参与命令解析、分发、执行或渲染。
+- `EngineSession` 只拥有每条连接的 DB 选择、client name、RESP 版本和事务队列等 session 状态，不参与命令解析、分发、执行或渲染。
 
 逐行追请求时看 [`request-execution-flow.md`](./request-execution-flow.md)。
 
@@ -116,19 +106,18 @@ DB 内部读 [`db-internals.md`](./db-internals.md)，FFM runtime 和 native-mem
 
 第一次读源码可以先打开这些入口，建立从启动到请求再到 DB 的最短路径：
 
-- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServer.java`
-- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
-- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java`
-- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java`
-- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RetainedRespExecutionRequest.java`
-- `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java`
-- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/ServerCommandComposition.java`
-- `yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java`
-- `yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java`
-- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java`
-- `yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
-- `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`
+- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/YierdisServer.java`
+- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
+- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java`
+- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java`
+- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/protocol/resp/netty/RetainedRespExecutionRequest.java`
+- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java`
+- `yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java`
+- `yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java`
+- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java`
+- `yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java`
+- `yierdis-db/yierdis-db/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
+- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`
 
 ## 接下来读什么
 

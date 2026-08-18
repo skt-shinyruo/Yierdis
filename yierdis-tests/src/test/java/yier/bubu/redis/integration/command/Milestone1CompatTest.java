@@ -27,8 +27,9 @@ public class Milestone1CompatTest {
     @Test
     public void scanMatchAndCountEventuallyReturnsAllMatchingKeys() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 Assert.assertTrue(client.execute(Arrays.asList(b("SET"), b("k1"), b("v"))) instanceof ReplySimpleString);
                 Assert.assertTrue(client.execute(Arrays.asList(b("SET"), b("k2"), b("v"))) instanceof ReplySimpleString);
                 Assert.assertTrue(client.execute(Arrays.asList(b("SET"), b("k3"), b("v"))) instanceof ReplySimpleString);
@@ -71,8 +72,9 @@ public class Milestone1CompatTest {
     @Test
     public void ttlFamilyPersistAndPexpireMatchRedisLikeConventions() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 Assert.assertTrue(client.execute(Arrays.asList(b("SET"), b("k"), b("v"))) instanceof ReplySimpleString);
 
                 ReplyInteger pttlNoTtl = (ReplyInteger) client.execute(Arrays.asList(b("PTTL"), b("k")));
@@ -93,8 +95,9 @@ public class Milestone1CompatTest {
     @Test
     public void expireAtUsesUnixSecondsAndReportsRemainingTtl() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 Assert.assertTrue(client.execute(Arrays.asList(b("SET"), b("abs"), b("v"))) instanceof ReplySimpleString);
 
                 long unixSeconds = (System.currentTimeMillis() / 1000L) + 60L;
@@ -114,8 +117,9 @@ public class Milestone1CompatTest {
     @Test
     public void setGetAndKeepTtlBehaveAsExpected() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 Assert.assertTrue(client.execute(Arrays.asList(b("SET"), b("k"), b("v"), b("EX"), b("5"))) instanceof ReplySimpleString);
                 Assert.assertTrue(((ReplyInteger) client.execute(Arrays.asList(b("TTL"), b("k")))).value() > 0L);
 
@@ -134,8 +138,9 @@ public class Milestone1CompatTest {
     @Test
     public void setRejectsConflictingModeOptions() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 ReplyError err = (ReplyError) client.execute(Arrays.asList(b("SET"), b("k"), b("v"), b("NX"), b("XX")));
                 Assert.assertEquals("ERR syntax error", err.message());
             }
@@ -145,8 +150,9 @@ public class Milestone1CompatTest {
     @Test
     public void flushdbValidatesOptions() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 Assert.assertTrue(client.execute(Arrays.asList(b("SET"), b("k"), b("v"))) instanceof ReplySimpleString);
                 Assert.assertTrue(client.execute(Arrays.asList(b("FLUSHDB"), b("ASYNC"))) instanceof ReplySimpleString);
 	                Assert.assertTrue(client.execute(Arrays.asList(b("GET"), b("k"))) instanceof ReplyNull);
@@ -160,8 +166,9 @@ public class Milestone1CompatTest {
     @Test
     public void lpopCountHandlesNullArrayAndEmptyArray() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-		            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+		            {
+		                FastTestClient client = new FastTestClient(dispatcher);
 		                Assert.assertTrue(client.execute(Arrays.asList(b("LPOP"), b("nope"))) instanceof ReplyNull);
 
 		                Assert.assertTrue(client.execute(Arrays.asList(b("LPOP"), b("nope"), b("2"))) instanceof ReplyNullArray);

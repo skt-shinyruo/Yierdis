@@ -20,8 +20,6 @@ public class ReferenceCountedRequestMemoryLeaseTest {
         second.close();
 
         Assert.assertEquals(123L, released.get());
-        Assert.assertTrue(first.released());
-        Assert.assertTrue(second.released());
     }
 
     @Test

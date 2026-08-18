@@ -33,9 +33,9 @@
 CommandExecutor
   -> CommandDispatcher.prepare(session, request)
   -> CommandSpec.handler().parse(CommandArgs)
-  -> CommandInvocation.prepare(session)
+  -> Function<CommandSession, PreparedCommand>.apply(session)
   -> PreparedCommand
-  -> reserve -> validate -> execute(context)
+  -> reserve -> validate -> execute(session)
   -> CommandResult -> RedisReplyRenderer
 ```
 

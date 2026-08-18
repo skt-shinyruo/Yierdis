@@ -19,8 +19,9 @@ public class EmptyBulkStringCommandTest {
     @Test
     public void smembersAllowsEmptyMember() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 byte[] key = b("s-empty");
                 byte[] empty = b("");
 
@@ -36,8 +37,9 @@ public class EmptyBulkStringCommandTest {
     @Test
     public void hgetallAllowsEmptyField() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 byte[] key = b("h-empty");
                 byte[] field = b("");
                 byte[] value = b("v");
@@ -55,8 +57,9 @@ public class EmptyBulkStringCommandTest {
     @Test
     public void zrangeAllowsEmptyMemberWithScores() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 byte[] key = b("z-empty");
                 byte[] empty = b("");
 

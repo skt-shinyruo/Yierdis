@@ -19,8 +19,9 @@ public class CommandErrorTest {
     @Test
     public void wrongTypeOnGetWhenKeyHoldsNonString() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
             byte[] listKey = b("l");
             byte[] hashKey = b("h");
@@ -43,8 +44,9 @@ public class CommandErrorTest {
     @Test
     public void wrongTypeOnHsetWhenKeyHoldsNonHash() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
             byte[] stringKey = b("k:string");
             byte[] listKey = b("k:list");
@@ -67,8 +69,9 @@ public class CommandErrorTest {
     @Test
     public void wrongTypeOnSaddAndZaddWhenKeyHoldsNonMatchingType() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
             byte[] stringKey = b("k:string");
             byte[] listKey = b("k:list");
@@ -92,8 +95,9 @@ public class CommandErrorTest {
     @Test
     public void arityAndSyntaxErrorsMatchExpectedMessages() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
             ReplyError hsetWrongArity = (ReplyError) client.execute(Arrays.asList(b("HSET"), b("k"), b("f")));
             Assert.assertEquals("ERR wrong number of arguments for 'hset' command", hsetWrongArity.message());
@@ -142,8 +146,9 @@ public class CommandErrorTest {
     @Test
     public void scoreRangeCommandsValidateArityAndLimitArguments() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
             ReplyError zrangeByScoreWrongArity = (ReplyError) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), b("k"), b("0")));
             Assert.assertEquals("ERR wrong number of arguments for 'zrangebyscore' command", zrangeByScoreWrongArity.message());

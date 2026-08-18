@@ -14,9 +14,9 @@ RESP bytes
   -> CommandExecutor
   -> CommandDispatcher.prepare(session, request)
   -> CommandSpec.handler().parse(CommandArgs)
-  -> CommandInvocation.prepare(session)
+  -> Function<CommandSession, PreparedCommand>.apply(session)
   -> PreparedCommand
-  -> reserve -> validate -> execute(context)
+  -> reserve -> validate -> execute(session)
   -> CommandResult -> RedisReplyRenderer
 ```
 
@@ -25,9 +25,9 @@ RESP bytes
 - `NettyExecutionRequestIngress` 只负责 reply slot 对齐、admission 和提交所有权；
 - `CommandExecutor` 负责 owner-thread 调度、reply capacity、prepared validation、执行、渲染和关闭保护；
 - `CommandDispatcher` 负责命令查表、统一前置校验、事务分支和预期 command error；
-- `CommandHandler.parse(CommandArgs)` 只解释 argv，不读取 session、DB 或 server provider；
-- `CommandInvocation.prepare(session)` 才能读取连接态、访问 DB、准备 mutation 或获取 streamed reply source；
-- `PreparedCommand.execute(context)` 在预留成功后完成可见动作并返回 `CommandResult`；
+- `CommandHandler.parse(CommandArgs)` 只解释 argv，返回 `Function<CommandSession, PreparedCommand>`，不读取 session、DB 或 server provider；
+- dispatcher 对返回的函数调用 `apply(session)`，此时才能读取连接态、访问 DB、准备 mutation 或获取 streamed reply source；
+- `PreparedCommand.execute(session)` 在预留成功后完成可见动作并返回 `CommandResult`；
 - `RedisReplyRenderer` 是语义 `RedisReply` 到 RESP-facing `RedisReplyWriter` 的唯一普通命令出口。
 
 command package 不依赖 `RedisReplyWriter`。命令通过 `RedisReply` 描述标量、聚合或延迟 payload；writer 只是 renderer 的协议端口。
@@ -41,9 +41,9 @@ command package 不依赖 `RedisReplyWriter`。命令通过 `RedisReply` 描述�
 每个 `CommandSpec` 只有两部分：
 
 - `CommandSyntax`：规范化命令名、`CommandArity`、`CommandKeySpec` 和 `TransactionPolicy`；
-- `CommandHandler`：接收 `CommandArgs`，返回 `CommandInvocation`，解析失败时抛 `CommandParseException`。
+- `CommandHandler`：接收 `CommandArgs`，返回 `Function<CommandSession, PreparedCommand>`，解析失败时抛 `CommandParseException`。
 
-`CommandInvocation` 是解析结果与 session/DB 准备之间的小边界。它只暴露 `prepare(CommandSession)`，返回带 reservation shape、validation、execution 和可选 owner 的 `PreparedCommand`。
+这个函数是解析结果与 session/DB 准备之间的边界。调用 `apply(CommandSession)` 后，返回带 reservation shape、validation、execution 和可选 owner 的 `PreparedCommand`。
 
 ## `CommandDispatcher.prepare(...)` 主流程
 
@@ -55,9 +55,9 @@ dispatcher 的实际顺序是：
 4. 用 upper-case name 从 `CommandRegistry` 取得 `CommandSpec`；
 5. 创建 `CommandArgs`，先调用 `spec.syntax().arity().validate(...)`；
 6. 若 transaction active，根据 `TransactionPolicy` 选择禁止、排队或 transaction-control 分支；
-7. 普通执行调用 `spec.handler().parse(args)` 得到 invocation；
-8. 调用 `invocation.prepare(session)` 得到 `PreparedCommand`；
-9. executor 根据其 reservation shape 完成 `reserve -> validate -> execute(context)`；
+7. 普通执行调用 `spec.handler().parse(args)` 得到准备函数；
+8. 调用 `prepareFunction.apply(session)` 得到 `PreparedCommand`；
+9. executor 根据其 reservation shape 完成 `reserve -> validate -> execute(session)`；
 10. execute 返回 `CommandResult`，executor 用 `RedisReplyRenderer` 统一渲染。
 
 `CommandParseException` 被转换成语义 error reply；prepare 阶段抛出的 `WrongTypeException` 与 `YierdisCommandException` 也会变成 command error。其他未预期异常继续交给 executor 的 terminal failure 路径，不能被误报为确定的业务失败。
@@ -68,7 +68,7 @@ dispatcher 的实际顺序是：
 
 `CommandArgs` 是 argv、ASCII 和整数解析的统一 helper：
 
-- `argc()`、`isNull(...)`、`length(...)`、`byteAt(...)` 暴露请求形状；
+- `argc()`、`isNull(...)`、`length(...)` 暴露请求形状；
 - `slice(...)` 提供不复制的 `BytesSlice`；
 - `bytes(...)`、`byteArraysFrom(...)` 取得稳定参数视图；
 - `is(index, literal)` 做 ASCII case-insensitive literal 比较；
@@ -92,18 +92,18 @@ parse 阶段不得调用 session、DB router、server info provider 或 slow-com
 
 ```text
 parse(CommandArgs)
-  -> argv 是否可解释，以及解析后的不可变参数是什么
+  -> argv 是否可解释，并返回 Function<CommandSession, PreparedCommand>
 
-prepare(CommandSession)
+apply(CommandSession)
   -> 当前连接态和 DB 状态下需要什么 ReplyShape、mutation 或 source owner
 
-execute(CommandExecutionContext)
+execute(CommandSession)
   -> 容量已预留且 prepared state 仍有效时，提交什么动作并返回什么 CommandResult
 ```
 
 只读命令可以在 prepare 时取得 DB source，并由 `PreparedCommand` 持有到渲染完成。需要 optimistic preview 的写命令可以准备 `PreparedMutation`，将 `isCurrent()` 接到 `validateBeforeExecute()`，把真正的 commit 留到 execute。无需状态预读的写命令也可以返回带上界 shape 的 action，在 execute 时直接调用 DB capability。
 
-`CommandExecutionContext` 不含 writer。它只持有 `CommandSession`，command implementation 因而无法绕过 `CommandResult` 直接写协议输出。
+executor 将当前 `CommandSession` 直接传给 `PreparedCommand.execute(...)`。command API 不提供 writer，command implementation 因而无法绕过 `CommandResult` 直接写协议输出。
 
 ## reply reservation 与统一渲染
 
@@ -113,7 +113,7 @@ execute(CommandExecutionContext)
 
 1. executor 调用 `validateBeforeExecute()`；
 2. `STALE` 会关闭 prepared object 并从 dispatcher 重新准备，尚未发生 mutation；
-3. `VALID` 才创建 `CommandExecutionContext` 并调用 execute；
+3. `VALID` 才调用 `execute(session)`；
 4. execute 返回 `CommandResult(RedisReply, closeAfterReply)`；
 5. executor 创建 `RedisReplyWriter`，调用 `RedisReplyRenderer.render(result.reply(), writer)`；
 6. 渲染完成后再关闭 prepared owner 与 request。
@@ -132,9 +132,9 @@ RESP decoder 会忠实保留 array 中的 null bulk string。dispatcher 统一�
 
 transaction active 时，dispatcher 仍先完成命令名检查、registry lookup 和 arity validation。之后按 `CommandSyntax.transactionPolicy()` 分支：
 
-- `TRANSACTION_CONTROL`：`MULTI/EXEC/DISCARD` 立即走自己的 invocation，不重新排队；
+- `TRANSACTION_CONTROL`：`MULTI/EXEC/DISCARD` 立即应用自己的准备函数，不重新排队；
 - `DISALLOWED_IN_MULTI`：准备 error action，并在执行时标记 transaction aborted；
-- `QUEUEABLE`：调用同一个 `handler.parse(CommandArgs)` 做完整参数 preflight，但不调用返回 invocation 的 `prepare(session)`。
+- `QUEUEABLE`：调用同一个 `handler.parse(CommandArgs)` 做完整参数 preflight，但不应用其返回的准备函数。
 
 queueable preflight 成功后，dispatcher 返回一个 maximum-shape prepared action。executor 先预留回复容量，再执行 `TransactionState.tryEnqueue(request)`：成功返回 `QUEUED`，条数或字节限制失败则返回 `ERR Transaction queue is full` 并标记 aborted。
 
@@ -142,7 +142,7 @@ queueable preflight 成功后，dispatcher 返回一个 maximum-shape prepared a
 
 - dispatcher 拥有查表、arity、policy 与 handler parse；
 - `TransactionState` 拥有 retained request 和 queue limits；
-- invocation preparation、DB read、mutation preparation 与 execution 全部推迟到 `EXEC` replay；
+- 准备函数应用、DB read、mutation preparation 与 execution 全部推迟到 `EXEC` replay；
 - executor 仍拥有 reply reservation、execution scope 和 renderer。
 
 详细的 drain、child ownership 和 replay 见 [`transaction-and-replay.md`](./transaction-and-replay.md)。
@@ -155,11 +155,11 @@ renderer 调用 emitter 时 source 仍然有效，渲染后 executor 才关闭 p
 
 ## DB 提交边界
 
-reply capacity 成功后，executor 创建只含当前 session 的 `CommandExecutionContext`。写入和 lifecycle capability 直接来自本次路由得到的 `DbEngine`；只读路径不会提前访问未使用的 mutation capability。
+reply capacity 成功后，executor 把当前 `CommandSession` 直接传给 `PreparedCommand.execute(...)`。写入和 flush 操作直接来自本次路由得到的 `DbEngine`；只读路径不会提前访问未使用的 mutation capability。
 
 真正的 storage 与 ledger 提交由 `YierdisDbMutationExecutor` 持有。parse error、unknown command 和 `QUEUED` 不进入 mutation executor；条件写 no-op 则由 prepared mutation 返回 unchanged outcome。
 
-`EXEC` 的每个 child 都使用独立的 execution context，继续走相同的 DB mutation path。事务入队成功不代表 mutation 已提交。
+`EXEC` 的每个 child 都把当前 `CommandSession` 直接传给 `execute(...)`，继续走相同的 DB mutation path。事务入队成功不代表 mutation 已提交。
 
 ## 相关测试
 

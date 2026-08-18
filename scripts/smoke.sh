@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Build control
-MVN_ARGS="${MVN_ARGS:--q -pl yierdis-server/yierdis-server-main,yierdis-cli -am -DskipTests package}"
+MVN_ARGS="${MVN_ARGS:--q -pl yierdis-server/yierdis-server,yierdis-cli -am -DskipTests package}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 
 # Smoke config
@@ -68,7 +68,7 @@ main() {
   build_if_needed
 
   local server_jar client_jar
-  server_jar="$(pick_jar "$ROOT_DIR/yierdis-server/yierdis-server-main/target/yierdis-server-main-*.jar" "original-")"
+  server_jar="$(pick_jar "$ROOT_DIR/yierdis-server/yierdis-server/target/yierdis-server-*.jar" "original-")"
   client_jar="$(pick_jar "$ROOT_DIR/yierdis-cli/target/yierdis-cli-*.jar" "original-")"
 
   printf "[smoke] serverJar: %s\n" "$server_jar"
@@ -85,7 +85,7 @@ main() {
   trap cleanup EXIT
 
   printf "[smoke] 启动 server: %s:%s\n" "$HOST" "$PORT"
-  java -jar "$server_jar" --port "$PORT" >"$SERVER_LOG" 2>&1 &
+  java -jar "$server_jar" --port "$PORT" --maxmemoryBytes=0 >"$SERVER_LOG" 2>&1 &
   server_pid="$!"
 
   if ! wait_ready "$client_jar"; then

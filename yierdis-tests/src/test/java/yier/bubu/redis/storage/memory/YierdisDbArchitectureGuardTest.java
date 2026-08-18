@@ -17,7 +17,7 @@ public class YierdisDbArchitectureGuardTest {
         Constructor<?>[] constructors = YierdisDbEngineFactory.class.getConstructors();
         Assert.assertEquals(1, constructors.length);
         Assert.assertArrayEquals(
-                new Class<?>[]{StableMemoryBackendFactory.class, YierdisDbBackendConfig.class},
+                new Class<?>[]{StableMemoryBackendFactory.class, int.class},
                 constructors[0].getParameterTypes()
         );
     }
@@ -38,7 +38,6 @@ public class YierdisDbArchitectureGuardTest {
                 YierdisKeyspaceOps.class,
                 YierdisTtlOps.class,
                 YierdisDbExpirationSupport.class,
-                YierdisDbWrites.class,
                 YierdisDbMemoryReporter.class,
                 YierdisDbMemoryEstimator.class,
                 YierdisDbMaxmemorySupport.class

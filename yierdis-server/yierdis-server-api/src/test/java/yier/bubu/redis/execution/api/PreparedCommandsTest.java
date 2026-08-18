@@ -179,6 +179,6 @@ public class PreparedCommandsTest {
                 new Class<?>[]{CommandSession.class},
                 (proxy, method, args) -> null
         );
-        return prepared.execute(CommandExecutionContext.forSession(session));
+        return prepared.execute(session);
     }
 }

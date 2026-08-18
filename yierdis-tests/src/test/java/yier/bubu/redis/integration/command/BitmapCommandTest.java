@@ -20,8 +20,9 @@ public class BitmapCommandTest {
     @Test
     public void getbitSetbitBasicSemantics() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 byte[] key = b("k");
 
                 ReplyInteger miss = (ReplyInteger) client.execute(Arrays.asList(b("GETBIT"), key, b("0")));
@@ -46,8 +47,9 @@ public class BitmapCommandTest {
     @Test
     public void bitcountRangeFollowsRedisByteRangeRules() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 byte[] key = b("k");
 
                 client.execute(Arrays.asList(b("SETBIT"), key, b("0"), b("1")));
@@ -71,8 +73,9 @@ public class BitmapCommandTest {
     @Test
     public void setbitZeroFillsGrownBytesWithinCapacity() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 byte[] key = b("k");
 
                 client.execute(cmd("SET", "k", "a"));
@@ -92,8 +95,9 @@ public class BitmapCommandTest {
     public void bitmapCommandsErrorOnWrongType() {
         forEachDb(db -> {
             // 复用现有 list 命令制造非 string 类型
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 client.execute(Arrays.asList(b("LPUSH"), b("k"), b("x")));
 
                 ReplyObject err = client.execute(Arrays.asList(b("GETBIT"), b("k"), b("0")));
@@ -106,8 +110,9 @@ public class BitmapCommandTest {
     @Test
     public void bitmapCommandsRejectInvalidArgumentsBeforeExecution() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 assertError("not an integer or out of range", client.execute(cmd("SETBIT", "k", "-1", "0")));
                 assertError("bit is not an integer or out of range", client.execute(cmd("SETBIT", "k", "0", "2")));
                 assertError("bit is not an integer or out of range", client.execute(cmd("SETBIT", "k", "0", "nope")));

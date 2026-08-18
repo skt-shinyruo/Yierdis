@@ -29,7 +29,7 @@ public class RespIngressPressureTest {
         List<IngressFixture> connections = new ArrayList<>();
         try {
             for (int i = 0; i < CONNECTIONS; i++) {
-                IngressFixture fixture = new IngressFixture(budget, "pressure-" + i);
+                IngressFixture fixture = new IngressFixture(budget);
                 connections.add(fixture);
                 fixture.channel.runPendingTasks();
 
@@ -46,7 +46,7 @@ public class RespIngressPressureTest {
                         fixture.readCredits.outstandingReadCreditBytes() <= RECEIVE_CREDIT_BYTES);
             }
 
-            IngressFixture queued = new IngressFixture(budget, "queued-after-pressure");
+            IngressFixture queued = new IngressFixture(budget);
             connections.add(queued);
             queued.channel.runPendingTasks();
 
@@ -64,7 +64,7 @@ public class RespIngressPressureTest {
 
         assertFullyReleased(budget);
 
-        IngressFixture ping = new IngressFixture(budget, "after-pressure");
+        IngressFixture ping = new IngressFixture(budget);
         try {
             ping.write("*1\r\n$4\r\nPING\r\n");
             Object message = ping.channel.readInbound();
@@ -95,8 +95,8 @@ public class RespIngressPressureTest {
         private final InboundReadCreditHandler readCredits;
         private final EmbeddedChannel channel;
 
-        private IngressFixture(InboundMemoryBudget budget, String id) {
-            memory = new InboundConnectionMemory(id, 65_536, Runnable::run, () -> { });
+        private IngressFixture(InboundMemoryBudget budget) {
+            memory = new InboundConnectionMemory(65_536, Runnable::run, () -> { });
             readCredits = new InboundReadCreditHandler(budget, memory, RECEIVE_BUFFER_BYTES);
             RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
                     65_536,

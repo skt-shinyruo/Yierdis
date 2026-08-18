@@ -37,7 +37,7 @@ mvn -DskipTests package
 
 ```bash
 mvn -q -DskipTests package
-java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar --port 6378 --maxmemoryBytes 0
+java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 6378 --maxmemoryBytes 0
 ```
 
 用 `redis-cli` 验证：
@@ -107,7 +107,7 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 1. 先单独启动 Yierdis，benchmark 默认目标端口是 `16378`：
 
 ```bash
-java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar --port 16378
+java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 16378
 ```
 
 2. 在另一个终端运行 Yierdis benchmark：
@@ -147,7 +147,7 @@ Yierdis CSV 在这八列之后增加 `status` 和 `reason`，它们不是共享 
 
 ### Storage footprint benchmark
 
-存储基准在单 owner thread 上直接调用 `RuntimeDbEngine` 的 `StringWriteOps.setString(...)`，排除 TCP、RESP、server 和 executor 开销。默认写入 1,000,000 个唯一 key，key/value 都是固定 16 bytes，并先在一个随后关闭的临时 DB 中预热 50,000 次：
+存储基准在单 owner thread 上直接调用 `RuntimeDbEngine.strings().setString(...)`，排除 TCP、RESP、server 和 executor 开销。默认写入 1,000,000 个唯一 key，key/value 都是固定 16 bytes，并先在一个随后关闭的临时 DB 中预热 50,000 次：
 
 ```bash
 ./scripts/storage-bench.sh

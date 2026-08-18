@@ -31,8 +31,8 @@ public class ReplyShapeTest {
         List<Integer> first = new ArrayList<>();
         List<Integer> second = new ArrayList<>();
 
-        sequence.payloadLengths().visit(first::add);
-        sequence.payloadLengths().visit(second::add);
+        sequence.payloadLengths().accept(first::add);
+        sequence.payloadLengths().accept(second::add);
 
         Assert.assertEquals(List.of(2, -1, 5), first);
         Assert.assertEquals(first, second);

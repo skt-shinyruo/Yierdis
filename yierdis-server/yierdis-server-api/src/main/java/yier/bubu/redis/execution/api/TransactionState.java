@@ -3,7 +3,7 @@ package yier.bubu.redis.execution.api;
 import java.util.List;
 import java.util.function.Consumer;
 
-public interface TransactionState extends AutoCloseable {
+public interface TransactionState {
     boolean active();
 
     boolean aborted();
@@ -22,6 +22,4 @@ public interface TransactionState extends AutoCloseable {
 
     void discard();
 
-    @Override
-    void close();
 }

@@ -25,9 +25,9 @@ YierdisServer
   -> CommandExecutor
   -> CommandDispatcher.prepare(session, request)
   -> CommandSpec.handler().parse(CommandArgs)
-  -> CommandInvocation.prepare(session)
+  -> Function<CommandSession, PreparedCommand>.apply(session)
   -> PreparedCommand
-  -> reserve -> validate -> execute(context)
+  -> reserve -> validate -> execute(session)
   -> CommandResult -> RedisReplyRenderer
   -> RedisReplyWriter
   -> RespReplyWriter
@@ -38,7 +38,7 @@ YierdisServer
 
 ## 1. 进程入口
 
-先看 [`YierdisServer.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServer.java)。
+先看 [`YierdisServer.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/YierdisServer.java)。
 
 它只做两件事：
 
@@ -49,7 +49,7 @@ YierdisServer
 
 ## 2. 组装中心
 
-再看 [`YierdisServerBootstrap.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java)。
+再看 [`YierdisServerBootstrap.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java)。
 
 它负责把实例、dispatcher、executor、Netty group 和 server channel 组起来。读它时重点盯住：
 
@@ -58,12 +58,12 @@ YierdisServer
 - `CommandExecutor`
 - `YierdisServerChannelInitializer`
 
-`YierdisServerBootstrap` 是接线中心：它通过 `ServerCommandComposition` 组装并封闭命令注册表，把
-`CommandDispatcher::prepare` 接到 executor 的 transport-neutral `CommandExecutionEngine` 边界；这里不实现命令语义。
+`YierdisServerBootstrap` 是接线中心：它直接用 `CommandRegistries.dispatcher(...)` 注册默认命令与
+server-only 命令，并把 `dispatcher::prepare` 接到 executor；这里不实现普通命令语义。
 
 ## 3. 实例和多 DB
 
-看 [`YierdisInstance.java`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java)。
+看 [`YierdisInstance.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java)。
 
 它不是单个 DB，而是实例级资源 owner。这里能看到：
 
@@ -72,23 +72,23 @@ YierdisServer
 - runtime memory runtime
 - DB engine 数组导出
 
-你要记住的是：command 层通过 `DbEngine / DbReads / DbWrites` 访问 DB，不直接绑定具体实现。
+你要记住的是：command 层通过 `DbEngine` 直接暴露的 typed ops 访问 DB，不直接绑定具体实现。
 
 ## 4. 连接和 pipeline
 
-看 [`YierdisServerChannelInitializer.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java) 和 [`NettyExecutionConnection.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionConnection.java)。
+看 [`YierdisServerChannelInitializer.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java) 和 [`NettyExecutionConnection.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/NettyExecutionConnection.java)。
 
 这里会建立连接根对象，并把状态分成三块：
 
 - Netty `Channel`
-- `EngineSession`，只拥有连接级 DB index、RESP version、事务队列和 client metadata
+- `EngineSession`，只拥有连接级 DB index、RESP version、事务队列和 client name
 - `ExecutionConnectionContext`
 
 pipeline 的关键点是 `RespRequestDecoder`。它在完成 ingress admission 后把 RESP bytes 直接变成带 lease 的 `ExecutionRequest`，再交给提交层。
 
 ## 5. RESP 解码
 
-继续看 [`RespRequestDecoder.java`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java) 和 [`RetainedRespExecutionRequest.java`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RetainedRespExecutionRequest.java)。
+继续看 [`RespRequestDecoder.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java) 和 [`RetainedRespExecutionRequest.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/protocol/resp/netty/RetainedRespExecutionRequest.java)。
 
 它们的职责很窄：
 
@@ -100,7 +100,7 @@ pipeline 的关键点是 `RespRequestDecoder`。它在完成 ingress admission �
 
 ## 6. Executor 提交和 drain
 
-看 [`NettyExecutionRequestIngress.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionRequestIngress.java) 和 [`CommandExecutor.java`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java)。
+看 [`NettyExecutionRequestIngress.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/NettyExecutionRequestIngress.java) 和 [`CommandExecutor.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java)。
 
 `NettyExecutionRequestIngress` 只处理 reply slot 与 executor admission，不执行命令。`CommandExecutor` 在
 owner thread 上负责：
@@ -116,7 +116,7 @@ dispatcher、handler 和 DB 层。
 
 ## 7. Dispatcher 到命令层
 
-看 [`CommandDispatcher.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java)、[`CommandSpec.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandSpec.java)、[`CommandArgs.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandArgs.java) 和 [`PreparedCommand.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/PreparedCommand.java)。
+看 [`CommandDispatcher.java`](../../yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java)、[`CommandSpec.java`](../../yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/api/CommandSpec.java)、[`CommandArgs.java`](../../yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/api/CommandArgs.java) 和 [`PreparedCommand.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/PreparedCommand.java)。
 
 最终命令流固定为：
 
@@ -124,30 +124,30 @@ dispatcher、handler 和 DB 层。
 CommandExecutor
   -> CommandDispatcher.prepare(session, request)
   -> CommandSpec.handler().parse(CommandArgs)
-  -> CommandInvocation.prepare(session)
+  -> Function<CommandSession, PreparedCommand>.apply(session)
   -> PreparedCommand
-  -> reserve -> validate -> execute(context)
+  -> reserve -> validate -> execute(session)
   -> CommandResult -> RedisReplyRenderer
 ```
 
 `CommandDispatcher` 统一处理空命令、unknown command、arity、事务策略和预期命令错误。handler 的
-`parse(CommandArgs)` 只解释 argv，不读取 DB、provider 或 session；得到的 `CommandInvocation` 才在
-`prepare(session)` 阶段访问连接和 DB 能力。`CommandParseIsolationTest` 用全部默认命令的 fixture 集合锁住
+`parse(CommandArgs)` 只解释 argv，不读取 DB、provider 或 session；得到的
+`Function<CommandSession, PreparedCommand>` 应用于 session 时才访问连接和 DB 能力。`CommandParseIsolationTest` 用全部默认命令的 fixture 集合锁住
 这条边界，`ServerCommandParseIsolationTest` 同样覆盖 `HELLO`、`INFO` 和 `STATS`。
 
-在 `MULTI` 中，可排队命令只运行 handler parse 做 preflight，不运行 invocation prepare；真正的
+在 `MULTI` 中，可排队命令只运行 handler parse 做 preflight，不对返回函数调用 `apply(session)`；真正的
 `EXEC` 由 `TransactionCommands` 通过同一 `CommandDispatcher.prepareReplay(...)` 重放队列，并负责释放
 队列中保留的 request 和每个 child prepared command。
 
 ## 8. PING 路径
 
-先看 [`CoreConnectionCommands.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/connection/CoreConnectionCommands.java)。`PING` 在这里注册并实现，属于 transport-neutral 的连接命令。
+先看 [`CoreConnectionCommands.java`](../../yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/defaults/connection/CoreConnectionCommands.java)。`PING` 在这里注册并实现，属于 transport-neutral 的连接命令。
 
 如果只追主路径，`PING` 的重点是：
 
 - `CommandExecutor` 把请求送到 owner thread
 - `CommandDispatcher` 找到 `PING` 的 `CommandSpec`
-- handler parse 返回 invocation，invocation prepare 返回 `PreparedCommand`
+- handler parse 返回函数，函数应用于 session 后返回 `PreparedCommand`
 - executor 在预留和校验后得到包含 `PONG` 的 `CommandResult`
 - `RedisReplyRenderer` 把语义回复写到 RESP-facing `RedisReplyWriter`
 
@@ -155,15 +155,15 @@ CommandExecutor
 
 `SET` 是最值得读的写路径。顺序建议是：
 
-1. [`StringCommands.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java)
-2. [`YierdisStringOps.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java)
-3. [`YierdisDbMutationExecutor.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java)
+1. [`StringCommands.java`](../../yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java)
+2. [`YierdisStringOps.java`](../../yierdis-db/yierdis-db/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java)
+3. [`YierdisDbMutationExecutor.java`](../../yierdis-db/yierdis-db/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java)
 
-你会看到命令层先解析参数，再把写入交给 DB 层的 mutation executor 和 key lifecycle。这里也能对应 `YierdisDbWrites`、`DbEngine`、`DbReads` 的能力边界。
+你会看到命令层先解析参数，再通过 `DbEngine.strings()` 把写入交给 `YierdisStringOps`、mutation executor 和 key lifecycle。
 
 ## 10. 回包写出
 
-最后看 [`CommandResult.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/CommandResult.java)、[`RedisReplyRenderer.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/RedisReplyRenderer.java)、[`RedisReplyWriter.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/RedisReplyWriter.java)、[`RespReplyWriter.java`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java) 和 [`NettyExecutionIoAdapter.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionIoAdapter.java)。
+最后看 [`CommandResult.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/CommandResult.java)、[`RedisReplyRenderer.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/RedisReplyRenderer.java)、[`RedisReplyWriter.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/RedisReplyWriter.java)、[`RespReplyWriter.java`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java) 和 [`NettyExecutionIoAdapter.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/NettyExecutionIoAdapter.java)。
 
 这里的核心是：
 

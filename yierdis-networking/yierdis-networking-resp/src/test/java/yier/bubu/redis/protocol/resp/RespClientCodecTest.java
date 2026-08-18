@@ -19,7 +19,9 @@ public class RespClientCodecTest {
 
     @Test
     public void readsSimpleBulkIntegerNullAndArrayReplies() throws Exception {
-        Assert.assertTrue(RespClientCodec.readReply(in("+OK\r\n"), 1024).isSimpleString("OK"));
+        RespClientCodec.RespReply simple = RespClientCodec.readReply(in("+OK\r\n"), 1024);
+        Assert.assertEquals(RespClientCodec.RespReply.Kind.SIMPLE_STRING, simple.kind());
+        Assert.assertEquals("OK", simple.text());
         Assert.assertArrayEquals(bytes("abc"), RespClientCodec.readReply(in("$3\r\nabc\r\n"), 1024).bytes());
         Assert.assertEquals(Long.valueOf(7), RespClientCodec.readReply(in(":7\r\n"), 1024).integer());
         Assert.assertTrue(RespClientCodec.readReply(in("$-1\r\n"), 1024).isNull());
@@ -55,10 +57,12 @@ public class RespClientCodecTest {
                 1024
         );
         Assert.assertEquals(2, nested.values().size());
-        Assert.assertTrue(nested.values().get(0).values().get(0).isSimpleString("OK"));
-        Assert.assertEquals(0, nested.values().get(1).bulkLength());
-        Assert.assertFalse(nested.isSimpleString("OK"));
-        Assert.assertEquals(-1, error.bulkLength());
+        RespClientCodec.RespReply simple = nested.values().get(0).values().get(0);
+        Assert.assertEquals(RespClientCodec.RespReply.Kind.SIMPLE_STRING, simple.kind());
+        Assert.assertEquals("OK", simple.text());
+        Assert.assertEquals(0, nested.values().get(1).bytes().length);
+        Assert.assertEquals(RespClientCodec.RespReply.Kind.ARRAY, nested.kind());
+        Assert.assertNull(error.bytes());
     }
 
     @Test

@@ -26,8 +26,9 @@ public class HllCommandTest {
     @Test
     public void pfaddCreatesAndUpdates() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 ReplyInteger add1 = (ReplyInteger) client.execute(cmd("PFADD", "h", "a"));
                 Assert.assertEquals(1, add1.value());
 
@@ -43,8 +44,9 @@ public class HllCommandTest {
     @Test
     public void pfcountAndPfmergeWorkOnUnion() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 client.execute(cmd("PFADD", "h1", "foo", "bar"));
                 client.execute(cmd("PFADD", "h2", "bar", "baz"));
 
@@ -71,8 +73,9 @@ public class HllCommandTest {
         YierdisDb db = openFfm(0L);
         try {
             db.bindToCurrentThread();
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 client.execute(cmd("PFADD", "src", "a", "b"));
 
                 // PFMERGE 总是写 dense，这样后续 PFADD 会走 dense 原地更新分支。
@@ -94,8 +97,9 @@ public class HllCommandTest {
         YierdisDb db = openFfm(DENSE_HLL_PHYSICAL_MAXMEMORY_BYTES);
         db.bindToCurrentThread();
         try {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 ReplyObject sourceAdd = client.execute(cmd("PFADD", "src", "a", "b"));
                 Assert.assertTrue("initial PFADD reply: " + replyDescription(sourceAdd), sourceAdd instanceof ReplyInteger);
                 ReplyObject merge = client.execute(cmd("PFMERGE", "dense", "src"));
@@ -130,8 +134,9 @@ public class HllCommandTest {
     @Test
     public void pfaddErrorsOnNonHllString() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 client.execute(cmd("SET", "k", "v"));
 
                 ReplyObject err = client.execute(Arrays.asList(b("PFADD"), b("k"), b("x")));

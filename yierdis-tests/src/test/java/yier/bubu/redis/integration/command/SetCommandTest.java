@@ -18,8 +18,9 @@ public class SetCommandTest {
     @Test
     public void upgradeFromIntsetKeepsExistingMembers() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
             byte[] key = new byte[]{'s', 0, 1};
 
@@ -59,8 +60,9 @@ public class SetCommandTest {
     @Test
     public void setMembersAreBinarySafeEvenWhenIntegerLike() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
             byte[] key = b("s");
 
@@ -102,8 +104,9 @@ public class SetCommandTest {
     @Test
     public void sremDeletesKeyWhenEmpty() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandDispatchers.forDb(db);
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
 
             byte[] key = new byte[]{0, 's'};
             byte[] member = new byte[]{(byte) 0xFF};

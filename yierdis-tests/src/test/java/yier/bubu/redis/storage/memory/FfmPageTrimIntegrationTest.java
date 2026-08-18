@@ -33,7 +33,7 @@ public class FfmPageTrimIntegrationTest {
                     MaxmemoryPolicy.NOEVICTION,
                     () -> {
                     },
-                    ignored -> backend.trimEmptyPages(MemoryPressureBudget.unlimited()),
+                    ignored -> backend.trimEmptyPages(MemoryPressureBudget.UNLIMITED),
                     () -> backend.memoryUsage().effectiveBytesForMaxmemory(),
                     () -> null,
                     () -> null

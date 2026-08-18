@@ -13,8 +13,8 @@ public class CoreContractSmokeTest {
                 new Class<?>[]{CommandSession.class},
                 (proxy, method, args) -> null
         );
-        CommandExecutionContext context = CommandExecutionContext.forSession(session);
+        CommandSession context = session;
 
-        Assert.assertSame(session, context.session());
+        Assert.assertSame(session, context);
     }
 }

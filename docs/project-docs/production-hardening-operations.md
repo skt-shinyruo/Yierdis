@@ -19,7 +19,7 @@ Start from a packaged artifact only after the command above identifies JDK 25:
 
 ```bash
 mvn -DskipTests package
-java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar --port 6378
+java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 6378
 ```
 
 Use `INFO`, `INFO stats`, `STATS`, and `MEMORY STATS` to inspect a running process. Do not infer a limit from JVM heap use alone: request, maxmemory/native, and reply ownership are separate bounded domains.
@@ -87,7 +87,7 @@ Operators should distinguish a result-unknown close from a capacity reject by ch
 
 During normal steady state, peaks may remain non-zero while current reserved/allocated bytes return to zero. After a test fixture or successful graceful shutdown, active slots, chunks, sources, child channels, and inbound reservation must converge to zero. A non-zero current gauge after clients disconnect is a leak signal; capture `INFO stats`, `MEMORY STATS`, process logs, the exact workload seed, and the candidate artifact checksum before restarting.
 
-The soak workload uses one warmup cycle followed by three measured fill/cleanup cycles. At each completed cycle, live native objects and FFM regions must return to the warm baseline, and committed native bytes must remain below the metadata high-water mark plus the configured one-warm-page-per-size-class bound. The main client keeps one fixed inbound read credit while it remains connected; that standing credit is its cycle baseline, while retained input, consolidation, reply slots, sources, chunks, and outbound reservations must drain. RSS is supplementary evidence: the harness reports it for every sample and fails on uninterrupted growth above 16 MiB across the final three completed cycles. Native counters and ownership gauges remain the required leak assertions.
+The soak workload uses one warmup cycle followed by three measured fill/cleanup cycles. At each completed cycle, live native objects and FFM regions must return to the warm baseline, and committed native bytes must remain below the metadata high-water mark plus the configured one-warm-page-per-size-class bound. The main client keeps one fixed inbound read credit while it remains connected; that standing credit is its cycle baseline, while retained input, consolidation, reply slots, sources, chunks, and outbound reservations must drain. RSS remains supplementary telemetry because JVM heap residency can grow independently of live ownership; native counters and ownership gauges are the required leak assertions.
 
 ## Graceful Shutdown
 
@@ -141,8 +141,8 @@ For final acceptance, package the candidate exactly once. Record the resulting S
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-  mvn -pl yierdis-server/yierdis-server-main,yierdis-cli,yierdis-benchmark -am -DskipTests package
-sha256sum yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar
+  mvn -pl yierdis-server/yierdis-server,yierdis-cli,yierdis-benchmark -am -DskipTests package
+sha256sum yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar
 sha256sum yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
   SKIP_BUILD=1 ./scripts/smoke.sh
@@ -247,7 +247,7 @@ Commands used for this candidate, all under JDK 25:
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
   mvn -q -pl '!yierdis-benchmark' -DskipTests package
-sha256sum yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar
+sha256sum yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
   SKIP_BUILD=1 ./scripts/smoke.sh
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \

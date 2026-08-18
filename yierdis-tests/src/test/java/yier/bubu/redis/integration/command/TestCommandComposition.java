@@ -1,12 +1,13 @@
 package yier.bubu.redis.integration.command;
 
 import yier.bubu.redis.command.api.CommandModule;
-import yier.bubu.redis.command.api.SlowCommandGovernor;
+import yier.bubu.redis.command.api.ServerInfoProvider;
+import yier.bubu.redis.command.api.SlowCommandLimits;
 import yier.bubu.redis.command.api.YierdisDbRouter;
 import yier.bubu.redis.command.defaults.DefaultCommandModules;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.command.kernel.CommandRegistries;
-import yier.bubu.redis.execution.api.DbIndexSession;
+import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.storage.api.DbEngine;
 
 import java.util.ArrayList;
@@ -21,14 +22,25 @@ public final class TestCommandComposition {
         return createDispatcher(singleDbRouter(db), extraModules);
     }
 
-    public static CommandDispatcher createDispatcherWithSlowGovernor(
+    public static CommandDispatcher createDispatcher(
             DbEngine db,
-            SlowCommandGovernor slowCommandGovernor
+            ServerInfoProvider infoProvider
+    ) {
+        return CommandRegistries.dispatcher(DefaultCommandModules.create(
+                singleDbRouter(db),
+                infoProvider,
+                SlowCommandLimits.DEFAULT
+        ));
+    }
+
+    public static CommandDispatcher createDispatcherWithSlowLimits(
+            DbEngine db,
+            SlowCommandLimits slowCommandLimits
     ) {
         return CommandRegistries.dispatcher(DefaultCommandModules.create(
                 singleDbRouter(db),
                 null,
-                slowCommandGovernor
+                slowCommandLimits
         ));
     }
 
@@ -37,20 +49,20 @@ public final class TestCommandComposition {
             CommandModule... extraModules
     ) {
         List<CommandModule> modules = new ArrayList<>();
-        modules.add(DefaultCommandModules.create(dbRouter, null));
+        modules.add(DefaultCommandModules.create(dbRouter, null, SlowCommandLimits.DEFAULT));
         if (extraModules != null) {
             for (CommandModule extraModule : extraModules) {
                 modules.add(extraModule);
             }
         }
-        return CommandRegistries.dispatcher(modules);
+        return CommandRegistries.dispatcher(modules.toArray(CommandModule[]::new));
     }
 
     private static YierdisDbRouter singleDbRouter(DbEngine db) {
         DbEngine fixed = Objects.requireNonNull(db, "db");
         return new YierdisDbRouter() {
             @Override
-            public DbEngine dbFor(DbIndexSession session) {
+            public DbEngine dbFor(CommandSession session) {
                 return fixed;
             }
 

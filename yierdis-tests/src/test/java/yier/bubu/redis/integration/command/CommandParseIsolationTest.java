@@ -6,18 +6,16 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.api.CommandArgs;
-import yier.bubu.redis.command.api.CommandInvocation;
+import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParseException;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.ServerInfoProvider;
-import yier.bubu.redis.command.api.SlowCommandGovernor;
+import yier.bubu.redis.command.api.SlowCommandLimits;
 import yier.bubu.redis.command.api.YierdisDbRouter;
 import yier.bubu.redis.command.defaults.DefaultCommandModules;
-import yier.bubu.redis.command.kernel.CommandRegistries;
 import yier.bubu.redis.command.kernel.CommandRegistry;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandSession;
-import yier.bubu.redis.execution.api.DbIndexSession;
 import yier.bubu.redis.storage.api.DbEngine;
 
 public class CommandParseIsolationTest {
@@ -28,11 +26,10 @@ public class CommandParseIsolationTest {
     public void everyDefaultCommandHandlerParsesWithoutRuntimeServices() throws Exception {
         AtomicInteger routerCalls = new AtomicInteger();
         AtomicInteger providerCalls = new AtomicInteger();
-        AtomicInteger governorCalls = new AtomicInteger();
         YierdisDbRouter router = throwingRouter(routerCalls);
         ServerInfoProvider provider = throwingProvider(providerCalls);
-        SlowCommandGovernor governor = throwingGovernor(governorCalls);
-        CommandRegistry registry = CommandRegistries.from(DefaultCommandModules.create(router, provider, governor));
+        CommandRegistry registry = registry(DefaultCommandModules.create(
+                router, provider, SlowCommandLimits.DEFAULT));
         List<ParseCase> fixtures = validParseCases();
         Set<String> fixtureNames = fixtures.stream()
                 .map(ParseCase::commandName)
@@ -44,7 +41,7 @@ public class CommandParseIsolationTest {
         for (ParseCase command : fixtures) {
             CommandSpec spec = registry.specByUpperName(command.commandName());
             Assert.assertNotNull(command.commandName(), spec);
-            CommandInvocation invocation = spec.handler().parse(command.args());
+            var invocation = spec.handler().parse(command.args());
             Assert.assertNotNull(command.commandName(), invocation);
         }
         CommandSpec memory = registry.specByUpperName("MEMORY");
@@ -53,15 +50,14 @@ public class CommandParseIsolationTest {
 
         Assert.assertEquals(0, routerCalls.get());
         Assert.assertEquals(0, providerCalls.get());
-        Assert.assertEquals(0, governorCalls.get());
     }
 
     @Test
     public void stringCommandHandlersRejectInvalidUserInputBeforePreparation() {
-        CommandRegistry registry = CommandRegistries.from(DefaultCommandModules.create(
+        CommandRegistry registry = registry(DefaultCommandModules.create(
                 throwingRouter(new AtomicInteger()),
                 throwingProvider(new AtomicInteger()),
-                throwingGovernor(new AtomicInteger())
+                SlowCommandLimits.DEFAULT
         ));
 
         for (CommandArgs invalid : new CommandArgs[]{
@@ -79,10 +75,10 @@ public class CommandParseIsolationTest {
 
     @Test
     public void keyspaceCommandHandlersRejectInvalidUserInputBeforePreparation() {
-        CommandRegistry registry = CommandRegistries.from(DefaultCommandModules.create(
+        CommandRegistry registry = registry(DefaultCommandModules.create(
                 throwingRouter(new AtomicInteger()),
                 throwingProvider(new AtomicInteger()),
-                throwingGovernor(new AtomicInteger())
+                SlowCommandLimits.DEFAULT
         ));
 
         for (CommandArgs invalid : new CommandArgs[]{
@@ -108,10 +104,10 @@ public class CommandParseIsolationTest {
 
     @Test
     public void collectionCommandHandlersRejectInvalidUserInputBeforePreparation() {
-        CommandRegistry registry = CommandRegistries.from(DefaultCommandModules.create(
+        CommandRegistry registry = registry(DefaultCommandModules.create(
                 throwingRouter(new AtomicInteger()),
                 throwingProvider(new AtomicInteger()),
-                throwingGovernor(new AtomicInteger())
+                SlowCommandLimits.DEFAULT
         ));
 
         for (CommandArgs invalid : new CommandArgs[]{
@@ -137,10 +133,10 @@ public class CommandParseIsolationTest {
 
     @Test
     public void sortedSetHandlersRejectInvalidUserInputBeforePreparation() {
-        CommandRegistry registry = CommandRegistries.from(DefaultCommandModules.create(
+        CommandRegistry registry = registry(DefaultCommandModules.create(
                 throwingRouter(new AtomicInteger()),
                 throwingProvider(new AtomicInteger()),
-                throwingGovernor(new AtomicInteger())
+                SlowCommandLimits.DEFAULT
         ));
 
         for (CommandArgs invalid : new CommandArgs[]{
@@ -169,12 +165,19 @@ public class CommandParseIsolationTest {
             spec.handler().parse(args);
             Assert.fail("expected parse failure for " + args.utf8(0));
         } catch (CommandParseException expected) {
-            Assert.assertNotNull(expected.replyMessage());
+            Assert.assertNotNull(expected.getMessage());
         }
     }
 
+    private static CommandRegistry registry(CommandModule module) {
+        CommandRegistry registry = new CommandRegistry();
+        module.register(registry);
+        registry.seal();
+        return registry;
+    }
+
     private static CommandArgs argv(String... values) {
-        return CommandArgs.of(ByteArrayExecutionRequest.fromUtf8(values[0], java.util.List.of(
+        return new CommandArgs(ByteArrayExecutionRequest.fromUtf8(values[0], java.util.List.of(
                 java.util.Arrays.copyOfRange(values, 1, values.length))));
     }
 
@@ -250,7 +253,7 @@ public class CommandParseIsolationTest {
     private static YierdisDbRouter throwingRouter(AtomicInteger calls) {
         return new YierdisDbRouter() {
             @Override
-            public DbEngine dbFor(DbIndexSession session) {
+            public DbEngine dbFor(CommandSession session) {
                 calls.incrementAndGet();
                 throw new AssertionError("parser accessed DB router");
             }
@@ -292,19 +295,4 @@ public class CommandParseIsolationTest {
         };
     }
 
-    private static SlowCommandGovernor throwingGovernor(AtomicInteger calls) {
-        return new SlowCommandGovernor() {
-            @Override
-            public long keysTimeBudgetNanos(CommandSession session) {
-                calls.incrementAndGet();
-                throw new AssertionError("parser accessed slow command governor");
-            }
-
-            @Override
-            public int keysMaxResults(CommandSession session) {
-                calls.incrementAndGet();
-                throw new AssertionError("parser accessed slow command governor");
-            }
-        };
-    }
 }

@@ -5,10 +5,10 @@
 
 ## 模块边界
 
-- `yierdis-networking-netty` 负责入站 decoder、连接 handler 和 Netty pipeline 适配。
+- `yierdis-server` 负责入站 decoder、连接 handler 和 Netty pipeline 适配。
 - `yierdis-networking-resp` 通过 `BytesSink` 编码 RESP，不依赖 `ByteBuf`。
 - command、storage 和 native value 通过 `BytesView` / `BytesSlice` 工作，不导入 Netty。
-- `yierdis-server-main` 把 reply reservation、chunk allocation、顺序写回和 channel lifecycle 接到一起。
+- `yierdis-server` 同时组装 reply reservation、chunk allocation、顺序写回和 channel lifecycle。
 
 ## 入站路径
 

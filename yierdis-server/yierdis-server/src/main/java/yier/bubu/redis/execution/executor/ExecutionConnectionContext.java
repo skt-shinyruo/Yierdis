@@ -1,0 +1,120 @@
+package yier.bubu.redis.execution.executor;
+
+import yier.bubu.redis.execution.api.ConnectionStatsView;
+
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+
+public final class ExecutionConnectionContext {
+    private final AtomicInteger pending = new AtomicInteger(0);
+    private final AtomicLong pendingBytes = new AtomicLong(0);
+    private final AtomicBoolean closing = new AtomicBoolean(false);
+    private final AtomicBoolean inputDisabledByExecutor = new AtomicBoolean(false);
+    private final AtomicBoolean inputPausedByReply = new AtomicBoolean(false);
+    private final AtomicLong commandsEnqueued = new AtomicLong(0);
+    private final AtomicLong commandsExecuted = new AtomicLong(0);
+    private final AtomicLong commandsRejected = new AtomicLong(0);
+    private final AtomicLong commandsSkippedClosing = new AtomicLong(0);
+    private final AtomicLong closeAfterReply = new AtomicLong(0);
+    private final AtomicLong backpressureEnter = new AtomicLong(0);
+    private final AtomicLong backpressureExit = new AtomicLong(0);
+
+    public int pending() {
+        return pending.get();
+    }
+
+    public long pendingBytes() {
+        return pendingBytes.get();
+    }
+
+    public boolean isClosing() {
+        return closing.get();
+    }
+
+    public boolean markClosing() {
+        return closing.compareAndSet(false, true);
+    }
+
+    public void recordCommandEnqueued(int retainedBytes) {
+        pending.incrementAndGet();
+        pendingBytes.addAndGet(Math.max(0, retainedBytes));
+        commandsEnqueued.incrementAndGet();
+    }
+
+    void rollbackCommandEnqueued(int retainedBytes) {
+        pending.decrementAndGet();
+        pendingBytes.addAndGet(-Math.max(0, retainedBytes));
+        commandsEnqueued.decrementAndGet();
+    }
+
+    public void recordCommandFinished(int retainedBytes, boolean executed) {
+        pending.decrementAndGet();
+        pendingBytes.addAndGet(-Math.max(0, retainedBytes));
+        if (executed) {
+            commandsExecuted.incrementAndGet();
+        }
+    }
+
+    public void recordCommandRejected() {
+        commandsRejected.incrementAndGet();
+    }
+
+    public void recordSkippedClosing() {
+        commandsSkippedClosing.incrementAndGet();
+    }
+
+    public void recordCloseAfterReply() {
+        closeAfterReply.incrementAndGet();
+    }
+
+    public void recordBackpressureEnter() {
+        backpressureEnter.incrementAndGet();
+    }
+
+    public void recordBackpressureExit() {
+        backpressureExit.incrementAndGet();
+    }
+
+    public boolean markInputDisabledByExecutor() {
+        return inputDisabledByExecutor.compareAndSet(false, true);
+    }
+
+    public boolean autoReadDisabledByExecutor() {
+        return inputDisabledByExecutor.get();
+    }
+
+    public boolean clearAutoReadDisabledByExecutor() {
+        return inputDisabledByExecutor.compareAndSet(true, false);
+    }
+
+    public boolean markInputPausedByReply() {
+        return inputPausedByReply.compareAndSet(false, true);
+    }
+
+    public boolean inputPausedByReply() {
+        return inputPausedByReply.get();
+    }
+
+    public boolean clearInputPausedByReply() {
+        return inputPausedByReply.compareAndSet(true, false);
+    }
+
+    public ConnectionStatsView statsSnapshot() {
+        return new ConnectionStatsView(
+                pending.get(),
+                pendingBytes.get(),
+                inputDisabledByExecutor.get(),
+                inputPausedByReply.get(),
+                closing.get(),
+                commandsEnqueued.get(),
+                commandsExecuted.get(),
+                commandsRejected.get(),
+                commandsSkippedClosing.get(),
+                closeAfterReply.get(),
+                backpressureEnter.get(),
+                backpressureExit.get()
+        );
+    }
+
+}

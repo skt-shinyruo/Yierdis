@@ -20,7 +20,7 @@ Yierdis 的测试大致分成七层：
 | native/internal | handle、backend、keyspace、root/value、ledger | `NativeHandleTest`, `YierdisFfmStableMemoryBackendTest`, `StringRootTest`, `MemoryLedgerContractTest` |
 | executor / server | owner thread、队列、背压、Netty 适配 | `CommandExecutorTest`, `CommandExecutorBackpressureTest`, `RespProtocolIntegrationTest` |
 | CLI / bench | 客户端、catalog、NIO runner、storage footprint、脚本和输出契约 | `YierdisClientTest`, `RedisBenchmarkCatalogTest`, `NioBenchmarkRunnerTest`, `BenchmarkOutputRendererTest`, `StorageBenchmarkRunnerTest`, `BenchScriptContractTest` |
-| architecture guard | command、DB 和 runtime 边界 | `CommandBuiltinDbAccessBoundaryTest`, `CommandParseIsolationTest`, `YierdisDbArchitectureGuardTest` |
+| architecture guard | command、DB 和 runtime 边界 | `CommandParseIsolationTest`, `YierdisDbArchitectureGuardTest` |
 
 查找入口：开发路径看 [`development-navigation.md`](./development-navigation.md)，源码职责看 [`core-logic-index.md`](./core-logic-index.md)。
 
@@ -29,13 +29,13 @@ Yierdis 的测试大致分成七层：
 先跑最窄协议测试：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-networking/yierdis-networking-netty,yierdis-networking/yierdis-networking-resp -am -Dtest=RespRequestDecoderTest,RespIngressAdmissionTest,RespReplyWriterTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server,yierdis-networking/yierdis-networking-resp -am -Dtest=RespRequestDecoderTest,RespIngressAdmissionTest,RespReplyWriterTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 再跑 server 协议集成：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server-main -am -Dtest=RespProtocolIntegrationTest,RespProtocolErrorIntegrationTest,RespHandshakeIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server -am -Dtest=RespProtocolIntegrationTest,RespProtocolErrorIntegrationTest,RespHandshakeIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 排障顺序：`RespRequestDecoder` 看线上 bytes 是否在 admission 后正确切成 `RetainedRespExecutionRequest`，`InboundMemoryBudget` 看 lease 是否在最后一个消费者释放，`RespReplyWriter` 看 reply 语义是否被正确编码。
@@ -49,7 +49,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 ```
 
 新增命令或新增 option/subcommand 时，优先补最窄的命令家族测试和错误测试；server-only 命令还要补
-server-main 组装或协议集成测试。
+`yierdis-server` 组装或协议集成测试。
 
 最终命令流固定为：
 
@@ -57,9 +57,9 @@ server-main 组装或协议集成测试。
 CommandExecutor
   -> CommandDispatcher.prepare(session, request)
   -> CommandSpec.handler().parse(CommandArgs)
-  -> CommandInvocation.prepare(session)
+  -> Function<CommandSession, PreparedCommand>.apply(session)
   -> PreparedCommand
-  -> reserve -> validate -> execute(context)
+  -> reserve -> validate -> execute(session)
   -> CommandResult -> RedisReplyRenderer
 ```
 
@@ -67,14 +67,14 @@ CommandExecutor
 `DefaultCommandModules` 的全部注册完全相等，并用会抛异常的 router/provider 证明 parse 不访问服务；
 `ServerCommandParseIsolationTest` 对 `HELLO`、`INFO`、`STATS` 做同样检查。排障顺序：先看
 `CommandRegistry` 是否注册，再看 `CommandSpec.syntax()` 的 arity/key metadata，然后区分 handler parse、
-`CommandInvocation.prepare(session)` 和 `PreparedCommand.execute(context)` 三个阶段。
+准备函数的 `apply(session)` 和 `PreparedCommand.execute(session)` 三个阶段。
 
 ## 改 DB 或数据结构时
 
 先跑 direct ops，确认不依赖命令解析也能复现：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=StringDirectOpsTest,CollectionDirectOpsTest,TtlLifecycleDirectOpsTest,NativeStorageRegressionTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db -am -Dtest=StringDirectOpsTest,CollectionDirectOpsTest,TtlLifecycleDirectOpsTest,NativeStorageRegressionTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 再跑相关命令家族，确认回包语义没有偏移：
@@ -83,7 +83,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests -am -Dtest=StringCommandTest,ListCommandTest,HashCommandTest,SetCommandTest,ZSetCommandTest,HllCommandTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-排障顺序：`DbEngine` capability view -> family ops -> `YierdisDbMutationExecutor` -> key lifecycle -> root/value 结构。DB 读写细节看 [`db-internals.md`](./db-internals.md)。
+排障顺序：`DbEngine` direct ops -> family ops -> `YierdisDbMutationExecutor` -> key lifecycle -> root/value 结构。DB 读写细节看 [`db-internals.md`](./db-internals.md)。
 
 ## 改 transaction / replay 时
 
@@ -95,8 +95,8 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 排障顺序：`CommandDispatcher` 的 handler-parse preflight ->
 `EngineSession.DefaultTransactionState.tryEnqueue(...)` -> retained `ExecutionRequest` ->
-`TransactionCommands` drain -> `CommandDispatcher.prepareReplay(...)` -> child execute 和聚合结果。入队前不运行
-`CommandInvocation.prepare(session)`；drain 后的 `PreparedExec` 拥有并最终关闭队列 request 与 child
+`TransactionCommands` drain -> `CommandDispatcher.prepareReplay(...)` -> child execute 和聚合结果。入队前不应用
+handler 返回的准备函数；drain 后的 `PreparedExec` 拥有并最终关闭队列 request 与 child
 `PreparedCommand`。事务与 replay 的完整主线看 [`transaction-and-replay.md`](./transaction-and-replay.md)。
 
 ## 改 TTL / expiration 时
@@ -124,7 +124,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 先跑 allocator / handle contract：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-memory/yierdis-memory-api,yierdis-memory/yierdis-memory-ffm -am -Dtest=NativeHandleTest,YierdisNativeObjectTableTest,YierdisFfmStableMemoryBackendTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db,yierdis-db/yierdis-db -am -Dtest=NativeHandleTest,YierdisNativeObjectTableTest,YierdisFfmStableMemoryBackendTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 再跑 DB native path：
@@ -140,13 +140,13 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 先跑 executor 单元测试：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server-executor -am -Dtest=CommandExecutorTest,CommandExecutorBackpressureTest,CommandExecutorFairSchedulingTest,ExecutionConnectionContextTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server -am -Dtest=CommandExecutorTest,CommandExecutorBackpressureTest,CommandExecutorFairSchedulingTest,ExecutionConnectionContextTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 再跑 server 组装和 Netty 适配：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server-main -am -Dtest=YierdisServerBootstrapCommandWiringTest,NettyExecutionAdapterIntegrationTest,ClosingSkipSideEffectsIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server -am -Dtest=YierdisServerBootstrapCommandWiringTest,NettyExecutionAdapterIntegrationTest,ClosingSkipSideEffectsIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 排障顺序：submitter 接收请求 -> backlog budget -> scheduling policy -> drain loop -> dispatcher prepare -> reply
@@ -182,7 +182,6 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 当改动可能触碰协议边界、command/internal 边界或 runtime 访问约束时，优先补护栏测试：
 
-- `CommandBuiltinDbAccessBoundaryTest`：检查 builtin 命令通过 `CommandDb` 门面访问数据库。
 - `CommandParseIsolationTest` / `ServerCommandParseIsolationTest`：检查全部生产注册都有 parse-only fixture，parse 不访问 DB router 或 provider。
 - `YierdisDbArchitectureGuardTest`：检查 DB 保持单一公开 factory，并且实现类型不公开；必要时连同 `DbEngineReadWriteBoundaryTest` 一起跑。
 

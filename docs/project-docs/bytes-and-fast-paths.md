@@ -50,13 +50,13 @@ reply 编码方向相反。`RespReplyWriter.bulkString(BytesSlice)` 先写 RESP 
 
 ## DB lookup 和写路径如何使用 bytes
 
-DB API 的很多 read ops 接受 `BytesView`，例如 `StringReadOps`、`TtlReadOps`、`KeyspaceReadOps`、`MemoryOps`。这让 command/DB contract 保持 Netty-free；当前 lookup 的 ownership copy 边界见下文。
+DB API 的很多读方法接受 `BytesView`，例如 `StringOps`、`TtlOps`、`KeyspaceOps` 与 `DbEngine` 上的 memory/object-encoding 方法。这让 command/DB contract 保持 Netty-free；当前 lookup 的 ownership copy 边界见下文。
 
 当前实现里，`YierdisDbKeyLifecycle` 在 `BytesView` 进入 key directory 前会调用 `YierdisDb.toByteArray(keyView)` materialize 一个 heap `byte[]`。这是因为 `NativeKeyDirectory` 的 lookup API 当前是 `byte[]` based，例如 `get(byte[])`、`getKeyHandle(byte[])` 和 `compute(byte[], ...)`。这份 heap copy 是今天的 ownership/lifetime 边界，不应该写成“lookup 已经避免 heap key 生成”。
 
 新 key 持久化会把 key bytes 存成 allocator-backed `KEY_BYTES`。`SCAN` discovery 只保留 cursor、目录元数据和 epoch，输出时重放同一段目录并把 key 暴露为 native-backed slice；snapshot、`RANDOMKEY`、显式 `byte[]` 和 introspection API 才会为了独立 ownership 或诊断生成 heap copy。这些复制点和 lifecycle 边界 copy 一样，都是有意的 lifetime/ownership 边界。
 
-写路径中，`StringWriteOps.set(...)`、`append(...)` 和 HLL 内部逻辑接收 `BytesSlice`。这让 command 层把 value 作为 slice 交给 DB，由 `StringRoot` 或对应 type root 写入 allocator-backed `STRING_BYTES` 或 collection native payload handles。slice 的重点是延后复制决策，而不是承诺零拷贝持久化。
+写路径中，`StringOps.set(...)`、`append(...)` 和 HLL 内部逻辑接收 `BytesSlice`。这让 command 层把 value 作为 slice 交给 DB，由 `StringRoot` 或对应 type root 写入 allocator-backed `STRING_BYTES` 或 collection native payload handles。slice 的重点是延后复制决策，而不是承诺零拷贝持久化。
 
 集合读路径大量使用 `BulkStringSink`。这个 storage API 中的协议无关输出端口支持 `bulkString(byte[])`、`bulkString(byte[], off, len)`、`bulkString(BytesSlice)`、`bulkStringLongAscii(long)` 和 null bulk；`LRANGE`、`HGETALL`、`SMEMBERS`、`ZRANGE` 等可以逐项 emit 到 sink，避免先组装完整 `List<byte[]>` 再交给协议层。
 
@@ -69,8 +69,7 @@ DB API 的很多 read ops 接受 `BytesView`，例如 `StringReadOps`、`TtlRead
 ```text
 CommandResult / RedisReply
   -> RedisReplyRenderer
-  -> RedisReplyWriterFactory / RedisReplyWriter
-  -> RespReplyWriter
+  -> RedisReplyWriter (RespReplyWriter)
   -> ReplyReservationSink
   -> BoundedChunkedReplySink
   -> bounded ByteBuf chunks

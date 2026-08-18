@@ -2,6 +2,7 @@ package yier.bubu.redis.protocol.resp;
 
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.ReplyReservationSink;
 import yier.bubu.redis.execution.api.ReplyShapes;
@@ -14,27 +15,14 @@ public final class RespReplyWriter implements RedisReplyWriter {
     private static final byte[] CRLF = new byte[]{'\r', '\n'};
     private final BytesSink out;
     private final IntSupplier versionSupplier;
-    private boolean closeAfterReplyRequested;
 
-    public RespReplyWriter(BytesSink out, RespProtocolVersion version) {
-        this.out = Objects.requireNonNull(out, "out");
-        RespProtocolVersion fixed = version == null ? RespProtocolVersion.RESP2 : version;
-        this.versionSupplier = fixed::wireValue;
+    public RespReplyWriter(CommandSession session, BytesSink out) {
+        this(out, Objects.requireNonNull(session, "session")::respVersion);
     }
 
     RespReplyWriter(BytesSink out, IntSupplier versionSupplier) {
         this.out = Objects.requireNonNull(out, "out");
         this.versionSupplier = Objects.requireNonNull(versionSupplier, "versionSupplier");
-    }
-
-    @Override
-    public void requestCloseAfterReply() {
-        closeAfterReplyRequested = true;
-    }
-
-    @Override
-    public boolean closeAfterReplyRequested() {
-        return closeAfterReplyRequested;
     }
 
     @Override
@@ -53,17 +41,6 @@ public final class RespReplyWriter implements RedisReplyWriter {
             reservationSink.useControlReservation();
         }
         error(message);
-    }
-
-    @Override
-    public void protocolError(String message) {
-        controlError(message == null ? "ERR Protocol error" : message);
-        requestCloseAfterReply();
-    }
-
-    @Override
-    public void internalError(String message) {
-        controlError(message == null ? "ERR internal error" : message);
     }
 
     @Override

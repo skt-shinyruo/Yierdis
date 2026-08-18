@@ -5,7 +5,7 @@ package yier.bubu.redis.integration.runtime;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
-import yier.bubu.redis.integration.command.TestCommandDispatchers;
+import yier.bubu.redis.integration.command.TestCommandComposition;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.storage.api.DbDefragConfig;
@@ -15,6 +15,7 @@ import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
+import yier.bubu.redis.runtime.embedded.TestDbRouters;
 import yier.bubu.redis.runtime.embedded.YierdisInstanceObservability;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyBulkString;
@@ -28,6 +29,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
+import static yier.bubu.redis.testutil.TestBytes.stringValue;
 
 public class YierdisInstanceTest {
     @Test
@@ -43,11 +45,12 @@ public class YierdisInstanceTest {
                 .build();
 
         try (YierdisInstance instance = YierdisInstance.create(config)) {
-            instance.bindToCurrentThread();
-            CommandDispatcher dispatcher = TestCommandDispatchers.forRouter(TestDbRouters.forInstance(instance));
+            instance.runtimeAccess().bindToCurrentThread();
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(TestDbRouters.forInstance(instance));
             TestSession session = new TestSession();
 
-            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), b("k0"), value))).value());
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("SELECT"), b("1")))).value());
 
@@ -75,9 +78,10 @@ public class YierdisInstanceTest {
                 .build();
 
         try (YierdisInstance instance = YierdisInstance.create(config)) {
-            instance.bindToCurrentThread();
-            CommandDispatcher dispatcher = TestCommandDispatchers.forRouter(TestDbRouters.forInstance(instance));
-            try (FastTestClient client = new FastTestClient(dispatcher)) {
+            instance.runtimeAccess().bindToCurrentThread();
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(TestDbRouters.forInstance(instance));
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), key, largeValue))).value());
                 long usedBefore = instance.observability().memoryStats().usedBytesForMaxmemory();
                 Assert.assertTrue(usedBefore <= maxmemoryBytes);
@@ -117,18 +121,18 @@ public class YierdisInstanceTest {
                 .build();
 
         try (YierdisInstance instance = YierdisInstance.create(config)) {
-            instance.bindToCurrentThread();
+            instance.runtimeAccess().bindToCurrentThread();
 
-            long db0Before = instance.engine(0).memory().memoryStats().usedBytesForMaxmemory();
+            long db0Before = instance.engines()[0].memoryStats().usedBytesForMaxmemory();
 
-            Assert.assertTrue(instance.engine(1).writes().strings().setString(b("remote"), value, SetMode.NORMAL, null).value());
-            long db0AfterRemoteWrite = instance.engine(0).memory().memoryStats().usedBytesForMaxmemory();
+            Assert.assertTrue(instance.engines()[1].strings().setString(b("remote"), value, SetMode.NORMAL, null).value());
+            long db0AfterRemoteWrite = instance.engines()[0].memoryStats().usedBytesForMaxmemory();
             Assert.assertEquals("DB1 writes must not consume DB0 maxmemory budget in per-db mode",
                     db0Before,
                     db0AfterRemoteWrite);
 
-            Assert.assertTrue(instance.engine(0).writes().strings().setString(b("local"), value, SetMode.NORMAL, null).value());
-            long db0AfterLocalWrite = instance.engine(0).memory().memoryStats().usedBytesForMaxmemory();
+            Assert.assertTrue(instance.engines()[0].strings().setString(b("local"), value, SetMode.NORMAL, null).value());
+            long db0AfterLocalWrite = instance.engines()[0].memoryStats().usedBytesForMaxmemory();
             Assert.assertTrue("DB0 local writes should increase its own maxmemory usage",
                     db0AfterLocalWrite > db0AfterRemoteWrite);
         }
@@ -144,15 +148,15 @@ public class YierdisInstanceTest {
                 .build();
 
         try (YierdisInstance instance = YierdisInstance.create(config)) {
-            instance.bindToCurrentThread();
+            instance.runtimeAccess().bindToCurrentThread();
             byte[] value = new byte[4_000];
             Arrays.fill(value, (byte) 'a');
 
-            Assert.assertTrue(instance.engine(0).writes().strings().setString(b("a"), value, SetMode.NORMAL, null).value());
-            Assert.assertTrue(instance.engine(1).writes().strings().setString(b("b"), value, SetMode.NORMAL, null).value());
+            Assert.assertTrue(instance.engines()[0].strings().setString(b("a"), value, SetMode.NORMAL, null).value());
+            Assert.assertTrue(instance.engines()[1].strings().setString(b("b"), value, SetMode.NORMAL, null).value());
 
-            long off0 = instance.engine(0).memory().memoryStats().offHeapUsedBytes();
-            long off1 = instance.engine(1).memory().memoryStats().offHeapUsedBytes();
+            long off0 = instance.engines()[0].memoryStats().offHeapUsedBytes();
+            long off1 = instance.engines()[1].memoryStats().offHeapUsedBytes();
             long expected;
             if (Long.MAX_VALUE - off0 < off1) {
                 expected = Long.MAX_VALUE;
@@ -176,15 +180,15 @@ public class YierdisInstanceTest {
                 .build();
 
         try (YierdisInstance instance = YierdisInstance.create(config)) {
-            instance.bindToCurrentThread();
+            instance.runtimeAccess().bindToCurrentThread();
             byte[] value = new byte[4_000];
             Arrays.fill(value, (byte) 'a');
 
-            Assert.assertTrue(instance.engine(0).writes().strings().setString(b("a"), value, SetMode.NORMAL, null).value());
-            Assert.assertTrue(instance.engine(1).writes().strings().setString(b("b"), value, SetMode.NORMAL, null).value());
+            Assert.assertTrue(instance.engines()[0].strings().setString(b("a"), value, SetMode.NORMAL, null).value());
+            Assert.assertTrue(instance.engines()[1].strings().setString(b("b"), value, SetMode.NORMAL, null).value());
 
-            long off0 = instance.engine(0).memory().memoryStats().offHeapUsedBytes();
-            long off1 = instance.engine(1).memory().memoryStats().offHeapUsedBytes();
+            long off0 = instance.engines()[0].memoryStats().offHeapUsedBytes();
+            long off1 = instance.engines()[1].memoryStats().offHeapUsedBytes();
 
             var stats = instance.observability().memoryStats();
             Assert.assertTrue("expected off-heap to be included in global maxmemory accounting", stats.offHeapIncludedInMaxmemory());
@@ -206,13 +210,13 @@ public class YierdisInstanceTest {
                 .build();
 
         try (YierdisInstance instance = YierdisInstance.create(config)) {
-            instance.bindToCurrentThread();
-            Assert.assertTrue(instance.engine(0).writes().strings().setString(b("k"), b("value"), SetMode.NORMAL, null).value());
+            instance.runtimeAccess().bindToCurrentThread();
+            Assert.assertTrue(instance.engines()[0].strings().setString(b("k"), b("value"), SetMode.NORMAL, null).value());
 
             instance.runtimeAccess().maintenanceTick();
 
-            Assert.assertArrayEquals(b("value"), instance.engine(0).reads().strings().getStringBytes(b("k")));
-            Assert.assertTrue(instance.engine(0).memory().memoryStats().nativeDefragLastMovedObjects() > 0L);
+            Assert.assertArrayEquals(b("value"), stringValue(instance.engines()[0].strings(), b("k")));
+            Assert.assertTrue(instance.engines()[0].memoryStats().nativeDefragLastMovedObjects() > 0L);
         }
     }
 
@@ -291,9 +295,9 @@ public class YierdisInstanceTest {
                 .build();
 
         try (YierdisInstance instance = YierdisInstance.create(config)) {
-            instance.bindToCurrentThread();
-            instance.engine(0).writes().strings().setString(key, initialValue, SetMode.NORMAL, null);
-            instance.engine(0).writes().strings().setString(key, overwriteValue, SetMode.NORMAL, null);
+            instance.runtimeAccess().bindToCurrentThread();
+            instance.engines()[0].strings().setString(key, initialValue, SetMode.NORMAL, null);
+            instance.engines()[0].strings().setString(key, overwriteValue, SetMode.NORMAL, null);
             return true;
         } catch (YierdisCommandException e) {
             return isExpectedOom(e);
@@ -309,9 +313,9 @@ public class YierdisInstanceTest {
                 .build();
 
         try (YierdisInstance instance = YierdisInstance.create(config)) {
-            instance.bindToCurrentThread();
-            instance.engine(0).writes().strings().setString(b("k0"), value, SetMode.NORMAL, null);
-            instance.engine(1).writes().strings().setString(b("k1"), value, SetMode.NORMAL, null);
+            instance.runtimeAccess().bindToCurrentThread();
+            instance.engines()[0].strings().setString(b("k0"), value, SetMode.NORMAL, null);
+            instance.engines()[1].strings().setString(b("k1"), value, SetMode.NORMAL, null);
             return true;
         } catch (YierdisCommandException e) {
             return isExpectedOom(e);
@@ -327,8 +331,8 @@ public class YierdisInstanceTest {
                 .build();
 
         try (YierdisInstance instance = YierdisInstance.create(config)) {
-            instance.bindToCurrentThread();
-            instance.engine(dbIndex).writes().strings().setString(key, value, SetMode.NORMAL, null);
+            instance.runtimeAccess().bindToCurrentThread();
+            instance.engines()[dbIndex].strings().setString(key, value, SetMode.NORMAL, null);
             return true;
         } catch (YierdisCommandException e) {
             return isExpectedOom(e);
@@ -352,18 +356,18 @@ public class YierdisInstanceTest {
         YierdisInstanceConfig config = YierdisInstanceConfig.builder().build();
         try (YierdisInstance instance = YierdisInstance.create(config)) {
             try {
-                instance.engine(0).memory().memoryStats();
+                instance.engines()[0].memoryStats();
                 Assert.fail("expected fail-fast before bind");
             } catch (IllegalStateException e) {
                 Assert.assertTrue(e.getMessage().contains("bindToCurrentThread"));
             }
 
-            instance.bindToCurrentThread();
+            instance.runtimeAccess().bindToCurrentThread();
 
             AtomicReference<Throwable> errRef = new AtomicReference<>();
             Thread t = new Thread(() -> {
                 try {
-                    instance.engine(0).memory().memoryStats();
+                    instance.engines()[0].memoryStats();
                 } catch (Throwable t1) {
                     errRef.set(t1);
                 }
@@ -385,10 +389,11 @@ public class YierdisInstanceTest {
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.PER_DB)
                 .build();
         try (YierdisInstance instance = YierdisInstance.create(config)) {
-            instance.bindToCurrentThread();
-            CommandDispatcher dispatcher = TestCommandDispatchers.forRouter(TestDbRouters.forInstance(instance));
+            instance.runtimeAccess().bindToCurrentThread();
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(TestDbRouters.forInstance(instance));
             TestSession session = new TestSession();
-            try (FastTestClient client = new FastTestClient(dispatcher, session)) {
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), b("k0"), b("v0")))).value());
                 Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("EXPIRE"), b("k0"), b("60")))).value());
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("SELECT"), b("1")))).value());
@@ -409,7 +414,6 @@ public class YierdisInstanceTest {
     private static final class TestSession implements yier.bubu.redis.execution.api.CommandSession {
         private int dbIndex;
         private String clientName;
-        private boolean authenticated;
         private final TransactionState tx = new NoopTransactionState();
 
         @Override
@@ -423,11 +427,6 @@ public class YierdisInstanceTest {
         }
 
         @Override
-        public long clientId() {
-            return 1L;
-        }
-
-        @Override
         public String clientName() {
             return clientName;
         }
@@ -435,16 +434,6 @@ public class YierdisInstanceTest {
         @Override
         public void setClientName(String clientName) {
             this.clientName = clientName;
-        }
-
-        @Override
-        public boolean authenticated() {
-            return authenticated;
-        }
-
-        @Override
-        public void setAuthenticated(boolean authenticated) {
-            this.authenticated = authenticated;
         }
 
         @Override
@@ -510,9 +499,6 @@ public class YierdisInstanceTest {
             return java.util.Collections.emptyList();
         }
 
-        @Override
-        public void close() {
-        }
     }
 
 }
