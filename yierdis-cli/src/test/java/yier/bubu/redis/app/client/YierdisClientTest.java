@@ -1,36 +1,18 @@
 package yier.bubu.redis.app.client;
 
-import io.netty.bootstrap.ServerBootstrap;
-import io.netty.buffer.Unpooled;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.channel.ChannelInitializer;
-import io.netty.channel.EventLoopGroup;
-import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.SocketChannel;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.util.ReferenceCountUtil;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.server.YierdisServerBootstrap;
 import yier.bubu.redis.protocol.resp.RespClientCodec;
 
 import java.io.IOException;
-import java.net.ConnectException;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 
 public class YierdisClientTest {
     @Test
@@ -144,22 +126,17 @@ public class YierdisClientTest {
     }
 
     @Test
-    public void failedConnectDoesNotLeakEventLoopThreads() throws Exception {
-        Set<String> before = threadNames();
-
-        try {
-            YierdisClient.connect("127.0.0.1", unusedPort());
-            Assert.fail("Expected connection failure");
-        } catch (Exception expected) {
-            assertConnectException(expected);
-        }
-
-        waitForNoExtraEventLoopThreads(before, 3000);
-    }
-
-    @Test
     public void timeoutClosesConnectionToPreventResponseDesync() throws Exception {
-        try (BlackholeServer server = BlackholeServer.start();
+        try (ScriptedSocketServer server = ScriptedSocketServer.start(socket -> {
+            if (socket.getInputStream().read() < 0) {
+                throw new AssertionError("client closed before sending a command");
+            }
+            try {
+                while (socket.getInputStream().read() >= 0) {
+                }
+            } catch (IOException ignored) {
+            }
+        });
              YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
             try {
                 client.execute(Arrays.asList(b("PING")), 100);
@@ -174,12 +151,13 @@ public class YierdisClientTest {
             } catch (IllegalStateException e) {
                 Assert.assertTrue(e.getMessage().toLowerCase().contains("closed"));
             }
+            server.assertSucceeded();
         }
     }
 
     @Test
     public void serverCloseWakesExecuteWithoutTimeout() throws Exception {
-        try (CloseOnReadServer server = CloseOnReadServer.start();
+        try (ScriptedSocketServer server = ScriptedSocketServer.start(socket -> socket.getInputStream().read());
              YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
             try {
                 client.execute(Arrays.asList(b("PING")), 5000);
@@ -190,15 +168,19 @@ public class YierdisClientTest {
                 Assert.assertTrue(msg.toLowerCase().contains("closed")
                         || (e.getCause() != null && String.valueOf(e.getCause().getMessage()).toLowerCase().contains("closed")));
             }
+            server.assertSucceeded();
         }
     }
 
     @Test
     public void invalidRespReplyClosesConnection() throws Exception {
-        try (FloodingServer server = FloodingServer.start(1);
+        try (ScriptedSocketServer server = ScriptedSocketServer.start(socket -> {
+            socket.getOutputStream().write("{not-resp}\n".getBytes(StandardCharsets.US_ASCII));
+            socket.getOutputStream().flush();
+            while (socket.getInputStream().read() >= 0) {
+            }
+        });
              YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-            Assert.assertTrue(server.awaitFlood(1_000));
-
             try {
                 client.execute(Arrays.asList(b("PING")), 1000);
                 Assert.fail("Expected IllegalStateException");
@@ -212,6 +194,7 @@ public class YierdisClientTest {
             } catch (IllegalStateException e) {
                 Assert.assertTrue(e.getMessage().toLowerCase().contains("closed"));
             }
+            server.assertSucceeded();
         }
     }
 
@@ -287,58 +270,6 @@ public class YierdisClientTest {
         return s.getBytes(StandardCharsets.UTF_8);
     }
 
-    private static Set<String> threadNames() {
-        Set<String> names = new LinkedHashSet<>();
-        for (Thread thread : Thread.getAllStackTraces().keySet()) {
-            if (thread != null) {
-                names.add(thread.getName());
-            }
-        }
-        return names;
-    }
-
-    private static int unusedPort() throws IOException {
-        try (ServerSocket socket = new ServerSocket(0)) {
-            socket.setReuseAddress(true);
-            return socket.getLocalPort();
-        }
-    }
-
-    private static void waitForNoExtraEventLoopThreads(Set<String> before, long timeoutMillis) throws Exception {
-        long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
-        while (true) {
-            Set<String> leaked = extraEventLoopThreads(before);
-            if (leaked.isEmpty()) {
-                return;
-            }
-            if (System.nanoTime() >= deadlineNanos) {
-                Assert.fail("Expected no leaked nioEventLoopGroup threads, but found " + leaked);
-            }
-            Thread.sleep(25);
-        }
-    }
-
-    private static Set<String> extraEventLoopThreads(Set<String> before) {
-        Set<String> leaked = new LinkedHashSet<>();
-        for (String name : threadNames()) {
-            if (!before.contains(name) && name.contains("nioEventLoopGroup")) {
-                leaked.add(name);
-            }
-        }
-        return leaked;
-    }
-
-    private static void assertConnectException(Exception expected) {
-        Throwable cursor = expected;
-        while (cursor != null) {
-            if (cursor instanceof ConnectException) {
-                return;
-            }
-            cursor = cursor.getCause();
-        }
-        throw new AssertionError("Expected ConnectException but got " + expected, expected);
-    }
-
     private static final class TestServer implements AutoCloseable {
         private final YierdisServerBootstrap server;
 
@@ -367,186 +298,4 @@ public class YierdisClientTest {
         }
     }
 
-    /**
-     * A tiny TCP server that accepts connections but never replies.
-     * <p>
-     * Used to deterministically trigger client-side timeouts without modifying the real server implementation.
-     */
-    private static final class BlackholeServer implements AutoCloseable {
-        private final EventLoopGroup boss;
-        private final EventLoopGroup workers;
-        private final Channel serverChannel;
-
-        private BlackholeServer(EventLoopGroup boss, EventLoopGroup workers, Channel serverChannel) {
-            this.boss = boss;
-            this.workers = workers;
-            this.serverChannel = serverChannel;
-        }
-
-        static BlackholeServer start() throws Exception {
-            EventLoopGroup boss = new NioEventLoopGroup(1);
-            EventLoopGroup workers = new NioEventLoopGroup(1);
-
-            ServerBootstrap bootstrap = new ServerBootstrap();
-            bootstrap.group(boss, workers)
-                    .channel(NioServerSocketChannel.class)
-                    .childHandler(new ChannelInitializer<SocketChannel>() {
-                        @Override
-                        protected void initChannel(SocketChannel ch) {
-                            ch.pipeline().addLast(new ChannelInboundHandlerAdapter() {
-                                @Override
-                                public void channelRead(ChannelHandlerContext ctx, Object msg) {
-                                    // Consume and discard to keep the connection open.
-                                    ReferenceCountUtil.release(msg);
-                                }
-                            });
-                        }
-                    });
-
-            Channel ch = bootstrap.bind(0).sync().channel();
-            return new BlackholeServer(boss, workers, ch);
-        }
-
-        int port() {
-            if (serverChannel.localAddress() instanceof InetSocketAddress addr) {
-                return addr.getPort();
-            }
-            throw new IllegalStateException("No local address");
-        }
-
-        @Override
-        public void close() {
-            try {
-                serverChannel.close().syncUninterruptibly();
-            } finally {
-                boss.shutdownGracefully();
-                workers.shutdownGracefully();
-            }
-        }
-    }
-
-    /**
-     * A TCP server that closes immediately after receiving any bytes.
-     * <p>
-     * Used to verify the client unblocks on close (without waiting for timeout).
-     */
-    private static final class CloseOnReadServer implements AutoCloseable {
-        private final EventLoopGroup boss;
-        private final EventLoopGroup workers;
-        private final Channel serverChannel;
-
-        private CloseOnReadServer(EventLoopGroup boss, EventLoopGroup workers, Channel serverChannel) {
-            this.boss = boss;
-            this.workers = workers;
-            this.serverChannel = serverChannel;
-        }
-
-        static CloseOnReadServer start() throws Exception {
-            EventLoopGroup boss = new NioEventLoopGroup(1);
-            EventLoopGroup workers = new NioEventLoopGroup(1);
-
-            ServerBootstrap bootstrap = new ServerBootstrap();
-            bootstrap.group(boss, workers)
-                    .channel(NioServerSocketChannel.class)
-                    .childHandler(new ChannelInitializer<SocketChannel>() {
-                        @Override
-                        protected void initChannel(SocketChannel ch) {
-                            ch.pipeline().addLast(new ChannelInboundHandlerAdapter() {
-                                @Override
-                                public void channelRead(ChannelHandlerContext ctx, Object msg) {
-                                    ReferenceCountUtil.release(msg);
-                                    ctx.close();
-                                }
-                            });
-                        }
-                    });
-
-            Channel ch = bootstrap.bind(0).sync().channel();
-            return new CloseOnReadServer(boss, workers, ch);
-        }
-
-        int port() {
-            if (serverChannel.localAddress() instanceof InetSocketAddress addr) {
-                return addr.getPort();
-            }
-            throw new IllegalStateException("No local address");
-        }
-
-        @Override
-        public void close() {
-            try {
-                serverChannel.close().syncUninterruptibly();
-            } finally {
-                boss.shutdownGracefully();
-                workers.shutdownGracefully();
-            }
-        }
-    }
-
-    /**
-     * A server that sends invalid RESP on connect, used to verify malformed replies close the client.
-     */
-    private static final class FloodingServer implements AutoCloseable {
-        private final EventLoopGroup boss;
-        private final EventLoopGroup workers;
-        private final Channel serverChannel;
-        private final CountDownLatch flooded;
-
-        private FloodingServer(EventLoopGroup boss, EventLoopGroup workers, Channel serverChannel, CountDownLatch flooded) {
-            this.boss = boss;
-            this.workers = workers;
-            this.serverChannel = serverChannel;
-            this.flooded = flooded;
-        }
-
-        static FloodingServer start(int lines) throws Exception {
-            EventLoopGroup boss = new NioEventLoopGroup(1);
-            EventLoopGroup workers = new NioEventLoopGroup(1);
-            CountDownLatch flooded = new CountDownLatch(1);
-
-            ServerBootstrap bootstrap = new ServerBootstrap();
-            bootstrap.group(boss, workers)
-                    .channel(NioServerSocketChannel.class)
-                    .childHandler(new ChannelInitializer<SocketChannel>() {
-                        @Override
-                        protected void initChannel(SocketChannel ch) {
-                            ch.pipeline().addLast(new ChannelInboundHandlerAdapter() {
-                                @Override
-                                public void channelActive(ChannelHandlerContext ctx) {
-                                    byte[] invalid = "{not-resp}\n".getBytes(StandardCharsets.US_ASCII);
-                                    for (int i = 0; i < lines; i++) {
-                                        ctx.write(Unpooled.copiedBuffer(invalid));
-                                    }
-                                    ctx.flush();
-                                    flooded.countDown();
-                                }
-                            });
-                        }
-                    });
-
-            Channel ch = bootstrap.bind(0).sync().channel();
-            return new FloodingServer(boss, workers, ch, flooded);
-        }
-
-        boolean awaitFlood(long timeoutMillis) throws InterruptedException {
-            return flooded.await(timeoutMillis, TimeUnit.MILLISECONDS);
-        }
-
-        int port() {
-            if (serverChannel.localAddress() instanceof InetSocketAddress addr) {
-                return addr.getPort();
-            }
-            throw new IllegalStateException("No local address");
-        }
-
-        @Override
-        public void close() {
-            try {
-                serverChannel.close().syncUninterruptibly();
-            } finally {
-                boss.shutdownGracefully();
-                workers.shutdownGracefully();
-            }
-        }
-    }
 }

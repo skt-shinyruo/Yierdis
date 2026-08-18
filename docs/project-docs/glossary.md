@@ -10,7 +10,7 @@
 
 ### `ByteArrayExecutionRequest`
 
-以 heap `byte[]` 保存参数的 `ExecutionRequest` 实现。测试、显式 copy 和部分适配路径会使用它；事务 replay 保留原请求实现的 retained view。详见 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)。
+以 heap `byte[][]` 保存参数的 `ExecutionRequest` 实现。网络 decoder 用 `takeOwnership(...)` 移交不可变 argv 与 admission lease，`retain()` 共享 argv 并增加 lease 引用，`copyOf(...)` 才创建独立快照。详见 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)。
 
 ### `RedisReply`
 
@@ -56,7 +56,7 @@ CommandExecutor
 
 ### `CommandRegistry`
 
-命令名到 `CommandSpec` 的注册表。composition 阶段注册，sealed 后由 `CommandDispatcher` 只读查找。详见 [`core-logic-index.md`](./core-logic-index.md)。
+命令名到 `CommandSpec` 的注册表。composition 阶段注册，sealed 后由 `CommandDispatcher` 只读查找。详见 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)。
 
 ### `CommandDispatcher`
 

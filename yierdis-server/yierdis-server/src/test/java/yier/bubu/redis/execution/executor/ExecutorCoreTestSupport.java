@@ -6,19 +6,18 @@ import org.junit.Assert;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.CommandResult;
-import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionReply;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.ReplyShape;
 import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.execution.api.ReplyReservationResult;
-import yier.bubu.redis.execution.api.ReplyReservationSink;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.RedisReplies;
-import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.ValidationResult;
+import yier.bubu.redis.execution.engine.EngineSession;
+import yier.bubu.redis.protocol.resp.RespReplyWriter;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -29,7 +28,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Consumer;
 import java.util.function.Function;
 
 final class ExecutorCoreTestSupport {
@@ -62,7 +60,7 @@ final class ExecutorCoreTestSupport {
     }
 
     static BiFunction<CommandSession, BytesSink, RedisReplyWriter> simpleReplyWriterFactory() {
-        return (session, out) -> new SimpleReplyWriter(out);
+        return RespReplyWriter::new;
     }
 
     static BiFunction<CommandSession, ReplyShape, ReplyPlan> simpleReplySizer() {
@@ -171,7 +169,7 @@ final class ExecutorCoreTestSupport {
 
 final class TestConnection implements ExecutionConnection {
     private final String connectionId;
-    private final CommandSession session = new TestSession();
+    private final CommandSession session = new EngineSession(0, 0);
     private final ExecutionConnectionContext context;
 
     TestConnection(String connectionId) {
@@ -202,91 +200,6 @@ final class TestConnection implements ExecutionConnection {
         return context.markClosing();
     }
 
-    private static final class TestSession implements CommandSession {
-        private final TransactionState transaction = new TestTransactionState();
-
-        @Override
-        public int dbIndex() {
-            return 0;
-        }
-
-        @Override
-        public void setDbIndex(int dbIndex) {
-        }
-
-        @Override
-        public String clientName() {
-            return null;
-        }
-
-        @Override
-        public void setClientName(String clientName) {
-        }
-
-        @Override
-        public TransactionState transaction() {
-            return transaction;
-        }
-
-        @Override
-        public ConnectionStatsView connectionStats() {
-            return null;
-        }
-
-        @Override
-        public int respVersion() {
-            return 2;
-        }
-
-        @Override
-        public void setRespVersion(int respVersion) {
-        }
-    }
-
-    private static final class TestTransactionState implements TransactionState {
-        @Override
-        public boolean active() {
-            return false;
-        }
-
-        @Override
-        public boolean aborted() {
-            return false;
-        }
-
-        @Override
-        public void begin() {
-        }
-
-        @Override
-        public void markAborted() {
-        }
-
-        @Override
-        public String tryEnqueue(ExecutionRequest request) {
-            return null;
-        }
-
-        @Override
-        public int size() {
-            return 0;
-        }
-
-        @Override
-        public void forEachQueued(Consumer<? super ExecutionRequest> visitor) {
-            Objects.requireNonNull(visitor, "visitor");
-        }
-
-        @Override
-        public List<ExecutionRequest> drain() {
-            return List.of();
-        }
-
-        @Override
-        public void discard() {
-        }
-
-    }
 }
 
 final class DelegatingSerialOwnerExecutor implements SerialOwnerExecutor {
@@ -533,128 +446,6 @@ final class TrackingExecutionRequest implements ExecutionRequest {
 
     private static byte[] utf8(String value) {
         return value.getBytes(StandardCharsets.UTF_8);
-    }
-}
-
-final class SimpleReplyWriter implements RedisReplyWriter {
-    private final BytesSink out;
-
-    SimpleReplyWriter(BytesSink out) {
-        this.out = Objects.requireNonNull(out, "out");
-    }
-
-    @Override
-    public void simpleString(String value) {
-        write(value == null ? "(null)" : value);
-    }
-
-    @Override
-    public void error(String message) {
-        write("ERR " + message);
-    }
-
-    @Override
-    public void controlError(String message) {
-        if (out instanceof ReplyReservationSink reservationSink) {
-            reservationSink.useControlReservation();
-        }
-        write(message == null ? "ERR internal error" : message);
-    }
-
-    @Override
-    public void integer(long value) {
-        write(Long.toString(value));
-    }
-
-    @Override
-    public void booleanValue(boolean value) {
-        write(Boolean.toString(value));
-    }
-
-    @Override
-    public void doubleValue(double value) {
-        write(Double.toString(value));
-    }
-
-    @Override
-    public void bigNumberAscii(String value) {
-        write(value);
-    }
-
-    @Override
-    public void verbatimString(String format, byte[] data) {
-        write(new String(data == null ? new byte[0] : data, StandardCharsets.UTF_8));
-    }
-
-    @Override
-    public void blobError(String message) {
-        write("ERR " + message);
-    }
-
-    @Override
-    public void bulkString(byte[] data) {
-        write(data == null ? "(null)" : new String(data, StandardCharsets.UTF_8));
-    }
-
-    @Override
-    public void bulkString(byte[] data, int off, int len) {
-        write(data == null ? "(null)" : new String(data, off, len, StandardCharsets.UTF_8));
-    }
-
-    @Override
-    public void bulkString(yier.bubu.redis.bytes.BytesSlice slice) {
-        if (slice == null) {
-            write("(null)");
-            return;
-        }
-        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        slice.writeTo(bytes::write);
-        write(bytes.toString(StandardCharsets.UTF_8));
-    }
-
-    @Override
-    public void bulkStringLongAscii(long value) {
-        write(Long.toString(value));
-    }
-
-    @Override
-    public void nullValue() {
-        write("(null)");
-    }
-
-    @Override
-    public void nullArray() {
-        write("(null)");
-    }
-
-    @Override
-    public void arrayHeader(int count) {
-        throw new UnsupportedOperationException("arrayHeader");
-    }
-
-    @Override
-    public void mapHeader(int pairs) {
-        throw new UnsupportedOperationException("mapHeader");
-    }
-
-    @Override
-    public void setHeader(int count) {
-        throw new UnsupportedOperationException("setHeader");
-    }
-
-    @Override
-    public void pushHeader(int count) {
-        throw new UnsupportedOperationException("pushHeader");
-    }
-
-    @Override
-    public void attributeHeader(int pairs) {
-        throw new UnsupportedOperationException("attributeHeader");
-    }
-
-    private void write(String value) {
-        byte[] bytes = (value + "\n").getBytes(StandardCharsets.UTF_8);
-        out.writeBytes(bytes, 0, bytes.length);
     }
 }
 

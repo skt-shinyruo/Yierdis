@@ -6,7 +6,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.memory.api.MemoryOwner;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.testkit.HeapStableMemoryBackend;
@@ -18,6 +17,8 @@ import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
+
+import static yier.bubu.redis.storage.testkit.TestBytes.view;
 
 public class YierdisDbMaintenanceContractTest {
     @Test
@@ -173,20 +174,6 @@ public class YierdisDbMaintenanceContractTest {
 
     private static byte[] bytes(String value) {
         return value.getBytes(StandardCharsets.US_ASCII);
-    }
-
-    private static BytesView view(byte[] bytes) {
-        return new BytesView() {
-            @Override
-            public int length() {
-                return bytes.length;
-            }
-
-            @Override
-            public byte getByte(int index) {
-                return bytes[index];
-            }
-        };
     }
 
     private static final class RecordingCoordinator implements MaxmemoryCoordinator {

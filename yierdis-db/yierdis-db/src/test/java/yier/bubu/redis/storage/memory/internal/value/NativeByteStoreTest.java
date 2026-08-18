@@ -4,7 +4,6 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
@@ -12,6 +11,8 @@ import yier.bubu.redis.storage.memory.TestBackend;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+
+import static yier.bubu.redis.storage.testkit.TestBytes.view;
 
 public class NativeByteStoreTest {
     @Test
@@ -51,20 +52,6 @@ public class NativeByteStoreTest {
             store.release(handle);
             Assert.assertEquals(0L, store.nativeBytes());
         }
-    }
-
-    private static BytesView view(byte[] bytes) {
-        return new BytesView() {
-            @Override
-            public int length() {
-                return bytes.length;
-            }
-
-            @Override
-            public byte getByte(int index) {
-                return bytes[index];
-            }
-        };
     }
 
     private static byte[] bytes(String value) {

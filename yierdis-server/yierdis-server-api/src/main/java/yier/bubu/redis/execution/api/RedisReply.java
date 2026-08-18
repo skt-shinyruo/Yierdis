@@ -8,9 +8,7 @@ import java.util.function.IntConsumer;
 
 public sealed interface RedisReply permits
         RedisReply.SimpleString, RedisReply.Error, RedisReply.ControlError,
-        RedisReply.IntegerValue, RedisReply.BooleanValue, RedisReply.DoubleValue,
-        RedisReply.BigNumber, RedisReply.VerbatimString, RedisReply.BlobError,
-        RedisReply.BulkString, RedisReply.NullValue, RedisReply.NullArray,
+        RedisReply.IntegerValue, RedisReply.BulkString, RedisReply.NullValue, RedisReply.NullArray,
         RedisReply.Aggregate, RedisReply.ByteSequence, RedisReply.ByteSet, RedisReply.ByteMap {
 
     default ReplyShape shape() {
@@ -19,11 +17,6 @@ public sealed interface RedisReply permits
             case Error value -> ReplyShapes.error(value.message);
             case ControlError ignored -> ReplyShapes.maximum();
             case IntegerValue value -> ReplyShapes.integer(value.value);
-            case BooleanValue value -> ReplyShapes.booleanValue(value.value);
-            case DoubleValue value -> ReplyShapes.doubleValue(value.value);
-            case BigNumber value -> ReplyShapes.bigNumber(value.ascii);
-            case VerbatimString value -> ReplyShapes.verbatimString(value.format, value.data.length);
-            case BlobError value -> ReplyShapes.blobError(value.message);
             case BulkString value -> ReplyShapes.bulkString(value.payloadLength, value.retainedSourceBytes);
             case NullValue ignored -> ReplyShapes.nullValue();
             case NullArray ignored -> ReplyShapes.nullArray();
@@ -47,29 +40,6 @@ public sealed interface RedisReply permits
     }
 
     record IntegerValue(long value) implements RedisReply {
-    }
-
-    record BooleanValue(boolean value) implements RedisReply {
-    }
-
-    record DoubleValue(double value) implements RedisReply {
-    }
-
-    record BigNumber(String ascii) implements RedisReply {
-    }
-
-    record VerbatimString(String format, byte[] data) implements RedisReply {
-        public VerbatimString {
-            data = Objects.requireNonNull(data, "data").clone();
-        }
-
-        @Override
-        public byte[] data() {
-            return data.clone();
-        }
-    }
-
-    record BlobError(String message) implements RedisReply {
     }
 
     record BulkString(
@@ -147,9 +117,6 @@ public sealed interface RedisReply permits
         return switch (aggregate.kind) {
             case ARRAY -> ReplyShapes.array(shapes);
             case MAP -> ReplyShapes.map(shapes);
-            case SET -> ReplyShapes.set(shapes);
-            case PUSH -> ReplyShapes.push(shapes);
-            case ATTRIBUTE -> ReplyShapes.attribute(shapes);
         };
     }
 
@@ -158,8 +125,7 @@ public sealed interface RedisReply permits
             List<RedisReply> elements
     ) {
         List<RedisReply> copied = List.copyOf(Objects.requireNonNull(elements, "elements"));
-        if ((kind == ReplyShape.AggregateKind.MAP || kind == ReplyShape.AggregateKind.ATTRIBUTE)
-                && (copied.size() & 1) != 0) {
+        if (kind == ReplyShape.AggregateKind.MAP && (copied.size() & 1) != 0) {
             throw new IllegalArgumentException(kind + " requires field/value pairs");
         }
         for (RedisReply element : copied) {

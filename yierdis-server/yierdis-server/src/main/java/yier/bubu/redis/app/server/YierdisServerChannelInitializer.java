@@ -46,7 +46,7 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
                 new InboundMemoryBudget(config.protocolGlobalInFlightBytes()),
                 new OutboundMemoryBudget(config.replyGlobalCapacityBytes()),
                 new ChildChannelRegistry(config.maxClients()),
-                ReplyEgressStats.noop()
+                new ReplyEgressStats()
         );
     }
 
@@ -65,7 +65,7 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
                 inboundMemoryBudget,
                 outboundMemoryBudget,
                 childChannelRegistry,
-                ReplyEgressStats.noop()
+                new ReplyEgressStats()
         );
     }
 

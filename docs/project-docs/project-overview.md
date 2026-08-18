@@ -70,11 +70,10 @@ CommandExecutor
   -> CommandResult -> RedisReplyRenderer
 ```
 
-它的外侧是 `Netty inbound bytes -> RespRequestDecoder -> RetainedRespExecutionRequest / ExecutionRequest`，渲染后则经 `RedisReplyWriter / RespReplyWriter -> Netty write-back` 回到客户端。这些边界的含义是：
+它的外侧是 `Netty inbound bytes -> RespRequestDecoder -> ByteArrayExecutionRequest`，渲染后则经 `RedisReplyWriter / RespReplyWriter -> Netty write-back` 回到客户端。这些边界的含义是：
 
 - `RespRequestDecoder` 在分配前执行 ingress admission，并直接构造执行请求。
-- `RetainedRespExecutionRequest` 是网络主链的字节参数请求实现，持有可跨线程释放的 memory lease。
-- `ByteArrayExecutionRequest` 是 heap 输入和 retained snapshot 使用的执行请求实现。
+- `ByteArrayExecutionRequest` 是网络主链和 heap 输入共用的实现；decoder 用 `takeOwnership(...)` 移交不可变 argv 与 memory lease，`retain()` 共享 argv 并增加 lease 引用，`copyOf(...)` 才创建独立快照。
 - `ExecutionRequest` 是 server/command 层之间的统一请求契约。
 - `CommandExecutor` 把请求从 I/O 线程切到执行线程，并施加队列和背压约束。
 - `CommandDispatcher` 完成命令名、null、arity 和事务策略检查；普通命令依次解析 `CommandArgs` 并按 `CommandSession` 准备为 `PreparedCommand`。
@@ -110,7 +109,7 @@ DB 内部读 [`db-internals.md`](./db-internals.md)，FFM runtime 和 native-mem
 - `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
 - `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java`
 - `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java`
-- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/protocol/resp/netty/RetainedRespExecutionRequest.java`
+- `yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ByteArrayExecutionRequest.java`
 - `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java`
 - `yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java`
 - `yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java`

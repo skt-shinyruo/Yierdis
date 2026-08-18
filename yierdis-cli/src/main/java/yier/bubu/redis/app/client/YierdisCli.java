@@ -14,6 +14,7 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.List;
 
 public final class YierdisCli {
@@ -158,16 +159,7 @@ public final class YierdisCli {
     }
 
     private static String toHex(byte[] data) {
-        if (data == null) {
-            return "(nil)";
-        }
-        StringBuilder sb = new StringBuilder(data.length * 2 + 2);
-        sb.append("0x");
-        for (byte b : data) {
-            sb.append(Character.forDigit((b >>> 4) & 0xF, 16));
-            sb.append(Character.forDigit(b & 0xF, 16));
-        }
-        return sb.toString();
+        return "0x" + HexFormat.of().formatHex(data);
     }
 
     private static byte[] b(String s) {

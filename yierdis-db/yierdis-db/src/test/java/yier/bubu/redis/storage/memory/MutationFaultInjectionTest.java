@@ -8,7 +8,6 @@ import java.util.List;
 import java.util.Objects;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeHandle;
@@ -24,7 +23,6 @@ import yier.bubu.redis.storage.api.WriteResult;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.result.ByteMapSource;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
-import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.PoppedValueSequence;
 import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
@@ -41,6 +39,8 @@ import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMemoryLedger;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 import yier.bubu.redis.storage.memory.internal.value.YierdisHyperLogLog;
+import yier.bubu.redis.storage.testkit.MaterializingByteValueSink;
+import yier.bubu.redis.storage.testkit.TestBytes;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
@@ -763,7 +763,7 @@ public class MutationFaultInjectionTest {
         return sink.values;
     }
 
-    private static final class RecordingByteValueSink implements ByteValueSink {
+    private static final class RecordingByteValueSink extends MaterializingByteValueSink {
         private final List<String> values = new java.util.ArrayList<>();
 
         @Override
@@ -771,39 +771,14 @@ public class MutationFaultInjectionTest {
             values.add(data == null ? null : new String(data, StandardCharsets.UTF_8));
         }
 
-        @Override
-        public void value(byte[] data, int off, int len) {
-            values.add(new String(data, off, len, StandardCharsets.UTF_8));
-        }
-
-        @Override
-        public void value(BytesSlice slice) {
-            if (slice == null) {
-                values.add(null);
-                return;
-            }
-            byte[] data = new byte[slice.length()];
-            slice.getBytes(0, data, 0, data.length);
-            value(data);
-        }
-
-        @Override
-        public void longAscii(long value) {
-            values.add(Long.toString(value));
-        }
-
-        @Override
-        public void nullValue() {
-            value((byte[]) null);
-        }
     }
 
     private static BytesSlice slice(String value) {
-        return new ArrayBytesSlice(value.getBytes(StandardCharsets.UTF_8));
+        return TestBytes.slice(value.getBytes(StandardCharsets.UTF_8));
     }
 
     private static BytesSlice view(byte[] value) {
-        return new ArrayBytesSlice(Arrays.copyOf(value, value.length));
+        return TestBytes.slice(Arrays.copyOf(value, value.length));
     }
 
     private static byte[] repeatedBytes(char value, int count) {
@@ -812,26 +787,4 @@ public class MutationFaultInjectionTest {
         return bytes;
     }
 
-    private static final class ArrayBytesSlice implements BytesSlice {
-        private final byte[] bytes;
-
-        private ArrayBytesSlice(byte[] bytes) {
-            this.bytes = bytes;
-        }
-
-        @Override
-        public int length() {
-            return bytes.length;
-        }
-
-        @Override
-        public byte getByte(int index) {
-            return bytes[index];
-        }
-
-        @Override
-        public void writeTo(BytesSink out) {
-            out.writeBytes(bytes, 0, bytes.length);
-        }
-    }
 }

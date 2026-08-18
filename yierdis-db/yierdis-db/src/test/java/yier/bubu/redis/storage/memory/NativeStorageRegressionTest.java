@@ -1,7 +1,5 @@
 package yier.bubu.redis.storage.memory;
 
-import yier.bubu.redis.bytes.BytesView;
-import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import org.junit.Assert;
@@ -21,7 +19,6 @@ import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
-import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.KeyScanWindow;
 import yier.bubu.redis.storage.api.result.PoppedValueSequence;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
@@ -29,6 +26,7 @@ import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.AllocatorKeyHandle;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
+import yier.bubu.redis.storage.testkit.MaterializingByteValueSink;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -40,6 +38,8 @@ import java.util.Random;
 import java.util.Set;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
+import static yier.bubu.redis.storage.testkit.TestBytes.slice;
+import static yier.bubu.redis.storage.testkit.TestBytes.view;
 import static yier.bubu.redis.storage.memory.internal.keyspace.TestNativeKeyDirectories.insert;
 
 public class NativeStorageRegressionTest {
@@ -795,37 +795,8 @@ public class NativeStorageRegressionTest {
         return out;
     }
 
-    private static BytesView view(byte[] data) {
-        return new BytesView() {
-            @Override
-            public int length() {
-                return data.length;
-            }
-
-            @Override
-            public byte getByte(int index) {
-                return data[index];
-            }
-        };
-    }
-
     private static BytesSlice sliceOf(byte[] data) {
-        return new BytesSlice() {
-            @Override
-            public void writeTo(BytesSink out) {
-                out.writeBytes(data, 0, data.length);
-            }
-
-            @Override
-            public int length() {
-                return data.length;
-            }
-
-            @Override
-            public byte getByte(int index) {
-                return data[index];
-            }
-        };
+        return slice(data);
     }
 
     private static List<String> strings(PoppedValueSequence values) {
@@ -847,37 +818,12 @@ public class NativeStorageRegressionTest {
 
     private static List<String> strings(ByteSequenceSource values) {
         List<String> out = new ArrayList<>(values.elementCount());
-        values.emitTo(new ByteValueSink() {
+        values.emitTo(new MaterializingByteValueSink() {
             @Override
             public void value(byte[] data) {
                 out.add(data == null ? null : new String(data, StandardCharsets.UTF_8));
             }
 
-            @Override
-            public void value(byte[] data, int off, int len) {
-                out.add(data == null ? null : new String(data, off, len, StandardCharsets.UTF_8));
-            }
-
-            @Override
-            public void value(BytesSlice slice) {
-                if (slice == null) {
-                    out.add(null);
-                    return;
-                }
-                byte[] data = new byte[slice.length()];
-                slice.getBytes(0, data, 0, data.length);
-                out.add(new String(data, StandardCharsets.UTF_8));
-            }
-
-            @Override
-            public void longAscii(long value) {
-                out.add(Long.toString(value));
-            }
-
-            @Override
-            public void nullValue() {
-                out.add(null);
-            }
         });
         return out;
     }

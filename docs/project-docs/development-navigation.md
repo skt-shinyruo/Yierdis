@@ -2,7 +2,7 @@
 
 本文按常见改动类型回答一个实际问题：我要改某类需求时，应该先打开哪些文件，沿哪条链继续追。
 
-先把两份导航放在手边：测试选择看 [`testing-and-debugging.md`](./testing-and-debugging.md)，源码职责看 [`core-logic-index.md`](./core-logic-index.md)。
+先把两份导航放在手边：测试选择看 [`testing-and-debugging.md`](./testing-and-debugging.md)，模块职责看 [`module-architecture.md`](./module-architecture.md)。
 
 ## 工作规则
 
@@ -30,7 +30,7 @@ CommandExecutor
 先打开：
 
 - [`RespRequestDecoder.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java)
-- [`RetainedRespExecutionRequest.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/protocol/resp/netty/RetainedRespExecutionRequest.java)
+- [`ByteArrayExecutionRequest.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ByteArrayExecutionRequest.java)
 - [`InboundMemoryBudget.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/protocol/resp/netty/InboundMemoryBudget.java)
 - [`RespReplyWriter.java`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java)
 - [`NettyExecutionIoAdapter.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/NettyExecutionIoAdapter.java)
@@ -77,9 +77,8 @@ CommandExecutor
 
 - 对应家族测试，例如 `StringCommandTest`、`ListCommandTest`、`HashCommandTest`、`SetCommandTest`、`ZSetCommandTest`、`HllCommandTest`
 - `CommandErrorTest`
-- `CommandVariantCoverageTest`
-- `CommandRegistryGuardTest`
 - `CommandDispatcherTest`
+- `DefaultCommandRegistrationTest`
 - 默认命令跑 `CommandParseIsolationTest`，server-only 命令再跑 `ServerCommandParseIsolationTest`、`YierdisServerBootstrapCommandWiringTest` 和相关协议集成测试
 
 ## 改 transaction / replay
@@ -312,7 +311,7 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 
 ## 推荐最小工作流
 
-1. 在 [`core-logic-index.md`](./core-logic-index.md) 找到目标类的职责和边界。
+1. 在本页和 [`module-architecture.md`](./module-architecture.md) 找到目标类的职责和边界。
 2. 先补或调整最窄测试，再改实现。
 3. 跑目标家族测试。
 4. 如果改动改变了架构边界、协议语义或 native-memory 当前事实，同步更新对应专题文档。
@@ -322,7 +321,6 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 
 - [`project-overview.md`](./project-overview.md)
 - [`module-architecture.md`](./module-architecture.md)
-- [`main-path-walkthrough.md`](./main-path-walkthrough.md)
 - [`request-execution-flow.md`](./request-execution-flow.md)
 - [`commands-and-data-model.md`](./commands-and-data-model.md)
 - [`db-internals.md`](./db-internals.md)

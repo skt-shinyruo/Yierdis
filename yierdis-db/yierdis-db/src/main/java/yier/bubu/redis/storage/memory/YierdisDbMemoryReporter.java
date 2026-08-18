@@ -10,7 +10,6 @@ import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.key.AllocatorKeyHandle;
-import yier.bubu.redis.storage.memory.internal.ledger.DbMemoryAccounting;
 import yier.bubu.redis.storage.memory.internal.ledger.MemoryLedger;
 
 final class YierdisDbMemoryReporter {
@@ -61,16 +60,48 @@ final class YierdisDbMemoryReporter {
 
     YierdisMemoryStats memoryStats() {
         kernel.checkOwner();
-        return DbMemoryAccounting.snapshot(
+        MemoryUsageSnapshot usage = componentMemoryUsage();
+        NativeAllocatorStats allocatorStats = safeNativeAllocatorStats();
+        NativeDefragReport defragReport = nativeDefragReportSupplier.get();
+        long offHeapUsedBytes = MemoryUsageSnapshot.addSaturating(
+                usage.nativeMetadataCommittedBytes(),
+                usage.nativeDataCommittedBytes()
+        );
+        long totalEstimatedBytes = usage.effectiveBytesForMaxmemory();
+        long reservedBytes = ledger.reservedBytes();
+        int pendingHashTableCount = hashTableMaintenanceRegistry.pendingTableCount();
+
+        return new YierdisMemoryStats(
                 maxmemoryBytes,
-                componentMemoryUsage(),
-                ledger.reservedBytes(),
+                totalEstimatedBytes,
+                usage.heapEstimatedBytes(),
+                offHeapUsedBytes,
+                reservedBytes,
+                MemoryUsageSnapshot.addSaturating(totalEstimatedBytes, Math.max(0L, reservedBytes)),
+                true,
+                true,
                 keyLifecycle.keyCount(),
                 keyLifecycle.expireCount(),
-                hashTableMaintenanceRegistry,
-                true,
-                safeNativeAllocatorStats(),
-                nativeDefragReportSupplier.get(),
+                totalEstimatedBytes,
+                defragReport == null ? 0L : defragReport.scannedObjects(),
+                defragReport == null ? 0L : defragReport.movedObjects(),
+                defragReport == null ? 0L : defragReport.movedBytes(),
+                defragReport == null ? 0L : defragReport.skippedPinnedObjects(),
+                defragReport == null ? 0L : defragReport.skippedBudgetObjects(),
+                defragReport == null ? 0L : defragReport.failedMoves(),
+                allocatorStats == null ? 0L : allocatorStats.defragMovedBytes(),
+                allocatorStats == null ? 0L : allocatorStats.defragSkippedPinnedObjects(),
+                allocatorStats == null ? 0L : allocatorStats.quarantinedObjects(),
+                allocatorStats == null ? 0L : allocatorStats.quarantineBytes(),
+                allocatorStats == null ? 0L : allocatorStats.staleHandleDetections(),
+                allocatorStats == null ? 0L : allocatorStats.defragReclaimedPages(),
+                usage.nativeMetadataCommittedBytes(),
+                usage.nativeDataCommittedBytes(),
+                usage.nativeDataLiveBytes(),
+                usage.nativeReclaimableBytes(),
+                pendingHashTableCount,
+                hashTableMaintenanceRegistry.lastStopReason().name(),
+                allocatorStats == null ? 0L : allocatorStats.liveObjects(),
                 safeNativeLiveRegionCount()
         );
     }

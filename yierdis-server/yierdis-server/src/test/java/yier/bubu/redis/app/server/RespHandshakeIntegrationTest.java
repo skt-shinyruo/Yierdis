@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 import yier.bubu.redis.protocol.resp.RespClientCodec;
+import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 
 public class RespHandshakeIntegrationTest {
     @Test
@@ -25,9 +26,12 @@ public class RespHandshakeIntegrationTest {
 
             out.write("*2\r\n$5\r\nHELLO\r\n$1\r\n3\r\n".getBytes(StandardCharsets.US_ASCII));
             out.flush();
-            String hello = readSome(in);
-            Assert.assertTrue(hello.startsWith("%5\r\n"));
-            Assert.assertTrue(hello.contains("$5\r\nproto\r\n:3\r\n"));
+            RespClientCodec.RespReply hello = RespClientCodec.readReply(
+                    in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+            Assert.assertEquals(RespClientCodec.RespReply.Kind.MAP, hello.kind());
+            Assert.assertEquals(10, hello.values().size());
+            Assert.assertArrayEquals(bytes("proto"), hello.values().get(4).bytes());
+            Assert.assertEquals(Long.valueOf(3L), hello.values().get(5).integer());
 
             out.write("*1\r\n$4\r\nPING\r\n".getBytes(StandardCharsets.US_ASCII));
             out.flush();
@@ -46,12 +50,14 @@ public class RespHandshakeIntegrationTest {
 
             out.write("*2\r\n$5\r\nHELLO\r\n$1\r\n3\r\n".getBytes(StandardCharsets.US_ASCII));
             out.flush();
-            RespClientCodec.RespReply hello3 = RespClientCodec.readReply(in, 1_024);
+            RespClientCodec.RespReply hello3 = RespClientCodec.readReply(
+                    in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
             Assert.assertEquals(RespClientCodec.RespReply.Kind.MAP, hello3.kind());
 
             out.write("*2\r\n$5\r\nHELLO\r\n$1\r\n2\r\n".getBytes(StandardCharsets.US_ASCII));
             out.flush();
-            RespClientCodec.RespReply hello2 = RespClientCodec.readReply(in, 1_024);
+            RespClientCodec.RespReply hello2 = RespClientCodec.readReply(
+                    in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
             Assert.assertEquals(RespClientCodec.RespReply.Kind.ARRAY, hello2.kind());
             Assert.assertEquals(10, hello2.values().size());
             Assert.assertArrayEquals(bytes("proto"), hello2.values().get(4).bytes());
@@ -59,7 +65,8 @@ public class RespHandshakeIntegrationTest {
 
             out.write("*1\r\n$4\r\nPING\r\n".getBytes(StandardCharsets.US_ASCII));
             out.flush();
-            RespClientCodec.RespReply pong = RespClientCodec.readReply(in, 1_024);
+            RespClientCodec.RespReply pong = RespClientCodec.readReply(
+                    in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
             Assert.assertEquals(RespClientCodec.RespReply.Kind.SIMPLE_STRING, pong.kind());
             Assert.assertEquals("PONG", pong.text());
         }
@@ -76,18 +83,21 @@ public class RespHandshakeIntegrationTest {
 
             out.write(RespClientCodec.encodeCommand(List.of(bytes("HELLO"), bytes("3"))));
             out.flush();
-            RespClientCodec.RespReply hello = RespClientCodec.readReply(in, 1024);
+            RespClientCodec.RespReply hello = RespClientCodec.readReply(
+                    in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
             Assert.assertEquals(RespClientCodec.RespReply.Kind.MAP, hello.kind());
             Assert.assertEquals(10, hello.values().size());
 
             out.write(RespClientCodec.encodeCommand(List.of(
                     bytes("SADD"), bytes("members"), bytes("alpha"), bytes("beta"))));
             out.flush();
-            Assert.assertEquals(Long.valueOf(2), RespClientCodec.readReply(in, 1024).integer());
+            Assert.assertEquals(Long.valueOf(2), RespClientCodec.readReply(
+                    in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES).integer());
 
             out.write(RespClientCodec.encodeCommand(List.of(bytes("SMEMBERS"), bytes("members"))));
             out.flush();
-            RespClientCodec.RespReply members = RespClientCodec.readReply(in, 1024);
+            RespClientCodec.RespReply members = RespClientCodec.readReply(
+                    in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
             Assert.assertEquals(RespClientCodec.RespReply.Kind.SET, members.kind());
             Set<String> values = members.values().stream()
                     .map(value -> new String(value.bytes(), StandardCharsets.UTF_8))
@@ -107,9 +117,12 @@ public class RespHandshakeIntegrationTest {
 
             out.write("*4\r\n$5\r\nHELLO\r\n$1\r\n2\r\n$7\r\nSETNAME\r\n$5\r\nalpha\r\n".getBytes(StandardCharsets.US_ASCII));
             out.flush();
-            String hello2 = readSome(in);
-            Assert.assertTrue(hello2.startsWith("*10\r\n"));
-            Assert.assertTrue(hello2.contains("$5\r\nproto\r\n:2\r\n"));
+            RespClientCodec.RespReply hello2 = RespClientCodec.readReply(
+                    in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+            Assert.assertEquals(RespClientCodec.RespReply.Kind.ARRAY, hello2.kind());
+            Assert.assertEquals(10, hello2.values().size());
+            Assert.assertArrayEquals(bytes("proto"), hello2.values().get(4).bytes());
+            Assert.assertEquals(Long.valueOf(2L), hello2.values().get(5).integer());
 
             out.write("*2\r\n$6\r\nCLIENT\r\n$7\r\nGETNAME\r\n".getBytes(StandardCharsets.US_ASCII));
             out.flush();
@@ -122,8 +135,10 @@ public class RespHandshakeIntegrationTest {
             out.write(("*5\r\n$5\r\nHELLO\r\n$1\r\n3\r\n$4\r\nAUTH\r\n$7\r\ndefault\r\n$2\r\npw\r\n")
                     .getBytes(StandardCharsets.US_ASCII));
             out.flush();
-            String authError = readSome(in);
-            Assert.assertTrue(authError.contains("called without any password configured"));
+            RespClientCodec.RespReply authError = RespClientCodec.readReply(
+                    in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+            Assert.assertEquals(RespClientCodec.RespReply.Kind.ERROR, authError.kind());
+            Assert.assertTrue(authError.text().contains("called without any password configured"));
         }
     }
 
@@ -152,12 +167,6 @@ public class RespHandshakeIntegrationTest {
 
     private static String readAscii(InputStream in, int len) throws Exception {
         return new String(in.readNBytes(len), StandardCharsets.US_ASCII);
-    }
-
-    private static String readSome(InputStream in) throws Exception {
-        byte[] buf = new byte[256];
-        int n = in.read(buf);
-        return new String(buf, 0, n, StandardCharsets.US_ASCII);
     }
 
     private static byte[] bytes(String value) {

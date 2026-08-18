@@ -111,4 +111,4 @@ Netty / RESP
 - `EngineSession` 只保存连接级状态，`CommandDispatcher` 由 bootstrap 组装。
 - RESP 是当前唯一 active public protocol lane。
 
-修改模块边界前，同时查看 [`core-logic-index.md`](./core-logic-index.md)、[`request-execution-flow.md`](./request-execution-flow.md) 和各 leaf POM，并运行架构测试。
+修改模块边界前，同时查看 [`development-navigation.md`](./development-navigation.md)、[`request-execution-flow.md`](./request-execution-flow.md) 和各 leaf POM，并运行架构测试。

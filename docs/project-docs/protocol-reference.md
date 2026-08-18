@@ -11,7 +11,7 @@ Yierdis 的公开网络入口是 Redis RESP 风格的 TCP 协议。协议层负�
 ```text
 Netty ByteBuf
   -> RespRequestDecoder
-  -> RetainedRespExecutionRequest / ExecutionRequest
+  -> ByteArrayExecutionRequest
   -> CommandExecutor
   -> CommandDispatcher.prepare(session, request)
 ```

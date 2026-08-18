@@ -100,7 +100,7 @@ public class CommandExecutorTest {
         Assert.assertEquals(1, ownerExecutor.pendingTasks());
         ownerExecutor.runAll();
 
-        Assert.assertEquals("PONG\n", io.replyBytes(connection));
+        Assert.assertEquals("+PONG\r\n", io.replyBytes(connection));
         Assert.assertEquals(1, ping.closeCalls());
 
         TrackingExecutionRequest queuedButClosing = TrackingExecutionRequest.ofUtf8("PING");
@@ -194,7 +194,7 @@ public class CommandExecutorTest {
                     accepted,
                     ExecutorCoreTestSupport.ioReply(io, acceptedConnection)
             );
-            Assert.assertEquals("PONG\n", io.replyBytes(acceptedConnection));
+            Assert.assertEquals("+PONG\r\n", io.replyBytes(acceptedConnection));
             Assert.assertEquals(1, accepted.closeCalls());
             Assert.assertEquals(1L, executor.statsSnapshot().commandsExecuted());
             Assert.assertEquals(2L, executor.statsSnapshot().submitAccepted());
@@ -323,7 +323,7 @@ public class CommandExecutorTest {
 
         ownerExecutor.runAll();
 
-        Assert.assertEquals("ERR internal error\n", io.replyBytes(connection));
+        Assert.assertEquals("-ERR internal error\r\n", io.replyBytes(connection));
         Assert.assertTrue(io.replyCloseAfterReply(connection));
         Assert.assertTrue(connection.context().statsSnapshot().closing());
         Assert.assertEquals(1, exploding.closeCalls());
@@ -382,7 +382,7 @@ public class CommandExecutorTest {
         ExecutorCoreTestSupport.publish(executor, connection, quit, reply);
         ownerExecutor.runAll();
 
-        Assert.assertEquals("OK\n", reply.bytes());
+        Assert.assertEquals("$2\r\nOK\r\n", reply.bytes());
         Assert.assertTrue(reply.readyCloseAfterReply());
         Assert.assertTrue(connection.context().statsSnapshot().closing());
         Assert.assertEquals(1, quit.closeCalls());
@@ -434,7 +434,7 @@ public class CommandExecutorTest {
             Assert.assertEquals(1, actions.get());
             Assert.assertEquals(1, closes.get());
             Assert.assertEquals(1, request.closeCalls());
-            Assert.assertEquals("ERR internal error\n", reply.bytes());
+            Assert.assertEquals("-ERR internal error\r\n", reply.bytes());
             Assert.assertEquals(1, reply.readyCalls());
             Assert.assertTrue(reply.readyCloseAfterReply());
             Assert.assertEquals(0, reply.cancelCalls());
@@ -482,7 +482,7 @@ public class CommandExecutorTest {
             Assert.assertEquals(1, actions.get());
             Assert.assertEquals(1, preparedCloses.get());
             Assert.assertEquals(1, request.closeCalls());
-            Assert.assertEquals("ERR internal error\n", reply.bytes());
+            Assert.assertEquals("-ERR internal error\r\n", reply.bytes());
             Assert.assertEquals(1, reply.requireCalls());
             Assert.assertEquals(1, reply.controlReservationUses());
             Assert.assertEquals(1, reply.readyCalls());
@@ -532,7 +532,7 @@ public class CommandExecutorTest {
             Assert.assertEquals(1, actions.get());
             Assert.assertEquals(1, preparedCloses.get());
             Assert.assertEquals(1, request.closeCalls());
-            Assert.assertEquals("ERR expected\n", reply.bytes());
+            Assert.assertEquals("-ERR expected\r\n", reply.bytes());
             Assert.assertEquals(1, reply.requireCalls());
             Assert.assertEquals(1, reply.controlReservationUses());
             Assert.assertEquals(1, reply.readyCalls());
@@ -751,7 +751,7 @@ public class CommandExecutorTest {
             Assert.assertEquals(1, actions.get());
             Assert.assertEquals(1, closes.get());
             Assert.assertEquals(1, request.closeCalls());
-            Assert.assertEquals("x\n", reply.bytes());
+            Assert.assertEquals("$1\r\nx\r\n", reply.bytes());
             Assert.assertEquals(0, reply.readyCalls());
             Assert.assertEquals(1, reply.cancelCalls());
             Assert.assertEquals(1, reply.resultUnknownCalls());

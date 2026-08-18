@@ -9,23 +9,21 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.bytes.BytesSink;
-import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.command.api.CommandArgs;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandSession;
-import yier.bubu.redis.execution.api.CommandResult;
-import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
-import yier.bubu.redis.execution.api.RedisReplyRenderer;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.execution.api.TransactionState;
-import yier.bubu.redis.execution.api.ValidationResult;
+import yier.bubu.redis.execution.engine.EngineSession;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.resp.RespReplySizer;
+import yier.bubu.redis.protocol.resp.RespClientCodec;
+import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 import yier.bubu.redis.protocol.resp.RespReplyWriter;
 import yier.bubu.redis.protocol.resp.netty.InboundByteAccountingHandler;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
@@ -37,9 +35,7 @@ import yier.bubu.redis.command.kernel.CommandDispatcher;
 import yier.bubu.redis.command.kernel.CommandRegistries;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
-import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -49,7 +45,6 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -162,18 +157,18 @@ public class YierdisServerBootstrapCommandWiringTest {
         )) {
             instance.runtimeAccess().bindToCurrentThread();
             NettyServerInfoProvider infoProvider = new NettyServerInfoProvider(
-                    runtimeConfig(0, 0, 1024, 1, 4, 5)
+                    TestCommandDispatchers.runtimeConfig(0, 0, 1024, 1, 4, 5)
             );
             CommandDispatcher dispatcher = CommandRegistries.dispatcher(
                     DefaultCommandModules.create(
-                            TestDbRouters.forInstance(instance),
+                            YierdisServerBootstrap.dbRouter(instance),
                             infoProvider,
                             SlowCommandLimits.DEFAULT
                     ),
                     new ServerCommandModule(infoProvider)
             );
             BiFunction<CommandSession, ExecutionRequest, PreparedCommand> execution = dispatcher::prepare;
-            EngineSession session = new EngineSession();
+            EngineSession session = new EngineSession(0, 0);
             PreparedCommand prepared = execution.apply(session, request("PING"));
             Assert.assertNotNull(prepared);
         }
@@ -204,8 +199,9 @@ public class YierdisServerBootstrapCommandWiringTest {
 
     @Test
     public void unboundInfoProviderReturnsSemanticNotReadyErrors() {
-        NettyServerInfoProvider provider = new NettyServerInfoProvider(runtimeConfig(0, 0, 1024, 1, 4, 5));
-        EngineSession session = new EngineSession();
+        NettyServerInfoProvider provider = new NettyServerInfoProvider(
+                TestCommandDispatchers.runtimeConfig(0, 0, 1024, 1, 4, 5));
+        EngineSession session = new EngineSession(0, 0);
 
         RedisReply info = provider.info(new CommandArgs(request("INFO")), session);
         RedisReply stats = provider.stats(session);
@@ -401,7 +397,8 @@ public class YierdisServerBootstrapCommandWiringTest {
     @Test
     public void channelInitializerUsesRuntimeConfigForSessionAndProtocolLimits() throws Exception {
         try (InitializerTestEnv env = new InitializerTestEnv()) {
-            YierdisServerRuntimeConfig commandLimitedConfig = runtimeConfig(1, 0, 3, 2, 4, 5);
+            YierdisServerRuntimeConfig commandLimitedConfig =
+                    TestCommandDispatchers.runtimeConfig(1, 0, 3, 2, 4, 5);
             NioSocketChannel commandLimitedChannel = new NioSocketChannel();
             try {
                 new YierdisServerChannelInitializer(commandLimitedConfig, env.executor, env.replyWriterFactory).initChannel(commandLimitedChannel);
@@ -416,7 +413,8 @@ public class YierdisServerBootstrapCommandWiringTest {
                 commandLimitedChannel.unsafe().closeForcibly();
             }
 
-            YierdisServerRuntimeConfig byteLimitedConfig = runtimeConfig(0, 4, 3, 2, 4, 5);
+            YierdisServerRuntimeConfig byteLimitedConfig =
+                    TestCommandDispatchers.runtimeConfig(0, 4, 3, 2, 4, 5);
             NioSocketChannel byteLimitedChannel = new NioSocketChannel();
             try {
                 new YierdisServerChannelInitializer(byteLimitedConfig, env.executor, env.replyWriterFactory).initChannel(byteLimitedChannel);
@@ -468,7 +466,8 @@ public class YierdisServerBootstrapCommandWiringTest {
     @Test
     public void channelInitializerRegistersChildrenBeforeBuildingTheCommandPipeline() throws Exception {
         try (InitializerTestEnv env = new InitializerTestEnv()) {
-            YierdisServerRuntimeConfig config = runtimeConfig(0, 0, 1024, 16, 128, 1024);
+            YierdisServerRuntimeConfig config =
+                    TestCommandDispatchers.runtimeConfig(0, 0, 1024, 16, 128, 1024);
             ChildChannelRegistry acceptingRegistry = new ChildChannelRegistry();
             NioSocketChannel accepted = new NioSocketChannel();
             try {
@@ -510,102 +509,25 @@ public class YierdisServerBootstrapCommandWiringTest {
     }
 
     private static Object roundTrip(OutputStream out, InputStream in, String... args) throws IOException {
-        writeCommand(out, args);
-        return readResp(in);
-    }
-
-    private static void writeCommand(OutputStream out, String... args) throws IOException {
-        out.write(('*' + Integer.toString(args.length) + "\r\n").getBytes(StandardCharsets.US_ASCII));
-        for (String arg : args) {
-            byte[] bytes = arg.getBytes(StandardCharsets.UTF_8);
-            out.write(('$' + Integer.toString(bytes.length) + "\r\n").getBytes(StandardCharsets.US_ASCII));
-            out.write(bytes);
-            out.write("\r\n".getBytes(StandardCharsets.US_ASCII));
-        }
+        RespClientCodec.writeCommand(
+                out,
+                Arrays.stream(args).map(value -> value.getBytes(StandardCharsets.UTF_8)).toList()
+        );
         out.flush();
+        return respValue(RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES));
     }
 
-    private static Object readResp(InputStream in) throws IOException {
-        int type = in.read();
-        if (type < 0) {
-            return null;
-        }
-        return switch (type) {
-            case '+' -> readLine(in);
-            case '-' -> new RespError(readLine(in));
-            case ':' -> Long.parseLong(readLine(in));
-            case '$' -> readBulk(in);
-            case '*' -> readArray(in);
-            case '%' -> readMap(in);
-            case '_' -> {
-                expectLineEnd(in);
-                yield null;
-            }
-            default -> throw new IOException("unexpected RESP type: " + (char) type);
+    private static Object respValue(RespClientCodec.RespReply reply) {
+        return switch (reply.kind()) {
+            case SIMPLE_STRING -> reply.text();
+            case ERROR -> new RespError(reply.text());
+            case INTEGER -> reply.integer();
+            case BULK_STRING -> new String(reply.bytes(), StandardCharsets.UTF_8);
+            case NULL -> null;
+            case ARRAY, MAP, SET -> reply.values().stream()
+                    .map(YierdisServerBootstrapCommandWiringTest::respValue)
+                    .toList();
         };
-    }
-
-    private static String readBulk(InputStream in) throws IOException {
-        int len = Integer.parseInt(readLine(in));
-        if (len < 0) {
-            return null;
-        }
-        byte[] bytes = in.readNBytes(len);
-        if (bytes.length != len) {
-            throw new IOException("unexpected EOF in bulk string");
-        }
-        expectLineEnd(in);
-        return new String(bytes, StandardCharsets.UTF_8);
-    }
-
-    private static List<Object> readArray(InputStream in) throws IOException {
-        int len = Integer.parseInt(readLine(in));
-        if (len < 0) {
-            return null;
-        }
-        List<Object> values = new ArrayList<>(len);
-        for (int i = 0; i < len; i++) {
-            values.add(readResp(in));
-        }
-        return values;
-    }
-
-    private static List<Object> readMap(InputStream in) throws IOException {
-        int pairs = Integer.parseInt(readLine(in));
-        if (pairs < 0) {
-            return null;
-        }
-        List<Object> values = new ArrayList<>(pairs * 2);
-        for (int i = 0; i < pairs; i++) {
-            values.add(readResp(in));
-            values.add(readResp(in));
-        }
-        return values;
-    }
-
-    private static String readLine(InputStream in) throws IOException {
-        ByteArrayOutputStream buf = new ByteArrayOutputStream();
-        int prev = -1;
-        while (true) {
-            int b = in.read();
-            if (b < 0) {
-                throw new IOException("unexpected EOF before CRLF");
-            }
-            if (prev == '\r' && b == '\n') {
-                byte[] bytes = buf.toByteArray();
-                return new String(bytes, 0, bytes.length - 1, StandardCharsets.UTF_8);
-            }
-            buf.write(b);
-            prev = b;
-        }
-    }
-
-    private static void expectLineEnd(InputStream in) throws IOException {
-        int cr = in.read();
-        int lf = in.read();
-        if (cr != '\r' || lf != '\n') {
-            throw new IOException("expected CRLF");
-        }
     }
 
     private static Map<String, Object> respMap(Object value) {
@@ -668,62 +590,6 @@ public class YierdisServerBootstrapCommandWiringTest {
         Assert.assertEquals(expectedStep, asLong(info.get(5)));
     }
 
-    private static YierdisServerRuntimeConfig runtimeConfig(
-            int transactionQueueMaxCommands,
-            long transactionQueueMaxBytes,
-            int protocolMaxBulkBytes,
-            int protocolMaxArgs,
-            int protocolMaxLineBytes,
-            int protocolMaxCommandBytes
-    ) {
-        return new YierdisServerRuntimeConfig(
-                "127.0.0.1",
-                0,
-                1024,
-                1,
-                1000,
-                1,
-                1024,
-                0,
-                SchedulingPolicy.FAIR,
-                256,
-                128,
-                0,
-                0,
-                128,
-                10,
-                transactionQueueMaxCommands,
-                transactionQueueMaxBytes,
-                protocolMaxBulkBytes,
-                protocolMaxArgs,
-                protocolMaxLineBytes,
-                protocolMaxCommandBytes,
-                300000,
-                67108864,
-                10000,
-                256L * 1024L * 1024L,
-                128L * 1024L * 1024L,
-                64L * 1024L * 1024L,
-                64 * 1024,
-                4L * 1024L,
-                5_000L,
-                0,
-                YierdisInstanceConfig.MaxmemoryScope.GLOBAL,
-                MaxmemoryPolicy.NOEVICTION,
-                5,
-                5,
-                5,
-                false,
-                65536,
-                64,
-                1,
-                0,
-                0,
-                0,
-                128L * 1024L * 1024L
-        );
-    }
-
     private static ByteArrayExecutionRequest request(String... values) {
         return ByteArrayExecutionRequest.fromUtf8(values[0], Arrays.asList(Arrays.copyOfRange(values, 1, values.length)));
     }
@@ -755,19 +621,6 @@ public class YierdisServerBootstrapCommandWiringTest {
         return fromRepo;
     }
 
-    private static void execute(
-            CommandDispatcher dispatcher,
-            CommandSession session,
-            ExecutionRequest request,
-            RedisReplyWriter reply
-    ) {
-        try (PreparedCommand prepared = dispatcher.prepare(session, request)) {
-            Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
-            CommandResult result = prepared.execute(session);
-            RedisReplyRenderer.render(result.reply(), reply);
-        }
-    }
-
     private static int intField(Object target, String fieldName) throws Exception {
         Field field = target.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
@@ -781,225 +634,6 @@ public class YierdisServerBootstrapCommandWiringTest {
     }
 
     private record RespError(String message) {
-    }
-
-    private static final class CapturingReplyWriter implements RedisReplyWriter {
-        private String simpleStringValue;
-        private Integer mapHeaderCount;
-        private List<Object> arrayValues;
-        private List<Object> activeAggregate;
-
-        @Override
-        public void simpleString(String value) {
-            this.simpleStringValue = value;
-            addValue(value);
-        }
-
-        @Override
-        public void mapHeader(int count) {
-            this.mapHeaderCount = count;
-        }
-
-        @Override
-        public void error(String message) {
-            throw new AssertionError(message);
-        }
-
-        @Override
-        public void integer(long value) {
-            addValue(value);
-        }
-
-        @Override
-        public void booleanValue(boolean value) {
-        }
-
-        @Override
-        public void doubleValue(double value) {
-        }
-
-        @Override
-        public void bigNumberAscii(String value) {
-        }
-
-        @Override
-        public void verbatimString(String format, byte[] data) {
-        }
-
-        @Override
-        public void blobError(String message) {
-            throw new AssertionError(message);
-        }
-
-        @Override
-        public void nullValue() {
-            addValue(null);
-        }
-
-        @Override
-        public void nullArray() {
-        }
-
-        @Override
-        public void arrayHeader(int count) {
-            List<Object> values = new ArrayList<>(count);
-            this.arrayValues = values;
-            this.activeAggregate = values;
-        }
-
-        @Override
-        public void setHeader(int count) {
-        }
-
-        @Override
-        public void pushHeader(int count) {
-        }
-
-        @Override
-        public void attributeHeader(int pairs) {
-        }
-
-        @Override
-        public void bulkString(byte[] data) {
-            addValue(new String(data, StandardCharsets.UTF_8));
-        }
-
-        @Override
-        public void bulkString(byte[] data, int off, int len) {
-            addValue(new String(data, off, len, StandardCharsets.UTF_8));
-        }
-
-        @Override
-        public void bulkString(BytesSlice slice) {
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            slice.writeTo(bytes::write);
-            addValue(bytes.toString(StandardCharsets.UTF_8));
-        }
-
-        @Override
-        public void bulkStringLongAscii(long value) {
-            addValue(Long.toString(value));
-        }
-
-        private void addValue(Object value) {
-            if (activeAggregate != null) {
-                activeAggregate.add(value);
-            }
-        }
-    }
-
-    private static final class EngineSession implements CommandSession {
-        private final TransactionState tx = new TransactionState() {
-            private final List<ExecutionRequest> queue = new ArrayList<>();
-            private boolean active;
-            private boolean aborted;
-
-            @Override
-            public synchronized boolean active() {
-                return active;
-            }
-
-            @Override
-            public synchronized boolean aborted() {
-                return aborted;
-            }
-
-            @Override
-            public synchronized void begin() {
-                discard();
-                active = true;
-            }
-
-            @Override
-            public synchronized void markAborted() {
-                aborted = true;
-            }
-
-            @Override
-            public synchronized void discard() {
-                for (ExecutionRequest request : queue) {
-                    request.close();
-                }
-                queue.clear();
-                active = false;
-                aborted = false;
-            }
-
-            @Override
-            public synchronized String tryEnqueue(ExecutionRequest request) {
-                if (request != null) {
-                    queue.add(ByteArrayExecutionRequest.copyOf(request));
-                }
-                return null;
-            }
-
-            @Override
-            public synchronized int size() {
-                return queue.size();
-            }
-
-            @Override
-            public synchronized void forEachQueued(
-                    java.util.function.Consumer<? super ExecutionRequest> visitor
-            ) {
-                java.util.Objects.requireNonNull(visitor, "visitor");
-                queue.forEach(visitor);
-            }
-
-            @Override
-            public synchronized List<ExecutionRequest> drain() {
-                List<ExecutionRequest> drained = new ArrayList<>(queue);
-                queue.clear();
-                active = false;
-                aborted = false;
-                return drained;
-            }
-
-        };
-
-        private int dbIndex;
-        private String clientName;
-        private int respVersion = 2;
-
-        @Override
-        public int dbIndex() {
-            return dbIndex;
-        }
-
-        @Override
-        public void setDbIndex(int dbIndex) {
-            this.dbIndex = dbIndex;
-        }
-
-        @Override
-        public String clientName() {
-            return clientName;
-        }
-
-        @Override
-        public void setClientName(String name) {
-            this.clientName = name;
-        }
-
-        @Override
-        public int respVersion() {
-            return respVersion;
-        }
-
-        @Override
-        public void setRespVersion(int respVersion) {
-            this.respVersion = respVersion;
-        }
-
-        @Override
-        public TransactionState transaction() {
-            return tx;
-        }
-
-        @Override
-        public ConnectionStatsView connectionStats() {
-            return new ConnectionStatsView(0, 0, false, false, false, 0, 0, 0, 0, 0, 0, 0);
-        }
     }
 
     private static final class InitializerTestEnv implements AutoCloseable {

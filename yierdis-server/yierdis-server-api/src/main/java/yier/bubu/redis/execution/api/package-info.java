@@ -13,11 +13,8 @@
  *     <li>CommandSession - API。受众：executor、command dispatcher、server 会话实现与测试；直接承载 client metadata、transaction、stats 和 protocol 能力。</li>
  *     <li>ConnectionStatsView - API. Audience: server INFO/STATS views, executor/server observability, tests.</li>
  *     <li>TransactionState - API。受众：事务命令 handler、连接 session owner 与测试。</li>
- *     <li>CommandSession - API。受众：PreparedCommand；由执行器在回复容量预留后创建，提供本次会话。</li>
  *     <li>PreparedCommand - API。受众：command dispatcher、executor 与命令实现；封装预留形状、执行前校验、语义结果和保留资源的关闭责任。</li>
  *     <li>ReplyShape / BiFunction<CommandSession, ReplyShape, ReplyPlan> - API/SPI。受众：命令层、executor 与协议实现；命令层描述语义形状，协议实现计算 wire 大小。</li>
  * </ul>
  */
 package yier.bubu.redis.execution.api;
-
-import java.util.function.BiFunction;

@@ -7,6 +7,7 @@ import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
+import yier.bubu.redis.storage.testkit.TestBytes;
 
 import java.nio.charset.StandardCharsets;
 
@@ -105,17 +106,6 @@ public class PhysicalMemoryAccountingTest {
     }
 
     private static yier.bubu.redis.bytes.BytesView view(String value) {
-        byte[] bytes = bytes(value);
-        return new yier.bubu.redis.bytes.BytesView() {
-            @Override
-            public int length() {
-                return bytes.length;
-            }
-
-            @Override
-            public byte getByte(int index) {
-                return bytes[index];
-            }
-        };
+        return TestBytes.view(bytes(value));
     }
 }

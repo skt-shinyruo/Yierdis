@@ -18,11 +18,6 @@ public class RedisReplyRendererTest {
                 RedisReplies.simpleString("OK"),
                 RedisReplies.error("bad"),
                 RedisReplies.integer(-7),
-                new RedisReply.BooleanValue(true),
-                new RedisReply.DoubleValue(1.5D),
-                new RedisReply.BigNumber("12345678901234567890"),
-                new RedisReply.VerbatimString("txt", bytes("body")),
-                new RedisReply.BlobError("blob"),
                 bulk,
                 RedisReplies.nullValue(),
                 RedisReplies.nullArray()
@@ -32,15 +27,10 @@ public class RedisReplyRendererTest {
         RedisReplyRenderer.render(reply, writer);
 
         Assert.assertEquals(List.of(
-                "array:11",
+                "array:6",
                 "simple:OK",
                 "error:bad",
                 "integer:-7",
-                "boolean:true",
-                "double:1.5",
-                "big-number:12345678901234567890",
-                "verbatim:txt:body",
-                "blob-error:blob",
                 "bulk:value",
                 "null",
                 "null-array"
@@ -48,26 +38,17 @@ public class RedisReplyRendererTest {
     }
 
     @Test
-    public void rendererWritesAllAggregateHeadersAndChildrenInOrder() {
+    public void rendererWritesMaterializedMapHeadersAndChildrenInOrder() {
         RedisReply reply = RedisReplies.array(List.of(
-                RedisReplies.map(List.of(RedisReplies.simpleString("key"), RedisReplies.integer(1))),
-                new RedisReply.Aggregate(ReplyShape.AggregateKind.SET,
-                        List.of(RedisReplies.integer(2), RedisReplies.integer(3))),
-                new RedisReply.Aggregate(ReplyShape.AggregateKind.PUSH,
-                        List.of(RedisReplies.simpleString("message"))),
-                new RedisReply.Aggregate(ReplyShape.AggregateKind.ATTRIBUTE, List.of(
-                        RedisReplies.simpleString("meta"), new RedisReply.BooleanValue(false)))
+                RedisReplies.map(List.of(RedisReplies.simpleString("key"), RedisReplies.integer(1)))
         ));
         RecordingWriter writer = new RecordingWriter();
 
         RedisReplyRenderer.render(reply, writer);
 
         Assert.assertEquals(List.of(
-                "array:4",
-                "map:1", "simple:key", "integer:1",
-                "set:2", "integer:2", "integer:3",
-                "push:1", "simple:message",
-                "attribute:1", "simple:meta", "boolean:false"
+                "array:1",
+                "map:1", "simple:key", "integer:1"
         ), writer.events());
     }
 
@@ -168,31 +149,6 @@ public class RedisReplyRendererTest {
         }
 
         @Override
-        public void booleanValue(boolean value) {
-            events.add("boolean:" + value);
-        }
-
-        @Override
-        public void doubleValue(double value) {
-            events.add("double:" + value);
-        }
-
-        @Override
-        public void bigNumberAscii(String value) {
-            events.add("big-number:" + value);
-        }
-
-        @Override
-        public void verbatimString(String format, byte[] data) {
-            events.add("verbatim:" + format + ':' + new String(data, StandardCharsets.US_ASCII));
-        }
-
-        @Override
-        public void blobError(String message) {
-            events.add("blob-error:" + message);
-        }
-
-        @Override
         public void nullValue() {
             events.add("null");
         }
@@ -215,16 +171,6 @@ public class RedisReplyRendererTest {
         @Override
         public void setHeader(int count) {
             events.add("set:" + count);
-        }
-
-        @Override
-        public void pushHeader(int count) {
-            events.add("push:" + count);
-        }
-
-        @Override
-        public void attributeHeader(int pairs) {
-            events.add("attribute:" + pairs);
         }
 
         @Override

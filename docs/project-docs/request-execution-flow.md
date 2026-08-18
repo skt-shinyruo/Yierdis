@@ -73,9 +73,9 @@ CommandExecutor
 - `NettyExecutionRequestIngress` 接收其中的 `ExecutionRequest` 或 `RespProtocolError`，保持回复顺序，完成 executor admission 或协议错误回包；
 - I/O 线程不调用 command handler，也不访问 DB。
 
-`RespRequestDecoder` 在 argv 与 payload 分配前完成 ingress admission，随后构造不可变的 `RetainedRespExecutionRequest`。每个请求持有脱离 Netty DTO 的 reference-counted request-memory lease；RESP array 中的 null bulk string 会原样保留，合法性由 `CommandDispatcher` 判断。
+`RespRequestDecoder` 在 argv 与 payload 分配前完成 ingress admission，随后通过 `ByteArrayExecutionRequest.takeOwnership(...)` 把不可变 argv 与 reference-counted request-memory lease 一并移交给请求，不做第二次逐参数复制。RESP array 中的 null bulk string 会原样保留，合法性由 `CommandDispatcher` 判断。
 
-`RetainedRespExecutionRequest` 是网络主链实现；`ByteArrayExecutionRequest` 用于 heap 输入、显式复制和测试。普通执行与事务重放都只依赖 `ExecutionRequest`。
+`ByteArrayExecutionRequest` 是网络主链和 heap 输入共用的实现；`takeOwnership(...)` 接管 decoder 的 argv 与 lease，`copyOf(...)` 创建独立快照，`fromUtf8(...)` 用于文本构造。普通执行与事务重放都只依赖 `ExecutionRequest`。
 
 ## 提交、admission 和背压
 
@@ -126,7 +126,7 @@ CommandExecutor
 ```text
 Netty ByteBuf
   -> RespRequestDecoder
-  -> RetainedRespExecutionRequest
+  -> ByteArrayExecutionRequest
   -> NettyExecutionRequestIngress
   -> CommandExecutor
   -> CommandDispatcher.prepare(session, request)

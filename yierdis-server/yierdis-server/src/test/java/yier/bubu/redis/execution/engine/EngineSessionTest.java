@@ -182,7 +182,7 @@ public class EngineSessionTest {
         Assert.assertNull(session.connectionStats());
 
         ConnectionStatsView stats = new ConnectionStatsView(
-                2, 24, false, false, false, 3, 1, 0, 0, 0, 0, 0);
+                2, 24, false, false, 3, 1, 0, 0, 0, 0, 0);
         session.bindConnectionStatsSupplier(() -> stats);
 
         Assert.assertSame(stats, session.connectionStats());

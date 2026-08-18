@@ -58,10 +58,6 @@ public interface ExecutionRequest extends AutoCloseable {
         return retainedBytes();
     }
 
-    default long retainedMemoryBytes() {
-        return admittedMemoryBytes();
-    }
-
     /**
      * 创建一个由新所有者关闭一次的独立保留视图。
      */

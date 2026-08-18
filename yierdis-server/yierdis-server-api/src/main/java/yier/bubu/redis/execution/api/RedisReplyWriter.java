@@ -23,16 +23,6 @@ public interface RedisReplyWriter extends ReplySink {
 
     void integer(long value);
 
-    void booleanValue(boolean value);
-
-    void doubleValue(double value);
-
-    void bigNumberAscii(String value);
-
-    void verbatimString(String format, byte[] data);
-
-    void blobError(String message);
-
     // --- Aggregates ---
     void nullValue();
 
@@ -43,8 +33,4 @@ public interface RedisReplyWriter extends ReplySink {
     void mapHeader(int pairs);
 
     void setHeader(int count);
-
-    void pushHeader(int count);
-
-    void attributeHeader(int pairs);
 }

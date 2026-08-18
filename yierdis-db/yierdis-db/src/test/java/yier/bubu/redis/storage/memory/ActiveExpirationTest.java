@@ -8,7 +8,6 @@ import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.SetMode;
-import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
@@ -23,6 +22,7 @@ import java.util.List;
 import java.util.Set;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
+import static yier.bubu.redis.storage.testkit.TestBytes.view;
 
 public class ActiveExpirationTest {
     @Test
@@ -277,13 +277,7 @@ public class ActiveExpirationTest {
         Assert.assertTrue(db.ttl().expire(keyView, 60).value());
         long usedAfterTtl = db.usedBytesForMaxmemory();
         Assert.assertEquals(usedBeforeTtl, usedAfterTtl);
-        YierdisMemoryStats stats = db.memoryStats();
-        Assert.assertEquals(1, stats.expireCount());
-        Assert.assertFalse(stats.expireRehashing());
-        Assert.assertEquals(0, stats.expireTable0Capacity());
-        Assert.assertEquals(0, stats.expireTable1Capacity());
-        Assert.assertEquals(0L, stats.expireTableOverheadBytesEstimate());
-        Assert.assertEquals(0L, stats.expireValueObjectsBytesEstimate());
+        Assert.assertEquals(1, db.memoryStats().expireCount());
 
         Assert.assertTrue(db.ttl().expire(keyView, 120).value());
         Assert.assertEquals(usedAfterTtl, db.usedBytesForMaxmemory());
@@ -351,17 +345,7 @@ public class ActiveExpirationTest {
     }
 
     private static BytesView viewOf(byte[] data) {
-        return new BytesView() {
-            @Override
-            public int length() {
-                return data.length;
-            }
-
-            @Override
-            public byte getByte(int index) {
-                return data[index];
-            }
-        };
+        return view(data);
     }
 
     private static void makePersistentWithoutStartingAnotherMutation(YierdisDb db, byte[] key) {

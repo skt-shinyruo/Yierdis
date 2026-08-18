@@ -8,16 +8,23 @@ import java.util.Objects;
  * Immutable heap-backed {@link ExecutionRequest}.
  */
 public final class ByteArrayExecutionRequest implements ExecutionRequest {
-    private final SharedArgv argv;
+    private final byte[][] argv;
+    private final int retainedBytes;
     private final boolean exposeReadOnlyBacking;
     private final RequestMemoryLease lease;
 
     private ByteArrayExecutionRequest(byte[][] argv, int retainedBytes, boolean exposeReadOnlyBacking) {
-        this(new SharedArgv(argv, retainedBytes), exposeReadOnlyBacking, RequestMemoryLease.NOOP);
+        this(argv, retainedBytes, exposeReadOnlyBacking, RequestMemoryLease.NOOP);
     }
 
-    private ByteArrayExecutionRequest(SharedArgv argv, boolean exposeReadOnlyBacking, RequestMemoryLease lease) {
+    private ByteArrayExecutionRequest(
+            byte[][] argv,
+            int retainedBytes,
+            boolean exposeReadOnlyBacking,
+            RequestMemoryLease lease
+    ) {
         this.argv = argv;
+        this.retainedBytes = retainedBytes;
         this.exposeReadOnlyBacking = exposeReadOnlyBacking;
         this.lease = lease;
     }
@@ -66,6 +73,21 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
         return new ByteArrayExecutionRequest(argv.clone(), Math.max(0, retainedBytes), true);
     }
 
+    public static ByteArrayExecutionRequest takeOwnership(
+            byte[][] argv,
+            int retainedBytes,
+            RequestMemoryLease lease
+    ) {
+        Objects.requireNonNull(argv, "argv");
+        Objects.requireNonNull(lease, "lease");
+        return new ByteArrayExecutionRequest(
+                argv,
+                Math.max(0, retainedBytes),
+                true,
+                lease
+        );
+    }
+
     public static ByteArrayExecutionRequest fromUtf8(String commandName, List<String> args) {
         Objects.requireNonNull(commandName, "commandName");
         Objects.requireNonNull(args, "args");
@@ -95,23 +117,23 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
 
     @Override
     public int argc() {
-        return argv.values.length;
+        return argv.length;
     }
 
     @Override
     public boolean isNull(int index) {
-        return argv.values[index] == null;
+        return argv[index] == null;
     }
 
     @Override
     public int len(int index) {
-        byte[] arg = argv.values[index];
+        byte[] arg = argv[index];
         return arg == null ? -1 : arg.length;
     }
 
     @Override
     public byte byteAt(int index, int offset) {
-        byte[] arg = argv.values[index];
+        byte[] arg = argv[index];
         if (arg == null) {
             throw new IllegalStateException("arg is null");
         }
@@ -120,7 +142,7 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
 
     @Override
     public void copyToByteArray(int index, byte[] dst, int dstOff) {
-        byte[] arg = argv.values[index];
+        byte[] arg = argv[index];
         if (arg == null) {
             throw new IllegalStateException("arg is null");
         }
@@ -129,13 +151,13 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
 
     @Override
     public byte[] toByteArray(int index) {
-        byte[] arg = argv.values[index];
+        byte[] arg = argv[index];
         return arg == null ? null : arg.clone();
     }
 
     @Override
     public byte[] readOnlyByteArray(int index) {
-        byte[] arg = argv.values[index];
+        byte[] arg = argv[index];
         if (arg == null) {
             return null;
         }
@@ -144,17 +166,22 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
 
     @Override
     public int retainedBytes() {
-        return argv.retainedBytes;
+        return retainedBytes;
     }
 
     @Override
     public long admittedMemoryBytes() {
-        return argv.admittedMemoryBytes;
+        return lease == RequestMemoryLease.NOOP ? estimatedMemoryBytes(argv) : lease.reservedBytes();
     }
 
     @Override
     public ByteArrayExecutionRequest retain() {
-        return new ByteArrayExecutionRequest(argv, exposeReadOnlyBacking, lease.retain());
+        return new ByteArrayExecutionRequest(
+                argv,
+                retainedBytes,
+                exposeReadOnlyBacking,
+                lease.retain()
+        );
     }
 
     @Override
@@ -162,13 +189,8 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
         lease.close();
     }
 
-    private record SharedArgv(byte[][] values, int retainedBytes, long admittedMemoryBytes) {
-        private SharedArgv(byte[][] values, int retainedBytes) {
-            this(values, retainedBytes, ByteArrayExecutionRequest.admittedMemoryBytes(values));
-        }
-    }
-
-    private static long admittedMemoryBytes(byte[][] argv) {
+    public static long estimatedMemoryBytes(byte[][] argv) {
+        Objects.requireNonNull(argv, "argv");
         long total = saturatedAdd(48L, argv.length * 8L);
         for (byte[] arg : argv) {
             if (arg != null) {

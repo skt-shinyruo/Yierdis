@@ -55,7 +55,7 @@ final class ConnectionReplySequencer implements AutoCloseable {
             Runnable disableInput,
             Function<ReplySlot, BytesSink> sinkFactory
     ) {
-        this(channel, connectionMemory, disableInput, sinkFactory, ReplyEgressStats.noop());
+        this(channel, connectionMemory, disableInput, sinkFactory, new ReplyEgressStats());
     }
 
     ConnectionReplySequencer(

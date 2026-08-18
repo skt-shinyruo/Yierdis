@@ -4,6 +4,7 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 
 import java.nio.charset.StandardCharsets;
@@ -401,7 +402,7 @@ public class RespRequestDecoderTest {
             )));
 
             Object decoded = channel.readInbound();
-            Assert.assertTrue(decoded instanceof RetainedRespExecutionRequest);
+            Assert.assertTrue(decoded instanceof ByteArrayExecutionRequest);
             ExecutionRequest request = (ExecutionRequest) decoded;
             retained = request.retain();
             request.close();

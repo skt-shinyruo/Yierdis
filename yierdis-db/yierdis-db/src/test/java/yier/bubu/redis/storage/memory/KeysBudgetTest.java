@@ -8,17 +8,16 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.ScanCursorV2;
-import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.KeyScanWindow;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 import yier.bubu.redis.storage.memory.internal.keyspace.YierdisGlobMatcher;
+import yier.bubu.redis.storage.testkit.MaterializingByteValueSink;
 
 import java.nio.charset.StandardCharsets;
 import java.lang.reflect.Field;
@@ -203,7 +202,7 @@ public class KeysBudgetTest {
         return new String(bytes, StandardCharsets.US_ASCII);
     }
 
-    private static final class RecordingSink implements ByteValueSink {
+    private static final class RecordingSink extends MaterializingByteValueSink {
         private final List<String> values = new ArrayList<>();
 
         @Override
@@ -211,30 +210,5 @@ public class KeysBudgetTest {
             values.add(data == null ? null : new String(data, StandardCharsets.US_ASCII));
         }
 
-        @Override
-        public void value(byte[] data, int off, int len) {
-            values.add(data == null ? null : new String(data, off, len, StandardCharsets.US_ASCII));
-        }
-
-        @Override
-        public void value(BytesSlice slice) {
-            if (slice == null) {
-                values.add(null);
-                return;
-            }
-            byte[] bytes = new byte[slice.length()];
-            slice.getBytes(0, bytes, 0, bytes.length);
-            values.add(new String(bytes, StandardCharsets.US_ASCII));
-        }
-
-        @Override
-        public void longAscii(long value) {
-            values.add(Long.toString(value));
-        }
-
-        @Override
-        public void nullValue() {
-            values.add(null);
-        }
     }
 }

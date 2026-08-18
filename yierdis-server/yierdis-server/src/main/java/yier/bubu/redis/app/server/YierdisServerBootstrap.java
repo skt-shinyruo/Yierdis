@@ -597,7 +597,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         }
     }
 
-    private static YierdisDbRouter dbRouter(YierdisInstance instance) {
+    static YierdisDbRouter dbRouter(YierdisInstance instance) {
         Objects.requireNonNull(instance, "instance");
         DbEngine[] dbViews = instance.engines();
         return new YierdisDbRouter() {

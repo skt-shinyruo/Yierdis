@@ -14,11 +14,6 @@ public final class RedisReplyRenderer {
             case RedisReply.Error value -> out.error(value.message());
             case RedisReply.ControlError value -> out.controlError(value.message());
             case RedisReply.IntegerValue value -> out.integer(value.value());
-            case RedisReply.BooleanValue value -> out.booleanValue(value.value());
-            case RedisReply.DoubleValue value -> out.doubleValue(value.value());
-            case RedisReply.BigNumber value -> out.bigNumberAscii(value.ascii());
-            case RedisReply.VerbatimString value -> out.verbatimString(value.format(), value.data());
-            case RedisReply.BlobError value -> out.blobError(value.message());
             case RedisReply.BulkString value -> value.emitter().accept(out);
             case RedisReply.NullValue ignored -> out.nullValue();
             case RedisReply.NullArray ignored -> out.nullArray();
@@ -43,9 +38,6 @@ public final class RedisReplyRenderer {
         switch (aggregate.kind()) {
             case ARRAY -> out.arrayHeader(elementCount);
             case MAP -> out.mapHeader(elementCount / 2);
-            case SET -> out.setHeader(elementCount);
-            case PUSH -> out.pushHeader(elementCount);
-            case ATTRIBUTE -> out.attributeHeader(elementCount / 2);
         }
         for (RedisReply element : aggregate.elements()) {
             render(element, out);

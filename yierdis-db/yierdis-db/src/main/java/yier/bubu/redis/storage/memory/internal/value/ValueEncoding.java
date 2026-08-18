@@ -1,12 +1,5 @@
 package yier.bubu.redis.storage.memory.internal.value;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
-
 import yier.bubu.redis.storage.api.ValueType;
 /**
  * Redis-style internal encodings per logical {@link ValueType}.

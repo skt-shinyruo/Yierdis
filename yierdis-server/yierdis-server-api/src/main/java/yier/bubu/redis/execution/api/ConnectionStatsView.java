@@ -4,7 +4,6 @@ public record ConnectionStatsView(
         int pending,
         long pendingBytes,
         boolean inputDisabledByExecutor,
-        boolean inputPausedByReply,
         boolean closing,
         long commandsEnqueued,
         long commandsExecuted,

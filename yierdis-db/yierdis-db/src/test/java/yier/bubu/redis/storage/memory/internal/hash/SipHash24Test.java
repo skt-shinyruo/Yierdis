@@ -2,13 +2,14 @@ package yier.bubu.redis.storage.memory.internal.hash;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.storage.memory.TestBackend;
+
+import static yier.bubu.redis.storage.testkit.TestBytes.view;
 
 public class SipHash24Test {
     private static final HashSeed REFERENCE_SEED = new HashSeed(
@@ -54,7 +55,7 @@ public class SipHash24Test {
         byte[] input = {0, (byte) 0xff, 1, (byte) 0x80, 127};
         long expected = SipHash24.hash(REFERENCE_SEED, input);
 
-        Assert.assertEquals(expected, SipHash24.hash(REFERENCE_SEED, bytesView(input)));
+        Assert.assertEquals(expected, SipHash24.hash(REFERENCE_SEED, view(input)));
 
         try (TestBackend runtime = TestBackend.open("siphash-test");
              StableMemoryBackend allocator = runtime.backend()) {
@@ -72,17 +73,4 @@ public class SipHash24Test {
         }
     }
 
-    private static BytesView bytesView(byte[] data) {
-        return new BytesView() {
-            @Override
-            public int length() {
-                return data.length;
-            }
-
-            @Override
-            public byte getByte(int index) {
-                return data[index];
-            }
-        };
-    }
 }

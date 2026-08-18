@@ -12,7 +12,6 @@ import org.junit.Test;
 public class RedisReplyTest {
     @Test
     public void exactRepliesCarryTheirOwnDataAndShape() {
-        byte[] verbatimData = bytes("body");
         byte[] bulkData = bytes("value");
         List<ReplyCase> cases = List.of(
                 new ReplyCase(
@@ -32,31 +31,6 @@ public class RedisReplyTest {
                         ReplyShapes.integer(7),
                         reply -> Assert.assertEquals(7L, ((RedisReply.IntegerValue) reply).value())),
                 new ReplyCase(
-                        new RedisReply.BooleanValue(true),
-                        ReplyShapes.booleanValue(true),
-                        reply -> Assert.assertTrue(((RedisReply.BooleanValue) reply).value())),
-                new ReplyCase(
-                        new RedisReply.DoubleValue(1.5D),
-                        ReplyShapes.doubleValue(1.5D),
-                        reply -> Assert.assertEquals(1.5D, ((RedisReply.DoubleValue) reply).value(), 0D)),
-                new ReplyCase(
-                        new RedisReply.BigNumber("12345678901234567890"),
-                        ReplyShapes.bigNumber("12345678901234567890"),
-                        reply -> Assert.assertEquals(
-                                "12345678901234567890", ((RedisReply.BigNumber) reply).ascii())),
-                new ReplyCase(
-                        new RedisReply.VerbatimString("txt", verbatimData),
-                        ReplyShapes.verbatimString("txt", 4),
-                        reply -> {
-                            RedisReply.VerbatimString value = (RedisReply.VerbatimString) reply;
-                            Assert.assertEquals("txt", value.format());
-                            Assert.assertArrayEquals(bytes("body"), value.data());
-                        }),
-                new ReplyCase(
-                        new RedisReply.BlobError("bad"),
-                        ReplyShapes.blobError("bad"),
-                        reply -> Assert.assertEquals("bad", ((RedisReply.BlobError) reply).message())),
-                new ReplyCase(
                         RedisReplies.bulkString(bulkData),
                         ReplyShapes.bulkString(5, 0),
                         reply -> {
@@ -74,7 +48,6 @@ public class RedisReplyTest {
                         reply -> Assert.assertTrue(reply instanceof RedisReply.NullArray))
         );
 
-        verbatimData[0] = 'X';
         bulkData[0] = 'X';
         for (ReplyCase replyCase : cases) {
             Assert.assertEquals(replyCase.shape(), replyCase.reply().shape());
@@ -95,15 +68,6 @@ public class RedisReplyTest {
                 new AggregateCase(
                         RedisReplies.map(List.of(bulk, RedisReplies.integer(1))),
                         ReplyShape.AggregateKind.MAP,
-                        2),
-                new AggregateCase(new RedisReply.Aggregate(ReplyShape.AggregateKind.SET,
-                        List.of(simple, bulk)), ReplyShape.AggregateKind.SET, 2),
-                new AggregateCase(new RedisReply.Aggregate(ReplyShape.AggregateKind.PUSH,
-                        List.of(simple)), ReplyShape.AggregateKind.PUSH, 1),
-                new AggregateCase(
-                        new RedisReply.Aggregate(ReplyShape.AggregateKind.ATTRIBUTE,
-                                List.of(simple, RedisReplies.integer(1))),
-                        ReplyShape.AggregateKind.ATTRIBUTE,
                         2)
         );
 
@@ -234,7 +198,6 @@ public class RedisReplyTest {
         assertNullPointer(() -> RedisReplies.byteMap(0, 0, null, emitter));
         assertNullPointer(() -> RedisReplies.byteMap(0, 0, lengths, null));
         assertNullPointer(() -> RedisReplies.bulkString((byte[]) null));
-        assertNullPointer(() -> new RedisReply.VerbatimString("txt", null));
     }
 
     @Test
@@ -244,9 +207,7 @@ public class RedisReplyTest {
         withNull.add(null);
 
         assertIllegalArgument(() -> RedisReplies.map(odd));
-        assertIllegalArgument(() -> new RedisReply.Aggregate(ReplyShape.AggregateKind.ATTRIBUTE, odd));
         assertIllegalArgument(() -> new RedisReply.Aggregate(ReplyShape.AggregateKind.MAP, odd));
-        assertIllegalArgument(() -> new RedisReply.Aggregate(ReplyShape.AggregateKind.ATTRIBUTE, odd));
         assertNullPointer(() -> RedisReplies.array(withNull));
         assertNullPointer(() -> new RedisReply.Aggregate(ReplyShape.AggregateKind.ARRAY, withNull));
     }
@@ -257,12 +218,6 @@ public class RedisReplyTest {
 
         assertIllegalArgument(() -> RedisReplies.array(List.of(controlError)));
         assertIllegalArgument(() -> RedisReplies.map(List.of(RedisReplies.integer(1), controlError)));
-        assertIllegalArgument(() -> new RedisReply.Aggregate(
-                ReplyShape.AggregateKind.SET, List.of(controlError)));
-        assertIllegalArgument(() -> new RedisReply.Aggregate(
-                ReplyShape.AggregateKind.PUSH, List.of(controlError)));
-        assertIllegalArgument(() -> new RedisReply.Aggregate(
-                ReplyShape.AggregateKind.ATTRIBUTE, List.of(RedisReplies.integer(1), controlError)));
         assertIllegalArgument(() -> new RedisReply.Aggregate(
                 ReplyShape.AggregateKind.ARRAY,
                 List.of(controlError)));

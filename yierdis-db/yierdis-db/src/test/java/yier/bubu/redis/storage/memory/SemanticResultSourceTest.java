@@ -8,14 +8,13 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.result.ByteMapSource;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
-import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.KeyScanWindow;
+import yier.bubu.redis.storage.testkit.MaterializingByteValueSink;
 
 public class SemanticResultSourceTest {
     @Test
@@ -157,36 +156,12 @@ public class SemanticResultSourceTest {
         void accept(YierdisDb db);
     }
 
-    private static final class RecordingSink implements ByteValueSink {
+    private static final class RecordingSink extends MaterializingByteValueSink {
         private final List<byte[]> values = new ArrayList<>();
 
         @Override
         public void value(byte[] data) {
             values.add(data == null ? null : data.clone());
-        }
-
-        @Override
-        public void value(byte[] data, int off, int len) {
-            byte[] copy = new byte[len];
-            System.arraycopy(data, off, copy, 0, len);
-            values.add(copy);
-        }
-
-        @Override
-        public void value(BytesSlice slice) {
-            byte[] copy = new byte[slice.length()];
-            slice.getBytes(0, copy, 0, copy.length);
-            values.add(copy);
-        }
-
-        @Override
-        public void longAscii(long value) {
-            values.add(Long.toString(value).getBytes(StandardCharsets.US_ASCII));
-        }
-
-        @Override
-        public void nullValue() {
-            values.add(null);
         }
 
         private List<byte[]> values() {

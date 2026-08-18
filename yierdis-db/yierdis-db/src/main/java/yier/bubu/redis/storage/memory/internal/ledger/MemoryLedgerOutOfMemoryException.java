@@ -1,11 +1,5 @@
 package yier.bubu.redis.storage.memory.internal.ledger;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
 // MemoryLedgerOutOfMemoryException：ledger 层的“预算触顶”拒写异常（对齐 Redis OOM message）。
 
 /**

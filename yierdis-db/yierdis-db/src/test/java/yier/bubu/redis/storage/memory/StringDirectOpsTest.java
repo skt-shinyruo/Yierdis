@@ -2,7 +2,6 @@ package yier.bubu.redis.storage.memory;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.storage.api.ExpireOption;
@@ -14,10 +13,11 @@ import yier.bubu.redis.storage.api.StringOps;
 import yier.bubu.redis.storage.api.WriteResult;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.YierdisCommandException;
-import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.ByteValue;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
+import yier.bubu.redis.storage.testkit.MaterializingByteValueSink;
+import yier.bubu.redis.storage.testkit.TestBytes;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -539,7 +539,7 @@ public class StringDirectOpsTest {
     }
 
     private static BytesSlice slice(String text) {
-        return new ArrayBytesSlice(b(text));
+        return TestBytes.slice(b(text));
     }
 
     private static void sleepPastTtl() {
@@ -571,33 +571,12 @@ public class StringDirectOpsTest {
 
     private static byte[] byteValueBytes(ByteValue value) {
         final byte[][] captured = new byte[1][];
-        value.emitTo(new ByteValueSink() {
+        value.emitTo(new MaterializingByteValueSink() {
             @Override
             public void value(byte[] data) {
                 captured[0] = data == null ? null : java.util.Arrays.copyOf(data, data.length);
             }
 
-            @Override
-            public void value(byte[] data, int off, int len) {
-                captured[0] = java.util.Arrays.copyOfRange(data, off, off + len);
-            }
-
-            @Override
-            public void value(BytesSlice slice) {
-                byte[] data = new byte[slice.length()];
-                slice.getBytes(0, data, 0, data.length);
-                captured[0] = data;
-            }
-
-            @Override
-            public void longAscii(long value) {
-                captured[0] = Long.toString(value).getBytes(StandardCharsets.US_ASCII);
-            }
-
-            @Override
-            public void nullValue() {
-                captured[0] = null;
-            }
         });
         return captured[0];
     }
@@ -612,31 +591,4 @@ public class StringDirectOpsTest {
         void run();
     }
 
-    private static final class ArrayBytesSlice implements BytesSlice {
-        private final byte[] bytes;
-
-        private ArrayBytesSlice(byte[] bytes) {
-            this.bytes = bytes;
-        }
-
-        @Override
-        public void writeTo(BytesSink out) {
-            out.writeBytes(bytes, 0, bytes.length);
-        }
-
-        @Override
-        public int length() {
-            return bytes.length;
-        }
-
-        @Override
-        public byte getByte(int index) {
-            return bytes[index];
-        }
-
-        @Override
-        public String toString() {
-            return new String(bytes, StandardCharsets.UTF_8);
-        }
-    }
 }

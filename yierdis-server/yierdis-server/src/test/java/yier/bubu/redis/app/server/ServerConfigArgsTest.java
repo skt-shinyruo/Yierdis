@@ -29,36 +29,32 @@ public class ServerConfigArgsTest {
                 () -> ServerConfig.fromArgs(new String[]{"--port", "0"})
         );
 
-        Assert.assertEquals(2, error.exitCode());
         Assert.assertTrue(error.getMessage().contains("--maxmemoryBytes must be specified explicitly"));
     }
 
     @Test
     public void invalidWatermarkOrderFailsFast() {
-        YierdisCliException error = assertThrows(YierdisCliException.class, () -> ServerConfig.fromArgs(new String[]{
+        assertThrows(YierdisCliException.class, () -> ServerConfig.fromArgs(new String[]{
                 "--maxmemoryBytes", "0",
                 "--backpressureHigh", "10",
                 "--backpressureLow", "10"
         }));
-        Assert.assertEquals(2, error.exitCode());
     }
 
     @Test
     public void invalidMaxmemoryPolicyFailsFast() {
-        YierdisCliException error = assertThrows(YierdisCliException.class, () -> ServerConfig.fromArgs(new String[]{
+        assertThrows(YierdisCliException.class, () -> ServerConfig.fromArgs(new String[]{
                 "--maxmemoryBytes", "0",
                 "--maxmemoryPolicy", "random-evict"
         }));
-        Assert.assertEquals(2, error.exitCode());
     }
 
     @Test
     public void parseErrorsPrintUsageAndThrowCliException() {
         String err = captureStderr(() -> {
-            YierdisCliException error = assertThrows(YierdisCliException.class, () -> ServerConfig.fromArgs(new String[]{
+            assertThrows(YierdisCliException.class, () -> ServerConfig.fromArgs(new String[]{
                     "--port", "not-a-number"
             }));
-            Assert.assertEquals(2, error.exitCode());
         });
 
         Assert.assertTrue("stderr should include usage", err.contains("Usage: yierdis"));
@@ -151,10 +147,9 @@ public class ServerConfigArgsTest {
     @Test
     public void validateErrorsPrintUsageToStderr() {
         String err = captureStderr(() -> {
-            YierdisCliException error = assertThrows(YierdisCliException.class, () -> ServerConfig.fromArgs(new String[]{
+            assertThrows(YierdisCliException.class, () -> ServerConfig.fromArgs(new String[]{
                     "--offheapBackend", "foreign"
             }));
-            Assert.assertEquals(2, error.exitCode());
         });
 
         Assert.assertTrue("stderr should include usage", err.contains("Usage: yierdis"));

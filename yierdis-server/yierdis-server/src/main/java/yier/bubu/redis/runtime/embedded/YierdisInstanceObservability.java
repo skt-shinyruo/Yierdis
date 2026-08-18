@@ -71,19 +71,10 @@ public final class YierdisInstanceObservability {
         }
 
         MemoryUsageSnapshot physicalUsage = MemoryUsageSnapshot.ZERO;
-        long keyspaceOverhead = 0;
-        long expireOverhead = 0;
-        long expireValueObjects = 0;
         long reserved = 0;
         int keyCount = 0;
         int expireCount = 0;
         boolean keysStoredOffHeap = false;
-        boolean keyspaceRehashing = false;
-        boolean expireRehashing = false;
-        int keyspaceCap0 = 0;
-        int keyspaceCap1 = 0;
-        int expireCap0 = 0;
-        int expireCap1 = 0;
         long nativeDefragLastScannedObjects = 0;
         long nativeDefragLastMovedObjects = 0;
         long nativeDefragLastMovedBytes = 0;
@@ -118,19 +109,10 @@ public final class YierdisInstanceObservability {
             if (dbUsage != null) {
                 physicalUsage = physicalUsage.plus(dbUsage);
             }
-            keyspaceOverhead = addSaturating(keyspaceOverhead, s.keyspaceTableOverheadBytesEstimate());
-            expireOverhead = addSaturating(expireOverhead, s.expireTableOverheadBytesEstimate());
-            expireValueObjects = addSaturating(expireValueObjects, s.expireValueObjectsBytesEstimate());
             reserved = addSaturating(reserved, Math.max(0L, s.reservedBytes()));
             keyCount = addSaturating(keyCount, s.keyCount());
             expireCount = addSaturating(expireCount, s.expireCount());
             keysStoredOffHeap |= s.keysStoredOffHeap();
-            keyspaceRehashing |= s.keyspaceRehashing();
-            expireRehashing |= s.expireRehashing();
-            keyspaceCap0 = addSaturating(keyspaceCap0, s.keyspaceTable0Capacity());
-            keyspaceCap1 = addSaturating(keyspaceCap1, s.keyspaceTable1Capacity());
-            expireCap0 = addSaturating(expireCap0, s.expireTable0Capacity());
-            expireCap1 = addSaturating(expireCap1, s.expireTable1Capacity());
             nativeDefragLastScannedObjects = addSaturating(nativeDefragLastScannedObjects, s.nativeDefragLastScannedObjects());
             nativeDefragLastMovedObjects = addSaturating(nativeDefragLastMovedObjects, s.nativeDefragLastMovedObjects());
             nativeDefragLastMovedBytes = addSaturating(nativeDefragLastMovedBytes, s.nativeDefragLastMovedBytes());
@@ -173,15 +155,6 @@ public final class YierdisInstanceObservability {
                 keysStoredOffHeap,
                 keyCount,
                 expireCount,
-                keyspaceRehashing,
-                keyspaceCap0,
-                keyspaceCap1,
-                keyspaceOverhead,
-                expireRehashing,
-                expireCap0,
-                expireCap1,
-                expireOverhead,
-                expireValueObjects,
                 totalEstimatedBytes,
                 nativeDefragLastScannedObjects,
                 nativeDefragLastMovedObjects,

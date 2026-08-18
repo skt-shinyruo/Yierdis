@@ -5,7 +5,6 @@ import java.util.ArrayList;
 import java.util.List;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.memory.testkit.HeapStableMemoryBackend;
 import yier.bubu.redis.storage.api.DbDefragConfig;
@@ -18,8 +17,9 @@ import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.StringOps;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
 import yier.bubu.redis.storage.api.result.ByteValue;
-import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.PoppedValueSequence;
+import yier.bubu.redis.storage.testkit.MaterializingByteValueSink;
+import yier.bubu.redis.storage.testkit.TestBytes;
 
 public class PreparedMutationStorageTest {
     @Test
@@ -145,7 +145,7 @@ public class PreparedMutationStorageTest {
     }
 
     private static BytesSlice slice(String value) {
-        return new ArraySlice(bytes(value));
+        return TestBytes.slice(bytes(value));
     }
 
     private static List<String> strings(ByteSequenceSource source) {
@@ -204,51 +204,12 @@ public class PreparedMutationStorageTest {
         }
     }
 
-    private record ArraySlice(byte[] data) implements BytesSlice {
-        @Override
-        public int length() {
-            return data.length;
-        }
-
-        @Override
-        public byte getByte(int index) {
-            return data[index];
-        }
-
-        @Override
-        public void writeTo(BytesSink out) {
-            out.writeBytes(data, 0, data.length);
-        }
-    }
-
-    private static final class CollectingSink implements ByteValueSink {
+    private static final class CollectingSink extends MaterializingByteValueSink {
         private final List<String> values = new ArrayList<>();
 
         @Override
         public void value(byte[] data) {
-            values.add(new String(data, StandardCharsets.US_ASCII));
-        }
-
-        @Override
-        public void value(byte[] data, int offset, int length) {
-            values.add(new String(data, offset, length, StandardCharsets.US_ASCII));
-        }
-
-        @Override
-        public void value(BytesSlice slice) {
-            byte[] data = new byte[slice.length()];
-            slice.getBytes(0, data, 0, data.length);
-            value(data);
-        }
-
-        @Override
-        public void longAscii(long value) {
-            values.add(Long.toString(value));
-        }
-
-        @Override
-        public void nullValue() {
-            values.add(null);
+            values.add(data == null ? null : new String(data, StandardCharsets.US_ASCII));
         }
 
         private List<String> values() {

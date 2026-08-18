@@ -28,19 +28,6 @@ public final class RespReplySizer implements BiFunction<CommandSession, ReplySha
             case ReplyShape.SimpleString value -> lineBytes(value.payloadLength());
             case ReplyShape.Error value -> lineBytes(value.payloadLength());
             case ReplyShape.IntegerValue value -> lineBytes(decimalDigits(value.value()));
-            case ReplyShape.BooleanValue value -> version == RespProtocolVersion.RESP3
-                    ? 4L
-                    : lineBytes(1);
-            case ReplyShape.DoubleValue value -> doubleBytes(value.value(), version);
-            case ReplyShape.BigNumber value -> version == RespProtocolVersion.RESP3
-                    ? lineBytes(value.asciiLength())
-                    : bulkBytes(value.asciiLength());
-            case ReplyShape.VerbatimString value -> version == RespProtocolVersion.RESP3
-                    ? framedBytes(saturatedAdd(saturatedAdd(value.formatLength(), 1L), value.payloadLength()))
-                    : bulkBytes(value.payloadLength());
-            case ReplyShape.BlobError value -> version == RespProtocolVersion.RESP3
-                    ? framedBytes(value.payloadLength())
-                    : lineBytes(value.payloadLength());
             case ReplyShape.BulkString value -> bulkBytes(value.payloadLength());
             case ReplyShape.NullValue ignored -> nullValueBytes(version);
             case ReplyShape.NullArray ignored -> nullArrayBytes(version);
@@ -59,34 +46,11 @@ public final class RespReplySizer implements BiFunction<CommandSession, ReplySha
         };
     }
 
-    private static long doubleBytes(double value, RespProtocolVersion version) {
-        String text;
-        if (Double.isNaN(value)) {
-            text = "nan";
-        } else if (value == Double.POSITIVE_INFINITY) {
-            text = "inf";
-        } else if (value == Double.NEGATIVE_INFINITY) {
-            text = "-inf";
-        } else {
-            text = Double.toString(value);
-        }
-        return version == RespProtocolVersion.RESP3
-                ? lineBytes(text.length())
-                : bulkBytes(text.length());
-    }
-
     private static long aggregateBytes(ReplyShape.Aggregate aggregate, RespProtocolVersion version) {
         List<ReplyShape> elements = aggregate.elements();
         long encoded = switch (aggregate.kind()) {
             case ARRAY -> aggregateHeaderBytes('*', elements.size());
             case MAP -> mapHeaderBytes(elements.size(), version, '%');
-            case SET -> version == RespProtocolVersion.RESP3
-                    ? aggregateHeaderBytes('~', elements.size())
-                    : aggregateHeaderBytes('*', elements.size());
-            case PUSH -> version == RespProtocolVersion.RESP3
-                    ? aggregateHeaderBytes('>', elements.size())
-                    : aggregateHeaderBytes('*', elements.size());
-            case ATTRIBUTE -> mapHeaderBytes(elements.size(), version, '|');
         };
         for (ReplyShape element : elements) {
             encoded = saturatedAdd(encoded, encodedBytes(element, version));

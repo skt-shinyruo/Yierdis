@@ -9,7 +9,7 @@
 ```text
 RESP bytes
   -> RespRequestDecoder
-  -> RetainedRespExecutionRequest / ExecutionRequest
+  -> ByteArrayExecutionRequest
   -> NettyExecutionRequestIngress
   -> CommandExecutor
   -> CommandDispatcher.prepare(session, request)

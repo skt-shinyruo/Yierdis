@@ -30,8 +30,8 @@ mvn -DskipTests package
 1. [`docs/project-docs/readme.md`](docs/project-docs/readme.md)
 2. [`docs/project-docs/project-overview.md`](docs/project-docs/project-overview.md)
 3. [`docs/project-docs/request-execution-flow.md`](docs/project-docs/request-execution-flow.md)
-4. [`docs/project-docs/main-path-walkthrough.md`](docs/project-docs/main-path-walkthrough.md)
-5. [`docs/project-docs/module-architecture.md`](docs/project-docs/module-architecture.md)
+4. [`docs/project-docs/module-architecture.md`](docs/project-docs/module-architecture.md)
+5. [`docs/project-docs/development-navigation.md`](docs/project-docs/development-navigation.md)
 
 ## 启动
 

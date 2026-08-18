@@ -1,17 +1,11 @@
 package yier.bubu.redis.storage.memory;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.storage.api.SetMode;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
+import static yier.bubu.redis.storage.testkit.TestBytes.view;
 
 public class MemoryStatsAccountingConsistencyTest {
     @Test
@@ -30,20 +24,4 @@ public class MemoryStatsAccountingConsistencyTest {
         }
     }
 
-    private static BytesView view(byte[] data) {
-        return new BytesView() {
-            @Override
-            public int length() {
-                return data.length;
-            }
-
-            @Override
-            public byte getByte(int index) {
-                if (index < 0 || index >= data.length) {
-                    throw new IndexOutOfBoundsException();
-                }
-                return data[index];
-            }
-        };
-    }
 }

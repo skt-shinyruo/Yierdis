@@ -3,9 +3,6 @@ package yier.bubu.redis.app.server;
 import java.util.concurrent.atomic.LongAdder;
 
 final class ReplyEgressStats {
-    private static final ReplyEgressStats NOOP = new ReplyEgressStats(false);
-
-    private final boolean enabled;
     private final LongAdder activeChunks = new LongAdder();
     private final LongAdder activeSources = new LongAdder();
     private final LongAdder oversizedReplies = new LongAdder();
@@ -15,76 +12,44 @@ final class ReplyEgressStats {
     private final LongAdder resultUnknownCloses = new LongAdder();
     private final LongAdder shutdownTimeouts = new LongAdder();
 
-    ReplyEgressStats() {
-        this(true);
-    }
-
-    private ReplyEgressStats(boolean enabled) {
-        this.enabled = enabled;
-    }
-
-    static ReplyEgressStats noop() {
-        return NOOP;
-    }
-
     void chunkAdded() {
-        if (enabled) {
-            activeChunks.increment();
-        }
+        activeChunks.increment();
     }
 
     void chunkReleased() {
-        if (enabled) {
-            activeChunks.decrement();
-        }
+        activeChunks.decrement();
     }
 
     void sourceAdded() {
-        if (enabled) {
-            activeSources.increment();
-        }
+        activeSources.increment();
     }
 
     void sourceReleased() {
-        if (enabled) {
-            activeSources.decrement();
-        }
+        activeSources.decrement();
     }
 
     void oversizedReply() {
-        if (enabled) {
-            oversizedReplies.increment();
-        }
+        oversizedReplies.increment();
     }
 
     void cancelledSlot() {
-        if (enabled) {
-            cancelledSlots.increment();
-        }
+        cancelledSlots.increment();
     }
 
     void failedSlot() {
-        if (enabled) {
-            failedSlots.increment();
-        }
+        failedSlots.increment();
     }
 
     void writeFailure() {
-        if (enabled) {
-            writeFailures.increment();
-        }
+        writeFailures.increment();
     }
 
     void resultUnknownClose() {
-        if (enabled) {
-            resultUnknownCloses.increment();
-        }
+        resultUnknownCloses.increment();
     }
 
     void shutdownTimeout() {
-        if (enabled) {
-            shutdownTimeouts.increment();
-        }
+        shutdownTimeouts.increment();
     }
 
     Snapshot snapshot() {

@@ -12,7 +12,6 @@ import yier.bubu.redis.execution.api.RedisReplyRenderer;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.ReplyReservationSink;
-import yier.bubu.redis.execution.api.ReplyShape;
 
 import java.io.ByteArrayOutputStream;
 import java.lang.reflect.Proxy;
@@ -35,7 +34,7 @@ public class RedisReplyRespContractTest {
     }
 
     @Test
-    public void nestedAggregatesUseResp2FallbacksAndResp3NativeTypes() {
+    public void mapsUseResp2FallbacksAndResp3NativeTypes() {
         for (ReplyFixture fixture : aggregateFixtures()) {
             assertExactContract(fixture);
         }
@@ -135,16 +134,6 @@ public class RedisReplyRespContractTest {
                         "-ERR wrong\r\n", "-ERR wrong\r\n"),
                 fixture("integer", RedisReplies.integer(-42L),
                         ":-42\r\n", ":-42\r\n"),
-                fixture("boolean", new RedisReply.BooleanValue(true),
-                        ":1\r\n", "#t\r\n"),
-                fixture("double", new RedisReply.DoubleValue(1.5D),
-                        "$3\r\n1.5\r\n", ",1.5\r\n"),
-                fixture("big number", new RedisReply.BigNumber(" 123 "),
-                        "$3\r\n123\r\n", "(123\r\n"),
-                fixture("verbatim string", new RedisReply.VerbatimString("markdown", bytes("doc")),
-                        "$3\r\ndoc\r\n", "=7\r\nmar:doc\r\n"),
-                fixture("blob error", new RedisReply.BlobError("bad"),
-                        "-ERR bad\r\n", "!7\r\nERR bad\r\n"),
                 fixture("retained bulk string",
                         RedisReplies.bulkString(4, 13L, sink -> sink.bulkString(bytes("data"))),
                         "$4\r\ndata\r\n", "$4\r\ndata\r\n", 13L),
@@ -156,20 +145,6 @@ public class RedisReplyRespContractTest {
     }
 
     private static List<ReplyFixture> aggregateFixtures() {
-        RedisReply nested = RedisReplies.array(List.of(
-                RedisReplies.simpleString("root"),
-                RedisReplies.map(List.of(
-                        RedisReplies.bulkString(bytes("items")),
-                        new RedisReply.Aggregate(ReplyShape.AggregateKind.SET, List.of(
-                                RedisReplies.bulkString(bytes("a")),
-                                RedisReplies.array(List.of(
-                                        RedisReplies.integer(2L),
-                                        RedisReplies.nullValue()
-                                ))
-                        ))
-                ))
-        ));
-
         return List.of(
                 fixture("map",
                         RedisReplies.map(List.of(
@@ -177,33 +152,7 @@ public class RedisReplyRespContractTest {
                                 RedisReplies.integer(7L)
                         )),
                         "*2\r\n$3\r\nkey\r\n:7\r\n",
-                        "%1\r\n$3\r\nkey\r\n:7\r\n"),
-                fixture("set",
-                        new RedisReply.Aggregate(ReplyShape.AggregateKind.SET, List.of(
-                                RedisReplies.bulkString(bytes("a")),
-                                RedisReplies.bulkString(bytes("b"))
-                        )),
-                        "*2\r\n$1\r\na\r\n$1\r\nb\r\n",
-                        "~2\r\n$1\r\na\r\n$1\r\nb\r\n"),
-                fixture("push",
-                        new RedisReply.Aggregate(ReplyShape.AggregateKind.PUSH, List.of(
-                                RedisReplies.simpleString("message"),
-                                RedisReplies.bulkString(bytes("x"))
-                        )),
-                        "*2\r\n+message\r\n$1\r\nx\r\n",
-                        ">2\r\n+message\r\n$1\r\nx\r\n"),
-                fixture("attribute",
-                        new RedisReply.Aggregate(ReplyShape.AggregateKind.ATTRIBUTE, List.of(
-                                RedisReplies.bulkString(bytes("ttl")),
-                                RedisReplies.integer(10L)
-                        )),
-                        "*2\r\n$3\r\nttl\r\n:10\r\n",
-                        "|1\r\n$3\r\nttl\r\n:10\r\n"),
-                fixture("nested array/map/set", nested,
-                        "*2\r\n+root\r\n*2\r\n$5\r\nitems\r\n*2\r\n"
-                                + "$1\r\na\r\n*2\r\n:2\r\n$-1\r\n",
-                        "*2\r\n+root\r\n%1\r\n$5\r\nitems\r\n~2\r\n"
-                                + "$1\r\na\r\n*2\r\n:2\r\n_\r\n")
+                        "%1\r\n$3\r\nkey\r\n:7\r\n")
         );
     }
 

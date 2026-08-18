@@ -1,52 +1,60 @@
 package yier.bubu.redis.storage.memory.internal.ledger;
 
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import org.junit.After;
 import org.junit.Before;
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.memory.api.NativeCapacityExceededException;
+import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.PostCommitMutationException;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.YierdisCommandException;
-import yier.bubu.redis.memory.api.NativeCapacityExceededException;
-import yier.bubu.redis.memory.api.StableMemoryBackend;
-import yier.bubu.redis.memory.api.NativeHandle;
-import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.storage.memory.TestBackend;
-import yier.bubu.redis.storage.memory.YierdisDbHealth;
+import yier.bubu.redis.storage.memory.MutationExecutorTestSupport;
 import yier.bubu.redis.storage.memory.OwnedReplyValueAssertions;
-
-import java.nio.charset.StandardCharsets;
+import yier.bubu.redis.storage.memory.TestBackend;
+import yier.bubu.redis.storage.memory.TestDbSupport;
+import yier.bubu.redis.storage.memory.YierdisDb;
+import yier.bubu.redis.storage.memory.YierdisDbHealth;
+import yier.bubu.redis.storage.testkit.TestBytes;
 
 public class MutationExecutorReservationTest {
     private static final long PREPARED_TEST_UPPER_BOUND_BYTES = 1_000_000L;
 
-    private InMemoryLedger preparedLedger;
+    private MemoryLedger preparedLedger;
+    private AtomicInteger preparedNormalReservations;
+    private AtomicInteger preparedReclamationBegins;
     private TestBackend preparedRuntime;
     private StableMemoryBackend preparedAllocator;
     private YierdisDbMutationExecutor preparedExecutor;
 
     @Before
     public void setUpPreparedFixture() {
-        preparedLedger = new InMemoryLedger(0);
+        preparedNormalReservations = new AtomicInteger();
+        preparedReclamationBegins = new AtomicInteger();
+        preparedLedger = proxyLedger(ledger(0), methodName -> {
+            if (methodName.equals("reserve")) {
+                preparedNormalReservations.incrementAndGet();
+            } else if (methodName.equals("beginReclamation")) {
+                preparedReclamationBegins.incrementAndGet();
+            }
+        });
         preparedRuntime = TestBackend.open("prepared-mutation-test");
         preparedAllocator = preparedRuntime.backend();
         preparedAllocator.bindToCurrentThread();
@@ -126,7 +134,7 @@ public class MutationExecutorReservationTest {
         AtomicInteger trimCalls = new AtomicInteger();
         StableMemoryBackend recordingAllocator = allocatorThatCountsTrims(trimCalls);
         YierdisDbMutationExecutor executor = executor(
-                new InMemoryLedger(PREPARED_TEST_UPPER_BOUND_BYTES * 2L),
+                ledger(PREPARED_TEST_UPPER_BOUND_BYTES * 2L),
                 recordingAllocator
         );
 
@@ -183,7 +191,7 @@ public class MutationExecutorReservationTest {
         AtomicInteger trimCalls = new AtomicInteger();
         AtomicInteger releaseCalls = new AtomicInteger();
         YierdisDbMutationExecutor executor = executor(
-                new InMemoryLedger(PREPARED_TEST_UPPER_BOUND_BYTES * 2L),
+                ledger(PREPARED_TEST_UPPER_BOUND_BYTES * 2L),
                 allocatorThatCountsTrims(trimCalls)
         );
         PreparedDbMutation<String> prepared = new AbstractPreparedMutation<>(
@@ -248,10 +256,12 @@ public class MutationExecutorReservationTest {
     @Test
     public void reAdmitsWhenAdmissionChangesMutationUpperBound() {
         AtomicLong upperBound = new AtomicLong(10_000L);
-        AdmissionChangingLedger ledger = new AdmissionChangingLedger(
-                new InMemoryLedger(0),
-                () -> upperBound.set(20_000L)
-        );
+        AtomicInteger normalReservationCalls = new AtomicInteger();
+        MemoryLedger ledger = proxyLedger(ledger(0), methodName -> {
+            if (methodName.equals("reserve") && normalReservationCalls.incrementAndGet() == 1) {
+                upperBound.set(20_000L);
+            }
+        });
         YierdisDbMutationExecutor executor = executor(ledger, preparedAllocator);
         PreparedDbMutation<String> prepared = prepared(
                 0L,
@@ -277,17 +287,20 @@ public class MutationExecutorReservationTest {
                     }
                 })
         );
-        org.junit.Assert.assertEquals(2, ledger.normalReservationCalls());
+        org.junit.Assert.assertEquals(2, normalReservationCalls.get());
         org.junit.Assert.assertEquals(0L, ledger.reservedBytes());
     }
 
     @Test
     public void reAdmitsAfterRejectedAdmissionShrinksMutationUpperBound() {
         AtomicLong upperBound = new AtomicLong(20_000L);
-        AdmissionFailingLedger ledger = new AdmissionFailingLedger(
-                new InMemoryLedger(0),
-                () -> upperBound.set(10_000L)
-        );
+        AtomicInteger normalReservationCalls = new AtomicInteger();
+        MemoryLedger ledger = proxyLedger(ledger(0), methodName -> {
+            if (methodName.equals("reserve") && normalReservationCalls.incrementAndGet() == 1) {
+                upperBound.set(10_000L);
+                throw new MemoryLedgerOutOfMemoryException();
+            }
+        });
         YierdisDbMutationExecutor executor = executor(ledger, preparedAllocator);
         PreparedDbMutation<String> prepared = prepared(
                 0L,
@@ -313,7 +326,7 @@ public class MutationExecutorReservationTest {
                     }
                 })
         );
-        org.junit.Assert.assertEquals(2, ledger.normalReservationCalls());
+        org.junit.Assert.assertEquals(2, normalReservationCalls.get());
         org.junit.Assert.assertEquals(0L, ledger.reservedBytes());
     }
 
@@ -347,8 +360,8 @@ public class MutationExecutorReservationTest {
         };
 
         org.junit.Assert.assertEquals("removed", preparedExecutor.execute(plan));
-        org.junit.Assert.assertEquals(1, preparedLedger.reclamationBegins());
-        org.junit.Assert.assertEquals(0, preparedLedger.normalReservations());
+        org.junit.Assert.assertEquals(1, preparedReclamationBegins.get());
+        org.junit.Assert.assertEquals(0, preparedNormalReservations.get());
     }
 
     @Test
@@ -561,130 +574,41 @@ public class MutationExecutorReservationTest {
                     if (method.getName().equals("trimEmptyPages")) {
                         trimCalls.incrementAndGet();
                     }
-                    try {
-                        return method.invoke(preparedAllocator, args);
-                    } catch (InvocationTargetException failure) {
-                        throw failure.getCause();
-                    }
+                    return invoke(preparedAllocator, method, args);
                 }
         );
     }
 
-    private static final class AdmissionChangingLedger implements MemoryLedger {
-        private final MemoryLedger delegate;
-        private final Runnable afterFirstNormalReservation;
-        private final AtomicInteger normalReservationCalls = new AtomicInteger();
-
-        private AdmissionChangingLedger(MemoryLedger delegate, Runnable afterFirstNormalReservation) {
-            this.delegate = delegate;
-            this.afterFirstNormalReservation = afterFirstNormalReservation;
-        }
-
-        @Override
-        public long limitBytes() {
-            return delegate.limitBytes();
-        }
-
-        @Override
-        public long usedBytes() {
-            return delegate.usedBytes();
-        }
-
-        @Override
-        public long reservedBytes() {
-            return delegate.reservedBytes();
-        }
-
-        @Override
-        public MemoryReservation reserve(long estimatedExtraBytes) {
-            MemoryReservation reservation = delegate.reserve(estimatedExtraBytes);
-            if (normalReservationCalls.incrementAndGet() == 1) {
-                afterFirstNormalReservation.run();
-            }
-            return reservation;
-        }
-
-        @Override
-        public void reconcile(MemoryReservation reservation, long requiredBytes) {
-            delegate.reconcile(reservation, requiredBytes);
-        }
-
-        @Override
-        public MemoryReservation beginReclamation() {
-            return delegate.beginReclamation();
-        }
-
-        @Override
-        public void commit(MemoryReservation reservation, long actualDeltaBytes) {
-            delegate.commit(reservation, actualDeltaBytes);
-        }
-
-        @Override
-        public void rollback(MemoryReservation reservation) {
-            delegate.rollback(reservation);
-        }
-
-        private int normalReservationCalls() {
-            return normalReservationCalls.get();
-        }
+    private static MemoryLedger ledger(long limitBytes) {
+        MemoryLedger[] holder = new MemoryLedger[1];
+        holder[0] = new YierdisDbMemoryLedger(
+                limitBytes,
+                MaxmemoryPolicy.NOEVICTION,
+                () -> { },
+                ignored -> { },
+                () -> holder[0].effectiveUsedBytes(),
+                () -> null,
+                () -> null
+        );
+        return holder[0];
     }
 
-    private static final class AdmissionFailingLedger implements MemoryLedger {
-        private final MemoryLedger delegate;
-        private final Runnable afterFirstRejectedReservation;
-        private final AtomicInteger normalReservationCalls = new AtomicInteger();
+    private static MemoryLedger proxyLedger(MemoryLedger delegate, Consumer<String> beforeCall) {
+        return (MemoryLedger) Proxy.newProxyInstance(
+                MemoryLedger.class.getClassLoader(),
+                new Class<?>[]{MemoryLedger.class},
+                (proxy, method, args) -> {
+                    beforeCall.accept(method.getName());
+                    return invoke(delegate, method, args);
+                }
+        );
+    }
 
-        private AdmissionFailingLedger(MemoryLedger delegate, Runnable afterFirstRejectedReservation) {
-            this.delegate = delegate;
-            this.afterFirstRejectedReservation = afterFirstRejectedReservation;
-        }
-
-        @Override
-        public long limitBytes() {
-            return delegate.limitBytes();
-        }
-
-        @Override
-        public long usedBytes() {
-            return delegate.usedBytes();
-        }
-
-        @Override
-        public long reservedBytes() {
-            return delegate.reservedBytes();
-        }
-
-        @Override
-        public MemoryReservation reserve(long estimatedExtraBytes) {
-            if (normalReservationCalls.incrementAndGet() == 1) {
-                afterFirstRejectedReservation.run();
-                throw new MemoryLedgerOutOfMemoryException();
-            }
-            return delegate.reserve(estimatedExtraBytes);
-        }
-
-        @Override
-        public void reconcile(MemoryReservation reservation, long requiredBytes) {
-            delegate.reconcile(reservation, requiredBytes);
-        }
-
-        @Override
-        public MemoryReservation beginReclamation() {
-            return delegate.beginReclamation();
-        }
-
-        @Override
-        public void commit(MemoryReservation reservation, long actualDeltaBytes) {
-            delegate.commit(reservation, actualDeltaBytes);
-        }
-
-        @Override
-        public void rollback(MemoryReservation reservation) {
-            delegate.rollback(reservation);
-        }
-
-        private int normalReservationCalls() {
-            return normalReservationCalls.get();
+    private static Object invoke(Object delegate, Method method, Object[] args) throws Throwable {
+        try {
+            return method.invoke(delegate, args);
+        } catch (InvocationTargetException failure) {
+            throw failure.getCause();
         }
     }
 
@@ -825,26 +749,6 @@ public class MutationExecutorReservationTest {
     }
 
     private static BytesSlice slice(byte[] data) {
-        return new BytesSlice() {
-            private final byte[] payload = data;
-
-            @Override
-            public int length() {
-                return payload.length;
-            }
-
-            @Override
-            public byte getByte(int index) {
-                if (index < 0 || index >= payload.length) {
-                    throw new IndexOutOfBoundsException();
-                }
-                return payload[index];
-            }
-
-            @Override
-            public void writeTo(BytesSink out) {
-                out.writeBytes(payload, 0, payload.length);
-            }
-        };
+        return TestBytes.slice(data);
     }
 }

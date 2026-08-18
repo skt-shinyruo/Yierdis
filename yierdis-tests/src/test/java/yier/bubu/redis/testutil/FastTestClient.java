@@ -9,8 +9,8 @@ import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.RedisReplyRenderer;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
-import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.execution.api.ValidationResult;
+import yier.bubu.redis.execution.engine.EngineSession;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -28,13 +28,13 @@ public final class FastTestClient {
     private final CommandSession session;
 
     public FastTestClient(CommandDispatcher dispatcher) {
-        this(dispatcher, null);
+        this(dispatcher, new EngineSession(0, 0));
     }
 
     public FastTestClient(CommandDispatcher dispatcher, CommandSession session) {
         Objects.requireNonNull(dispatcher, "dispatcher");
         this.dispatcher = dispatcher;
-        this.session = session != null ? session : new DefaultTestSession();
+        this.session = Objects.requireNonNull(session, "session");
     }
 
     public ReplyObject execute(List<byte[]> args) {
@@ -104,39 +104,12 @@ public final class FastTestClient {
 
         @Override
         public void error(String message) {
-            addValue(new ReplyError(ReplyError.Kind.COMMAND, message == null ? "ERR error" : message));
+            addValue(new ReplyError(message == null ? "ERR error" : message));
         }
 
         @Override
         public void integer(long value) {
             addValue(new ReplyInteger(value));
-        }
-
-        @Override
-        public void booleanValue(boolean value) {
-            addValue(new ReplyInteger(value ? 1L : 0L));
-        }
-
-        @Override
-        public void doubleValue(double value) {
-            addValue(new ReplySimpleString(Double.toString(value)));
-        }
-
-        @Override
-        public void bigNumberAscii(String value) {
-            addValue(new ReplySimpleString(value == null ? "" : value));
-        }
-
-        @Override
-        public void verbatimString(String format, byte[] data) {
-            String prefix = format == null ? "" : format.trim();
-            String payload = data == null ? "" : new String(data, java.nio.charset.StandardCharsets.UTF_8);
-            addValue(new ReplySimpleString(prefix.isEmpty() ? payload : (prefix + ":" + payload)));
-        }
-
-        @Override
-        public void blobError(String message) {
-            addValue(new ReplyError(ReplyError.Kind.COMMAND, message == null ? "ERR error" : message));
         }
 
         @Override
@@ -215,16 +188,6 @@ public final class FastTestClient {
             arrayHeader(count);
         }
 
-        @Override
-        public void pushHeader(int count) {
-            arrayHeader(count);
-        }
-
-        @Override
-        public void attributeHeader(int pairs) {
-            mapHeader(pairs);
-        }
-
         private void addValue(ReplyObject value) {
             Objects.requireNonNull(value, "value");
             if (stack.isEmpty()) {
@@ -292,121 +255,4 @@ public final class FastTestClient {
         }
     }
 
-    private static final class DefaultTestSession implements CommandSession {
-        private int dbIndex;
-        private String clientName;
-        private final TransactionState tx = new DefaultTransactionState();
-
-        @Override
-        public int dbIndex() {
-            return dbIndex;
-        }
-
-        @Override
-        public void setDbIndex(int dbIndex) {
-            this.dbIndex = Math.max(0, dbIndex);
-        }
-
-        @Override
-        public String clientName() {
-            return clientName;
-        }
-
-        @Override
-        public void setClientName(String clientName) {
-            this.clientName = clientName;
-        }
-
-        @Override
-        public TransactionState transaction() {
-            return tx;
-        }
-
-        @Override
-        public yier.bubu.redis.execution.api.ConnectionStatsView connectionStats() {
-            return null;
-        }
-
-        @Override
-        public int respVersion() {
-            return 2;
-        }
-
-        @Override
-        public void setRespVersion(int respVersion) {
-        }
-    }
-
-    private static final class DefaultTransactionState implements TransactionState {
-        private boolean active;
-        private boolean aborted;
-        private final ArrayList<ExecutionRequest> queue = new ArrayList<>();
-
-        @Override
-        public synchronized boolean active() {
-            return active;
-        }
-
-        @Override
-        public synchronized void begin() {
-            closeQueued();
-            active = true;
-            aborted = false;
-        }
-
-        @Override
-        public synchronized void discard() {
-            closeQueued();
-            active = false;
-            aborted = false;
-        }
-
-        @Override
-        public synchronized String tryEnqueue(ExecutionRequest request) {
-            if (request == null) {
-                return null;
-            }
-            queue.add(ByteArrayExecutionRequest.copyOf(request));
-            return null;
-        }
-
-        @Override
-        public synchronized boolean aborted() {
-            return aborted;
-        }
-
-        @Override
-        public synchronized void markAborted() {
-            aborted = true;
-        }
-
-        @Override
-        public synchronized int size() {
-            return queue.size();
-        }
-
-        @Override
-        public synchronized void forEachQueued(
-                java.util.function.Consumer<? super ExecutionRequest> visitor
-        ) {
-            Objects.requireNonNull(visitor, "visitor");
-            queue.forEach(visitor);
-        }
-
-        @Override
-        public synchronized List<ExecutionRequest> drain() {
-            ArrayList<ExecutionRequest> out = new ArrayList<>(queue);
-            queue.clear();
-            active = false;
-            aborted = false;
-            return out;
-        }
-
-        private void closeQueued() {
-            for (ExecutionRequest request : queue) {
-                request.close();
-            }
-            queue.clear();
-        }
-    }
 }

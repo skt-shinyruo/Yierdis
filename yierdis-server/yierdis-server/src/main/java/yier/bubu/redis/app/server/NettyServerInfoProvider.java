@@ -127,7 +127,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     private volatile InboundMemoryBudget inboundMemoryBudget;
     private volatile OutboundMemoryBudget outboundMemoryBudget;
     private volatile ChildChannelRegistry childChannelRegistry;
-    private volatile ReplyEgressStats replyEgressStats;
+    private volatile ReplyEgressStats replyEgressStats = new ReplyEgressStats();
     private volatile Supplier<String> lifecycleState = () -> "STARTING";
 
     NettyServerInfoProvider(YierdisServerRuntimeConfig config) {
@@ -323,13 +323,10 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         if (memory) {
             YierdisMemoryStats memStats = aggregatedMemoryStats();
             long usedMemoryBytes = memStats.heapDataBytesEstimate() + memStats.offHeapUsedBytes();
-            long overheadBytesEstimate = memStats.keyspaceTableOverheadBytesEstimate()
-                    + memStats.expireTableOverheadBytesEstimate()
-                    + memStats.expireValueObjectsBytesEstimate();
             sb.append("# Memory\r\n");
             sb.append("used_memory:").append(usedMemoryBytes).append("\r\n");
             sb.append("used_memory_dataset:").append(memStats.heapDataBytesEstimate()).append("\r\n");
-            sb.append("used_memory_overhead:").append(overheadBytesEstimate).append("\r\n");
+            sb.append("used_memory_overhead:0\r\n");
             sb.append("maxmemory:").append(config.maxmemoryBytes()).append("\r\n");
             sb.append("maxmemory_policy:").append(config.maxmemoryPolicy().redisName()).append("\r\n");
             sb.append("yierdis_maxmemory_scope:")
@@ -502,8 +499,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     }
 
     private ReplyEgressStats.Snapshot replyEgressStats() {
-        ReplyEgressStats stats = replyEgressStats;
-        return stats == null ? ReplyEgressStats.noop().snapshot() : stats.snapshot();
+        return replyEgressStats.snapshot();
     }
 
     private ChildChannelRegistry.StatsSnapshot childStats() {

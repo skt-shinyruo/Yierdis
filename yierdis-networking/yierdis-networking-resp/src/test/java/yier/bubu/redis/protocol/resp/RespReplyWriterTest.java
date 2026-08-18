@@ -21,7 +21,7 @@ public class RespReplyWriterTest {
     }
 
     @Test
-    public void resp2MapsAndBooleansDowngradeToCompatibleTypes() {
+    public void resp2MapsDowngradeToArrays() {
         String out = write2(w -> {
             w.mapHeader(2);
             w.bulkString(bytes("server"));
@@ -30,16 +30,12 @@ public class RespReplyWriterTest {
             w.integer(2);
         });
         Assert.assertEquals("*4\r\n$6\r\nserver\r\n$7\r\nyierdis\r\n$5\r\nproto\r\n:2\r\n", out);
-        Assert.assertEquals(":1\r\n", write2(w -> w.booleanValue(true)));
-        Assert.assertEquals(":0\r\n", write2(w -> w.booleanValue(false)));
     }
 
     @Test
     public void resp3UsesNativeTypes() {
         Assert.assertEquals("_\r\n", write3(RespReplyWriter::nullValue));
         Assert.assertEquals("_\r\n", write3(w -> w.nullArray()));
-        Assert.assertEquals("#t\r\n", write3(w -> w.booleanValue(true)));
-        Assert.assertEquals(",1.5\r\n", write3(w -> w.doubleValue(1.5)));
         String out = write3(w -> {
             w.mapHeader(1);
             w.bulkString(bytes("proto"));
@@ -67,16 +63,6 @@ public class RespReplyWriterTest {
         Assert.assertEquals("-ERR\r\n", write2(w -> w.error("ERR")));
         Assert.assertEquals("-NOAUTH\r\n", write2(w -> w.error("NOAUTH")));
         Assert.assertEquals("-WRONGTYPE\r\n", write2(w -> w.error("WRONGTYPE")));
-    }
-
-    @Test
-    public void resp3EncodesNonFiniteDoublesNativelyAndResp2DowngradesToBulkStrings() {
-        Assert.assertEquals(",nan\r\n", write3(w -> w.doubleValue(Double.NaN)));
-        Assert.assertEquals(",inf\r\n", write3(w -> w.doubleValue(Double.POSITIVE_INFINITY)));
-        Assert.assertEquals(",-inf\r\n", write3(w -> w.doubleValue(Double.NEGATIVE_INFINITY)));
-        Assert.assertEquals("$3\r\nnan\r\n", write2(w -> w.doubleValue(Double.NaN)));
-        Assert.assertEquals("$3\r\ninf\r\n", write2(w -> w.doubleValue(Double.POSITIVE_INFINITY)));
-        Assert.assertEquals("$4\r\n-inf\r\n", write2(w -> w.doubleValue(Double.NEGATIVE_INFINITY)));
     }
 
     @Test
@@ -111,23 +97,6 @@ public class RespReplyWriterTest {
     }
 
     @Test
-    public void bigNumbersVerbatimStringsAndBlobErrorsRespectProtocolVersion() {
-        Assert.assertEquals("(12345678901234567890\r\n",
-                write3(w -> w.bigNumberAscii(" 12345678901234567890 ")));
-        Assert.assertEquals("$3\r\n123\r\n", write2(w -> w.bigNumberAscii(" 123 ")));
-        Assert.assertEquals("(a b\r\n", write3(w -> w.bigNumberAscii("a\nb")));
-        Assert.assertEquals("(\r\n", write3(w -> w.bigNumberAscii(null)));
-
-        Assert.assertEquals("=8\r\ntxt:data\r\n", write3(w -> w.verbatimString("x", bytes("data"))));
-        Assert.assertEquals("=7\r\nmar:doc\r\n", write3(w -> w.verbatimString("markdown", bytes("doc"))));
-        Assert.assertEquals("=4\r\ntxt:\r\n", write3(w -> w.verbatimString(null, null)));
-        Assert.assertEquals("$4\r\ndata\r\n", write2(w -> w.verbatimString("txt", bytes("data"))));
-
-        Assert.assertEquals("!10\r\nERR \u9519\u8bef\r\n", write3(w -> w.blobError("\u9519\u8bef")));
-        Assert.assertEquals("-ERR bad\r\n", write2(w -> w.blobError("bad")));
-    }
-
-    @Test
     public void bulkStringOverloadsCoverNullOffsetsSlicesAndLongAscii() {
         Assert.assertEquals("$-1\r\n", write2(w -> w.bulkString((byte[]) null)));
         Assert.assertEquals("$-1\r\n", write2(w -> w.bulkString((byte[]) null, 99, -1)));
@@ -158,40 +127,24 @@ public class RespReplyWriterTest {
     }
 
     @Test
-    public void collectionHeadersUseNativeResp3TypesAndResp2Fallbacks() {
+    public void setHeadersUseNativeResp3TypeAndResp2Fallback() {
         Assert.assertEquals("*0\r\n*-1\r\n", write2(w -> {
             w.arrayHeader(0);
             w.nullArray();
         }));
-        Assert.assertEquals("*0\r\n*0\r\n*0\r\n*0\r\n", write2(w -> {
+        Assert.assertEquals("*0\r\n*0\r\n", write2(w -> {
             w.arrayHeader(-1);
             w.setHeader(-1);
-            w.pushHeader(-1);
-            w.attributeHeader(-1);
         }));
-        Assert.assertEquals("~2\r\n>3\r\n|4\r\n", write3(w -> {
-            w.setHeader(2);
-            w.pushHeader(3);
-            w.attributeHeader(4);
-        }));
+        Assert.assertEquals("~2\r\n", write3(w -> w.setHeader(2)));
     }
 
     @Test
-    public void simpleAndErrorLinesAreSanitizedAndUtf8TruncationKeepsCodePointsWhole() {
+    public void simpleAndErrorLinesAreSanitized() {
         Assert.assertEquals("+\r\n", write2(w -> w.simpleString(null)));
         Assert.assertEquals("+a b c\r\n", write2(w -> w.simpleString("a\rb\nc")));
         Assert.assertEquals("-ERR error\r\n", write2(w -> w.error(null)));
         Assert.assertEquals("-ERR lower case\r\n", write2(w -> w.error("lower\rcase")));
-
-        String retained = "ERR " + "a".repeat(496) + "\u00e9\u754c\ud83d\ude00";
-        String oversized = retained + "\ud83d\ude00";
-        ByteArraySink sink = new ByteArraySink();
-        new RespReplyWriter(sink, () -> 3).blobError(oversized);
-
-        byte[] body = retained.getBytes(StandardCharsets.UTF_8);
-        Assert.assertEquals(509, body.length);
-        Assert.assertEquals("!509\r\n" + retained + "\r\n", sink.utf8());
-        Assert.assertFalse(sink.utf8().contains("\ufffd"));
     }
 
     private static String write2(WriterAction action) {
@@ -229,9 +182,6 @@ public class RespReplyWriterTest {
             return out.toString(StandardCharsets.UTF_8);
         }
 
-        byte[] bytes() {
-            return out.toByteArray();
-        }
     }
 
     private static final class ControlTrackingSink extends ByteArraySink implements ReplyReservationSink {

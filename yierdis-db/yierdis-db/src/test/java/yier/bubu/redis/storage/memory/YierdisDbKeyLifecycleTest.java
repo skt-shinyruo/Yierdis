@@ -12,6 +12,8 @@ import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.nio.charset.StandardCharsets;
 
+import static yier.bubu.redis.storage.testkit.TestBytes.view;
+
 public class YierdisDbKeyLifecycleTest {
     @Test
     public void inspectionAndNullInputsHaveStableNoopContracts() {
@@ -227,10 +229,6 @@ public class YierdisDbKeyLifecycleTest {
         return value.getBytes(StandardCharsets.UTF_8);
     }
 
-    private static BytesView view(byte[] value) {
-        return new ArrayBytesView(value);
-    }
-
     private static void withDb(DbConsumer consumer) {
         YierdisDb db = TestDbSupport.open();
         try {
@@ -246,15 +244,4 @@ public class YierdisDbKeyLifecycleTest {
         void accept(YierdisDb db);
     }
 
-    private record ArrayBytesView(byte[] bytes) implements BytesView {
-        @Override
-        public int length() {
-            return bytes.length;
-        }
-
-        @Override
-        public byte getByte(int index) {
-            return bytes[index];
-        }
-    }
 }

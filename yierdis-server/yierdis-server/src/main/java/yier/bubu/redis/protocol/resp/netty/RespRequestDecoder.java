@@ -4,6 +4,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.util.ReferenceCountUtil;
+import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.ReferenceCountedRequestMemoryLease;
 import yier.bubu.redis.execution.api.RequestMemoryLease;
@@ -455,7 +456,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         RequestMemoryLease lease = budget == null
                 ? new ReferenceCountedRequestMemoryLease(reservedBytes, ignored -> { })
                 : requestLease(reservedBytes);
-        return RetainedRespExecutionRequest.takeOwnership(argv, retainedBytes, lease);
+        return ByteArrayExecutionRequest.takeOwnership(argv, retainedBytes, lease);
     }
 
     private boolean forwardPendingDecodedMessage(ChannelHandlerContext ctx) {
@@ -547,7 +548,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         pendingReservedBytes = admissionBytes;
         try {
             byte[][] argv = parseInline(in, lineStart, length);
-            long fullCharge = RetainedRespExecutionRequest.estimatedMemoryBytes(argv);
+            long fullCharge = ByteArrayExecutionRequest.estimatedMemoryBytes(argv);
             if (fullCharge > admissionBytes) {
                 emitRequestMemoryError(ctx);
                 return ParseResult.ERROR;
@@ -556,7 +557,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             releaseInlineTransient(admissionBytes, fullCharge);
             pendingReservedBytes = fullCharge;
             RequestMemoryLease lease = requestLease(fullCharge);
-            pendingDecodedMessage = RetainedRespExecutionRequest.takeOwnership(argv, retainedBytes, lease);
+            pendingDecodedMessage = ByteArrayExecutionRequest.takeOwnership(argv, retainedBytes, lease);
             pendingReservedBytes = 0L;
             state = State.WAITING_FOR_HANDOFF;
             return forwardPendingDecodedMessage(ctx) ? ParseResult.CONTINUE : ParseResult.WAITING;

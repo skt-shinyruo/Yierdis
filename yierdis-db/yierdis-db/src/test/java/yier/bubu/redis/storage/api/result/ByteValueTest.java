@@ -4,9 +4,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.storage.api.StringOps;
+
+import static yier.bubu.redis.storage.testkit.TestBytes.slice;
 
 public class ByteValueTest {
     @Test
@@ -25,7 +26,7 @@ public class ByteValueTest {
         Assert.assertEquals("array", sink.kind);
         Assert.assertEquals("bc", sink.value);
 
-        ByteValue slice = ByteValue.slice(new ArraySlice(bytes("slice")));
+        ByteValue slice = ByteValue.slice(slice(bytes("slice")));
         Assert.assertEquals(5, slice.payloadLength());
         slice.emitTo(sink);
         Assert.assertEquals("slice", sink.kind);
@@ -49,7 +50,7 @@ public class ByteValueTest {
     public void ownedValueReportsRetainedBytesAndClosesOwnerOnce() {
         AtomicInteger closes = new AtomicInteger();
         ByteValue value = ByteValue.owned(
-                new ArraySlice(bytes("owned")),
+                slice(bytes("owned")),
                 5,
                 37L,
                 closes::incrementAndGet
@@ -66,7 +67,7 @@ public class ByteValueTest {
     public void setStringValueClosesItsOldValue() {
         AtomicInteger closes = new AtomicInteger();
         ByteValue oldValue = ByteValue.owned(
-                new ArraySlice(bytes("old")),
+                slice(bytes("old")),
                 3,
                 11L,
                 closes::incrementAndGet
@@ -81,23 +82,6 @@ public class ByteValueTest {
 
     private static byte[] bytes(String value) {
         return value.getBytes(StandardCharsets.US_ASCII);
-    }
-
-    private record ArraySlice(byte[] data) implements BytesSlice {
-        @Override
-        public int length() {
-            return data.length;
-        }
-
-        @Override
-        public byte getByte(int index) {
-            return data[index];
-        }
-
-        @Override
-        public void writeTo(BytesSink out) {
-            out.writeBytes(data, 0, data.length);
-        }
     }
 
     private static final class RecordingSink implements ByteValueSink {

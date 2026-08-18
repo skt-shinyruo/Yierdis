@@ -21,6 +21,7 @@ import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.ByteValue;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
+import static yier.bubu.redis.storage.testkit.TestBytes.view;
 
 public class OffHeapStringStorageTest {
     @Test
@@ -35,7 +36,7 @@ public class OffHeapStringStorageTest {
                 Assert.assertTrue(db.strings().setString(key, value, SetMode.NORMAL, null).value());
                 Assert.assertTrue(runtime.usedBytes() > 0);
 
-                try (ByteValue replyValue = db.strings().getStringValue(new TestBytesView(key))) {
+                try (ByteValue replyValue = db.strings().getStringValue(view(key))) {
                     RecordingByteValueOutput out = new RecordingByteValueOutput();
                     replyValue.emitTo(out);
                     Assert.assertTrue(out.usedBytesSlice);
@@ -64,7 +65,7 @@ public class OffHeapStringStorageTest {
                 db.strings().setString(key, value, SetMode.NORMAL, null).value();
                 long accessClockBeforePreflight = db.keyLifecycle().entryRecord(key).lruOrLfu();
 
-                try (ByteValue replyValue = db.strings().getStringValue(new TestBytesView(key))) {
+                try (ByteValue replyValue = db.strings().getStringValue(view(key))) {
                     RecordingByteValueOutput out = new RecordingByteValueOutput();
                     replyValue.emitTo(out);
                     Assert.assertTrue(out.usedBytesSlice);
@@ -111,7 +112,7 @@ public class OffHeapStringStorageTest {
 
             db.lists().lpush(key, List.of(b("a")));
 
-            Assert.assertEquals(ValueType.LIST, db.keyspace().typeOf(new TestBytesView(key)));
+            Assert.assertEquals(ValueType.LIST, db.keyspace().typeOf(view(key)));
         } finally {
             db.shutdown();
         }
@@ -132,7 +133,7 @@ public class OffHeapStringStorageTest {
             Assert.assertTrue(db.strings().setString(key, v2, SetMode.NORMAL, null).value());
             Assert.assertNotEquals(firstHandle, db.keyLifecycle().liveEntryRecord(key).valueHandle().nativeHandle());
 
-            try (ByteValue replyValue = db.strings().getStringValue(new TestBytesView(key))) {
+            try (ByteValue replyValue = db.strings().getStringValue(view(key))) {
                 RecordingByteValueOutput out = new RecordingByteValueOutput();
                 replyValue.emitTo(out);
                 Assert.assertTrue(out.usedBytesSlice);
@@ -261,21 +262,4 @@ public class OffHeapStringStorageTest {
         Assert.assertTrue(stats.nativeReclaimableBytes() <= stats.nativeDataCommittedBytes());
     }
 
-    private static final class TestBytesView implements yier.bubu.redis.bytes.BytesView {
-        private final byte[] data;
-
-        private TestBytesView(byte[] data) {
-            this.data = data;
-        }
-
-        @Override
-        public int length() {
-            return data.length;
-        }
-
-        @Override
-        public byte getByte(int index) {
-            return data[index];
-        }
-    }
 }

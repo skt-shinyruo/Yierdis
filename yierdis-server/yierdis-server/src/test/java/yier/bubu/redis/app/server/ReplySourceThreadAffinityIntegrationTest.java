@@ -5,10 +5,13 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.protocol.resp.RespClientCodec;
+import yier.bubu.redis.protocol.resp.RespClientCodec.RespReply;
+import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 
 public class ReplySourceThreadAffinityIntegrationTest {
     @Test
@@ -25,26 +28,27 @@ public class ReplySourceThreadAffinityIntegrationTest {
                 InputStream in = socket.getInputStream();
 
                 writeCommand(out, "SET", "key", "value");
-                Assert.assertEquals("+OK\r\n", readLine(in));
+                assertSimpleString(readReply(in), "OK");
 
                 writeCommand(out, "GET", "key");
-                Assert.assertEquals("$5\r\n", readLine(in));
-                Assert.assertEquals("value", new String(in.readNBytes(7), 0, 5, StandardCharsets.US_ASCII));
+                assertBulkString(readReply(in), "value");
 
                 writeCommand(out, "RPUSH", "list", "a", "bb");
-                Assert.assertEquals(2L, readReply(in));
+                assertInteger(readReply(in), 2L);
                 writeCommand(out, "LRANGE", "list", "0", "-1");
                 assertBulkArray(readReply(in), "a", "bb");
 
                 writeCommand(out, "HSET", "hash", "field", "value");
-                Assert.assertEquals(1L, readReply(in));
+                assertInteger(readReply(in), 1L);
                 writeCommand(out, "HGETALL", "hash");
                 assertBulkArray(readReply(in), "field", "value");
 
                 writeCommand(out, "SADD", "set", "a", "bb");
-                Assert.assertEquals(2L, readReply(in));
+                assertInteger(readReply(in), 2L);
                 writeCommand(out, "SMEMBERS", "set");
-                Assert.assertEquals(2, ((List<?>) readReply(in)).size());
+                RespReply members = readReply(in);
+                Assert.assertEquals(RespReply.Kind.ARRAY, members.kind());
+                Assert.assertEquals(2, members.values().size());
 
                 writeCommand(out, "HSCAN", "hash", "0");
                 assertScanReply(readReply(in), 2);
@@ -52,7 +56,7 @@ public class ReplySourceThreadAffinityIntegrationTest {
                 assertScanReply(readReply(in), 2);
 
                 writeCommand(out, "QUIT");
-                Assert.assertEquals("+OK\r\n", readLine(in));
+                assertSimpleString(readReply(in), "OK");
                 Assert.assertEquals(-1, in.read());
             }
         } finally {
@@ -61,82 +65,51 @@ public class ReplySourceThreadAffinityIntegrationTest {
     }
 
     private static void writeCommand(OutputStream out, String... args) throws IOException {
-        StringBuilder command = new StringBuilder("*").append(args.length).append("\r\n");
-        for (String arg : args) {
-            byte[] bytes = arg.getBytes(StandardCharsets.US_ASCII);
-            command.append('$').append(bytes.length).append("\r\n").append(arg).append("\r\n");
-        }
-        out.write(command.toString().getBytes(StandardCharsets.US_ASCII));
+        RespClientCodec.writeCommand(
+                out,
+                Arrays.stream(args).map(ReplySourceThreadAffinityIntegrationTest::bytes).toList()
+        );
         out.flush();
     }
 
-    private static String readLine(InputStream in) throws IOException {
-        StringBuilder line = new StringBuilder();
-        while (true) {
-            int next = in.read();
-            if (next < 0) {
-                throw new IOException("unexpected EOF while reading RESP line");
-            }
-            line.append((char) next);
-            if (next == '\n') {
-                return line.toString();
-            }
-        }
+    private static RespReply readReply(InputStream in) throws IOException {
+        return RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
     }
 
-    private static Object readReply(InputStream in) throws IOException {
-        int marker = in.read();
-        if (marker < 0) {
-            throw new IOException("unexpected EOF while reading RESP reply");
-        }
-        String line = readLine(in);
-        String value = line.substring(0, line.length() - 2);
-        return switch (marker) {
-            case '+' -> value;
-            case ':' -> Long.parseLong(value);
-            case '$' -> readBulk(in, Integer.parseInt(value));
-            case '*' -> readArray(in, Integer.parseInt(value));
-            case '-' -> throw new AssertionError(value);
-            default -> throw new IOException("unsupported RESP marker: " + (char) marker);
-        };
+    private static void assertSimpleString(RespReply reply, String expected) {
+        Assert.assertEquals(RespReply.Kind.SIMPLE_STRING, reply.kind());
+        Assert.assertEquals(expected, reply.text());
     }
 
-    private static byte[] readBulk(InputStream in, int length) throws IOException {
-        if (length < 0) {
-            return null;
-        }
-        byte[] data = in.readNBytes(length);
-        Assert.assertEquals(length, data.length);
-        Assert.assertEquals('\r', in.read());
-        Assert.assertEquals('\n', in.read());
-        return data;
+    private static void assertInteger(RespReply reply, long expected) {
+        Assert.assertEquals(RespReply.Kind.INTEGER, reply.kind());
+        Assert.assertEquals(Long.valueOf(expected), reply.integer());
     }
 
-    private static List<Object> readArray(InputStream in, int length) throws IOException {
-        if (length < 0) {
-            return null;
-        }
-        List<Object> values = new ArrayList<>(length);
-        for (int index = 0; index < length; index++) {
-            values.add(readReply(in));
-        }
-        return values;
+    private static void assertBulkString(RespReply reply, String expected) {
+        Assert.assertEquals(RespReply.Kind.BULK_STRING, reply.kind());
+        Assert.assertArrayEquals(bytes(expected), reply.bytes());
     }
 
-    private static void assertBulkArray(Object reply, String... expected) {
-        Assert.assertTrue(reply instanceof List<?>);
-        List<?> values = (List<?>) reply;
+    private static void assertBulkArray(RespReply reply, String... expected) {
+        Assert.assertEquals(RespReply.Kind.ARRAY, reply.kind());
+        List<RespReply> values = reply.values();
         Assert.assertEquals(expected.length, values.size());
         for (int index = 0; index < expected.length; index++) {
-            Assert.assertArrayEquals(expected[index].getBytes(StandardCharsets.US_ASCII), (byte[]) values.get(index));
+            assertBulkString(values.get(index), expected[index]);
         }
     }
 
-    private static void assertScanReply(Object reply, int expectedElements) {
-        Assert.assertTrue(reply instanceof List<?>);
-        List<?> outer = (List<?>) reply;
+    private static void assertScanReply(RespReply reply, int expectedElements) {
+        Assert.assertEquals(RespReply.Kind.ARRAY, reply.kind());
+        List<RespReply> outer = reply.values();
         Assert.assertEquals(2, outer.size());
-        Assert.assertArrayEquals("0".getBytes(StandardCharsets.US_ASCII), (byte[]) outer.get(0));
-        Assert.assertEquals(expectedElements, ((List<?>) outer.get(1)).size());
+        assertBulkString(outer.get(0), "0");
+        Assert.assertEquals(RespReply.Kind.ARRAY, outer.get(1).kind());
+        Assert.assertEquals(expectedElements, outer.get(1).values().size());
+    }
+
+    private static byte[] bytes(String value) {
+        return value.getBytes(StandardCharsets.US_ASCII);
     }
 }

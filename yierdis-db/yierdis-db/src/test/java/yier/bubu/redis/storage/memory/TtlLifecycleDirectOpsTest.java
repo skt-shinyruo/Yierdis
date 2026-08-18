@@ -2,7 +2,6 @@ package yier.bubu.redis.storage.memory;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.SetMode;
@@ -10,6 +9,7 @@ import yier.bubu.redis.storage.api.SetMode;
 import java.util.List;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
+import static yier.bubu.redis.storage.testkit.TestBytes.slice;
 
 public class TtlLifecycleDirectOpsTest {
     @Test
@@ -139,7 +139,7 @@ public class TtlLifecycleDirectOpsTest {
     }
 
     private static BytesSlice view(String text) {
-        return new ArrayBytesSlice(b(text));
+        return slice(b(text));
     }
 
     private static void sleepPastTtl() {
@@ -156,26 +156,4 @@ public class TtlLifecycleDirectOpsTest {
         void accept(YierdisDb db);
     }
 
-    private static final class ArrayBytesSlice implements BytesSlice {
-        private final byte[] bytes;
-
-        private ArrayBytesSlice(byte[] bytes) {
-            this.bytes = bytes;
-        }
-
-        @Override
-        public void writeTo(BytesSink out) {
-            out.writeBytes(bytes, 0, bytes.length);
-        }
-
-        @Override
-        public int length() {
-            return bytes.length;
-        }
-
-        @Override
-        public byte getByte(int index) {
-            return bytes[index];
-        }
-    }
 }

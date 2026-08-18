@@ -12,11 +12,6 @@ public sealed interface ReplyShape permits
         ReplyShape.SimpleString,
         ReplyShape.Error,
         ReplyShape.IntegerValue,
-        ReplyShape.BooleanValue,
-        ReplyShape.DoubleValue,
-        ReplyShape.BigNumber,
-        ReplyShape.VerbatimString,
-        ReplyShape.BlobError,
         ReplyShape.BulkString,
         ReplyShape.NullValue,
         ReplyShape.NullArray,
@@ -32,10 +27,7 @@ public sealed interface ReplyShape permits
 
     enum AggregateKind {
         ARRAY,
-        MAP,
-        SET,
-        PUSH,
-        ATTRIBUTE
+        MAP
     }
 
     record SimpleString(int payloadLength) implements ReplyShape {
@@ -51,31 +43,6 @@ public sealed interface ReplyShape permits
     }
 
     record IntegerValue(long value) implements ReplyShape {
-    }
-
-    record BooleanValue(boolean value) implements ReplyShape {
-    }
-
-    record DoubleValue(double value) implements ReplyShape {
-    }
-
-    record BigNumber(int asciiLength) implements ReplyShape {
-        public BigNumber {
-            requireNonNegative(asciiLength, "asciiLength");
-        }
-    }
-
-    record VerbatimString(int formatLength, int payloadLength) implements ReplyShape {
-        public VerbatimString {
-            requireNonNegative(formatLength, "formatLength");
-            requireNonNegative(payloadLength, "payloadLength");
-        }
-    }
-
-    record BlobError(int payloadLength) implements ReplyShape {
-        public BlobError {
-            requireNonNegative(payloadLength, "payloadLength");
-        }
     }
 
     record BulkString(int payloadLength, long retainedSourceBytes) implements ReplyShape {

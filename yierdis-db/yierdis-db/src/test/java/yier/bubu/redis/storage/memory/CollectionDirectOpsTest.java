@@ -13,11 +13,11 @@ import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
-import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.PoppedValueSequence;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
+import yier.bubu.redis.storage.testkit.MaterializingByteValueSink;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Set;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
+import static yier.bubu.redis.storage.testkit.TestBytes.slice;
 
 public class CollectionDirectOpsTest {
     @Test
@@ -480,7 +481,7 @@ public class CollectionDirectOpsTest {
     }
 
     private static BytesSlice view(String text) {
-        return new ArrayBytesSlice(b(text));
+        return slice(b(text));
     }
 
     private static byte[] repeatedBytes(char value, int count) {
@@ -570,7 +571,7 @@ public class CollectionDirectOpsTest {
         }
     }
 
-    private static final class RecordingByteValueSink implements ByteValueSink {
+    private static final class RecordingByteValueSink extends MaterializingByteValueSink {
         private final List<String> values = new ArrayList<>();
 
         @Override
@@ -578,53 +579,6 @@ public class CollectionDirectOpsTest {
             values.add(data == null ? null : new String(data, StandardCharsets.UTF_8));
         }
 
-        @Override
-        public void value(byte[] data, int off, int len) {
-            values.add(data == null ? null : new String(data, off, len, StandardCharsets.UTF_8));
-        }
-
-        @Override
-        public void value(BytesSlice slice) {
-            if (slice == null) {
-                values.add(null);
-                return;
-            }
-            byte[] bytes = new byte[slice.length()];
-            slice.getBytes(0, bytes, 0, bytes.length);
-            values.add(new String(bytes, StandardCharsets.UTF_8));
-        }
-
-        @Override
-        public void longAscii(long value) {
-            values.add(Long.toString(value));
-        }
-
-        @Override
-        public void nullValue() {
-            values.add(null);
-        }
     }
 
-    private static final class ArrayBytesSlice implements BytesSlice {
-        private final byte[] bytes;
-
-        private ArrayBytesSlice(byte[] bytes) {
-            this.bytes = Arrays.copyOf(bytes, bytes.length);
-        }
-
-        @Override
-        public void writeTo(yier.bubu.redis.bytes.BytesSink out) {
-            out.writeBytes(bytes, 0, bytes.length);
-        }
-
-        @Override
-        public int length() {
-            return bytes.length;
-        }
-
-        @Override
-        public byte getByte(int index) {
-            return bytes[index];
-        }
-    }
 }

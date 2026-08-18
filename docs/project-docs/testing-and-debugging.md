@@ -22,7 +22,7 @@ Yierdis 的测试大致分成七层：
 | CLI / bench | 客户端、catalog、NIO runner、storage footprint、脚本和输出契约 | `YierdisClientTest`, `RedisBenchmarkCatalogTest`, `NioBenchmarkRunnerTest`, `BenchmarkOutputRendererTest`, `StorageBenchmarkRunnerTest`, `BenchScriptContractTest` |
 | architecture guard | command、DB 和 runtime 边界 | `CommandParseIsolationTest`, `YierdisDbArchitectureGuardTest` |
 
-查找入口：开发路径看 [`development-navigation.md`](./development-navigation.md)，源码职责看 [`core-logic-index.md`](./core-logic-index.md)。
+查找入口：开发路径看 [`development-navigation.md`](./development-navigation.md)，模块职责看 [`module-architecture.md`](./module-architecture.md)。
 
 ## 改协议时
 
@@ -38,14 +38,14 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server -am -Dtest=RespProtocolIntegrationTest,RespProtocolErrorIntegrationTest,RespHandshakeIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-排障顺序：`RespRequestDecoder` 看线上 bytes 是否在 admission 后正确切成 `RetainedRespExecutionRequest`，`InboundMemoryBudget` 看 lease 是否在最后一个消费者释放，`RespReplyWriter` 看 reply 语义是否被正确编码。
+排障顺序：`RespRequestDecoder` 看线上 bytes 是否在 admission 后正确转成 `ByteArrayExecutionRequest` 并移交 argv 与 lease，`InboundMemoryBudget` 看 lease 是否在最后一个消费者释放，`RespReplyWriter` 看 reply 语义是否被正确编码。
 
 ## 改命令时
 
 先跑命令家族测试和错误测试。例如 string / bitmap：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests -am -Dtest=StringCommandTest,BitmapCommandTest,CommandErrorTest,CommandVariantCoverageTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests -am -Dtest=StringCommandTest,BitmapCommandTest,CommandErrorTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 新增命令或新增 option/subcommand 时，优先补最窄的命令家族测试和错误测试；server-only 命令还要补
@@ -191,7 +191,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 | 现象 | 先看哪里 | 常用测试 |
 | --- | --- | --- |
-| unknown command 或 arity 不对 | `CommandRegistry`, `CommandSpec`, `CommandArgs`, `CommandDispatcher` | `CommandRegistryGuardTest`, `CommandDispatcherTest`, `CommandErrorTest` |
+| unknown command 或 arity 不对 | `CommandRegistry`, `CommandSpec`, `CommandArgs`, `CommandDispatcher` | `CommandRegistryTest`, `CommandDispatcherTest`, `CommandErrorTest` |
 | parse 阶段意外访问 DB/provider | command handler、`CommandArgs` | `CommandParseIsolationTest`, `ServerCommandParseIsolationTest` |
 | 事务里行为不同 | `CommandDispatcher`, `TransactionCommands`, `TransactionState` | `CommandDispatcherTest`, `TransactionCommandTest`, `TransactionQueueCleanupTest` |
 | RESP 回包形状不对 | `CommandResult`, `RedisReplyRenderer`, `RespReplyWriter` | `RedisReplyRendererTest`, `RespReplyWriterTest`, `RespProtocolIntegrationTest` |

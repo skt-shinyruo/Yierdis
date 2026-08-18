@@ -49,84 +49,6 @@ public final class RespReplyWriter implements RedisReplyWriter {
     }
 
     @Override
-    public void booleanValue(boolean value) {
-        if (version() == RespProtocolVersion.RESP3) {
-            writeAscii(value ? "#t\r\n" : "#f\r\n");
-        } else {
-            integer(value ? 1L : 0L);
-        }
-    }
-
-    @Override
-    public void doubleValue(double value) {
-        if (version() == RespProtocolVersion.RESP3) {
-            if (Double.isNaN(value)) {
-                writeAscii(",nan\r\n");
-                return;
-            }
-            if (value == Double.POSITIVE_INFINITY) {
-                writeAscii(",inf\r\n");
-                return;
-            }
-            if (value == Double.NEGATIVE_INFINITY) {
-                writeAscii(",-inf\r\n");
-                return;
-            }
-            writeAsciiLine(',', Double.toString(value));
-        } else {
-            if (Double.isNaN(value)) {
-                bulkString("nan".getBytes(StandardCharsets.US_ASCII));
-                return;
-            }
-            if (value == Double.POSITIVE_INFINITY) {
-                bulkString("inf".getBytes(StandardCharsets.US_ASCII));
-                return;
-            }
-            if (value == Double.NEGATIVE_INFINITY) {
-                bulkString("-inf".getBytes(StandardCharsets.US_ASCII));
-                return;
-            }
-            bulkString(Double.toString(value).getBytes(StandardCharsets.US_ASCII));
-        }
-    }
-
-    @Override
-    public void bigNumberAscii(String value) {
-        String normalized = ReplyShapes.sanitizeSimple(value == null ? "" : value.trim());
-        if (version() == RespProtocolVersion.RESP3) {
-            writeAsciiLine('(', normalized);
-        } else {
-            bulkString(normalized.getBytes(StandardCharsets.US_ASCII));
-        }
-    }
-
-    @Override
-    public void verbatimString(String format, byte[] data) {
-        byte[] body = data == null ? new byte[0] : data;
-        if (version() == RespProtocolVersion.RESP3) {
-            String f = ReplyShapes.sanitizeVerbatimFormat(format);
-            writeAscii("=" + (f.length() + 1 + body.length) + "\r\n" + f + ":");
-            out.writeBytes(body, 0, body.length);
-            writeCrlf();
-        } else {
-            bulkString(body);
-        }
-    }
-
-    @Override
-    public void blobError(String message) {
-        String normalized = ReplyShapes.normalizeError(message);
-        if (version() == RespProtocolVersion.RESP3) {
-            byte[] bytes = normalized.getBytes(StandardCharsets.UTF_8);
-            writeAscii("!" + bytes.length + "\r\n");
-            out.writeBytes(bytes, 0, bytes.length);
-            writeCrlf();
-        } else {
-            error(normalized);
-        }
-    }
-
-    @Override
     public void bulkString(byte[] data) {
         if (data == null) {
             nullValue();
@@ -205,24 +127,6 @@ public final class RespReplyWriter implements RedisReplyWriter {
             writeAsciiLine('~', Integer.toString(Math.max(0, count)));
         } else {
             arrayHeader(count);
-        }
-    }
-
-    @Override
-    public void pushHeader(int count) {
-        if (version() == RespProtocolVersion.RESP3) {
-            writeAsciiLine('>', Integer.toString(Math.max(0, count)));
-        } else {
-            arrayHeader(count);
-        }
-    }
-
-    @Override
-    public void attributeHeader(int pairs) {
-        if (version() == RespProtocolVersion.RESP3) {
-            writeAsciiLine('|', Integer.toString(Math.max(0, pairs)));
-        } else {
-            mapHeader(pairs);
         }
     }
 

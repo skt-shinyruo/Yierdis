@@ -105,7 +105,6 @@ public final class ExecutionConnectionContext {
                 pending.get(),
                 pendingBytes.get(),
                 inputDisabledByExecutor.get(),
-                inputPausedByReply.get(),
                 closing.get(),
                 commandsEnqueued.get(),
                 commandsExecuted.get(),

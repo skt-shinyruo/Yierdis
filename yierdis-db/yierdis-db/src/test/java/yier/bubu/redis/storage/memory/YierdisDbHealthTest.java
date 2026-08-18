@@ -2,7 +2,6 @@ package yier.bubu.redis.storage.memory;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.memory.api.NativeAllocationScope;
 import yier.bubu.redis.memory.api.NativeHandle;
@@ -30,6 +29,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
+import static yier.bubu.redis.storage.testkit.TestBytes.slice;
 
 public class YierdisDbHealthTest {
     private static final long TEST_UPPER_BOUND_BYTES = 1_000_000L;
@@ -324,22 +324,4 @@ public class YierdisDbHealthTest {
         return (prefix + ':' + index).getBytes(StandardCharsets.US_ASCII);
     }
 
-    private static BytesSlice slice(byte[] bytes) {
-        return new BytesSlice() {
-            @Override
-            public void writeTo(BytesSink out) {
-                out.writeBytes(bytes, 0, bytes.length);
-            }
-
-            @Override
-            public int length() {
-                return bytes.length;
-            }
-
-            @Override
-            public byte getByte(int index) {
-                return bytes[index];
-            }
-        };
-    }
 }

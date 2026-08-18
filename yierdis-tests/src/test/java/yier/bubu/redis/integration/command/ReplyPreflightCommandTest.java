@@ -650,26 +650,6 @@ public class ReplyPreflightCommandTest {
         }
 
         @Override
-        public void booleanValue(boolean value) {
-        }
-
-        @Override
-        public void doubleValue(double value) {
-        }
-
-        @Override
-        public void bigNumberAscii(String value) {
-        }
-
-        @Override
-        public void verbatimString(String format, byte[] data) {
-        }
-
-        @Override
-        public void blobError(String message) {
-        }
-
-        @Override
         public void nullValue() {
         }
 
@@ -691,14 +671,6 @@ public class ReplyPreflightCommandTest {
 
         @Override
         public void setHeader(int count) {
-        }
-
-        @Override
-        public void pushHeader(int count) {
-        }
-
-        @Override
-        public void attributeHeader(int pairs) {
         }
 
         @Override

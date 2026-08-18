@@ -1,22 +1,13 @@
 package yier.bubu.redis.storage.memory.internal.ledger;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
-import yier.bubu.redis.storage.memory.internal.ledger.InMemoryLedger;
-import yier.bubu.redis.storage.memory.internal.ledger.MemoryLedgerOutOfMemoryException;
-import yier.bubu.redis.storage.memory.internal.ledger.MemoryReservation;
 
 public class MemoryLedgerContractTest {
     @Test
     public void reserveCommitRollbackMaintainInvariants() {
-        InMemoryLedger ledger = new InMemoryLedger(10);
+        MemoryLedger ledger = ledger(10);
         Assert.assertEquals(0, ledger.usedBytes());
         Assert.assertEquals(0, ledger.reservedBytes());
 
@@ -54,7 +45,7 @@ public class MemoryLedgerContractTest {
 
     @Test
     public void reconcileCanReduceButNeverGrowAReservation() {
-        InMemoryLedger ledger = new InMemoryLedger(10);
+        MemoryLedger ledger = ledger(10);
         MemoryReservation reservation = ledger.reserve(8);
 
         ledger.reconcile(reservation, 3);
@@ -67,8 +58,8 @@ public class MemoryLedgerContractTest {
     }
 
     @Test
-    public void inMemoryReservationOverflowIsRejectedWithoutCounterDrift() {
-        InMemoryLedger ledger = new InMemoryLedger(Long.MAX_VALUE);
+    public void reservationOverflowIsRejectedWithoutCounterDrift() {
+        MemoryLedger ledger = ledger(Long.MAX_VALUE);
         MemoryReservation reservation = ledger.reserve(Long.MAX_VALUE - 1L);
 
         Assert.assertThrows(MemoryLedgerOutOfMemoryException.class, () -> ledger.reserve(2L));
@@ -102,7 +93,7 @@ public class MemoryLedgerContractTest {
 
     @Test
     public void commitRejectsUsageOverflowBeforeFinishingItsReservation() {
-        InMemoryLedger ledger = new InMemoryLedger(0L);
+        MemoryLedger ledger = ledger(0L);
         MemoryReservation initial = ledger.reserve(Long.MAX_VALUE);
         ledger.commit(initial, Long.MAX_VALUE);
         MemoryReservation overflow = ledger.reserve(1L);
@@ -113,5 +104,19 @@ public class MemoryLedgerContractTest {
 
         ledger.rollback(overflow);
         Assert.assertEquals(0L, ledger.reservedBytes());
+    }
+
+    private static MemoryLedger ledger(long limitBytes) {
+        MemoryLedger[] holder = new MemoryLedger[1];
+        holder[0] = new YierdisDbMemoryLedger(
+                limitBytes,
+                MaxmemoryPolicy.NOEVICTION,
+                () -> { },
+                ignored -> { },
+                () -> holder[0].effectiveUsedBytes(),
+                () -> null,
+                () -> null
+        );
+        return holder[0];
     }
 }

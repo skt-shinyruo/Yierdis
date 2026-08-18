@@ -11,15 +11,6 @@ import java.nio.charset.StandardCharsets;
 
 public class RespReplyWriterSessionTest {
     @Test
-    public void usesSessionRespVersionWhenAvailable() {
-        ByteArraySink sink = new ByteArraySink();
-        RespReplyWriter writer = new RespReplyWriter(session(3), sink);
-        writer.booleanValue(true);
-
-        Assert.assertEquals("#t\r\n", sink.utf8());
-    }
-
-    @Test
     public void sessionBackedWriterObservesProtocolChangesBeforeReplyIsWritten() {
         ByteArraySink sink = new ByteArraySink();
         CommandSession session = session(2);
@@ -31,15 +22,6 @@ public class RespReplyWriterSessionTest {
         writer.integer(3);
 
         Assert.assertEquals("%1\r\n$5\r\nproto\r\n:3\r\n", sink.utf8());
-    }
-
-    @Test
-    public void usesResp2FromCompleteSession() {
-        ByteArraySink sink = new ByteArraySink();
-        RespReplyWriter writer = new RespReplyWriter(session(2), sink);
-        writer.booleanValue(true);
-
-        Assert.assertEquals(":1\r\n", sink.utf8());
     }
 
     private static CommandSession session(int version) {

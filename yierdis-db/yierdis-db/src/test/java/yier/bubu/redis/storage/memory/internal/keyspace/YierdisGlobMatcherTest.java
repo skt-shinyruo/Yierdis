@@ -6,6 +6,8 @@ import yier.bubu.redis.bytes.BytesView;
 
 import java.nio.charset.StandardCharsets;
 
+import static yier.bubu.redis.storage.testkit.TestBytes.view;
+
 public class YierdisGlobMatcherTest {
     @Test
     public void matchesLiteralStarAndQuestionAcrossInputBackings() {
@@ -77,17 +79,4 @@ public class YierdisGlobMatcherTest {
         return value.getBytes(StandardCharsets.UTF_8);
     }
 
-    private static BytesView view(byte[] data) {
-        return new BytesView() {
-            @Override
-            public int length() {
-                return data.length;
-            }
-
-            @Override
-            public byte getByte(int index) {
-                return data[index];
-            }
-        };
-    }
 }

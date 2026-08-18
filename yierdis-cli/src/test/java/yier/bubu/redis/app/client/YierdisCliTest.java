@@ -13,7 +13,6 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.atomic.AtomicReference;
 
 public class YierdisCliTest {
     @Test
@@ -96,7 +95,13 @@ public class YierdisCliTest {
     @Test
     public void hexModePrintsInvalidUtf8BulkBytesWithoutReplacement() throws Exception {
         byte[] reply = new byte[]{'$', '1', '\r', '\n', (byte) 0xff, '\r', '\n'};
-        try (ScriptedReplyServer server = ScriptedReplyServer.start(reply)) {
+        try (ScriptedSocketServer server = ScriptedSocketServer.start(socket -> {
+            readAtLeastOneRequest(socket);
+            socket.getOutputStream().write(reply);
+            socket.getOutputStream().flush();
+            while (socket.getInputStream().read() >= 0) {
+            }
+        })) {
             CliResult result = runWithIo(
                     "",
                     "--host", "127.0.0.1",
@@ -309,115 +314,4 @@ public class YierdisCliTest {
         }
     }
 
-    private static final class ScriptedReplyServer implements AutoCloseable {
-        private final ServerSocket server;
-        private final AtomicReference<Throwable> failure;
-        private final Thread worker;
-
-        private ScriptedReplyServer(
-                ServerSocket server,
-                AtomicReference<Throwable> failure,
-                Thread worker
-        ) {
-            this.server = server;
-            this.failure = failure;
-            this.worker = worker;
-        }
-
-        private static ScriptedReplyServer start(byte[] reply) throws Exception {
-            ServerSocket server = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"));
-            AtomicReference<Throwable> failure = new AtomicReference<>();
-            Thread worker = Thread.ofPlatform().start(() -> {
-                try (Socket socket = server.accept()) {
-                    socket.setSoTimeout(2_000);
-                    byte[] request = new byte[256];
-                    InputStream input = socket.getInputStream();
-                    if (input.read(request) < 0) {
-                        throw new AssertionError("client closed before sending a command");
-                    }
-                    socket.getOutputStream().write(reply);
-                    socket.getOutputStream().flush();
-                    while (input.read(request) >= 0) {
-                    }
-                } catch (Throwable t) {
-                    if (!server.isClosed()) {
-                        failure.set(t);
-                    }
-                }
-            });
-            return new ScriptedReplyServer(server, failure, worker);
-        }
-
-        private int port() {
-            return server.getLocalPort();
-        }
-
-        private void assertSucceeded() throws Exception {
-            worker.join(2_000L);
-            Assert.assertFalse("scripted reply server did not finish", worker.isAlive());
-            if (failure.get() != null) {
-                throw new AssertionError("scripted reply server failed", failure.get());
-            }
-        }
-
-        @Override
-        public void close() throws Exception {
-            server.close();
-            worker.join(2_000L);
-        }
-    }
-
-    @FunctionalInterface
-    private interface SocketScript {
-        void run(Socket socket) throws Exception;
-    }
-
-    private static final class ScriptedSocketServer implements AutoCloseable {
-        private final ServerSocket server;
-        private final AtomicReference<Throwable> failure;
-        private final Thread worker;
-
-        private ScriptedSocketServer(
-                ServerSocket server,
-                AtomicReference<Throwable> failure,
-                Thread worker
-        ) {
-            this.server = server;
-            this.failure = failure;
-            this.worker = worker;
-        }
-
-        private static ScriptedSocketServer start(SocketScript script) throws IOException {
-            ServerSocket server = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"));
-            AtomicReference<Throwable> failure = new AtomicReference<>();
-            Thread worker = Thread.ofPlatform().start(() -> {
-                try (Socket socket = server.accept()) {
-                    script.run(socket);
-                } catch (Throwable t) {
-                    if (!server.isClosed()) {
-                        failure.set(t);
-                    }
-                }
-            });
-            return new ScriptedSocketServer(server, failure, worker);
-        }
-
-        private int port() {
-            return server.getLocalPort();
-        }
-
-        private void assertSucceeded() throws Exception {
-            worker.join(3_000L);
-            Assert.assertFalse("scripted socket server did not finish", worker.isAlive());
-            if (failure.get() != null) {
-                throw new AssertionError("scripted socket server failed", failure.get());
-            }
-        }
-
-        @Override
-        public void close() throws Exception {
-            server.close();
-            worker.join(3_000L);
-        }
-    }
 }

@@ -3,7 +3,6 @@ package yier.bubu.redis.storage.memory;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
-import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
@@ -12,6 +11,8 @@ import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 
 import java.nio.charset.StandardCharsets;
+
+import static yier.bubu.redis.storage.testkit.TestBytes.view;
 
 public class YierdisDbMemoryReporterTest {
     @Test
@@ -87,20 +88,6 @@ public class YierdisDbMemoryReporterTest {
 
     private static byte[] bytes(String value) {
         return value.getBytes(StandardCharsets.UTF_8);
-    }
-
-    private static BytesView view(byte[] data) {
-        return new BytesView() {
-            @Override
-            public int length() {
-                return data.length;
-            }
-
-            @Override
-            public byte getByte(int index) {
-                return data[index];
-            }
-        };
     }
 
     private enum TestMaxmemoryCoordinator implements MaxmemoryCoordinator {
