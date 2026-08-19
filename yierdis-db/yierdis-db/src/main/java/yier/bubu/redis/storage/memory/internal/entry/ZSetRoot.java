@@ -132,7 +132,7 @@ public final class ZSetRoot implements AutoCloseable {
             }
             ZAddResult added;
             try {
-                added = value.prepareAdd(plan.scoreMemberPairs());
+                added = value.add(plan.scoreMemberPairs());
             } finally {
                 zsets.refreshAdapter(replacement);
             }

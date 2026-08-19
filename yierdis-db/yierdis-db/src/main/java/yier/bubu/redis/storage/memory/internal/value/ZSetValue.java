@@ -213,7 +213,7 @@ public final class ZSetValue implements YierdisValue {
         return sizes;
     }
 
-    public ZAddResult prepareAdd(List<byte[]> scoreMemberPairs) {
+    public ZAddResult add(List<byte[]> scoreMemberPairs) {
         validateScoreMemberPairs(scoreMemberPairs);
         if (size() != 0) {
             try (PreparedExistingAdd prepared = prepareExistingAdd(planExistingAdd(scoreMemberPairs))) {
@@ -226,7 +226,7 @@ public final class ZSetValue implements YierdisValue {
                 return result;
             }
         }
-        return prepareAddInternal(scoreMemberPairs);
+        return addDirectly(scoreMemberPairs);
     }
 
     public ZAddPlan planExistingAdd(List<byte[]> scoreMemberPairs) {
@@ -341,14 +341,14 @@ public final class ZSetValue implements YierdisValue {
     }
 
     public int zaddMany(List<byte[]> scoreMemberPairs) {
-        return prepareAdd(scoreMemberPairs).added();
+        return add(scoreMemberPairs).added();
     }
 
     public ZAddResult zaddManyResult(List<byte[]> scoreMemberPairs) {
-        return prepareAdd(scoreMemberPairs);
+        return add(scoreMemberPairs);
     }
 
-    private ZAddResult prepareAddInternal(List<byte[]> scoreMemberPairs) {
+    private ZAddResult addDirectly(List<byte[]> scoreMemberPairs) {
         validateScoreMemberPairs(scoreMemberPairs);
         int added = 0;
         boolean changedAny = false;

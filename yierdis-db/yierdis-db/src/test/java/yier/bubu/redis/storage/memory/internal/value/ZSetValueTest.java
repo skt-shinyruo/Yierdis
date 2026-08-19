@@ -25,6 +25,32 @@ import java.util.Set;
 
 public class ZSetValueTest {
     @Test
+    public void addImmediatelyReportsNewUpdatedAndUnchangedMembers() {
+        try (TestBackend runtime = TestBackend.open("zset-immediate-add");
+             StableMemoryBackend allocator = runtime.backend()) {
+            ZSetValue zset = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
+            try {
+                Assert.assertEquals(new ZSetValue.ZAddResult(1, true),
+                        zset.add(List.of(b("1"), b("member"))));
+                Assert.assertEquals(1, zset.size());
+                Assert.assertEquals("1", scoreFor(zset, "member"));
+
+                Assert.assertEquals(new ZSetValue.ZAddResult(0, true),
+                        zset.add(List.of(b("2"), b("member"))));
+                Assert.assertEquals(1, zset.size());
+                Assert.assertEquals("2", scoreFor(zset, "member"));
+
+                Assert.assertEquals(new ZSetValue.ZAddResult(0, false),
+                        zset.add(List.of(b("2"), b("member"))));
+                Assert.assertEquals(1, zset.size());
+                Assert.assertEquals("2", scoreFor(zset, "member"));
+            } finally {
+                zset.close();
+            }
+        }
+    }
+
+    @Test
     public void stagedPackedBuildPlansOneFinalMemberBlockAcrossAllocatorSizeClasses() {
         ArrayList<byte[]> pairs = new ArrayList<>();
         for (int index = 0; index < YierdisEncodingThresholds.ZSET_MAX_LISTPACK_ENTRIES; index++) {
@@ -41,7 +67,7 @@ public class ZSetValueTest {
             ZSetValue zset = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 zset.reservePackedForBuild(plan);
-                Assert.assertEquals(plan.memberCount(), zset.prepareAdd(pairs).added());
+                Assert.assertEquals(plan.memberCount(), zset.add(pairs).added());
                 Assert.assertEquals(ValueEncoding.ZSET_PACKED, zset.encoding());
             } finally {
                 zset.close();
@@ -545,7 +571,7 @@ public class ZSetValueTest {
                 long upperBound = source.preparedCopyHeapUpperBound(addition);
 
                 replacement.zaddMany(sourcePairs);
-                replacement.prepareAdd(addition);
+                replacement.add(addition);
 
                 Assert.assertTrue(replacement.heapEstimatedBytes() <= upperBound);
             } finally {
