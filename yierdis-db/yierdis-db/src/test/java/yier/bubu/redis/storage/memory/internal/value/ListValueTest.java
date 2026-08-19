@@ -1,9 +1,12 @@
 package yier.bubu.redis.storage.memory.internal.value;
 
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.storage.memory.TestBackend;
 import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
@@ -12,6 +15,50 @@ import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
 public class ListValueTest {
+    private static final int QUICKLIST_NODE_RECORD_BYTES = 80;
+    private static final int QUICKLIST_NODE_OWNER_ROOT_OFFSET = 0;
+    private static final int QUICKLIST_NODE_PREV_OFFSET = 16;
+    private static final int QUICKLIST_NODE_NEXT_OFFSET = 32;
+
+    @Test
+    public void preparedFactoriesExposeExplicitOperationVariants() {
+        try (TestBackend runtime = TestBackend.open("list-value-prepared-operations");
+             ListRoot root = new ListRoot(runtime.backend())) {
+            ValueHandle packed = root.build(List.of(b("value")));
+            ValueHandle quicklist = root.build(List.of(filled('a', 5_000), filled('b', 5_000), b("tail")));
+            try {
+                try (ListValue.PreparedMutation prepared = root.preparePush(packed, List.of(), true)) {
+                    Assert.assertEquals(ListValue.PreparedMutation.Operation.UNCHANGED, prepared.operation());
+                }
+                try (ListValue.PreparedMutation prepared = root.preparePush(packed, List.of(b("next")), false)) {
+                    Assert.assertEquals(
+                            ListValue.PreparedMutation.Operation.PACKED_REPLACEMENT,
+                            prepared.operation()
+                    );
+                }
+                try (ListValue.PreparedMutation prepared = root.preparePush(
+                        packed,
+                        List.of(filled('c', 5_000), filled('d', 5_000)),
+                        false
+                )) {
+                    Assert.assertEquals(
+                            ListValue.PreparedMutation.Operation.PACKED_TO_QUICKLIST,
+                            prepared.operation()
+                    );
+                }
+                try (ListValue.PreparedMutation prepared = root.preparePush(quicklist, List.of(b("next")), true)) {
+                    Assert.assertEquals(ListValue.PreparedMutation.Operation.QUICKLIST_PUSH, prepared.operation());
+                }
+                try (ListValue.PreparedMutation prepared = root.preparePop(quicklist, 1, false)) {
+                    Assert.assertEquals(ListValue.PreparedMutation.Operation.QUICKLIST_POP, prepared.operation());
+                }
+            } finally {
+                root.release(packed);
+                root.release(quicklist);
+            }
+        }
+    }
+
     @Test
     public void preparedPackedPushCanBeAbortedAndCommittedWithoutChangingOrder() {
         try (TestBackend runtime = TestBackend.open("list-value-prepared-packed");
@@ -98,6 +145,98 @@ public class ListValueTest {
     }
 
     @Test
+    public void preparedQuicklistPushCanBeAbortedAndCommittedAtBothEdges() {
+        try (TestBackend runtime = TestBackend.open("list-value-prepared-quicklist-push");
+             StableMemoryBackend backend = runtime.backend();
+             ListRoot root = new ListRoot(backend)) {
+            byte[] first = filled('m', 5_000);
+            byte[] second = filled('n', 5_000);
+            ValueHandle handle = root.build(List.of(first, second));
+            long liveBefore = backend.stats().liveObjects();
+
+            try (ListValue.PreparedMutation prepared = root.preparePush(
+                    handle,
+                    List.of(filled('a', 5_000)),
+                    true
+            )) {
+                Assert.assertEquals(ListValue.PreparedMutation.Operation.QUICKLIST_PUSH, prepared.operation());
+            }
+            Assert.assertEquals(liveBefore, backend.stats().liveObjects());
+            assertValues(root, handle, first, second);
+
+            byte[] left = filled('l', 5_000);
+            try (ListValue.PreparedMutation prepared = root.preparePush(handle, List.of(left), true)) {
+                prepared.commit();
+                prepared.releaseSuperseded();
+            }
+            byte[] right = filled('r', 5_000);
+            try (ListValue.PreparedMutation prepared = root.preparePush(handle, List.of(right), false)) {
+                prepared.commit();
+                prepared.releaseSuperseded();
+            }
+
+            assertValues(root, handle, left, first, second, right);
+            root.release(handle);
+            Assert.assertEquals(0L, backend.stats().liveObjects());
+        }
+    }
+
+    @Test
+    public void releasingQuicklistPushRefreshesRetainedHeapAccounting() {
+        try (TestBackend runtime = TestBackend.open("list-value-prepared-metadata-refresh");
+             StableMemoryBackend backend = runtime.backend();
+             ListRoot root = new ListRoot(backend)) {
+            byte[] first = filled('a', 5_000);
+            byte[] second = filled('b', 5_000);
+            ValueHandle handle = root.build(List.of(b("tail")));
+            try {
+                try (ListValue.PreparedMutation prepared = root.preparePush(
+                        handle,
+                        List.of(first, second),
+                        true
+                )) {
+                    prepared.commit();
+                    prepared.releaseSuperseded();
+                }
+                assertQuicklistMetadataLinks(root, handle, backend);
+                long retainedBefore = root.retainedHeapBytes();
+                try (ListValue.PreparedMutation prepared = root.preparePush(
+                        handle,
+                        List.of(filled('c', 5_000)),
+                        true
+                )) {
+                    prepared.commit();
+                    Assert.assertEquals(retainedBefore, root.retainedHeapBytes());
+                    prepared.releaseSuperseded();
+                }
+                assertQuicklistMetadataLinks(root, handle, backend);
+                try (ListValue.PreparedMutation prepared = root.preparePush(
+                        handle,
+                        List.of(filled('d', 5_000)),
+                        false
+                )) {
+                    prepared.commit();
+                    prepared.releaseSuperseded();
+                }
+                assertQuicklistMetadataLinks(root, handle, backend);
+                try (ListValue.PreparedMutation prepared = root.preparePop(handle, 1, true)) {
+                    prepared.commit();
+                    prepared.releaseSuperseded();
+                }
+                assertQuicklistMetadataLinks(root, handle, backend);
+                try (ListValue.PreparedMutation prepared = root.preparePop(handle, 1, false)) {
+                    prepared.commit();
+                    prepared.releaseSuperseded();
+                }
+                assertQuicklistMetadataLinks(root, handle, backend);
+                Assert.assertTrue(root.retainedHeapBytes() > retainedBefore);
+            } finally {
+                root.release(handle);
+            }
+        }
+    }
+
+    @Test
     public void preparedPopAndRangeCoverNoopFullAndNormalizedBounds() {
         try (TestBackend runtime = TestBackend.open("list-value-bounds");
              ListRoot root = new ListRoot(runtime.backend())) {
@@ -160,22 +299,38 @@ public class ListValueTest {
     }
 
     @Test
-    public void preparedPushReportsAConservativeHeapBound() {
+    public void preparedMutationVariantsReportConservativeHeapBounds() {
         try (TestBackend runtime = TestBackend.open("list-value-prepared")) {
             ListRoot root = new ListRoot(runtime.backend());
-            ValueHandle handle = root.build(List.of(b("a"), b("b")));
+            ValueHandle packed = root.build(List.of(b("a"), b("b")));
+            ValueHandle quicklist = root.build(List.of(filled('a', 5_000), filled('b', 5_000), b("tail")));
             try {
-                List<byte[]> addition = List.of(new byte[512], new byte[512]);
-                long upperBound = root.estimatedPreparedPushHeapGrowthBytes(
-                        handle,
-                        addition,
-                        false
-                );
-                try (ListValue.PreparedMutation prepared = root.preparePush(handle, addition, false)) {
-                    Assert.assertTrue(prepared.stagedHeapBytes() <= upperBound);
+                List<byte[]> packedAddition = List.of(new byte[512], new byte[512]);
+                try (ListValue.PreparedMutation prepared = root.preparePush(packed, packedAddition, false)) {
+                    Assert.assertTrue(prepared.stagedHeapBytes()
+                            <= root.estimatedPreparedPushHeapGrowthBytes(packed, packedAddition, false));
+                }
+                List<byte[]> promotion = List.of(filled('c', 5_000), filled('d', 5_000));
+                try (ListValue.PreparedMutation prepared = root.preparePush(packed, promotion, false)) {
+                    Assert.assertTrue(prepared.stagedHeapBytes()
+                            <= root.estimatedPreparedPushHeapGrowthBytes(packed, promotion, false));
+                }
+                List<byte[]> quicklistAddition = List.of(filled('e', 5_000));
+                try (ListValue.PreparedMutation prepared = root.preparePush(quicklist, quicklistAddition, true)) {
+                    Assert.assertTrue(prepared.stagedHeapBytes()
+                            <= root.estimatedPreparedPushHeapGrowthBytes(quicklist, quicklistAddition, true));
+                }
+                try (ListValue.PreparedMutation prepared = root.preparePop(quicklist, 1, false)) {
+                    Assert.assertTrue(prepared.stagedHeapBytes()
+                            <= root.estimatedPreparedPopHeapGrowthBytes(quicklist, 1, false));
+                }
+                try (ListValue.PreparedMutation prepared = root.preparePop(quicklist, 0, true)) {
+                    Assert.assertTrue(prepared.stagedHeapBytes()
+                            <= root.estimatedPreparedPopHeapGrowthBytes(quicklist, 0, true));
                 }
             } finally {
-                root.release(handle);
+                root.release(packed);
+                root.release(quicklist);
             }
         }
     }
@@ -292,5 +447,36 @@ public class ListValueTest {
         for (int index = 0; index < expected.length; index++) {
             Assert.assertArrayEquals(expected[index], actual.get(index));
         }
+    }
+
+    private static void assertQuicklistMetadataLinks(
+            ListRoot root,
+            ValueHandle handle,
+            StableMemoryBackend backend
+    ) {
+        List<NativeHandle> nodes = new ArrayList<>();
+        root.forEachNativeHandle(handle, nativeHandle -> {
+            try (NativeObjectView view = backend.resolve(nativeHandle, NativeAccessMode.READ_ONLY)) {
+                if (view.size() == QUICKLIST_NODE_RECORD_BYTES
+                        && handle.nativeHandle().equals(readHandle(view, QUICKLIST_NODE_OWNER_ROOT_OFFSET))) {
+                    nodes.add(nativeHandle);
+                }
+            }
+        });
+        Assert.assertTrue(nodes.size() >= 2);
+        for (int index = 0; index < nodes.size(); index++) {
+            NativeHandle expectedPrevious = index == 0 ? NativeHandle.NULL : nodes.get(index - 1);
+            NativeHandle expectedNext = index + 1 == nodes.size()
+                    ? NativeHandle.NULL
+                    : nodes.get(index + 1);
+            try (NativeObjectView view = backend.resolve(nodes.get(index), NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(expectedPrevious, readHandle(view, QUICKLIST_NODE_PREV_OFFSET));
+                Assert.assertEquals(expectedNext, readHandle(view, QUICKLIST_NODE_NEXT_OFFSET));
+            }
+        }
+    }
+
+    private static NativeHandle readHandle(NativeObjectView view, int offset) {
+        return new NativeHandle(view.getLongLittleEndian(offset), view.getLongLittleEndian(offset + Long.BYTES));
     }
 }
