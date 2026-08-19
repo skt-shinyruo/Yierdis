@@ -1,5 +1,7 @@
 package yier.bubu.redis.protocol.resp;
 
+import yier.bubu.redis.bytes.BytesView;
+
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -16,27 +18,55 @@ public final class InlineCommandParser {
         if (maxArgs <= 0) {
             throw new IllegalArgumentException("maxArgs must be > 0");
         }
-        return parseInternal(input, off, len, maxArgs);
+        Parsed parsed = requireArguments(parseResult(input, off, len));
+        if (parsed.argc() > maxArgs) {
+            throw new IllegalArgumentException("Protocol error: array length too large");
+        }
+        return parsed.takeArgs();
     }
 
     public static byte[][] parseUnlimited(byte[] input, int off, int len) {
-        return parseInternal(input, off, len, 0);
+        return requireArguments(parseResult(input, off, len)).takeArgs();
     }
 
-    private static byte[][] parseInternal(byte[] input, int off, int len, int maxArgs) {
+    /** 校验并统计 inline 命令；空行表示为 argc=0，且在调用 {@link Parsed#takeArgs()} 前不分配 argv。 */
+    public static Parsed parseResult(byte[] input, int off, int len) {
+        return parseInternal(input, off, len);
+    }
+
+    public static boolean isBlank(BytesView input) {
+        if (input == null) {
+            throw new IllegalArgumentException("input must not be null");
+        }
+        for (int i = 0; i < input.length(); i++) {
+            if (!isSpace(input.getByte(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static Parsed requireArguments(Parsed parsed) {
+        if (parsed.argc() == 0) {
+            throw new IllegalArgumentException("Protocol error: empty inline command");
+        }
+        return parsed;
+    }
+
+    private static Parsed parseInternal(byte[] input, int off, int len) {
         if (input == null) {
             throw new IllegalArgumentException("input must not be null");
         }
         if (off < 0 || len < 0 || off > input.length - len) {
             throw new IndexOutOfBoundsException();
         }
+        byte[] ownedInput = Arrays.copyOfRange(input, off, off + len);
+        return parseSyntax(ownedInput, 0, ownedInput.length, null, null);
+    }
 
-        int[] offsets = new int[16];
-        int[] lengths = new int[16];
+    private static Parsed parseSyntax(byte[] input, int off, int len, byte[] decoded, byte[][] args) {
         int argc = 0;
-
         int end = off + len;
-        byte[] decoded = new byte[len];
         int outPos = 0;
 
         int p = off;
@@ -60,13 +90,20 @@ public final class InlineCommandParser {
                             && input[p + 1] == 'x'
                             && isHexDigit(input[p + 2])
                             && isHexDigit(input[p + 3])) {
-                        decoded[outPos++] = (byte) ((hexDigitToInt(input[p + 2]) << 4) | hexDigitToInt(input[p + 3]));
+                        if (decoded != null) {
+                            decoded[outPos] = (byte) ((hexDigitToInt(input[p + 2]) << 4)
+                                    | hexDigitToInt(input[p + 3]));
+                        }
+                        outPos++;
                         p += 4;
                         continue;
                     }
                     if (b == '\\' && p + 1 < end) {
                         p++;
-                        decoded[outPos++] = decodeEscapedChar(input[p]);
+                        if (decoded != null) {
+                            decoded[outPos] = decodeEscapedChar(input[p]);
+                        }
+                        outPos++;
                         p++;
                         continue;
                     }
@@ -78,14 +115,20 @@ public final class InlineCommandParser {
                         p++;
                         break;
                     }
-                    decoded[outPos++] = b;
+                    if (decoded != null) {
+                        decoded[outPos] = b;
+                    }
+                    outPos++;
                     p++;
                     continue;
                 }
 
                 if (insq) {
                     if (b == '\\' && p + 1 < end && input[p + 1] == '\'') {
-                        decoded[outPos++] = (byte) '\'';
+                        if (decoded != null) {
+                            decoded[outPos] = (byte) '\'';
+                        }
+                        outPos++;
                         p += 2;
                         continue;
                     }
@@ -97,7 +140,10 @@ public final class InlineCommandParser {
                         p++;
                         break;
                     }
-                    decoded[outPos++] = b;
+                    if (decoded != null) {
+                        decoded[outPos] = b;
+                    }
+                    outPos++;
                     p++;
                     continue;
                 }
@@ -115,7 +161,10 @@ public final class InlineCommandParser {
                     p++;
                     continue;
                 }
-                decoded[outPos++] = b;
+                if (decoded != null) {
+                    decoded[outPos] = b;
+                }
+                outPos++;
                 p++;
             }
 
@@ -124,27 +173,14 @@ public final class InlineCommandParser {
             }
 
             int tokenLen = outPos - tokenStart;
-            if (maxArgs > 0 && argc >= maxArgs) {
-                throw new IllegalArgumentException("Protocol error: array length too large");
+            if (args != null) {
+                args[argc] = new byte[tokenLen];
+                System.arraycopy(decoded, tokenStart, args[argc], 0, tokenLen);
             }
-            if (argc == offsets.length) {
-                int next = offsets.length << 1;
-                offsets = Arrays.copyOf(offsets, next);
-                lengths = Arrays.copyOf(lengths, next);
-            }
-            offsets[argc] = tokenStart;
-            lengths[argc] = tokenLen;
             argc++;
         }
 
-        if (argc == 0) {
-            throw new IllegalArgumentException("Protocol error: empty inline command");
-        }
-        byte[][] args = new byte[argc][];
-        for (int i = 0; i < argc; i++) {
-            args[i] = Arrays.copyOfRange(decoded, offsets[i], offsets[i] + lengths[i]);
-        }
-        return args;
+        return new Parsed(input, off, len, argc, outPos);
     }
 
     public static List<byte[]> splitUtf8(String line, int maxArgs) {
@@ -153,6 +189,42 @@ public final class InlineCommandParser {
         }
         byte[] input = line.getBytes(StandardCharsets.UTF_8);
         return new ArrayList<>(Arrays.asList(parse(input, 0, input.length, maxArgs)));
+    }
+
+    /** 已完成语法校验并持有输入快照的 inline 命令；调用方完成限制检查后再物化 argv。 */
+    public static final class Parsed {
+        private byte[] input;
+        private final int off;
+        private final int len;
+        private final int argc;
+        private final int retainedBytes;
+
+        private Parsed(byte[] input, int off, int len, int argc, int retainedBytes) {
+            this.input = input;
+            this.off = off;
+            this.len = len;
+            this.argc = argc;
+            this.retainedBytes = retainedBytes;
+        }
+
+        public int argc() {
+            return argc;
+        }
+
+        public int retainedBytes() {
+            return retainedBytes;
+        }
+
+        /** 将输入快照转换为 argv 并转移所有权；每个解析结果只能调用一次。 */
+        public byte[][] takeArgs() {
+            if (input == null) {
+                throw new IllegalStateException("inline arguments already taken");
+            }
+            byte[][] args = new byte[argc][];
+            parseSyntax(input, off, len, input, args);
+            input = null;
+            return args;
+        }
     }
 
     private static boolean isSpace(byte b) {

@@ -75,6 +75,17 @@ public class InlineCommandParserTest {
     }
 
     @Test
+    public void namedResultRepresentsBlankLineWithoutArguments() {
+        byte[] input = bytes(" \t ");
+
+        InlineCommandParser.Parsed parsed = InlineCommandParser.parseResult(input, 0, input.length);
+
+        Assert.assertEquals(0, parsed.argc());
+        Assert.assertEquals(0, parsed.retainedBytes());
+        Assert.assertEquals(0, parsed.takeArgs().length);
+    }
+
+    @Test
     public void decodesSingleQuotesAndEverySupportedDoubleQuoteEscape() {
         byte[][] singleQuoted = parse("ECHO 'it\\'s' ''");
         Assert.assertArrayEquals(bytes("it's"), singleQuoted[1]);

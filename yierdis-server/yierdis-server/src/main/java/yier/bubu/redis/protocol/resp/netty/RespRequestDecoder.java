@@ -4,6 +4,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.util.ReferenceCountUtil;
+import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ReferenceCountedRequestMemoryLease;
 import yier.bubu.redis.execution.api.RequestMemoryLease;
@@ -22,19 +23,18 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     private static final int OUTER_ARGV_BYTES = 16;
     private static final int REFERENCE_BYTES = 8;
     private static final int ARRAY_HEADER_BYTES = 16;
-    private static final int INLINE_PARSER_INITIAL_METADATA_CAPACITY = 16;
     private static final long INLINE_DECODED_OBJECT_BYTES = 32L;
     private static final long INLINE_PARSER_TRANSIENT_FLOOR_BYTES = 512L;
     private static final int MAX_COMPONENTS = 16;
     private static final int INCOMPLETE_LINE = Integer.MIN_VALUE;
     private static final int INVALID_LINE = -1;
-    private static final long INVALID_INLINE_SHAPE = -1L;
 
     private enum State {
         READ_COMMAND,
         WAITING_FOR_ARGV,
         READ_ARRAY_BODY,
         WAITING_FOR_BULK,
+        WAITING_FOR_INLINE,
         WAITING_FOR_HANDOFF,
         CLOSING
     }
@@ -46,6 +46,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     private final InboundMemoryBudget budget;
     private final InboundConnectionMemory connection;
     private final RespDecodedMessageGate decodedMessageGate;
+    private final ByteBufLineView inlineLineView = new ByteBufLineView();
 
     private State state = State.READ_COMMAND;
     private AccountedRespCumulator cumulator;
@@ -61,6 +62,8 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     private PendingAdmission pendingAdmission;
     private boolean bulkAdmissionGranted;
     private boolean pendingRequestCredit;
+    private InlineCommandParser.Parsed pendingInline;
+    private long pendingInlineAdmissionBytes;
     private RespDecodedMessage pendingDecodedMessage;
     private int allocatedArgvArrays;
     private int allocatedBulkArrays;
@@ -264,6 +267,16 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
                 return false;
             }
             state = State.READ_ARRAY_BODY;
+        }
+        if (state == State.WAITING_FOR_INLINE) {
+            long remainingAdmission = pendingInlineAdmissionBytes - pendingReservedBytes;
+            if (!consumeProgressAdmission(ctx, remainingAdmission, 0L)) {
+                return false;
+            }
+            pendingReservedBytes = pendingInlineAdmissionBytes;
+            if (finishPendingInline(ctx) != ParseResult.CONTINUE) {
+                return false;
+            }
         }
         if (state == State.WAITING_FOR_HANDOFF) {
             if (pendingRequestCredit) {
@@ -520,64 +533,89 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             return ParseResult.ERROR;
         }
         int lineEnd = lf - 1;
-        if (lineEnd <= lineStart || isBlank(in, lineStart, lineEnd)) {
+        int length = lineEnd - lineStart;
+        boolean blank = InlineCommandParser.isBlank(inlineLineView.reset(in, lineStart, length));
+        inlineLineView.clear();
+        if (blank) {
             cumulator.discardFullyReadComponents();
             return ParseResult.CONTINUE;
         }
-
-        int length = lineEnd - lineStart;
         if (maxCommandBytes > 0 && length > maxCommandBytes) {
             emitProtocolError(ctx, "ERR Protocol error: command is too large");
             return ParseResult.ERROR;
         }
 
-        long shape = scanInlineShape(in, lineStart, lineEnd);
-        if (shape == INVALID_INLINE_SHAPE) {
-            emitProtocolError(ctx, "ERR Protocol error: invalid inline command");
-            return ParseResult.ERROR;
-        }
-        int argc = inlineArgc(shape);
-        int retainedBytes = inlineRetainedBytes(shape);
-        if (maxArgs > 0 && argc > maxArgs) {
-            emitProtocolError(ctx, "ERR Protocol error: too many arguments");
-            return ParseResult.ERROR;
-        }
-        if (maxCommandBytes > 0 && retainedBytes > maxCommandBytes) {
-            emitProtocolError(ctx, "ERR Protocol error: command is too large");
-            return ParseResult.ERROR;
-        }
-
-        long admissionBytes = inlineAdmissionCharge(length, argc, retainedBytes);
+        long inspectionBytes = inlineInspectionCharge(length);
         long inputReleaseCredit = cumulator.releasableChargeAfterRead(0);
-        if (!consumeProgressAdmission(ctx, admissionBytes, inputReleaseCredit)) {
+        if (!consumeProgressAdmission(ctx, inspectionBytes, inputReleaseCredit)) {
             if (state != State.CLOSING) {
                 in.readerIndex(lineStart);
                 return ParseResult.WAITING;
             }
             return ParseResult.ERROR;
         }
-        pendingReservedBytes = admissionBytes;
+        pendingReservedBytes = inspectionBytes;
         try {
-            byte[][] argv = parseInline(in, lineStart, length);
-            long fullCharge = ByteArrayExecutionRequest.estimatedMemoryBytes(argv);
-            if (fullCharge > admissionBytes) {
-                emitRequestMemoryError(ctx);
+            byte[] line = new byte[length];
+            in.getBytes(lineStart, line);
+            cumulator.discardFullyReadComponents();
+            InlineCommandParser.Parsed parsed = InlineCommandParser.parseResult(line, 0, line.length);
+            if (parsed.argc() == 0) {
+                releaseInlineTransient(pendingReservedBytes, 0L);
+                pendingReservedBytes = 0L;
+                return ParseResult.CONTINUE;
+            }
+            if (maxArgs > 0 && parsed.argc() > maxArgs) {
+                emitProtocolError(ctx, "ERR Protocol error: too many arguments");
                 return ParseResult.ERROR;
             }
-            cumulator.discardFullyReadComponents();
-            releaseInlineTransient(admissionBytes, fullCharge);
-            pendingReservedBytes = fullCharge;
-            RequestMemoryLease lease = requestLease(fullCharge);
-            pendingDecodedMessage = new RespDecodedMessage.Request(
-                    ByteArrayExecutionRequest.takeOwnership(argv, retainedBytes, lease)
+            if (maxCommandBytes > 0 && parsed.retainedBytes() > maxCommandBytes) {
+                emitProtocolError(ctx, "ERR Protocol error: command is too large");
+                return ParseResult.ERROR;
+            }
+
+            pendingInline = parsed;
+            pendingInlineAdmissionBytes = inlineAdmissionCharge(
+                    length,
+                    parsed.argc(),
+                    parsed.retainedBytes()
             );
-            pendingReservedBytes = 0L;
-            state = State.WAITING_FOR_HANDOFF;
-            return forwardPendingDecodedMessage(ctx) ? ParseResult.CONTINUE : ParseResult.WAITING;
+            long remainingAdmission = pendingInlineAdmissionBytes - pendingReservedBytes;
+            if (!consumeProgressAdmission(ctx, remainingAdmission, 0L)) {
+                if (state != State.CLOSING) {
+                    state = State.WAITING_FOR_INLINE;
+                    return ParseResult.WAITING;
+                }
+                return ParseResult.ERROR;
+            }
+            pendingReservedBytes = pendingInlineAdmissionBytes;
+            return finishPendingInline(ctx);
         } catch (IllegalArgumentException e) {
             emitProtocolError(ctx, "ERR Protocol error: invalid inline command");
             return ParseResult.ERROR;
         }
+    }
+
+    private ParseResult finishPendingInline(ChannelHandlerContext ctx) {
+        InlineCommandParser.Parsed parsed = pendingInline;
+        byte[][] argv = parsed.takeArgs();
+        allocatedArgvArrays++;
+        long fullCharge = ByteArrayExecutionRequest.estimatedMemoryBytes(argv);
+        if (fullCharge > pendingReservedBytes) {
+            emitRequestMemoryError(ctx);
+            return ParseResult.ERROR;
+        }
+        releaseInlineTransient(pendingReservedBytes, fullCharge);
+        pendingReservedBytes = fullCharge;
+        pendingInline = null;
+        pendingInlineAdmissionBytes = 0L;
+        RequestMemoryLease lease = requestLease(fullCharge);
+        pendingDecodedMessage = new RespDecodedMessage.Request(
+                ByteArrayExecutionRequest.takeOwnership(argv, parsed.retainedBytes(), lease)
+        );
+        pendingReservedBytes = 0L;
+        state = State.WAITING_FOR_HANDOFF;
+        return forwardPendingDecodedMessage(ctx) ? ParseResult.CONTINUE : ParseResult.WAITING;
     }
 
     private boolean consumeProgressAdmission(ChannelHandlerContext ctx, long bytes, long inputReleaseCredit) {
@@ -719,6 +757,8 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         pendingReservedBytes = 0L;
         pendingRequestCredit = false;
         bulkAdmissionGranted = false;
+        pendingInline = null;
+        pendingInlineAdmissionBytes = 0L;
     }
 
     private void releasePendingAdmission() {
@@ -763,16 +803,14 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         }
     }
 
-    private static byte[][] parseInline(ByteBuf in, int lineStart, int length) {
-        byte[] line = new byte[length];
-        in.getBytes(lineStart, line);
-        return InlineCommandParser.parseUnlimited(line, 0, line.length);
+    private static long inlineInspectionCharge(int lineLength) {
+        long lineArrays = InboundMemoryBudget.saturatedAdd(payloadCharge(lineLength), payloadCharge(lineLength));
+        return InboundMemoryBudget.saturatedAdd(lineArrays, INLINE_DECODED_OBJECT_BYTES);
     }
 
     private static long inlineAdmissionCharge(int lineLength, int argc, int retainedBytes) {
         long finalRequestCharge = inlineFinalChargeUpperBound(argc, retainedBytes);
         long parserTransient = InboundMemoryBudget.saturatedAdd(payloadCharge(lineLength), payloadCharge(lineLength));
-        parserTransient = InboundMemoryBudget.saturatedAdd(parserTransient, inlineParserMetadataCharge(argc));
         parserTransient = InboundMemoryBudget.saturatedAdd(parserTransient, INLINE_DECODED_OBJECT_BYTES);
         parserTransient = Math.max(parserTransient, INLINE_PARSER_TRANSIENT_FLOOR_BYTES);
         return InboundMemoryBudget.saturatedAdd(finalRequestCharge, parserTransient);
@@ -785,138 +823,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         total = InboundMemoryBudget.saturatedAdd(total, perArgumentHeaders);
         total = InboundMemoryBudget.saturatedAdd(total, Math.max(0, retainedBytes));
         return InboundMemoryBudget.saturatedAdd(total, alignmentSlack);
-    }
-
-    private static long inlineParserMetadataCharge(int argc) {
-        int capacity = INLINE_PARSER_INITIAL_METADATA_CAPACITY;
-        long total = 0L;
-        while (true) {
-            long oneArray = primitiveArrayCharge(capacity, Integer.BYTES);
-            total = InboundMemoryBudget.saturatedAdd(total, oneArray);
-            total = InboundMemoryBudget.saturatedAdd(total, oneArray);
-            if (capacity >= argc) {
-                return total;
-            }
-            if (capacity > Integer.MAX_VALUE / 2) {
-                return Long.MAX_VALUE;
-            }
-            capacity <<= 1;
-        }
-    }
-
-    private static long primitiveArrayCharge(int length, int elementBytes) {
-        long payload = saturatedMultiply(Math.max(0, length), Math.max(0, elementBytes));
-        return InboundMemoryBudget.saturatedAdd(ARRAY_HEADER_BYTES, align8(payload));
-    }
-
-    private static long scanInlineShape(ByteBuf in, int start, int end) {
-        int position = start;
-        int argc = 0;
-        int retainedBytes = 0;
-        while (true) {
-            while (position < end && isInlineSpace(in.getByte(position))) {
-                position++;
-            }
-            if (position >= end) {
-                break;
-            }
-
-            boolean doubleQuoted = false;
-            boolean singleQuoted = false;
-            int argumentLength = 0;
-            while (position < end) {
-                byte value = in.getByte(position);
-                if (doubleQuoted) {
-                    if (value == '\\'
-                            && position + 3 < end
-                            && in.getByte(position + 1) == 'x'
-                            && isHexDigit(in.getByte(position + 2))
-                            && isHexDigit(in.getByte(position + 3))) {
-                        argumentLength++;
-                        position += 4;
-                        continue;
-                    }
-                    if (value == '\\' && position + 1 < end) {
-                        argumentLength++;
-                        position += 2;
-                        continue;
-                    }
-                    if (value == '"') {
-                        if (position + 1 < end && !isInlineSpace(in.getByte(position + 1))) {
-                            return INVALID_INLINE_SHAPE;
-                        }
-                        doubleQuoted = false;
-                        position++;
-                        break;
-                    }
-                    argumentLength++;
-                    position++;
-                    continue;
-                }
-
-                if (singleQuoted) {
-                    if (value == '\\' && position + 1 < end && in.getByte(position + 1) == '\'') {
-                        argumentLength++;
-                        position += 2;
-                        continue;
-                    }
-                    if (value == '\'') {
-                        if (position + 1 < end && !isInlineSpace(in.getByte(position + 1))) {
-                            return INVALID_INLINE_SHAPE;
-                        }
-                        singleQuoted = false;
-                        position++;
-                        break;
-                    }
-                    argumentLength++;
-                    position++;
-                    continue;
-                }
-
-                if (isInlineSpace(value)) {
-                    break;
-                }
-                if (value == '"') {
-                    doubleQuoted = true;
-                    position++;
-                    continue;
-                }
-                if (value == '\'') {
-                    singleQuoted = true;
-                    position++;
-                    continue;
-                }
-                argumentLength++;
-                position++;
-            }
-            if (doubleQuoted || singleQuoted || argc == Integer.MAX_VALUE) {
-                return INVALID_INLINE_SHAPE;
-            }
-            retainedBytes = saturatedAdd(retainedBytes, argumentLength);
-            argc++;
-        }
-        if (argc == 0) {
-            return INVALID_INLINE_SHAPE;
-        }
-        return ((long) argc << Integer.SIZE) | (retainedBytes & 0xFFFF_FFFFL);
-    }
-
-    private static int inlineArgc(long shape) {
-        return (int) (shape >>> Integer.SIZE);
-    }
-
-    private static int inlineRetainedBytes(long shape) {
-        return (int) shape;
-    }
-
-    private static boolean isInlineSpace(byte value) {
-        return value == ' ' || value == '\t';
-    }
-
-    private static boolean isHexDigit(byte value) {
-        return (value >= '0' && value <= '9')
-                || (value >= 'a' && value <= 'f')
-                || (value >= 'A' && value <= 'F');
     }
 
     private static long payloadCharge(int length) {
@@ -939,6 +845,38 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             return 0L;
         }
         return left > Long.MAX_VALUE / right ? Long.MAX_VALUE : left * right;
+    }
+
+    private static final class ByteBufLineView implements BytesView {
+        private ByteBuf buffer;
+        private int start;
+        private int length;
+
+        private ByteBufLineView reset(ByteBuf buffer, int start, int length) {
+            this.buffer = buffer;
+            this.start = start;
+            this.length = length;
+            return this;
+        }
+
+        private void clear() {
+            buffer = null;
+            start = 0;
+            length = 0;
+        }
+
+        @Override
+        public int length() {
+            return length;
+        }
+
+        @Override
+        public byte getByte(int index) {
+            if (index < 0 || index >= length) {
+                throw new IndexOutOfBoundsException();
+            }
+            return buffer.getByte(start + index);
+        }
     }
 
     private static Long parseInteger(ByteBuf in, int start, int endExclusive) {
@@ -966,16 +904,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             }
         }
         return negative ? -value : value;
-    }
-
-    private static boolean isBlank(ByteBuf in, int start, int endExclusive) {
-        for (int i = start; i < endExclusive; i++) {
-            byte value = in.getByte(i);
-            if (value != ' ' && value != '\t' && value != '\r' && value != '\n') {
-                return false;
-            }
-        }
-        return true;
     }
 
     private static int saturatedAdd(int current, int value) {
