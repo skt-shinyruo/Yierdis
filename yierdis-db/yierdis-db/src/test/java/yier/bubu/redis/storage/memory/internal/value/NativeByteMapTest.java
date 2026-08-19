@@ -406,8 +406,8 @@ public class NativeByteMapTest {
     }
 
     @Test
-    public void preparedTopologyReplacementRejectsAnUnrelatedValueChange() {
-        try (TestBackend runtime = TestBackend.open("native-byte-map-prepared-stale");
+    public void preparedSourceLocationsKeepTableIdentitySeparateFromSlotIndex() throws ReflectiveOperationException {
+        try (TestBackend runtime = TestBackend.open("native-byte-map-prepared-source-locations");
              StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.HASH_FIELD_BYTES);
             try (NativeByteMap<String> map = new NativeByteMap<>(
@@ -418,19 +418,65 @@ public class NativeByteMapTest {
                 for (int index = 0; index < 12; index++) {
                     map.put(bytes("field-" + index), "value-" + index);
                 }
+                map.put(bytes("active"), "active-value");
+
+                try (NativeByteMap.PreparedMutation<String> prepared = map.preparePuts(List.of(
+                        new NativeByteMap.StagedPut<>(bytes("active"), "updated-active", true),
+                        new NativeByteMap.StagedPut<>(bytes("field-0"), "updated-old", true),
+                        new NativeByteMap.StagedPut<>(bytes("new"), "new-value", false)
+                ))) {
+                    SourceLocationInspection active = sourceLocation(prepared, 0);
+                    SourceLocationInspection old = sourceLocation(prepared, 1);
+                    SourceLocationInspection absent = sourceLocation(prepared, 2);
+
+                    Assert.assertEquals("ACTIVE", active.table());
+                    Assert.assertTrue(active.slot() >= 0);
+                    Assert.assertEquals("OLD", old.table());
+                    Assert.assertTrue(old.slot() >= 0);
+                    Assert.assertEquals("ABSENT", absent.table());
+                    Assert.assertEquals(-1, absent.slot());
+
+                    prepared.commit();
+                    prepared.releaseSuperseded();
+                }
+
+                Assert.assertEquals("updated-active", map.get(bytes("active")));
+                Assert.assertEquals("updated-old", map.get(bytes("field-0")));
+                Assert.assertEquals("new-value", map.get(bytes("new")));
+            }
+        }
+    }
+
+    @Test
+    public void preparedMutationRejectsSourceTopologyChange() throws ReflectiveOperationException {
+        try (TestBackend runtime = TestBackend.open("native-byte-map-prepared-stale");
+             StableMemoryBackend allocator = runtime.backend()) {
+            NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.HASH_FIELD_BYTES);
+            try (NativeByteMap<String> map = new NativeByteMap<>(
+                    store,
+                    NativeObjectKind.HASH_FIELD_BYTES,
+                    FIXED_SEED
+            )) {
+                for (int index = 0; index < 13; index++) {
+                    map.put(bytes("field-" + index), "value-" + index);
+                }
+                Assert.assertTrue(map.metrics().rehashing());
                 long nativeBytesBefore = map.nativeBytes();
 
                 try (NativeByteMap.PreparedMutation<String> prepared = map.preparePuts(List.of(
-                        new NativeByteMap.StagedPut<>(bytes("field-12"), "value-12", false)
+                        new NativeByteMap.StagedPut<>(bytes("field-0"), "updated", true),
+                        new NativeByteMap.StagedPut<>(bytes("field-13"), "value-13", false)
                 ))) {
-                    Assert.assertEquals("value-1", map.replace(bytes("field-1"), "new-value-1"));
+                    int oldSlot = sourceLocation(prepared, 0).slot();
+                    map.advanceRehash(HashTableWorkBudget.of(oldSlot + 1L, Long.MAX_VALUE));
                     Assert.assertThrows(IllegalStateException.class, prepared::commit);
                 }
 
-                Assert.assertEquals(12, map.size());
-                Assert.assertEquals("new-value-1", map.get(bytes("field-1")));
-                Assert.assertNull(map.get(bytes("field-12")));
+                Assert.assertEquals(13, map.size());
+                Assert.assertEquals("value-0", map.get(bytes("field-0")));
+                Assert.assertNull(map.get(bytes("field-13")));
                 Assert.assertEquals(nativeBytesBefore, map.nativeBytes());
+                Assert.assertEquals(nativeBytesBefore, store.nativeBytes());
             }
         }
     }
@@ -768,5 +814,22 @@ public class NativeByteMapTest {
                 throw new IllegalStateException("shutdown is outside the owner thread");
             }
         }
+    }
+
+    private static SourceLocationInspection sourceLocation(
+            NativeByteMap.PreparedMutation<?> prepared,
+            int index
+    ) throws ReflectiveOperationException {
+        var locationsField = prepared.getClass().getDeclaredField("sourceLocations");
+        locationsField.setAccessible(true);
+        Object location = ((Object[]) locationsField.get(prepared))[index];
+        var tableField = location.getClass().getDeclaredField("table");
+        tableField.setAccessible(true);
+        var slotField = location.getClass().getDeclaredField("slot");
+        slotField.setAccessible(true);
+        return new SourceLocationInspection(tableField.get(location).toString(), slotField.getInt(location));
+    }
+
+    private record SourceLocationInspection(String table, int slot) {
     }
 }
