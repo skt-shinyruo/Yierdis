@@ -219,8 +219,8 @@ public class YierdisFfmStableMemoryBackendTest {
             Assert.assertEquals(8, meta.size());
             Assert.assertEquals(16, meta.capacity());
             Assert.assertEquals(YierdisNativePageClass.SMALL.ordinal(), meta.pageClass());
-            Assert.assertTrue(meta.segmentId() > 0);
-            Assert.assertTrue(meta.address() >= 0L);
+            Assert.assertTrue(meta.pageId() > 0);
+            Assert.assertTrue(meta.pageOffset() >= 0L);
 
             NativeAllocatorStats stats = allocator.stats();
             Assert.assertEquals(8L, stats.logicalUsedBytes());
@@ -1547,7 +1547,7 @@ public class YierdisFfmStableMemoryBackendTest {
     }
 
     private static NativeLocation locationOf(YierdisNativeObjectMeta meta) {
-        return new NativeLocation(meta.segmentId(), meta.address());
+        return new NativeLocation(meta.pageId(), meta.pageOffset());
     }
 
     private static void assertContentEquals(byte[] expected, NativeObjectView view) {

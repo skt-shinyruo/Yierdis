@@ -162,8 +162,8 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
                     localRaw,
                     newSize,
                     meta.capacity(),
-                    meta.segmentId(),
-                    meta.address(),
+                    meta.pageId(),
+                    meta.pageOffset(),
                     meta.pageClass()
             );
             logicalUsedBytes += (long) newSize - oldSize;

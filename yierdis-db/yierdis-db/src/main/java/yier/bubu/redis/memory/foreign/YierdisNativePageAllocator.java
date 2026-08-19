@@ -318,8 +318,8 @@ final class YierdisNativePageAllocator
         ensureOpen();
         Objects.requireNonNull(meta, "meta");
         return blockAt(
-                meta.segmentId(),
-                Math.toIntExact(meta.address()),
+                meta.pageId(),
+                Math.toIntExact(meta.pageOffset()),
                 meta.capacity(),
                 meta.pageClass()
         );
