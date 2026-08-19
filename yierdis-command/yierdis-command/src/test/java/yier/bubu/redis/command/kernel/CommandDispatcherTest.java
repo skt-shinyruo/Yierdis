@@ -241,7 +241,7 @@ public class CommandDispatcherTest {
     }
 
     @Test
-    public void replayParsesAndPreparesQueueableCommandWithoutQueueingAgain() {
+    public void execReplayParsesAndPreparesQueueableCommandWithoutQueueingAgain() {
         AtomicInteger parses = new AtomicInteger();
         AtomicInteger prepares = new AtomicInteger();
         CommandDispatcher dispatcher = dispatcher(spec(
@@ -251,7 +251,7 @@ public class CommandDispatcherTest {
         RecordingSession session = new RecordingSession(true);
 
         try (ExecutionRequest request = request("WRITE");
-             PreparedCommand prepared = dispatcher.prepareReplay(session, request)) {
+             PreparedCommand prepared = dispatcher.prepareExecReplay(session, request)) {
             Assert.assertEquals(1, parses.get());
             Assert.assertEquals(1, prepares.get());
             Assert.assertEquals(0, session.tx.enqueueCalls);
@@ -413,6 +413,7 @@ public class CommandDispatcherTest {
         TrackingSession session = new TrackingSession(tx);
         tx.begin();
         TrackingRequest request = trackingRequest("WRITE");
+        TrackingRequest retained;
 
         try (PreparedCommand queued = dispatcher.prepare(session, request)) {
             Assert.assertEquals(1, parses.get());
@@ -422,12 +423,16 @@ public class CommandDispatcherTest {
 
             Assert.assertEquals("QUEUED", execute(queued, session, request).simpleString());
             Assert.assertEquals(1, tx.size());
-            Assert.assertSame(request, tx.request(0));
+            retained = tx.request(0);
+            Assert.assertNotSame(request, retained);
             Assert.assertEquals(0, prepares.get());
             Assert.assertEquals(0, request.closeCount());
         }
-        tx.discard();
+        request.close();
         Assert.assertEquals(1, request.closeCount());
+        Assert.assertEquals(0, retained.closeCount());
+        tx.discard();
+        Assert.assertEquals(1, retained.closeCount());
     }
 
     @Test
@@ -909,7 +914,9 @@ public class CommandDispatcherTest {
         TrackingTransactionState tx = new TrackingTransactionState();
         tx.begin();
         for (String command : commands) {
-            tx.tryEnqueue(trackingRequest(command));
+            try (TrackingRequest request = trackingRequest(command)) {
+                tx.tryEnqueue(request);
+            }
         }
         return tx;
     }
@@ -1141,8 +1148,9 @@ public class CommandDispatcherTest {
         @Override public void forEachQueued(Consumer<? super ExecutionRequest> visitor) { queue.forEach(visitor); }
         @Override public String tryEnqueue(ExecutionRequest request) {
             TrackingRequest tracked = (TrackingRequest) request;
-            queue.add(tracked);
-            requests.add(tracked);
+            TrackingRequest retained = tracked.retain();
+            queue.add(retained);
+            requests.add(retained);
             return null;
         }
         @Override public List<ExecutionRequest> drain() {

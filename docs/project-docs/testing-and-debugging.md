@@ -95,7 +95,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 排障顺序：`CommandDispatcher` 的 handler-parse preflight ->
 `EngineSession.DefaultTransactionState.tryEnqueue(...)` -> retained `ExecutionRequest` ->
-`TransactionCommands` drain -> `CommandDispatcher.prepareReplay(...)` -> child execute 和聚合结果。入队前不应用
+`TransactionCommands` drain -> `CommandDispatcher.prepareExecReplay(...)` -> child execute 和聚合结果。入队前不应用
 handler 返回的准备函数；drain 后的 `PreparedExec` 拥有并最终关闭队列 request 与 child
 `PreparedCommand`。事务与 replay 的完整主线看 [`transaction-and-replay.md`](./transaction-and-replay.md)。
 

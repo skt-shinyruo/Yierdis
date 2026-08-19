@@ -110,7 +110,7 @@ final class TransactionCommands {
         ArrayList<PreparedCommand> children = new ArrayList<>(tx.size());
         try {
             tx.forEachQueued(request -> {
-                PreparedCommand child = dispatcher.prepareReplay(session, request);
+                PreparedCommand child = dispatcher.prepareExecReplay(session, request);
                 addOwnedChild(children, child);
             });
             ReplyShape reservationShape = children.isEmpty()
@@ -173,7 +173,7 @@ final class TransactionCommands {
         try {
             children.add(child);
         } catch (RuntimeException | Error failure) {
-            // prepareReplay 已转移 child 所有权；发布到清理列表失败时必须在当前栈帧归还。
+            // prepareExecReplay 已转移 child 所有权；发布到清理列表失败时必须在当前栈帧归还。
             closeSuppressing(failure, child::close);
             throw failure;
         }
@@ -281,7 +281,7 @@ final class TransactionCommands {
 
         private PreparedCommand prepareCurrentChild(ExecutionRequest request) {
             for (;;) {
-                PreparedCommand child = dispatcher.prepareReplay(session, request);
+                PreparedCommand child = dispatcher.prepareExecReplay(session, request);
                 ValidationResult validation;
                 try {
                     validation = child.validateBeforeExecute();

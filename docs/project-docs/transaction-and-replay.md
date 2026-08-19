@@ -14,7 +14,7 @@ CommandExecutor
   -> CommandResult -> RedisReplyRenderer
 ```
 
-transaction replay 把 dispatcher 入口替换为 `prepareReplay(...)` 以关闭再次排队，并复用查表、parse、准备函数应用、validation 和 execute；child 不单独 reserve 或 render，外层 `PreparedExec` 统一预留并在聚合后交给 renderer。下面的 queue path 是 transaction active 时的 preflight 分支：它在 handler parse 后暂停，不应用返回的准备函数；`EXEC` 才让 retained request 进入上述 child replay 路径。
+transaction replay 把 dispatcher 入口替换为 `prepareExecReplay(...)` 以关闭再次排队，并复用查表、parse、准备函数应用、validation 和 execute；child 不单独 reserve 或 render，外层 `PreparedExec` 统一预留并在聚合后交给 renderer。下面的 queue path 是 transaction active 时的 preflight 分支：它在 handler parse 后暂停，不应用返回的准备函数；`EXEC` 才让 retained request 进入上述 child replay 路径。
 
 ## 事务状态属于连接 session
 
@@ -88,7 +88,7 @@ queue 条数或字节超限由 `TransactionState.tryEnqueue(...)` 返回 `ERR Tr
 
 `PreparedExec` 根据 queue size 使用两种准备策略：
 
-- `0` 或 `1` 个 child：在外层 prepare 阶段遍历 queue，调用 `CommandDispatcher.prepareReplay(session, request)`，提前持有 child prepared command；空队列可给出精确空 array shape，单 child 使用 maximum reservation；
+- `0` 或 `1` 个 child：在外层 prepare 阶段遍历 queue，调用 `CommandDispatcher.prepareExecReplay(session, request)`，提前持有 child prepared command；空队列可给出精确空 array shape，单 child 使用 maximum reservation；
 - 多个 child：外层先使用 maximum reservation，drain 后在 execute 阶段逐条 prepare。这样后一个 child 能观察前一个 child 的顺序 side effect，而不会在执行前把整个 transaction 的 state-dependent read 固化。
 
 对于提前准备的 child，外层 `validateBeforeExecute()` 会逐个检查；任一 `STALE` 都让 executor 关闭整个外层对象并重新 prepare，此时 queue 尚未 drain。动态策略则为每个当前 child 循环 prepare/validate，直到不再 stale。
@@ -106,7 +106,7 @@ queue 条数或字节超限由 `TransactionState.tryEnqueue(...)` 返回 `ERR Tr
 7. 所有 child 的 `closeAfterReply` flag 做 OR，并放到外层 `CommandResult`；
 8. 外层 executor 调用一次 `RedisReplyRenderer` 渲染整个 array。
 
-`CommandDispatcher.prepareReplay(...)` 只关闭“再次排队”的 transaction policy。每个 replay request 仍复用：
+`CommandDispatcher.prepareExecReplay(...)` 只关闭“再次排队”的 transaction policy。每个 replay request 仍复用：
 
 - 空命令、null argument 与 name 安全检查；
 - 同一个 `CommandRegistry` 与 `CommandSpec`；
