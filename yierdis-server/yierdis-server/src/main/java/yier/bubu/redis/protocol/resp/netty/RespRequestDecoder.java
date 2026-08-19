@@ -5,7 +5,6 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.util.ReferenceCountUtil;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
-import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.ReferenceCountedRequestMemoryLease;
 import yier.bubu.redis.execution.api.RequestMemoryLease;
 import yier.bubu.redis.protocol.resp.InlineCommandParser;
@@ -62,7 +61,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     private PendingAdmission pendingAdmission;
     private boolean bulkAdmissionGranted;
     private boolean pendingRequestCredit;
-    private Object pendingDecodedMessage;
+    private RespDecodedMessage pendingDecodedMessage;
     private int allocatedArgvArrays;
     private int allocatedBulkArrays;
 
@@ -441,7 +440,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         return forwardPendingDecodedMessage(ctx) ? ParseResult.CONTINUE : ParseResult.WAITING;
     }
 
-    private Object buildCompletedRequest() {
+    private RespDecodedMessage buildCompletedRequest() {
         byte[][] argv = pendingArgv;
         int retainedBytes = pendingRetainedBytes;
         long reservedBytes = pendingReservedBytes;
@@ -456,47 +455,59 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         RequestMemoryLease lease = budget == null
                 ? new ReferenceCountedRequestMemoryLease(reservedBytes, ignored -> { })
                 : requestLease(reservedBytes);
-        return ByteArrayExecutionRequest.takeOwnership(argv, retainedBytes, lease);
+        return new RespDecodedMessage.Request(
+                ByteArrayExecutionRequest.takeOwnership(argv, retainedBytes, lease)
+        );
     }
 
     private boolean forwardPendingDecodedMessage(ChannelHandlerContext ctx) {
-        Object decoded = pendingDecodedMessage;
+        RespDecodedMessage decoded = pendingDecodedMessage;
         if (decoded == null) {
             state = State.READ_COMMAND;
             readControl.resumeIngress();
             return true;
         }
+        boolean terminal = switch (decoded) {
+            case RespDecodedMessage.Request ignored -> false;
+            case RespProtocolError ignored -> true;
+        };
+        pendingDecodedMessage = null;
+        state = terminal ? State.CLOSING : State.READ_COMMAND;
+        if (terminal) {
+            readControl.pauseIngress();
+        }
         RespDecodedMessageGate.Admission admission;
         try {
-            admission = decodedMessageGate.tryAdmit(ctx, decoded, () -> resumeOnEventLoop(ctx));
+            admission = decodedMessageGate.tryAdmit(ctx, decoded, () -> resumeHandoffLater(ctx));
         } catch (Throwable ignored) {
-            closeDecoded(decoded);
-            pendingDecodedMessage = null;
+            decoded.close();
             enterClosing();
             return false;
         }
-        if (admission == null || admission.status() == RespDecodedMessageGate.Status.CLOSED) {
-            closeDecoded(decoded);
-            pendingDecodedMessage = null;
+        if (admission == null) {
+            decoded.close();
             enterClosing();
             return false;
         }
-        if (admission.status() == RespDecodedMessageGate.Status.WAITING) {
-            state = State.WAITING_FOR_HANDOFF;
-            readControl.pauseIngress();
-            return false;
-        }
-        pendingDecodedMessage = null;
-        if (decoded instanceof RespProtocolError) {
-            state = State.CLOSING;
-            readControl.pauseIngress();
-            ctx.fireChannelRead(admission.forwardedMessage());
-            return false;
-        }
-        state = State.READ_COMMAND;
-        readControl.resumeIngress();
-        ctx.fireChannelRead(admission.forwardedMessage());
-        return true;
+        return switch (admission) {
+            case ADMITTED -> {
+                if (!terminal) {
+                    readControl.resumeIngress();
+                }
+                yield !terminal;
+            }
+            case WAITING -> {
+                pendingDecodedMessage = decoded;
+                state = State.WAITING_FOR_HANDOFF;
+                readControl.pauseIngress();
+                yield false;
+            }
+            case CLOSED -> {
+                decoded.close();
+                enterClosing();
+                yield false;
+            }
+        };
     }
 
     private ParseResult tryReadInline(ChannelHandlerContext ctx, ByteBuf in) {
@@ -557,7 +568,9 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             releaseInlineTransient(admissionBytes, fullCharge);
             pendingReservedBytes = fullCharge;
             RequestMemoryLease lease = requestLease(fullCharge);
-            pendingDecodedMessage = ByteArrayExecutionRequest.takeOwnership(argv, retainedBytes, lease);
+            pendingDecodedMessage = new RespDecodedMessage.Request(
+                    ByteArrayExecutionRequest.takeOwnership(argv, retainedBytes, lease)
+            );
             pendingReservedBytes = 0L;
             state = State.WAITING_FOR_HANDOFF;
             return forwardPendingDecodedMessage(ctx) ? ParseResult.CONTINUE : ParseResult.WAITING;
@@ -624,6 +637,15 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         ctx.executor().execute(() -> process(ctx));
     }
 
+    private void resumeHandoffLater(ChannelHandlerContext ctx) {
+        try {
+            // WAITING 返回后 decoder 才恢复 pending 消息状态，因此 handoff wake-up 不得同步重入。
+            ctx.executor().execute(() -> process(ctx));
+        } catch (RuntimeException ignored) {
+            ctx.close();
+        }
+    }
+
     private int findCrlfLine(ChannelHandlerContext ctx, ByteBuf in, String errorMessage) {
         int start = in.readerIndex();
         int lfDistance = in.bytesBefore(LF);
@@ -681,7 +703,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     private void resetPendingState() {
         releasePendingAdmission();
         if (pendingDecodedMessage != null) {
-            closeDecoded(pendingDecodedMessage);
+            pendingDecodedMessage.close();
             pendingDecodedMessage = null;
         }
         if (pendingReservedBytes > 0L && budget != null) {
@@ -709,12 +731,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             budget.release(connection, pending.bytes);
         } else {
             budget.cancelWaiter(connection);
-        }
-    }
-
-    private static void closeDecoded(Object decoded) {
-        if (decoded instanceof ExecutionRequest request) {
-            request.close();
         }
     }
 

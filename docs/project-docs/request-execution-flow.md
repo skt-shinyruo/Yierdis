@@ -69,8 +69,8 @@ CommandExecutor
 
 连接 pipeline 把网络数据推进到请求模型，再推进到 executor admission：
 
-- `RespRequestDecoder` 解析 RESP array 或 inline command，执行 bulk、argc、line 和 command-bytes 入口限制，并通过 reply gate 产出带 `ReplySlot` 的 `RegisteredRespMessage`；
-- `NettyExecutionRequestIngress` 接收其中的 `ExecutionRequest` 或 `RespProtocolError`，保持回复顺序，完成 executor admission 或协议错误回包；
+- `RespRequestDecoder` 解析 RESP array 或 inline command，执行 bulk、argc、line 和 command-bytes 入口限制，并把结果封闭为 `RespDecodedMessage.Request` 或 `RespProtocolError`；reply gate 再将该变体与 `ReplySlot` 绑定为 `RegisteredRespMessage`；
+- `NettyExecutionRequestIngress` 穷尽处理其中的两个变体，保持回复顺序，完成 executor admission 或协议错误回包；
 - I/O 线程不调用 command handler，也不访问 DB。
 
 `RespRequestDecoder` 在 argv 与 payload 分配前完成 ingress admission，随后通过 `ByteArrayExecutionRequest.takeOwnership(...)` 把不可变 argv 与 reference-counted request-memory lease 一并移交给请求，不做第二次逐参数复制。RESP array 中的 null bulk string 会原样保留，合法性由 `CommandDispatcher` 判断。

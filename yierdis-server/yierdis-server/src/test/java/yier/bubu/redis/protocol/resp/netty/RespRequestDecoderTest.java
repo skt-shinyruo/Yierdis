@@ -335,15 +335,13 @@ public class RespRequestDecoderTest {
     }
 
     @Test
-    public void decoderEmitsExecutionRequestDirectly() {
+    public void decoderEmitsExplicitRequestVariant() {
         EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024, 1024));
         ExecutionRequest request = null;
         try {
             Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer("*1\r\n$4\r\nPING\r\n", StandardCharsets.US_ASCII)));
 
-            Object msg = ch.readInbound();
-            Assert.assertTrue(msg instanceof ExecutionRequest);
-            request = (ExecutionRequest) msg;
+            request = readExecutionRequest(ch);
             Assert.assertEquals(1, request.argc());
             Assert.assertArrayEquals(bytes("PING"), request.readOnlyByteArray(0));
         } finally {
@@ -364,9 +362,7 @@ public class RespRequestDecoderTest {
                     StandardCharsets.US_ASCII
             )));
 
-            Object msg = ch.readInbound();
-            Assert.assertTrue(msg instanceof ExecutionRequest);
-            request = (ExecutionRequest) msg;
+            request = readExecutionRequest(ch);
             Assert.assertEquals(2, request.argc());
             Assert.assertArrayEquals(bytes("ECHO"), request.readOnlyByteArray(0));
             Assert.assertTrue(request.isNull(1));
@@ -401,9 +397,8 @@ public class RespRequestDecoderTest {
                     StandardCharsets.US_ASCII
             )));
 
-            Object decoded = channel.readInbound();
-            Assert.assertTrue(decoded instanceof ByteArrayExecutionRequest);
-            ExecutionRequest request = (ExecutionRequest) decoded;
+            ExecutionRequest request = readExecutionRequest(channel);
+            Assert.assertTrue(request instanceof ByteArrayExecutionRequest);
             retained = request.retain();
             request.close();
 
@@ -444,8 +439,8 @@ public class RespRequestDecoderTest {
 
     private static ExecutionRequest readExecutionRequest(EmbeddedChannel channel) {
         Object message = channel.readInbound();
-        Assert.assertTrue(message instanceof ExecutionRequest);
-        return (ExecutionRequest) message;
+        Assert.assertTrue(message instanceof RespDecodedMessage.Request);
+        return ((RespDecodedMessage.Request) message).request();
     }
 
     private static Object writeInboundAndReadFirst(EmbeddedChannel ch, String payload) {

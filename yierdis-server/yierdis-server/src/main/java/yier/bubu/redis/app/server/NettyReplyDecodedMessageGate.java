@@ -2,7 +2,9 @@ package yier.bubu.redis.app.server;
 
 import io.netty.channel.ChannelHandlerContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.protocol.resp.netty.RespDecodedMessage;
 import yier.bubu.redis.protocol.resp.netty.RespDecodedMessageGate;
+import yier.bubu.redis.protocol.resp.netty.RespProtocolError;
 
 import java.util.Objects;
 import java.util.Optional;
@@ -37,17 +39,22 @@ final class NettyReplyDecodedMessageGate implements RespDecodedMessageGate {
     }
 
     @Override
-    public Admission tryAdmit(ChannelHandlerContext ctx, Object decoded, Runnable resumeOnEventLoop) {
+    public Admission tryAdmit(
+            ChannelHandlerContext ctx,
+            RespDecodedMessage decoded,
+            Runnable resumeOnEventLoop
+    ) {
+        Objects.requireNonNull(ctx, "ctx");
         Objects.requireNonNull(decoded, "decoded");
         Objects.requireNonNull(resumeOnEventLoop, "resumeOnEventLoop");
         if (!sequencer.acceptingRegistrations() || connectionMemory.closed()) {
-            return Admission.closed();
+            return Admission.CLOSED;
         }
         CompletableFuture<Void> barrier = registrationBarrier;
         if (barrier != null) {
             if (!barrier.isDone()) {
                 barrier.whenComplete((ignored, failure) -> resumeLater(ctx, resumeOnEventLoop));
-                return Admission.waiting();
+                return Admission.WAITING;
             }
             if (registrationBarrier == barrier) {
                 registrationBarrier = null;
@@ -61,23 +68,28 @@ final class NettyReplyDecodedMessageGate implements RespDecodedMessageGate {
         if (reservation.isPresent()) {
             Optional<ReplySlot> slot = sequencer.register(reservation.get());
             if (slot.isEmpty()) {
-                return Admission.closed();
+                return Admission.CLOSED;
             }
             ReplySlot registered = slot.get();
             if (isExec(decoded)) {
                 // EXEC 的动态回复需要把当前 lease 扩到单回复上限；后续控制槽若先占额度会把扩容锁死。
                 registrationBarrier = registered.cleanupCompletion();
             }
-            return Admission.admitted(new RegisteredRespMessage(decoded, registered));
+            RegisteredRespMessage registeredMessage = new RegisteredRespMessage(decoded, registered);
+            try {
+                ctx.fireChannelRead(registeredMessage);
+            } catch (Throwable ignored) {
+                registeredMessage.close();
+                ctx.close();
+            }
+            return Admission.ADMITTED;
         }
 
         if (connectionMemory.awaitCapacity(controlReservationBytes, singleReplyLimitBytes, resumeOnEventLoop)) {
-            return Admission.waiting();
+            return Admission.WAITING;
         }
-        if (ctx != null) {
-            ctx.close();
-        }
-        return Admission.closed();
+        ctx.close();
+        return Admission.CLOSED;
     }
 
     Optional<ReplySlot> tryRegisterTerminalSlot() {
@@ -96,9 +108,15 @@ final class NettyReplyDecodedMessageGate implements RespDecodedMessageGate {
         return connectionMemory;
     }
 
-    private static boolean isExec(Object decoded) {
-        if (!(decoded instanceof ExecutionRequest request)
-                || request.argc() == 0
+    private static boolean isExec(RespDecodedMessage decoded) {
+        return switch (decoded) {
+            case RespDecodedMessage.Request value -> isExec(value.request());
+            case RespProtocolError ignored -> false;
+        };
+    }
+
+    private static boolean isExec(ExecutionRequest request) {
+        if (request.argc() == 0
                 || request.isNull(0)
                 || request.len(0) != 4) {
             return false;
@@ -115,10 +133,6 @@ final class NettyReplyDecodedMessageGate implements RespDecodedMessageGate {
     }
 
     private static void resumeLater(ChannelHandlerContext ctx, Runnable resumeOnEventLoop) {
-        if (ctx == null) {
-            resumeOnEventLoop.run();
-            return;
-        }
         try {
             ctx.executor().execute(resumeOnEventLoop);
         } catch (RuntimeException failure) {

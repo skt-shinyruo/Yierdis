@@ -9,7 +9,9 @@ import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.util.ReferenceCountUtil;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.protocol.resp.netty.InboundConnectionMemory;
+import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
+import yier.bubu.redis.protocol.resp.netty.RespDecodedMessage;
 import yier.bubu.redis.protocol.resp.netty.RespRequestDecoder;
 
 import java.nio.charset.StandardCharsets;
@@ -18,6 +20,59 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class OrderedReplyPipelineTest {
+    @Test
+    public void closingRegisteredDecodeResultBeforeTransferReleasesBothReservationsOnce() {
+        InboundMemoryBudget inboundBudget = new InboundMemoryBudget(4_096L);
+        InboundConnectionMemory inboundConnection = new InboundConnectionMemory(4_096L, Runnable::run, () -> { });
+        OutboundMemoryBudget outboundBudget = new OutboundMemoryBudget(4_096L);
+        OutboundConnectionMemory outboundConnection = outboundBudget.openConnection(4_096L);
+        EmbeddedChannel channel = new EmbeddedChannel();
+        ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, outboundConnection, () -> { });
+        NettyReplyDecodedMessageGate gate = new NettyReplyDecodedMessageGate(
+                4_096L,
+                4_096L,
+                outboundConnection,
+                sequencer
+        );
+        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                1_024,
+                16,
+                1_024,
+                1_024,
+                inboundBudget,
+                inboundConnection,
+                gate
+        );
+        CapturingHandler capture = new CapturingHandler();
+        channel.pipeline().addLast("decoder", decoder);
+        channel.pipeline().addLast("capture", capture);
+        try {
+            Assert.assertFalse(channel.writeInbound(Unpooled.copiedBuffer(
+                    "*1\r\n$4\r\nPING\r\n",
+                    StandardCharsets.US_ASCII
+            )));
+
+            RegisteredRespMessage registered = capture.messages.getFirst();
+            RespDecodedMessage decoded = registered.message();
+            Assert.assertTrue(decoded instanceof RespDecodedMessage.Request);
+
+            registered.close();
+            registered.close();
+            channel.runPendingTasks();
+
+            Assert.assertThrows(IllegalStateException.class, registered::takeMessage);
+            Assert.assertEquals(ReplySlotState.CANCELLED, registered.slot().state());
+            Assert.assertEquals(0L, inboundBudget.stats().reservedBytes());
+            Assert.assertEquals(0L, outboundBudget.stats().reservedBytes());
+        } finally {
+            channel.finishAndReleaseAll();
+            sequencer.close();
+            inboundConnection.close();
+            inboundBudget.close();
+            outboundBudget.close();
+        }
+    }
+
     @Test
     public void decoderWaitsAtReplyAdmissionAndPreservesTheOriginalMessageUntilCapacityReturns() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(4_096L);
@@ -45,7 +100,7 @@ public class OrderedReplyPipelineTest {
 
             Assert.assertEquals(1, capture.messages.size());
             RegisteredRespMessage first = capture.messages.getFirst();
-            Assert.assertTrue(first.message() instanceof ExecutionRequest);
+            Assert.assertTrue(first.message() instanceof RespDecodedMessage.Request);
             Assert.assertEquals(0L, first.slot().sequence());
             first.slot().cancel();
             channel.runPendingTasks();

@@ -149,9 +149,7 @@ public class RespIngressAdmissionTest {
             Assert.assertTrue(channel.writeInbound(Unpooled.wrappedBuffer(finalFragment)));
             channel.runPendingTasks();
 
-            Object decoded = channel.readInbound();
-            Assert.assertTrue(decoded instanceof ExecutionRequest);
-            request = (ExecutionRequest) decoded;
+            request = readExecutionRequest(channel);
             Assert.assertEquals(1, request.argc());
             Assert.assertArrayEquals(repeatedByte('x', 256), request.readOnlyByteArray(0));
             Assert.assertNull(channel.readInbound());
@@ -201,7 +199,7 @@ public class RespIngressAdmissionTest {
             Assert.assertTrue(channel.writeInbound(Unpooled.wrappedBuffer(finalFragment)));
             channel.runPendingTasks();
 
-            request = (ExecutionRequest) channel.readInbound();
+            request = readExecutionRequest(channel);
             Assert.assertNotNull(request);
             Assert.assertArrayEquals(repeatedByte('x', 420), request.readOnlyByteArray(0));
         } finally {
@@ -234,7 +232,7 @@ public class RespIngressAdmissionTest {
 
             Assert.assertTrue(channel.writeInbound(ascii("*1\r\n$4\r\nPING\r\n")));
             channel.runPendingTasks();
-            request = (ExecutionRequest) channel.readInbound();
+            request = readExecutionRequest(channel);
 
             Assert.assertEquals(1, budget.stats().waitingConnections());
             Assert.assertEquals(0L, readCredits.outstandingReadCreditBytes());
@@ -318,9 +316,7 @@ public class RespIngressAdmissionTest {
             budget.release(blocker, 800);
             channel.runPendingTasks();
 
-            Object message = channel.readInbound();
-            Assert.assertTrue(message instanceof ExecutionRequest);
-            request = (ExecutionRequest) message;
+            request = readExecutionRequest(channel);
             Assert.assertArrayEquals(asciiBytes("PING"), request.readOnlyByteArray(0));
         } finally {
             if (request != null) {
@@ -372,13 +368,43 @@ public class RespIngressAdmissionTest {
             gate.resume.run();
             channel.runPendingTasks();
 
-            Object first = channel.readInbound();
-            Assert.assertTrue(first instanceof ExecutionRequest);
-            ((ExecutionRequest) first).close();
+            readExecutionRequest(channel).close();
             Assert.assertEquals(3, gate.attempts);
             Assert.assertEquals("WAITING_FOR_HANDOFF", decoder.stateNameForTests());
             Assert.assertNull(channel.readInbound());
         } finally {
+            channel.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    public void synchronousGateWakeupRetriesAfterTheWaitingResultOwnsTheMessage() {
+        int[] attempts = {0};
+        RespDecodedMessageGate gate = (ctx, decoded, resume) -> {
+            if (++attempts[0] == 1) {
+                resume.run();
+                return RespDecodedMessageGate.Admission.WAITING;
+            }
+            ctx.fireChannelRead(decoded);
+            return RespDecodedMessageGate.Admission.ADMITTED;
+        };
+        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                1_024, 16, 1_024, 1_024, null, null, gate
+        );
+        EmbeddedChannel channel = new EmbeddedChannel(decoder);
+        ExecutionRequest request = null;
+        try {
+            channel.writeInbound(ascii("*1\r\n$4\r\nPING\r\n"));
+
+            channel.runPendingTasks();
+
+            request = readExecutionRequest(channel);
+            Assert.assertEquals(2, attempts[0]);
+            Assert.assertEquals("READ_COMMAND", decoder.stateNameForTests());
+        } finally {
+            if (request != null) {
+                request.close();
+            }
             channel.finishAndReleaseAll();
         }
     }
@@ -394,18 +420,12 @@ public class RespIngressAdmissionTest {
         Assert.assertThrows(IllegalArgumentException.class, () -> RespRequestDecoder.withIngressAdmission(
                 1_024, 16, 1_024, 1_024, null, connection, RespDecodedMessageGate.PASS_THROUGH
         ));
-        Assert.assertThrows(NullPointerException.class,
-                () -> new RespDecodedMessageGate.Admission(null, null));
-        Assert.assertThrows(NullPointerException.class,
-                () -> new RespDecodedMessageGate.Admission(
-                        RespDecodedMessageGate.Status.ADMITTED,
-                        null
-                ));
+        Assert.assertThrows(NullPointerException.class, () -> new RespDecodedMessage.Request(null));
     }
 
     @Test
     public void closedNullAndThrowingGatesReleaseDecodedRequestsAndIncomingBuffers() {
-        assertTerminalGateOutcome((ctx, decoded, resume) -> RespDecodedMessageGate.Admission.closed());
+        assertTerminalGateOutcome((ctx, decoded, resume) -> RespDecodedMessageGate.Admission.CLOSED);
         assertTerminalGateOutcome((ctx, decoded, resume) -> null);
         assertTerminalGateOutcome((ctx, decoded, resume) -> {
             throw new IllegalStateException("gate failed");
@@ -423,7 +443,7 @@ public class RespIngressAdmissionTest {
                 1_024,
                 budget,
                 connection,
-                (ctx, decoded, resume) -> RespDecodedMessageGate.Admission.waiting()
+                (ctx, decoded, resume) -> RespDecodedMessageGate.Admission.WAITING
         );
         EmbeddedChannel channel = new EmbeddedChannel(decoder);
 
@@ -480,20 +500,31 @@ public class RespIngressAdmissionTest {
         return bytes;
     }
 
+    private static ExecutionRequest readExecutionRequest(EmbeddedChannel channel) {
+        Object decoded = channel.readInbound();
+        Assert.assertTrue(decoded instanceof RespDecodedMessage.Request);
+        return ((RespDecodedMessage.Request) decoded).request();
+    }
+
     private static final class RecordingGate implements RespDecodedMessageGate {
         private int attempts;
         private boolean admit;
         private Runnable resume;
 
         @Override
-        public Admission tryAdmit(ChannelHandlerContext ctx, Object decoded, Runnable resumeOnEventLoop) {
+        public Admission tryAdmit(
+                ChannelHandlerContext ctx,
+                RespDecodedMessage decoded,
+                Runnable resumeOnEventLoop
+        ) {
             attempts++;
             if (admit) {
                 admit = false;
-                return Admission.admitted(decoded);
+                ctx.fireChannelRead(decoded);
+                return Admission.ADMITTED;
             }
             resume = resumeOnEventLoop;
-            return Admission.waiting();
+            return Admission.WAITING;
         }
     }
 }
