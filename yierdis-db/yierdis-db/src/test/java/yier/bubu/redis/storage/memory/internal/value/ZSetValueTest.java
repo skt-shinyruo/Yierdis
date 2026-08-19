@@ -631,6 +631,43 @@ public class ZSetValueTest {
     }
 
     @Test
+    public void packedScoreRangeViewsShareBoundsPaginationAndDirection() {
+        try (TestBackend runtime = TestBackend.open("zset-packed-score-range");
+             StableMemoryBackend allocator = runtime.backend()) {
+            ZSetValue zset = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
+            try {
+                zset.zaddMany(scoreBoundaryPairs());
+                Assert.assertEquals(ValueEncoding.ZSET_PACKED, zset.encoding());
+
+                assertPackedScoreRangeViews(
+                        zset,
+                        false,
+                        1,
+                        false,
+                        4,
+                        true,
+                        1,
+                        2,
+                        List.of("b", "2", "c", "2")
+                );
+                assertPackedScoreRangeViews(
+                        zset,
+                        true,
+                        1,
+                        true,
+                        4,
+                        false,
+                        1,
+                        10,
+                        List.of("d", "3", "c", "2", "b", "2")
+                );
+            } finally {
+                zset.close();
+            }
+        }
+    }
+
+    @Test
     public void scoreAndRankRemovalsMatchPackedAndSkiplistEncodings() {
         assertScoreAndRankRemovals(false);
         assertScoreAndRankRemovals(true);
@@ -638,6 +675,39 @@ public class ZSetValueTest {
 
     private static byte[] b(String s) {
         return s.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static void assertPackedScoreRangeViews(
+            ZSetValue zset,
+            boolean reverse,
+            double min,
+            boolean minExclusive,
+            double max,
+            boolean maxExclusive,
+            long offset,
+            long count,
+            List<String> expected
+    ) {
+        List<byte[]> materialized = reverse
+                ? zset.zrevrangeByScore(min, minExclusive, max, maxExclusive, true, offset, count)
+                : zset.zrangeByScore(min, minExclusive, max, maxExclusive, true, offset, count);
+        int elementCount = reverse
+                ? zset.zrevrangeByScoreCount(min, minExclusive, max, maxExclusive, true, offset, count)
+                : zset.zrangeByScoreCount(min, minExclusive, max, maxExclusive, true, offset, count);
+        RecordingSink streamed = new RecordingSink();
+        if (reverse) {
+            zset.zrevrangeByScoreWriteTo(
+                    min, minExclusive, max, maxExclusive, true, offset, count, streamed
+            );
+        } else {
+            zset.zrangeByScoreWriteTo(
+                    min, minExclusive, max, maxExclusive, true, offset, count, streamed
+            );
+        }
+
+        Assert.assertEquals(expected, strings(materialized));
+        Assert.assertEquals(expected.size(), elementCount);
+        Assert.assertEquals(expected, streamed.values);
     }
 
     private static byte[] fixedMember(int index, int length) {
