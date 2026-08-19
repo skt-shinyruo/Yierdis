@@ -33,7 +33,7 @@ public final class CommandDispatcher {
         return prepare(session, request, true);
     }
 
-    PreparedCommand prepareReplay(CommandSession session, ExecutionRequest request) {
+    PreparedCommand prepareExecReplay(CommandSession session, ExecutionRequest request) {
         return prepare(session, request, false);
     }
 
@@ -74,11 +74,8 @@ public final class CommandDispatcher {
                     );
                 }
                 if (policy == TransactionPolicy.QUEUEABLE) {
-                    Objects.requireNonNull(
-                            spec.handler().parse(args),
-                            "command handler returned null"
-                    );
-                    return queued(transaction, request);
+                    preflightMultiQueue(spec, args);
+                    return prepareRetainedRequestEnqueue(transaction, request);
                 }
             }
 
@@ -97,7 +94,16 @@ public final class CommandDispatcher {
         }
     }
 
-    private static PreparedCommand queued(TransactionState transaction, ExecutionRequest request) {
+    private static void preflightMultiQueue(CommandSpec spec, CommandArgs args) {
+        Function<CommandSession, PreparedCommand> deferredPrepare = spec.handler().parse(args);
+        // EXEC replay 会重新 parse 并应用届时的 session；这里仅确认 preflight 产出了合法的延迟 prepare。
+        Objects.requireNonNull(deferredPrepare, "command handler returned null");
+    }
+
+    private static PreparedCommand prepareRetainedRequestEnqueue(
+            TransactionState transaction,
+            ExecutionRequest request
+    ) {
         return PreparedCommands.action(
                 ReplyShapes.errorUpperBound(),
                 context -> {

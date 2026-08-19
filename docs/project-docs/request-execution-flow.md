@@ -166,7 +166,7 @@ Netty ByteBuf
 
 事务队列保存的是自己拥有的 retained `ExecutionRequest`，不是另一套命令 IR。`MULTI` 中的 queueable 命令会先经过同一个 registry lookup、arity 校验和 `handler.parse(CommandArgs)`；只有这些 preflight 成功，排队用的 prepared action 才会在 reply reservation 后调用 `TransactionState.tryEnqueue(request)` 并返回 `QUEUED`。此时不会把 session 应用到 handler 返回的 function，也不会访问 DB。
 
-`EXEC` 重放每条 retained request 时调用同一个 `CommandDispatcher.prepareReplay(...)`。该入口只跳过再次排队，仍复用查表、arity、handler parse、session-aware prepare、prepared validation、execution 和 DB mutation path。子命令返回的 `RedisReply` 被收集成外层数组，executor 最终只调用一次 `RedisReplyRenderer`。
+`EXEC` 重放每条 retained request 时调用同一个 `CommandDispatcher.prepareExecReplay(...)`。该入口只跳过再次排队，仍复用查表、arity、handler parse、session-aware prepare、prepared validation、execution 和 DB mutation path。子命令返回的 `RedisReply` 被收集成外层数组，executor 最终只调用一次 `RedisReplyRenderer`。
 
 持有 streamed source 的 child `PreparedCommand` 会一直保留到整个 `EXEC` 聚合回复渲染结束；随后外层 prepared command 按逆序关闭 children 与 drained requests。child 返回的 `ControlError` 会先降为可嵌套的普通 `Error`，因为 control reservation 只适用于顶层回复。详细状态机见 [`transaction-and-replay.md`](./transaction-and-replay.md)。
 
