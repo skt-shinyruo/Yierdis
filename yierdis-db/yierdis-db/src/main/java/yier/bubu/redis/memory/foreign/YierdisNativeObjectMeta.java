@@ -4,10 +4,10 @@ import yier.bubu.redis.memory.api.NativeHandleDomain;
 
 record YierdisNativeObjectMeta(
         long slotId,
-        long address,
+        long pageOffset,
         int size,
         int capacity,
-        int segmentId,
+        int pageId,
         int pageClass,
         int generation,
         NativeHandleDomain domain,

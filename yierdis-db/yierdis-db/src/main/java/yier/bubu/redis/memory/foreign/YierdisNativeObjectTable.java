@@ -24,9 +24,9 @@ final class YierdisNativeObjectTable implements AutoCloseable {
     private static final long CHECKPOINT_OBJECT_BYTES = 24L;
     private static final long REFERENCE_BYTES = 8L;
 
-    static final int ADDRESS_OFFSET = 0;
+    static final int PAGE_OFFSET_OFFSET = 0;
     static final int SIZE_OFFSET = 4;
-    static final int SEGMENT_ID_OFFSET = 8;
+    static final int PAGE_ID_OFFSET = 8;
     static final int PACKED_METADATA_OFFSET = 12;
     static final int ALLOC_EPOCH_OFFSET = 16;
     static final int FREE_EPOCH_OFFSET = 24;
@@ -82,8 +82,8 @@ final class YierdisNativeObjectTable implements AutoCloseable {
             NativeObjectKind kind,
             int size,
             int capacity,
-            int segmentId,
-            long address,
+            int pageId,
+            long pageOffset,
             int pageClass,
             long allocEpoch
     ) {
@@ -95,9 +95,9 @@ final class YierdisNativeObjectTable implements AutoCloseable {
         if (capacity < size) {
             throw new IllegalArgumentException("capacity must be >= size");
         }
-        int pageOffset = checkedPageOffset(address);
+        int checkedPageOffset = checkedPageOffset(pageOffset);
         requirePackedField("pageClass", pageClass, PAGE_CLASS_MASK);
-        validateResolvedCapacity(size, capacity, segmentId, pageOffset, pageClass);
+        validateResolvedCapacity(size, capacity, pageId, checkedPageOffset, pageClass);
         int packedFields = packMetadata(
                 INITIAL_GENERATION,
                 kind.domain().code(),
@@ -109,9 +109,9 @@ final class YierdisNativeObjectTable implements AutoCloseable {
 
         SegmentSlot slot = allocateSlot();
         int generation = generation(slot);
-        slot.segment.writeInt(slot.offset, ADDRESS_OFFSET, pageOffset);
+        slot.segment.writeInt(slot.offset, PAGE_OFFSET_OFFSET, checkedPageOffset);
         slot.segment.writeInt(slot.offset, SIZE_OFFSET, size);
-        slot.segment.writeInt(slot.offset, SEGMENT_ID_OFFSET, segmentId);
+        slot.segment.writeInt(slot.offset, PAGE_ID_OFFSET, pageId);
         slot.segment.writeInt(slot.offset, PIN_COUNT_OFFSET, 0);
         slot.segment.writeLong(slot.offset, ALLOC_EPOCH_OFFSET, allocEpoch);
         slot.segment.writeLong(slot.offset, FREE_EPOCH_OFFSET, 0L);
@@ -236,21 +236,21 @@ final class YierdisNativeObjectTable implements AutoCloseable {
             long localRaw,
             int size,
             int capacity,
-            int segmentId,
-            long address,
+            int pageId,
+            long pageOffset,
             int pageClass
     ) {
         ensureOpen();
         SegmentSlot slot = requireLiveSlot(localRaw, false);
-        updateLocation(slot, size, capacity, segmentId, address, pageClass);
+        updateLocation(slot, size, capacity, pageId, pageOffset, pageClass);
     }
 
     private void updateLocation(
             SegmentSlot slot,
             int size,
             int capacity,
-            int segmentId,
-            long address,
+            int pageId,
+            long pageOffset,
             int pageClass
     ) {
         if (size < 0) {
@@ -259,12 +259,12 @@ final class YierdisNativeObjectTable implements AutoCloseable {
         if (capacity < size) {
             throw new IllegalArgumentException("capacity must be >= size");
         }
-        int pageOffset = checkedPageOffset(address);
+        int checkedPageOffset = checkedPageOffset(pageOffset);
         requirePackedField("pageClass", pageClass, PAGE_CLASS_MASK);
-        validateResolvedCapacity(size, capacity, segmentId, pageOffset, pageClass);
-        slot.segment.writeInt(slot.offset, ADDRESS_OFFSET, pageOffset);
+        validateResolvedCapacity(size, capacity, pageId, checkedPageOffset, pageClass);
+        slot.segment.writeInt(slot.offset, PAGE_OFFSET_OFFSET, checkedPageOffset);
         slot.segment.writeInt(slot.offset, SIZE_OFFSET, size);
-        slot.segment.writeInt(slot.offset, SEGMENT_ID_OFFSET, segmentId);
+        slot.segment.writeInt(slot.offset, PAGE_ID_OFFSET, pageId);
         replacePageClass(slot, pageClass);
     }
 
@@ -285,8 +285,8 @@ final class YierdisNativeObjectTable implements AutoCloseable {
             long localRaw,
             int size,
             int capacity,
-            int segmentId,
-            long address,
+            int pageId,
+            long pageOffset,
             int pageClass
     ) {
         ensureOpen();
@@ -297,12 +297,12 @@ final class YierdisNativeObjectTable implements AutoCloseable {
         if (capacity < size) {
             throw new IllegalArgumentException("capacity must be >= size");
         }
-        int pageOffset = checkedPageOffset(address);
+        int checkedPageOffset = checkedPageOffset(pageOffset);
         requirePackedField("pageClass", pageClass, PAGE_CLASS_MASK);
-        validateResolvedCapacity(size, capacity, segmentId, pageOffset, pageClass);
-        slot.segment.writeInt(slot.offset, ADDRESS_OFFSET, pageOffset);
+        validateResolvedCapacity(size, capacity, pageId, checkedPageOffset, pageClass);
+        slot.segment.writeInt(slot.offset, PAGE_OFFSET_OFFSET, checkedPageOffset);
         slot.segment.writeInt(slot.offset, SIZE_OFFSET, size);
-        slot.segment.writeInt(slot.offset, SEGMENT_ID_OFFSET, segmentId);
+        slot.segment.writeInt(slot.offset, PAGE_ID_OFFSET, pageId);
         replacePageClass(slot, pageClass);
         transitionState(slot, STATE_ALLOCATED);
     }
@@ -552,9 +552,9 @@ final class YierdisNativeObjectTable implements AutoCloseable {
 
     private void releaseSlot(SegmentSlot slot, long freeEpoch) {
         int generation = generation(slot);
-        slot.segment.writeInt(slot.offset, ADDRESS_OFFSET, 0);
+        slot.segment.writeInt(slot.offset, PAGE_OFFSET_OFFSET, 0);
         slot.segment.writeInt(slot.offset, SIZE_OFFSET, 0);
-        slot.segment.writeInt(slot.offset, SEGMENT_ID_OFFSET, 0);
+        slot.segment.writeInt(slot.offset, PAGE_ID_OFFSET, 0);
         slot.segment.writeInt(slot.offset, PIN_COUNT_OFFSET, 0);
         slot.segment.writeLong(slot.offset, FREE_EPOCH_OFFSET, freeEpoch);
         transitionState(slot, STATE_FREE);
@@ -580,12 +580,12 @@ final class YierdisNativeObjectTable implements AutoCloseable {
 
     private YierdisNativeObjectMeta readMeta(SegmentSlot slot) {
         int packedMetadata = packedMetadata(slot);
-        int pageOffset = slot.segment.readInt(slot.offset, ADDRESS_OFFSET);
+        int pageOffset = slot.segment.readInt(slot.offset, PAGE_OFFSET_OFFSET);
         int size = slot.segment.readInt(slot.offset, SIZE_OFFSET);
-        int segmentId = slot.segment.readInt(slot.offset, SEGMENT_ID_OFFSET);
+        int pageId = slot.segment.readInt(slot.offset, PAGE_ID_OFFSET);
         int pageClass = unpack(packedMetadata, PAGE_CLASS_SHIFT, PAGE_CLASS_MASK);
         // capacity 的权威来源是 page/span descriptor；slot 只保存定位信息，避免为每个 tiny object 重复 4 bytes。
-        int capacity = capacityResolver.resolveCapacity(segmentId, pageOffset, pageClass);
+        int capacity = capacityResolver.resolveCapacity(pageId, pageOffset, pageClass);
         if (capacity <= 0 || capacity < size) {
             throw new NativeMemoryException("native page capacity is inconsistent with object metadata");
         }
@@ -594,7 +594,7 @@ final class YierdisNativeObjectTable implements AutoCloseable {
                 pageOffset,
                 size,
                 capacity,
-                segmentId,
+                pageId,
                 pageClass,
                 unpack(packedMetadata, GENERATION_SHIFT, GENERATION_MASK),
                 NativeHandleDomain.fromCode(unpack(packedMetadata, DOMAIN_SHIFT, DOMAIN_MASK)),
@@ -694,22 +694,22 @@ final class YierdisNativeObjectTable implements AutoCloseable {
         }
     }
 
-    private static int checkedPageOffset(long address) {
-        int pageOffset = Math.toIntExact(address);
-        if (pageOffset < 0) {
-            throw new IllegalArgumentException("address must be >= 0");
+    private static int checkedPageOffset(long pageOffset) {
+        int checkedPageOffset = Math.toIntExact(pageOffset);
+        if (checkedPageOffset < 0) {
+            throw new IllegalArgumentException("page offset must be >= 0");
         }
-        return pageOffset;
+        return checkedPageOffset;
     }
 
     private void validateResolvedCapacity(
             int size,
             int declaredCapacity,
-            int segmentId,
+            int pageId,
             int pageOffset,
             int pageClass
     ) {
-        int resolvedCapacity = capacityResolver.resolveCapacity(segmentId, pageOffset, pageClass);
+        int resolvedCapacity = capacityResolver.resolveCapacity(pageId, pageOffset, pageClass);
         if (resolvedCapacity <= 0) {
             throw new IllegalArgumentException("resolved capacity must be > 0");
         }

@@ -23,9 +23,9 @@ public class YierdisNativeObjectTableTest {
     @Test
     public void metadataLayoutRemainsCompactAndNativeBacked() {
         Assert.assertEquals(36, YierdisNativeObjectTable.META_BYTES);
-        Assert.assertEquals(0, YierdisNativeObjectTable.ADDRESS_OFFSET);
+        Assert.assertEquals(0, YierdisNativeObjectTable.PAGE_OFFSET_OFFSET);
         Assert.assertEquals(4, YierdisNativeObjectTable.SIZE_OFFSET);
-        Assert.assertEquals(8, YierdisNativeObjectTable.SEGMENT_ID_OFFSET);
+        Assert.assertEquals(8, YierdisNativeObjectTable.PAGE_ID_OFFSET);
         Assert.assertEquals(12, YierdisNativeObjectTable.PACKED_METADATA_OFFSET);
         Assert.assertEquals(16, YierdisNativeObjectTable.ALLOC_EPOCH_OFFSET);
         Assert.assertEquals(24, YierdisNativeObjectTable.FREE_EPOCH_OFFSET);
@@ -124,8 +124,8 @@ public class YierdisNativeObjectTableTest {
             Assert.assertEquals(1, YierdisLocalHandleCodec.generation(localRaw));
             Assert.assertEquals(32, meta.size());
             Assert.assertEquals(48, meta.capacity());
-            Assert.assertEquals(1234L, meta.address());
-            Assert.assertEquals(55, meta.segmentId());
+            Assert.assertEquals(1234L, meta.pageOffset());
+            Assert.assertEquals(55, meta.pageId());
             Assert.assertEquals(2, meta.pageClass());
             Assert.assertEquals(9L, meta.allocEpoch());
             Assert.assertEquals(YierdisNativeObjectTable.STATE_ALLOCATED, meta.state());
