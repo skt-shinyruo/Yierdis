@@ -74,6 +74,8 @@ ops 不直接组合 directory 与 entry table，也不能从 lifecycle 取出 ba
 
 `ListValue.PreparedMutation` 按操作变体分为 unchanged、packed replacement、packed-to-quicklist、quicklist push 和 quicklist pop。每个变体只保存自己拥有的 replacement、node 或 superseded 资源，并分别实现 source 校验、提交、superseded 释放和放弃清理；公共生命周期只负责状态保护与变体调度，避免通过 nullable 资源组合推断操作类型。
 
+`NativeByteMap.PreparedMutation` 把每个 source 显式记录为 active、old 或 absent，并为 present source 单独保存非负 slot index；inspect、validate、commit 和 abort cleanup 共用该位置模型，不再用整数符号区分 table。
+
 `CommandSupport.commandDb(session)` 直接返回路由选中的 `DbEngine`；命令通过 typed ops 或 `memoryUsage(...)`、`memoryStats()`、`objectEncoding(...)`、`flushDb()` 直接调用。prepared set/pop 使用无参数 `commit()`；lazy expiry、active expiry 和 eviction 也进入同一个 mutation executor。
 
 ## 读路径

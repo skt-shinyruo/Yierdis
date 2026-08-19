@@ -27,6 +27,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
     private static final long REFERENCE_BYTES = 8L;
     private static final long TABLE_OBJECT_BYTES = 48L;
     private static final long PREPARED_MUTATION_OBJECT_BYTES = 128L;
+    private static final long SOURCE_LOCATION_OBJECT_BYTES = 32L;
     private static final HashTableWorkBudget WRITE_REHASH_BUDGET = HashTableWorkBudget.of(2L, Long.MAX_VALUE);
 
     private final NativeByteStore byteStore;
@@ -346,7 +347,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
             throw new IllegalArgumentException("invalid prepared native byte-map put counts");
         }
         int topologyCapacity = replacementTopologyCapacity(addedCount);
-        return preparedMutationHeapBytes(putCount, topologyCapacity, valueLayout);
+        return preparedMutationHeapBytes(putCount, addedCount, topologyCapacity, valueLayout);
     }
 
     public V replace(byte[] keyBytes, V value) {
@@ -1231,22 +1232,27 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
 
     private static long preparedMutationHeapBytes(
             int putCount,
+            int addedCount,
             int topologyCapacity,
             ValueLayout valueLayout
     ) {
         long referenceArrayBytes = ARRAY_HEADER_BYTES + (long) putCount * REFERENCE_BYTES;
         long intArrayBytes = ARRAY_HEADER_BYTES + (long) putCount * Integer.BYTES;
         long handleArrayBytes = ARRAY_HEADER_BYTES + (long) putCount * REFERENCE_BYTES;
+        long sourceLocationBytes = (long) (putCount - addedCount) * SOURCE_LOCATION_OBJECT_BYTES;
         long duplicateIndexBytes = ARRAY_HEADER_BYTES
                 + (long) PreparedMutation.duplicateIndexCapacity(putCount) * Integer.BYTES;
         long topologyBytes = topologyCapacity == 0
                 ? 0L
                 : heapBytesForCapacity(topologyCapacity, valueLayout);
-        long arrays = referenceArrayBytes * 2L
-                + intArrayBytes * 2L
+        long arrays = referenceArrayBytes * 3L
+                + intArrayBytes
                 + handleArrayBytes
                 + duplicateIndexBytes;
-        return addSaturating(PREPARED_MUTATION_OBJECT_BYTES, addSaturating(arrays, topologyBytes));
+        return addSaturating(
+                PREPARED_MUTATION_OBJECT_BYTES,
+                addSaturating(sourceLocationBytes, addSaturating(arrays, topologyBytes))
+        );
     }
 
     @FunctionalInterface
@@ -1282,13 +1288,46 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         }
     }
 
+    private enum SourceTable {
+        ACTIVE,
+        OLD,
+        ABSENT
+    }
+
+    private record SourceLocation(SourceTable table, int slot) {
+        private static final SourceLocation ABSENT = new SourceLocation(SourceTable.ABSENT, -1);
+
+        SourceLocation {
+            Objects.requireNonNull(table, "table");
+            if (table == SourceTable.ABSENT ? slot != -1 : slot < 0) {
+                throw new IllegalArgumentException("invalid native byte-map source location");
+            }
+        }
+
+        static SourceLocation active(int slot) {
+            return new SourceLocation(SourceTable.ACTIVE, slot);
+        }
+
+        static SourceLocation old(int slot) {
+            return new SourceLocation(SourceTable.OLD, slot);
+        }
+
+        static SourceLocation absent() {
+            return ABSENT;
+        }
+
+        boolean present() {
+            return table != SourceTable.ABSENT;
+        }
+    }
+
     static final class PreparedMutation<V> implements AutoCloseable {
         private static final int MAX_INDEX_CAPACITY = 1 << 30;
 
         private final NativeByteMap<V> owner;
         private final StagedPut<V>[] puts;
         private final int[] hashes;
-        private final int[] sourceLocations;
+        private final SourceLocation[] sourceLocations;
         private final NativeHandle[] keyHandles;
         private final Object[] previousValues;
         private final Table sourceActive;
@@ -1308,7 +1347,8 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
             this.owner = Objects.requireNonNull(owner, "owner");
             this.puts = Objects.requireNonNull(puts, "puts");
             this.hashes = new int[puts.length];
-            this.sourceLocations = new int[puts.length];
+            this.sourceLocations = new SourceLocation[puts.length];
+            Arrays.fill(this.sourceLocations, SourceLocation.absent());
             this.keyHandles = new NativeHandle[puts.length];
             this.previousValues = new Object[puts.length];
             this.sourceActive = owner.active;
@@ -1324,7 +1364,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
             long allocatedBytes = 0L;
             try {
                 for (int index = 0; index < puts.length; index++) {
-                    if (sourceLocations[index] != 0) {
+                    if (sourceLocations[index].present()) {
                         continue;
                     }
                     NativeHandle keyHandle = owner.ownsKeys
@@ -1365,7 +1405,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
 
         long stagedHeapBytes() {
             ensurePrepared();
-            return preparedMutationHeapBytes(puts.length, topologyCapacity, owner.valueLayout);
+            return preparedMutationHeapBytes(puts.length, addedCount, topologyCapacity, owner.valueLayout);
         }
 
         long targetHeapBytes() {
@@ -1409,16 +1449,16 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
             }
 
             for (int index = 0; index < puts.length; index++) {
-                int location = sourceLocations[index];
-                if (location == 0) {
+                SourceLocation location = sourceLocations[index];
+                if (!location.present()) {
                     continue;
                 }
-                Table table = location > 0 ? sourceActive : sourceOld;
-                int slot = decodeLocation(location);
+                Table table = location.table() == SourceTable.ACTIVE ? sourceActive : sourceOld;
+                int slot = location.slot();
                 owner.writeValue(table, slot, puts[index].nextValue);
             }
             for (int index = 0; index < puts.length; index++) {
-                if (sourceLocations[index] == 0) {
+                if (!sourceLocations[index].present()) {
                     owner.insertActive(keyHandles[index], puts[index].nextValue, hashes[index]);
                 }
             }
@@ -1449,19 +1489,19 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
 
                 int activeIndex = owner.findIndex(sourceActive, put.keyBytes, hash);
                 if (activeIndex >= 0) {
-                    sourceLocations[index] = encodeActiveLocation(activeIndex);
+                    sourceLocations[index] = SourceLocation.active(activeIndex);
                     keyHandles[index] = sourceActive.keyHandles[activeIndex];
                     previousValues[index] = owner.valueAt(sourceActive, activeIndex);
                 } else {
                     int oldIndex = owner.findIndex(sourceOld, put.keyBytes, hash);
                     if (oldIndex >= 0) {
-                        sourceLocations[index] = encodeOldLocation(oldIndex);
+                        sourceLocations[index] = SourceLocation.old(oldIndex);
                         keyHandles[index] = sourceOld.keyHandles[oldIndex];
                         previousValues[index] = owner.valueAt(sourceOld, oldIndex);
                     }
                 }
 
-                boolean present = sourceLocations[index] != 0;
+                boolean present = sourceLocations[index].present();
                 if (present != put.expectedPresent) {
                     throw new IllegalStateException("prepared native byte-map source presence changed");
                 }
@@ -1498,16 +1538,16 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
                 throw new IllegalStateException("prepared native byte-map source topology changed");
             }
             for (int index = 0; index < puts.length; index++) {
-                int location = sourceLocations[index];
-                if (location == 0) {
+                SourceLocation location = sourceLocations[index];
+                if (!location.present()) {
                     if (owner.findIndex(sourceActive, puts[index].keyBytes, hashes[index]) >= 0
                             || owner.findIndex(sourceOld, puts[index].keyBytes, hashes[index]) >= 0) {
                         throw new IllegalStateException("prepared native byte-map source membership changed");
                     }
                     continue;
                 }
-                Table table = location > 0 ? sourceActive : sourceOld;
-                int slot = decodeLocation(location);
+                Table table = location.table() == SourceTable.ACTIVE ? sourceActive : sourceOld;
+                int slot = location.slot();
                 if (table == null
                         || table.states[slot] != STATE_FILLED
                         || table.hashes[slot] != hashes[index]
@@ -1521,7 +1561,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         private void releaseUncommittedKeys(Throwable failure) {
             for (int index = 0; index < keyHandles.length; index++) {
                 if (!owner.ownsKeys
-                        || sourceLocations[index] != 0
+                        || sourceLocations[index].present()
                         || keyHandles[index] == null) {
                     continue;
                 }
@@ -1561,18 +1601,6 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
             if (cleanupFailure.getSuppressed().length != 0) {
                 throw cleanupFailure;
             }
-        }
-
-        private static int encodeActiveLocation(int index) {
-            return index + 1;
-        }
-
-        private static int encodeOldLocation(int index) {
-            return -(index + 1);
-        }
-
-        private static int decodeLocation(int location) {
-            return Math.abs(location) - 1;
         }
 
         private static int duplicateIndexCapacity(int entryCount) {
