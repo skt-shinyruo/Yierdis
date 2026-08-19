@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.OptionalLong;
 import java.util.function.Consumer;
 
 public final class SetValue implements YierdisValue {
@@ -149,12 +150,11 @@ public final class SetValue implements YierdisValue {
             return members.get(member) != null;
         }
 
-        long parsed = parseCanonicalLongOrSentinel(member);
-        boolean isInt = parsed != Long.MIN_VALUE || isLongMinValueBytes(member);
-        if (!isInt) {
+        OptionalLong parsed = parseCanonicalLong(member);
+        if (parsed.isEmpty()) {
             return false;
         }
-        return intsetContains(parsed);
+        return intsetContains(parsed.getAsLong());
     }
 
     public List<byte[]> members() {
@@ -291,14 +291,13 @@ public final class SetValue implements YierdisValue {
             return members.put(member, PRESENT) == null;
         }
 
-        long parsed = parseCanonicalLongOrSentinel(member);
-        boolean isInt = parsed != Long.MIN_VALUE || isLongMinValueBytes(member);
-        if (!isInt) {
+        OptionalLong parsed = parseCanonicalLong(member);
+        if (parsed.isEmpty()) {
             convertToHashSet();
             return members.put(member, PRESENT) == null;
         }
 
-        boolean added = intsetAdd(parsed);
+        boolean added = intsetAdd(parsed.getAsLong());
         if (added && intsetSize > YierdisEncodingThresholds.SET_MAX_INTSET_ENTRIES) {
             convertToHashSet();
         }
@@ -314,12 +313,11 @@ public final class SetValue implements YierdisValue {
             return members.remove(member) != null;
         }
 
-        long parsed = parseCanonicalLongOrSentinel(member);
-        boolean isInt = parsed != Long.MIN_VALUE || isLongMinValueBytes(member);
-        if (!isInt) {
+        OptionalLong parsed = parseCanonicalLong(member);
+        if (parsed.isEmpty()) {
             return false;
         }
-        return intsetRemove(parsed);
+        return intsetRemove(parsed.getAsLong());
     }
 
     private void convertToHashSet() {
@@ -616,18 +614,6 @@ public final class SetValue implements YierdisValue {
         return out;
     }
 
-    private static boolean isLongMinValueBytes(byte[] s) {
-        if (s == null || s.length != LONG_MIN_VALUE_BYTES.length) {
-            return false;
-        }
-        for (int i = 0; i < LONG_MIN_VALUE_BYTES.length; i++) {
-            if (s[i] != LONG_MIN_VALUE_BYTES[i]) {
-                return false;
-            }
-        }
-        return true;
-    }
-
     private static int longStringByteLength(long v) {
         if (v == Long.MIN_VALUE) {
             return LONG_MIN_VALUE_BYTES.length;
@@ -650,56 +636,49 @@ public final class SetValue implements YierdisValue {
         return false;
     }
 
-    /**
-     * Parses a canonical ASCII long. Returns {@link Long#MIN_VALUE} as a sentinel on failure.
-     * <p>
-     * This rejects "+1", "01", and "-0" to preserve binary-safe set semantics.
-     */
-    private static long parseCanonicalLongOrSentinel(byte[] s) {
-        if (s == null || s.length == 0) {
-            return Long.MIN_VALUE;
+    /** 只接受 canonical ASCII long；拒绝 "+1"、"01" 和 "-0"，保持 binary-safe Set 语义。 */
+    private static OptionalLong parseCanonicalLong(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) {
+            return OptionalLong.empty();
         }
 
         int i = 0;
         boolean negative = false;
-        byte first = s[0];
+        byte first = bytes[0];
         if (first == '+') {
-            return Long.MIN_VALUE;
+            return OptionalLong.empty();
         }
         if (first == '-') {
             negative = true;
             i = 1;
-            if (i == s.length) {
-                return Long.MIN_VALUE;
+            if (i == bytes.length) {
+                return OptionalLong.empty();
             }
         }
 
-        if (s[i] == '0') {
-            if (i == s.length - 1) {
-                return negative ? Long.MIN_VALUE : 0L;
-            }
-            return Long.MIN_VALUE;
+        if (bytes[i] == '0') {
+            return !negative && i == bytes.length - 1 ? OptionalLong.of(0L) : OptionalLong.empty();
         }
 
         long limit = negative ? Long.MIN_VALUE : -Long.MAX_VALUE;
         long multMin = limit / 10;
         long result = 0;
 
-        while (i < s.length) {
-            int digit = s[i++] - '0';
+        while (i < bytes.length) {
+            int digit = bytes[i++] - '0';
             if (digit < 0 || digit > 9) {
-                return Long.MIN_VALUE;
+                return OptionalLong.empty();
             }
             if (result < multMin) {
-                return Long.MIN_VALUE;
+                return OptionalLong.empty();
             }
             result *= 10;
             if (result < limit + digit) {
-                return Long.MIN_VALUE;
+                return OptionalLong.empty();
             }
             result -= digit;
         }
 
-        return negative ? result : -result;
+        return OptionalLong.of(negative ? result : -result);
     }
 }
