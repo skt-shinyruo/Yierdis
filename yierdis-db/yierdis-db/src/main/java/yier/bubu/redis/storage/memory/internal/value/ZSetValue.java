@@ -22,6 +22,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.function.IntConsumer;
 import java.nio.charset.StandardCharsets;
 
 public final class ZSetValue implements YierdisValue {
@@ -427,7 +428,9 @@ public final class ZSetValue implements YierdisValue {
         }
 
         if (listpack != null) {
-            return zrangeByScoreListpack(min, minExclusive, max, maxExclusive, withScores, offset, count);
+            return materializePackedScoreRange(
+                    min, minExclusive, max, maxExclusive, withScores, offset, count, false
+            );
         }
         return zrangeByScoreSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count);
     }
@@ -438,7 +441,9 @@ public final class ZSetValue implements YierdisValue {
         }
 
         if (listpack != null) {
-            return zrevrangeByScoreListpack(min, minExclusive, max, maxExclusive, withScores, offset, count);
+            return materializePackedScoreRange(
+                    min, minExclusive, max, maxExclusive, withScores, offset, count, true
+            );
         }
         return zrevrangeByScoreSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count);
     }
@@ -641,7 +646,9 @@ public final class ZSetValue implements YierdisValue {
             return 0;
         }
         if (listpack != null) {
-            return zrangeByScoreCountListpack(min, minExclusive, max, maxExclusive, withScores, offset, count);
+            return countPackedScoreRange(
+                    min, minExclusive, max, maxExclusive, withScores, offset, count, false
+            );
         }
         return zrangeByScoreCountSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count);
     }
@@ -654,7 +661,9 @@ public final class ZSetValue implements YierdisValue {
             return;
         }
         if (listpack != null) {
-            zrangeByScoreWriteToListpack(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+            writePackedScoreRange(
+                    min, minExclusive, max, maxExclusive, withScores, offset, count, false, out
+            );
             return;
         }
         zrangeByScoreWriteToSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
@@ -665,7 +674,9 @@ public final class ZSetValue implements YierdisValue {
             return 0;
         }
         if (listpack != null) {
-            return zrevrangeByScoreCountListpack(min, minExclusive, max, maxExclusive, withScores, offset, count);
+            return countPackedScoreRange(
+                    min, minExclusive, max, maxExclusive, withScores, offset, count, true
+            );
         }
         return zrevrangeByScoreCountSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count);
     }
@@ -678,7 +689,9 @@ public final class ZSetValue implements YierdisValue {
             return;
         }
         if (listpack != null) {
-            zrevrangeByScoreWriteToListpack(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+            writePackedScoreRange(
+                    min, minExclusive, max, maxExclusive, withScores, offset, count, true, out
+            );
             return;
         }
         zrevrangeByScoreWriteToSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
@@ -864,227 +877,95 @@ public final class ZSetValue implements YierdisValue {
         }
     }
 
-    private List<byte[]> zrangeByScoreListpack(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
+    private List<byte[]> materializePackedScoreRange(
+            double min,
+            boolean minExclusive,
+            double max,
+            boolean maxExclusive,
+            boolean withScores,
+            long offset,
+            long count,
+            boolean reverse
+    ) {
         int size = listpack.size();
-        if (size == 0) {
-            return new ArrayList<>();
-        }
-
-        int startIdx;
-        if (min == Double.NEGATIVE_INFINITY) {
-            startIdx = 0;
-        } else {
-            startIdx = firstIndexForMin(min, minExclusive);
-            if (startIdx >= size) {
-                return new ArrayList<>();
-            }
-        }
-
-        long skipped = Math.max(0, offset);
-        long remaining = count;
-        int expected = (int) Math.min(size, remaining);
+        int expected = (int) Math.min(size, count);
         List<byte[]> out = new ArrayList<>(withScores ? expected * 2 : expected);
-
-        for (int i = startIdx; i < size && remaining > 0; i++) {
-            double score = listpack.scoreAt(i);
-            if (!scoreInRange(score, min, minExclusive, max, maxExclusive)) {
-                if (max == Double.POSITIVE_INFINITY) {
-                    continue;
-                }
-                if (score > max || (maxExclusive && compareScores(score, max) == 0)) {
-                    break;
-                }
-                continue;
-            }
-            if (skipped > 0) {
-                skipped--;
-                continue;
-            }
-
-            out.add(listpack.memberAt(i));
+        forEachPackedScoreRange(min, minExclusive, max, maxExclusive, offset, count, reverse, index -> {
+            out.add(listpack.memberAt(index));
             if (withScores) {
-                out.add(formatScoreBytes(score));
+                out.add(formatScoreBytes(listpack.scoreAt(index)));
             }
-            remaining--;
-        }
+        });
         return out;
     }
 
-    private int zrangeByScoreCountListpack(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        int size = listpack.size();
-        if (size == 0) {
-            return 0;
-        }
-
-        int startIdx;
-        if (min == Double.NEGATIVE_INFINITY) {
-            startIdx = 0;
-        } else {
-            startIdx = firstIndexForMin(min, minExclusive);
-            if (startIdx >= size) {
-                return 0;
-            }
-        }
-
-        long skipped = Math.max(0, offset);
-        long remaining = count;
-        int outCount = 0;
-
-        for (int i = startIdx; i < size && remaining > 0; i++) {
-            double score = listpack.scoreAt(i);
-            if (!scoreInRange(score, min, minExclusive, max, maxExclusive)) {
-                if (max == Double.POSITIVE_INFINITY) {
-                    continue;
+    private int countPackedScoreRange(
+            double min,
+            boolean minExclusive,
+            double max,
+            boolean maxExclusive,
+            boolean withScores,
+            long offset,
+            long count,
+            boolean reverse
+    ) {
+        int selected = forEachPackedScoreRange(
+                min, minExclusive, max, maxExclusive, offset, count, reverse, index -> {
                 }
-                if (score > max || (maxExclusive && compareScores(score, max) == 0)) {
-                    break;
-                }
-                continue;
-            }
-            if (skipped > 0) {
-                skipped--;
-                continue;
-            }
-
-            int add = withScores ? 2 : 1;
-            if (outCount > Integer.MAX_VALUE - add) {
-                throw new IllegalArgumentException("response is too large");
-            }
-            outCount += add;
-            remaining--;
-        }
-        return outCount;
+        );
+        return selected * (withScores ? 2 : 1);
     }
 
-    private void zrangeByScoreWriteToListpack(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, ByteValueSink out) {
-        int size = listpack.size();
-        if (size == 0) {
-            return;
-        }
-
-        int startIdx;
-        if (min == Double.NEGATIVE_INFINITY) {
-            startIdx = 0;
-        } else {
-            startIdx = firstIndexForMin(min, minExclusive);
-            if (startIdx >= size) {
-                return;
-            }
-        }
-
-        long skipped = Math.max(0, offset);
-        long remaining = count;
-
-        for (int i = startIdx; i < size && remaining > 0; i++) {
-            double score = listpack.scoreAt(i);
-            if (!scoreInRange(score, min, minExclusive, max, maxExclusive)) {
-                if (max == Double.POSITIVE_INFINITY) {
-                    continue;
-                }
-                if (score > max || (maxExclusive && compareScores(score, max) == 0)) {
-                    break;
-                }
-                continue;
-            }
-            if (skipped > 0) {
-                skipped--;
-                continue;
-            }
-
-            listpack.memberWriteTo(i, out);
+    private void writePackedScoreRange(
+            double min,
+            boolean minExclusive,
+            double max,
+            boolean maxExclusive,
+            boolean withScores,
+            long offset,
+            long count,
+            boolean reverse,
+            ByteValueSink out
+    ) {
+        forEachPackedScoreRange(min, minExclusive, max, maxExclusive, offset, count, reverse, index -> {
+            listpack.memberWriteTo(index, out);
             if (withScores) {
-                writeScoreTo(out, score);
+                writeScoreTo(out, listpack.scoreAt(index));
             }
-            remaining--;
-        }
+        });
     }
 
-    private List<byte[]> zrevrangeByScoreListpack(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        int size = listpack.size();
-        if (size == 0) {
-            return new ArrayList<>();
-        }
-
-        int startIdx = min == Double.NEGATIVE_INFINITY ? 0 : firstIndexForMin(min, minExclusive);
-        int endIdx = max == Double.POSITIVE_INFINITY ? size - 1 : lastIndexForMax(max, maxExclusive);
-        if (endIdx < startIdx) {
-            return new ArrayList<>();
-        }
-
-        long skipped = Math.max(0, offset);
-        long remaining = count;
-        int expected = (int) Math.min(size, remaining);
-        List<byte[]> out = new ArrayList<>(withScores ? expected * 2 : expected);
-
-        for (int i = endIdx; i >= startIdx && remaining > 0; i--) {
-            if (skipped > 0) {
-                skipped--;
-                continue;
-            }
-            out.add(listpack.memberAt(i));
-            if (withScores) {
-                out.add(formatScoreBytes(listpack.scoreAt(i)));
-            }
-            remaining--;
-        }
-        return out;
-    }
-
-    private int zrevrangeByScoreCountListpack(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        int size = listpack.size();
-        if (size == 0) {
-            return 0;
-        }
-
-        int startIdx = min == Double.NEGATIVE_INFINITY ? 0 : firstIndexForMin(min, minExclusive);
-        int endIdx = max == Double.POSITIVE_INFINITY ? size - 1 : lastIndexForMax(max, maxExclusive);
-        if (endIdx < startIdx) {
+    private int forEachPackedScoreRange(
+            double min,
+            boolean minExclusive,
+            double max,
+            boolean maxExclusive,
+            long offset,
+            long count,
+            boolean reverse,
+            IntConsumer selectedIndex
+    ) {
+        int first = min == Double.NEGATIVE_INFINITY ? 0 : firstIndexForMin(min, minExclusive);
+        int last = max == Double.POSITIVE_INFINITY ? listpack.size() - 1 : lastIndexForMax(max, maxExclusive);
+        if (first > last) {
             return 0;
         }
 
         long skipped = Math.max(0, offset);
         long remaining = count;
-        int outCount = 0;
-        for (int i = endIdx; i >= startIdx && remaining > 0; i--) {
+        int selected = 0;
+        for (int index = reverse ? last : first;
+             index >= first && index <= last && remaining > 0;
+             index += reverse ? -1 : 1) {
             if (skipped > 0) {
                 skipped--;
                 continue;
             }
-            int add = withScores ? 2 : 1;
-            if (outCount > Integer.MAX_VALUE - add) {
-                throw new IllegalArgumentException("response is too large");
-            }
-            outCount += add;
+            selectedIndex.accept(index);
+            selected++;
             remaining--;
         }
-        return outCount;
-    }
-
-    private void zrevrangeByScoreWriteToListpack(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, ByteValueSink out) {
-        int size = listpack.size();
-        if (size == 0) {
-            return;
-        }
-
-        int startIdx = min == Double.NEGATIVE_INFINITY ? 0 : firstIndexForMin(min, minExclusive);
-        int endIdx = max == Double.POSITIVE_INFINITY ? size - 1 : lastIndexForMax(max, maxExclusive);
-        if (endIdx < startIdx) {
-            return;
-        }
-
-        long skipped = Math.max(0, offset);
-        long remaining = count;
-        for (int i = endIdx; i >= startIdx && remaining > 0; i--) {
-            if (skipped > 0) {
-                skipped--;
-                continue;
-            }
-            listpack.memberWriteTo(i, out);
-            if (withScores) {
-                writeScoreTo(out, listpack.scoreAt(i));
-            }
-            remaining--;
-        }
+        return selected;
     }
 
     private int firstIndexForMin(double min, boolean exclusive) {
