@@ -60,6 +60,49 @@ public class SetValueTest {
     }
 
     @Test
+    public void intsetSupportsLongBoundsAcrossEncodingUpgrades() {
+        try (TestBackend runtime = TestBackend.open("set-long-bounds");
+             StableMemoryBackend allocator = runtime.backend()) {
+            SetValue set = new SetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
+            try {
+                byte[] min = b(Long.toString(Long.MIN_VALUE));
+                byte[] max = b(Long.toString(Long.MAX_VALUE));
+
+                Assert.assertEquals(2, set.addAll(List.of(b("1"), b(Integer.toString(Integer.MAX_VALUE)))));
+                Assert.assertEquals(2, set.addAll(List.of(min, max)));
+                Assert.assertEquals(ValueEncoding.SET_INTSET, set.encoding());
+                Assert.assertTrue(set.contains(b("1")));
+                Assert.assertTrue(set.contains(b(Integer.toString(Integer.MAX_VALUE))));
+                Assert.assertTrue(set.contains(min));
+                Assert.assertTrue(set.contains(max));
+
+                Assert.assertEquals(2, set.removeAll(List.of(min, max)));
+                Assert.assertFalse(set.contains(min));
+                Assert.assertFalse(set.contains(max));
+                Assert.assertEquals(ValueEncoding.SET_INTSET, set.encoding());
+            } finally {
+                set.close();
+            }
+        }
+    }
+
+    @Test
+    public void nonCanonicalAndOutOfRangeMembersKeepBinarySetSemantics() {
+        try (TestBackend runtime = TestBackend.open("set-non-canonical-integers");
+             StableMemoryBackend allocator = runtime.backend()) {
+            for (String member : List.of(
+                    "+1",
+                    "01",
+                    "-0",
+                    "9223372036854775808",
+                    "-9223372036854775809"
+            )) {
+                assertHashtableMemberLifecycle(allocator, member);
+            }
+        }
+    }
+
+    @Test
     public void nativeSetStreamsHashtableMembersThroughNativeBytesSlice() {
         try (TestBackend runtime = TestBackend.open("set-stream-test");
              StableMemoryBackend allocator = runtime.backend()) {
@@ -82,6 +125,20 @@ public class SetValueTest {
 
     private static byte[] b(String value) {
         return value.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static void assertHashtableMemberLifecycle(StableMemoryBackend allocator, String member) {
+        SetValue set = new SetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
+        try {
+            byte[] bytes = b(member);
+            Assert.assertEquals(1, set.addAll(List.of(bytes)));
+            Assert.assertEquals(ValueEncoding.SET_HT, set.encoding());
+            Assert.assertTrue(set.contains(bytes));
+            Assert.assertEquals(1, set.removeAll(List.of(bytes)));
+            Assert.assertFalse(set.contains(bytes));
+        } finally {
+            set.close();
+        }
     }
 
     private static Object nativeMapValueSlots(Object owner, String mapFieldName) throws ReflectiveOperationException {
