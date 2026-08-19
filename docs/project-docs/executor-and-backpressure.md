@@ -26,8 +26,8 @@ Netty 侧还有 `NettyExecutionRequestIngress` 和 `YierdisServerChannelInitiali
 
 ```text
 RespRequestDecoder
-  -> ByteArrayExecutionRequest
-  -> RegisteredRespMessage(request, replySlot)
+  -> RespDecodedMessage.Request(ByteArrayExecutionRequest)
+  -> RegisteredRespMessage(decodedMessage, replySlot)
   -> NettyExecutionRequestIngress
   -> CommandExecutor.tryAcquire(connection, retainedBytes)
   -> ExecutorAdmission.publish(request, replySlot)

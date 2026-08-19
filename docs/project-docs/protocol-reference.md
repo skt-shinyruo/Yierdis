@@ -16,7 +16,7 @@ Netty ByteBuf
   -> CommandDispatcher.prepare(session, request)
 ```
 
-`RespRequestDecoder` 只处理 RESP / inline 字节、协议上限、ingress admission 和协议错误；它直接产出传输无关的 `ExecutionRequest`。因此同一个命令实现不需要知道请求来自 RESP array 还是 inline command，也不需要自己拼 RESP 回包。
+`RespRequestDecoder` 只处理 RESP / inline 字节、协议上限、ingress admission 和协议错误；它把结果封闭为 `RespDecodedMessage.Request` 或 `RespProtocolError`。reply admission 注册槽位后，execution ingress 才从 request 变体中取得传输无关的 `ExecutionRequest`。因此同一个命令实现不需要知道请求来自 RESP array 还是 inline command，也不需要自己拼 RESP 回包。
 
 ## RESP2 请求
 
@@ -117,7 +117,7 @@ RESP3 下，已有专属形态的语义会换成 RESP3 编码：
 
 ## 协议错误和断连
 
-malformed RESP 没有可靠的重同步点。Yierdis 的策略是：尽量返回 RESP error reply，然后关闭当前连接。实现上，`RespRequestDecoder` 把 `RespProtocolError` 放入 `RegisteredRespMessage`，`NettyExecutionRequestIngress` 使用对应 `ReplySlot` 和当前 session 的 RESP 版本写入 control error，并把该 slot 标记为 terminal；sequencer flush 后断开连接。
+malformed RESP 没有可靠的重同步点。Yierdis 的策略是：尽量返回 RESP error reply，然后关闭当前连接。实现上，`RespRequestDecoder` 产出 `RespProtocolError` 变体，reply admission 把它与已注册槽位一起放入 `RegisteredRespMessage`；`NettyExecutionRequestIngress` 使用对应 `ReplySlot` 和当前 session 的 RESP 版本写入 control error，并把该 slot 标记为 terminal；sequencer flush 后断开连接。
 
 常见协议错误包括：
 

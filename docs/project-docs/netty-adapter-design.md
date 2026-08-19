@@ -17,7 +17,8 @@ ByteBuf fragments
   -> AccountedRespCumulator
   -> RespRequestDecoder
   -> retained heap argv + RequestMemoryLease
-  -> ExecutionRequest
+  -> RespDecodedMessage.Request(ExecutionRequest) / RespProtocolError
+  -> reply admission / RegisteredRespMessage
   -> CommandExecutor / CommandDispatcher
 ```
 

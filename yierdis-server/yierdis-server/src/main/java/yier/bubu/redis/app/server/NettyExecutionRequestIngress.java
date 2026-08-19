@@ -12,6 +12,7 @@ import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.ExecutorAdmissionAttempt;
 import yier.bubu.redis.protocol.resp.netty.InboundReadCreditHandler;
+import yier.bubu.redis.protocol.resp.netty.RespDecodedMessage;
 import yier.bubu.redis.protocol.resp.netty.RespProtocolError;
 
 import java.io.IOException;
@@ -41,8 +42,8 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
             handleRegistered(ctx, registered);
             return;
         }
-        if (msg instanceof ExecutionRequest request) {
-            closeRequest(request);
+        if (msg instanceof RespDecodedMessage decoded) {
+            closeDecoded(decoded);
             ctx.close();
             return;
         }
@@ -50,43 +51,41 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
     }
 
     private void handleRegistered(ChannelHandlerContext ctx, RegisteredRespMessage registered) {
-        NettyExecutionConnection connection = requireConnection(ctx);
-        Object message;
+        NettyExecutionConnection connection;
+        RespDecodedMessage message;
         try {
+            connection = requireConnection(ctx);
             message = registered.takeMessage();
         } catch (Throwable ignored) {
             registered.close();
             return;
         }
 
-        if (message instanceof ExecutionRequest request) {
-            PendingSubmission submission = new PendingSubmission(request, registered.slot());
-            if (!pendingSubmissions.isEmpty()) {
-                pendingSubmissions.addLast(submission);
-                pauseExecutorInput(ctx);
-                return;
-            }
-            submitOrDefer(ctx, connection, submission);
-            return;
-        }
-
-        if (message instanceof RespProtocolError error) {
-            cancelCapacityWait();
-            completePendingSubmissionsWithError(connection);
-            try {
-                if (connection.markClosing()) {
-                    safeDisableAutoRead(ctx);
+        switch (message) {
+            case RespDecodedMessage.Request decodedRequest -> {
+                PendingSubmission submission = new PendingSubmission(decodedRequest.request(), registered.slot());
+                if (!pendingSubmissions.isEmpty()) {
+                    pendingSubmissions.addLast(submission);
+                    pauseExecutorInput(ctx);
+                    return;
                 }
-                RedisReplyWriter writer = replyWriterFactory.apply(connection.session(), registered.slot().sink());
-                writer.controlError(error.message());
-                registered.slot().markReady(true);
-            } catch (Throwable ignored) {
-                registered.slot().cancel();
+                submitOrDefer(ctx, connection, submission);
             }
-            return;
+            case RespProtocolError error -> {
+                cancelCapacityWait();
+                completePendingSubmissionsWithError(connection);
+                try {
+                    if (connection.markClosing()) {
+                        safeDisableAutoRead(ctx);
+                    }
+                    RedisReplyWriter writer = replyWriterFactory.apply(connection.session(), registered.slot().sink());
+                    writer.controlError(error.message());
+                    registered.slot().markReady(true);
+                } catch (Throwable ignored) {
+                    registered.slot().cancel();
+                }
+            }
         }
-
-        registered.slot().cancel();
     }
 
     @Override
@@ -342,6 +341,14 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
             request.close();
         } catch (Throwable ignored) {
             // 拒绝路径仍需释放 slot，不能因请求清理异常中断。
+        }
+    }
+
+    private static void closeDecoded(RespDecodedMessage decoded) {
+        try {
+            decoded.close();
+        } catch (Throwable ignored) {
+            // 非法的裸解码消息仍需继续关闭连接。
         }
     }
 

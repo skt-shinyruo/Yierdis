@@ -1,25 +1,24 @@
 package yier.bubu.redis.app.server;
 
-import io.netty.util.ReferenceCountUtil;
+import yier.bubu.redis.protocol.resp.netty.RespDecodedMessage;
 
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * RESP 解码结果与其已注册回复槽位的所有权绑定。
  */
 final class RegisteredRespMessage implements AutoCloseable {
-    private final Object message;
+    private final RespDecodedMessage message;
     private final ReplySlot slot;
-    private final AtomicBoolean closed = new AtomicBoolean();
-    private final AtomicBoolean messageTransferred = new AtomicBoolean();
+    private boolean closed;
+    private boolean messageTransferred;
 
-    RegisteredRespMessage(Object message, ReplySlot slot) {
+    RegisteredRespMessage(RespDecodedMessage message, ReplySlot slot) {
         this.message = Objects.requireNonNull(message, "message");
         this.slot = Objects.requireNonNull(slot, "slot");
     }
 
-    Object message() {
+    RespDecodedMessage message() {
         return message;
     }
 
@@ -27,33 +26,32 @@ final class RegisteredRespMessage implements AutoCloseable {
         return slot;
     }
 
-    Object takeMessage() {
-        if (!messageTransferred.compareAndSet(false, true)) {
-            throw new IllegalStateException("registered RESP message was already transferred");
+    synchronized RespDecodedMessage takeMessage() {
+        if (closed || messageTransferred) {
+            throw new IllegalStateException("registered RESP message is no longer available");
         }
+        messageTransferred = true;
         return message;
     }
 
     @Override
     public void close() {
-        if (!closed.compareAndSet(false, true)) {
-            return;
-        }
-        if (!messageTransferred.get()) {
-            closeMessage(message);
-        }
-        slot.cancel();
-    }
-
-    private static void closeMessage(Object message) {
-        if (message instanceof AutoCloseable closeable) {
-            try {
-                closeable.close();
-            } catch (Exception ignored) {
-                // 释放解码输入失败时仍需继续取消槽位额度。
+        boolean closeMessage;
+        synchronized (this) {
+            if (closed) {
+                return;
             }
-            return;
+            closed = true;
+            closeMessage = !messageTransferred;
         }
-        ReferenceCountUtil.release(message);
+        try {
+            if (closeMessage) {
+                message.close();
+            }
+        } catch (Throwable ignored) {
+            // 请求清理失败时仍需取消 reply slot，避免保留额度。
+        } finally {
+            slot.cancel();
+        }
     }
 }

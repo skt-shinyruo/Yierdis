@@ -10,6 +10,8 @@ import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.executor.CommandExecutor;
+import yier.bubu.redis.protocol.resp.netty.RespDecodedMessage;
+import yier.bubu.redis.protocol.resp.netty.RespProtocolError;
 
 final class OrderedReplyTestFixture implements AutoCloseable {
     static final long CONTROL_BYTES = 4_096L;
@@ -68,14 +70,14 @@ final class OrderedReplyTestFixture implements AutoCloseable {
     }
 
     void write(ExecutionRequest request) {
-        channel.writeInbound(register(request));
+        channel.writeInbound(register(new RespDecodedMessage.Request(request)));
     }
 
     void writeProtocolError(String message) {
-        channel.writeInbound(register(new yier.bubu.redis.protocol.resp.netty.RespProtocolError(message)));
+        channel.writeInbound(register(new RespProtocolError(message)));
     }
 
-    RegisteredRespMessage register(Object message) {
+    RegisteredRespMessage register(RespDecodedMessage message) {
         OutboundMemoryLease lease = connectionMemory.reserve(CONTROL_BYTES, MAX_REPLY_BYTES).orElseThrow();
         ReplySlot slot = sequencer.register(lease).orElseThrow();
         return new RegisteredRespMessage(message, slot);
