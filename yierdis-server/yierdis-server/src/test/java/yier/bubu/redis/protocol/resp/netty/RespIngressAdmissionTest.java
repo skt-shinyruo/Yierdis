@@ -330,6 +330,43 @@ public class RespIngressAdmissionTest {
     }
 
     @Test
+    public void parsedInlineCommandWaitsForFinalPayloadAdmission() {
+        InboundMemoryBudget budget = new InboundMemoryBudget(2_048);
+        InboundConnectionMemory blocker = new InboundConnectionMemory(2_048, Runnable::run, () -> { });
+        InboundConnectionMemory connection = new InboundConnectionMemory(2_048, Runnable::run, () -> { });
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.RESERVED, budget.tryReserve(blocker, 1_455));
+        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                1_024, 16, 1_024, 1_024, budget, connection, RespDecodedMessageGate.PASS_THROUGH
+        );
+        EmbeddedChannel channel = new EmbeddedChannel(decoder);
+        ExecutionRequest request = null;
+        try {
+            Assert.assertFalse(channel.writeInbound(unaccountedAscii("\r\n \t\r\n")));
+            Assert.assertEquals(1_455L, budget.stats().reservedBytes());
+
+            Assert.assertFalse(channel.writeInbound(unaccountedAscii("PING\r\n")));
+            Assert.assertEquals("WAITING_FOR_INLINE", decoder.stateNameForTests());
+            Assert.assertEquals(0, decoder.allocatedArgvArraysForTests());
+            Assert.assertEquals(1, budget.stats().waitingConnections());
+
+            budget.release(blocker, 600);
+            channel.runPendingTasks();
+
+            request = readExecutionRequest(channel);
+            Assert.assertArrayEquals(asciiBytes("PING"), request.readOnlyByteArray(0));
+            Assert.assertEquals(1, decoder.allocatedArgvArraysForTests());
+        } finally {
+            if (request != null) {
+                request.close();
+            }
+            channel.finishAndReleaseAll();
+            budget.release(blocker, 855);
+        }
+
+        Assert.assertEquals(0L, budget.stats().reservedBytes());
+    }
+
+    @Test
     public void inlineCommandOverAdmissionLimitProducesTerminalMemoryError() {
         InboundMemoryBudget budget = new InboundMemoryBudget(512);
         InboundConnectionMemory connection = new InboundConnectionMemory(512, Runnable::run, () -> { });
@@ -421,6 +458,24 @@ public class RespIngressAdmissionTest {
                 1_024, 16, 1_024, 1_024, null, connection, RespDecodedMessageGate.PASS_THROUGH
         ));
         Assert.assertThrows(NullPointerException.class, () -> new RespDecodedMessage.Request(null));
+    }
+
+    @Test
+    public void blankInlineLineBypassesCommandAndAdmissionLimits() {
+        InboundMemoryBudget budget = new InboundMemoryBudget(1);
+        InboundConnectionMemory connection = new InboundConnectionMemory(1, Runnable::run, () -> { });
+        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                1_024, 16, 1_024, 4, budget, connection, RespDecodedMessageGate.PASS_THROUGH
+        );
+        EmbeddedChannel channel = new EmbeddedChannel(decoder);
+        try {
+            Assert.assertFalse(channel.writeInbound(unaccountedAscii("     \r\n")));
+            Assert.assertEquals("READ_COMMAND", decoder.stateNameForTests());
+            Assert.assertNull(channel.readInbound());
+            Assert.assertEquals(0L, budget.stats().reservedBytes());
+        } finally {
+            channel.finishAndReleaseAll();
+        }
     }
 
     @Test

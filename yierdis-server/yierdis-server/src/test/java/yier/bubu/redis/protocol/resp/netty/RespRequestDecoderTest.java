@@ -187,6 +187,31 @@ public class RespRequestDecoderTest {
     }
 
     @Test
+    public void decodesByteFragmentedInlinePipelineBeforeInvalidTrailingEscape() {
+        EmbeddedChannel channel = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024, 1024));
+        byte[] payload = bytes("\r\nSET \"a\\x20b\" 'it\\'s'\r\nECHO \"bad\\\r\nPING\r\n");
+        try {
+            for (byte value : payload) {
+                channel.writeInbound(Unpooled.wrappedBuffer(new byte[]{value}));
+            }
+
+            try (ExecutionRequest request = readExecutionRequest(channel)) {
+                Assert.assertEquals(3, request.argc());
+                Assert.assertArrayEquals(bytes("SET"), request.readOnlyByteArray(0));
+                Assert.assertArrayEquals(bytes("a b"), request.readOnlyByteArray(1));
+                Assert.assertArrayEquals(bytes("it's"), request.readOnlyByteArray(2));
+                Assert.assertEquals(10, request.retainedBytes());
+            }
+            Object error = channel.readInbound();
+            Assert.assertTrue(error instanceof RespProtocolError);
+            Assert.assertEquals("ERR Protocol error: invalid inline command", ((RespProtocolError) error).message());
+            Assert.assertNull(channel.readInbound());
+        } finally {
+            channel.finishAndReleaseAll();
+        }
+    }
+
+    @Test
     public void rejectsConfiguredArrayInlineArgumentAndLineLimits() {
         assertProtocolError(
                 new RespRequestDecoder(1024, 1, 1024, 1024),
@@ -208,6 +233,37 @@ public class RespRequestDecoderTest {
                 "PING\r\n",
                 "ERR Protocol error: invalid inline command"
         );
+    }
+
+    @Test
+    public void inlineArgumentLimitIsCheckedBeforeFinalArgvAllocation() {
+        RespRequestDecoder accepted = new RespRequestDecoder(1024, 3, 1024, 1024);
+        EmbeddedChannel acceptedChannel = new EmbeddedChannel(accepted);
+        try {
+            Assert.assertTrue(acceptedChannel.writeInbound(Unpooled.copiedBuffer(
+                    "SET key value\r\n",
+                    StandardCharsets.US_ASCII
+            )));
+            readExecutionRequest(acceptedChannel).close();
+            Assert.assertEquals(1, accepted.allocatedArgvArraysForTests());
+        } finally {
+            acceptedChannel.finishAndReleaseAll();
+        }
+
+        RespRequestDecoder rejected = new RespRequestDecoder(1024, 2, 1024, 1024);
+        EmbeddedChannel rejectedChannel = new EmbeddedChannel(rejected);
+        try {
+            Assert.assertTrue(rejectedChannel.writeInbound(Unpooled.copiedBuffer(
+                    "SET key value\r\n",
+                    StandardCharsets.US_ASCII
+            )));
+            Object message = rejectedChannel.readInbound();
+            Assert.assertTrue(message instanceof RespProtocolError);
+            Assert.assertEquals("ERR Protocol error: too many arguments", ((RespProtocolError) message).message());
+            Assert.assertEquals(0, rejected.allocatedArgvArraysForTests());
+        } finally {
+            rejectedChannel.finishAndReleaseAll();
+        }
     }
 
     @Test

@@ -58,7 +58,7 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 - 双引号内 `\xHH` 十六进制字节。
 - `maxArgs` 上限，超出时报 `Protocol error: array length too large`。
 
-`parse(...)` 返回 `Decoded`，其中保存一块 decoded byte buffer，以及每个 argv 的 offset/length。`splitUtf8(...)` 是 CLI REPL 使用的便利方法，会把 Java `String` 先编码成 UTF-8，再复制出每个 argv。服务端 decoder 使用显式的 `parseUnlimited(...)`，解析后再按连接配置返回更精确的参数数量错误。
+`parseResult(...)` 返回具名的 `Parsed` 结果，其中保存已验证的输入快照、参数数量和 retained bytes；调用方完成限制与内存准入后，再通过一次性的 `takeArgs()` 物化 argv。`parse(...)`、`parseUnlimited(...)` 和 `splitUtf8(...)` 保留为 CLI 与普通调用方的便利入口。服务端 decoder 使用 `parseResult(...)`，因此语法、参数数量和 retained bytes 都来自同一套 parser 规则，同时避免在限制检查前分配完整请求载荷。
 
 CLI 和 server 共用同一套 inline 语法，但边界不同：CLI 侧更偏人手输入和单机验证，服务端侧更偏协议适配和错误关闭。两边都不把 inline 解析当成 RESP array 的替代品，只是为了给手工调试、`redis-cli` 风格输入和基础兼容留一条可控路径。
 
