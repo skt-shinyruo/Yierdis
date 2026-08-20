@@ -16,17 +16,19 @@ import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMetrics;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkResult;
+import yier.bubu.redis.storage.memory.internal.hash.OpenAddressingTopology;
+import yier.bubu.redis.storage.memory.internal.hash.OpenAddressingTopology.Location;
+import yier.bubu.redis.storage.memory.internal.hash.OpenAddressingTopology.ProbeResult;
+import yier.bubu.redis.storage.memory.internal.hash.OpenAddressingTopology.SlotState;
+import yier.bubu.redis.storage.memory.internal.hash.OpenAddressingTopology.TableSide;
 import yier.bubu.redis.storage.memory.internal.hash.SipHash24;
 import yier.bubu.redis.storage.memory.internal.key.AllocatorKeyHandle;
 
 public final class NativeKeyDirectory implements AutoCloseable, HashTableMaintenanceRegistry.Participant {
-    private static final byte STATE_EMPTY = 0;
-    private static final byte STATE_FILLED = 1;
-    private static final byte STATE_TOMBSTONE = 2;
-    private static final byte STATE_MIGRATED_SCAN_SHADOW = 3;
     private static final long ARRAY_HEADER_BYTES = 16L;
-    private static final long HANDLE_BYTES = Long.BYTES * 2L;
+    private static final long REFERENCE_BYTES = 8L;
     private static final long TABLE_OBJECT_BYTES = 48L;
+    private static final long REPLACEMENT_OBJECT_BYTES = 32L;
     private static final long DETACHED_ENTRIES_OBJECT_BYTES = 64L;
     private static final HashTableWorkBudget WRITE_REHASH_BUDGET = HashTableWorkBudget.of(2L, Long.MAX_VALUE);
 
@@ -34,13 +36,9 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
     private final HashSeed hashSeed;
     private final HashTableMaintenanceRegistry maintenanceRegistry;
     private final HashTableMaintenanceRegistry.Registration maintenanceRegistration;
+    private final OpenAddressingTopology topology;
     private Table active;
     private Table old;
-    private int rehashCursor;
-    private int size;
-    private long generation;
-    private long completedRehashes;
-    private int maximumProbeLength;
     private boolean maintenanceDebt;
     private DetachedEntries detachedHead;
     private DetachedEntries detachedTail;
@@ -57,11 +55,12 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         this.hashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
         this.maintenanceRegistry = maintenanceRegistry;
         this.maintenanceRegistration = maintenanceRegistry == null ? null : maintenanceRegistry.registration(this);
+        this.topology = new OpenAddressingTopology(HashCapacityPolicy.MIN_CAPACITY);
         this.active = new Table(HashCapacityPolicy.MIN_CAPACITY);
     }
 
     public synchronized int size() {
-        return size;
+        return topology.metrics().size();
     }
 
     public synchronized long nativeBytes() {
@@ -71,50 +70,43 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
 
     public synchronized long heapBytes() {
         ensureOpen();
-        return active.heapBytes + (old == null ? 0L : old.heapBytes) + detachedHeapBytes;
+        return active.heapBytes
+                + (old == null ? 0L : old.heapBytes)
+                + topology.heapEstimatedBytes()
+                + detachedHeapBytes;
     }
 
     public synchronized long estimatedInsertHeapGrowthBytes() {
         ensureOpen();
-        if (old != null) {
+        HashTableMetrics metrics = topology.metrics();
+        if (metrics.rehashing()) {
             return 0L;
         }
-        int projectedFilled = Math.min(active.capacity, active.filled + 1);
-        int projectedSize = active.size + 1;
+        int projectedFilled = Math.min(metrics.capacity(), metrics.filledSlots() + 1);
+        int projectedSize = metrics.size() + 1;
         int projectedTombstones = projectedFilled - projectedSize;
         if (projectedTombstones < 0) {
             return 0L;
         }
         HashCapacityPolicy.Decision decision = HashCapacityPolicy.nextAction(
-                active.capacity,
+                metrics.capacity(),
                 projectedSize,
                 projectedFilled,
                 projectedTombstones
         );
         return decision.action() == HashCapacityPolicy.Action.NONE
                 ? 0L
-                : heapBytesForCapacity(decision.targetCapacity());
+                : stagedReplacementHeapBytesForCapacity(decision.targetCapacity());
     }
 
     public synchronized HashTableMetrics metrics() {
         ensureOpen();
-        return new HashTableMetrics(
-                active.capacity,
-                size,
-                active.filled,
-                active.tombstones,
-                old != null,
-                old == null ? 0 : old.capacity,
-                old == null ? 0 : rehashCursor,
-                generation,
-                completedRehashes,
-                maximumProbeLength
-        );
+        return topology.metrics();
     }
 
     public synchronized long tableGeneration() {
         ensureOpen();
-        return generation;
+        return topology.metrics().generation();
     }
 
     @Override
@@ -125,7 +117,7 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
 
     public synchronized StagedResize stageMaintenanceResize() {
         ensureOpen();
-        if (old != null) {
+        if (topology.metrics().rehashing()) {
             return null;
         }
         HashCapacityPolicy.Decision decision = maintenanceDecision();
@@ -134,19 +126,19 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
             refreshMaintenanceRegistration();
             return null;
         }
-        return new StagedResize(active, new Table(decision.targetCapacity()));
+        return new StagedResize(active, emptyReplacement(decision.targetCapacity()));
     }
 
     @Override
     public synchronized long estimatedMaintenanceGrowthBytes() {
         ensureOpen();
-        if (old != null) {
+        if (topology.metrics().rehashing()) {
             return 0L;
         }
         HashCapacityPolicy.Decision decision = maintenanceDecision();
         return decision.action() == HashCapacityPolicy.Action.NONE
                 ? 0L
-                : heapBytesForCapacity(decision.targetCapacity());
+                : stagedReplacementHeapBytesForCapacity(decision.targetCapacity());
     }
 
     @Override
@@ -192,7 +184,7 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         Objects.requireNonNull(staged, "staged");
         ensureOpen();
         staged.ensureActive();
-        if (old != null || active != staged.source) {
+        if (topology.metrics().rehashing() || active != staged.source) {
             throw new IllegalStateException("staged key-directory resize is no longer current");
         }
         publishStagedDirectory(staged.publish());
@@ -202,75 +194,53 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
     public synchronized HashTableWorkResult advanceRehash(HashTableWorkBudget budget) {
         Objects.requireNonNull(budget, "budget");
         ensureOpen();
-        if (old == null) {
+        if (!topology.metrics().rehashing()) {
             return new HashTableWorkResult(0L, 0L, true, HashTableWorkResult.StopReason.NOT_REHASHING);
         }
-
-        long inspected = 0L;
-        long migrated = 0L;
-        long startedAt = System.nanoTime();
-        while (rehashCursor < old.capacity) {
-            if (inspected >= budget.maxInspectedSlots()) {
-                return new HashTableWorkResult(inspected, migrated, false, HashTableWorkResult.StopReason.SLOT_LIMIT);
-            }
-            if (timeLimitReached(startedAt, budget.timeLimitNanos())) {
-                return new HashTableWorkResult(inspected, migrated, false, HashTableWorkResult.StopReason.TIME_LIMIT);
-            }
-
-            int index = rehashCursor++;
-            inspected++;
-            if (old.states[index] == STATE_FILLED) {
-                moveOldSlotToActive(index);
-                migrated++;
-            }
+        HashTableWorkResult result = topology.advanceRehash(budget, (sourceIndex, targetIndex) -> {
+            NativeHandle keyHandle = old.keyHandles[sourceIndex];
+            active.keyHandles[targetIndex] = keyHandle;
+            active.entryHandles[targetIndex] = old.entryHandles[sourceIndex];
+            // old shadow 只保留 key 用于 scan 定位；清空 entry 后，detach 可按 ownership marker 精确回收一次。
+            old.entryHandles[sourceIndex] = null;
+        });
+        if (result.rehashComplete()) {
+            old = null;
+            recordMaintenanceDebt();
         }
-
-        old = null;
-        rehashCursor = 0;
-        completedRehashes++;
-        generation++;
-        recordMaintenanceDebt();
-        return new HashTableWorkResult(inspected, migrated, true, HashTableWorkResult.StopReason.COMPLETE);
+        return result;
     }
 
     public synchronized EntryHandle get(byte[] keyBytes) {
         Objects.requireNonNull(keyBytes, "keyBytes");
         ensureOpen();
         int hash = hash(keyBytes);
-        int index = findIndex(active, keyBytes, hash);
-        if (index >= 0) {
-            return entryHandleAt(active, index);
-        }
-        index = findIndex(old, keyBytes, hash);
-        return index < 0 ? null : entryHandleAt(old, index);
+        ProbeResult probe = probe(keyBytes, hash);
+        return probe.found() ? entryHandleAt(table(probe.location().table()), probe.location().slot()) : null;
     }
 
     public synchronized AllocatorKeyHandle getKeyHandle(byte[] keyBytes) {
         Objects.requireNonNull(keyBytes, "keyBytes");
         ensureOpen();
         int hash = hash(keyBytes);
-        int index = findIndex(active, keyBytes, hash);
-        if (index >= 0) {
-            return keyHandleAt(active, index);
-        }
-        index = findIndex(old, keyBytes, hash);
-        return index < 0 ? null : keyHandleAt(old, index);
+        ProbeResult probe = probe(keyBytes, hash);
+        return probe.found() ? keyHandleAt(probe.location()) : null;
     }
 
     public synchronized AllocatorKeyHandle randomKeyHandle() {
         ensureOpen();
-        if (size == 0) {
+        if (topology.metrics().size() == 0) {
             return null;
         }
-        AllocatorKeyHandle fromActive = randomKeyHandle(active);
-        return fromActive != null ? fromActive : randomKeyHandle(old);
+        AllocatorKeyHandle fromActive = randomKeyHandle(active, TableSide.ACTIVE);
+        return fromActive != null ? fromActive : randomKeyHandle(old, TableSide.OLD);
     }
 
     public synchronized void forEachEntry(EntryConsumer consumer) {
         Objects.requireNonNull(consumer, "consumer");
         ensureOpen();
-        forEachEntry(active, consumer);
-        forEachEntry(old, consumer);
+        forEachEntry(active, TableSide.ACTIVE, consumer);
+        forEachEntry(old, TableSide.OLD, consumer);
     }
 
     public synchronized ScanCursorV2 scan(ScanCursorV2 cursor, int maxSteps, ScanConsumer consumer) {
@@ -286,8 +256,8 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         }
 
         ScanCursorV2 start = normalizeScanCursor(cursor);
-        if (size == 0) {
-            return new ScanResult(start, ScanCursorV2.start(), 0L, generation);
+        if (topology.metrics().size() == 0) {
+            return new ScanResult(start, ScanCursorV2.start(), 0L, topology.metrics().generation());
         }
 
         int phase = start.phase();
@@ -301,26 +271,24 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
                     position = 0L;
                     continue;
                 }
-                return new ScanResult(start, ScanCursorV2.start(), inspected, generation);
+                return new ScanResult(start, ScanCursorV2.start(), inspected, topology.metrics().generation());
             }
 
             if (inspected >= maxSteps) {
-                return new ScanResult(start, cursorFor(phase, position), inspected, generation);
+                return new ScanResult(start, cursorFor(phase, position), inspected, topology.metrics().generation());
             }
 
             int index = (int) position;
             position++;
             inspected++;
-            byte state = table.states[index];
-            boolean visible = state == STATE_FILLED || (phase == 1 && state == STATE_MIGRATED_SCAN_SHADOW);
-            if (visible && !consumer.accept(keyHandleAt(table, index), entryHandleAt(table, index))) {
+            if (!acceptScanSlot(table, phase, index, consumer)) {
                 if (position >= table.capacity) {
-                    if (phase == 0 && old != null) {
-                        return new ScanResult(start, cursorFor(1, 0L), inspected, generation);
+                    if (phase == 0 && topology.metrics().rehashing()) {
+                        return new ScanResult(start, cursorFor(1, 0L), inspected, topology.metrics().generation());
                     }
-                    return new ScanResult(start, ScanCursorV2.start(), inspected, generation);
+                    return new ScanResult(start, ScanCursorV2.start(), inspected, topology.metrics().generation());
                 }
-                return new ScanResult(start, cursorFor(phase, position), inspected, generation);
+                return new ScanResult(start, cursorFor(phase, position), inspected, topology.metrics().generation());
             }
         }
     }
@@ -332,10 +300,10 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
             ensureOpen();
             advanceRehashOnWrite();
             int hash = hash(stableKeyBytes);
-            if (findIndex(active, stableKeyBytes, hash) >= 0 || findIndex(old, stableKeyBytes, hash) >= 0) {
+            if (probe(stableKeyBytes, hash).found()) {
                 throw new IllegalStateException("native key already exists during staged insert");
             }
-            Table staged = stageDirectoryForInsert(stableKeyBytes, hash);
+            Replacement staged = stageTableForInsert(hash);
             NativeHandle keyHandle = allocateKey(stableKeyBytes);
             return new StagedInsert(stableKeyBytes, hash, keyHandle, staged);
         }
@@ -346,15 +314,15 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         Objects.requireNonNull(entryHandle, "entryHandle");
         ensureOpen();
         staged.ensureActive();
-        if (findIndex(active, staged.keyBytes, staged.hash) >= 0 || findIndex(old, staged.keyBytes, staged.hash) >= 0) {
+        if (probe(staged.keyBytes, staged.hash).found()) {
             throw new IllegalStateException("native key appeared during staged insert");
         }
-        if (staged.directory != null) {
-            publishStagedDirectory(staged.directory);
+        if (staged.replacement != null) {
+            publishStagedDirectory(staged.replacement);
         }
         recordMaintenanceDebt();
         NativeHandle keyHandle = staged.keyHandleForPublish();
-        insertActive(keyHandle, entryHandle, staged.hash, staged.keyBytes);
+        insertActive(keyHandle, entryHandle, staged.hash);
         staged.markPublished();
     }
 
@@ -363,18 +331,13 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         ensureOpen();
         advanceRehashOnWrite();
         int hash = hash(keyBytes);
-        int index = findIndex(active, keyBytes, hash);
-        if (index >= 0) {
-            EntryHandle removed = entryHandleAt(active, index);
-            removeFromActive(index);
-            return removed;
-        }
-        index = findIndex(old, keyBytes, hash);
-        if (index < 0) {
+        ProbeResult probe = probe(keyBytes, hash);
+        if (!probe.found()) {
             return null;
         }
-        EntryHandle removed = entryHandleAt(old, index);
-        removeFromOld(index);
+        Location location = probe.location();
+        EntryHandle removed = entryHandleAt(table(location.table()), location.slot());
+        remove(location, hash);
         return removed;
     }
 
@@ -384,19 +347,16 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         ensureOpen();
         advanceRehashOnWrite();
         int hash = hash(keyBytes);
-        int index = findIndex(active, keyBytes, hash);
-        if (index >= 0) {
-            if (!expectedHandle.nativeHandle().equals(active.entryHandles[index])) {
-                return false;
-            }
-            removeFromActive(index);
-            return true;
-        }
-        index = findIndex(old, keyBytes, hash);
-        if (index < 0 || !expectedHandle.nativeHandle().equals(old.entryHandles[index])) {
+        ProbeResult probe = probe(keyBytes, hash);
+        if (!probe.found()) {
             return false;
         }
-        removeFromOld(index);
+        Location location = probe.location();
+        Table table = table(location.table());
+        if (!expectedHandle.nativeHandle().equals(table.entryHandles[location.slot()])) {
+            return false;
+        }
+        remove(location, hash);
         return true;
     }
 
@@ -404,16 +364,11 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         Objects.requireNonNull(handle, "handle");
         ensureOpen();
         advanceRehashOnWrite();
-        int index = findHandleIndex(active, handle);
-        if (index >= 0) {
-            removeFromActive(index);
-            return true;
-        }
-        index = findHandleIndex(old, handle);
-        if (index < 0) {
+        Location location = findHandleLocation(handle);
+        if (location == null) {
             return false;
         }
-        removeFromOld(index);
+        remove(location, topology.hashAt(location));
         return true;
     }
 
@@ -427,8 +382,9 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
      */
     public synchronized void detachEntries() {
         ensureOpen();
-        Table replacement = new Table(HashCapacityPolicy.MIN_CAPACITY);
-        DetachedEntries detached = size == 0 ? null : new DetachedEntries(active, old, size);
+        Replacement replacement = emptyReplacement(HashCapacityPolicy.MIN_CAPACITY);
+        int currentSize = topology.metrics().size();
+        DetachedEntries detached = currentSize == 0 ? null : new DetachedEntries(active, old, currentSize);
         long nextDetachedHeapBytes = detached == null
                 ? detachedHeapBytes
                 : Math.addExact(detachedHeapBytes, detached.retainedHeapBytes);
@@ -436,13 +392,11 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
                 ? detachedEntryCount
                 : Math.addExact(detachedEntryCount, (long) detached.remainingEntries);
 
-        active = replacement;
+        topology.reset(replacement.topology);
+        active = replacement.table;
         old = null;
-        rehashCursor = 0;
-        size = 0;
         maintenanceDebt = false;
         refreshMaintenanceRegistration();
-        generation++;
 
         if (detached == null) {
             return;
@@ -473,7 +427,7 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         Throwable failure = null;
         try {
             consumer.accept(
-                    new AllocatorKeyHandle(allocator, slot.keyHandle, slot.hash),
+                    new AllocatorKeyHandle(allocator, slot.keyHandle, hash(slot.keyHandle)),
                     new EntryHandle(slot.entryHandle)
             );
         } catch (RuntimeException | Error next) {
@@ -527,7 +481,7 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
     }
 
     private void advanceRehashOnWrite() {
-        if (old != null) {
+        if (topology.metrics().rehashing()) {
             advanceRehash(WRITE_REHASH_BUDGET);
         }
     }
@@ -538,37 +492,59 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         }
     }
 
-    private AllocatorKeyHandle randomKeyHandle(Table table) {
-        if (table == null || table.size == 0) {
+    private AllocatorKeyHandle randomKeyHandle(Table table, TableSide side) {
+        if (table == null) {
             return null;
         }
         int start = ThreadLocalRandom.current().nextInt(table.capacity);
         for (int step = 0; step < table.capacity; step++) {
             int index = (start + step) & (table.capacity - 1);
-            if (table.states[index] == STATE_FILLED) {
-                return keyHandleAt(table, index);
+            if (topology.slotState(side, index) == SlotState.FILLED) {
+                return keyHandleAt(new Location(side, index));
             }
         }
         return null;
     }
 
-    private void forEachEntry(Table table, EntryConsumer consumer) {
+    private void forEachEntry(Table table, TableSide side, EntryConsumer consumer) {
         if (table == null) {
             return;
         }
         for (int i = 0; i < table.capacity; i++) {
-            if (table.states[i] == STATE_FILLED) {
-                consumer.accept(keyHandleAt(table, i), entryHandleAt(table, i));
+            if (topology.slotState(side, i) == SlotState.FILLED) {
+                consumer.accept(keyHandleAt(new Location(side, i)), entryHandleAt(table, i));
             }
         }
     }
 
-    private AllocatorKeyHandle keyHandleAt(Table table, int index) {
-        return new AllocatorKeyHandle(allocator, table.keyHandles[index], table.hashes[index]);
+    private AllocatorKeyHandle keyHandleAt(Location location) {
+        return new AllocatorKeyHandle(
+                allocator,
+                table(location.table()).keyHandles[location.slot()],
+                topology.hashAt(location)
+        );
     }
 
     private static EntryHandle entryHandleAt(Table table, int index) {
         return new EntryHandle(table.entryHandles[index]);
+    }
+
+    private boolean acceptScanSlot(Table table, int phase, int index, ScanConsumer consumer) {
+        TableSide side = phase == 0 ? TableSide.ACTIVE : TableSide.OLD;
+        SlotState state = topology.slotState(side, index);
+        if (state == SlotState.FILLED) {
+            return consumer.accept(keyHandleAt(new Location(side, index)), entryHandleAt(table, index));
+        }
+        if (phase != 1 || state != SlotState.MIGRATED_SCAN_SHADOW) {
+            return true;
+        }
+        NativeHandle keyHandle = table.keyHandles[index];
+        ProbeResult probe = probeStoredKey(keyHandle, topology.hashAt(new Location(TableSide.OLD, index)));
+        return !probe.found()
+                || consumer.accept(
+                        keyHandleAt(probe.location()),
+                        entryHandleAt(table(probe.location().table()), probe.location().slot())
+                );
     }
 
     private ScanCursorV2 normalizeScanCursor(ScanCursorV2 cursor) {
@@ -577,7 +553,7 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         if (cursor.value() == 0L || cursor.generation() != currentGeneration) {
             return ScanCursorV2.of(currentGeneration, 0, 0L);
         }
-        if (cursor.phase() == 1 && old == null) {
+        if (cursor.phase() == 1 && !topology.metrics().rehashing()) {
             return ScanCursorV2.of(currentGeneration, 0, 0L);
         }
         return cursor;
@@ -592,48 +568,45 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
     }
 
     private int wireGeneration() {
-        return (int) (generation & 0x1fff_ffffL);
+        return (int) (topology.metrics().generation() & 0x1fff_ffffL);
     }
 
     private void clearInternal() {
+        Replacement replacement = emptyReplacement(HashCapacityPolicy.MIN_CAPACITY);
         Throwable failure = null;
         try {
-            freeEntries(active);
+            freeEntries(active, TableSide.ACTIVE);
         } catch (RuntimeException | Error e) {
             failure = e;
         }
         try {
-            freeEntries(old);
+            freeEntries(old, TableSide.OLD);
         } catch (RuntimeException | Error e) {
             failure = addFailure(failure, e);
         }
-        active = new Table(HashCapacityPolicy.MIN_CAPACITY);
+        topology.reset(replacement.topology);
+        active = replacement.table;
         old = null;
-        rehashCursor = 0;
-        size = 0;
         maintenanceDebt = false;
         refreshMaintenanceRegistration();
-        generation++;
         if (failure != null) {
             rethrow(failure);
         }
     }
 
-    private void freeEntries(Table table) {
+    private void freeEntries(Table table, TableSide side) {
         if (table == null) {
             return;
         }
         Throwable failure = null;
         for (int i = 0; i < table.capacity; i++) {
-            if (table.states[i] != STATE_FILLED) {
+            if (topology.slotState(side, i) != SlotState.FILLED) {
                 continue;
             }
             try {
                 allocator.free(table.keyHandles[i]);
                 table.keyHandles[i] = null;
                 table.entryHandles[i] = null;
-                table.hashes[i] = 0;
-                table.states[i] = STATE_EMPTY;
             } catch (RuntimeException | Error e) {
                 failure = addFailure(failure, e);
             }
@@ -643,130 +616,86 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         }
     }
 
-    private Table stageDirectoryForInsert(byte[] keyBytes, int hash) {
-        if (old != null) {
+    private Replacement stageTableForInsert(int hash) {
+        if (topology.metrics().rehashing()) {
             return null;
         }
-        int insertIndex = findInsertIndex(active, keyBytes, hash);
-        byte previousState = active.states[insertIndex];
-        if (previousState == STATE_FILLED) {
-            throw new IllegalStateException("native key already exists during staged insert");
-        }
-        int projectedSize = active.size + 1;
-        int projectedFilled = active.filled + (previousState == STATE_EMPTY ? 1 : 0);
-        int projectedTombstones = active.tombstones - (previousState == STATE_TOMBSTONE ? 1 : 0);
+        HashTableMetrics metrics = topology.metrics();
+        int insertionIndex = topology.probe(hash, ignored -> false).location().slot();
+        SlotState previousState = topology.slotState(TableSide.ACTIVE, insertionIndex);
+        int projectedSize = metrics.size() + 1;
+        int projectedFilled = metrics.filledSlots() + (previousState == SlotState.EMPTY ? 1 : 0);
+        int projectedTombstones = metrics.tombstones() - (previousState == SlotState.TOMBSTONE ? 1 : 0);
         HashCapacityPolicy.Decision decision = HashCapacityPolicy.nextAction(
-                active.capacity,
+                metrics.capacity(),
                 projectedSize,
                 projectedFilled,
                 projectedTombstones
         );
-        return decision.action() == HashCapacityPolicy.Action.NONE ? null : new Table(decision.targetCapacity());
+        return decision.action() == HashCapacityPolicy.Action.NONE
+                ? null
+                : emptyReplacement(decision.targetCapacity());
     }
 
-    private void publishStagedDirectory(Table staged) {
-        if (old != null) {
+    private Replacement emptyReplacement(int capacity) {
+        return new Replacement(new Table(capacity), new OpenAddressingTopology(capacity));
+    }
+
+    private void publishStagedDirectory(Replacement staged) {
+        if (topology.metrics().rehashing()) {
             throw new IllegalStateException("cannot start a second key-directory rehash");
         }
-        old = active;
-        active = Objects.requireNonNull(staged, "staged");
-        rehashCursor = 0;
+        Replacement replacement = Objects.requireNonNull(staged, "staged");
+        Table previous = active;
+        topology.beginRehash(replacement.topology);
+        old = previous;
+        active = replacement.table;
         maintenanceDebt = true;
         refreshMaintenanceRegistration();
-        generation++;
     }
 
-    private void insertActive(NativeHandle keyHandle, EntryHandle entryHandle, int hash, byte[] keyBytes) {
-        int index = findInsertIndex(active, keyBytes, hash);
-        if (active.states[index] == STATE_FILLED) {
+    private void insertActive(NativeHandle keyHandle, EntryHandle entryHandle, int hash) {
+        ProbeResult probe = topology.probe(hash, ignored -> false);
+        if (probe.found()) {
             throw new IllegalStateException("native key appeared during insert");
         }
+        int index = probe.location().slot();
         Objects.requireNonNull(entryHandle, "entryHandle");
-        writeFilled(active, index, keyHandle, entryHandle.nativeHandle(), hash);
-        size++;
+        active.keyHandles[index] = Objects.requireNonNull(keyHandle, "keyHandle");
+        active.entryHandles[index] = entryHandle.nativeHandle();
+        topology.occupyActive(index, hash);
     }
 
-    private void moveOldSlotToActive(int oldIndex) {
-        if (old == null || old.states[oldIndex] != STATE_FILLED) {
-            return;
+    private void remove(Location location, int hash) {
+        Table table = table(location.table());
+        int index = location.slot();
+        NativeHandle keyHandle = table.keyHandles[index];
+        if (location.table() == TableSide.ACTIVE) {
+            invalidateOldShadow(keyHandle, hash);
         }
-        NativeHandle keyHandle = old.keyHandles[oldIndex];
-        NativeHandle entryHandle = old.entryHandles[oldIndex];
-        int hash = old.hashes[oldIndex];
-        int activeIndex = findInsertionIndex(active, hash);
-        if (active.states[activeIndex] == STATE_FILLED) {
-            throw new IllegalStateException("duplicate native key while rehashing key directory");
-        }
-        writeFilled(active, activeIndex, keyHandle, entryHandle, hash);
-        old.states[oldIndex] = STATE_MIGRATED_SCAN_SHADOW;
-        old.size--;
-        old.filled--;
-    }
-
-    private void writeFilled(
-            Table table,
-            int index,
-            NativeHandle keyHandle,
-            NativeHandle entryHandle,
-            int hash
-    ) {
-        byte previous = table.states[index];
-        if (previous == STATE_EMPTY) {
-            table.filled++;
-        } else if (previous == STATE_TOMBSTONE) {
-            table.tombstones--;
-        } else {
-            throw new IllegalStateException("attempted to overwrite a live hash-table slot");
-        }
-        table.keyHandles[index] = Objects.requireNonNull(keyHandle, "keyHandle");
-        table.entryHandles[index] = Objects.requireNonNull(entryHandle, "entryHandle");
-        table.hashes[index] = hash;
-        table.states[index] = STATE_FILLED;
-        table.size++;
-    }
-
-    private void removeFromActive(int index) {
-        NativeHandle keyHandle = active.keyHandles[index];
-        int hash = active.hashes[index];
-        invalidateOldShadow(keyHandle, hash);
-        removeFromTable(active, index);
-    }
-
-    private void removeFromOld(int index) {
-        removeFromTable(old, index);
-    }
-
-    private void removeFromTable(Table table, int index) {
-        if (table == null || table.states[index] != STATE_FILLED) {
-            return;
-        }
-        allocator.free(table.keyHandles[index]);
+        allocator.free(keyHandle);
         table.keyHandles[index] = null;
         table.entryHandles[index] = null;
-        table.hashes[index] = 0;
-        table.states[index] = STATE_TOMBSTONE;
-        table.size--;
-        table.tombstones++;
-        size--;
+        topology.remove(location);
         recordMaintenanceDebt();
     }
 
     private HashCapacityPolicy.Decision maintenanceDecision() {
+        HashTableMetrics metrics = topology.metrics();
         return HashCapacityPolicy.nextAction(
-                active.capacity,
-                active.size,
-                active.filled,
-                active.tombstones
+                metrics.capacity(),
+                metrics.size(),
+                metrics.filledSlots(),
+                metrics.tombstones()
         );
     }
 
     private void recordMaintenanceDebt() {
-        if (old != null) {
+        if (topology.metrics().rehashing()) {
             maintenanceDebt = true;
-            refreshMaintenanceRegistration();
-            return;
+        } else {
+            maintenanceDebt = maintenanceDecision().action() != HashCapacityPolicy.Action.NONE;
         }
-        maintenanceDebt = maintenanceDecision().action() != HashCapacityPolicy.Action.NONE;
         refreshMaintenanceRegistration();
     }
 
@@ -774,7 +703,7 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         if (maintenanceRegistration == null) {
             return;
         }
-        if (maintenanceDebt || old != null) {
+        if (maintenanceDebt || topology.metrics().rehashing()) {
             if (!maintenanceRegistration.registered()) {
                 maintenanceRegistry.register(maintenanceRegistration);
             }
@@ -787,119 +716,58 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         if (old == null) {
             return;
         }
-        int mask = old.capacity - 1;
-        int index = hash & mask;
-        for (int probes = 0; probes < old.capacity; probes++) {
-            byte state = old.states[index];
-            if (state == STATE_EMPTY) {
-                return;
-            }
-            if (state == STATE_MIGRATED_SCAN_SHADOW
-                    && old.hashes[index] == hash
-                    && keyHandle.equals(old.keyHandles[index])) {
-                old.keyHandles[index] = null;
-                old.entryHandles[index] = null;
-                old.hashes[index] = 0;
-                old.states[index] = STATE_TOMBSTONE;
-                old.filled++;
-                old.tombstones++;
-                return;
-            }
-            index = (index + 1) & mask;
+        int index = topology.invalidateOldShadow(
+                hash,
+                location -> keyHandle.equals(old.keyHandles[location.slot()])
+        );
+        if (index >= 0) {
+            old.keyHandles[index] = null;
+            old.entryHandles[index] = null;
         }
     }
 
-    private int findIndex(Table table, byte[] keyBytes, int hash) {
-        if (table == null) {
-            return -1;
-        }
-        int mask = table.capacity - 1;
-        int index = hash & mask;
-        for (int probes = 1; probes <= table.capacity; probes++) {
-            recordProbe(probes);
-            byte state = table.states[index];
-            if (state == STATE_EMPTY) {
-                return -1;
-            }
-            if (state == STATE_FILLED
-                    && table.hashes[index] == hash
-                    && equalsBytes(table.keyHandles[index], keyBytes)) {
-                return index;
-            }
-            index = (index + 1) & mask;
-        }
-        return -1;
+    private ProbeResult probe(byte[] keyBytes, int hash) {
+        return topology.probe(
+                hash,
+                location -> equalsBytes(table(location.table()).keyHandles[location.slot()], keyBytes)
+        );
     }
 
-    private int findHandleIndex(Table table, EntryHandle handle) {
-        if (table == null) {
-            return -1;
-        }
-        for (int i = 0; i < table.capacity; i++) {
-            if (table.states[i] == STATE_FILLED
-                    && handle.nativeHandle().equals(table.entryHandles[i])) {
-                return i;
-            }
-        }
-        return -1;
+    private ProbeResult probeStoredKey(NativeHandle keyHandle, int hash) {
+        return topology.probe(
+                hash,
+                location -> keyHandle.equals(table(location.table()).keyHandles[location.slot()])
+        );
     }
 
-    private int findInsertIndex(Table table, byte[] keyBytes, int hash) {
-        int mask = table.capacity - 1;
-        int index = hash & mask;
-        int firstTombstone = -1;
-        for (int probes = 1; probes <= table.capacity; probes++) {
-            recordProbe(probes);
-            byte state = table.states[index];
-            if (state == STATE_EMPTY) {
-                return firstTombstone >= 0 ? firstTombstone : index;
+    private Location findHandleLocation(EntryHandle handle) {
+        for (TableSide side : TableSide.values()) {
+            Table table = table(side);
+            if (table == null) {
+                continue;
             }
-            if (state == STATE_TOMBSTONE) {
-                if (firstTombstone < 0) {
-                    firstTombstone = index;
+            for (int slot = 0; slot < table.capacity; slot++) {
+                if (topology.slotState(side, slot) == SlotState.FILLED
+                        && handle.nativeHandle().equals(table.entryHandles[slot])) {
+                    return new Location(side, slot);
                 }
-            } else if (state == STATE_FILLED
-                    && table.hashes[index] == hash
-                    && equalsBytes(table.keyHandles[index], keyBytes)) {
-                return index;
             }
-            index = (index + 1) & mask;
         }
-        if (firstTombstone >= 0) {
-            return firstTombstone;
-        }
-        throw new IllegalStateException("key directory has no insertable slot");
+        return null;
     }
 
-    private int findInsertionIndex(Table table, int hash) {
-        int mask = table.capacity - 1;
-        int index = hash & mask;
-        int firstTombstone = -1;
-        for (int probes = 1; probes <= table.capacity; probes++) {
-            recordProbe(probes);
-            byte state = table.states[index];
-            if (state == STATE_EMPTY) {
-                return firstTombstone >= 0 ? firstTombstone : index;
-            }
-            if (state == STATE_TOMBSTONE && firstTombstone < 0) {
-                firstTombstone = index;
-            }
-            index = (index + 1) & mask;
-        }
-        if (firstTombstone >= 0) {
-            return firstTombstone;
-        }
-        throw new IllegalStateException("active key directory has no insertion slot");
-    }
-
-    private void recordProbe(int probes) {
-        if (probes > maximumProbeLength) {
-            maximumProbeLength = probes;
-        }
+    private Table table(TableSide side) {
+        return side == TableSide.ACTIVE ? active : old;
     }
 
     private int hash(byte[] keyBytes) {
         return SipHash24.foldToInt(SipHash24.hash(hashSeed, keyBytes));
+    }
+
+    private int hash(NativeHandle keyHandle) {
+        try (NativeObjectView view = allocator.resolve(keyHandle, NativeAccessMode.READ_ONLY)) {
+            return SipHash24.foldToInt(SipHash24.hash(hashSeed, view));
+        }
     }
 
     private NativeHandle allocateKey(byte[] keyBytes) {
@@ -925,10 +793,6 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         }
     }
 
-    private static boolean timeLimitReached(long startedAt, long timeLimitNanos) {
-        return timeLimitNanos != Long.MAX_VALUE && System.nanoTime() - startedAt >= timeLimitNanos;
-    }
-
     private static Throwable addFailure(Throwable failure, Throwable next) {
         if (failure == null) {
             return next;
@@ -947,12 +811,19 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         throw new IllegalStateException(failure);
     }
 
-    private static long heapBytesForCapacity(int capacity) {
-        long keyHandleArray = ARRAY_HEADER_BYTES + (long) capacity * HANDLE_BYTES;
-        long entryHandleArray = ARRAY_HEADER_BYTES + (long) capacity * HANDLE_BYTES;
-        long hashArray = ARRAY_HEADER_BYTES + (long) capacity * Integer.BYTES;
-        long stateArray = ARRAY_HEADER_BYTES + capacity;
-        return TABLE_OBJECT_BYTES + keyHandleArray + entryHandleArray + hashArray + stateArray;
+    private static long payloadHeapBytesForCapacity(int capacity) {
+        long keyHandleArray = ARRAY_HEADER_BYTES + (long) capacity * REFERENCE_BYTES;
+        long entryHandleArray = ARRAY_HEADER_BYTES + (long) capacity * REFERENCE_BYTES;
+        return TABLE_OBJECT_BYTES + keyHandleArray + entryHandleArray;
+    }
+
+    private static long committedHeapBytesForCapacity(int capacity) {
+        return payloadHeapBytesForCapacity(capacity)
+                + OpenAddressingTopology.standaloneHeapEstimatedBytes(capacity);
+    }
+
+    private static long stagedReplacementHeapBytesForCapacity(int capacity) {
+        return REPLACEMENT_OBJECT_BYTES + committedHeapBytesForCapacity(capacity);
     }
 
     @FunctionalInterface
@@ -986,7 +857,7 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
             this.first = Objects.requireNonNull(first, "first");
             this.second = second;
             this.remainingEntries = remainingEntries;
-            int tableEntries = first.size + (second == null ? 0 : second.size);
+            int tableEntries = liveEntryCount(first) + liveEntryCount(second);
             if (remainingEntries <= 0 || tableEntries != remainingEntries) {
                 throw new IllegalStateException(
                         "detached key-directory size mismatch: expected=" + remainingEntries
@@ -1008,19 +879,16 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
                     continue;
                 }
                 int index = slotIndex++;
-                if (table.states[index] != STATE_FILLED) {
+                // migrated shadow 仍保留 key，但 entry 已移到 active；非空 entry 是 detached ownership marker。
+                if (table.entryHandles[index] == null) {
                     continue;
                 }
                 DetachedSlot slot = new DetachedSlot(
                         table.keyHandles[index],
-                        table.entryHandles[index],
-                        table.hashes[index]
+                        table.entryHandles[index]
                 );
                 table.keyHandles[index] = null;
                 table.entryHandles[index] = null;
-                table.hashes[index] = 0;
-                table.states[index] = STATE_EMPTY;
-                table.size--;
                 remainingEntries--;
                 return slot;
             }
@@ -1032,9 +900,22 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
             second = null;
             next = null;
         }
+
+        private static int liveEntryCount(Table table) {
+            if (table == null) {
+                return 0;
+            }
+            int count = 0;
+            for (NativeHandle entryHandle : table.entryHandles) {
+                if (entryHandle != null) {
+                    count++;
+                }
+            }
+            return count;
+        }
     }
 
-    private record DetachedSlot(NativeHandle keyHandle, NativeHandle entryHandle, int hash) {
+    private record DetachedSlot(NativeHandle keyHandle, NativeHandle entryHandle) {
         private DetachedSlot {
             Objects.requireNonNull(keyHandle, "keyHandle");
             Objects.requireNonNull(entryHandle, "entryHandle");
@@ -1043,22 +924,22 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
 
     public final class StagedResize implements AutoCloseable {
         private final Table source;
-        private Table replacement;
+        private Replacement replacement;
         private boolean terminal;
 
-        private StagedResize(Table source, Table replacement) {
+        private StagedResize(Table source, Replacement replacement) {
             this.source = Objects.requireNonNull(source, "source");
             this.replacement = Objects.requireNonNull(replacement, "replacement");
         }
 
         public long stagedHeapBytes() {
             ensureActive();
-            return replacement.heapBytes;
+            return replacement.stagedHeapBytes();
         }
 
-        private Table publish() {
+        private Replacement publish() {
             ensureActive();
-            Table published = replacement;
+            Replacement published = replacement;
             replacement = null;
             terminal = true;
             return published;
@@ -1083,18 +964,18 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
     public final class StagedInsert implements AutoCloseable {
         private final byte[] keyBytes;
         private final int hash;
-        private final Table directory;
+        private final Replacement replacement;
         private NativeHandle keyHandle;
         private boolean terminal;
 
-        private StagedInsert(byte[] keyBytes, int hash, NativeHandle keyHandle, Table directory) {
+        private StagedInsert(byte[] keyBytes, int hash, NativeHandle keyHandle, Replacement replacement) {
             this.keyBytes = keyBytes;
             this.hash = hash;
             this.keyHandle = Objects.requireNonNull(keyHandle, "keyHandle");
             if (keyHandle.isNull()) {
                 throw new IllegalArgumentException("keyHandle must not be null");
             }
-            this.directory = directory;
+            this.replacement = replacement;
         }
 
         public AllocatorKeyHandle keyHandle() {
@@ -1103,7 +984,7 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         }
 
         public long stagedHeapBytes() {
-            return directory == null ? 0L : directory.heapBytes;
+            return replacement == null ? 0L : replacement.stagedHeapBytes();
         }
 
         private NativeHandle keyHandleForPublish() {
@@ -1137,16 +1018,26 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         }
     }
 
+    private record Replacement(Table table, OpenAddressingTopology topology) {
+        private Replacement {
+            Objects.requireNonNull(table, "table");
+            Objects.requireNonNull(topology, "topology");
+        }
+
+        private long committedHeapBytes() {
+            return table.heapBytes + topology.heapEstimatedBytes();
+        }
+
+        private long stagedHeapBytes() {
+            return REPLACEMENT_OBJECT_BYTES + committedHeapBytes();
+        }
+    }
+
     private static final class Table {
         private final int capacity;
         private final NativeHandle[] keyHandles;
         private final NativeHandle[] entryHandles;
-        private final int[] hashes;
-        private final byte[] states;
         private final long heapBytes;
-        private int size;
-        private int filled;
-        private int tombstones;
 
         private Table(int capacity) {
             if (capacity < HashCapacityPolicy.MIN_CAPACITY
@@ -1157,9 +1048,7 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
             this.capacity = capacity;
             this.keyHandles = new NativeHandle[capacity];
             this.entryHandles = new NativeHandle[capacity];
-            this.hashes = new int[capacity];
-            this.states = new byte[capacity];
-            this.heapBytes = heapBytesForCapacity(capacity);
+            this.heapBytes = payloadHeapBytesForCapacity(capacity);
         }
     }
 }

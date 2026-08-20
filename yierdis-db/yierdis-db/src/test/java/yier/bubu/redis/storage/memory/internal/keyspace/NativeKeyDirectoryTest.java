@@ -25,6 +25,34 @@ public class NativeKeyDirectoryTest {
     private static final HashSeed FIXED_SEED = new HashSeed(0x0123456789abcdefL, 0xfedcba9876543210L);
 
     @Test
+    public void growthEstimateIncludesTheStagedReplacementAndSharedTopology() {
+        try (TestBackend runtime = TestBackend.open("directory-growth-estimate")) {
+            StableMemoryBackend backend = runtime.backend();
+            NativeKeyDirectory directory = new NativeKeyDirectory(backend, FIXED_SEED, null);
+            List<NativeHandle> entries = new ArrayList<>();
+            try {
+                for (int i = 0; i < 12; i++) {
+                    NativeHandle nativeEntry = backend.allocate(NativeObjectKind.ENTRY_RECORD, 1);
+                    entries.add(nativeEntry);
+                    insert(directory, b("growth-" + i), new EntryHandle(nativeEntry));
+                }
+
+                long payloadBytes = 48L + 2L * (16L + 32L * Long.BYTES);
+                long topologyBytes = 64L + 48L + 16L + 32L * Integer.BYTES + 16L + 32L;
+                Assert.assertEquals(
+                        32L + payloadBytes + topologyBytes,
+                        directory.estimatedInsertHeapGrowthBytes()
+                );
+            } finally {
+                directory.close();
+                for (NativeHandle entry : entries) {
+                    backend.free(entry);
+                }
+            }
+        }
+    }
+
+    @Test
     public void equalLocalRawFromAnotherBackendCannotAliasAnEntry() {
         HeapStableMemoryBackend left = new HeapStableMemoryBackend("directory-left", 8, new DbThreadGuard());
         HeapStableMemoryBackend right = new HeapStableMemoryBackend("directory-right", 8, new DbThreadGuard());
