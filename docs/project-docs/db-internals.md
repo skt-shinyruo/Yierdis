@@ -40,6 +40,8 @@ Type roots
 
 `NativeKeyDirectory` 保存 allocator-backed `KEY_BYTES`，并把 key 映射到 `EntryHandle`。它负责 lookup、insert/remove、random candidate、cursor scan 和 table maintenance，不理解 value 类型，也不释放 payload。
 
+`OpenAddressingTopology` 是 `NativeKeyDirectory` 与 `NativeByteMap` 旁的共享兼容核心，统一表达 slot state、linear probing、tombstone 复用和 active/old 增量 rehash。它不持有 key/value 数组、native handle 或任何 payload ownership。当前两个生产容器仍使用各自的 topology 实现；差异化测试先固定三者的状态转换，后续容器迁移再切换生产委托关系。
+
 `EntryTable` 把每个 `EntryRecord` 编码进 72-byte `ENTRY_RECORD`。key/value handle 各占 16 bytes，显式保存 `allocatorId` 与 `localRaw`；其余字段保存 key hash、type、encoding、flags、TTL、version 和 LRU/LFU clock。
 
 公共 `NativeHandle` 是 `(allocatorId, localRaw)` 的 paired stable identity，不是 physical address，也不是一个全局 packed long。只有 FFM backend 私有的 `localRaw` 由 `YierdisLocalHandleCodec` 编码 slot/generation/kind/domain；DB 边界不能丢掉 `allocatorId`。
