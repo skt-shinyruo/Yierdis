@@ -11,6 +11,7 @@ import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
+import yier.bubu.redis.storage.memory.internal.hash.OpenAddressingTopology;
 import yier.bubu.redis.storage.memory.internal.key.AllocatorKeyHandle;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 
@@ -401,11 +402,14 @@ public class ActiveExpirationTest {
     }
 
     private static void advanceFullGenerationKeepingWireToken(NativeKeyDirectory directory) throws Exception {
-        Field generation = NativeKeyDirectory.class.getDeclaredField("generation");
+        Field topologyField = NativeKeyDirectory.class.getDeclaredField("topology");
+        topologyField.setAccessible(true);
+        OpenAddressingTopology topology = (OpenAddressingTopology) topologyField.get(directory);
+        Field generation = OpenAddressingTopology.class.getDeclaredField("generation");
         generation.setAccessible(true);
-        long current = generation.getLong(directory);
+        long current = generation.getLong(topology);
         // wire cursor 只携带低 29 位；保持该部分不变，才能验证 cleaner 保存的完整 generation sidecar。
-        generation.setLong(directory, Math.addExact(current, 1L << 29));
+        generation.setLong(topology, Math.addExact(current, 1L << 29));
     }
 
     private record ExpirationBatch(List<byte[]> keys, ScanCursorV2 nextCursor) {

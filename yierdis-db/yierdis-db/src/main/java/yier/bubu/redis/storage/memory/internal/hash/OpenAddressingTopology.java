@@ -122,7 +122,20 @@ public final class OpenAddressingTopology {
 
     /** 清空 active/old 状态，但保留跨 clear 的历史计数。 */
     public void reset(int initialCapacity) {
-        active = new Table(initialCapacity);
+        reset(new OpenAddressingTopology(initialCapacity));
+    }
+
+    /** 发布预先分配的空 active topology，并保留跨 clear 的历史计数。 */
+    public void reset(OpenAddressingTopology replacement) {
+        Objects.requireNonNull(replacement, "replacement");
+        if (replacement == this
+                || replacement.old != null
+                || replacement.size != 0
+                || replacement.active.filled != 0
+                || replacement.active.tombstones != 0) {
+            throw new IllegalArgumentException("replacement must be an empty standalone active topology");
+        }
+        active = replacement.active;
         old = null;
         rehashCursor = 0;
         size = 0;

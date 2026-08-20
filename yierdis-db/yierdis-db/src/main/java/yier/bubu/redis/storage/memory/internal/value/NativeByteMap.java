@@ -436,11 +436,12 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
     }
 
     public void clear() {
+        Replacement replacement = emptyReplacement(HashCapacityPolicy.MIN_CAPACITY);
         releaseTableKeys(active, TableSide.ACTIVE);
         releaseTableKeys(old, TableSide.OLD);
-        active = new Table(HashCapacityPolicy.MIN_CAPACITY, valueLayout);
+        topology.reset(replacement.topology);
+        active = replacement.table;
         old = null;
-        topology.reset(HashCapacityPolicy.MIN_CAPACITY);
         nativeBytes = 0L;
         maintenanceDebt = false;
         refreshMaintenanceRegistration();

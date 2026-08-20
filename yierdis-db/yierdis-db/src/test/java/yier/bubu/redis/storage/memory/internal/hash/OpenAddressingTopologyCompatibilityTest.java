@@ -67,6 +67,23 @@ public class OpenAddressingTopologyCompatibilityTest {
     }
 
     @Test
+    public void resetPublishesAPreallocatedEmptyTopology() {
+        OpenAddressingTopology topology = new OpenAddressingTopology(16);
+        topology.occupyActive(1, 1);
+        topology.beginRehash(new OpenAddressingTopology(32));
+        long generation = topology.metrics().generation();
+
+        topology.reset(new OpenAddressingTopology(16));
+
+        Assert.assertEquals(16, topology.metrics().capacity());
+        Assert.assertEquals(0, topology.metrics().size());
+        Assert.assertFalse(topology.metrics().rehashing());
+        Assert.assertEquals(generation + 1L, topology.metrics().generation());
+        Assert.assertEquals(0L, topology.metrics().completedRehashes());
+        Assert.assertEquals(SlotState.EMPTY, topology.slotState(TableSide.ACTIVE, 1));
+    }
+
+    @Test
     public void matchesBothNativeContainersAcrossCollisionsTombstonesAndIncrementalRehash() {
         try (TestBackend runtime = TestBackend.open("topology-compatibility");
              StableMemoryBackend backend = runtime.backend()) {

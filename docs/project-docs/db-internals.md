@@ -40,7 +40,7 @@ Type roots
 
 `NativeKeyDirectory` 保存 allocator-backed `KEY_BYTES`，并把 key 映射到 `EntryHandle`。它负责 lookup、insert/remove、random candidate、cursor scan 和 table maintenance，不理解 value 类型，也不释放 payload。
 
-`OpenAddressingTopology` 统一表达 slot state、linear probing、tombstone 复用和 active/old 增量 rehash，不持有 key/value 数组、native handle 或任何 payload ownership。`NativeByteMap` 已把生产 topology 委托给该核心，只保留 payload arrays 与 ownership；`NativeKeyDirectory` 仍使用私有实现，等待后续迁移。
+`OpenAddressingTopology` 统一表达 slot state、linear probing、tombstone 复用和 active/old 增量 rehash，不持有 key/value 数组、native handle 或任何 payload ownership。`NativeByteMap` 与 `NativeKeyDirectory` 均把生产 topology 委托给该核心，只保留 payload arrays 与 ownership/lifecycle logic。
 
 `EntryTable` 把每个 `EntryRecord` 编码进 72-byte `ENTRY_RECORD`。key/value handle 各占 16 bytes，显式保存 `allocatorId` 与 `localRaw`；其余字段保存 key hash、type、encoding、flags、TTL、version 和 LRU/LFU clock。
 
