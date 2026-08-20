@@ -10,6 +10,7 @@ import yier.bubu.redis.protocol.resp.netty.InboundConnectionMemory;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudgetStats;
 import yier.bubu.redis.protocol.resp.netty.InboundReadCreditHandler;
+import yier.bubu.redis.protocol.resp.netty.RespDecodedMessage;
 import yier.bubu.redis.protocol.resp.netty.RespDecodedMessageGate;
 import yier.bubu.redis.protocol.resp.netty.RespRequestDecoder;
 
@@ -68,8 +69,9 @@ public class RespIngressPressureTest {
         try {
             ping.write("*1\r\n$4\r\nPING\r\n");
             Object message = ping.channel.readInbound();
-            Assert.assertTrue("ingress must resume after disconnected pressure clients release", message instanceof ExecutionRequest);
-            try (ExecutionRequest request = (ExecutionRequest) message) {
+            Assert.assertTrue("ingress must resume after disconnected pressure clients release",
+                    message instanceof RespDecodedMessage.Request);
+            try (ExecutionRequest request = ((RespDecodedMessage.Request) message).request()) {
                 Assert.assertArrayEquals("PING".getBytes(StandardCharsets.US_ASCII), request.readOnlyByteArray(0));
             }
         } finally {
@@ -120,8 +122,8 @@ public class RespIngressPressureTest {
         public void close() {
             Object message;
             while ((message = channel.readInbound()) != null) {
-                if (message instanceof ExecutionRequest request) {
-                    request.close();
+                if (message instanceof RespDecodedMessage decoded) {
+                    decoded.close();
                 }
             }
             channel.finishAndReleaseAll();

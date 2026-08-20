@@ -25,6 +25,10 @@ ByteBuf fragments
 请求跨过 decoder 生命周期前会 materialize 成稳定 heap argv；这是 ownership 和 admission
 边界，不是零拷贝路径。
 
+`RespRequestDecoder` 用单一封闭 phase 保存当前 array、bulk、inline、request credit 或 handoff
+恢复所需的数据；异步 admission 被消费后才进入下一 phase。decoder 自己的 pending phase 会先于
+`AccountedRespCumulator` 的 consolidation admission 恢复，因此同一连接不会同时登记两种等待。
+
 ## 回复路径
 
 ```text

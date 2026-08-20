@@ -2,6 +2,7 @@ package yier.bubu.redis.protocol.resp.netty;
 
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.Assert;
 import org.junit.Test;
@@ -420,6 +421,7 @@ public class RespIngressAdmissionTest {
         RespDecodedMessageGate gate = (ctx, decoded, resume) -> {
             if (++attempts[0] == 1) {
                 resume.run();
+                resume.run();
                 return RespDecodedMessageGate.Admission.WAITING;
             }
             ctx.fireChannelRead(decoded);
@@ -442,6 +444,36 @@ public class RespIngressAdmissionTest {
             if (request != null) {
                 request.close();
             }
+            channel.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    public void pendingProtocolErrorRejectsLateInputUntilHandoffCompletes() {
+        RecordingGate gate = new RecordingGate();
+        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                1_024, 16, 1_024, 1_024, null, null, gate
+        );
+        EmbeddedChannel channel = new EmbeddedChannel(decoder);
+        try {
+            Assert.assertFalse(channel.writeInbound(ascii("*invalid\r\n")));
+            Assert.assertEquals(1, gate.attempts);
+
+            io.netty.buffer.ByteBuf late = ascii("PING\r\n");
+            Assert.assertFalse(channel.writeInbound(late));
+            Assert.assertEquals(0, late.refCnt());
+
+            gate.admit = true;
+            gate.resume.run();
+            channel.runPendingTasks();
+
+            Object message = channel.readInbound();
+            Assert.assertTrue(message instanceof RespProtocolError);
+            Assert.assertEquals("ERR Protocol error: invalid multibulk length",
+                    ((RespProtocolError) message).message());
+            Assert.assertNull(channel.readInbound());
+            Assert.assertEquals(2, gate.attempts);
+        } finally {
             channel.finishAndReleaseAll();
         }
     }
@@ -509,6 +541,42 @@ public class RespIngressAdmissionTest {
         channel.finishAndReleaseAll();
 
         Assert.assertEquals(0L, budget.stats().reservedBytes());
+    }
+
+    @Test
+    public void downstreamRemovalAfterSynchronousHandoffKeepsRequestOwnership() {
+        InboundMemoryBudget budget = new InboundMemoryBudget(4_096);
+        InboundConnectionMemory connection = new InboundConnectionMemory(4_096, Runnable::run, () -> { });
+        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                1_024,
+                16,
+                1_024,
+                1_024,
+                budget,
+                connection,
+                RespDecodedMessageGate.PASS_THROUGH
+        );
+        ExecutionRequest[] received = {null};
+        EmbeddedChannel channel = new EmbeddedChannel(decoder, new ChannelInboundHandlerAdapter() {
+            @Override
+            public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                received[0] = ((RespDecodedMessage.Request) msg).request();
+                ctx.pipeline().remove(decoder);
+            }
+        });
+        try {
+            Assert.assertFalse(channel.writeInbound(unaccountedAscii("PING\r\n")));
+            Assert.assertNotNull(received[0]);
+            Assert.assertTrue(budget.stats().reservedBytes() > 0L);
+
+            received[0].close();
+            Assert.assertEquals(0L, budget.stats().reservedBytes());
+        } finally {
+            if (received[0] != null) {
+                received[0].close();
+            }
+            channel.finishAndReleaseAll();
+        }
     }
 
     private static void assertTerminalGateOutcome(RespDecodedMessageGate gate) {

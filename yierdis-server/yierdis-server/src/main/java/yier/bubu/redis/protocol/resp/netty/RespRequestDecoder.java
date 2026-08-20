@@ -11,6 +11,8 @@ import yier.bubu.redis.execution.api.RequestMemoryLease;
 import yier.bubu.redis.protocol.resp.InlineCommandParser;
 import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+
 /**
  * RESP 请求解码器。所有可控的数组与 bulk 分配在创建前都经过入站预算准入。
  */
@@ -29,16 +31,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     private static final int INCOMPLETE_LINE = Integer.MIN_VALUE;
     private static final int INVALID_LINE = -1;
 
-    private enum State {
-        READ_COMMAND,
-        WAITING_FOR_ARGV,
-        READ_ARRAY_BODY,
-        WAITING_FOR_BULK,
-        WAITING_FOR_INLINE,
-        WAITING_FOR_HANDOFF,
-        CLOSING
-    }
-
     private final int maxBulkBytes;
     private final int maxArgs;
     private final int maxInlineBytes;
@@ -48,23 +40,9 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     private final RespDecodedMessageGate decodedMessageGate;
     private final ByteBufLineView inlineLineView = new ByteBufLineView();
 
-    private State state = State.READ_COMMAND;
+    private DecodePhase phase = SimplePhase.READ_COMMAND;
     private AccountedRespCumulator cumulator;
     private InboundReadControl readControl = InboundReadControl.NOOP;
-    private byte[][] pendingArgv;
-    private int pendingArgc;
-    private int pendingArgIndex;
-    private int pendingRetainedBytes;
-    private int pendingBulkLength = -1;
-    private byte[] pendingBulkBuffer;
-    private int pendingBulkBytesRead;
-    private long pendingReservedBytes;
-    private PendingAdmission pendingAdmission;
-    private boolean bulkAdmissionGranted;
-    private boolean pendingRequestCredit;
-    private InlineCommandParser.Parsed pendingInline;
-    private long pendingInlineAdmissionBytes;
-    private RespDecodedMessage pendingDecodedMessage;
     private int allocatedArgvArrays;
     private int allocatedBulkArrays;
 
@@ -120,7 +98,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        if (state == State.CLOSING) {
+        if (!phase.acceptsInput()) {
             releaseIncoming(msg);
             return;
         }
@@ -170,7 +148,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     }
 
     String stateNameForTests() {
-        return state.name();
+        return phase.stateName();
     }
 
     private void ensureCumulator(ChannelHandlerContext ctx) {
@@ -193,23 +171,26 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     }
 
     private void process(ChannelHandlerContext ctx) {
-        if (state == State.CLOSING || cumulator == null) {
+        if (phase == SimplePhase.CLOSING || cumulator == null) {
+            return;
+        }
+        // 先恢复 decoder 自己的唯一 pending phase，避免同一连接又进入 consolidation admission。
+        if (!resumePendingPhase(ctx) || phase == SimplePhase.CLOSING) {
             return;
         }
         if (!completeConsolidation(ctx)) {
             return;
         }
-        if (!resumePendingState(ctx)) {
-            return;
-        }
 
         ByteBuf in = cumulator.buffer();
-        while (state != State.CLOSING && in.isReadable()) {
+        while (phase != SimplePhase.CLOSING && in.isReadable()) {
             ParseResult result;
-            if (state == State.READ_COMMAND) {
+            if (phase == SimplePhase.READ_COMMAND) {
                 byte first = in.getByte(in.readerIndex());
                 result = first == ARRAY ? tryStartArray(ctx, in) : tryReadInline(ctx, in);
-            } else if (state == State.READ_ARRAY_BODY) {
+            } else if (phase instanceof ArrayPhase
+                    || phase instanceof BulkReadyPhase
+                    || phase instanceof BulkBodyPhase) {
                 result = tryContinueArray(ctx, in);
             } else {
                 return;
@@ -226,12 +207,12 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             if (!completeConsolidation(ctx)) {
                 return;
             }
-            if (!resumePendingState(ctx)) {
+            if (!resumePendingPhase(ctx)) {
                 return;
             }
         }
         cumulator.discardFullyReadComponents();
-        if (state != State.CLOSING) {
+        if (phase != SimplePhase.CLOSING) {
             readControl.resumeIngress();
         }
     }
@@ -253,45 +234,16 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         return false;
     }
 
-    private boolean resumePendingState(ChannelHandlerContext ctx) {
-        if (state == State.WAITING_FOR_ARGV) {
-            if (!consumeProgressAdmission(ctx, outerArgvCharge(pendingArgc), cumulator.releasableChargeAfterRead(0))) {
-                return false;
-            }
-            allocatePendingArgv();
-            state = State.READ_ARRAY_BODY;
-        }
-        if (state == State.WAITING_FOR_BULK) {
-            PendingAdmission pending = pendingAdmission;
-            if (pending == null || !pending.granted) {
-                return false;
-            }
-            state = State.READ_ARRAY_BODY;
-        }
-        if (state == State.WAITING_FOR_INLINE) {
-            long remainingAdmission = pendingInlineAdmissionBytes - pendingReservedBytes;
-            if (!consumeProgressAdmission(ctx, remainingAdmission, 0L)) {
-                return false;
-            }
-            pendingReservedBytes = pendingInlineAdmissionBytes;
-            if (finishPendingInline(ctx) != ParseResult.CONTINUE) {
-                return false;
-            }
-        }
-        if (state == State.WAITING_FOR_HANDOFF) {
-            if (pendingRequestCredit) {
-                if (!consumeProgressAdmission(ctx, REQUEST_FIXED_BYTES, cumulator.releasableChargeAfterRead(0))) {
-                    return false;
-                }
-                pendingRequestCredit = false;
-                pendingReservedBytes = InboundMemoryBudget.saturatedAdd(pendingReservedBytes, REQUEST_FIXED_BYTES);
-                pendingDecodedMessage = buildCompletedRequest();
-            }
-            if (pendingDecodedMessage != null) {
-                return forwardPendingDecodedMessage(ctx);
-            }
-        }
-        return state != State.CLOSING;
+    private boolean resumePendingPhase(ChannelHandlerContext ctx) {
+        return switch (phase) {
+            case ArgvAdmissionPhase pending -> resumeArgvAdmission(ctx, pending);
+            case BulkAdmissionPhase pending -> resumeBulkAdmission(ctx, pending);
+            case InlineInspectionPhase pending -> resumeInlineInspection(ctx, pending);
+            case InlineAdmissionPhase pending -> resumeInlineAdmission(ctx, pending);
+            case RequestAdmissionPhase pending -> resumeRequestAdmission(ctx, pending);
+            case HandoffPhase pending -> forwardPendingDecodedMessage(ctx, pending);
+            default -> true;
+        };
     }
 
     private ParseResult tryStartArray(ChannelHandlerContext ctx, ByteBuf in) {
@@ -315,30 +267,56 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             return ParseResult.ERROR;
         }
 
-        pendingArgc = argc;
-        if (!consumeProgressAdmission(ctx, outerArgvCharge(argc), cumulator.releasableChargeAfterRead(0))) {
-            state = State.WAITING_FOR_ARGV;
-            return ParseResult.WAITING;
+        PendingAdmission admission = progressAdmission(
+                outerArgvCharge(argc),
+                cumulator.releasableChargeAfterRead(0)
+        );
+        ArgvAdmissionPhase pending = new ArgvAdmissionPhase(argc, admission);
+        if (!requestAdmission(ctx, pending)) {
+            return phase == SimplePhase.CLOSING ? ParseResult.ERROR : ParseResult.WAITING;
         }
-        allocatePendingArgv();
-        state = State.READ_ARRAY_BODY;
+        if (!resumeArgvAdmission(ctx, pending)) {
+            return ParseResult.ERROR;
+        }
         return ParseResult.CONTINUE;
     }
 
-    private void allocatePendingArgv() {
-        long charge = outerArgvCharge(pendingArgc);
-        pendingReservedBytes = InboundMemoryBudget.saturatedAdd(pendingReservedBytes, charge);
-        pendingArgv = new byte[pendingArgc][];
+    private boolean resumeArgvAdmission(ChannelHandlerContext ctx, ArgvAdmissionPhase pending) {
+        if (!consumeAdmission(pending.admission())) {
+            return false;
+        }
+        long reservedBytes = pending.admission().bytes;
+        byte[][] argv;
+        try {
+            argv = new byte[pending.argc()][];
+        } catch (OutOfMemoryError failure) {
+            emitRequestMemoryError(ctx);
+            return false;
+        }
         allocatedArgvArrays++;
-        pendingArgIndex = 0;
-        pendingRetainedBytes = 0;
-        pendingBulkLength = -1;
+        phase = new ArrayPhase(new ArrayProgress(argv, reservedBytes));
         cumulator.discardFullyReadComponents();
+        return true;
     }
 
     private ParseResult tryContinueArray(ChannelHandlerContext ctx, ByteBuf in) {
-        while (pendingArgIndex < pendingArgc) {
-            if (pendingBulkLength < 0) {
+        ArrayProgress array;
+        BulkBodyPhase bulk;
+        if (phase instanceof BulkBodyPhase current) {
+            array = current.array();
+            bulk = current;
+        } else if (phase instanceof BulkReadyPhase current) {
+            array = current.array();
+            if (!allocateBulkBody(ctx, current)) {
+                return ParseResult.ERROR;
+            }
+            bulk = (BulkBodyPhase) phase;
+        } else {
+            array = ((ArrayPhase) phase).array();
+            bulk = null;
+        }
+        while (array.argIndex < array.argv.length) {
+            if (bulk == null) {
                 if (!in.isReadable()) {
                     return ParseResult.NEED_MORE;
                 }
@@ -361,7 +339,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
                     return ParseResult.ERROR;
                 }
                 if (lenValue == -1L) {
-                    pendingArgv[pendingArgIndex++] = null;
+                    array.argv[array.argIndex++] = null;
                     cumulator.discardFullyReadComponents();
                     continue;
                 }
@@ -370,28 +348,35 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
                     emitProtocolError(ctx, "ERR Protocol error: invalid bulk length");
                     return ParseResult.ERROR;
                 }
-                pendingBulkLength = length;
-            }
-
-            if (maxCommandBytes > 0 && pendingRetainedBytes > maxCommandBytes - pendingBulkLength) {
-                emitProtocolError(ctx, "ERR Protocol error: command is too large");
-                return ParseResult.ERROR;
-            }
-            if (!admitPendingBulk(ctx)) {
-                if (state != State.CLOSING) {
-                    state = State.WAITING_FOR_BULK;
-                    return ParseResult.WAITING;
+                if (maxCommandBytes > 0 && array.retainedBytes > maxCommandBytes - length) {
+                    emitProtocolError(ctx, "ERR Protocol error: command is too large");
+                    return ParseResult.ERROR;
                 }
-                return ParseResult.ERROR;
+                PendingAdmission admission = progressAdmission(
+                        payloadCharge(length),
+                        cumulator.releasableChargeAfterRead(0)
+                );
+                BulkAdmissionPhase pending = new BulkAdmissionPhase(array, length, admission);
+                if (!requestAdmission(ctx, pending)) {
+                    return phase == SimplePhase.CLOSING ? ParseResult.ERROR : ParseResult.WAITING;
+                }
+                if (!resumeBulkAdmission(ctx, pending)) {
+                    return ParseResult.ERROR;
+                }
+                BulkReadyPhase ready = (BulkReadyPhase) phase;
+                if (!allocateBulkBody(ctx, ready)) {
+                    return ParseResult.ERROR;
+                }
+                bulk = (BulkBodyPhase) phase;
             }
-            int remainingBody = pendingBulkLength - pendingBulkBytesRead;
+            int remainingBody = bulk.length() - bulk.bytesRead;
             if (remainingBody > 0 && in.isReadable()) {
                 int copied = Math.min(remainingBody, in.readableBytes());
-                in.readBytes(pendingBulkBuffer, pendingBulkBytesRead, copied);
-                pendingBulkBytesRead += copied;
+                in.readBytes(bulk.buffer(), bulk.bytesRead, copied);
+                bulk.bytesRead += copied;
                 cumulator.discardFullyReadComponents();
             }
-            if (pendingBulkBytesRead < pendingBulkLength) {
+            if (bulk.bytesRead < bulk.length()) {
                 return ParseResult.NEED_MORE;
             }
 
@@ -399,119 +384,128 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
                 return ParseResult.NEED_MORE;
             }
 
-            byte[] arg = pendingBulkBuffer;
-            pendingBulkBuffer = null;
-            pendingBulkBytesRead = 0;
             byte cr = in.readByte();
             byte lf = in.readByte();
             if (cr != CR || lf != LF) {
                 emitProtocolError(ctx, "ERR Protocol error: invalid bulk string terminator");
                 return ParseResult.ERROR;
             }
-            pendingArgv[pendingArgIndex++] = arg;
-            pendingRetainedBytes = saturatedAdd(pendingRetainedBytes, pendingBulkLength);
-            pendingBulkLength = -1;
-            bulkAdmissionGranted = false;
+            array.argv[array.argIndex++] = bulk.buffer();
+            array.retainedBytes = saturatedAdd(array.retainedBytes, bulk.length());
+            phase = new ArrayPhase(array);
+            bulk = null;
             cumulator.discardFullyReadComponents();
         }
 
-        return completeRequest(ctx);
+        return completeRequest(ctx, array);
     }
 
-    private boolean admitPendingBulk(ChannelHandlerContext ctx) {
-        if (bulkAdmissionGranted) {
-            return true;
-        }
-        long charge = payloadCharge(pendingBulkLength);
-        long releaseCredit = cumulator.releasableChargeAfterRead(0);
-        if (!consumeProgressAdmission(ctx, charge, releaseCredit)) {
+    private boolean resumeBulkAdmission(ChannelHandlerContext ctx, BulkAdmissionPhase pending) {
+        if (!consumeAdmission(pending.admission())) {
             return false;
         }
-        pendingReservedBytes = InboundMemoryBudget.saturatedAdd(pendingReservedBytes, charge);
+        ArrayProgress array = pending.array();
+        array.reservedBytes = InboundMemoryBudget.saturatedAdd(
+                array.reservedBytes,
+                pending.admission().bytes
+        );
+        phase = new BulkReadyPhase(array, pending.length());
+        return true;
+    }
+
+    private boolean allocateBulkBody(ChannelHandlerContext ctx, BulkReadyPhase ready) {
+        ArrayProgress array = ready.array();
+        byte[] buffer;
         try {
-            pendingBulkBuffer = new byte[pendingBulkLength];
-            allocatedBulkArrays++;
+            buffer = new byte[ready.length()];
         } catch (OutOfMemoryError failure) {
             emitRequestMemoryError(ctx);
             return false;
         }
-        pendingBulkBytesRead = 0;
-        bulkAdmissionGranted = true;
+        allocatedBulkArrays++;
+        phase = new BulkBodyPhase(array, ready.length(), buffer);
         cumulator.discardFullyReadComponents();
         return true;
     }
 
-    private ParseResult completeRequest(ChannelHandlerContext ctx) {
-        if (!consumeProgressAdmission(ctx, REQUEST_FIXED_BYTES, cumulator.releasableChargeAfterRead(0))) {
-            pendingRequestCredit = true;
-            state = State.WAITING_FOR_HANDOFF;
-            return ParseResult.WAITING;
+    private ParseResult completeRequest(ChannelHandlerContext ctx, ArrayProgress array) {
+        PendingAdmission admission = progressAdmission(
+                REQUEST_FIXED_BYTES,
+                cumulator.releasableChargeAfterRead(0)
+        );
+        RequestAdmissionPhase pending = new RequestAdmissionPhase(array, admission);
+        if (!requestAdmission(ctx, pending)) {
+            return phase == SimplePhase.CLOSING ? ParseResult.ERROR : ParseResult.WAITING;
         }
-        pendingReservedBytes = InboundMemoryBudget.saturatedAdd(pendingReservedBytes, REQUEST_FIXED_BYTES);
-        pendingDecodedMessage = buildCompletedRequest();
-        state = State.WAITING_FOR_HANDOFF;
-        return forwardPendingDecodedMessage(ctx) ? ParseResult.CONTINUE : ParseResult.WAITING;
+        return resumeRequestAdmission(ctx, pending) ? ParseResult.CONTINUE : ParseResult.WAITING;
     }
 
-    private RespDecodedMessage buildCompletedRequest() {
-        byte[][] argv = pendingArgv;
-        int retainedBytes = pendingRetainedBytes;
-        long reservedBytes = pendingReservedBytes;
-        pendingArgv = null;
-        pendingArgc = 0;
-        pendingArgIndex = 0;
-        pendingRetainedBytes = 0;
-        pendingBulkLength = -1;
-        pendingBulkBuffer = null;
-        pendingBulkBytesRead = 0;
-        pendingReservedBytes = 0L;
+    private boolean resumeRequestAdmission(ChannelHandlerContext ctx, RequestAdmissionPhase pending) {
+        if (!consumeAdmission(pending.admission())) {
+            return false;
+        }
+        ArrayProgress array = pending.array();
+        array.reservedBytes = InboundMemoryBudget.saturatedAdd(
+                array.reservedBytes,
+                pending.admission().bytes
+        );
+        RespDecodedMessage decoded = buildCompletedRequest(array);
+        HandoffPhase handoff = new HandoffPhase(decoded);
+        phase = handoff;
+        return forwardPendingDecodedMessage(ctx, handoff);
+    }
+
+    private RespDecodedMessage buildCompletedRequest(ArrayProgress array) {
         RequestMemoryLease lease = budget == null
-                ? new ReferenceCountedRequestMemoryLease(reservedBytes, ignored -> { })
-                : requestLease(reservedBytes);
+                ? new ReferenceCountedRequestMemoryLease(array.reservedBytes, ignored -> { })
+                : requestLease(array.reservedBytes);
         return new RespDecodedMessage.Request(
-                ByteArrayExecutionRequest.takeOwnership(argv, retainedBytes, lease)
+                ByteArrayExecutionRequest.takeOwnership(array.argv, array.retainedBytes, lease)
         );
     }
 
-    private boolean forwardPendingDecodedMessage(ChannelHandlerContext ctx) {
-        RespDecodedMessage decoded = pendingDecodedMessage;
-        if (decoded == null) {
-            state = State.READ_COMMAND;
-            readControl.resumeIngress();
-            return true;
-        }
-        boolean terminal = switch (decoded) {
-            case RespDecodedMessage.Request ignored -> false;
-            case RespProtocolError ignored -> true;
-        };
-        pendingDecodedMessage = null;
-        state = terminal ? State.CLOSING : State.READ_COMMAND;
-        if (terminal) {
+    private boolean forwardPendingDecodedMessage(ChannelHandlerContext ctx, HandoffPhase handoff) {
+        RespDecodedMessage decoded = handoff.message();
+        if (handoff.terminal()) {
             readControl.pauseIngress();
         }
+        HandoffAttempt attempt = new HandoffAttempt();
         RespDecodedMessageGate.Admission admission;
+        handoff.admissionInProgress = true;
         try {
-            admission = decodedMessageGate.tryAdmit(ctx, decoded, () -> resumeHandoffLater(ctx));
+            admission = decodedMessageGate.tryAdmit(
+                    ctx,
+                    decoded,
+                    () -> resumeHandoffLater(ctx, handoff, attempt)
+            );
         } catch (Throwable ignored) {
+            handoff.admissionInProgress = false;
             decoded.close();
             enterClosing();
             return false;
         }
+        handoff.admissionInProgress = false;
         if (admission == null) {
             decoded.close();
             enterClosing();
             return false;
         }
+        if (phase != handoff) {
+            if (admission != RespDecodedMessageGate.Admission.ADMITTED) {
+                decoded.close();
+            }
+            return false;
+        }
         return switch (admission) {
             case ADMITTED -> {
-                if (!terminal) {
+                phase = handoff.terminal() ? SimplePhase.CLOSING : SimplePhase.READ_COMMAND;
+                if (!handoff.terminal()) {
                     readControl.resumeIngress();
                 }
-                yield !terminal;
+                yield !handoff.terminal();
             }
             case WAITING -> {
-                pendingDecodedMessage = decoded;
-                state = State.WAITING_FOR_HANDOFF;
+                phase = handoff;
                 readControl.pauseIngress();
                 yield false;
             }
@@ -547,124 +541,133 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
 
         long inspectionBytes = inlineInspectionCharge(length);
         long inputReleaseCredit = cumulator.releasableChargeAfterRead(0);
-        if (!consumeProgressAdmission(ctx, inspectionBytes, inputReleaseCredit)) {
-            if (state != State.CLOSING) {
-                in.readerIndex(lineStart);
-                return ParseResult.WAITING;
-            }
-            return ParseResult.ERROR;
+        PendingAdmission admission = progressAdmission(inspectionBytes, inputReleaseCredit);
+        InlineInspectionPhase pending = new InlineInspectionPhase(length, admission);
+        in.readerIndex(lineStart);
+        if (!requestAdmission(ctx, pending)) {
+            return phase == SimplePhase.CLOSING ? ParseResult.ERROR : ParseResult.WAITING;
         }
-        pendingReservedBytes = inspectionBytes;
-        try {
-            byte[] line = new byte[length];
-            in.getBytes(lineStart, line);
-            cumulator.discardFullyReadComponents();
-            InlineCommandParser.Parsed parsed = InlineCommandParser.parseResult(line, 0, line.length);
-            if (parsed.argc() == 0) {
-                releaseInlineTransient(pendingReservedBytes, 0L);
-                pendingReservedBytes = 0L;
-                return ParseResult.CONTINUE;
-            }
-            if (maxArgs > 0 && parsed.argc() > maxArgs) {
-                emitProtocolError(ctx, "ERR Protocol error: too many arguments");
-                return ParseResult.ERROR;
-            }
-            if (maxCommandBytes > 0 && parsed.retainedBytes() > maxCommandBytes) {
-                emitProtocolError(ctx, "ERR Protocol error: command is too large");
-                return ParseResult.ERROR;
-            }
-
-            pendingInline = parsed;
-            pendingInlineAdmissionBytes = inlineAdmissionCharge(
-                    length,
-                    parsed.argc(),
-                    parsed.retainedBytes()
-            );
-            long remainingAdmission = pendingInlineAdmissionBytes - pendingReservedBytes;
-            if (!consumeProgressAdmission(ctx, remainingAdmission, 0L)) {
-                if (state != State.CLOSING) {
-                    state = State.WAITING_FOR_INLINE;
-                    return ParseResult.WAITING;
-                }
-                return ParseResult.ERROR;
-            }
-            pendingReservedBytes = pendingInlineAdmissionBytes;
-            return finishPendingInline(ctx);
-        } catch (IllegalArgumentException e) {
-            emitProtocolError(ctx, "ERR Protocol error: invalid inline command");
-            return ParseResult.ERROR;
+        if (resumeInlineInspection(ctx, pending)) {
+            return ParseResult.CONTINUE;
         }
+        return phase == SimplePhase.CLOSING ? ParseResult.ERROR : ParseResult.WAITING;
     }
 
-    private ParseResult finishPendingInline(ChannelHandlerContext ctx) {
-        InlineCommandParser.Parsed parsed = pendingInline;
+    private boolean resumeInlineInspection(ChannelHandlerContext ctx, InlineInspectionPhase pending) {
+        if (!consumeAdmission(pending.admission())) {
+            return false;
+        }
+        ByteBuf in = cumulator.buffer();
+        int lineStart = in.readerIndex();
+        int length = pending.length();
+        in.readerIndex(lineStart + length + 2);
+        byte[] line = new byte[length];
+        in.getBytes(lineStart, line);
+        cumulator.discardFullyReadComponents();
+        InlineCommandParser.Parsed parsed;
+        try {
+            parsed = InlineCommandParser.parseResult(line, 0, line.length);
+        } catch (IllegalArgumentException e) {
+            emitProtocolError(ctx, "ERR Protocol error: invalid inline command");
+            return false;
+        }
+        if (parsed.argc() == 0) {
+            releaseReservedBytes(pending.admission().bytes);
+            phase = SimplePhase.READ_COMMAND;
+            return true;
+        }
+        if (maxArgs > 0 && parsed.argc() > maxArgs) {
+            emitProtocolError(ctx, "ERR Protocol error: too many arguments");
+            return false;
+        }
+        if (maxCommandBytes > 0 && parsed.retainedBytes() > maxCommandBytes) {
+            emitProtocolError(ctx, "ERR Protocol error: command is too large");
+            return false;
+        }
+
+        long total = inlineAdmissionCharge(length, parsed.argc(), parsed.retainedBytes());
+        InlineAdmissionPhase next = new InlineAdmissionPhase(
+                parsed,
+                pending.admission().bytes,
+                progressAdmission(total - pending.admission().bytes, 0L)
+        );
+        if (!requestAdmission(ctx, next)) {
+            return false;
+        }
+        return resumeInlineAdmission(ctx, next);
+    }
+
+    private boolean resumeInlineAdmission(ChannelHandlerContext ctx, InlineAdmissionPhase pending) {
+        if (!consumeAdmission(pending.admission())) {
+            return false;
+        }
+        pending.reservedBytes = InboundMemoryBudget.saturatedAdd(
+                pending.reservedBytes,
+                pending.admission().bytes
+        );
+        InlineCommandParser.Parsed parsed = pending.parsed();
         byte[][] argv = parsed.takeArgs();
         allocatedArgvArrays++;
         long fullCharge = ByteArrayExecutionRequest.estimatedMemoryBytes(argv);
-        if (fullCharge > pendingReservedBytes) {
-            emitRequestMemoryError(ctx);
-            return ParseResult.ERROR;
-        }
-        releaseInlineTransient(pendingReservedBytes, fullCharge);
-        pendingReservedBytes = fullCharge;
-        pendingInline = null;
-        pendingInlineAdmissionBytes = 0L;
-        RequestMemoryLease lease = requestLease(fullCharge);
-        pendingDecodedMessage = new RespDecodedMessage.Request(
-                ByteArrayExecutionRequest.takeOwnership(argv, parsed.retainedBytes(), lease)
-        );
-        pendingReservedBytes = 0L;
-        state = State.WAITING_FOR_HANDOFF;
-        return forwardPendingDecodedMessage(ctx) ? ParseResult.CONTINUE : ParseResult.WAITING;
-    }
-
-    private boolean consumeProgressAdmission(ChannelHandlerContext ctx, long bytes, long inputReleaseCredit) {
-        return consumePendingAdmission(ctx, bytes, inputReleaseCredit, true);
-    }
-
-    private boolean consumePendingAdmission(
-            ChannelHandlerContext ctx,
-            long bytes,
-            long inputReleaseCredit,
-            boolean progressReservation
-    ) {
-        if (bytes < 0L || inputReleaseCredit < 0L) {
+        if (fullCharge > pending.reservedBytes) {
             emitRequestMemoryError(ctx);
             return false;
         }
-        PendingAdmission pending = pendingAdmission;
-        if (pending != null) {
-            if (!pending.matches(bytes, inputReleaseCredit, progressReservation) || !pending.granted) {
-                return false;
-            }
-            pendingAdmission = null;
-            return true;
+        releaseInlineTransient(pending.reservedBytes, fullCharge);
+        pending.reservedBytes = fullCharge;
+        RequestMemoryLease lease = requestLease(fullCharge);
+        RespDecodedMessage decoded = new RespDecodedMessage.Request(
+                ByteArrayExecutionRequest.takeOwnership(argv, parsed.retainedBytes(), lease)
+        );
+        HandoffPhase handoff = new HandoffPhase(decoded);
+        phase = handoff;
+        return forwardPendingDecodedMessage(ctx, handoff);
+    }
+
+    private static PendingAdmission progressAdmission(long bytes, long inputReleaseCredit) {
+        return new PendingAdmission(bytes, inputReleaseCredit);
+    }
+
+    private boolean requestAdmission(ChannelHandlerContext ctx, AdmissionPhase requestedPhase) {
+        PendingAdmission requested = requestedPhase.admission();
+        phase = requestedPhase;
+        if (requested.bytes < 0L || requested.inputReleaseCredit < 0L) {
+            emitRequestMemoryError(ctx);
+            return false;
         }
         if (budget == null) {
+            requested.granted = true;
             return true;
         }
-        PendingAdmission requested = new PendingAdmission(bytes, inputReleaseCredit, progressReservation);
-        pendingAdmission = requested;
         connection.setResumeCallback(ctx.executor(), () -> {
-            if (pendingAdmission == requested && connection.claimGrantedReservation(requested.bytes)) {
+            if (phase == requestedPhase && connection.claimGrantedReservation(requested.bytes)) {
                 requested.granted = true;
                 resumeOnEventLoop(ctx);
             }
         });
-        InboundMemoryBudget.ReservationResult result = progressReservation
-                ? budget.tryTransferForProgress(connection, bytes, inputReleaseCredit)
-                : budget.tryTransfer(connection, bytes, inputReleaseCredit);
+        InboundMemoryBudget.ReservationResult result = budget.tryTransferForProgress(
+                connection,
+                requested.bytes,
+                requested.inputReleaseCredit
+        );
         if (result == InboundMemoryBudget.ReservationResult.RESERVED) {
-            pendingAdmission = null;
+            requested.granted = true;
             return true;
         }
         if (result == InboundMemoryBudget.ReservationResult.WAITING) {
             readControl.pauseIngress();
             return false;
         }
-        pendingAdmission = null;
         emitRequestMemoryError(ctx);
         return false;
+    }
+
+    private static boolean consumeAdmission(PendingAdmission admission) {
+        if (!admission.granted) {
+            return false;
+        }
+        admission.consumed = true;
+        return true;
     }
 
     private void resumeOnEventLoop(ChannelHandlerContext ctx) {
@@ -675,10 +678,21 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         ctx.executor().execute(() -> process(ctx));
     }
 
-    private void resumeHandoffLater(ChannelHandlerContext ctx) {
+    private void resumeHandoffLater(
+            ChannelHandlerContext ctx,
+            HandoffPhase handoff,
+            HandoffAttempt attempt
+    ) {
+        if (!attempt.scheduled.compareAndSet(false, true)) {
+            return;
+        }
         try {
-            // WAITING 返回后 decoder 才恢复 pending 消息状态，因此 handoff wake-up 不得同步重入。
-            ctx.executor().execute(() -> process(ctx));
+            // gate 可能同步触发 wake-up；延后到 event loop，避免 tryAdmit 返回前重入同一 handoff。
+            ctx.executor().execute(() -> {
+                if (phase == handoff) {
+                    process(ctx);
+                }
+            });
         } catch (RuntimeException ignored) {
             ctx.close();
         }
@@ -715,22 +729,24 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     }
 
     private void emitProtocolError(ChannelHandlerContext ctx, String message) {
-        resetPendingState();
+        releasePhase();
         enterClosing();
         if (cumulator != null) {
             cumulator.close();
         }
-        pendingDecodedMessage = new RespProtocolError(message);
-        forwardPendingDecodedMessage(ctx);
+        HandoffPhase handoff = new HandoffPhase(new RespProtocolError(message));
+        phase = handoff;
+        forwardPendingDecodedMessage(ctx, handoff);
     }
 
     private void enterClosing() {
-        state = State.CLOSING;
+        phase = SimplePhase.CLOSING;
         readControl.pauseIngress();
     }
 
     private void cleanup() {
-        resetPendingState();
+        releasePhase();
+        phase = SimplePhase.CLOSING;
         if (cumulator != null) {
             cumulator.close();
             cumulator = null;
@@ -738,39 +754,34 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         readControl.pauseIngress();
     }
 
-    private void resetPendingState() {
-        releasePendingAdmission();
-        if (pendingDecodedMessage != null) {
-            pendingDecodedMessage.close();
-            pendingDecodedMessage = null;
+    private void releasePhase() {
+        DecodePhase current = phase;
+        // 先摘下 phase，释放预算时触发的同步回调就无法再次消费同一份所有权。
+        phase = SimplePhase.READ_COMMAND;
+        if (current instanceof AdmissionPhase admissionPhase) {
+            releasePendingAdmission(admissionPhase.admission());
         }
-        if (pendingReservedBytes > 0L && budget != null) {
-            budget.release(connection.account(), pendingReservedBytes);
+        releaseReservedBytes(current.reservedBytes());
+        // 同步下游可在 tryAdmit 内移除 decoder；等 admission 返回后再判定消息由谁释放。
+        if (current instanceof HandoffPhase handoff && !handoff.admissionInProgress) {
+            handoff.message().close();
         }
-        pendingArgv = null;
-        pendingArgc = 0;
-        pendingArgIndex = 0;
-        pendingRetainedBytes = 0;
-        pendingBulkLength = -1;
-        pendingBulkBuffer = null;
-        pendingBulkBytesRead = 0;
-        pendingReservedBytes = 0L;
-        pendingRequestCredit = false;
-        bulkAdmissionGranted = false;
-        pendingInline = null;
-        pendingInlineAdmissionBytes = 0L;
     }
 
-    private void releasePendingAdmission() {
-        PendingAdmission pending = pendingAdmission;
-        pendingAdmission = null;
-        if (pending == null || budget == null || connection == null) {
+    private void releasePendingAdmission(PendingAdmission pending) {
+        if (pending.consumed || budget == null || connection == null) {
             return;
         }
         if (pending.granted || connection.claimGrantedReservation(pending.bytes)) {
             budget.release(connection, pending.bytes);
         } else {
             budget.cancelWaiter(connection);
+        }
+    }
+
+    private void releaseReservedBytes(long reservedBytes) {
+        if (reservedBytes > 0L && budget != null) {
+            budget.release(connection.account(), reservedBytes);
         }
     }
 
@@ -918,26 +929,245 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         ERROR
     }
 
+    /** 当前 phase 独占恢复解码所需的数据、预算和 handoff 消息。 */
+    private sealed interface DecodePhase
+            permits SimplePhase, AdmissionPhase, ArrayPhase, BulkReadyPhase, BulkBodyPhase, HandoffPhase {
+        String stateName();
+
+        default boolean acceptsInput() {
+            return true;
+        }
+
+        default long reservedBytes() {
+            return 0L;
+        }
+    }
+
+    private enum SimplePhase implements DecodePhase {
+        READ_COMMAND,
+        CLOSING;
+
+        @Override
+        public String stateName() {
+            return name();
+        }
+
+        @Override
+        public boolean acceptsInput() {
+            return this != CLOSING;
+        }
+    }
+
+    private sealed interface AdmissionPhase extends DecodePhase
+            permits ArgvAdmissionPhase, BulkAdmissionPhase, InlineInspectionPhase,
+            InlineAdmissionPhase, RequestAdmissionPhase {
+        PendingAdmission admission();
+    }
+
+    private record ArgvAdmissionPhase(int argc, PendingAdmission admission) implements AdmissionPhase {
+        @Override
+        public String stateName() {
+            return "WAITING_FOR_ARGV";
+        }
+
+        @Override
+        public long reservedBytes() {
+            return admission.consumed ? admission.bytes : 0L;
+        }
+    }
+
+    private static final class ArrayProgress {
+        private final byte[][] argv;
+        private int argIndex;
+        private int retainedBytes;
+        private long reservedBytes;
+
+        private ArrayProgress(byte[][] argv, long reservedBytes) {
+            this.argv = argv;
+            this.reservedBytes = reservedBytes;
+        }
+    }
+
+    private record ArrayPhase(ArrayProgress array) implements DecodePhase {
+        @Override
+        public String stateName() {
+            return "READ_ARRAY_BODY";
+        }
+
+        @Override
+        public long reservedBytes() {
+            return array.reservedBytes;
+        }
+    }
+
+    private record BulkAdmissionPhase(
+            ArrayProgress array,
+            int length,
+            PendingAdmission admission
+    ) implements AdmissionPhase {
+        @Override
+        public String stateName() {
+            return "WAITING_FOR_BULK";
+        }
+
+        @Override
+        public long reservedBytes() {
+            return array.reservedBytes;
+        }
+    }
+
+    private record BulkReadyPhase(ArrayProgress array, int length) implements DecodePhase {
+        @Override
+        public String stateName() {
+            return "READ_ARRAY_BODY";
+        }
+
+        @Override
+        public long reservedBytes() {
+            return array.reservedBytes;
+        }
+    }
+
+    private static final class BulkBodyPhase implements DecodePhase {
+        private final ArrayProgress array;
+        private final int length;
+        private final byte[] buffer;
+        private int bytesRead;
+
+        private BulkBodyPhase(ArrayProgress array, int length, byte[] buffer) {
+            this.array = array;
+            this.length = length;
+            this.buffer = buffer;
+        }
+
+        private ArrayProgress array() {
+            return array;
+        }
+
+        private int length() {
+            return length;
+        }
+
+        private byte[] buffer() {
+            return buffer;
+        }
+
+        @Override
+        public String stateName() {
+            return "READ_ARRAY_BODY";
+        }
+
+        @Override
+        public long reservedBytes() {
+            return array.reservedBytes;
+        }
+    }
+
+    private record InlineInspectionPhase(
+            int length,
+            PendingAdmission admission
+    ) implements AdmissionPhase {
+        @Override
+        public String stateName() {
+            return "WAITING_FOR_INLINE";
+        }
+
+        @Override
+        public long reservedBytes() {
+            return admission.consumed ? admission.bytes : 0L;
+        }
+    }
+
+    private static final class InlineAdmissionPhase implements AdmissionPhase {
+        private final InlineCommandParser.Parsed parsed;
+        private final PendingAdmission admission;
+        private long reservedBytes;
+
+        private InlineAdmissionPhase(
+                InlineCommandParser.Parsed parsed,
+                long reservedBytes,
+                PendingAdmission admission
+        ) {
+            this.parsed = parsed;
+            this.reservedBytes = reservedBytes;
+            this.admission = admission;
+        }
+
+        private InlineCommandParser.Parsed parsed() {
+            return parsed;
+        }
+
+        @Override
+        public PendingAdmission admission() {
+            return admission;
+        }
+
+        @Override
+        public String stateName() {
+            return "WAITING_FOR_INLINE";
+        }
+
+        @Override
+        public long reservedBytes() {
+            return reservedBytes;
+        }
+    }
+
+    private record RequestAdmissionPhase(
+            ArrayProgress array,
+            PendingAdmission admission
+    ) implements AdmissionPhase {
+        @Override
+        public String stateName() {
+            return "WAITING_FOR_HANDOFF";
+        }
+
+        @Override
+        public long reservedBytes() {
+            return array.reservedBytes;
+        }
+    }
+
+    private static final class HandoffPhase implements DecodePhase {
+        private final RespDecodedMessage message;
+        private boolean admissionInProgress;
+
+        private HandoffPhase(RespDecodedMessage message) {
+            this.message = message;
+        }
+
+        private RespDecodedMessage message() {
+            return message;
+        }
+
+        private boolean terminal() {
+            return message instanceof RespProtocolError;
+        }
+
+        @Override
+        public String stateName() {
+            return terminal() ? "CLOSING" : "WAITING_FOR_HANDOFF";
+        }
+
+        @Override
+        public boolean acceptsInput() {
+            return !terminal();
+        }
+    }
+
+    private static final class HandoffAttempt {
+        private final AtomicBoolean scheduled = new AtomicBoolean();
+    }
+
     private static final class PendingAdmission {
         private final long bytes;
         private final long inputReleaseCredit;
-        private final boolean progressReservation;
         private volatile boolean granted;
+        private boolean consumed;
 
-        private PendingAdmission(long bytes, long inputReleaseCredit, boolean progressReservation) {
+        private PendingAdmission(long bytes, long inputReleaseCredit) {
             this.bytes = bytes;
             this.inputReleaseCredit = inputReleaseCredit;
-            this.progressReservation = progressReservation;
-        }
-
-        private boolean matches(
-                long candidateBytes,
-                long candidateInputReleaseCredit,
-                boolean candidateProgressReservation
-        ) {
-            return bytes == candidateBytes
-                    && inputReleaseCredit == candidateInputReleaseCredit
-                    && progressReservation == candidateProgressReservation;
         }
     }
 }
