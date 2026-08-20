@@ -43,9 +43,9 @@ public final class ZSetCommands {
         registration.register(new CommandSpec(syntax("ZRANGE", CommandArity.range(4, 6)), this::zrange));
         registration.register(new CommandSpec(syntax("ZREVRANGE", CommandArity.oneOf(4, 5)), this::zrevrange));
         registration.register(new CommandSpec(syntax("ZRANGEBYSCORE", CommandArity.min(4)),
-                args -> zrangeByScore(args, false)));
+                args -> zrangeByScore(args, RangeDirection.FORWARD)));
         registration.register(new CommandSpec(syntax("ZREVRANGEBYSCORE", CommandArity.min(4)),
-                args -> zrangeByScore(args, true)));
+                args -> zrangeByScore(args, RangeDirection.REVERSE)));
         registration.register(new CommandSpec(syntax("ZREMRANGEBYSCORE", CommandArity.exact(4)),
                 this::zremrangebyscore));
         registration.register(new CommandSpec(syntax("ZREMRANGEBYRANK", CommandArity.exact(4)),
@@ -74,7 +74,7 @@ public final class ZSetCommands {
         long start = args.longAt(2);
         long stop = args.longAt(3);
         boolean withScores = false;
-        boolean reverse = false;
+        RangeDirection direction = RangeDirection.FORWARD;
         for (int index = 4; index < args.argc(); index++) {
             if (args.is(index, "WITHSCORES")) {
                 if (withScores) {
@@ -82,15 +82,15 @@ public final class ZSetCommands {
                 }
                 withScores = true;
             } else if (args.is(index, "REV")) {
-                if (reverse) {
+                if (direction == RangeDirection.REVERSE) {
                     throw syntaxFailure();
                 }
-                reverse = true;
+                direction = RangeDirection.REVERSE;
             } else {
                 throw syntaxFailure();
             }
         }
-        ZRangeArgs parsed = new ZRangeArgs(args.bytes(1), start, stop, withScores, reverse);
+        ZRangeArgs parsed = new ZRangeArgs(args.bytes(1), start, stop, withScores, direction);
         return session -> prepareRange(parsed, session);
     }
 
@@ -102,7 +102,7 @@ public final class ZSetCommands {
             throw syntaxFailure();
         }
         ZRangeArgs parsed = new ZRangeArgs(
-                args.bytes(1), start, stop, withScores, true);
+                args.bytes(1), start, stop, withScores, RangeDirection.REVERSE);
         return session -> prepareRange(parsed, session);
     }
 
@@ -110,19 +110,21 @@ public final class ZSetCommands {
             ZRangeArgs args,
             yier.bubu.redis.execution.api.CommandSession session
     ) {
-        return prepareSequence(() -> args.reverse()
+        return prepareSequence(() -> args.direction() == RangeDirection.REVERSE
                 ? support.commandDb(session).zsets()
                         .zrevrange(args.key(), args.start(), args.stop(), args.withScores())
                 : support.commandDb(session).zsets()
                         .zrange(args.key(), args.start(), args.stop(), args.withScores()));
     }
 
-    private Function<CommandSession, PreparedCommand> zrangeByScore(CommandArgs args, boolean reverse)
- {
+    private Function<CommandSession, PreparedCommand> zrangeByScore(
+            CommandArgs args,
+            RangeDirection direction
+    ) {
         ScoreBound first = parseScoreBound(args.bytes(2));
         ScoreBound second = parseScoreBound(args.bytes(3));
-        ScoreBound min = reverse ? second : first;
-        ScoreBound max = reverse ? first : second;
+        ScoreBound min = direction == RangeDirection.REVERSE ? second : first;
+        ScoreBound max = direction == RangeDirection.REVERSE ? first : second;
         boolean withScores = false;
         long offset = 0L;
         long count = Long.MAX_VALUE;
@@ -151,7 +153,7 @@ public final class ZSetCommands {
         }
 
         ZRangeByScoreArgs parsed = new ZRangeByScoreArgs(
-                args.bytes(1), min, max, withScores, offset, count, reverse);
+                args.bytes(1), min, max, withScores, offset, count, direction);
         return session -> prepareRangeByScore(parsed, session);
     }
 
@@ -159,7 +161,7 @@ public final class ZSetCommands {
             ZRangeByScoreArgs args,
             yier.bubu.redis.execution.api.CommandSession session
     ) {
-        return prepareSequence(() -> args.reverse()
+        return prepareSequence(() -> args.direction() == RangeDirection.REVERSE
                 ? support.commandDb(session).zsets().zrevrangeByScore(
                         args.key(), args.min().value(), args.min().exclusive(),
                         args.max().value(), args.max().exclusive(),
@@ -200,7 +202,7 @@ public final class ZSetCommands {
     }
 
     private Function<CommandSession, PreparedCommand> zscan(CommandArgs args) {
-        CollectionScanCommandSupport.Arguments parsed = CollectionScanCommandSupport.parse(args, false);
+        CollectionScanCommandSupport.Arguments parsed = CollectionScanCommandSupport.parse(args);
         return session -> CollectionScanCommandSupport.prepareReply(
                 support.commandDb(session).zsets().zscan(
                         parsed.key(), parsed.cursor(), parsed.match(), parsed.count()));
@@ -277,7 +279,18 @@ public final class ZSetCommands {
         return new CommandParseException(SYNTAX_ERROR);
     }
 
-    private record ZRangeArgs(byte[] key, long start, long stop, boolean withScores, boolean reverse) {
+    private enum RangeDirection {
+        FORWARD,
+        REVERSE
+    }
+
+    private record ZRangeArgs(
+            byte[] key,
+            long start,
+            long stop,
+            boolean withScores,
+            RangeDirection direction
+    ) {
     }
 
     private record ZRangeByScoreArgs(
@@ -287,7 +300,7 @@ public final class ZSetCommands {
             boolean withScores,
             long offset,
             long count,
-            boolean reverse
+            RangeDirection direction
     ) {
     }
 
