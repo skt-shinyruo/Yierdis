@@ -38,6 +38,22 @@ public final class ZSetValue implements YierdisValue {
     private static final long ARRAY_LIST_HEAP_BYTES = 32L;
     private static final long STAGED_PUT_HEAP_BYTES = 64L;
 
+    private enum ScoreRangeDirection {
+        FORWARD,
+        REVERSE
+    }
+
+    private record ScoreRangeQuery(
+            double min,
+            boolean minExclusive,
+            double max,
+            boolean maxExclusive,
+            long offset,
+            long count,
+            ScoreRangeDirection direction
+    ) {
+    }
+
     private final NativeByteStore memberStore;
     private final HashSeed hashSeed;
     private final HashTableMaintenanceRegistry maintenanceRegistry;
@@ -426,13 +442,12 @@ public final class ZSetValue implements YierdisValue {
         if (count <= 0) {
             return new ArrayList<>();
         }
-
-        if (listpack != null) {
-            return materializePackedScoreRange(
-                    min, minExclusive, max, maxExclusive, withScores, offset, count, false
-            );
-        }
-        return zrangeByScoreSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count);
+        return materializeScoreRange(
+                new ScoreRangeQuery(
+                        min, minExclusive, max, maxExclusive, offset, count, ScoreRangeDirection.FORWARD
+                ),
+                withScores
+        );
     }
 
     public List<byte[]> zrevrangeByScore(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
@@ -440,12 +455,12 @@ public final class ZSetValue implements YierdisValue {
             return new ArrayList<>();
         }
 
-        if (listpack != null) {
-            return materializePackedScoreRange(
-                    min, minExclusive, max, maxExclusive, withScores, offset, count, true
-            );
-        }
-        return zrevrangeByScoreSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count);
+        return materializeScoreRange(
+                new ScoreRangeQuery(
+                        min, minExclusive, max, maxExclusive, offset, count, ScoreRangeDirection.REVERSE
+                ),
+                withScores
+        );
     }
 
     public int zremrangeByScore(double min, boolean minExclusive, double max, boolean maxExclusive) {
@@ -645,12 +660,12 @@ public final class ZSetValue implements YierdisValue {
         if (count <= 0) {
             return 0;
         }
-        if (listpack != null) {
-            return countPackedScoreRange(
-                    min, minExclusive, max, maxExclusive, withScores, offset, count, false
-            );
-        }
-        return zrangeByScoreCountSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count);
+        return countScoreRange(
+                new ScoreRangeQuery(
+                        min, minExclusive, max, maxExclusive, offset, count, ScoreRangeDirection.FORWARD
+                ),
+                withScores
+        );
     }
 
     public void zrangeByScoreWriteTo(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, ByteValueSink out) {
@@ -660,25 +675,25 @@ public final class ZSetValue implements YierdisValue {
         if (count <= 0) {
             return;
         }
-        if (listpack != null) {
-            writePackedScoreRange(
-                    min, minExclusive, max, maxExclusive, withScores, offset, count, false, out
-            );
-            return;
-        }
-        zrangeByScoreWriteToSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+        writeScoreRange(
+                new ScoreRangeQuery(
+                        min, minExclusive, max, maxExclusive, offset, count, ScoreRangeDirection.FORWARD
+                ),
+                withScores,
+                out
+        );
     }
 
     public int zrevrangeByScoreCount(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
         if (count <= 0) {
             return 0;
         }
-        if (listpack != null) {
-            return countPackedScoreRange(
-                    min, minExclusive, max, maxExclusive, withScores, offset, count, true
-            );
-        }
-        return zrevrangeByScoreCountSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count);
+        return countScoreRange(
+                new ScoreRangeQuery(
+                        min, minExclusive, max, maxExclusive, offset, count, ScoreRangeDirection.REVERSE
+                ),
+                withScores
+        );
     }
 
     public void zrevrangeByScoreWriteTo(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, ByteValueSink out) {
@@ -688,13 +703,13 @@ public final class ZSetValue implements YierdisValue {
         if (count <= 0) {
             return;
         }
-        if (listpack != null) {
-            writePackedScoreRange(
-                    min, minExclusive, max, maxExclusive, withScores, offset, count, true, out
-            );
-            return;
-        }
-        zrevrangeByScoreWriteToSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+        writeScoreRange(
+                new ScoreRangeQuery(
+                        min, minExclusive, max, maxExclusive, offset, count, ScoreRangeDirection.REVERSE
+                ),
+                withScores,
+                out
+        );
     }
 
     private List<byte[]> rangeByIndex(long start, long stop, boolean withScores, boolean reverse) {
@@ -877,82 +892,87 @@ public final class ZSetValue implements YierdisValue {
         }
     }
 
-    private List<byte[]> materializePackedScoreRange(
-            double min,
-            boolean minExclusive,
-            double max,
-            boolean maxExclusive,
-            boolean withScores,
-            long offset,
-            long count,
-            boolean reverse
-    ) {
-        int size = listpack.size();
-        int expected = (int) Math.min(size, count);
+    private List<byte[]> materializeScoreRange(ScoreRangeQuery query, boolean withScores) {
+        int expected = (int) Math.min(size(), query.count());
         List<byte[]> out = new ArrayList<>(withScores ? expected * 2 : expected);
-        forEachPackedScoreRange(min, minExclusive, max, maxExclusive, offset, count, reverse, index -> {
-            out.add(listpack.memberAt(index));
-            if (withScores) {
-                out.add(formatScoreBytes(listpack.scoreAt(index)));
-            }
-        });
+        forEachScoreRange(
+                query,
+                index -> {
+                    out.add(listpack.memberAt(index));
+                    if (withScores) {
+                        out.add(formatScoreBytes(listpack.scoreAt(index)));
+                    }
+                },
+                node -> {
+                    out.add(memberStore.toByteArray(node.member));
+                    if (withScores) {
+                        out.add(formatScoreBytes(node.score));
+                    }
+                }
+        );
         return out;
     }
 
-    private int countPackedScoreRange(
-            double min,
-            boolean minExclusive,
-            double max,
-            boolean maxExclusive,
-            boolean withScores,
-            long offset,
-            long count,
-            boolean reverse
-    ) {
-        int selected = forEachPackedScoreRange(
-                min, minExclusive, max, maxExclusive, offset, count, reverse, index -> {
-                }
-        );
+    private int countScoreRange(ScoreRangeQuery query, boolean withScores) {
+        int selected = forEachScoreRange(query, index -> {
+        }, node -> {
+        });
+        if (withScores && selected > Integer.MAX_VALUE / 2) {
+            throw new IllegalArgumentException("response is too large");
+        }
         return selected * (withScores ? 2 : 1);
     }
 
-    private void writePackedScoreRange(
-            double min,
-            boolean minExclusive,
-            double max,
-            boolean maxExclusive,
-            boolean withScores,
-            long offset,
-            long count,
-            boolean reverse,
-            ByteValueSink out
+    private void writeScoreRange(ScoreRangeQuery query, boolean withScores, ByteValueSink out) {
+        forEachScoreRange(
+                query,
+                index -> {
+                    listpack.memberWriteTo(index, out);
+                    if (withScores) {
+                        writeScoreTo(out, listpack.scoreAt(index));
+                    }
+                },
+                node -> {
+                    if (node.member == null) {
+                        out.nullValue();
+                    } else {
+                        out.value(memberStore.slice(node.member));
+                    }
+                    if (withScores) {
+                        writeScoreTo(out, node.score);
+                    }
+                }
+        );
+    }
+
+    private int forEachScoreRange(
+            ScoreRangeQuery query,
+            IntConsumer packedSelection,
+            Consumer<ZSkipList.Node> skiplistSelection
     ) {
-        forEachPackedScoreRange(min, minExclusive, max, maxExclusive, offset, count, reverse, index -> {
-            listpack.memberWriteTo(index, out);
-            if (withScores) {
-                writeScoreTo(out, listpack.scoreAt(index));
-            }
-        });
+        if (listpack != null) {
+            return forEachPackedScoreRange(query, packedSelection);
+        }
+        return forEachSkiplistScoreRange(query, skiplistSelection);
     }
 
     private int forEachPackedScoreRange(
-            double min,
-            boolean minExclusive,
-            double max,
-            boolean maxExclusive,
-            long offset,
-            long count,
-            boolean reverse,
+            ScoreRangeQuery query,
             IntConsumer selectedIndex
     ) {
-        int first = min == Double.NEGATIVE_INFINITY ? 0 : firstIndexForMin(min, minExclusive);
-        int last = max == Double.POSITIVE_INFINITY ? listpack.size() - 1 : lastIndexForMax(max, maxExclusive);
+        int first = query.min() == Double.NEGATIVE_INFINITY
+                ? 0
+                : firstIndexForMin(query.min(), query.minExclusive());
+        int last = query.max() == Double.POSITIVE_INFINITY
+                ? listpack.size() - 1
+                : lastIndexForMax(query.max(), query.maxExclusive());
         if (first > last) {
             return 0;
         }
 
-        long skipped = Math.max(0, offset);
-        long remaining = count;
+        boolean reverse = query.direction() == ScoreRangeDirection.REVERSE;
+        long skipped = Math.max(0, query.offset());
+        long remaining = query.count();
         int selected = 0;
         for (int index = reverse ? last : first;
              index >= first && index <= last && remaining > 0;
@@ -964,6 +984,35 @@ public final class ZSetValue implements YierdisValue {
             selectedIndex.accept(index);
             selected++;
             remaining--;
+        }
+        return selected;
+    }
+
+    private int forEachSkiplistScoreRange(
+            ScoreRangeQuery query,
+            Consumer<ZSkipList.Node> selectedNode
+    ) {
+        boolean reverse = query.direction() == ScoreRangeDirection.REVERSE;
+        ZSkipList.Node node = reverse
+                ? lastNodeForMax(query.max(), query.maxExclusive())
+                : firstNodeForMin(query.min(), query.minExclusive());
+        long skipped = Math.max(0, query.offset());
+        long remaining = query.count();
+        int selected = 0;
+
+        while (node != null
+                && remaining > 0
+                && scoreInRange(
+                        node.score, query.min(), query.minExclusive(), query.max(), query.maxExclusive()
+                )) {
+            if (skipped > 0) {
+                skipped--;
+            } else {
+                selectedNode.accept(node);
+                selected++;
+                remaining--;
+            }
+            node = reverse ? node.backward : node.forward[0];
         }
         return selected;
     }
@@ -996,217 +1045,6 @@ public final class ZSetValue implements YierdisValue {
         return -1;
     }
 
-    private List<byte[]> zrangeByScoreSkipList(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        int size = byMember.size();
-        if (size == 0) {
-            return new ArrayList<>();
-        }
-
-        ZSkipList.Node node = firstNodeForMin(min, minExclusive);
-        if (node == null) {
-            return new ArrayList<>();
-        }
-
-        long skipped = Math.max(0, offset);
-        long remaining = count;
-        int expected = (int) Math.min(size, remaining);
-        List<byte[]> out = new ArrayList<>(withScores ? expected * 2 : expected);
-
-        while (node != null && remaining > 0) {
-            double s = node.score;
-            if (!scoreInRange(s, min, minExclusive, max, maxExclusive)) {
-                break;
-            }
-            if (skipped > 0) {
-                skipped--;
-                node = node.forward[0];
-                continue;
-            }
-
-            out.add(memberStore.toByteArray(node.member));
-            if (withScores) {
-                out.add(formatScoreBytes(s));
-            }
-            remaining--;
-            node = node.forward[0];
-        }
-        return out;
-    }
-
-    private int zrangeByScoreCountSkipList(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        int size = byMember.size();
-        if (size == 0) {
-            return 0;
-        }
-
-        ZSkipList.Node node = firstNodeForMin(min, minExclusive);
-        if (node == null) {
-            return 0;
-        }
-
-        long skipped = Math.max(0, offset);
-        long remaining = count;
-        int outCount = 0;
-
-        while (node != null && remaining > 0) {
-            double s = node.score;
-            if (!scoreInRange(s, min, minExclusive, max, maxExclusive)) {
-                break;
-            }
-            if (skipped > 0) {
-                skipped--;
-                node = node.forward[0];
-                continue;
-            }
-
-            int add = withScores ? 2 : 1;
-            if (outCount > Integer.MAX_VALUE - add) {
-                throw new IllegalArgumentException("response is too large");
-            }
-            outCount += add;
-            remaining--;
-            node = node.forward[0];
-        }
-        return outCount;
-    }
-
-    private void zrangeByScoreWriteToSkipList(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, ByteValueSink out) {
-        ZSkipList.Node node = firstNodeForMin(min, minExclusive);
-        if (node == null) {
-            return;
-        }
-
-        long skipped = Math.max(0, offset);
-        long remaining = count;
-        while (node != null && remaining > 0) {
-            double s = node.score;
-            if (!scoreInRange(s, min, minExclusive, max, maxExclusive)) {
-                break;
-            }
-            if (skipped > 0) {
-                skipped--;
-                node = node.forward[0];
-                continue;
-            }
-
-            if (node.member == null) {
-                out.nullValue();
-            } else {
-                out.value(memberStore.slice(node.member));
-            }
-            if (withScores) {
-                writeScoreTo(out, s);
-            }
-            remaining--;
-            node = node.forward[0];
-        }
-    }
-
-    private List<byte[]> zrevrangeByScoreSkipList(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        int size = byMember.size();
-        if (size == 0) {
-            return new ArrayList<>();
-        }
-
-        ZSkipList.Node node = lastNodeForMax(max, maxExclusive);
-        if (node == null) {
-            return new ArrayList<>();
-        }
-
-        long skipped = Math.max(0, offset);
-        long remaining = count;
-        int expected = (int) Math.min(size, remaining);
-        List<byte[]> out = new ArrayList<>(withScores ? expected * 2 : expected);
-
-        while (node != null && remaining > 0) {
-            double s = node.score;
-            if (!scoreAtOrAboveMin(s, min, minExclusive)) {
-                break;
-            }
-            if (skipped > 0) {
-                skipped--;
-                node = node.backward;
-                continue;
-            }
-
-            out.add(memberStore.toByteArray(node.member));
-            if (withScores) {
-                out.add(formatScoreBytes(s));
-            }
-            remaining--;
-            node = node.backward;
-        }
-        return out;
-    }
-
-    private int zrevrangeByScoreCountSkipList(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        int size = byMember.size();
-        if (size == 0) {
-            return 0;
-        }
-
-        ZSkipList.Node node = lastNodeForMax(max, maxExclusive);
-        if (node == null) {
-            return 0;
-        }
-
-        long skipped = Math.max(0, offset);
-        long remaining = count;
-        int outCount = 0;
-        while (node != null && remaining > 0) {
-            double s = node.score;
-            if (!scoreAtOrAboveMin(s, min, minExclusive)) {
-                break;
-            }
-            if (skipped > 0) {
-                skipped--;
-                node = node.backward;
-                continue;
-            }
-
-            int add = withScores ? 2 : 1;
-            if (outCount > Integer.MAX_VALUE - add) {
-                throw new IllegalArgumentException("response is too large");
-            }
-            outCount += add;
-            remaining--;
-            node = node.backward;
-        }
-        return outCount;
-    }
-
-    private void zrevrangeByScoreWriteToSkipList(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, ByteValueSink out) {
-        ZSkipList.Node node = lastNodeForMax(max, maxExclusive);
-        if (node == null) {
-            return;
-        }
-
-        long skipped = Math.max(0, offset);
-        long remaining = count;
-        while (node != null && remaining > 0) {
-            double s = node.score;
-            if (!scoreAtOrAboveMin(s, min, minExclusive)) {
-                break;
-            }
-            if (skipped > 0) {
-                skipped--;
-                node = node.backward;
-                continue;
-            }
-
-            if (node.member == null) {
-                out.nullValue();
-            } else {
-                out.value(memberStore.slice(node.member));
-            }
-            if (withScores) {
-                writeScoreTo(out, s);
-            }
-            remaining--;
-            node = node.backward;
-        }
-    }
-
     private ZSkipList.Node firstNodeForMin(double min, boolean minExclusive) {
         if (min == Double.NEGATIVE_INFINITY) {
             return byScore.first();
@@ -1219,13 +1057,6 @@ public final class ZSetValue implements YierdisValue {
             return byScore.last();
         }
         return byScore.findLastByScore(max, maxExclusive);
-    }
-
-    private static boolean scoreAtOrAboveMin(double s, double min, boolean minExclusive) {
-        if (compareScores(s, min) < 0) {
-            return false;
-        }
-        return !minExclusive || compareScores(s, min) != 0;
     }
 
     private static boolean scoreInRange(double s, double min, boolean minExclusive, double max, boolean maxExclusive) {
