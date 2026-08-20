@@ -7,6 +7,9 @@ import java.util.Objects;
  * key/value 数组及其所有权留给容器；matcher 和 mover 只在对应槽位仍有效的同步调用期间使用。
  */
 public final class OpenAddressingTopology {
+    private static final long ARRAY_HEADER_BYTES = 16L;
+    private static final long TOPOLOGY_OBJECT_BYTES = 64L;
+    private static final long TABLE_OBJECT_BYTES = 48L;
     private static final byte STATE_EMPTY = 0;
     private static final byte STATE_FILLED = 1;
     private static final byte STATE_TOMBSTONE = 2;
@@ -64,12 +67,65 @@ public final class OpenAddressingTopology {
     }
 
     public void beginRehash(int targetCapacity) {
+        beginRehash(new OpenAddressingTopology(targetCapacity));
+    }
+
+    /** 发布预先分配的空 active topology，并把当前 active 转为 old。 */
+    public void beginRehash(OpenAddressingTopology replacement) {
+        Objects.requireNonNull(replacement, "replacement");
         if (old != null) {
             throw new IllegalStateException("cannot start a second topology rehash");
         }
+        if (replacement == this
+                || replacement.old != null
+                || replacement.size != 0
+                || replacement.active.filled != 0
+                || replacement.active.tombstones != 0) {
+            throw new IllegalArgumentException("replacement must be an empty standalone active topology");
+        }
         old = active;
-        active = new Table(targetCapacity);
+        active = replacement.active;
         rehashCursor = 0;
+        generation++;
+    }
+
+    /** 将指定 old slot 同步提升到 active，并返回 mover 收到的 active slot。 */
+    public int promoteOld(int oldSlot, SlotMover mover) {
+        Objects.requireNonNull(mover, "mover");
+        if (old == null) {
+            throw new IllegalStateException("old topology is not available");
+        }
+        requireSlot(old, oldSlot);
+        if (old.states[oldSlot] != STATE_FILLED) {
+            throw new IllegalStateException("cannot promote a non-filled old slot");
+        }
+        return moveOldSlot(oldSlot, mover);
+    }
+
+    /** 发布一个已完整构建的 standalone topology，同时保留本实例的生命周期计数。 */
+    public void replaceActive(OpenAddressingTopology replacement) {
+        Objects.requireNonNull(replacement, "replacement");
+        if (replacement == this || replacement.old != null) {
+            throw new IllegalArgumentException("replacement must be a standalone active topology");
+        }
+        boolean replacedRehash = old != null;
+        active = replacement.active;
+        old = null;
+        rehashCursor = 0;
+        size = replacement.size;
+        maximumProbeLength = Math.max(maximumProbeLength, replacement.maximumProbeLength);
+        if (replacedRehash) {
+            completedRehashes++;
+        }
+        generation++;
+    }
+
+    /** 清空 active/old 状态，但保留跨 clear 的历史计数。 */
+    public void reset(int initialCapacity) {
+        active = new Table(initialCapacity);
+        old = null;
+        rehashCursor = 0;
+        size = 0;
         generation++;
     }
 
@@ -104,7 +160,7 @@ public final class OpenAddressingTopology {
             int oldSlot = rehashCursor++;
             inspected++;
             if (old.states[oldSlot] == STATE_FILLED) {
-                moveOldSlot(oldSlot, mover);
+                promoteOld(oldSlot, mover);
                 migrated++;
             }
         }
@@ -158,6 +214,17 @@ public final class OpenAddressingTopology {
         );
     }
 
+    public long heapEstimatedBytes() {
+        return TOPOLOGY_OBJECT_BYTES
+                + tableHeapEstimatedBytes(active.capacity)
+                + (old == null ? 0L : tableHeapEstimatedBytes(old.capacity));
+    }
+
+    public static long standaloneHeapEstimatedBytes(int capacity) {
+        validateCapacity(capacity);
+        return TOPOLOGY_OBJECT_BYTES + tableHeapEstimatedBytes(capacity);
+    }
+
     public SlotState slotState(TableSide side, int slot) {
         Table table = table(side);
         requireSlot(table, slot);
@@ -168,6 +235,18 @@ public final class OpenAddressingTopology {
             case STATE_MIGRATED_SCAN_SHADOW -> SlotState.MIGRATED_SCAN_SHADOW;
             default -> throw new IllegalStateException("unknown topology slot state");
         };
+    }
+
+    /** 返回 FILLED 或 MIGRATED_SCAN_SHADOW slot 保留的 probe hash。 */
+    public int hashAt(Location location) {
+        Objects.requireNonNull(location, "location");
+        Table table = table(location.table());
+        requireSlot(table, location.slot());
+        byte state = table.states[location.slot()];
+        if (state != STATE_FILLED && state != STATE_MIGRATED_SCAN_SHADOW) {
+            throw new IllegalStateException("topology slot does not retain a hash");
+        }
+        return table.hashes[location.slot()];
     }
 
     private TableProbe probe(
@@ -199,13 +278,14 @@ public final class OpenAddressingTopology {
         return new TableProbe(-1, locateInsertion ? firstTombstone : -1, table.capacity);
     }
 
-    private void moveOldSlot(int oldSlot, SlotMover mover) {
+    private int moveOldSlot(int oldSlot, SlotMover mover) {
         int hash = old.hashes[oldSlot];
         int activeSlot = insertionSlot(active, hash);
         mover.move(oldSlot, activeSlot);
         occupy(active, activeSlot, hash);
         old.states[oldSlot] = STATE_MIGRATED_SCAN_SHADOW;
         old.filled--;
+        return activeSlot;
     }
 
     private int insertionSlot(Table table, int hash) {
@@ -274,6 +354,12 @@ public final class OpenAddressingTopology {
                 || (capacity & (capacity - 1)) != 0) {
             throw new IllegalArgumentException("invalid topology capacity: " + capacity);
         }
+    }
+
+    private static long tableHeapEstimatedBytes(int capacity) {
+        long hashes = ARRAY_HEADER_BYTES + (long) capacity * Integer.BYTES;
+        long states = ARRAY_HEADER_BYTES + capacity;
+        return TABLE_OBJECT_BYTES + hashes + states;
     }
 
     @FunctionalInterface

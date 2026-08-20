@@ -45,7 +45,8 @@ public class OpenAddressingTopologyCompatibilityTest {
         Assert.assertEquals(new Location(TableSide.ACTIVE, 1), replacement.location());
         topology.occupyActive(replacement.location().slot(), 1);
 
-        topology.beginRehash(32);
+        OpenAddressingTopology stagedActive = new OpenAddressingTopology(32);
+        topology.beginRehash(stagedActive);
         AtomicInteger movedFrom = new AtomicInteger(-1);
         AtomicInteger movedTo = new AtomicInteger(-1);
         HashTableWorkResult step = topology.advanceRehash(
