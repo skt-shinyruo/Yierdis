@@ -32,7 +32,7 @@ CommandExecutor
 
 `CommandRegistry` 是 upper-case command name 到 `CommandSpec` 的单一映射。`CommandSpec` 包含：
 
-- `CommandSyntax`：name、`CommandArity`、`CommandKeySpec` 和 `TransactionPolicy`；
+- `CommandSyntax`：name、`CommandArity`、`CommandKeySpec`、`TransactionPolicy` 和 `ReplyAdmissionRequirement`；
 - `CommandHandler`：`parse(CommandArgs)`，成功时返回 `Function<CommandSession, PreparedCommand>`。
 
 dispatcher 先做命令名、null argument、lookup 和 arity 检查，再调用 handler。handler 只读取 argv 并生成不可变的解析结果；它不能读取 session、路由 DB 或调用 server provider。这个限制让普通执行与 `MULTI` 入队 preflight 复用同一个 parse 行为。
@@ -215,7 +215,7 @@ HLL 也没有独立 `ValueType`。命令层由 `HllCommands` 表达语义，DB �
 ## 新增命令时的路线
 
 1. 确认命令 family，或实现新的 `CommandModule`。
-2. 注册 `CommandSpec(CommandSyntax, CommandHandler)`，补齐 arity、key spec 和 transaction policy。
+2. 注册 `CommandSpec(CommandSyntax, CommandHandler)`，补齐 arity、key spec、transaction policy 和 reply admission requirement。
 3. 在 `handler.parse(CommandArgs)` 中完成纯 argv 解析；错误抛 `CommandParseException`，不得访问 session 或 DB。
 4. 返回 `Function<CommandSession, PreparedCommand>`，在 `apply(session)` 中取得当前 DB、准备 mutation/source，并构造 `PreparedCommand`。
 5. 为 prepared command 给出真实 reservation shape；可变 preview 接上 validation，可见 mutation 留在 execute。

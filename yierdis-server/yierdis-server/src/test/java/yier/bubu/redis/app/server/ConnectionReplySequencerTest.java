@@ -20,6 +20,62 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class ConnectionReplySequencerTest {
     @Test
+    public void cleanupIncludesAnAsyncResourceTransferredWhileTheLeaseIsClosing() throws Exception {
+        OutboundMemoryBudget budget = new OutboundMemoryBudget(4_096L);
+        OutboundConnectionMemory connection = budget.openConnection(4_096L);
+        OutboundConnectionMemory waiterConnection = budget.openConnection(4_096L);
+        EmbeddedChannel channel = new EmbeddedChannel();
+        ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, connection, () -> { });
+        ReplySlot slot = sequencer.register(connection.reserve(4_096L, 4_096L).orElseThrow()).orElseThrow();
+        CountDownLatch leaseCloseEntered = new CountDownLatch(1);
+        CountDownLatch releaseLeaseClose = new CountDownLatch(1);
+        CompletableFuture<Void> resourceClose = new CompletableFuture<>();
+        AtomicInteger closes = new AtomicInteger();
+        Thread cleanup = null;
+        try {
+            Assert.assertTrue(waiterConnection.awaitCapacity(4_096L, 4_096L, () -> {
+                leaseCloseEntered.countDown();
+                try {
+                    Assert.assertTrue(releaseLeaseClose.await(1, TimeUnit.SECONDS));
+                } catch (InterruptedException failure) {
+                    throw new AssertionError(failure);
+                }
+            }));
+
+            cleanup = Thread.ofPlatform().start(slot::cancelNow);
+            Assert.assertTrue(leaseCloseEntered.await(1, TimeUnit.SECONDS));
+            slot.addOwnedResource(closes::incrementAndGet, resource -> resourceClose.thenRun(() -> {
+                try {
+                    resource.close();
+                } catch (Exception failure) {
+                    throw new IllegalStateException(failure);
+                }
+            }));
+            releaseLeaseClose.countDown();
+            cleanup.join(1_000L);
+
+            Assert.assertFalse(cleanup.isAlive());
+            Assert.assertFalse(slot.cleanupCompletion().isDone());
+            Assert.assertEquals(0, closes.get());
+
+            resourceClose.complete(null);
+
+            Assert.assertEquals(1, closes.get());
+            Assert.assertTrue(slot.cleanupCompletion().isDone());
+            Assert.assertEquals(0L, budget.stats().reservedBytes());
+        } finally {
+            releaseLeaseClose.countDown();
+            resourceClose.complete(null);
+            if (cleanup != null) {
+                cleanup.join(1_000L);
+            }
+            waiterConnection.close();
+            channel.finishAndReleaseAll();
+            sequencer.close();
+        }
+    }
+
+    @Test
     public void cancellationAfterChunksAreClaimedKeepsTheLeaseUntilEveryChunkIsReleased() throws Exception {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(4_096L);
         OutboundConnectionMemory connection = budget.openConnection(4_096L);
@@ -52,6 +108,50 @@ public class ConnectionReplySequencerTest {
             if (writer != null) {
                 writer.join(1_000L);
             }
+            channel.finishAndReleaseAll();
+            sequencer.close();
+        }
+    }
+
+    @Test
+    public void cleanupWaitsForAResourceTransferredWhileAnInFlightChunkKeepsTerminationOpen() {
+        OutboundMemoryBudget budget = new OutboundMemoryBudget(4_096L);
+        OutboundConnectionMemory connection = budget.openConnection(4_096L);
+        DelayedOutboundWrites delayedWrites = new DelayedOutboundWrites();
+        EmbeddedChannel channel = new EmbeddedChannel(delayedWrites);
+        ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, connection, () -> { });
+        ReplySlot slot = sequencer.register(connection.reserve(4_096L, 4_096L).orElseThrow()).orElseThrow();
+        CompletableFuture<Void> resourceClose = new CompletableFuture<>();
+        AtomicInteger closes = new AtomicInteger();
+        try {
+            slot.addChunk(Unpooled.copiedBuffer("reply", StandardCharsets.US_ASCII));
+            slot.markReady(false);
+            drain(channel);
+            Assert.assertEquals(1, delayedWrites.pendingWriteCount());
+
+            Assert.assertTrue(slot.cancelNow());
+            slot.addOwnedResource(closes::incrementAndGet, resource -> resourceClose.thenRun(() -> {
+                try {
+                    resource.close();
+                } catch (Exception failure) {
+                    throw new IllegalStateException(failure);
+                }
+            }));
+            delayedWrites.succeedAll();
+            drain(channel);
+
+            Assert.assertFalse(slot.cleanupCompletion().isDone());
+            Assert.assertFalse(slot.lease().closed());
+            Assert.assertEquals(4_096L, budget.stats().reservedBytes());
+
+            resourceClose.complete(null);
+
+            Assert.assertEquals(1, closes.get());
+            Assert.assertTrue(slot.cleanupCompletion().isDone());
+            Assert.assertEquals(0L, budget.stats().reservedBytes());
+        } finally {
+            resourceClose.complete(null);
+            delayedWrites.failAll();
             channel.finishAndReleaseAll();
             sequencer.close();
         }
@@ -340,7 +440,7 @@ public class ConnectionReplySequencerTest {
             producer.join();
             closer.join();
 
-            Assert.assertTrue(slot.cleanupStarted());
+            Assert.assertTrue(slot.cleanupCompletion().isDone());
             Assert.assertEquals(1, closes.get());
             Assert.assertEquals(0L, budget.stats().reservedBytes());
             Assert.assertEquals(ReplySlotState.CANCELLED, slot.state());

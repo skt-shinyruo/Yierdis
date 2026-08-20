@@ -318,7 +318,7 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
     }
 
     private void ensureOpen() {
-        if (finished || slot.state() == ReplySlotState.CANCELLED || slot.state() == ReplySlotState.FAILED) {
+        if (finished || slot.state().cleanupOwned()) {
             throw new IllegalStateException("reply sink is closed");
         }
     }

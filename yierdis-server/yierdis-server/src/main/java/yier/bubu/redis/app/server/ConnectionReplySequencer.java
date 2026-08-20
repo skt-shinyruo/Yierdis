@@ -166,7 +166,7 @@ final class ConnectionReplySequencer implements AutoCloseable {
                         break;
                     }
                     ReplySlotState state = head.state();
-                    if (state == ReplySlotState.CANCELLED || state == ReplySlotState.FAILED || state == ReplySlotState.COMPLETED) {
+                    if (state.cleanupOwned()) {
                         removeHead(head);
                         continue;
                     }
@@ -211,7 +211,7 @@ final class ConnectionReplySequencer implements AutoCloseable {
         synchronized (lock) {
             for (ReplySlot slot : slots) {
                 ReplySlotState state = slot.state();
-                if (state != ReplySlotState.READY && state != ReplySlotState.WRITING) {
+                if (state != ReplySlotState.READY && state != ReplySlotState.WRITING && !state.cleanupOwned()) {
                     toCancel.add(slot);
                 }
             }

@@ -28,19 +28,17 @@ final class ReplySlot implements ExecutionReply {
     private final ConnectionReplySequencer sequencer;
     private final Function<ReplySlot, BytesSink> sinkFactory;
     private final ReplyEgressStats replyEgressStats;
-    private final AtomicReference<ReplySlotState> state = new AtomicReference<>(ReplySlotState.REGISTERED);
-    private final AtomicBoolean cleanupStarted = new AtomicBoolean();
     private final AtomicReference<CapacityWait> capacityWait = new AtomicReference<>();
     private final Object contentLock = new Object();
     private final List<ReplyChunk> pendingChunks = new ArrayList<>();
     private final List<OwnedResource> ownedResources = new ArrayList<>();
     private final CompletableFuture<Void> cleanupCompletion = new CompletableFuture<>();
 
+    private volatile ReplySlotState state = ReplySlotState.REGISTERED;
     private volatile boolean closeAfterReply;
     private BytesSink sink;
     private int inFlightChunks;
-    private int pendingResourceCloses;
-    private boolean leaseClosed;
+    private int pendingCleanupTasks;
     private Throwable cleanupFailure;
 
     ReplySlot(
@@ -62,11 +60,7 @@ final class ReplySlot implements ExecutionReply {
     }
 
     ReplySlotState state() {
-        return state.get();
-    }
-
-    boolean cleanupStarted() {
-        return cleanupStarted.get();
+        return state;
     }
 
     OutboundMemoryLease lease() {
@@ -88,7 +82,7 @@ final class ReplySlot implements ExecutionReply {
             throw new IllegalArgumentException("allocatedBytes must be non-negative");
         }
         synchronized (contentLock) {
-            if (cleanupStarted.get() || !enterProducing()) {
+            if (!enterProducing()) {
                 chunk.release();
                 releaseAllocation(allocatedBytes);
                 throw new IllegalStateException("reply slot is not accepting chunks");
@@ -110,19 +104,26 @@ final class ReplySlot implements ExecutionReply {
         Objects.requireNonNull(closer, "closer");
         OwnedResource owned = new OwnedResource(resource, closer);
         boolean closeNow;
-        boolean added = false;
+        boolean tracked = false;
         synchronized (contentLock) {
-            closeNow = cleanupStarted.get();
+            closeNow = state.cleanupOwned();
             if (!closeNow) {
                 ownedResources.add(owned);
-                added = true;
+                tracked = true;
+            } else if (state.cleanupInProgress()) {
+                pendingCleanupTasks++;
+                tracked = true;
             }
         }
-        if (added) {
+        if (tracked) {
             replyEgressStats.sourceAdded();
         }
         if (closeNow) {
-            closeWithoutAccounting(owned);
+            if (tracked) {
+                closeResource(owned).whenComplete((ignored, failure) -> resourceCloseCompleted(failure));
+            } else {
+                closeWithoutAccounting(owned);
+            }
         }
     }
 
@@ -132,8 +133,8 @@ final class ReplySlot implements ExecutionReply {
 
     void markWaitingForCapacity() {
         synchronized (contentLock) {
-            if (!cleanupStarted.get()) {
-                state.compareAndSet(ReplySlotState.REGISTERED, ReplySlotState.WAITING_CAPACITY);
+            if (state == ReplySlotState.REGISTERED) {
+                state = ReplySlotState.WAITING_CAPACITY;
             }
         }
     }
@@ -163,7 +164,7 @@ final class ReplySlot implements ExecutionReply {
     public BytesSink sink() {
         synchronized (contentLock) {
             if (sink == null) {
-                if (cleanupStarted.get() || isTerminal(state.get())) {
+                if (state.cleanupOwned()) {
                     throw new IllegalStateException("reply slot has already terminated");
                 }
                 sink = sinkFactory.apply(this);
@@ -186,7 +187,7 @@ final class ReplySlot implements ExecutionReply {
         } catch (ReplyTooLargeException tooLarge) {
             return ReplyReservationResult.TOO_LARGE;
         } catch (IllegalStateException closedSlot) {
-            if (!cleanupStarted.get()) {
+            if (!state.cleanupOwned()) {
                 throw closedSlot;
             }
             return ReplyReservationResult.CLOSED;
@@ -197,7 +198,7 @@ final class ReplySlot implements ExecutionReply {
     public Runnable onCapacityAvailable(Runnable wakeup) {
         Objects.requireNonNull(wakeup, "wakeup");
         CapacityWait waiting = capacityWait.get();
-        if (waiting == null || cleanupStarted.get() || isTerminal(state.get())) {
+        if (waiting == null || state.cleanupOwned()) {
             return null;
         }
         AtomicBoolean active = new AtomicBoolean(true);
@@ -243,20 +244,15 @@ final class ReplySlot implements ExecutionReply {
     public void markReady(boolean closeAfterReply) {
         boolean ready = false;
         synchronized (contentLock) {
-            if (cleanupStarted.get()) {
+            if (state.cleanupOwned()) {
                 return;
             }
             this.closeAfterReply = closeAfterReply;
-            while (true) {
-                ReplySlotState current = state.get();
-                if (isTerminal(current) || current == ReplySlotState.WRITING || current == ReplySlotState.READY) {
-                    return;
-                }
-                if (state.compareAndSet(current, ReplySlotState.READY)) {
-                    ready = true;
-                    break;
-                }
+            if (state == ReplySlotState.WRITING || state == ReplySlotState.READY) {
+                return;
             }
+            state = ReplySlotState.READY;
+            ready = true;
         }
         if (ready) {
             sequencer.onSlotReady(this);
@@ -270,10 +266,10 @@ final class ReplySlot implements ExecutionReply {
 
     List<ReplyChunk> takeChunksForWrite() {
         synchronized (contentLock) {
-            if (cleanupStarted.get()
-                    || !state.compareAndSet(ReplySlotState.READY, ReplySlotState.WRITING)) {
+            if (state != ReplySlotState.READY) {
                 return null;
             }
+            state = ReplySlotState.WRITING;
             List<ReplyChunk> chunks = List.copyOf(pendingChunks);
             pendingChunks.clear();
             inFlightChunks += chunks.size();
@@ -306,13 +302,7 @@ final class ReplySlot implements ExecutionReply {
                 throw new IllegalStateException("reply slot chunk completion underflow");
             }
             inFlightChunks--;
-            closeLease = cleanupStarted.get()
-                    && inFlightChunks == 0
-                    && pendingResourceCloses == 0
-                    && !leaseClosed;
-            if (closeLease) {
-                leaseClosed = true;
-            }
+            closeLease = claimLeaseClose();
         }
         if (closeLease) {
             closeLeaseAndCompleteCleanup();
@@ -334,11 +324,9 @@ final class ReplySlot implements ExecutionReply {
     void runProducerAction(Runnable action) {
         Objects.requireNonNull(action, "action");
         synchronized (contentLock) {
-            ReplySlotState current = state.get();
-            if (cleanupStarted.get()
-                    || current == ReplySlotState.READY
-                    || current == ReplySlotState.WRITING
-                    || isTerminal(current)) {
+            if (state == ReplySlotState.READY
+                    || state == ReplySlotState.WRITING
+                    || state.cleanupOwned()) {
                 throw new IllegalStateException("reply slot is not accepting producer writes");
             }
             action.run();
@@ -346,43 +334,33 @@ final class ReplySlot implements ExecutionReply {
     }
 
     private boolean enterProducing() {
-        while (true) {
-            ReplySlotState current = state.get();
-            if (current == ReplySlotState.PRODUCING) {
-                return true;
-            }
-            if (current != ReplySlotState.REGISTERED && current != ReplySlotState.WAITING_CAPACITY) {
-                return false;
-            }
-            if (state.compareAndSet(current, ReplySlotState.PRODUCING)) {
-                return true;
-            }
+        if (state == ReplySlotState.PRODUCING) {
+            return true;
         }
+        if (state != ReplySlotState.REGISTERED && state != ReplySlotState.WAITING_CAPACITY) {
+            return false;
+        }
+        state = ReplySlotState.PRODUCING;
+        return true;
     }
 
     private boolean cleanup(ReplySlotState terminalState) {
-        if (!cleanupStarted.compareAndSet(false, true)) {
-            return false;
-        }
-
-        cancelCapacityWait();
-
         List<ReplyChunk> chunks;
         List<OwnedResource> resources;
         boolean closeLease;
         synchronized (contentLock) {
+            if (state.cleanupOwned()) {
+                return false;
+            }
+            state = terminalState.beginCleanup();
             chunks = List.copyOf(pendingChunks);
             pendingChunks.clear();
             resources = List.copyOf(ownedResources);
             ownedResources.clear();
-            pendingResourceCloses += resources.size();
-            closeLease = inFlightChunks == 0 && pendingResourceCloses == 0 && !leaseClosed;
-            if (closeLease) {
-                leaseClosed = true;
-            }
-            // 先发布 terminal state，再让其他线程离开 contentLock，避免 cleanup 缝隙中重新进入 producer。
-            state.set(terminalState);
+            pendingCleanupTasks += resources.size();
+            closeLease = claimLeaseClose();
         }
+        cancelCapacityWait();
         for (ReplyChunk chunk : chunks) {
             if (chunk.release()) {
                 replyEgressStats.chunkReleased();
@@ -406,27 +384,32 @@ final class ReplySlot implements ExecutionReply {
     private void resourceCloseCompleted(Throwable failure) {
         boolean closeLease;
         synchronized (contentLock) {
-            if (pendingResourceCloses <= 0) {
+            if (pendingCleanupTasks <= 0) {
                 throw new IllegalStateException("reply slot source completion underflow");
             }
-            pendingResourceCloses--;
+            pendingCleanupTasks--;
             cleanupFailure = recordFailure(cleanupFailure, unwrapCompletionFailure(failure));
-            closeLease = cleanupStarted.get()
-                    && inFlightChunks == 0
-                    && pendingResourceCloses == 0
-                    && !leaseClosed;
-            if (closeLease) {
-                leaseClosed = true;
-            }
+            closeLease = claimLeaseClose();
         }
         replyEgressStats.sourceReleased();
         if (closeLease) {
             closeLeaseAndCompleteCleanup();
+        } else {
+            completeCleanupIfReady();
         }
     }
 
+    private boolean claimLeaseClose() {
+        if (inFlightChunks != 0 || pendingCleanupTasks != 0 || !state.waitingToCloseLease()) {
+            return false;
+        }
+        state = state.beginLeaseClose();
+        // lease close 也是 cleanup task；计数保证并发转入的异步资源不能越过它发布 completion。
+        pendingCleanupTasks++;
+        return true;
+    }
+
     private void closeLeaseAndCompleteCleanup() {
-        Throwable failure;
         try {
             lease.close();
         } catch (Throwable closeFailure) {
@@ -435,12 +418,25 @@ final class ReplySlot implements ExecutionReply {
             }
         }
         synchronized (contentLock) {
-            failure = cleanupFailure;
+            if (pendingCleanupTasks <= 0) {
+                throw new IllegalStateException("reply slot lease completion underflow");
+            }
+            pendingCleanupTasks--;
         }
-        if (failure == null) {
-            cleanupCompletion.complete(null);
-        } else {
-            cleanupCompletion.completeExceptionally(failure);
+        completeCleanupIfReady();
+    }
+
+    private void completeCleanupIfReady() {
+        synchronized (contentLock) {
+            if (pendingCleanupTasks != 0 || !state.closingLease()) {
+                return;
+            }
+            state = state.completeCleanup();
+            if (cleanupFailure == null) {
+                cleanupCompletion.complete(null);
+            } else {
+                cleanupCompletion.completeExceptionally(cleanupFailure);
+            }
         }
     }
 
@@ -448,12 +444,6 @@ final class ReplySlot implements ExecutionReply {
         if (bytes > 0L) {
             lease.releaseAllocated(bytes);
         }
-    }
-
-    private static boolean isTerminal(ReplySlotState candidate) {
-        return candidate == ReplySlotState.COMPLETED
-                || candidate == ReplySlotState.CANCELLED
-                || candidate == ReplySlotState.FAILED;
     }
 
     private static CompletableFuture<Void> closeResource(OwnedResource owned) {

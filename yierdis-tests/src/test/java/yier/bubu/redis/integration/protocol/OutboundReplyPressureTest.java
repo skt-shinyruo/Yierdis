@@ -58,7 +58,7 @@ public class OutboundReplyPressureTest {
     }
 
     @Test
-    public void pipelinedTransactionProgressesWhenOneReplyCanFillTheConnectionBudget() throws Exception {
+    public void pipelinedExecClaimsTheConnectionBudgetBeforeFollowingPingRegisters() throws Exception {
         YierdisServerBootstrap server = YierdisServerBootstrap.start(serverArgs("fair"));
         OutboundMemoryBudget budget = server.outboundMemoryBudgetForTests();
         try (Socket client = RespTcpTestSupport.connect(server)) {

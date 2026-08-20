@@ -112,7 +112,7 @@ CommandExecutor
 
 查到的 `CommandSpec` 只有两部分：
 
-- `CommandSyntax`：命令名、arity、key spec 和 transaction policy；
+- `CommandSyntax`：命令名、arity、key spec、transaction policy 和 reply admission requirement；
 - `CommandHandler`：`parse(CommandArgs)` 返回 transport-neutral 的 `Function<CommandSession, PreparedCommand>`。
 
 `CommandArgs` 集中提供 argv、ASCII literal 和整数读取。parse 阶段只解释请求参数；dispatcher 随后把 session 传给返回的 function，由它访问 DB、准备 mutation 或取得需要延迟释放的 reply source，并返回 `PreparedCommand`。

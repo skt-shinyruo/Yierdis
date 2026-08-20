@@ -45,7 +45,12 @@ CommandResult / RedisReply
 
 `RespReplyWriter` 只看到 `BytesSink`。`BoundedChunkedReplySink` 在 allocator 调用前把已预留
 额度转换成 allocated credit，再创建固定上限 chunk 并登记到 `ReplySlot`。回复按 slot sequence
-写回；资源和额度由唯一 cleanup owner 收敛。
+写回；slot lifecycle 同时记录生产、写回、cleaning 和 cleaned 阶段，只有取得 cleaning 阶段的
+路径能执行终态清理。cleanup completion 会等待 in-flight chunks 与异步 resource close，再关闭
+outbound lease。
+
+命令注册通过 `ReplyAdmissionRequirement` 声明后续 slot 是否可继续流水线注册。reply gate 只执行
+这个策略；`EXEC` 的容量屏障由 command registry 语义提供，不在 transport 层重新识别命令 token。
 
 ## BytesSlice 输出
 
