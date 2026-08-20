@@ -105,13 +105,33 @@ public class NativeByteMapTest {
                     Assert.assertTrue(activeValueSlots(objects) instanceof Object[]);
 
                     int capacity = handles.metrics().capacity();
-                    Assert.assertEquals(tableHeapBytes(capacity, true), handles.heapEstimatedBytes());
-                    Assert.assertEquals(tableHeapBytes(capacity, false), constants.heapEstimatedBytes());
-                    Assert.assertEquals(tableHeapBytes(capacity, true), objects.heapEstimatedBytes());
+                    Assert.assertEquals(mapHeapBytes(capacity, true), handles.heapEstimatedBytes());
+                    Assert.assertEquals(mapHeapBytes(capacity, false), constants.heapEstimatedBytes());
+                    Assert.assertEquals(mapHeapBytes(capacity, true), objects.heapEstimatedBytes());
                 } finally {
                     valueStore.release(value);
                 }
             }
+        }
+    }
+
+    @Test
+    public void growthEstimateIncludesTheStagedReplacementAndSharedTopology() {
+        try (TestBackend runtime = TestBackend.open("native-byte-map-growth-estimate");
+             StableMemoryBackend allocator = runtime.backend();
+             NativeByteMap<Integer> map = new NativeByteMap<>(
+                     new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES),
+                     NativeObjectKind.SET_MEMBER_BYTES,
+                     FIXED_SEED
+             )) {
+            for (int i = 0; i < 12; i++) {
+                map.put(bytes("growth-" + i), i);
+            }
+
+            Assert.assertEquals(
+                    32L + mapHeapBytes(32, true),
+                    map.estimatedInsertHeapGrowthBytes()
+            );
         }
     }
 
@@ -716,6 +736,59 @@ public class NativeByteMapTest {
     }
 
     @Test
+    public void collisionLifecycleRemainsVisibleAcrossRehashPreparedPutAndTombstoneReuse() {
+        try (TestBackend runtime = TestBackend.open("native-byte-map-shared-topology");
+             StableMemoryBackend allocator = runtime.backend()) {
+            NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.HASH_FIELD_BYTES);
+            try (NativeByteMap<String> map = new NativeByteMap<>(
+                    store,
+                    NativeObjectKind.HASH_FIELD_BYTES,
+                    FIXED_SEED,
+                    ignored -> 7
+            )) {
+                for (int i = 0; i < 13; i++) {
+                    map.put(bytes("collision-" + i), "value-" + i);
+                }
+                Assert.assertTrue(map.metrics().rehashing());
+
+                try (NativeByteMap.PreparedMutation<String> prepared = map.preparePuts(List.of(
+                        new NativeByteMap.StagedPut<>(bytes("collision-0"), "updated", true),
+                        new NativeByteMap.StagedPut<>(bytes("prepared"), "added", false)
+                ))) {
+                    prepared.commit();
+                    prepared.releaseSuperseded();
+                }
+                drainRehash(map);
+
+                Assert.assertEquals("value-1", map.remove(bytes("collision-1")));
+                Assert.assertEquals(1, map.metrics().tombstones());
+                map.put(bytes("replacement"), "replacement-value");
+                Assert.assertEquals(0, map.metrics().tombstones());
+
+                Set<String> seen = new HashSet<>();
+                ScanCursorV2 cursor = ScanCursorV2.start();
+                do {
+                    NativeByteMap.ScanResult result = map.scanWithWork(cursor, 3L, (keyHandle, value) -> {
+                        seen.add(new String(store.toByteArray(keyHandle), StandardCharsets.US_ASCII));
+                        return true;
+                    });
+                    Assert.assertTrue(result.inspectedSlots() <= 3L);
+                    cursor = result.nextCursor();
+                } while (cursor.value() != 0L);
+
+                Assert.assertEquals(14, map.size());
+                Assert.assertEquals("updated", map.get(bytes("collision-0")));
+                Assert.assertNull(map.get(bytes("collision-1")));
+                Assert.assertEquals("added", map.get(bytes("prepared")));
+                Assert.assertEquals("replacement-value", map.get(bytes("replacement")));
+                Assert.assertEquals(14, seen.size());
+                Assert.assertFalse(seen.contains("collision-1"));
+            }
+            Assert.assertEquals(0L, store.nativeBytes());
+        }
+    }
+
+    @Test
     public void scanCanStopAfterTheFirstVisibleEntry() {
         try (TestBackend runtime = TestBackend.open("native-byte-map-scan-stop");
              StableMemoryBackend allocator = runtime.backend()) {
@@ -777,13 +850,16 @@ public class NativeByteMapTest {
         return valueSlotsField.get(table);
     }
 
-    private static long tableHeapBytes(int capacity, boolean hasValueArray) {
+    private static long mapHeapBytes(int capacity, boolean hasValueArray) {
         long valueArrayBytes = hasValueArray ? 16L + (long) capacity * Long.BYTES : 0L;
-        return 48L
+        long payloadBytes = 48L
                 + 16L + (long) capacity * Long.BYTES
-                + valueArrayBytes
+                + valueArrayBytes;
+        long topologyBytes = 64L
+                + 48L
                 + 16L + (long) capacity * Integer.BYTES
                 + 16L + capacity;
+        return payloadBytes + topologyBytes;
     }
 
     private static final class TestOwner implements MemoryOwner {

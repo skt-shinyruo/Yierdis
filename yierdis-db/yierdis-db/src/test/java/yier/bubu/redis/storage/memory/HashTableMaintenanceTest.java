@@ -320,13 +320,14 @@ public class HashTableMaintenanceTest {
 
     private static void assertNativeByteMapHeapFormula(NativeByteMap<?> map) {
         var metrics = map.metrics();
-        long expected = nativeByteMapTableHeapBytes(metrics.capacity())
+        long expected = 64L
+                + nativeByteMapTableHeapBytes(metrics.capacity())
                 + (metrics.rehashing() ? nativeByteMapTableHeapBytes(metrics.oldCapacity()) : 0L);
         Assert.assertEquals(expected, map.heapEstimatedBytes());
     }
 
     private static long nativeByteMapTableHeapBytes(int capacity) {
-        return 48L
+        return 48L * 2L
                 + (16L + (long) capacity * Long.BYTES) * 2L
                 + 16L + (long) capacity * Integer.BYTES
                 + 16L + capacity;
