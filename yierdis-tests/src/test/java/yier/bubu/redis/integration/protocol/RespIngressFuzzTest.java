@@ -8,6 +8,7 @@ import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.protocol.resp.netty.InboundConnectionMemory;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudgetStats;
+import yier.bubu.redis.protocol.resp.netty.RespDecodedMessage;
 import yier.bubu.redis.protocol.resp.netty.RespDecodedMessageGate;
 import yier.bubu.redis.protocol.resp.netty.RespRequestDecoder;
 
@@ -79,8 +80,8 @@ public class RespIngressFuzzTest {
             channel.runPendingTasks();
 
             Object message = channel.readInbound();
-            Assert.assertTrue(message instanceof ExecutionRequest);
-            try (ExecutionRequest request = (ExecutionRequest) message) {
+            Assert.assertTrue(message instanceof RespDecodedMessage.Request);
+            try (ExecutionRequest request = ((RespDecodedMessage.Request) message).request()) {
                 Assert.assertEquals(2, request.argc());
                 Assert.assertEquals(99_976, request.len(1));
             }
@@ -129,8 +130,8 @@ public class RespIngressFuzzTest {
     private static void drainRequests(EmbeddedChannel channel) {
         Object message;
         while ((message = channel.readInbound()) != null) {
-            if (message instanceof ExecutionRequest request) {
-                request.close();
+            if (message instanceof RespDecodedMessage decoded) {
+                decoded.close();
             }
         }
     }
