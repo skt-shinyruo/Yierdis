@@ -631,36 +631,21 @@ public class ZSetValueTest {
     }
 
     @Test
-    public void packedScoreRangeViewsShareBoundsPaginationAndDirection() {
-        try (TestBackend runtime = TestBackend.open("zset-packed-score-range");
+    public void scoreRangeViewsStayConsistentAcrossPackedToSkiplistTransition() {
+        try (TestBackend runtime = TestBackend.open("zset-score-range-encoding-transition");
              StableMemoryBackend allocator = runtime.backend()) {
             ZSetValue zset = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
                 zset.zaddMany(scoreBoundaryPairs());
                 Assert.assertEquals(ValueEncoding.ZSET_PACKED, zset.encoding());
+                assertScoreRangeViews(zset);
 
-                assertPackedScoreRangeViews(
-                        zset,
-                        false,
-                        1,
-                        false,
-                        4,
-                        true,
-                        1,
-                        2,
-                        List.of("b", "2", "c", "2")
-                );
-                assertPackedScoreRangeViews(
-                        zset,
-                        true,
-                        1,
-                        true,
-                        4,
-                        false,
-                        1,
-                        10,
-                        List.of("d", "3", "c", "2", "b", "2")
-                );
+                zset.zaddMany(List.of(
+                        b("99"),
+                        fixedMember(99, YierdisEncodingThresholds.ZSET_MAX_LISTPACK_VALUE_BYTES + 1)
+                ));
+                Assert.assertEquals(ValueEncoding.ZSET_SKIPLIST, zset.encoding());
+                assertScoreRangeViews(zset);
             } finally {
                 zset.close();
             }
@@ -677,9 +662,25 @@ public class ZSetValueTest {
         return s.getBytes(StandardCharsets.US_ASCII);
     }
 
-    private static void assertPackedScoreRangeViews(
+    private static void assertScoreRangeViews(ZSetValue zset) {
+        assertScoreRangeView(
+                zset, false, true, 1, false, 4, true, 1, 2,
+                List.of("b", "2", "c", "2")
+        );
+        assertScoreRangeView(
+                zset, true, true, 1, true, 4, false, 1, 10,
+                List.of("d", "3", "c", "2", "b", "2")
+        );
+        assertScoreRangeView(
+                zset, false, false, 1, false, 4, false, 2, 2,
+                List.of("c", "d")
+        );
+    }
+
+    private static void assertScoreRangeView(
             ZSetValue zset,
             boolean reverse,
+            boolean withScores,
             double min,
             boolean minExclusive,
             double max,
@@ -689,19 +690,19 @@ public class ZSetValueTest {
             List<String> expected
     ) {
         List<byte[]> materialized = reverse
-                ? zset.zrevrangeByScore(min, minExclusive, max, maxExclusive, true, offset, count)
-                : zset.zrangeByScore(min, minExclusive, max, maxExclusive, true, offset, count);
+                ? zset.zrevrangeByScore(min, minExclusive, max, maxExclusive, withScores, offset, count)
+                : zset.zrangeByScore(min, minExclusive, max, maxExclusive, withScores, offset, count);
         int elementCount = reverse
-                ? zset.zrevrangeByScoreCount(min, minExclusive, max, maxExclusive, true, offset, count)
-                : zset.zrangeByScoreCount(min, minExclusive, max, maxExclusive, true, offset, count);
+                ? zset.zrevrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count)
+                : zset.zrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
         RecordingSink streamed = new RecordingSink();
         if (reverse) {
             zset.zrevrangeByScoreWriteTo(
-                    min, minExclusive, max, maxExclusive, true, offset, count, streamed
+                    min, minExclusive, max, maxExclusive, withScores, offset, count, streamed
             );
         } else {
             zset.zrangeByScoreWriteTo(
-                    min, minExclusive, max, maxExclusive, true, offset, count, streamed
+                    min, minExclusive, max, maxExclusive, withScores, offset, count, streamed
             );
         }
 
