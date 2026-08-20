@@ -34,8 +34,10 @@ public final class SetCommands {
 
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register(new CommandSpec(syntax("SADD", CommandArity.min(3)), args -> change(args, true)));
-        registration.register(new CommandSpec(syntax("SREM", CommandArity.min(3)), args -> change(args, false)));
+        registration.register(new CommandSpec(syntax("SADD", CommandArity.min(3)),
+                args -> change(args, SetChange.ADD)));
+        registration.register(new CommandSpec(syntax("SREM", CommandArity.min(3)),
+                args -> change(args, SetChange.REMOVE)));
         registration.register(new CommandSpec(syntax("SMEMBERS", CommandArity.exact(2)), this::smembers));
         registration.register(new CommandSpec(syntax("SISMEMBER", CommandArity.exact(3)), this::sismember));
         registration.register(new CommandSpec(syntax("SCARD", CommandArity.exact(2)), this::scard));
@@ -46,11 +48,11 @@ public final class SetCommands {
         return new CommandSyntax(nameUpper, arity, KEY, TransactionPolicy.QUEUEABLE);
     }
 
-    private Function<CommandSession, PreparedCommand> change(CommandArgs args, boolean add) {
+    private Function<CommandSession, PreparedCommand> change(CommandArgs args, SetChange change) {
         byte[] key = args.bytes(1);
         List<byte[]> members = args.byteArraysFrom(2);
         return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
-            long changed = (add
+            long changed = (change == SetChange.ADD
                     ? support.commandDb(execution).sets().sadd(key, members)
                     : support.commandDb(execution).sets().srem(key, members)).value();
             return CommandResult.reply(RedisReplies.integer(changed));
@@ -80,10 +82,15 @@ public final class SetCommands {
     }
 
     private Function<CommandSession, PreparedCommand> sscan(CommandArgs args) {
-        CollectionScanCommandSupport.Arguments parsed = CollectionScanCommandSupport.parse(args, false);
+        CollectionScanCommandSupport.Arguments parsed = CollectionScanCommandSupport.parse(args);
         return session -> CollectionScanCommandSupport.prepareReply(
                 support.commandDb(session).sets().sscan(
                         parsed.key(), parsed.cursor(), parsed.match(), parsed.count()
                 ));
+    }
+
+    private enum SetChange {
+        ADD,
+        REMOVE
     }
 }

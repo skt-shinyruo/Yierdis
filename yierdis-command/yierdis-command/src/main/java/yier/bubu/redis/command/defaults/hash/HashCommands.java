@@ -90,7 +90,8 @@ public final class HashCommands {
     }
 
     private Function<CommandSession, PreparedCommand> hscan(CommandArgs args) {
-        CollectionScanCommandSupport.Arguments parsed = CollectionScanCommandSupport.parse(args, true);
+        CollectionScanCommandSupport.Arguments parsed =
+                CollectionScanCommandSupport.parseWithOptionalNoValues(args);
         return session -> CollectionScanCommandSupport.prepareReply(
                 support.commandDb(session).hashes().hscan(
                         parsed.key(), parsed.cursor(), parsed.match(), parsed.count(), parsed.noValues()

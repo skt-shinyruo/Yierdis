@@ -36,22 +36,26 @@ public final class ListCommands {
 
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register(new CommandSpec(syntax("LPUSH", CommandArity.min(3)), args -> push(args, true)));
-        registration.register(new CommandSpec(syntax("RPUSH", CommandArity.min(3)), args -> push(args, false)));
+        registration.register(new CommandSpec(syntax("LPUSH", CommandArity.min(3)),
+                args -> push(args, ListEnd.LEFT)));
+        registration.register(new CommandSpec(syntax("RPUSH", CommandArity.min(3)),
+                args -> push(args, ListEnd.RIGHT)));
         registration.register(new CommandSpec(syntax("LRANGE", CommandArity.exact(4)), this::lrange));
-        registration.register(new CommandSpec(syntax("LPOP", CommandArity.oneOf(2, 3)), args -> pop(args, true)));
-        registration.register(new CommandSpec(syntax("RPOP", CommandArity.oneOf(2, 3)), args -> pop(args, false)));
+        registration.register(new CommandSpec(syntax("LPOP", CommandArity.oneOf(2, 3)),
+                args -> pop(args, ListEnd.LEFT)));
+        registration.register(new CommandSpec(syntax("RPOP", CommandArity.oneOf(2, 3)),
+                args -> pop(args, ListEnd.RIGHT)));
     }
 
     private static CommandSyntax syntax(String nameUpper, CommandArity arity) {
         return new CommandSyntax(nameUpper, arity, KEY, TransactionPolicy.QUEUEABLE);
     }
 
-    private Function<CommandSession, PreparedCommand> push(CommandArgs args, boolean left) {
+    private Function<CommandSession, PreparedCommand> push(CommandArgs args, ListEnd end) {
         byte[] key = args.bytes(1);
         List<byte[]> values = args.byteArraysFrom(2);
         return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
-            long length = (left
+            long length = (end == ListEnd.LEFT
                     ? support.commandDb(execution).lists().lpush(key, values)
                     : support.commandDb(execution).lists().rpush(key, values)).value();
             return CommandResult.reply(RedisReplies.integer(length));
@@ -69,7 +73,7 @@ public final class ListCommands {
         };
     }
 
-    private Function<CommandSession, PreparedCommand> pop(CommandArgs args, boolean left) {
+    private Function<CommandSession, PreparedCommand> pop(CommandArgs args, ListEnd end) {
         boolean hasCount = args.argc() == 3;
         int count = 1;
         if (hasCount) {
@@ -79,7 +83,7 @@ public final class ListCommands {
             }
             count = parsed > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) parsed;
         }
-        PopArgs parsed = new PopArgs(args.bytes(1), count, hasCount, left);
+        PopArgs parsed = new PopArgs(args.bytes(1), count, hasCount, end);
         return session -> preparePop(parsed, session);
     }
 
@@ -88,7 +92,7 @@ public final class ListCommands {
             yier.bubu.redis.execution.api.CommandSession session
     ) {
         PreparedMutation<PoppedValueSequence> mutation = support.commandDb(session).lists()
-                .preparePop(args.key(), args.count(), args.left());
+                .preparePop(args.key(), args.count(), args.end() == ListEnd.LEFT);
         PoppedValueSequence preview = mutation.preview();
         RedisReply reply;
         if (preview == null || preview.isNull()) {
@@ -108,6 +112,11 @@ public final class ListCommands {
         );
     }
 
-    private record PopArgs(byte[] key, int count, boolean hasCount, boolean left) {
+    private enum ListEnd {
+        LEFT,
+        RIGHT
+    }
+
+    private record PopArgs(byte[] key, int count, boolean hasCount, ListEnd end) {
     }
 }

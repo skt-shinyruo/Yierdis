@@ -20,8 +20,15 @@ public final class CollectionScanCommandSupport {
     private CollectionScanCommandSupport() {
     }
 
-    public static Arguments parse(CommandArgs args, boolean allowNoValues)
- {
+    public static Arguments parse(CommandArgs args) {
+        return parse(args, NoValuesPolicy.REJECT);
+    }
+
+    public static Arguments parseWithOptionalNoValues(CommandArgs args) {
+        return parse(args, NoValuesPolicy.ALLOW);
+    }
+
+    private static Arguments parse(CommandArgs args, NoValuesPolicy noValuesPolicy) {
         ScanCursorV2 cursor;
         try {
             cursor = ScanCursorV2.of(args.nonNegativeLongAt(2));
@@ -51,7 +58,7 @@ public final class CollectionScanCommandSupport {
                 count = (int) parsed;
                 continue;
             }
-            if (allowNoValues && args.is(index, "NOVALUES")) {
+            if (noValuesPolicy == NoValuesPolicy.ALLOW && args.is(index, "NOVALUES")) {
                 noValues = true;
                 continue;
             }
@@ -75,6 +82,11 @@ public final class CollectionScanCommandSupport {
 
     private static CommandParseException integerFailure() {
         return new CommandParseException(INTEGER_ERROR);
+    }
+
+    private enum NoValuesPolicy {
+        ALLOW,
+        REJECT
     }
 
     public record Arguments(
