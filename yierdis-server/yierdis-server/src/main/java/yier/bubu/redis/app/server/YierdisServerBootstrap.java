@@ -262,6 +262,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                         runtimeConfig,
                         executor,
                         replyWriterFactory,
+                        dispatcher::replyAdmissionRequirement,
                         inboundMemoryBudget,
                         outboundMemoryBudget,
                         childChannelRegistry,

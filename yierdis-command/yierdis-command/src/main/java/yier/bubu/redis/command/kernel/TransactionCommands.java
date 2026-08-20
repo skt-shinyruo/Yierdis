@@ -20,6 +20,7 @@ import yier.bubu.redis.execution.api.PreparedCommands;
 import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.execution.api.ReplyShape;
+import yier.bubu.redis.execution.api.ReplyAdmissionRequirement;
 import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.execution.api.ValidationResult;
@@ -38,15 +39,23 @@ final class TransactionCommands {
         Objects.requireNonNull(registration, "registration");
         registration.register(new CommandSpec(syntax("MULTI"), this::multi));
         registration.register(new CommandSpec(syntax("DISCARD"), this::discard));
-        registration.register(new CommandSpec(syntax("EXEC"), this::exec));
+        registration.register(new CommandSpec(
+                syntax("EXEC", ReplyAdmissionRequirement.BARRIER_UNTIL_CLEANUP),
+                this::exec
+        ));
     }
 
     private static CommandSyntax syntax(String name) {
+        return syntax(name, ReplyAdmissionRequirement.PIPELINED);
+    }
+
+    private static CommandSyntax syntax(String name, ReplyAdmissionRequirement replyAdmissionRequirement) {
         return new CommandSyntax(
                 name,
                 CommandArity.exact(1),
                 CommandKeySpec.NONE,
-                TransactionPolicy.TRANSACTION_CONTROL
+                TransactionPolicy.TRANSACTION_CONTROL,
+                replyAdmissionRequirement
         );
     }
 

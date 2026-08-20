@@ -40,7 +40,7 @@ command package 不依赖 `RedisReplyWriter`。命令通过 `RedisReply` 描述�
 
 每个 `CommandSpec` 只有两部分：
 
-- `CommandSyntax`：规范化命令名、`CommandArity`、`CommandKeySpec` 和 `TransactionPolicy`；
+- `CommandSyntax`：规范化命令名、`CommandArity`、`CommandKeySpec`、`TransactionPolicy` 和 `ReplyAdmissionRequirement`；
 - `CommandHandler`：接收 `CommandArgs`，返回 `Function<CommandSession, PreparedCommand>`，解析失败时抛 `CommandParseException`。
 
 这个函数是解析结果与 session/DB 准备之间的边界。调用 `apply(CommandSession)` 后，返回带 reservation shape、validation、execution 和可选 owner 的 `PreparedCommand`。

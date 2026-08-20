@@ -52,7 +52,7 @@ CommandExecutor
 
 ### `CommandSpec`
 
-命令最终注册单元，由 `CommandSyntax` 和 `CommandHandler` 组成。syntax 保存名称、arity、key metadata 和 `TransactionPolicy`；handler 的 `parse(CommandArgs)` 返回 `Function<CommandSession, PreparedCommand>`。
+命令最终注册单元，由 `CommandSyntax` 和 `CommandHandler` 组成。syntax 保存名称、arity、key metadata、`TransactionPolicy` 和 `ReplyAdmissionRequirement`；handler 的 `parse(CommandArgs)` 返回 `Function<CommandSession, PreparedCommand>`。
 
 ### `CommandRegistry`
 

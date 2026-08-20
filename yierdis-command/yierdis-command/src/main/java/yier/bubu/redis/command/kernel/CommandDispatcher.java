@@ -10,6 +10,7 @@ import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.PreparedCommands;
 import yier.bubu.redis.execution.api.RedisReplies;
+import yier.bubu.redis.execution.api.ReplyAdmissionRequirement;
 import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.storage.api.WrongTypeException;
@@ -31,6 +32,22 @@ public final class CommandDispatcher {
 
     public PreparedCommand prepare(CommandSession session, ExecutionRequest request) {
         return prepare(session, request, true);
+    }
+
+    /**
+     * 按已注册命令名返回 reply admission 约束；空、非 ASCII 或未注册名称保持普通流水线语义。
+     *
+     * <p>该查询不校验 arity；已识别命令即使参数数量错误，仍返回其注册约束。</p>
+     */
+    public ReplyAdmissionRequirement replyAdmissionRequirement(ExecutionRequest request) {
+        Objects.requireNonNull(request, "request");
+        if (request.argc() <= 0 || request.isNull(0) || request.len(0) <= 0) {
+            return ReplyAdmissionRequirement.PIPELINED;
+        }
+        CommandSpec spec = registry.specByExactUpperName(exactUpperAsciiName(request));
+        return spec == null
+                ? ReplyAdmissionRequirement.PIPELINED
+                : spec.syntax().replyAdmissionRequirement();
     }
 
     PreparedCommand prepareExecReplay(CommandSession session, ExecutionRequest request) {

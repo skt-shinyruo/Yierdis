@@ -9,6 +9,9 @@ import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.util.ReferenceCountUtil;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.command.kernel.CommandDispatcher;
+import yier.bubu.redis.command.kernel.CommandRegistries;
+import yier.bubu.redis.execution.api.ReplyAdmissionRequirement;
 import yier.bubu.redis.protocol.resp.netty.InboundConnectionMemory;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
 import yier.bubu.redis.protocol.resp.netty.RespDecodedMessage;
@@ -20,6 +23,103 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class OrderedReplyPipelineTest {
+    @Test
+    public void terminalReplyCannotRegisterPastAnActiveReplyAdmissionBarrier() {
+        OutboundMemoryBudget budget = new OutboundMemoryBudget(8_192L);
+        OutboundConnectionMemory outboundConnection = budget.openConnection(8_192L);
+        EmbeddedChannel channel = new EmbeddedChannel();
+        ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, outboundConnection, () -> { });
+        NettyReplyDecodedMessageGate gate = new NettyReplyDecodedMessageGate(
+                2_048L,
+                8_192L,
+                outboundConnection,
+                sequencer,
+                ignored -> ReplyAdmissionRequirement.BARRIER_UNTIL_CLEANUP
+        );
+        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                1_024,
+                16,
+                1_024,
+                1_024,
+                null,
+                null,
+                gate
+        );
+        CapturingHandler capture = new CapturingHandler();
+        channel.pipeline().addLast("decoder", decoder);
+        channel.pipeline().addLast("capture", capture);
+        try {
+            Assert.assertFalse(channel.writeInbound(Unpooled.copiedBuffer(
+                    "*1\r\n$4\r\nPING\r\n",
+                    StandardCharsets.US_ASCII
+            )));
+
+            Assert.assertEquals(1, capture.messages.size());
+            Assert.assertTrue(gate.tryRegisterTerminalSlot().isEmpty());
+            Assert.assertEquals(2_048L, budget.stats().reservedBytes());
+
+            capture.messages.getFirst().close();
+            ReplySlot terminal = gate.tryRegisterTerminalSlot().orElseThrow();
+            terminal.cancel();
+            Assert.assertEquals(0L, budget.stats().reservedBytes());
+        } finally {
+            for (RegisteredRespMessage message : capture.messages) {
+                message.close();
+            }
+            channel.finishAndReleaseAll();
+            sequencer.close();
+        }
+    }
+
+    @Test
+    public void execMetadataLeavesRoomToExpandItsLeaseBeforeFollowingRegistration() {
+        CommandDispatcher dispatcher = CommandRegistries.dispatcher();
+        OutboundMemoryBudget budget = new OutboundMemoryBudget(8_192L);
+        OutboundConnectionMemory outboundConnection = budget.openConnection(8_192L);
+        EmbeddedChannel channel = new EmbeddedChannel();
+        ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, outboundConnection, () -> { });
+        NettyReplyDecodedMessageGate gate = new NettyReplyDecodedMessageGate(
+                2_048L,
+                8_192L,
+                outboundConnection,
+                sequencer,
+                dispatcher::replyAdmissionRequirement
+        );
+        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                1_024,
+                16,
+                1_024,
+                1_024,
+                null,
+                null,
+                gate
+        );
+        CapturingHandler capture = new CapturingHandler();
+        channel.pipeline().addLast("decoder", decoder);
+        channel.pipeline().addLast("capture", capture);
+        try {
+            Assert.assertFalse(channel.writeInbound(Unpooled.copiedBuffer(
+                    "*1\r\n$4\r\nEXEC\r\n*1\r\n$4\r\nPING\r\n",
+                    StandardCharsets.US_ASCII
+            )));
+
+            Assert.assertEquals(1, capture.messages.size());
+            Assert.assertTrue(capture.messages.getFirst().slot().lease().tryReserveAdditional(6_144L, 8_192L));
+            capture.messages.getFirst().close();
+            channel.runPendingTasks();
+
+            Assert.assertEquals(2, capture.messages.size());
+            capture.messages.get(1).close();
+            Assert.assertEquals(0L, budget.stats().reservedBytes());
+        } finally {
+            for (RegisteredRespMessage message : capture.messages) {
+                message.close();
+            }
+            channel.finishAndReleaseAll();
+            sequencer.close();
+        }
+    }
+
     @Test
     public void closingRegisteredDecodeResultBeforeTransferReleasesBothReservationsOnce() {
         InboundMemoryBudget inboundBudget = new InboundMemoryBudget(4_096L);

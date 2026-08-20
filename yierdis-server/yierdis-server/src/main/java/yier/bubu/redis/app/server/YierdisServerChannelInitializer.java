@@ -14,7 +14,9 @@ import io.netty.util.concurrent.ScheduledFuture;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.execution.api.CommandSession;
+import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.ReplyAdmissionRequirement;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.protocol.resp.netty.InboundByteAccountingHandler;
 import yier.bubu.redis.protocol.resp.netty.InboundConnectionMemory;
@@ -24,11 +26,13 @@ import yier.bubu.redis.protocol.resp.netty.RespRequestDecoder;
 
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 final class YierdisServerChannelInitializer extends ChannelInitializer<SocketChannel> {
     private final YierdisServerRuntimeConfig config;
     private final CommandExecutor<NettyExecutionConnection> executor;
     private final BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory;
+    private final Function<ExecutionRequest, ReplyAdmissionRequirement> replyAdmissionRequirement;
     private final InboundMemoryBudget inboundMemoryBudget;
     private final OutboundMemoryBudget outboundMemoryBudget;
     private final ChildChannelRegistry childChannelRegistry;
@@ -43,6 +47,7 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
                 config,
                 executor,
                 replyWriterFactory,
+                ignored -> ReplyAdmissionRequirement.PIPELINED,
                 new InboundMemoryBudget(config.protocolGlobalInFlightBytes()),
                 new OutboundMemoryBudget(config.replyGlobalCapacityBytes()),
                 new ChildChannelRegistry(config.maxClients()),
@@ -62,6 +67,7 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
                 config,
                 executor,
                 replyWriterFactory,
+                ignored -> ReplyAdmissionRequirement.PIPELINED,
                 inboundMemoryBudget,
                 outboundMemoryBudget,
                 childChannelRegistry,
@@ -73,6 +79,7 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
             YierdisServerRuntimeConfig config,
             CommandExecutor<NettyExecutionConnection> executor,
             BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory,
+            Function<ExecutionRequest, ReplyAdmissionRequirement> replyAdmissionRequirement,
             InboundMemoryBudget inboundMemoryBudget,
             OutboundMemoryBudget outboundMemoryBudget,
             ChildChannelRegistry childChannelRegistry,
@@ -81,6 +88,10 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
         this.config = Objects.requireNonNull(config, "config");
         this.executor = Objects.requireNonNull(executor, "executor");
         this.replyWriterFactory = Objects.requireNonNull(replyWriterFactory, "replyWriterFactory");
+        this.replyAdmissionRequirement = Objects.requireNonNull(
+                replyAdmissionRequirement,
+                "replyAdmissionRequirement"
+        );
         this.inboundMemoryBudget = Objects.requireNonNull(inboundMemoryBudget, "inboundMemoryBudget");
         this.outboundMemoryBudget = Objects.requireNonNull(outboundMemoryBudget, "outboundMemoryBudget");
         this.childChannelRegistry = Objects.requireNonNull(childChannelRegistry, "childChannelRegistry");
@@ -138,7 +149,8 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
                     config.replyControlReservationBytes(),
                     config.replyMaxTotalBytes(),
                     outboundConnection,
-                    replySequencer
+                    replySequencer,
+                    replyAdmissionRequirement
             );
             executionConnection.bindReplyGate(replyGate);
             childChannelRegistry.bindLifecycle(ch, replySequencer.terminationFuture());

@@ -21,6 +21,7 @@ import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.PreparedCommands;
 import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.RedisReply;
+import yier.bubu.redis.execution.api.ReplyAdmissionRequirement;
 import yier.bubu.redis.execution.api.ReplySink;
 import yier.bubu.redis.execution.api.ReplyShape;
 import yier.bubu.redis.execution.api.ReplyShapes;
@@ -38,6 +39,33 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 public class CommandDispatcherTest {
+    @Test
+    public void replyAdmissionRequirementComesFromRegisteredCommandSemantics() {
+        CommandDispatcher dispatcher = CommandRegistries.dispatcher();
+
+        try (ExecutionRequest exec = request("exec");
+             ExecutionRequest execWithInvalidArity = request("EXEC", "extra");
+             ExecutionRequest multi = request("MULTI");
+             ExecutionRequest unknown = request("MISSING")) {
+            Assert.assertEquals(
+                    ReplyAdmissionRequirement.BARRIER_UNTIL_CLEANUP,
+                    dispatcher.replyAdmissionRequirement(exec)
+            );
+            Assert.assertEquals(
+                    ReplyAdmissionRequirement.BARRIER_UNTIL_CLEANUP,
+                    dispatcher.replyAdmissionRequirement(execWithInvalidArity)
+            );
+            Assert.assertEquals(
+                    ReplyAdmissionRequirement.PIPELINED,
+                    dispatcher.replyAdmissionRequirement(multi)
+            );
+            Assert.assertEquals(
+                    ReplyAdmissionRequirement.PIPELINED,
+                    dispatcher.replyAdmissionRequirement(unknown)
+            );
+        }
+    }
+
     @Test
     public void dispatcherPreparesAndExecutesRegisteredCommand() {
         CommandDispatcher dispatcher = dispatcher(spec(
