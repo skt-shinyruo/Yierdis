@@ -554,7 +554,7 @@ public class CommandDispatcherTest {
     }
 
     @Test
-    public void singleChildExecUsesMaximumReservationAndClosesStaleChildBeforeRepreparing() {
+    public void singleChildExecPreparesDuringExecutionAndClosesStaleChildBeforeRepreparing() {
         TrackingTransactionState tx = transactionWith("FIRST");
         List<String> lifecycle = new ArrayList<>();
         TrackingPrepared stale = resultChild(CommandResult.reply(RedisReplies.simpleString("OLD")));
@@ -573,14 +573,11 @@ public class CommandDispatcherTest {
         )));
         TrackingSession session = new TrackingSession(tx);
 
-        PreparedCommand staleExec = prepare(dispatcher, session, "EXEC");
-        Assert.assertEquals(ReplyShapes.maximum(), staleExec.reservationShape());
-        Assert.assertEquals(ValidationResult.STALE, staleExec.validateBeforeExecute());
-        staleExec.close();
-
-        PreparedCommand currentExec = prepare(dispatcher, session, "EXEC");
-        Assert.assertEquals(ReplyShapes.maximum(), currentExec.reservationShape());
-        CommandResult result = executeResult(currentExec, session, trackingRequest("EXEC"));
+        PreparedCommand exec = prepare(dispatcher, session, "EXEC");
+        Assert.assertEquals(ReplyShapes.maximum(), exec.reservationShape());
+        Assert.assertEquals(0, preparations.get());
+        Assert.assertEquals(ValidationResult.VALID, exec.validateBeforeExecute());
+        CommandResult result = executeResult(exec, session, trackingRequest("EXEC"));
 
         Assert.assertEquals(
                 "NEW",
@@ -590,7 +587,7 @@ public class CommandDispatcherTest {
         Assert.assertEquals(0, current.closeCount());
         Assert.assertEquals(0, tx.request(0).closeCount());
 
-        currentExec.close();
+        exec.close();
         Assert.assertEquals(List.of(
                 "prepare:1", "close:stale", "prepare:2", "close:current"), lifecycle);
         Assert.assertEquals(1, current.closeCount());
@@ -598,7 +595,7 @@ public class CommandDispatcherTest {
     }
 
     @Test
-    public void dynamicExecClosesStaleChildBeforeRepreparingTheSameRequest() {
+    public void execClosesStaleChildBeforeRepreparingTheSameRequest() {
         TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
         List<String> lifecycle = new ArrayList<>();
         TrackingPrepared stale = resultChild(CommandResult.reply(RedisReplies.simpleString("OLD")));
@@ -641,7 +638,7 @@ public class CommandDispatcherTest {
     }
 
     @Test
-    public void dynamicExecClosesEveryRequestWhenChildParseFails() {
+    public void execClosesEveryRequestWhenChildParseFails() {
         TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
         IllegalStateException parseFailure = new IllegalStateException("parse failure");
         AtomicInteger secondPreparations = new AtomicInteger();
@@ -672,7 +669,7 @@ public class CommandDispatcherTest {
     }
 
     @Test
-    public void dynamicExecClosesEveryRequestWhenChildPreparationFails() {
+    public void execClosesEveryRequestWhenChildPreparationFails() {
         TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
         IllegalStateException prepareFailure = new IllegalStateException("prepare failure");
         AtomicInteger secondPreparations = new AtomicInteger();
@@ -703,7 +700,7 @@ public class CommandDispatcherTest {
     }
 
     @Test
-    public void dynamicExecClosesPreparedChildWhenValidationFails() {
+    public void execClosesPreparedChildWhenValidationFails() {
         TrackingTransactionState tx = transactionWith("FIRST", "SECOND");
         IllegalStateException validationFailure = new IllegalStateException("validation failure");
         IllegalStateException closeFailure = new IllegalStateException("validation cleanup failure");
@@ -881,39 +878,6 @@ public class CommandDispatcherTest {
         exec.close();
         Assert.assertEquals(1, first.closeCount());
         Assert.assertEquals(1, second.closeCount());
-    }
-
-    @Test
-    public void exactPreparationFailureContinuesClosingRetainedChildrenWhenCloseRethrowsPrimary() {
-        TrackingTransactionState tx = transactionWith("FIRST", "SECOND", "THIRD");
-        tx.reportedSize = 1;
-        IllegalStateException preparationFailure = new IllegalStateException("prepare failure");
-        TrackingPrepared first = resultChild(CommandResult.reply(RedisReplies.simpleString("ONE")));
-        TrackingPrepared second = resultChild(CommandResult.reply(RedisReplies.simpleString("TWO")));
-        second.closeFailure = preparationFailure;
-        CommandDispatcher dispatcher = transactionDispatcher(registration -> {
-            registration.register(spec("FIRST", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
-                    args -> session -> first));
-            registration.register(spec("SECOND", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
-                    args -> session -> second));
-            registration.register(spec("THIRD", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
-                    args -> session -> {
-                        throw preparationFailure;
-                    }));
-        });
-
-        IllegalStateException thrown = Assert.assertThrows(
-                IllegalStateException.class,
-                () -> prepare(dispatcher, new TrackingSession(tx), "EXEC")
-        );
-
-        Assert.assertSame(preparationFailure, thrown);
-        Assert.assertEquals(1, second.closeCount());
-        Assert.assertEquals(1, first.closeCount());
-        tx.discard();
-        Assert.assertEquals(1, tx.request(0).closeCount());
-        Assert.assertEquals(1, tx.request(1).closeCount());
-        Assert.assertEquals(1, tx.request(2).closeCount());
     }
 
     private static CommandDispatcher transactionDispatcher(CommandModuleAction module) {
@@ -1164,7 +1128,6 @@ public class CommandDispatcherTest {
     private static final class TrackingTransactionState implements TransactionState {
         private boolean active;
         private boolean aborted;
-        private Integer reportedSize;
         private final ArrayList<TrackingRequest> queue = new ArrayList<>();
         private final ArrayList<TrackingRequest> requests = new ArrayList<>();
 
@@ -1172,7 +1135,7 @@ public class CommandDispatcherTest {
         @Override public boolean aborted() { return aborted; }
         @Override public void begin() { active = true; aborted = false; }
         @Override public void markAborted() { aborted = true; }
-        @Override public int size() { return reportedSize == null ? queue.size() : reportedSize; }
+        @Override public int size() { return queue.size(); }
         @Override public void forEachQueued(Consumer<? super ExecutionRequest> visitor) { queue.forEach(visitor); }
         @Override public String tryEnqueue(ExecutionRequest request) {
             TrackingRequest tracked = (TrackingRequest) request;

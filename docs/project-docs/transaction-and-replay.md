@@ -78,7 +78,7 @@ CommandExecutor
 
 queue 条数或字节超限由 `TransactionState.tryEnqueue(...)` 返回 `ERR Transaction queue is full` 并标记 aborted。`TRANSACTION_CONTROL` 命令不进入 queueable 分支；`MULTI/EXEC/DISCARD` 立即应用各自的准备函数。
 
-## `EXEC` prepare 的两种策略
+## `EXEC` 的 child preparation 策略
 
 `EXEC` 的准备函数先查看 transaction state：
 
@@ -86,19 +86,16 @@ queue 条数或字节超限由 `TransactionState.tryEnqueue(...)` 返回 `ERR Tr
 - 已 aborted：准备一个 error action，执行时 `discard()`，返回 `EXECABORT Transaction discarded because of previous errors.`；
 - active 且未 aborted：创建 transaction-owned `PreparedExec`。
 
-`PreparedExec` 根据 queue size 使用两种准备策略：
+`PreparedExec` 对任意 queue size 都使用同一套策略：外层 prepare 不创建 child；空 queue 保留精确空 array reservation，非空 queue 使用 maximum reservation。reservation shape 只描述外层容量边界，不选择 child preparation 流程。
 
-- `0` 或 `1` 个 child：在外层 prepare 阶段遍历 queue，调用 `CommandDispatcher.prepareExecReplay(session, request)`，提前持有 child prepared command；空队列可给出精确空 array shape，单 child 使用 maximum reservation；
-- 多个 child：外层先使用 maximum reservation，drain 后在 execute 阶段逐条 prepare。这样后一个 child 能观察前一个 child 的顺序 side effect，而不会在执行前把整个 transaction 的 state-dependent read 固化。
-
-对于提前准备的 child，外层 `validateBeforeExecute()` 会逐个检查；任一 `STALE` 都让 executor 关闭整个外层对象并重新 prepare，此时 queue 尚未 drain。动态策略则为每个当前 child 循环 prepare/validate，直到不再 stale。
+执行时先 drain retained requests，再按队列顺序调用 `CommandDispatcher.prepareExecReplay(session, request)`。每个 child 都在当前索引循环 prepare/validate；若返回 `STALE`，先关闭该 child 再重新 prepare。当前 child 执行完成后才准备下一个，因此前一个 child 的 session 或 DB side effect 对后一个 child 的准备和执行可见。
 
 ## replay 主链
 
 容量预留和 validation 成功后，`PreparedExec.execute(...)` 执行：
 
 1. `tx.drain()` 取出 retained requests，同时重置 active、aborted 和 queue accounting；
-2. 对每个 request 取得或动态创建 child `PreparedCommand`；
+2. 对每个 request prepare 并 validate 当前 child `PreparedCommand`；
 3. 每个 child 都把当前 `CommandSession` 直接传给 `execute(session)`；
 4. child execute 返回 `CommandResult`，外层收集其中的语义 `RedisReply`；
 5. child 的顶层 `ControlError` 转成可放入 `EXEC` array 的普通 error；
