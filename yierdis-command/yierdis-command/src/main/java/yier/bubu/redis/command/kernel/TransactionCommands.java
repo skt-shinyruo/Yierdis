@@ -109,57 +109,14 @@ final class TransactionCommands {
                     }
             );
         }
-        if (tx.size() <= 1) {
-            return preparedExactExec(tx, session);
-        }
-        return preparedDynamicExec(tx, session);
-    }
-
-    private PreparedCommand preparedExactExec(TransactionState tx, CommandSession session) {
-        ArrayList<PreparedCommand> children = new ArrayList<>(tx.size());
-        try {
-            tx.forEachQueued(request -> {
-                PreparedCommand child = dispatcher.prepareExecReplay(session, request);
-                addOwnedChild(children, child);
-            });
-            ReplyShape reservationShape = children.isEmpty()
-                    ? ReplyShapes.array(List.of())
-                    : ReplyShapes.maximum();
-            return new PreparedExec(tx, dispatcher, session, children, reservationShape, false);
-        } catch (RuntimeException | Error failure) {
-            closeChildrenReverse(children, failure);
-            throw failure;
-        }
-    }
-
-    private PreparedCommand preparedDynamicExec(TransactionState tx, CommandSession session) {
-        return new PreparedExec(tx, dispatcher, session, new ArrayList<>(), ReplyShapes.maximum(), true);
+        ReplyShape reservationShape = tx.size() == 0
+                ? ReplyShapes.array(List.of())
+                : ReplyShapes.maximum();
+        return new PreparedExec(tx, dispatcher, session, reservationShape);
     }
 
     private static PreparedCommand error(String message) {
         return PreparedCommands.ready(RedisReplies.error(message));
-    }
-
-    private static void closeChildrenReverse(List<PreparedCommand> children, Throwable primary) {
-        Throwable failure = primary;
-        for (int index = children.size() - 1; index >= 0; index--) {
-            PreparedCommand child = children.get(index);
-            if (child != null) {
-                try {
-                    child.close();
-                } catch (RuntimeException | Error closeFailure) {
-                    if (failure == null) {
-                        failure = closeFailure;
-                    } else if (failure != closeFailure) {
-                        failure.addSuppressed(closeFailure);
-                    }
-                }
-                children.set(index, null);
-            }
-        }
-        if (primary == null && failure != null) {
-            rethrow(failure);
-        }
     }
 
     private static void closeSuppressing(Throwable primary, Runnable close) {
@@ -201,7 +158,6 @@ final class TransactionCommands {
         private final CommandSession session;
         private final ArrayList<PreparedCommand> children;
         private final ReplyShape reservationShape;
-        private final boolean prepareDuringExecution;
         private List<ExecutionRequest> drainedRequests = List.of();
         private boolean executed;
         private boolean closed;
@@ -210,16 +166,13 @@ final class TransactionCommands {
                 TransactionState tx,
                 CommandDispatcher dispatcher,
                 CommandSession session,
-                ArrayList<PreparedCommand> children,
-                ReplyShape reservationShape,
-                boolean prepareDuringExecution
+                ReplyShape reservationShape
         ) {
             this.tx = Objects.requireNonNull(tx, "tx");
             this.dispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
             this.session = Objects.requireNonNull(session, "session");
-            this.children = Objects.requireNonNull(children, "children");
+            this.children = new ArrayList<>();
             this.reservationShape = Objects.requireNonNull(reservationShape, "reservationShape");
-            this.prepareDuringExecution = prepareDuringExecution;
         }
 
         @Override
@@ -229,14 +182,6 @@ final class TransactionCommands {
 
         @Override
         public ValidationResult validateBeforeExecute() {
-            if (prepareDuringExecution) {
-                return ValidationResult.VALID;
-            }
-            for (PreparedCommand child : children) {
-                if (child != null && child.validateBeforeExecute() == ValidationResult.STALE) {
-                    return ValidationResult.STALE;
-                }
-            }
             return ValidationResult.VALID;
         }
 
@@ -252,19 +197,13 @@ final class TransactionCommands {
                 List<ExecutionRequest> queued = Objects.requireNonNull(
                         tx.drain(), "transaction drain returned null");
                 drainedRequests = queued;
-                if (!prepareDuringExecution && queued.size() != children.size()) {
-                    throw new IllegalStateException("transaction queue changed after EXEC preparation");
-                }
                 ArrayList<RedisReply> replies = new ArrayList<>(queued.size());
                 boolean closeAfterReply = false;
                 for (int index = 0; index < queued.size(); index++) {
                     ExecutionRequest request = queued.get(index);
-                    PreparedCommand child = prepareDuringExecution
-                            ? prepareCurrentChild(request)
-                            : children.get(index);
-                    if (prepareDuringExecution) {
-                        addOwnedChild(children, child);
-                    }
+                    // 按队列顺序准备 child，使前一命令的 session/DB 副作用对后一命令可见。
+                    PreparedCommand child = prepareCurrentChild(request);
+                    addOwnedChild(children, child);
                     childExecutionStarted = true;
                     CommandResult result = executeChild(child);
                     RedisReply reply = result.reply();
