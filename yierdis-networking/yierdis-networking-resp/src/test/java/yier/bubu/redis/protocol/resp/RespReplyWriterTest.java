@@ -47,7 +47,7 @@ public class RespReplyWriterTest {
     @Test
     public void controlErrorUsesTheReservationSinkControlPathBeforeEncoding() {
         ControlTrackingSink sink = new ControlTrackingSink();
-        RespReplyWriter writer = new RespReplyWriter(sink, () -> 2);
+        RespReplyWriter writer = new RespReplyWriter(2, sink);
 
         writer.controlError("OOM command not allowed when used memory > 'maxmemory'.");
 
@@ -68,7 +68,7 @@ public class RespReplyWriterTest {
     @Test
     public void bulkStringSliceRejectsNegativeLength() {
         ByteArraySink sink = new ByteArraySink();
-        RespReplyWriter writer = new RespReplyWriter(sink, () -> 2);
+        RespReplyWriter writer = new RespReplyWriter(2, sink);
 
         Assert.assertThrows(IllegalArgumentException.class, () -> writer.bulkString(new BytesSlice() {
             @Override
@@ -91,9 +91,9 @@ public class RespReplyWriterTest {
     @Test
     public void constructorRejectsMissingDependencies() {
         Assert.assertThrows(NullPointerException.class,
-                () -> new RespReplyWriter(null, () -> 2));
-        Assert.assertThrows(NullPointerException.class,
-                () -> new RespReplyWriter(new ByteArraySink(), (java.util.function.IntSupplier) null));
+                () -> new RespReplyWriter(2, null));
+        Assert.assertThrows(IllegalArgumentException.class,
+                () -> new RespReplyWriter(4, new ByteArraySink()));
     }
 
     @Test
@@ -157,7 +157,7 @@ public class RespReplyWriterTest {
 
     private static String write(RespProtocolVersion version, WriterAction action) {
         ByteArraySink sink = new ByteArraySink();
-        RespReplyWriter writer = new RespReplyWriter(sink, version::wireValue);
+        RespReplyWriter writer = new RespReplyWriter(version.wireValue(), sink);
         action.write(writer);
         return sink.utf8();
     }

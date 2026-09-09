@@ -50,10 +50,10 @@ public class MaxmemoryEvictionTest {
             EngineSession session = new EngineSession(16, 16 * 1024L);
             try (ExecutionRequest request = ByteArrayExecutionRequest.copyOf(List.of(b("SET"), b("b"), value));
                  PreparedCommand prepared = dispatcher.prepare(session, request)) {
-                ReplyPlan plan = new RespReplySizer().apply(session, prepared.reservationShape());
+                ReplyPlan plan = new RespReplySizer().apply(session.respVersion(), prepared.reservationShape());
                 Assert.assertEquals(
                         "SET successful reply must keep its exact preflight charge",
-                        new RespReplySizer().apply(session, ReplyShapes.simpleString("OK")),
+                        new RespReplySizer().apply(session.respVersion(), ReplyShapes.simpleString("OK")),
                         plan
                 );
             }

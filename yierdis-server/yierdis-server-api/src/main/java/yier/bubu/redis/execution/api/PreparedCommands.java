@@ -1,6 +1,7 @@
 package yier.bubu.redis.execution.api;
 
 import java.util.Objects;
+import java.util.OptionalInt;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -16,6 +17,7 @@ public final class PreparedCommands {
         CommandResult readyResult = Objects.requireNonNull(result, "result");
         return create(
                 readyResult.reply().shape(),
+                OptionalInt.empty(),
                 null,
                 () -> ValidationResult.VALID,
                 context -> readyResult);
@@ -27,6 +29,20 @@ public final class PreparedCommands {
     ) {
         return create(
                 reservationShape,
+                OptionalInt.empty(),
+                null,
+                () -> ValidationResult.VALID,
+                action);
+    }
+
+    public static PreparedCommand action(
+            ReplyShape reservationShape,
+            int replyProtocolVersion,
+            Function<CommandSession, CommandResult> action
+    ) {
+        return create(
+                reservationShape,
+                OptionalInt.of(replyProtocolVersion),
                 null,
                 () -> ValidationResult.VALID,
                 action);
@@ -49,6 +65,7 @@ public final class PreparedCommands {
     ) {
         return create(
                 reservationShape,
+                OptionalInt.empty(),
                 Objects.requireNonNull(owner, "owner"),
                 validation,
                 action);
@@ -56,11 +73,13 @@ public final class PreparedCommands {
 
     private static PreparedCommand create(
             ReplyShape reservationShape,
+            OptionalInt replyProtocolVersion,
             AutoCloseable owner,
             Supplier<ValidationResult> validation,
             Function<CommandSession, CommandResult> action
     ) {
         ReplyShape shape = Objects.requireNonNull(reservationShape, "reservationShape");
+        OptionalInt declaredVersion = Objects.requireNonNull(replyProtocolVersion, "replyProtocolVersion");
         Supplier<ValidationResult> validator = Objects.requireNonNull(validation, "validation");
         Function<CommandSession, CommandResult> execution =
                 Objects.requireNonNull(action, "action");
@@ -70,6 +89,11 @@ public final class PreparedCommands {
             @Override
             public ReplyShape reservationShape() {
                 return shape;
+            }
+
+            @Override
+            public OptionalInt replyProtocolVersion() {
+                return declaredVersion;
             }
 
             @Override

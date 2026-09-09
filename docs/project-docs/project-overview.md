@@ -81,7 +81,7 @@ CommandExecutor
 - 执行器按 `PreparedCommand.reservationShape()` 预留容量，校验仍有效后直接传入 `CommandSession` 执行。准备和执行阶段通过 DB API 完成真实读写。
 - 命令返回 `CommandResult`，其中 `RedisReply` 描述语义回复；bulk、byte sequence 和 byte map 可以持有语义流式 source/emitter，相关 owner 保持到 renderer 消费完成后才关闭。
 - `QUIT` 不接触 writer，而是通过 `CommandResult.closeAfterReply(...)` 携带关闭意图；执行器在结果渲染并发布后关闭连接。
-- `RedisReplyWriter` 只是 `RedisReplyRenderer` 面向 RESP 编码器的输出端口。`RespReplyWriter` 按 session 的 RESP 版本编码，最后由 Netty write-back 发回客户端。
+- `RedisReplyWriter` 只是 `RedisReplyRenderer` 面向 RESP 编码器的输出端口。`RespReplyWriter` 按 `ReplyPlan` 在 prepare/预留时刻捕获的 RESP 版本编码（同一版本同时决定容量预留与写出字节），最后由 Netty write-back 发回客户端。
 - `EngineSession` 只拥有每条连接的 DB 选择、client name、RESP 版本和事务队列等 session 状态，不参与命令解析、分发、执行或渲染。
 
 逐行追请求时看 [`request-execution-flow.md`](./request-execution-flow.md)。

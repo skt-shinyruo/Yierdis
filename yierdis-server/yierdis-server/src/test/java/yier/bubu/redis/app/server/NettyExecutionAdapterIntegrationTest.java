@@ -11,7 +11,6 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
-import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
@@ -49,7 +48,7 @@ public class NettyExecutionAdapterIntegrationTest {
     public void registeredRequestSubmitsThroughNettyExecutionConnection() {
         try (YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build())) {
             CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
-            BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
+            BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                     instance.runtimeAccess()::bindToCurrentThread,
                     dispatcher::prepare,
@@ -78,7 +77,7 @@ public class NettyExecutionAdapterIntegrationTest {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
-        BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
+        BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance.runtimeAccess()::bindToCurrentThread,
                 TestCommandDispatchers.forInstance(instance)::prepare,
@@ -130,7 +129,7 @@ public class NettyExecutionAdapterIntegrationTest {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
-        BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
+        BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance.runtimeAccess()::bindToCurrentThread,
                 TestCommandDispatchers.forInstance(instance)::prepare,
@@ -178,7 +177,7 @@ public class NettyExecutionAdapterIntegrationTest {
     @Test
     public void echoNullBulkStringUsesTheRegisteredRequestSlot() {
         try (YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build())) {
-            BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
+            BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                     instance.runtimeAccess()::bindToCurrentThread,
                     TestCommandDispatchers.forInstance(instance)::prepare,
@@ -205,7 +204,7 @@ public class NettyExecutionAdapterIntegrationTest {
     @Test
     public void setNullBulkStringUsesTheRegisteredRequestSlot() {
         try (YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build())) {
-            BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
+            BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                     instance.runtimeAccess()::bindToCurrentThread,
                     TestCommandDispatchers.forInstance(instance)::prepare,

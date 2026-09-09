@@ -4,23 +4,24 @@ import java.util.function.BiFunction;
 
 import java.util.List;
 import java.util.Objects;
-import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.ReplyShape;
 
 /**
  * RESP 协议对语义回复形状的唯一容量计算实现。
+ *
+ * <p>协议版本由调用方在 prepare/预留时刻确定并传入，计算结果把它原样捕获进 {@link ReplyPlan}。</p>
  */
-public final class RespReplySizer implements BiFunction<CommandSession, ReplyShape, ReplyPlan> {
+public final class RespReplySizer implements BiFunction<Integer, ReplyShape, ReplyPlan> {
     @Override
-    public ReplyPlan apply(CommandSession session, ReplyShape shape) {
-        Objects.requireNonNull(session, "session");
+    public ReplyPlan apply(Integer protocolVersion, ReplyShape shape) {
+        Objects.requireNonNull(protocolVersion, "protocolVersion");
         Objects.requireNonNull(shape, "shape");
+        RespProtocolVersion version = RespProtocolVersion.fromWireValue(protocolVersion);
         if (requiresMaximumReservation(shape)) {
-            return ReplyPlan.maximum();
+            return ReplyPlan.maximum(protocolVersion);
         }
-        RespProtocolVersion version = RespProtocolVersion.fromWireValue(session.respVersion());
-        return ReplyPlan.exact(encodedBytes(shape, version), shape.retainedSourceBytes());
+        return ReplyPlan.exact(encodedBytes(shape, version), shape.retainedSourceBytes(), protocolVersion);
     }
 
     private static long encodedBytes(ReplyShape shape, RespProtocolVersion version) {
@@ -29,8 +30,8 @@ public final class RespReplySizer implements BiFunction<CommandSession, ReplySha
             case ReplyShape.Error value -> lineBytes(value.payloadLength());
             case ReplyShape.IntegerValue value -> lineBytes(decimalDigits(value.value()));
             case ReplyShape.BulkString value -> bulkBytes(value.payloadLength());
-            case ReplyShape.NullValue ignored -> nullValueBytes(version);
-            case ReplyShape.NullArray ignored -> nullArrayBytes(version);
+            case ReplyShape.NullValue ignored -> version.nullValueEncoding().length;
+            case ReplyShape.NullArray ignored -> version.nullArrayEncoding().length;
             case ReplyShape.Aggregate value -> aggregateBytes(value, version);
             case ReplyShape.ByteSequence value -> byteSequenceBytes(value, version);
             case ReplyShape.ByteSet value -> byteSetBytes(value, version);
@@ -50,7 +51,7 @@ public final class RespReplySizer implements BiFunction<CommandSession, ReplySha
         List<ReplyShape> elements = aggregate.elements();
         long encoded = switch (aggregate.kind()) {
             case ARRAY -> aggregateHeaderBytes('*', elements.size());
-            case MAP -> mapHeaderBytes(elements.size(), version, '%');
+            case MAP -> mapHeaderBytes(elements.size(), version);
         };
         for (ReplyShape element : elements) {
             encoded = saturatedAdd(encoded, encodedBytes(element, version));
@@ -69,8 +70,7 @@ public final class RespReplySizer implements BiFunction<CommandSession, ReplySha
         PayloadAccumulator payloads = new PayloadAccumulator(set.elementCount(), version);
         set.payloadLengths().accept(payloads::accept);
         payloads.verifyComplete("set");
-        char prefix = version == RespProtocolVersion.RESP3 ? '~' : '*';
-        return saturatedAdd(aggregateHeaderBytes(prefix, set.elementCount()), payloads.encodedBytes());
+        return saturatedAdd(aggregateHeaderBytes(version.setPrefix(), set.elementCount()), payloads.encodedBytes());
     }
 
     private static long byteMapBytes(ReplyShape.ByteMap map, RespProtocolVersion version) {
@@ -78,31 +78,15 @@ public final class RespReplySizer implements BiFunction<CommandSession, ReplySha
         PayloadAccumulator payloads = new PayloadAccumulator(expectedValues, version);
         map.payloadLengths().accept(payloads::accept);
         payloads.verifyComplete("map");
-        long header = version == RespProtocolVersion.RESP3
-                ? aggregateHeaderBytes('%', map.pairCount())
-                : aggregateHeaderBytes('*', expectedValues);
+        long header = aggregateHeaderBytes(version.mapPrefix(), version.mapHeaderCount(map.pairCount()));
         return saturatedAdd(header, payloads.encodedBytes());
     }
 
-    private static long mapHeaderBytes(
-            int elementCount,
-            RespProtocolVersion version,
-            char resp3Prefix
-    ) {
+    private static long mapHeaderBytes(int elementCount, RespProtocolVersion version) {
         if ((elementCount & 1) != 0) {
             throw new IllegalArgumentException("map-like aggregate requires field/value pairs");
         }
-        return version == RespProtocolVersion.RESP3
-                ? aggregateHeaderBytes(resp3Prefix, elementCount / 2L)
-                : aggregateHeaderBytes('*', elementCount);
-    }
-
-    private static long nullValueBytes(RespProtocolVersion version) {
-        return version == RespProtocolVersion.RESP3 ? 3L : 5L;
-    }
-
-    private static long nullArrayBytes(RespProtocolVersion version) {
-        return version == RespProtocolVersion.RESP3 ? 3L : 5L;
+        return aggregateHeaderBytes(version.mapPrefix(), version.mapHeaderCount(elementCount / 2L));
     }
 
     private static long lineBytes(long payloadLength) {
@@ -153,7 +137,7 @@ public final class RespReplySizer implements BiFunction<CommandSession, ReplySha
                 throw new IllegalArgumentException("semantic payload callback emitted too many values");
             }
             encodedBytes = saturatedAdd(encodedBytes,
-                    payloadLength == -1 ? nullValueBytes(version) : bulkBytes(payloadLength));
+                    payloadLength == -1 ? version.nullValueEncoding().length : bulkBytes(payloadLength));
         }
 
         private void verifyComplete(String kind) {

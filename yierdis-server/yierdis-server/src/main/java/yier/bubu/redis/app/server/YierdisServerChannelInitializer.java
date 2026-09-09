@@ -13,7 +13,6 @@ import io.netty.util.concurrent.ImmediateEventExecutor;
 import io.netty.util.concurrent.ScheduledFuture;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.bytes.BytesSink;
-import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.ReplyAdmissionRequirement;
@@ -31,7 +30,7 @@ import java.util.function.Function;
 final class YierdisServerChannelInitializer extends ChannelInitializer<SocketChannel> {
     private final YierdisServerRuntimeConfig config;
     private final CommandExecutor<NettyExecutionConnection> executor;
-    private final BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory;
+    private final BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory;
     private final Function<ExecutionRequest, ReplyAdmissionRequirement> replyAdmissionRequirement;
     private final InboundMemoryBudget inboundMemoryBudget;
     private final OutboundMemoryBudget outboundMemoryBudget;
@@ -41,7 +40,7 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
     YierdisServerChannelInitializer(
             YierdisServerRuntimeConfig config,
             CommandExecutor<NettyExecutionConnection> executor,
-            BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory
+            BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory
     ) {
         this(
                 config,
@@ -58,7 +57,7 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
     YierdisServerChannelInitializer(
             YierdisServerRuntimeConfig config,
             CommandExecutor<NettyExecutionConnection> executor,
-            BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory,
+            BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory,
             InboundMemoryBudget inboundMemoryBudget,
             OutboundMemoryBudget outboundMemoryBudget,
             ChildChannelRegistry childChannelRegistry
@@ -78,7 +77,7 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
     YierdisServerChannelInitializer(
             YierdisServerRuntimeConfig config,
             CommandExecutor<NettyExecutionConnection> executor,
-            BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory,
+            BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory,
             Function<ExecutionRequest, ReplyAdmissionRequirement> replyAdmissionRequirement,
             InboundMemoryBudget inboundMemoryBudget,
             OutboundMemoryBudget outboundMemoryBudget,

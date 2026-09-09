@@ -466,7 +466,7 @@ public class CommandExecutorTest {
         CommandExecutor<TestConnection> executor = newStartedExecutor(
                 ownerExecutor,
                 engine,
-                (session, shape) -> ReplyPlan.exact(2L, 0L),
+                (version, shape) -> ReplyPlan.exact(2L, 0L, version),
                 ExecutorCoreTestSupport.simpleReplyWriterFactory(),
                 io
         );
@@ -516,7 +516,7 @@ public class CommandExecutorTest {
         CommandExecutor<TestConnection> executor = newStartedExecutor(
                 ownerExecutor,
                 engine,
-                (session, shape) -> ReplyPlan.exact(2L, 0L),
+                (version, shape) -> ReplyPlan.exact(2L, 0L, version),
                 ExecutorCoreTestSupport.simpleReplyWriterFactory(),
                 io
         );
@@ -565,7 +565,7 @@ public class CommandExecutorTest {
                 },
                 preparedCloses::incrementAndGet
         );
-        BiFunction<CommandSession, BytesSink, RedisReplyWriter> writerFactory = (session, out) -> {
+        BiFunction<Integer, BytesSink, RedisReplyWriter> writerFactory = (version, out) -> {
             writerCreations.incrementAndGet();
             throw writerFailure;
         };
@@ -620,7 +620,7 @@ public class CommandExecutorTest {
         CommandExecutor<TestConnection> executor = newStartedExecutor(
                 ownerExecutor,
                 engine,
-                (session, shape) -> ReplyPlan.exact(2L, 0L),
+                (version, shape) -> ReplyPlan.exact(2L, 0L, version),
                 ExecutorCoreTestSupport.simpleReplyWriterFactory(),
                 io
         );
@@ -959,8 +959,8 @@ public class CommandExecutorTest {
     private static CommandExecutor<TestConnection> newStartedExecutor(
             ManualOwnerExecutor ownerExecutor,
             BiFunction<CommandSession, ExecutionRequest, PreparedCommand> engine,
-            BiFunction<CommandSession, ReplyShape, ReplyPlan> replySizer,
-            BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory,
+            BiFunction<Integer, ReplyShape, ReplyPlan> replySizer,
+            BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory,
             RecordingIoAdapter io
     ) {
         CommandExecutor<TestConnection> executor = new CommandExecutor<>(

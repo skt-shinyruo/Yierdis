@@ -206,7 +206,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 "commandEngineDecorator result"
         );
         commandGroup = new DefaultEventExecutorGroup(1);
-        BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
+        BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
         CommandExecutorConfig executorConfig = runtimeConfig.executorConfig();
         SerialOwnerExecutor commandOwner = new NettySerialOwnerExecutor(commandGroup.next());
         executor = new CommandExecutor<>(

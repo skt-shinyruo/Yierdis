@@ -387,7 +387,7 @@ public class ReplyCapacityBlockedSchedulingTest {
                 () -> { },
                 engine,
                 ownerExecutor,
-                (session, shape) -> ReplyPlan.exact(64L, shape.retainedSourceBytes()),
+                (version, shape) -> ReplyPlan.exact(64L, shape.retainedSourceBytes(), version),
                 ExecutorCoreTestSupport.simpleReplyWriterFactory(),
                 new RecordingIoAdapter(),
                 new CommandExecutorConfig(16, 0, 8, 4, 0, 0, 128, 1_000, SchedulingPolicy.FAIR)

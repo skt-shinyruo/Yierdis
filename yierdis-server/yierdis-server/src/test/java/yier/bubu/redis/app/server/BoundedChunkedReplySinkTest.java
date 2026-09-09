@@ -19,7 +19,7 @@ public class BoundedChunkedReplySinkTest {
         Fixture fixture = new Fixture(200 * 1024L);
         try {
             BoundedChunkedReplySink sink = fixture.sink(Unpooled::buffer);
-            sink.require(ReplyPlan.exact(150L * 1024L, 0L));
+            sink.require(ReplyPlan.exact(150L * 1024L, 0L, 2));
             sink.writeBytes(new byte[150 * 1024], 0, 150 * 1024);
             sink.finish();
             fixture.slot.markReady(false);
@@ -41,7 +41,7 @@ public class BoundedChunkedReplySinkTest {
             BoundedChunkedReplySink sink = fixture.sink((initialCapacity, maxCapacity) ->
                     Unpooled.buffer(initialCapacity + 1, initialCapacity + 1)
             );
-            sink.require(ReplyPlan.exact(512L, 0L));
+            sink.require(ReplyPlan.exact(512L, 0L, 2));
 
             Assert.assertThrows(IllegalStateException.class, () -> sink.writeBytes(new byte[512], 0, 512));
             Assert.assertEquals(0L, fixture.budget.stats().allocatedBytes());
@@ -77,7 +77,7 @@ public class BoundedChunkedReplySinkTest {
         Fixture fixture = new Fixture(8_192L, 256, 2_048L);
         try {
             BoundedChunkedReplySink sink = fixture.sink(Unpooled::buffer);
-            sink.require(ReplyPlan.exact(7L, 0L));
+            sink.require(ReplyPlan.exact(7L, 0L, 2));
 
             sink.useControlReservation();
             sink.writeBytes(new byte[515], 0, 515);
@@ -111,7 +111,7 @@ public class BoundedChunkedReplySinkTest {
         );
         AtomicInteger wakeups = new AtomicInteger();
         try {
-            ReplyPlan plan = ReplyPlan.exact(512L, 0L);
+            ReplyPlan plan = ReplyPlan.exact(512L, 0L, 2);
             Assert.assertThrows(ReplyCapacityUnavailableException.class, () -> sink.require(plan));
             Runnable registration = slot.onCapacityAvailable(wakeups::incrementAndGet);
             Assert.assertNotSame(null, registration);
@@ -142,10 +142,10 @@ public class BoundedChunkedReplySinkTest {
         Fixture fixture = new Fixture(32 * 1024L);
         try {
             BoundedChunkedReplySink sink = fixture.sink(Unpooled::buffer);
-            sink.require(ReplyPlan.maximum());
+            sink.require(ReplyPlan.maximum(2));
 
             sink.writeBytes(new byte[4], 0, 4);
-            sink.require(ReplyPlan.exact(7L, 0L));
+            sink.require(ReplyPlan.exact(7L, 0L, 2));
             sink.writeBytes(new byte[7], 0, 7);
             sink.writeBytes(new byte[8], 0, 8);
 
@@ -161,9 +161,9 @@ public class BoundedChunkedReplySinkTest {
         Fixture fixture = new Fixture(16 * 1024L);
         try {
             BoundedChunkedReplySink sink = fixture.sink(Unpooled::buffer);
-            sink.require(ReplyPlan.maximum());
+            sink.require(ReplyPlan.maximum(2));
             sink.writeBytes(new byte[4], 0, 4);
-            sink.require(ReplyPlan.exact(6_000L, 0L));
+            sink.require(ReplyPlan.exact(6_000L, 0L, 2));
 
             byte[] oneByte = {1};
             for (int index = 0; index < 6_000; index++) {
@@ -185,7 +185,7 @@ public class BoundedChunkedReplySinkTest {
         Fixture fixture = new Fixture(16 * 1024L);
         try {
             BoundedChunkedReplySink sink = fixture.sink(Unpooled::buffer);
-            sink.require(ReplyPlan.maximum());
+            sink.require(ReplyPlan.maximum(2));
 
             int maximumPayload = 16 * 1024 - 4 * 1024 - (int) BoundedChunkedReplySink.CHUNK_COMPONENT_OVERHEAD_BYTES;
             sink.writeBytes(new byte[maximumPayload], 0, maximumPayload);

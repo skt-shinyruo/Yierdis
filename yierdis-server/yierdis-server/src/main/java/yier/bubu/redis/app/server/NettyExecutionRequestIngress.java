@@ -6,7 +6,6 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.handler.codec.DecoderException;
 import yier.bubu.redis.bytes.BytesSink;
-import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.executor.CommandExecutor;
@@ -24,13 +23,13 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
     private static final String DEFERRED_BUSY_ERROR = "ERR busy queue_full";
 
     private final CommandExecutor<NettyExecutionConnection> executor;
-    private final BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory;
+    private final BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory;
     private final ArrayDeque<PendingSubmission> pendingSubmissions = new ArrayDeque<>();
     private Runnable capacityRegistration;
 
     public NettyExecutionRequestIngress(
             CommandExecutor<NettyExecutionConnection> executor,
-            BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory
+            BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory
     ) {
         this.executor = Objects.requireNonNull(executor, "executor");
         this.replyWriterFactory = Objects.requireNonNull(replyWriterFactory, "replyWriterFactory");
@@ -78,7 +77,7 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
                     if (connection.markClosing()) {
                         safeDisableAutoRead(ctx);
                     }
-                    RedisReplyWriter writer = replyWriterFactory.apply(connection.session(), registered.slot().sink());
+                    RedisReplyWriter writer = controlReplyWriter(connection, registered.slot().sink());
                     writer.controlError(error.message());
                     registered.slot().markReady(true);
                 } catch (Throwable ignored) {
@@ -143,7 +142,7 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
             return;
         }
         try {
-            RedisReplyWriter writer = replyWriterFactory.apply(connection.session(), slot.sink());
+            RedisReplyWriter writer = controlReplyWriter(connection, slot.sink());
             writer.controlError("ERR internal error");
             slot.markReady(true);
         } catch (Throwable ignored) {
@@ -158,6 +157,11 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
             throw new IllegalStateException("missing NettyExecutionConnection");
         }
         return connection;
+    }
+
+    // 管线外控制回复（错误行）的编码在两个 RESP 版本下相同，writer 按 session 当前版本构造即可。
+    private RedisReplyWriter controlReplyWriter(NettyExecutionConnection connection, BytesSink sink) {
+        return replyWriterFactory.apply(connection.session().respVersion(), sink);
     }
 
     private void submitOrDefer(
@@ -252,7 +256,7 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
     ) {
         if (reject == CommandExecutor.SubmitRejectReason.REQUEST_TOO_LARGE) {
             try {
-                RedisReplyWriter writer = replyWriterFactory.apply(connection.session(), submission.slot.sink());
+                RedisReplyWriter writer = controlReplyWriter(connection, submission.slot.sink());
                 writer.error("ERR request exceeds executor queue byte limit");
                 submission.slot.markReady(false);
             } catch (Throwable ignored) {
@@ -291,10 +295,7 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
         PendingSubmission submission;
         while ((submission = pendingSubmissions.pollFirst()) != null) {
             try {
-                RedisReplyWriter writer = replyWriterFactory.apply(
-                        connection.session(),
-                        submission.slot.sink()
-                );
+                RedisReplyWriter writer = controlReplyWriter(connection, submission.slot.sink());
                 writer.error(DEFERRED_BUSY_ERROR);
                 submission.slot.markReady(false);
             } catch (Throwable ignored) {

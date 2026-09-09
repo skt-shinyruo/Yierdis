@@ -104,7 +104,8 @@ final class ServerCommandModule implements CommandModule {
                     ? session.respVersion()
                     : hello.requestedVersion();
             RedisReply reply = helloReply(targetRespVersion);
-            return PreparedCommands.action(reply.shape(), execution -> {
+            // 协商版本在 prepare 时声明，使本回复的容量预留与写出都按协商后版本计算。
+            return PreparedCommands.action(reply.shape(), targetRespVersion, execution -> {
                 execution.setRespVersion(targetRespVersion);
                 if (hello.setClientName()) {
                     execution.setClientName(hello.clientName());

@@ -59,12 +59,12 @@ final class ExecutorCoreTestSupport {
         Assert.assertFalse("executor.start should complete after owner tasks run", startThread.isAlive());
     }
 
-    static BiFunction<CommandSession, BytesSink, RedisReplyWriter> simpleReplyWriterFactory() {
+    static BiFunction<Integer, BytesSink, RedisReplyWriter> simpleReplyWriterFactory() {
         return RespReplyWriter::new;
     }
 
-    static BiFunction<CommandSession, ReplyShape, ReplyPlan> simpleReplySizer() {
-        return (session, shape) -> ReplyPlan.exact(64L, shape.retainedSourceBytes());
+    static BiFunction<Integer, ReplyShape, ReplyPlan> simpleReplySizer() {
+        return (version, shape) -> ReplyPlan.exact(64L, shape.retainedSourceBytes(), version);
     }
 
     static BiFunction<CommandSession, ExecutionRequest, PreparedCommand> simpleCommandEngine() {

@@ -2,27 +2,23 @@ package yier.bubu.redis.protocol.resp;
 
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.ReplyReservationSink;
 import yier.bubu.redis.execution.api.ReplyShapes;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
-import java.util.function.IntSupplier;
 
 public final class RespReplyWriter implements RedisReplyWriter {
     private static final byte[] CRLF = new byte[]{'\r', '\n'};
     private final BytesSink out;
-    private final IntSupplier versionSupplier;
+    private final RespProtocolVersion version;
 
-    public RespReplyWriter(CommandSession session, BytesSink out) {
-        this(out, Objects.requireNonNull(session, "session")::respVersion);
-    }
-
-    RespReplyWriter(BytesSink out, IntSupplier versionSupplier) {
+    // 协议版本在构造时固定，渲染期间不回读 session。预留回复路径上 executor 传入的是
+    // ReplyPlan 在 prepare 时刻捕获的值，保证写出字节与预留容量按同一版本计算。
+    public RespReplyWriter(int protocolVersion, BytesSink out) {
         this.out = Objects.requireNonNull(out, "out");
-        this.versionSupplier = Objects.requireNonNull(versionSupplier, "versionSupplier");
+        this.version = RespProtocolVersion.fromWireValue(protocolVersion);
     }
 
     @Override
@@ -91,20 +87,12 @@ public final class RespReplyWriter implements RedisReplyWriter {
 
     @Override
     public void nullValue() {
-        if (version() == RespProtocolVersion.RESP3) {
-            writeAscii("_\r\n");
-        } else {
-            writeAscii("$-1\r\n");
-        }
+        writeBytes(version.nullValueEncoding());
     }
 
     @Override
     public void nullArray() {
-        if (version() == RespProtocolVersion.RESP3) {
-            writeAscii("_\r\n");
-        } else {
-            writeAscii("*-1\r\n");
-        }
+        writeBytes(version.nullArrayEncoding());
     }
 
     @Override
@@ -114,24 +102,16 @@ public final class RespReplyWriter implements RedisReplyWriter {
 
     @Override
     public void mapHeader(int pairs) {
-        if (version() == RespProtocolVersion.RESP3) {
-            writeAsciiLine('%', Integer.toString(Math.max(0, pairs)));
-        } else {
-            writeAsciiLine('*', Integer.toString(Math.max(0, pairs) * 2));
-        }
+        writeAsciiLine(version.mapPrefix(), Long.toString(version.mapHeaderCount(Math.max(0, pairs))));
     }
 
     @Override
     public void setHeader(int count) {
-        if (version() == RespProtocolVersion.RESP3) {
-            writeAsciiLine('~', Integer.toString(Math.max(0, count)));
-        } else {
-            arrayHeader(count);
-        }
+        writeAsciiLine(version.setPrefix(), Integer.toString(Math.max(0, count)));
     }
 
-    private RespProtocolVersion version() {
-        return RespProtocolVersion.fromWireValue(versionSupplier.getAsInt());
+    private void writeBytes(byte[] encoding) {
+        out.writeBytes(encoding, 0, encoding.length);
     }
 
     private void writeAsciiLine(char prefix, String value) {

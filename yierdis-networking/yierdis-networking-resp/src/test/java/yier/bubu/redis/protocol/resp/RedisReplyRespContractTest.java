@@ -5,7 +5,6 @@ import java.util.function.BiFunction;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
-import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.execution.api.RedisReplyRenderer;
@@ -14,7 +13,6 @@ import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.ReplyReservationSink;
 
 import java.io.ByteArrayOutputStream;
-import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -24,7 +22,7 @@ import java.util.Set;
 
 public class RedisReplyRespContractTest {
     private final RespReplySizer sizer = new RespReplySizer();
-    private final BiFunction<CommandSession, BytesSink, RedisReplyWriter> writerFactory = RespReplyWriter::new;
+    private final BiFunction<Integer, BytesSink, RedisReplyWriter> writerFactory = RespReplyWriter::new;
 
     @Test
     public void scalarBulkAndNullRepliesHaveExactRespPlans() {
@@ -53,14 +51,14 @@ public class RedisReplyRespContractTest {
                 "OOM command not allowed when used memory > 'maxmemory'.");
 
         for (int version : new int[]{2, 3}) {
-            CommandSession session = session(version);
-            ReplyPlan plan = sizer.apply(session, reply.shape());
+            ReplyPlan plan = sizer.apply(version, reply.shape());
             ControlTrackingSink sink = new ControlTrackingSink();
-            RedisReplyWriter writer = writerFactory.apply(session, sink);
+            RedisReplyWriter writer = writerFactory.apply(version, sink);
 
             RedisReplyRenderer.render(reply, writer);
 
             Assert.assertTrue("RESP" + version + " control plan", plan.reserveMaximum());
+            Assert.assertEquals("RESP" + version + " captured version", version, plan.protocolVersion());
             Assert.assertEquals(0L, plan.encodedUpperBoundBytes());
             Assert.assertEquals(0L, plan.retainedSourceBytes());
             Assert.assertTrue("RESP" + version + " control reservation", sink.controlReservationUsed);
@@ -99,16 +97,16 @@ public class RedisReplyRespContractTest {
     }
 
     private void assertExactContract(ReplyFixture fixture, int version, String expectedWire) {
-        CommandSession session = session(version);
-        ReplyPlan plan = sizer.apply(session, fixture.reply().shape());
+        ReplyPlan plan = sizer.apply(version, fixture.reply().shape());
         ByteArraySink sink = new ByteArraySink();
-        RedisReplyWriter writer = writerFactory.apply(session, sink);
+        RedisReplyWriter writer = writerFactory.apply(version, sink);
 
         RedisReplyRenderer.render(fixture.reply(), writer);
 
         byte[] actual = sink.bytes();
         String context = fixture.name() + " RESP" + version;
         Assert.assertFalse(context + " must not reserve maximum", plan.reserveMaximum());
+        Assert.assertEquals(context + " captured version", version, plan.protocolVersion());
         Assert.assertEquals(context + " retained bytes",
                 fixture.retainedSourceBytes(), plan.retainedSourceBytes());
         Assert.assertTrue(context + " plan must bound encoded bytes",
@@ -152,7 +150,29 @@ public class RedisReplyRespContractTest {
                                 RedisReplies.integer(7L)
                         )),
                         "*2\r\n$3\r\nkey\r\n:7\r\n",
-                        "%1\r\n$3\r\nkey\r\n:7\r\n")
+                        "%1\r\n$3\r\nkey\r\n:7\r\n"),
+                // RESP2/RESP3 长度差异被放大的复合形状：头与 null 在两个版本下字节数都不同。
+                // contractFixturesCoverEveryPermittedRedisReplyVariant 强制每个未来新回复变体进入本契约测试，
+                // 届时任一版本编码更长（如未来 RESP3 类型）都会被逐版本精确相等的断言守住。
+                fixture("wide map with null value",
+                        RedisReplies.map(List.of(
+                                RedisReplies.bulkString(bytes("k0")), RedisReplies.integer(0L),
+                                RedisReplies.bulkString(bytes("k1")), RedisReplies.integer(1L),
+                                RedisReplies.bulkString(bytes("k2")), RedisReplies.integer(2L),
+                                RedisReplies.bulkString(bytes("k3")), RedisReplies.integer(3L),
+                                RedisReplies.bulkString(bytes("k4")), RedisReplies.integer(4L),
+                                RedisReplies.bulkString(bytes("k5")), RedisReplies.integer(5L),
+                                RedisReplies.bulkString(bytes("k6")), RedisReplies.integer(6L),
+                                RedisReplies.bulkString(bytes("k7")), RedisReplies.nullValue()
+                        )),
+                        "*16\r\n$2\r\nk0\r\n:0\r\n$2\r\nk1\r\n:1\r\n"
+                                + "$2\r\nk2\r\n:2\r\n$2\r\nk3\r\n:3\r\n"
+                                + "$2\r\nk4\r\n:4\r\n$2\r\nk5\r\n:5\r\n"
+                                + "$2\r\nk6\r\n:6\r\n$2\r\nk7\r\n$-1\r\n",
+                        "%8\r\n$2\r\nk0\r\n:0\r\n$2\r\nk1\r\n:1\r\n"
+                                + "$2\r\nk2\r\n:2\r\n$2\r\nk3\r\n:3\r\n"
+                                + "$2\r\nk4\r\n:4\r\n$2\r\nk5\r\n:5\r\n"
+                                + "$2\r\nk6\r\n:6\r\n$2\r\nk7\r\n_\r\n")
         );
     }
 
@@ -219,18 +239,6 @@ public class RedisReplyRespContractTest {
 
     private static byte[] bytes(String value) {
         return value.getBytes(StandardCharsets.UTF_8);
-    }
-
-    private static CommandSession session(int version) {
-        return (CommandSession) Proxy.newProxyInstance(
-                CommandSession.class.getClassLoader(),
-                new Class<?>[]{CommandSession.class},
-                (proxy, method, args) -> {
-                    if (method.getName().equals("respVersion")) {
-                        return version;
-                    }
-                    throw new UnsupportedOperationException(method.toString());
-                });
     }
 
     private record ReplyFixture(

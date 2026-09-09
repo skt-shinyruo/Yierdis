@@ -2,11 +2,15 @@ package yier.bubu.redis.execution.api;
 
 /**
  * 回复编码和保留来源在写入前必须取得的上界额度。
+ *
+ * <p>{@link #protocolVersion()} 是 sizing（prepare/预留）时刻捕获的 RESP 协议版本 wire value：
+ * 容量按它计算，writer 渲染同一条回复时必须使用这同一份捕获值，不允许在写出时再次读取版本。</p>
  */
 public record ReplyPlan(
         long encodedUpperBoundBytes,
         long retainedSourceBytes,
-        boolean reserveMaximum
+        boolean reserveMaximum,
+        int protocolVersion
 ) {
     public ReplyPlan {
         if (encodedUpperBoundBytes < 0L) {
@@ -17,12 +21,12 @@ public record ReplyPlan(
         }
     }
 
-    public static ReplyPlan exact(long encodedUpperBoundBytes, long retainedSourceBytes) {
-        return new ReplyPlan(encodedUpperBoundBytes, retainedSourceBytes, false);
+    public static ReplyPlan exact(long encodedUpperBoundBytes, long retainedSourceBytes, int protocolVersion) {
+        return new ReplyPlan(encodedUpperBoundBytes, retainedSourceBytes, false, protocolVersion);
     }
 
-    public static ReplyPlan maximum() {
-        return new ReplyPlan(0L, 0L, true);
+    public static ReplyPlan maximum(int protocolVersion) {
+        return new ReplyPlan(0L, 0L, true, protocolVersion);
     }
 
     public long totalUpperBoundBytes() {

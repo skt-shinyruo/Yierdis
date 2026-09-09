@@ -638,7 +638,7 @@ public class YierdisServerBootstrapCommandWiringTest {
 
     private static final class InitializerTestEnv implements AutoCloseable {
         private final YierdisInstance instance;
-        private final BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory;
+        private final BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory;
         private final CommandExecutor<NettyExecutionConnection> executor;
 
         private InitializerTestEnv() {

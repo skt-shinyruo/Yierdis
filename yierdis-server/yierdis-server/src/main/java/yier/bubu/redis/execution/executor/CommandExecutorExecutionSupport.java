@@ -22,8 +22,8 @@ import java.util.function.BooleanSupplier;
 
 final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
     private final BiFunction<CommandSession, ExecutionRequest, PreparedCommand> commandProcessor;
-    private final BiFunction<CommandSession, ReplyShape, ReplyPlan> replySizer;
-    private final BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory;
+    private final BiFunction<Integer, ReplyShape, ReplyPlan> replySizer;
+    private final BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory;
     private final ExecutionIoAdapter<C> ioAdapter;
     private final ExecutorBacklogBudget backlogBudget;
     private final ExecutorBackpressureController<C> backpressureController;
@@ -37,8 +37,8 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
 
     CommandExecutorExecutionSupport(
             BiFunction<CommandSession, ExecutionRequest, PreparedCommand> commandProcessor,
-            BiFunction<CommandSession, ReplyShape, ReplyPlan> replySizer,
-            BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory,
+            BiFunction<Integer, ReplyShape, ReplyPlan> replySizer,
+            BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory,
             ExecutionIoAdapter<C> ioAdapter,
             ExecutorBacklogBudget backlogBudget,
             ExecutorBackpressureController<C> backpressureController,
@@ -81,8 +81,12 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
                         commandProcessor.apply(connection.session(), task.request),
                         "command engine returned null prepared command"
                 );
+                // 协议版本在 prepare/预留时刻读取一次并捕获进 reply plan，渲染使用同一份捕获值；
+                // execute 期才切换版本的命令（HELLO）已在 prepare 时声明协商后版本。
+                int replyProtocolVersion = task.prepared.replyProtocolVersion()
+                        .orElseGet(() -> connection.session().respVersion());
                 task.replyPlan = Objects.requireNonNull(
-                        replySizer.apply(connection.session(), task.prepared.reservationShape()),
+                        replySizer.apply(replyProtocolVersion, task.prepared.reservationShape()),
                         "reply sizer returned null plan"
                 );
             }
@@ -117,7 +121,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
             );
             executed = true;
             RedisReplyWriter writer = replyWriterFactory.apply(
-                    connection.session(), task.reply.sink());
+                    task.replyPlan.protocolVersion(), task.reply.sink());
             RedisReplyRenderer.render(result.reply(), writer);
             if (result.closeAfterReply()) {
                 context.recordCloseAfterReply();
@@ -243,7 +247,8 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
             return;
         }
         try {
-            RedisReplyWriter writer = replyWriterFactory.apply(connection.session(), reply.sink());
+            // 控制错误编码在两个 RESP 版本下相同，按 session 当前版本创建 writer 即可。
+            RedisReplyWriter writer = replyWriterFactory.apply(connection.session().respVersion(), reply.sink());
             writer.controlError("ERR internal error");
             context.recordCloseAfterReply();
             closeAfterReply.increment();

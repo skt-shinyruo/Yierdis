@@ -67,7 +67,7 @@ HELLO 2 SETNAME <name>
 HELLO 3 SETNAME <name>
 ```
 
-`HELLO 2` 把连接设置为 RESP2 回包；`HELLO 3` 把连接切到基础 RESP3 reply encoding。切换成功后，作为连接 session owner 的 `EngineSession` 会记录当前版本。命令执行返回语义 `RedisReply` 后，executor 按更新后的 session 版本创建 `RespReplyWriter`，再由中央 renderer 编码成相应 RESP 形态。
+`HELLO 2` 把连接设置为 RESP2 回包；`HELLO 3` 把连接切到基础 RESP3 reply encoding。切换成功后，作为连接 session owner 的 `EngineSession` 会记录当前版本。回复使用的协议版本在 prepare/容量预留时刻读取一次并被捕获进 `ReplyPlan`，命令执行返回语义 `RedisReply` 后，executor 按这份捕获值创建 `RespReplyWriter`，再由中央 renderer 编码成相应 RESP 形态；HELLO 自身在 prepare 时声明协商后的目标版本，因此协商回复的容量预留与写出都按协商后版本计算。
 
 `HELLO` 返回 5 个字段：`server`、`version`、`proto`、`mode`、`role`。在 RESP2 下这个 reply 是 flat array；在 RESP3 下是 map。例如 `HELLO 3` 成功后，响应包含 `proto: 3`，并且后续 map、null、bool、double 等语义会使用 RESP3 基础编码。
 

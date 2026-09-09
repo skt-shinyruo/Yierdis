@@ -170,7 +170,7 @@ public class ReplyPreflightCommandTest {
                 long retainedBytes = echo.admittedMemoryBytes();
                 ReplyPlan plan = execute(dispatcher, session, echoWriter, echo);
                 Assert.assertEquals(
-                        REPLY_SIZER.apply(session, ReplyShapes.bulkString(7, retainedBytes)),
+                        REPLY_SIZER.apply(session.respVersion(), ReplyShapes.bulkString(7, retainedBytes)),
                         plan
                 );
             }
@@ -316,7 +316,7 @@ public class ReplyPreflightCommandTest {
             Assert.assertTrue(session.transaction().active());
             Assert.assertEquals(1, session.transaction().size());
             Assert.assertNull(stringValue(db.strings(), b("queued")));
-            Assert.assertEquals(ReplyPlan.maximum(), capacity.reservedPlan());
+            Assert.assertEquals(ReplyPlan.maximum(2), capacity.reservedPlan());
             session.discardTransaction();
         });
     }
@@ -340,7 +340,7 @@ public class ReplyPreflightCommandTest {
                     () -> execute(dispatcher, session, capacity, rejecting, cmd("EXEC"))
             );
 
-            Assert.assertEquals(ReplyPlan.maximum(), capacity.reservedPlan());
+            Assert.assertEquals(ReplyPlan.maximum(2), capacity.reservedPlan());
             Assert.assertEquals(2, session.transaction().size());
             Assert.assertNull(stringValue(db.strings(), b("queued")));
             Assert.assertEquals(0, rejecting.arrayHeaderCalls());
@@ -356,7 +356,7 @@ public class ReplyPreflightCommandTest {
         EngineSession session = new EngineSession(16, 16 * 1024L);
         ReplyPlan plan = execute(dispatcher, session, new TrackingReplyWriter(), command);
         Assert.assertEquals(
-                REPLY_SIZER.apply(session, ReplyShapes.bulkString(payloadLength, plan.retainedSourceBytes())),
+                REPLY_SIZER.apply(session.respVersion(), ReplyShapes.bulkString(payloadLength, plan.retainedSourceBytes())),
                 plan
         );
     }
@@ -583,7 +583,7 @@ public class ReplyPreflightCommandTest {
         try {
             try (PreparedCommand prepared = dispatcher.prepare(session, request)) {
                 Assert.assertEquals(ValidationResult.VALID, prepared.validateBeforeExecute());
-                ReplyPlan plan = REPLY_SIZER.apply(session, prepared.reservationShape());
+                ReplyPlan plan = REPLY_SIZER.apply(session.respVersion(), prepared.reservationShape());
                 capacity.reserve(plan);
                 CommandResult result = prepared.execute(session);
                 RedisReplyRenderer.render(result.reply(), writer);

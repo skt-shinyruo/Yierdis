@@ -11,7 +11,6 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
-import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
@@ -37,7 +36,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
 
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
         CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
-        BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
+        BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance.runtimeAccess()::bindToCurrentThread,
                 dispatcher::prepare,
@@ -72,7 +71,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
 
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
         CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
-        BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
+        BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance.runtimeAccess()::bindToCurrentThread,
                 dispatcher::prepare,
@@ -136,7 +135,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
 
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
         CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
-        BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
+        BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance.runtimeAccess()::bindToCurrentThread,
                 dispatcher::prepare,
@@ -177,7 +176,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
 
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
         CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
-        BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
+        BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance.runtimeAccess()::bindToCurrentThread,
                 dispatcher::prepare,
@@ -241,7 +240,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
 
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
         CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
-        BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
+        BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance.runtimeAccess()::bindToCurrentThread,
                 dispatcher::prepare,

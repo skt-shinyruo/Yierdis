@@ -39,8 +39,8 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
             Runnable bindToCurrentThread,
             BiFunction<CommandSession, ExecutionRequest, PreparedCommand> commandProcessor,
             SerialOwnerExecutor ownerExecutor,
-            BiFunction<CommandSession, ReplyShape, ReplyPlan> replySizer,
-            BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory,
+            BiFunction<Integer, ReplyShape, ReplyPlan> replySizer,
+            BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory,
             ExecutionIoAdapter<C> ioAdapter,
             CommandExecutorConfig config
     ) {

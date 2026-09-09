@@ -6,7 +6,6 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
 import java.nio.charset.StandardCharsets;
 import yier.bubu.redis.bytes.BytesSink;
-import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.executor.CommandExecutor;
@@ -28,7 +27,7 @@ final class OrderedReplyTestFixture implements AutoCloseable {
 
     private OrderedReplyTestFixture(
             CommandExecutor<NettyExecutionConnection> executor,
-            BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory
+            BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory
     ) {
         channel = new EmbeddedChannel(new NettyExecutionRequestIngress(executor, replyWriterFactory));
         connection = NettyExecutionConnection.getOrCreate(channel, 16, 1_024);
@@ -56,7 +55,7 @@ final class OrderedReplyTestFixture implements AutoCloseable {
 
     static OrderedReplyTestFixture open(
             CommandExecutor<NettyExecutionConnection> executor,
-            BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory
+            BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory
     ) {
         return new OrderedReplyTestFixture(executor, replyWriterFactory);
     }

@@ -379,7 +379,7 @@ public class RespIngressLifecycleIntegrationTest {
         private final ConnectionReplySequencer sequencer;
 
         private ProtocolExecutorFixture(int queueCapacity, AtomicInteger executions) {
-            BiFunction<CommandSession, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
+            BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
             executor = new CommandExecutor<>(
                     () -> { },
                     (session, request) -> okPrepared(executions),
