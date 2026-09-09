@@ -51,6 +51,7 @@ Thumbs.db
 .serena/
 .codex
 .superpowers/
+.scratch/
 
 # Git worktrees
 .worktrees/
