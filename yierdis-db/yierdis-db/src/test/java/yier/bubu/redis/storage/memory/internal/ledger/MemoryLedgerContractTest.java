@@ -106,6 +106,32 @@ public class MemoryLedgerContractTest {
         Assert.assertEquals(0L, ledger.reservedBytes());
     }
 
+    @Test
+    public void realignUsageRebasesLogicalBookOntoPhysicalFigure() {
+        YierdisDbMemoryLedger ledger = new YierdisDbMemoryLedger(
+                0L,
+                MaxmemoryPolicy.NOEVICTION,
+                () -> { },
+                ignored -> { },
+                () -> 0L,
+                () -> null,
+                () -> null
+        );
+        MemoryReservation reservation = ledger.reserve(64L);
+        ledger.commit(reservation, 48L);
+        Assert.assertEquals(48L, ledger.usedBytes());
+
+        ledger.realignUsage(30L);
+        Assert.assertEquals(30L, ledger.usedBytes());
+
+        ledger.realignUsage(0L);
+        Assert.assertEquals(0L, ledger.usedBytes());
+
+        // 负物理值会把账本带进非法状态，必须在入账前拒绝且不产生漂移。
+        Assert.assertThrows(IllegalArgumentException.class, () -> ledger.realignUsage(-1L));
+        Assert.assertEquals(0L, ledger.usedBytes());
+    }
+
     private static MemoryLedger ledger(long limitBytes) {
         MemoryLedger[] holder = new MemoryLedger[1];
         holder[0] = new YierdisDbMemoryLedger(

@@ -61,6 +61,8 @@ estimate upper bound
 
 `prepared.commit()` 开始之后不再存在“确认未生效”的安全回滚前提。此后的异常会触发 post-commit settle：executor best-effort promote allocation、settle ledger、release superseded resources；DB 进入 degraded，调用方收到 result-unknown，而不是把异常简单映射成一次确定未执行的 OOM。只有 commit 开始前的 capacity rejection 才能安全返回 Redis 风格 OOM。
 
+degraded 不是终态：`RuntimeDbEngine.reconcileAccounting()` 在 owner thread 上重算物理用量、把 ledger 漂移修正入账并清除 degraded，尝试与结果记入 `DbHealthSnapshot.lastReconciliation`。恢复只能显式触发，maintenance tick 不会自动对账。
+
 ## per-DB scope 的判断顺序
 
 没有全局 coordinator 时，`YierdisDbMemoryLedger.reserve(...)` 的判断顺序是本地 maxmemory 语义的真相来源：

@@ -38,7 +38,7 @@ Type roots
   ValueHandle -> string/list/hash/set/zset payload
 ```
 
-`NativeKeyDirectory` 保存 allocator-backed `KEY_BYTES`，并把 key 映射到 `EntryHandle`。它负责 lookup、insert/remove、random candidate、cursor scan 和 table maintenance，不理解 value 类型，也不释放 payload。
+`NativeKeyDirectory` 保存 allocator-backed `KEY_BYTES`，并把 key 映射到 `EntryHandle`。它负责 lookup、insert/remove、random candidate、cursor scan 和 table maintenance，不理解 value 类型，也不释放 payload。按 entry 删除（`removeEntry`）用 entry record 持有的 key handle 与 dict hash 反向探测槽位，O(probe) 定位，不做全表扫描；位置在删除时现查，rehash 两表状态下也不会指向 stale slot。
 
 `OpenAddressingTopology` 统一表达 slot state、linear probing、tombstone 复用和 active/old 增量 rehash，不持有 key/value 数组、native handle 或任何 payload ownership。`NativeByteMap` 与 `NativeKeyDirectory` 均把生产 topology 委托给该核心，只保留 payload arrays 与 ownership/lifecycle logic。
 
@@ -154,6 +154,8 @@ heap estimated
 per-db scope 先 cleanup expired，再按 `maxmemoryBytes - estimatedExtraBytes` trim/resample/evict。global scope 把相同 participant 操作交给 `YierdisGlobalMaxmemoryGovernor`，由它跨 DB 汇总 snapshots 和挑选 victim。各 DB backend runtime counter 只用于 lifecycle 诊断，不作为第二套 global usage source。
 
 `noeviction` 不选 victim；`allkeys-random` 随机取候选；`allkeys-lru` 比较 `EntryRecord.lruOrLfu()`。过期候选先走 expiration reclamation，真正 victim 通过 `YierdisDbKernel.evict(...)` 删除。
+
+ledger 逻辑账本与 admission 的物理重算是两套账，估算漂移触发 invariant failure 后 DB 进入 degraded、拒绝写入（MISCONF）。`RuntimeDbEngine.reconcileAccounting()` 是唯一的显式恢复入口：在 owner thread 上重算物理用量、用 `realignUsage` 把逻辑账本对齐到物理值、清除 degraded 并恢复写入；每次尝试与结果（成功/失败/修正量）记入 `DbHealthSnapshot.lastReconciliation`。快照的失败字段只描述当前未恢复的 episode，对账成功后随之关闭，下一场事故重新入账。恢复不会自动发生，持续性记账 bug 仍以事故形式暴露。
 
 更完整的 admission、OOM 和 result-unknown 边界见 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)。
 

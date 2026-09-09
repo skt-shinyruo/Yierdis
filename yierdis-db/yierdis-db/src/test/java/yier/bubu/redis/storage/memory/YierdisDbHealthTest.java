@@ -147,7 +147,8 @@ public class YierdisDbHealthTest {
 
             PostCommitMutationException failure = Assert.assertThrows(
                     PostCommitMutationException.class,
-                    () -> replaceStringAndFailDuringRelease(db, key, b("new"))
+                    () -> MutationExecutorTestSupport.replaceStringAndFailDuringRelease(
+                            db, key, b("new"), "corrupt metadata")
             );
 
             Assert.assertTrue(failure.getCause() instanceof NativeMemoryException);
@@ -209,39 +210,6 @@ public class YierdisDbHealthTest {
         }
     }
 
-    private static void replaceStringAndFailDuringRelease(YierdisDb db, byte[] key, byte[] nextBytes) {
-        YierdisDbKeyLifecycle keyLifecycle = db.keyLifecycle();
-        YierdisDbMutationExecutor executor = mutationExecutor(db);
-        executor.execute(new YierdisDbMutationExecutor.MutationPlan<Void>() {
-            @Override
-            public long upperBoundBytes() {
-                return TEST_UPPER_BOUND_BYTES;
-            }
-
-            @Override
-            public PreparedDbMutation<Void> prepare() {
-                EntryHandle existingEntryHandle = keyLifecycle.entryHandle(key);
-                AllocatorKeyHandle keyHandle = keyLifecycle.keyHandle(key);
-                EntryRecord oldRecord = keyLifecycle.entryRecord(existingEntryHandle);
-                ValueHandle replacement = KeyLifecycleTestAccess.inspect(keyLifecycle).stringRoot().store(nextBytes);
-                EntryRecord newRecord = stringRecord(keyLifecycle, keyHandle, replacement, oldRecord);
-                return PreparedEntryMutation.<Void>replace(
-                        keyLifecycle,
-                        null,
-                        0L,
-                        0L,
-                        existingEntryHandle,
-                        oldRecord,
-                        newRecord,
-                        true
-                ).releaseReplacedValueWith(() -> {
-                            keyLifecycle.releaseValue(oldRecord);
-                            throw new NativeMemoryException("corrupt metadata");
-                        });
-            }
-        });
-    }
-
     private static void publishNewStringThenFail(
             YierdisDb db,
             byte[] key,
@@ -250,7 +218,7 @@ public class YierdisDbHealthTest {
             AtomicBoolean released
     ) {
         YierdisDbKeyLifecycle keyLifecycle = db.keyLifecycle();
-        YierdisDbMutationExecutor executor = mutationExecutor(db);
+        YierdisDbMutationExecutor executor = MutationExecutorTestSupport.create(db);
         executor.execute(new YierdisDbMutationExecutor.MutationPlan<Void>() {
             @Override
             public long upperBoundBytes() {
@@ -293,15 +261,6 @@ public class YierdisDbHealthTest {
                 };
             }
         });
-    }
-
-    private static YierdisDbMutationExecutor mutationExecutor(YierdisDb db) {
-        return new YierdisDbMutationExecutor(
-                db::checkThread,
-                db.memoryLedger(),
-                KeyLifecycleTestAccess.backend(db),
-                db.healthMonitor()
-        );
     }
 
     private static EntryRecord stringRecord(

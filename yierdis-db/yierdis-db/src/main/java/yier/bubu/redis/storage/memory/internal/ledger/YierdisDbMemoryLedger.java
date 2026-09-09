@@ -148,6 +148,14 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
         reservedBytes = 0;
     }
 
+    // 显式对账的修正入口：逻辑账本向 admission 使用的物理重算值对齐，漂移量由调用方记入对账结果。
+    public void realignUsage(long physicalUsedBytes) {
+        if (physicalUsedBytes < 0L) {
+            throw new IllegalArgumentException("physicalUsedBytes must be >= 0");
+        }
+        usedBytes = physicalUsedBytes;
+    }
+
     public void enforceLocalMaintenance() {
         enforceLocalLimit(0L, false);
     }

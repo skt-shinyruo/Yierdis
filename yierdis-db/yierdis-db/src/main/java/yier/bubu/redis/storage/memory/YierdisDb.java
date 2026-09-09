@@ -8,6 +8,7 @@ import yier.bubu.redis.common.memory.MemoryReclaimResult;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
+import yier.bubu.redis.storage.api.DbAccountingReconciliation;
 import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.DbEngineConfig;
 import yier.bubu.redis.storage.api.DbHealthSnapshot;
@@ -285,6 +286,11 @@ public final class YierdisDb
     @Override
     public void runMaintenance() {
         maintenance.runMaintenance();
+    }
+
+    @Override
+    public DbAccountingReconciliation reconcileAccounting() {
+        return maintenance.reconcileAccounting();
     }
 
     @Override

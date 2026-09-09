@@ -5,6 +5,7 @@ import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor.
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor.MutationPlan.AdmissionMode;
 
 import yier.bubu.redis.common.memory.MemoryPressureBudget;
+import yier.bubu.redis.storage.api.DbAccountingReconciliation;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
@@ -87,6 +88,34 @@ final class YierdisDbDataMaintenance {
         health.requireWritable();
         runtimeState.checkThread();
         ledger.enforceLocalMaintenance();
+    }
+
+    DbAccountingReconciliation reconcileAccounting() {
+        runtimeState.checkThread();
+        long ledgerUsedBeforeBytes = ledger.usedBytes();
+        // 不能走 mutation executor：degraded 时 requireWritable 拒写，恢复只能绕过它对账本直接对账。
+        final long physicalUsedBytes;
+        try {
+            physicalUsedBytes = Math.max(0L, memoryReporter.usedBytesForMaxmemory());
+        } catch (RuntimeException failure) {
+            // 物理重算不可信时账本保持原样、degraded 不解除；失败尝试本身也要可观测。
+            // Error 属于 VM 级故障，不入账、直接向上传播。
+            DbAccountingReconciliation reconciliation = DbAccountingReconciliation.failure(
+                    ledgerUsedBeforeBytes,
+                    failure,
+                    System.currentTimeMillis()
+            );
+            health.recordReconciliation(reconciliation);
+            return reconciliation;
+        }
+        ledger.realignUsage(physicalUsedBytes);
+        DbAccountingReconciliation reconciliation = DbAccountingReconciliation.success(
+                ledgerUsedBeforeBytes,
+                physicalUsedBytes,
+                System.currentTimeMillis()
+        );
+        health.recordReconciliation(reconciliation);
+        return reconciliation;
     }
 
     void defragMaintenance() {
