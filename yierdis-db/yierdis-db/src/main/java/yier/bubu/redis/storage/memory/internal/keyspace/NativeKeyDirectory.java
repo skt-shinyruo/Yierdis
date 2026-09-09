@@ -360,15 +360,25 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         return true;
     }
 
-    public synchronized boolean remove(EntryHandle handle) {
-        Objects.requireNonNull(handle, "handle");
+    /**
+     * 按 entry 记录持有的 key 句柄与 dict hash 反向探测槽位并删除，O(probe) 定位，不做全表扫描。
+     * 位置在删除时现查，rehash 两表状态下也不会指向 stale slot。
+     */
+    public synchronized boolean removeEntry(NativeHandle keyHandle, int keyHash, EntryHandle expectedHandle) {
+        Objects.requireNonNull(keyHandle, "keyHandle");
+        Objects.requireNonNull(expectedHandle, "expectedHandle");
         ensureOpen();
         advanceRehashOnWrite();
-        Location location = findHandleLocation(handle);
-        if (location == null) {
+        ProbeResult probe = probeStoredKey(keyHandle, keyHash);
+        if (!probe.found()) {
             return false;
         }
-        remove(location, topology.hashAt(location));
+        Location location = probe.location();
+        Table table = table(location.table());
+        if (!expectedHandle.nativeHandle().equals(table.entryHandles[location.slot()])) {
+            return false;
+        }
+        remove(location, keyHash);
         return true;
     }
 
@@ -738,22 +748,6 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
                 hash,
                 location -> keyHandle.equals(table(location.table()).keyHandles[location.slot()])
         );
-    }
-
-    private Location findHandleLocation(EntryHandle handle) {
-        for (TableSide side : TableSide.values()) {
-            Table table = table(side);
-            if (table == null) {
-                continue;
-            }
-            for (int slot = 0; slot < table.capacity; slot++) {
-                if (topology.slotState(side, slot) == SlotState.FILLED
-                        && handle.nativeHandle().equals(table.entryHandles[slot])) {
-                    return new Location(side, slot);
-                }
-            }
-        }
-        return null;
     }
 
     private Table table(TableSide side) {

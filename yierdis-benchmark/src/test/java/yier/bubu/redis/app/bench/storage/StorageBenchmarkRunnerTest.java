@@ -23,6 +23,14 @@ public class StorageBenchmarkRunnerTest {
         Assert.assertTrue(result.elapsedNanos() > 0L);
         Assert.assertTrue(result.operationsPerSecond() > 0.0);
         Assert.assertTrue(result.latency().p99Nanos() >= result.latency().p50Nanos());
+        Assert.assertEquals(128L, result.ttlChurn().latency().count());
+        Assert.assertTrue(result.ttlChurn().elapsedNanos() > 0L);
+        Assert.assertTrue(result.ttlChurn().operationsPerSecond() > 0.0);
+        Assert.assertTrue(result.ttlChurn().latency().p99Nanos() >= result.ttlChurn().latency().p50Nanos());
+        Assert.assertEquals(128L, result.deletion().latency().count());
+        Assert.assertTrue(result.deletion().elapsedNanos() > 0L);
+        Assert.assertTrue(result.deletion().operationsPerSecond() > 0.0);
+        Assert.assertTrue(result.deletion().latency().p99Nanos() >= result.deletion().latency().p50Nanos());
         Assert.assertEquals(0, result.baseline().keyCount());
         Assert.assertEquals(128, result.loaded().keyCount());
         Assert.assertTrue(result.loaded().heapEstimatedBytes() >= result.baseline().heapEstimatedBytes());

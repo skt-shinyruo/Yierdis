@@ -12,7 +12,11 @@ public final class StorageBenchmarkRenderer {
             + "\"native_data_live_bytes\",\"native_reclaimable_bytes\",\"accounted_bytes\","
             + "\"baseline_accounted_bytes\",\"accounted_delta_bytes\","
             + "\"accounted_delta_bytes_per_key\",\"live_object_count\","
-            + "\"pending_hash_table_count\",\"rss_bytes\",\"rss_delta_bytes\"";
+            + "\"pending_hash_table_count\",\"rss_bytes\",\"rss_delta_bytes\","
+            + "\"ttl_churn_elapsed_seconds\",\"ttl_churn_ops_per_second\","
+            + "\"ttl_churn_p50_latency_ns\",\"ttl_churn_p99_latency_ns\","
+            + "\"del_elapsed_seconds\",\"del_ops_per_second\","
+            + "\"del_p50_latency_ns\",\"del_p99_latency_ns\"";
 
     public String render(StorageBenchmarkConfig config, StorageBenchmarkResult result) {
         StorageBenchmarkConfig requiredConfig = Objects.requireNonNull(config, "config");
@@ -48,27 +52,45 @@ public final class StorageBenchmarkRenderer {
         append(out, "  pending hash tables: %d\n", loaded.pendingHashTableCount());
         appendOptional(out, "  process RSS: %s bytes\n", loaded.rssBytes());
         appendOptional(out, "  process RSS delta: %s bytes\n", result.rssDeltaBytes());
+        appendPhase(out, "TTL churn (SET + PEXPIRE 0)", result.ttlChurn());
+        appendPhase(out, "DEL", result.deletion());
         return out.toString();
+    }
+
+    private static void appendPhase(StringBuilder out, String name, StorageBenchmarkResult.Phase phase) {
+        append(out, "====== %s ======\n", name);
+        append(out, "  operations: %d\n", phase.latency().count());
+        append(out, "  elapsed: %.6f seconds\n", phase.elapsedNanos() / 1_000_000_000.0);
+        append(out, "  throughput: %.2f ops/s\n", phase.operationsPerSecond());
+        append(out, "  latency p50: %d ns\n", phase.latency().p50Nanos());
+        append(out, "  latency p99: %d ns\n", phase.latency().p99Nanos());
     }
 
     private static String renderQuiet(StorageBenchmarkResult result) {
         return rootFormat(
                 "storage-set: %.2f ops/s, p50=%d ns, p99=%d ns, %.3f bytes/key, "
-                        + "live_objects=%d, pending_tables=%d, rss=%s\n",
+                        + "live_objects=%d, pending_tables=%d, rss=%s, "
+                        + "ttl_churn_p50=%d ns, ttl_churn_p99=%d ns, "
+                        + "del_p50=%d ns, del_p99=%d ns\n",
                 result.operationsPerSecond(),
                 result.latency().p50Nanos(),
                 result.latency().p99Nanos(),
                 result.accountedDeltaBytesPerKey(),
                 result.loaded().liveObjectCount(),
                 result.loaded().pendingHashTableCount(),
-                optional(result.loaded().rssBytes())
+                optional(result.loaded().rssBytes()),
+                result.ttlChurn().latency().p50Nanos(),
+                result.ttlChurn().latency().p99Nanos(),
+                result.deletion().latency().p50Nanos(),
+                result.deletion().latency().p99Nanos()
         );
     }
 
     private static String renderCsv(StorageBenchmarkConfig config, StorageBenchmarkResult result) {
         StorageMemorySnapshot loaded = result.loaded();
         return CSV_HEADER + '\n' + rootFormat(
-                "%d,%d,%d,%d,%.6f,%.2f,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%.3f,%d,%d,%s,%s\n",
+                "%d,%d,%d,%d,%.6f,%.2f,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%.3f,%d,%d,%s,%s,"
+                        + "%.6f,%.2f,%d,%d,%.6f,%.2f,%d,%d\n",
                 result.completedOperations(),
                 config.keySizeBytes(),
                 config.valueSizeBytes(),
@@ -89,7 +111,15 @@ public final class StorageBenchmarkRenderer {
                 loaded.liveObjectCount(),
                 loaded.pendingHashTableCount(),
                 optionalCsv(loaded.rssBytes()),
-                optionalCsv(result.rssDeltaBytes())
+                optionalCsv(result.rssDeltaBytes()),
+                result.ttlChurn().elapsedNanos() / 1_000_000_000.0,
+                result.ttlChurn().operationsPerSecond(),
+                result.ttlChurn().latency().p50Nanos(),
+                result.ttlChurn().latency().p99Nanos(),
+                result.deletion().elapsedNanos() / 1_000_000_000.0,
+                result.deletion().operationsPerSecond(),
+                result.deletion().latency().p50Nanos(),
+                result.deletion().latency().p99Nanos()
         );
     }
 

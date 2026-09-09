@@ -25,6 +25,12 @@ public class StorageBenchmarkRendererTest {
         Assert.assertTrue(rendered.contains("pending hash tables: 0"));
         Assert.assertTrue(rendered.contains("process RSS: 9000 bytes"));
         Assert.assertTrue(rendered.contains("process RSS delta: 8000 bytes"));
+        Assert.assertTrue(rendered.contains("====== TTL churn (SET + PEXPIRE 0) ======"));
+        Assert.assertTrue(rendered.contains("====== DEL ======"));
+        Assert.assertTrue(rendered.contains("latency p50: 50 ns"));
+        Assert.assertTrue(rendered.contains("latency p99: 90 ns"));
+        Assert.assertTrue(rendered.contains("latency p50: 25 ns"));
+        Assert.assertTrue(rendered.contains("latency p99: 45 ns"));
     }
 
     @Test
@@ -40,9 +46,11 @@ public class StorageBenchmarkRendererTest {
         Assert.assertTrue(lines[0].contains("\"live_object_count\""));
         Assert.assertTrue(lines[0].contains("\"rss_bytes\""));
         Assert.assertTrue(lines[0].contains("\"pending_hash_table_count\""));
-        Assert.assertEquals(21, lines[0].split(",", -1).length);
-        Assert.assertEquals(21, lines[1].split(",", -1).length);
-        Assert.assertTrue(lines[1].endsWith(",,"));
+        Assert.assertTrue(lines[0].contains("\"ttl_churn_p50_latency_ns\""));
+        Assert.assertTrue(lines[0].contains("\"del_p99_latency_ns\""));
+        Assert.assertEquals(29, lines[0].split(",", -1).length);
+        Assert.assertEquals(29, lines[1].split(",", -1).length);
+        Assert.assertTrue(lines[1].contains(",,0.500000"));
     }
 
     @Test
@@ -62,9 +70,18 @@ public class StorageBenchmarkRendererTest {
                 10,
                 1_000_000_000L,
                 new StorageLatencyRecorder.Summary(10L, 100.0, 80L, 200L, 250L),
+                phase(500_000_000L),
+                phase(250_000_000L),
                 baseline,
                 loaded
         ));
+    }
+
+    private static StorageBenchmarkResult.Phase phase(long elapsedNanos) {
+        return new StorageBenchmarkResult.Phase(
+                elapsedNanos,
+                new StorageLatencyRecorder.Summary(10L, 60.0, 50L, 90L, 120L)
+        );
     }
 
     private static StorageBenchmarkConfig config(BenchmarkFormat format) {
@@ -87,6 +104,14 @@ public class StorageBenchmarkRendererTest {
                 10,
                 1_000_000_000L,
                 new StorageLatencyRecorder.Summary(10L, 100.0, 80L, 200L, 250L),
+                new StorageBenchmarkResult.Phase(
+                        500_000_000L,
+                        new StorageLatencyRecorder.Summary(10L, 60.0, 50L, 90L, 120L)
+                ),
+                new StorageBenchmarkResult.Phase(
+                        250_000_000L,
+                        new StorageLatencyRecorder.Summary(10L, 30.0, 25L, 45L, 60L)
+                ),
                 baseline,
                 loaded
         );

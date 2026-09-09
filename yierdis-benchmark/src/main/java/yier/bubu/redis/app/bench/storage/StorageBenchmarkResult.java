@@ -7,6 +7,8 @@ public record StorageBenchmarkResult(
         int completedOperations,
         long elapsedNanos,
         StorageLatencyRecorder.Summary latency,
+        Phase ttlChurn,
+        Phase deletion,
         StorageMemorySnapshot baseline,
         StorageMemorySnapshot loaded
 ) {
@@ -18,10 +20,18 @@ public record StorageBenchmarkResult(
             throw new IllegalArgumentException("elapsedNanos must be >= 0");
         }
         latency = Objects.requireNonNull(latency, "latency");
+        ttlChurn = Objects.requireNonNull(ttlChurn, "ttlChurn");
+        deletion = Objects.requireNonNull(deletion, "deletion");
         baseline = Objects.requireNonNull(baseline, "baseline");
         loaded = Objects.requireNonNull(loaded, "loaded");
         if (latency.count() != completedOperations) {
             throw new IllegalArgumentException("latency count must equal completedOperations");
+        }
+        if (ttlChurn.latency().count() != completedOperations) {
+            throw new IllegalArgumentException("ttl-churn latency count must equal completedOperations");
+        }
+        if (deletion.latency().count() != completedOperations) {
+            throw new IllegalArgumentException("deletion latency count must equal completedOperations");
         }
         if (loaded.keyCount() != completedOperations) {
             throw new IllegalArgumentException("loaded key count must equal completedOperations");
@@ -37,6 +47,8 @@ public record StorageBenchmarkResult(
             int completedOperations,
             long elapsedNanos,
             StorageLatencyRecorder.Summary latency,
+            Phase ttlChurn,
+            Phase deletion,
             StorageMemorySnapshot baseline,
             StorageMemorySnapshot loaded
     ) {
@@ -47,15 +59,15 @@ public record StorageBenchmarkResult(
                 completedOperations,
                 elapsedNanos,
                 latency,
+                ttlChurn,
+                deletion,
                 baseline,
                 loaded
         );
     }
 
     public double operationsPerSecond() {
-        return elapsedNanos == 0L
-                ? 0.0
-                : completedOperations * 1_000_000_000.0 / elapsedNanos;
+        return perSecond(completedOperations, elapsedNanos);
     }
 
     public long accountedDeltaBytes() {
@@ -79,5 +91,27 @@ public record StorageBenchmarkResult(
         } catch (ArithmeticException ignored) {
             return OptionalLong.empty();
         }
+    }
+
+    public record Phase(long elapsedNanos, StorageLatencyRecorder.Summary latency) {
+        public Phase {
+            if (elapsedNanos < 0L) {
+                throw new IllegalArgumentException("phase elapsedNanos must be >= 0");
+            }
+            latency = Objects.requireNonNull(latency, "latency");
+            if (latency.count() <= 0L) {
+                throw new IllegalArgumentException("phase latency count must be > 0");
+            }
+        }
+
+        public double operationsPerSecond() {
+            return perSecond(latency.count(), elapsedNanos);
+        }
+    }
+
+    private static double perSecond(long operations, long elapsedNanos) {
+        return elapsedNanos == 0L
+                ? 0.0
+                : operations * 1_000_000_000.0 / elapsedNanos;
     }
 }

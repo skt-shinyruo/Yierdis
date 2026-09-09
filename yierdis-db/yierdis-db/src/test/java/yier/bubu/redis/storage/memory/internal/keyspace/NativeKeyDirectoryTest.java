@@ -17,6 +17,7 @@ import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
+import yier.bubu.redis.storage.memory.internal.key.AllocatorKeyHandle;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 import static yier.bubu.redis.storage.memory.internal.keyspace.TestNativeKeyDirectories.insert;
@@ -178,6 +179,99 @@ public class NativeKeyDirectoryTest {
                     backend.free(newEntry);
                 }
             }
+        }
+    }
+
+    @Test
+    public void removeEntryByStoredIdentityLocatesEntriesAcrossMidRehashTables() {
+        try (TestBackend runtime = TestBackend.open("directory-remove-entry-mid-rehash")) {
+            StableMemoryBackend backend = runtime.backend();
+            NativeKeyDirectory directory = new NativeKeyDirectory(backend, FIXED_SEED, new HashTableMaintenanceRegistry());
+            List<NativeHandle> entries = new ArrayList<>();
+            try {
+                int inserted = 0;
+                while (inserted < 256 && !directory.metrics().rehashing()) {
+                    NativeHandle nativeEntry = backend.allocate(NativeObjectKind.ENTRY_RECORD, 1);
+                    entries.add(nativeEntry);
+                    insert(directory, b("key-" + inserted), new EntryHandle(nativeEntry));
+                    inserted++;
+                }
+                Assert.assertTrue("test setup must leave the directory rehashing", directory.metrics().rehashing());
+                // 迁移一部分槽位，让目录同时存在 old-resident 与已迁移（active + old shadow）的 entry。
+                directory.advanceRehash(HashTableWorkBudget.of(8L, Long.MAX_VALUE));
+                Assert.assertTrue(directory.metrics().rehashing());
+
+                for (int i = 0; i < inserted; i++) {
+                    byte[] key = b("key-" + i);
+                    AllocatorKeyHandle keyHandle = directory.getKeyHandle(key);
+                    Assert.assertNotNull(keyHandle);
+                    EntryHandle entry = new EntryHandle(entries.get(i));
+                    Assert.assertTrue(directory.removeEntry(keyHandle.nativeHandle(), keyHandle.dictHash(), entry));
+                    Assert.assertNull(directory.get(key));
+                    Assert.assertFalse(directory.removeEntry(keyHandle.nativeHandle(), keyHandle.dictHash(), entry));
+                }
+                Assert.assertEquals(0, directory.size());
+                List<String> survivors = new ArrayList<>();
+                directory.scanWithWork(ScanCursorV2.start(), Long.MAX_VALUE, (key, entry) -> {
+                    survivors.add("x");
+                    return true;
+                });
+                Assert.assertTrue(survivors.isEmpty());
+            } finally {
+                directory.close();
+                for (NativeHandle entry : entries) {
+                    backend.free(entry);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void removeEntryByStoredIdentityRejectsAMismatchedEntry() {
+        try (TestBackend runtime = TestBackend.open("directory-remove-entry-mismatch")) {
+            StableMemoryBackend backend = runtime.backend();
+            NativeKeyDirectory directory = new NativeKeyDirectory(backend, FIXED_SEED, new HashTableMaintenanceRegistry());
+            NativeHandle entryNative = backend.allocate(NativeObjectKind.ENTRY_RECORD, 1);
+            NativeHandle otherNative = backend.allocate(NativeObjectKind.ENTRY_RECORD, 1);
+            EntryHandle entry = new EntryHandle(entryNative);
+            try {
+                insert(directory, b("key"), entry);
+                AllocatorKeyHandle keyHandle = directory.getKeyHandle(b("key"));
+                Assert.assertFalse(directory.removeEntry(
+                        keyHandle.nativeHandle(),
+                        keyHandle.dictHash(),
+                        new EntryHandle(otherNative)
+                ));
+                Assert.assertEquals(entry, directory.get(b("key")));
+                Assert.assertEquals(1, directory.size());
+            } finally {
+                directory.close();
+                backend.free(entryNative);
+                backend.free(otherNative);
+            }
+        }
+    }
+
+    @Test
+    public void removeEntryByStoredIdentityCannotAliasAKeyHandleFromAnotherBackend() {
+        HeapStableMemoryBackend left = new HeapStableMemoryBackend("directory-remove-left", 8, new DbThreadGuard());
+        HeapStableMemoryBackend right = new HeapStableMemoryBackend("directory-remove-right", 8, new DbThreadGuard());
+        left.bindToCurrentThread();
+        right.bindToCurrentThread();
+        NativeHandle entryNative = left.allocate(NativeObjectKind.ENTRY_RECORD, 1);
+        NativeHandle foreignKey = right.allocate(NativeObjectKind.KEY_BYTES, 1);
+        EntryHandle entry = new EntryHandle(entryNative);
+        try (NativeKeyDirectory directory = new NativeKeyDirectory(left, FIXED_SEED, new HashTableMaintenanceRegistry())) {
+            insert(directory, b("collision"), entry);
+            AllocatorKeyHandle keyHandle = directory.getKeyHandle(b("collision"));
+            Assert.assertFalse(directory.removeEntry(foreignKey, keyHandle.dictHash(), entry));
+            Assert.assertEquals(entry, directory.get(b("collision")));
+            Assert.assertEquals(1, directory.size());
+        } finally {
+            left.free(entryNative);
+            right.free(foreignKey);
+            left.close();
+            right.close();
         }
     }
 

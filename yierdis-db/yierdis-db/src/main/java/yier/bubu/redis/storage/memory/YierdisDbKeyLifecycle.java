@@ -7,6 +7,7 @@ import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
+import yier.bubu.redis.memory.api.StaleNativeHandleException;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
@@ -303,14 +304,21 @@ final class YierdisDbKeyLifecycle implements AutoCloseable {
         if (handle == null) {
             return null;
         }
-        if (!ownedResources.keyDirectory.remove(handle)) {
+        EntryRecord record;
+        try {
+            record = ownedResources.entryTable.get(handle);
+        } catch (StaleNativeHandleException stale) {
+            // 反向定位必须先读 record 拿 key 句柄；已释放的 stale handle 等价于映射不存在，与旧行为一样返回 null。
             return null;
         }
-        EntryRecord record = ownedResources.entryTable.get(handle);
-        if (record != null) {
-            releaseValue(record);
-            releaseEntry(handle, record);
+        if (record == null) {
+            return null;
         }
+        if (!ownedResources.keyDirectory.removeEntry(record.keyHandle(), record.keyHash(), handle)) {
+            return null;
+        }
+        releaseValue(record);
+        releaseEntry(handle, record);
         return record;
     }
 
@@ -473,7 +481,9 @@ final class YierdisDbKeyLifecycle implements AutoCloseable {
 
     void deleteEntry(EntryHandle handle, EntryRecord record) {
         Objects.requireNonNull(handle, "handle");
-        ownedResources.keyDirectory.remove(handle);
+        Objects.requireNonNull(record, "record");
+        // owner 单线程下提交期目录映射必然仍指向该 entry；返回值只用于防御，entry 必须恰好释放一次。
+        ownedResources.keyDirectory.removeEntry(record.keyHandle(), record.keyHash(), handle);
         releaseEntry(handle, record);
     }
 

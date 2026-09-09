@@ -1,5 +1,6 @@
 package yier.bubu.redis.app.bench.storage;
 
+import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.memory.api.StableMemoryBackendFactory;
 import yier.bubu.redis.memory.foreign.YierdisFfmStableMemoryBackend;
 import yier.bubu.redis.storage.api.DbDefragConfig;
@@ -13,6 +14,7 @@ import yier.bubu.redis.storage.api.WriteResult;
 import yier.bubu.redis.storage.memory.YierdisDbEngineFactory;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 import java.util.OptionalLong;
 import java.util.function.LongSupplier;
@@ -45,24 +47,17 @@ public final class StorageBenchmarkRunner {
 
         try (EngineLease lease = openEngine()) {
             RuntimeDbEngine engine = lease.engine();
-            StorageLatencyRecorder latency = new StorageLatencyRecorder(requiredConfig.precision());
             byte[] key = keyBuffer(requiredConfig.keySizeBytes());
             byte[] value = value(requiredConfig.valueSizeBytes());
             StringOps strings = engine.strings();
             StorageMemorySnapshot baseline = snapshot(engine);
 
-            long measuredStart = nanoClock.getAsLong();
-            for (int index = 0; index < requiredConfig.keys(); index++) {
-                encodeKeyIndex(key, index);
-                long operationStart = nanoClock.getAsLong();
-                WriteResult<Boolean> write = strings.setString(key, value, SetMode.NORMAL, null);
-                long operationStop = nanoClock.getAsLong();
+            StorageBenchmarkResult.Phase set = measurePhase(requiredConfig, key, (index, k) -> {
+                WriteResult<Boolean> write = strings.setString(k, value, SetMode.NORMAL, null);
                 if (!Boolean.TRUE.equals(write.value()) || !write.mutationOutcome().changedAny()) {
                     throw new IllegalStateException("SET did not store key index " + index);
                 }
-                latency.recordNanos(Math.max(0L, operationStop - operationStart));
-            }
-            long measuredStop = nanoClock.getAsLong();
+            });
             stabilizeHashTables(engine);
             StorageMemorySnapshot loaded = snapshot(engine);
             if (loaded.keyCount() != requiredConfig.keys()) {
@@ -77,14 +72,99 @@ public final class StorageBenchmarkRunner {
                                 + " pending hash tables"
                 );
             }
+            StorageBenchmarkResult.Phase ttlChurn = measureTtlChurn(requiredConfig, engine, strings, value);
+            StorageBenchmarkResult.Phase deletion = measureDeletion(requiredConfig, engine, key);
+            if (snapshot(engine).keyCount() != 0L) {
+                throw new IllegalStateException("delete phase did not drain the keyspace");
+            }
             return StorageBenchmarkResult.from(
                     requiredConfig.keys(),
-                    Math.max(0L, measuredStop - measuredStart),
-                    latency.summary(),
+                    set.elapsedNanos(),
+                    set.latency(),
+                    ttlChurn,
+                    deletion,
                     baseline,
                     loaded
             );
         }
+    }
+
+    /**
+     * 在已加载 keyspace 上持续 SET 后立即 PEXPIRE(0)（TTL<=0 立即删除路径）。
+     * 每次操作带一次删除，per-op 成本不应随 background key 数增长。
+     */
+    private StorageBenchmarkResult.Phase measureTtlChurn(
+            StorageBenchmarkConfig config,
+            RuntimeDbEngine engine,
+            StringOps strings,
+            byte[] value
+    ) {
+        byte[] churnKey = keyBuffer(config.keySizeBytes());
+        // churn key 换前缀，避免覆盖已加载的 'k' keyspace：SET 必须是插入，后续 DEL phase 才能删到全部已加载 key。
+        churnKey[0] = 'c';
+        return measurePhase(config, churnKey, (index, k) -> {
+            WriteResult<Boolean> write = strings.setString(k, value, SetMode.NORMAL, null);
+            if (!Boolean.TRUE.equals(write.value()) || !write.mutationOutcome().changedAny()) {
+                throw new IllegalStateException("churn SET did not store key index " + index);
+            }
+            WriteResult<Boolean> expired = engine.ttl().pexpire(view(k), 0L);
+            if (!Boolean.TRUE.equals(expired.value()) || !expired.mutationOutcome().changedAny()) {
+                throw new IllegalStateException("churn PEXPIRE did not delete key index " + index);
+            }
+        });
+    }
+
+    private StorageBenchmarkResult.Phase measureDeletion(
+            StorageBenchmarkConfig config,
+            RuntimeDbEngine engine,
+            byte[] key
+    ) {
+        return measurePhase(config, key, (index, k) -> {
+            WriteResult<Long> removed = engine.keyspace().del(List.of(k));
+            if (removed.value() == null || removed.value() != 1L) {
+                throw new IllegalStateException("DEL did not remove key index " + index);
+            }
+        });
+    }
+
+    private StorageBenchmarkResult.Phase measurePhase(
+            StorageBenchmarkConfig config,
+            byte[] key,
+            TimedOperation operation
+    ) {
+        StorageLatencyRecorder latency = new StorageLatencyRecorder(config.precision());
+        long measuredStart = nanoClock.getAsLong();
+        for (int index = 0; index < config.keys(); index++) {
+            encodeKeyIndex(key, index);
+            long operationStart = nanoClock.getAsLong();
+            operation.run(index, key);
+            long operationStop = nanoClock.getAsLong();
+            latency.recordNanos(Math.max(0L, operationStop - operationStart));
+        }
+        long measuredStop = nanoClock.getAsLong();
+        return new StorageBenchmarkResult.Phase(
+                Math.max(0L, measuredStop - measuredStart),
+                latency.summary()
+        );
+    }
+
+    @FunctionalInterface
+    private interface TimedOperation {
+        void run(int index, byte[] key);
+    }
+
+    private static BytesView view(byte[] key) {
+        return new BytesView() {
+            @Override
+            public int length() {
+                return key.length;
+            }
+
+            @Override
+            public byte getByte(int index) {
+                return key[index];
+            }
+        };
     }
 
     private void warmUp(StorageBenchmarkConfig config) {
