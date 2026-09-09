@@ -63,9 +63,8 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
         }
 
         long deadline = evictionDeadline(System.nanoTime());
-        // Best-effort: try to reclaim expired keys first (Redis does this too under pressure).
+        // 过期清理由各 participant 的维护节拍驱动；写 admission 只负责预算判定与淘汰。
         long nowMillis = System.currentTimeMillis();
-        cleanupExpiredAll(nowMillis);
         trimAllParticipants(deadline);
 
         long extra = estimatedExtraBytes;
@@ -97,15 +96,6 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
 
     private static YierdisCommandException oom() {
         return new YierdisCommandException(MaxmemoryErrors.OOM_ERR);
-    }
-
-    private void cleanupExpiredAll(long nowMillis) {
-        for (MaxmemoryParticipant participant : participants) {
-            if (participant == null) {
-                continue;
-            }
-            participant.cleanupExpired(nowMillis);
-        }
     }
 
     private void trimAllParticipants(long deadline) {

@@ -513,6 +513,49 @@ public class YierdisGlobalMaxmemoryGovernorTest {
         Assert.assertArrayEquals("must evict expected key", expectedKey, evictedKey.get());
     }
 
+    @Test
+    public void prepareWriteDoesNotTriggerParticipantExpiryCleanup() {
+        // 写 admission 不再对所有 DB 内联过期清理；主动过期由各 DB 自己的维护节拍驱动。
+        AtomicInteger cleanupCalls = new AtomicInteger();
+        MaxmemoryParticipant participant = new Participant() {
+            @Override
+            public MemoryUsageSnapshot memoryUsage() {
+                return snapshot(0);
+            }
+
+            @Override
+            public int keyCountEstimate() {
+                return 0;
+            }
+
+            @Override
+            public void cleanupExpired(long nowMillis) {
+                cleanupCalls.incrementAndGet();
+            }
+
+            @Override
+            public MaxmemoryCandidate sampleCandidate(MaxmemoryPolicy policy, long nowMillis) {
+                return null;
+            }
+
+            @Override
+            public boolean evict(MaxmemoryCandidate candidate, long nowMillis) {
+                return false;
+            }
+        };
+        YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
+                new MaxmemoryParticipant[]{participant},
+                100,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                0
+        );
+
+        governor.prepareWrite(participant, 1);
+
+        Assert.assertEquals(0, cleanupCalls.get());
+    }
+
     private abstract static class Participant implements MaxmemoryParticipant {
         @Override
         public MemoryReclaimResult trimMemory(MemoryPressureBudget budget) {

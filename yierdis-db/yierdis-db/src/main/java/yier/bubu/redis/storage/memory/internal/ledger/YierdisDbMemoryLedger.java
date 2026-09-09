@@ -12,7 +12,6 @@ import yier.bubu.redis.storage.api.YierdisCommandException;
 public final class YierdisDbMemoryLedger implements MemoryLedger {
     private final long limitBytes;
     private final MaxmemoryPolicy maxmemoryPolicy;
-    private final Runnable cleanupExpired;
     private final LongConsumer evictUntilUnder;
     private final LongSupplier usedBytesForMaxmemory;
     private final Supplier<MaxmemoryCoordinator> maxmemoryCoordinatorSupplier;
@@ -24,7 +23,6 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
     public YierdisDbMemoryLedger(
             long limitBytes,
             MaxmemoryPolicy maxmemoryPolicy,
-            Runnable cleanupExpired,
             LongConsumer evictUntilUnder,
             LongSupplier usedBytesForMaxmemory,
             Supplier<MaxmemoryCoordinator> maxmemoryCoordinatorSupplier,
@@ -32,7 +30,6 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
     ) {
         this.limitBytes = Math.max(0L, limitBytes);
         this.maxmemoryPolicy = Objects.requireNonNull(maxmemoryPolicy, "maxmemoryPolicy");
-        this.cleanupExpired = Objects.requireNonNull(cleanupExpired, "cleanupExpired");
         this.evictUntilUnder = Objects.requireNonNull(evictUntilUnder, "evictUntilUnder");
         this.usedBytesForMaxmemory = Objects.requireNonNull(usedBytesForMaxmemory, "usedBytesForMaxmemory");
         this.maxmemoryCoordinatorSupplier = Objects.requireNonNull(maxmemoryCoordinatorSupplier, "maxmemoryCoordinatorSupplier");
@@ -83,7 +80,7 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
             return new ReservationToken(this, estimatedExtraBytes);
         }
 
-        enforceLocalLimit(estimatedExtraBytes, true);
+        enforceLocalLimit(estimatedExtraBytes);
 
         if (estimatedExtraBytes == 0) {
             return NoopReservation.INSTANCE;
@@ -157,15 +154,12 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
     }
 
     public void enforceLocalMaintenance() {
-        enforceLocalLimit(0L, false);
+        enforceLocalLimit(0L);
     }
 
-    private void enforceLocalLimit(long estimatedExtraBytes, boolean cleanupBeforeAdmission) {
+    private void enforceLocalLimit(long estimatedExtraBytes) {
         if (limitBytes <= 0L) {
             return;
-        }
-        if (cleanupBeforeAdmission) {
-            cleanupExpired.run();
         }
         if (estimatedExtraBytes > 0L && estimatedExtraBytes > limitBytes) {
             throw new MemoryLedgerOutOfMemoryException();

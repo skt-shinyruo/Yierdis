@@ -19,8 +19,6 @@ public class MaxmemoryPageTrimTest {
         YierdisDbMemoryLedger ledger = new YierdisDbMemoryLedger(
                 100,
                 MaxmemoryPolicy.NOEVICTION,
-                () -> {
-                },
                 limit -> {
                     trimRan.set(true);
                     requestedLimit.set(limit);
@@ -49,8 +47,6 @@ public class MaxmemoryPageTrimTest {
         YierdisDbMemoryLedger ledger = new YierdisDbMemoryLedger(
                 100,
                 MaxmemoryPolicy.NOEVICTION,
-                () -> {
-                },
                 limit -> trimRan.set(true),
                 physicalUsedBytes::get,
                 () -> null,

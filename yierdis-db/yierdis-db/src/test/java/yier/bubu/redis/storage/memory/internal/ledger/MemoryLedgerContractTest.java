@@ -75,7 +75,6 @@ public class MemoryLedgerContractTest {
         YierdisDbMemoryLedger ledger = new YierdisDbMemoryLedger(
                 Long.MAX_VALUE,
                 MaxmemoryPolicy.NOEVICTION,
-                () -> { },
                 ignored -> { },
                 () -> 0L,
                 () -> null,
@@ -111,7 +110,6 @@ public class MemoryLedgerContractTest {
         YierdisDbMemoryLedger ledger = new YierdisDbMemoryLedger(
                 0L,
                 MaxmemoryPolicy.NOEVICTION,
-                () -> { },
                 ignored -> { },
                 () -> 0L,
                 () -> null,
@@ -137,7 +135,6 @@ public class MemoryLedgerContractTest {
         holder[0] = new YierdisDbMemoryLedger(
                 limitBytes,
                 MaxmemoryPolicy.NOEVICTION,
-                () -> { },
                 ignored -> { },
                 () -> holder[0].effectiveUsedBytes(),
                 () -> null,

@@ -584,7 +584,6 @@ public class MutationExecutorReservationTest {
         holder[0] = new YierdisDbMemoryLedger(
                 limitBytes,
                 MaxmemoryPolicy.NOEVICTION,
-                () -> { },
                 ignored -> { },
                 () -> holder[0].effectiveUsedBytes(),
                 () -> null,

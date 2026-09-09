@@ -20,6 +20,7 @@ import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
 import yier.bubu.redis.storage.memory.internal.key.AllocatorKeyHandle;
+import yier.bubu.redis.storage.memory.internal.keyspace.ExpiresIndex;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
@@ -123,6 +124,7 @@ final class YierdisDbKeyLifecycle implements AutoCloseable {
 
     private final OwnedResources ownedResources;
     private final LongSupplier lruClockSupplier;
+    private final ExpiresIndex expiresIndex = new ExpiresIndex();
     private int expireCount;
 
     YierdisDbKeyLifecycle(
@@ -330,6 +332,19 @@ final class YierdisDbKeyLifecycle implements AutoCloseable {
         return expireCount;
     }
 
+    ExpiresIndex.Entry peekExpiresIndexEntry() {
+        return expiresIndex.peek();
+    }
+
+    void dropExpiresIndexHead() {
+        expiresIndex.poll();
+    }
+
+    boolean hasDueExpiresIndexEntry(long nowMillis) {
+        ExpiresIndex.Entry head = expiresIndex.peek();
+        return head != null && head.expireAtMillis() <= nowMillis;
+    }
+
     AllocatorKeyHandle randomKeyHandle() {
         return ownedResources.keyDirectory.randomKeyHandle();
     }
@@ -420,14 +435,6 @@ final class YierdisDbKeyLifecycle implements AutoCloseable {
                 && isExpired(current, nowMillis);
     }
 
-    boolean hasCurrentExpiredEntry(
-            byte[] keyBytes,
-            AllocatorKeyHandle expectedKeyHandle,
-            long nowMillis
-    ) {
-        return isExpired(currentRecordForIdentity(keyBytes, expectedKeyHandle), nowMillis);
-    }
-
     boolean removeEntry(AllocatorKeyHandle keyHandle, EntryRecord expectedRecord) {
         if (keyHandle == null) {
             return false;
@@ -493,8 +500,9 @@ final class YierdisDbKeyLifecycle implements AutoCloseable {
         reconcileDerivedEntryState(record, null);
     }
 
-    void resetExpireCount() {
+    void resetExpirationTracking() {
         expireCount = 0;
+        expiresIndex.clear();
     }
 
     byte[] copyKeyBytes(AllocatorKeyHandle keyHandle) {
@@ -743,6 +751,20 @@ final class YierdisDbKeyLifecycle implements AutoCloseable {
                 throw new IllegalStateException("derived expire count underflow");
             }
             expireCount = nextExpireCount;
+        }
+        // expires 索引只在 deadline 实际变化时登记新项：touch/KEEPTTL 等 expireAtMillis 不变的
+        // 替换复用既有索引项。TTL 被移除或改值时旧项不主动清除，由主动清理惰性判 stale。
+        if (newHasTtl
+                && (oldRecord == null || oldRecord.expireAtMillis() != newRecord.expireAtMillis())
+                && !newRecord.keyHandle().isNull()) {
+            expiresIndex.add(
+                    newRecord.expireAtMillis(),
+                    new AllocatorKeyHandle(
+                            ownedResources.stableMemoryBackend,
+                            newRecord.keyHandle(),
+                            newRecord.keyHash()
+                    )
+            );
         }
     }
 

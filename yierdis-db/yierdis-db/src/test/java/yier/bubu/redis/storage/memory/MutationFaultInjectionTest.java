@@ -467,8 +467,6 @@ public class MutationFaultInjectionTest {
             YierdisDbMemoryLedger ledger = new YierdisDbMemoryLedger(
                     0L,
                     MaxmemoryPolicy.NOEVICTION,
-                    () -> {
-                    },
                     ignored -> {
                     },
                     () -> 0L,

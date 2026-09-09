@@ -31,8 +31,6 @@ public class FfmPageTrimIntegrationTest {
             YierdisDbMemoryLedger ledger = new YierdisDbMemoryLedger(
                     physicalBefore - 1L,
                     MaxmemoryPolicy.NOEVICTION,
-                    () -> {
-                    },
                     ignored -> backend.trimEmptyPages(MemoryPressureBudget.UNLIMITED),
                     () -> backend.memoryUsage().effectiveBytesForMaxmemory(),
                     () -> null,

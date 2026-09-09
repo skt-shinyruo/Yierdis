@@ -100,12 +100,11 @@ public final class YierdisDb
                     checkedConfig.expireCleanupTimeLimitMillis()
             );
             YierdisDbHealth health = new YierdisDbHealth(threadChecker);
-            // ledger 的 admission 回调依赖稍后创建的 expiry/maxmemory 模块；该占位对象只负责收敛这条构造环。
+            // ledger 的 admission 回调依赖稍后创建的 maxmemory 模块；该占位对象只负责收敛这条构造环。
             YierdisDbMemoryBudgetCallbacks memoryBudgetCallbacks = new YierdisDbMemoryBudgetCallbacks();
             YierdisDbMemoryLedger ledger = new YierdisDbMemoryLedger(
                     maxmemoryBytes,
                     maxmemoryPolicy,
-                    memoryBudgetCallbacks::cleanupExpired,
                     memoryBudgetCallbacks::evictUntilUnder,
                     memoryBudgetCallbacks::usedBytesForMaxmemory,
                     runtimeState::maxmemoryCoordinator,
@@ -156,7 +155,6 @@ public final class YierdisDb
                     evictionTimeLimitNanos
             );
             memoryBudgetCallbacks.bind(
-                    () -> expirationSupport.cleanupExpired(0L),
                     maxmemorySupport::evictUntilUnder,
                     memoryReporter::usedBytesForMaxmemory
             );

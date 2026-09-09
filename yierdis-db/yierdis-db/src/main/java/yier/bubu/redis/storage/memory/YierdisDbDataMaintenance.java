@@ -71,7 +71,7 @@ final class YierdisDbDataMaintenance {
         runtimeState.checkThread();
         reclaimDetachedEntries();
         health.requireWritable();
-        expirationSupport.cleanupExpired();
+        drainExpiredWithinBudget();
         rehashMaintenance(HashTableWorkBudget.of(
                 MAINTENANCE_REHASH_MAX_INSPECTED_SLOTS,
                 maintenanceTimeLimitNanos
@@ -82,6 +82,17 @@ final class YierdisDbDataMaintenance {
     void runDeferredReclamation() {
         runtimeState.checkThread();
         reclaimDetachedEntries();
+    }
+
+    // expires 索引让"是否还有到期候选"成为 O(1) 判断：节拍内在时间预算里循环排空，
+    // 短 TTL churn 不会在节拍之间无限积压；单次 cleanup 仍受候选上限约束。
+    private void drainExpiredWithinBudget() {
+        long startedNanos = System.nanoTime();
+        while (expirationSupport.cleanupExpired() > 0
+                && expirationSupport.hasDueExpiredCandidates(0L)
+                && System.nanoTime() - startedNanos < maintenanceTimeLimitNanos) {
+            // 单次调用消费为 0（候选删除失败等待重试）或预算耗尽时停止，避免节拍内空转。
+        }
     }
 
     void enforceMaxmemory() {
@@ -291,16 +302,14 @@ final class YierdisDbDataMaintenance {
     private void commitFlushDb() {
         runtimeState.checkThread();
         storage.clearData();
-        keyLifecycle.resetExpireCount();
-        expirationSupport.resetCursor();
+        keyLifecycle.resetExpirationTracking();
     }
 
     private void commitFlushDbAsync() {
         // 只在 mutation commit 边界发布空目录；旧目录在后续 owner maintenance 中释放，不能再查询当前 keyspace。
         runtimeState.checkThread();
         storage.detachEntries();
-        keyLifecycle.resetExpireCount();
-        expirationSupport.resetCursor();
+        keyLifecycle.resetExpirationTracking();
     }
 
     private void reclaimDetachedEntries() {

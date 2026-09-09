@@ -67,18 +67,19 @@ degraded 不是终态：`RuntimeDbEngine.reconcileAccounting()` 在 owner thread
 
 没有全局 coordinator 时，`YierdisDbMemoryLedger.reserve(...)` 的判断顺序是本地 maxmemory 语义的真相来源：
 
-1. 先做 `cleanupExpired.run()`，让刚释放的空间参与同一次预算判定。
-2. 如果 `estimatedExtraBytes > maxmemoryBytes`，直接 OOM。
-3. 计算本次写入前必须压到的目标：`limit = maxmemoryBytes - estimatedExtraBytes`。
-4. 如果 owned physical snapshot 超过 `limit`，调用 `YierdisDbMaxmemorySupport.evictUntilUnder(limit)`。该入口先 trim empty native pages，再重新采样 snapshot。
-5. 重新采样后仍超限时，`noeviction` 不选 victim；增长型写入 OOM，`estimatedExtraBytes == 0` 返回 noop reservation。其他策略继续淘汰，并在每次释放后 trim/resnapshot。
-6. 淘汰结束后再次采样；仍超限且本次写入会增长时，OOM。
-7. 只有通过这些检查后，才增加 `reservedBytes`。
+1. 如果 `estimatedExtraBytes > maxmemoryBytes`，直接 OOM。
+2. 计算本次写入前必须压到的目标：`limit = maxmemoryBytes - estimatedExtraBytes`。
+3. 如果 owned physical snapshot 超过 `limit`，调用 `YierdisDbMaxmemorySupport.evictUntilUnder(limit)`。该入口先 trim empty native pages，再重新采样 snapshot。
+4. 重新采样后仍超限时，`noeviction` 不选 victim；增长型写入 OOM，`estimatedExtraBytes == 0` 返回 noop reservation。其他策略继续淘汰，并在每次释放后 trim/resnapshot。
+5. 淘汰结束后再次采样；仍超限且本次写入会增长时，OOM。
+6. 只有通过这些检查后，才增加 `reservedBytes`。
+
+写 admission 不再内联跑过期清理：过期 key 由维护节拍和读路径惰性过期回收，admission 只按当前 owned physical snapshot 做预算判定。eviction 采样到已过期候选时仍先走 expiration reclamation，这部分与旧行为一致。
 
 这解释了几个容易混淆的现象：
 
 - 覆盖写如果最终缩小 value，可以在“已经顶到 maxmemory”时成功。
-- 纯 maintenance enforcement 会复用 `reserve(0)`，而不是另起一套判断口径。
+- 纯 maintenance enforcement 复用 `enforceLocalLimit` 的同一套判断口径，而不是另起一套。
 - `usedBytesForMaxmemory()` 是 owned physical snapshot 的投影；ledger `usedBytes` 只负责 mutation delta 对账，不能替代拒写采样。
 
 ## global scope 与 governor 协调
@@ -87,7 +88,7 @@ global scope 下，本地 ledger 不自己算跨 DB 预算，而是先委托 `Yi
 
 governor 的主线是：
 
-1. 对所有 participant 执行 `cleanupExpired(nowMillis)`，再按 budget 轮转调用 `trimMemory(...)`。
+1. 按 budget 轮转调用所有 participant 的 `trimMemory(...)`。过期清理由各 DB 的维护节拍驱动，`prepareWrite` 不再对所有 DB 内联触发。
 2. 计算本次写入前的目标线 `limit = maxmemoryBytes - estimatedExtraBytes`。
 3. 汇总所有 participant 最新的 owned physical snapshots；总量不超过 `limit` 时直接通过。
 4. `noeviction` 在 trim/resnapshot 后仍超限时，只允许不增长的维护路径继续。
@@ -100,7 +101,7 @@ governor 的主线是：
 
 maintenance 时的顺序由 `YierdisInstanceRuntimeAccess.maintenanceTick()` 固定：
 
-- 每个 DB 都先 `cleanupExpired()`，再 `defragMaintenance()`；
+- 每个 DB 都先在时间预算内排空到期过期 key（`runMaintenance` 内的 expires 索引 drain），再 `defragMaintenance()`；
 - per-DB scope 在每个 DB 内分别 enforce；
 - global scope 则在 DB 循环结束后，统一跑一次实例级 maxmemory maintenance。
 
@@ -125,9 +126,9 @@ maintenance 时的顺序由 `YierdisInstanceRuntimeAccess.maintenanceTick()` 固
 
 ## 仍然无法写入时的错误路径
 
-即使已经跑过 cleanup / eviction，本次写入仍可能失败：
+即使已经跑过 trim / eviction，本次写入仍可能失败：
 
-- cleanup 没释放出足够空间；
+- trim 没有释放出足够空间；
 - eviction policy 在预算内找不到可删的 victim；
 - participant owned snapshots 的全局总量仍高于目标线；
 - prepare 阶段命中了 native allocator capacity limit。
@@ -147,7 +148,7 @@ maintenance 时的顺序由 `YierdisInstanceRuntimeAccess.maintenanceTick()` 固
 - `MutationExecutorReservationTest`：reservation 先于 mutation，异常回滚后不污染下一次写入。
 - `MaxmemoryEvictionTest`：`noeviction`、`allkeys-random`、`allkeys-lru`、collection growth 与拒写不变式。
 - `TtlMaxmemoryTest`：TTL mutation 的保守 reservation、OOM 和失败原子性。
-- `YierdisGlobalMaxmemoryGovernorTest`：全局 cleanup/eviction/OOM 路径、deterministic LRU scan 和时间预算分支。
+- `YierdisGlobalMaxmemoryGovernorTest`：全局 trim/eviction/OOM 路径、deterministic LRU scan 和时间预算分支。
 - `GlobalMaxmemoryLruAcrossDbsTest`：global scope 下跨 DB 的真实 LRU 淘汰。
 - `MemoryStatsAccountingConsistencyTest`、`MaxmemoryScopeTest`：观测口径与 enforcement 口径保持一致，global/per-db scope 的统计差异可解释。
 
