@@ -61,8 +61,11 @@ public class CommandArgsTest {
     public void parsesLongEndpointsAndRejectsInvalidNumbersWithExplicitRedisError() throws Exception {
         Assert.assertEquals(Long.MIN_VALUE, args("CMD", Long.toString(Long.MIN_VALUE)).longAt(1));
         Assert.assertEquals(Long.MAX_VALUE, args("CMD", Long.toString(Long.MAX_VALUE)).longAt(1));
+        Assert.assertEquals(0L, args("CMD", "0").longAt(1));
+        Assert.assertEquals(-41L, args("CMD", "-41").longAt(1));
 
-        for (String invalid : List.of("", "+", "-", "9223372036854775808", "x")) {
+        // Redis string2ll 方言：'+' 前缀、前导零（"-0" 同理）与空白都不属于规范整数。
+        for (String invalid : List.of("", "+", "-", "+1", "007", "-0", "00", " 1", "1 ", "9223372036854775808", "-9223372036854775809", "x")) {
             assertIntegerFailure(() -> args("CMD", invalid).longAt(1));
         }
         assertIntegerFailure(() -> args("CMD", (String) null).longAt(1));

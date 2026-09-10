@@ -10,6 +10,7 @@ import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.StagedEntry;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.bytes.String2ll;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.PreparedMutation;
@@ -850,49 +851,13 @@ final class YierdisStringOps implements StringOps {
     }
 
     private static long parseLongAscii(byte[] buf) {
-        if (buf == null || buf.length <= 0) {
-            throw new YierdisCommandException(INTEGER_RANGE_ERROR);
-        }
-
-        int i = 0;
-        boolean negative = false;
-        byte first = buf[0];
         // Redis 的 string2ll 只接受规范整数：拒绝 '+' 前缀，且除单独的 "0" 外不允许前导零（"-0" 同样拒绝）；
-        // INCR/DECR 的操作数校验在此与 Redis 对齐。
-        if (first == '+') {
+        // INCR/DECR 的操作数校验在此与 Redis 对齐。与命令整数参数共用 String2ll，保证全库只有一种整数方言。
+        try {
+            return String2ll.parse(buf);
+        } catch (NumberFormatException notAnInteger) {
             throw new YierdisCommandException(INTEGER_RANGE_ERROR);
         }
-        if (first == '-') {
-            negative = true;
-            i = 1;
-            if (i == buf.length) {
-                throw new YierdisCommandException(INTEGER_RANGE_ERROR);
-            }
-        }
-        if (buf[i] == '0' && (negative || buf.length - i > 1)) {
-            throw new YierdisCommandException(INTEGER_RANGE_ERROR);
-        }
-
-        long limit = negative ? Long.MIN_VALUE : -Long.MAX_VALUE;
-        long multMin = limit / 10;
-        long result = 0;
-
-        while (i < buf.length) {
-            int digit = buf[i++] - '0';
-            if (digit < 0 || digit > 9) {
-                throw new YierdisCommandException(INTEGER_RANGE_ERROR);
-            }
-            if (result < multMin) {
-                throw new YierdisCommandException(INTEGER_RANGE_ERROR);
-            }
-            result *= 10;
-            if (result < limit + digit) {
-                throw new YierdisCommandException(INTEGER_RANGE_ERROR);
-            }
-            result -= digit;
-        }
-
-        return negative ? result : -result;
     }
 
     private static long safeAdd(long a, long b) {

@@ -2,6 +2,7 @@ package yier.bubu.redis.command.api;
 
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.bytes.String2ll;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 
 import java.nio.charset.StandardCharsets;
@@ -66,14 +67,18 @@ public final class CommandArgs {
         return true;
     }
 
+    /**
+     * 按 Redis {@code string2ll} 方言解析整数参数：拒绝 {@code '+'} 前缀、前导零等非规范写法，
+     * 失败时抛出携带 Redis 整数错误文案的 {@link CommandParseException}。
+     */
     public long longAt(int index) {
         byte[] value = bytes(index);
         if (value == null) {
             throw integerFailure();
         }
         try {
-            return Long.parseLong(new String(value, StandardCharsets.US_ASCII));
-        } catch (NumberFormatException failure) {
+            return String2ll.parse(value);
+        } catch (NumberFormatException notAnInteger) {
             throw integerFailure();
         }
     }
