@@ -18,14 +18,11 @@ import yier.bubu.redis.storage.api.result.ByteMapSource;
 import yier.bubu.redis.storage.api.result.ByteMapSources;
 import yier.bubu.redis.storage.api.result.ByteValue;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
-import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
 import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.AllocatorKeyHandle;
-import yier.bubu.redis.storage.memory.internal.value.SemanticResultSupport;
-
 import java.util.List;
 import java.util.Objects;
 
@@ -190,12 +187,8 @@ final class YierdisHashOps implements HashOps {
             return ByteMapSources.empty();
         }
         ValueHandle handle = requireHashHandle(record);
-        return ByteMapSources.of(
-                hashRoot.size(handle),
-                0L,
-                out -> hashRoot.hgetallPairsInto(handle, SemanticResultSupport.lengthSink(out)),
-                out -> hashRoot.hgetallPairsInto(handle, out)
-        );
+        // HGETALL 的 pairCount 在 prepare 时冻结；field/value 必须来自同一份快照。
+        return ByteMapSources.copiedFrom(out -> hashRoot.hgetallPairsInto(handle, out));
     }
 
     @Override

@@ -1,7 +1,6 @@
 package yier.bubu.redis.storage.memory;
 
 import org.junit.Assert;
-import org.junit.Ignore;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.memory.api.NativeHandle;
@@ -14,6 +13,7 @@ import yier.bubu.redis.storage.api.PreparedMutation;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.YierdisCommandException;
+import yier.bubu.redis.storage.api.result.ByteMapSource;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
 import yier.bubu.redis.storage.api.result.PoppedValueSequence;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
@@ -395,43 +395,105 @@ public class CollectionDirectOpsTest {
         });
     }
 
-    /**
-     * Regression lock for <a href="https://github.com/skt-shinyruo/Yierdis/issues/93">#93</a>.
-     * Remove {@code @Ignore} when streamed collection sources are snapshotted/pinned across
-     * reply-capacity deferral.
-     */
     @Test
-    @Ignore("Reproduces #93: live LRANGE source observes later mutations (declared count vs emit mismatch)")
     public void lrangeSourceMustStayStableAcrossLaterMutationsOfSameList() {
         withDb(db -> {
             Assert.assertEquals(3L, db.lists().rpush(b("list"), List.of(b("a"), b("b"), b("c"))).value().longValue());
             ByteSequenceSource deferred = db.lists().lrange(b("list"), 0, -1);
             try {
-                int declared = deferred.elementCount();
-                Assert.assertEquals(3, declared);
-                deferred.visitElementLengths(length -> Assert.assertTrue(length >= 0));
-
-                PreparedMutation<PoppedValueSequence> mutation = db.lists().preparePop(b("list"), 1, true);
-                try {
-                    Assert.assertFalse(mutation.preview().isNull());
-                    mutation.commit();
-                } finally {
-                    mutation.close();
-                }
-
-                Assert.assertEquals(2, sequence(db.lists().lrange(b("list"), 0, -1)).size());
-
-                RecordingByteValueSink sink = new RecordingByteValueSink();
-                deferred.emitTo(sink);
-                Assert.assertEquals(
-                        "streamed LRANGE source must not observe later pops of the same list",
-                        declared,
-                        sink.values.size()
-                );
+                assertFrozenSequence(deferred, List.of("a", "b", "c"), () -> {
+                    PreparedMutation<PoppedValueSequence> mutation = db.lists().preparePop(b("list"), 1, true);
+                    try {
+                        Assert.assertFalse(mutation.preview().isNull());
+                        mutation.commit();
+                    } finally {
+                        mutation.close();
+                    }
+                    Assert.assertEquals(List.of("b", "c"), sequence(db.lists().lrange(b("list"), 0, -1)));
+                });
             } finally {
                 deferred.close();
             }
         });
+    }
+
+    @Test
+    public void smembersSourceMustStayStableAcrossLaterRemovals() {
+        withDb(db -> {
+            Assert.assertEquals(3L, db.sets().sadd(b("set"), List.of(b("a"), b("b"), b("c"))).value().longValue());
+            ByteSequenceSource deferred = db.sets().smembers(b("set"));
+            try {
+                int declared = deferred.elementCount();
+                Assert.assertEquals(3, declared);
+                deferred.visitElementLengths(length -> Assert.assertTrue(length >= 0));
+                Assert.assertEquals(1L, db.sets().srem(b("set"), List.of(b("a"))).value().longValue());
+                Assert.assertEquals(2L, db.sets().scard(b("set")));
+                RecordingByteValueSink sink = new RecordingByteValueSink();
+                deferred.emitTo(sink);
+                Assert.assertEquals(declared, sink.values.size());
+                Assert.assertEquals(Set.of("a", "b", "c"), new HashSet<>(sink.values));
+            } finally {
+                deferred.close();
+            }
+        });
+    }
+
+    @Test
+    public void hgetallSourceMustStayStableAcrossLaterFieldDeletes() {
+        withDb(db -> {
+            Assert.assertEquals(2L, db.hashes().hset(b("h"), List.of(b("a"), b("1"), b("b"), b("2"))).value().longValue());
+            ByteMapSource deferred = db.hashes().hgetall(b("h"));
+            try {
+                Assert.assertEquals(2, deferred.pairCount());
+                deferred.visitPairLengths(length -> Assert.assertTrue(length >= 0));
+                Assert.assertEquals(1L, db.hashes().hdel(b("h"), List.of(b("a"))).value().longValue());
+                Assert.assertEquals(1, db.hashes().hgetall(b("h")).pairCount());
+                RecordingByteValueSink sink = new RecordingByteValueSink();
+                deferred.emitPairsTo(sink);
+                Assert.assertEquals(List.of("a", "1", "b", "2"), sink.values);
+            } finally {
+                deferred.close();
+            }
+        });
+    }
+
+    @Test
+    public void zrangeSourceMustStayStableAcrossLaterRemovals() {
+        withDb(db -> {
+            Assert.assertEquals(
+                    3L,
+                    db.zsets().zadd(b("z"), List.of(b("1"), b("a"), b("2"), b("b"), b("3"), b("c"))).value().longValue()
+            );
+            ByteSequenceSource deferred = db.zsets().zrange(b("z"), 0, -1, true);
+            try {
+                assertFrozenSequence(deferred, List.of("a", "1", "b", "2", "c", "3"), () -> {
+                    Assert.assertEquals(1L, db.zsets().zrem(b("z"), List.of(b("a"))).value().longValue());
+                    Assert.assertEquals(List.of("b", "c"), sequence(db.zsets().zrange(b("z"), 0, -1, false)));
+                });
+            } finally {
+                deferred.close();
+            }
+        });
+    }
+
+    private static void assertFrozenSequence(
+            ByteSequenceSource deferred,
+            List<String> expected,
+            Runnable mutate
+    ) {
+        int declared = deferred.elementCount();
+        Assert.assertEquals(expected.size(), declared);
+        List<Integer> lengthsBefore = new ArrayList<>();
+        deferred.visitElementLengths(lengthsBefore::add);
+        Assert.assertEquals(declared, lengthsBefore.size());
+        Assert.assertTrue(deferred.retainedMemoryBytes() >= payloadLengthTotal(deferred));
+        mutate.run();
+        List<Integer> lengthsAfter = new ArrayList<>();
+        deferred.visitElementLengths(lengthsAfter::add);
+        Assert.assertEquals(lengthsBefore, lengthsAfter);
+        RecordingByteValueSink sink = new RecordingByteValueSink();
+        deferred.emitTo(sink);
+        Assert.assertEquals(expected, sink.values);
     }
 
     private static void withDb(DbConsumer consumer) {

@@ -17,69 +17,63 @@ import yier.bubu.redis.storage.api.result.ByteValueSink;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
 public class NativeCollectionReadStreamingTest {
     @Test
-    public void lrangeStreamsBytesSlices() {
+    public void lrangeSnapshotSurvivesLaterPops() {
         withDb(db -> {
             db.lists().rpush(b("list"), List.of(b("a"), b("b"), b("c"))).value();
 
-            RecordingBulkSequenceOutput out = new RecordingBulkSequenceOutput();
             ByteSequenceSource seq = db.lists().lrange(b("list"), 0, -1);
             Assert.assertEquals(3, seq.elementCount());
-
-            seq.emitTo(out);
-            Assert.assertTrue(out.sawBytesSlice());
-            Assert.assertEquals(List.of("a", "b", "c"), out.strings());
+            var mutation = db.lists().preparePop(b("list"), 1, true);
+            try {
+                mutation.commit();
+            } finally {
+                mutation.close();
+            }
+            Assert.assertEquals(List.of("a", "b", "c"), strings(seq));
         });
     }
 
     @Test
-    public void smembersStreamsBytesSlices() {
+    public void smembersSnapshotSurvivesLaterRemovals() {
         withDb(db -> {
             db.sets().sadd(b("set"), List.of(b("alpha"), b("beta"))).value();
 
-            RecordingBulkSequenceOutput out = new RecordingBulkSequenceOutput();
             ByteSequenceSource seq = db.sets().smembers(b("set"));
             Assert.assertEquals(2, seq.elementCount());
-
-            seq.emitTo(out);
-            Assert.assertTrue(out.sawBytesSlice());
-            Assert.assertTrue(out.strings().contains("alpha"));
-            Assert.assertTrue(out.strings().contains("beta"));
+            db.sets().srem(b("set"), List.of(b("alpha")));
+            Assert.assertEquals(Set.of("alpha", "beta"), new HashSet<>(strings(seq)));
         });
     }
 
     @Test
-    public void hgetallStreamsBytesSlices() {
+    public void hgetallSnapshotSurvivesLaterFieldDeletes() {
         withDb(db -> {
             db.hashes().hset(b("hash"), List.of(b("field"), b("value"))).value();
 
-            RecordingBulkSequenceOutput out = new RecordingBulkSequenceOutput();
             ByteMapSource pairs = db.hashes().hgetall(b("hash"));
             Assert.assertEquals(1, pairs.pairCount());
-
-            pairs.emitPairsTo(out);
-            Assert.assertTrue(out.sawBytesSlice());
-            Assert.assertEquals(List.of("field", "value"), out.strings());
+            db.hashes().hdel(b("hash"), List.of(b("field")));
+            Assert.assertEquals(List.of("field", "value"), pairStrings(pairs));
         });
     }
 
     @Test
-    public void zrangeStreamsBytesSlices() {
+    public void zrangeSnapshotSurvivesLaterRemovals() {
         withDb(db -> {
             db.zsets().zadd(b("z"), List.of(b("1"), b("m1"), b("2"), b("m2"))).value();
 
-            RecordingBulkSequenceOutput out = new RecordingBulkSequenceOutput();
             ByteSequenceSource seq = db.zsets().zrange(b("z"), 0, -1, false);
             Assert.assertEquals(2, seq.elementCount());
-
-            seq.emitTo(out);
-            Assert.assertTrue(out.sawBytesSlice());
-            Assert.assertEquals(List.of("m1", "m2"), out.strings());
+            db.zsets().zrem(b("z"), List.of(b("m1")));
+            Assert.assertEquals(List.of("m1", "m2"), strings(seq));
         });
     }
 
@@ -100,19 +94,28 @@ public class NativeCollectionReadStreamingTest {
         void accept(YierdisDb db);
     }
 
+    private static List<String> strings(ByteSequenceSource source) {
+        RecordingBulkSequenceOutput out = new RecordingBulkSequenceOutput();
+        source.emitTo(out);
+        return out.strings();
+    }
+
+    private static List<String> pairStrings(ByteMapSource source) {
+        RecordingBulkSequenceOutput out = new RecordingBulkSequenceOutput();
+        source.emitPairsTo(out);
+        return out.strings();
+    }
+
     private static final class RecordingBulkSequenceOutput implements ByteValueSink {
         private final List<String> values = new ArrayList<>();
-        private boolean sawBytesSlice;
 
         @Override
         public void value(byte[] data) {
-            sawBytesSlice = false;
             values.add(data == null ? null : new String(data, StandardCharsets.UTF_8));
         }
 
         @Override
         public void value(byte[] data, int off, int len) {
-            sawBytesSlice = false;
             values.add(data == null ? null : new String(data, off, len, StandardCharsets.UTF_8));
         }
 
@@ -122,7 +125,6 @@ public class NativeCollectionReadStreamingTest {
                 values.add(null);
                 return;
             }
-            sawBytesSlice = true;
             byte[] bytes = new byte[slice.length()];
             slice.getBytes(0, bytes, 0, bytes.length);
             values.add(new String(bytes, StandardCharsets.UTF_8));
@@ -130,17 +132,12 @@ public class NativeCollectionReadStreamingTest {
 
         @Override
         public void longAscii(long value) {
-            sawBytesSlice = false;
             values.add(Long.toString(value));
         }
 
         @Override
         public void nullValue() {
             value((byte[]) null);
-        }
-
-        private boolean sawBytesSlice() {
-            return sawBytesSlice;
         }
 
         private List<String> strings() {

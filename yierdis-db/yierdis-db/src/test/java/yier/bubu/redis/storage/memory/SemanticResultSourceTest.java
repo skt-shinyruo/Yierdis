@@ -97,7 +97,7 @@ public class SemanticResultSourceTest {
             Assert.assertEquals(expected.size(), source.elementCount());
             Assert.assertEquals(payloadLengths(expected), lengths(source));
             Assert.assertEquals(payloadLengths(expected), lengths(source));
-            Assert.assertEquals(0L, source.retainedMemoryBytes());
+            Assert.assertEquals(payloadLengthSum(expected), source.retainedMemoryBytes());
             RecordingSink sink = new RecordingSink();
             source.emitTo(sink);
             assertByteValues(expected, sink.values());
@@ -114,6 +114,16 @@ public class SemanticResultSourceTest {
         List<Integer> lengths = new ArrayList<>();
         source.visitPairLengths(lengths::add);
         return lengths;
+    }
+
+    private static long payloadLengthSum(List<byte[]> values) {
+        long total = 0L;
+        for (byte[] value : values) {
+            if (value != null) {
+                total += value.length;
+            }
+        }
+        return total;
     }
 
     private static List<Integer> payloadLengths(List<byte[]> values) {

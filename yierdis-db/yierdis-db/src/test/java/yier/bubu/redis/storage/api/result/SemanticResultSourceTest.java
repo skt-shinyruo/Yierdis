@@ -90,6 +90,48 @@ public class SemanticResultSourceTest {
         Assert.assertEquals(23L, source.retainedMemoryBytes());
     }
 
+    @Test
+    public void copiedFromFreezesEmitterResults() {
+        List<byte[]> live = new ArrayList<>();
+        live.add(new byte[]{'a'});
+        live.add(new byte[]{'b'});
+        live.add(new byte[]{'c'});
+        ByteSequenceSource source = ByteSequenceSources.copiedFrom(out -> {
+            for (byte[] item : live) {
+                out.value(item);
+            }
+        });
+        live.remove(0);
+        Assert.assertEquals(3, source.elementCount());
+        Assert.assertEquals(3L, source.retainedMemoryBytes());
+        Assert.assertEquals(List.of(1, 1, 1), lengths(source::visitElementLengths));
+        RecordingValues sink = new RecordingValues();
+        source.emitTo(sink);
+        Assert.assertEquals(List.of("a", "b", "c"), sink.values);
+    }
+
+    @Test
+    public void copiedMapFromRejectsOddEmitterLength() {
+        try {
+            ByteMapSources.copiedFrom(out -> out.value(new byte[]{'a'}));
+            Assert.fail("expected odd captured map to fail");
+        } catch (IllegalStateException expected) {
+            Assert.assertTrue(expected.getMessage().contains("odd"));
+        }
+    }
+
+    @Test
+    public void copiedFromPreservesLongAsciiAndNulls() {
+        ByteSequenceSource source = ByteSequenceSources.copiedFrom(out -> {
+            out.longAscii(Long.MIN_VALUE);
+            out.nullValue();
+            out.value(new byte[]{1, 2});
+        });
+        Assert.assertEquals(3, source.elementCount());
+        Assert.assertEquals(List.of(20, -1, 2), lengths(source::visitElementLengths));
+        Assert.assertEquals(22L, source.retainedMemoryBytes());
+    }
+
     private static List<Integer> lengths(LengthVisit visit) {
         List<Integer> values = new ArrayList<>();
         visit.accept(values::add);
@@ -120,6 +162,35 @@ public class SemanticResultSourceTest {
 
         @Override
         public void nullValue() {
+        }
+    }
+
+    private static final class RecordingValues implements ByteValueSink {
+        private final List<String> values = new ArrayList<>();
+
+        @Override
+        public void value(byte[] data) {
+            values.add(data == null ? null : new String(data));
+        }
+
+        @Override
+        public void value(byte[] data, int offset, int length) {
+            values.add(data == null ? null : new String(data, offset, length));
+        }
+
+        @Override
+        public void value(yier.bubu.redis.bytes.BytesSlice slice) {
+            throw new UnsupportedOperationException("snapshot emit should not use live slices");
+        }
+
+        @Override
+        public void longAscii(long value) {
+            values.add(Long.toString(value));
+        }
+
+        @Override
+        public void nullValue() {
+            values.add(null);
         }
     }
 }
