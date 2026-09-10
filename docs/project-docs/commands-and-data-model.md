@@ -103,6 +103,8 @@ RESP2 / RESP3 的标量与 aggregate 编码由协议 writer 根据 session versi
 
 `DbReplies` 把这些 source 转成 `RedisReply.BulkString`、`ByteSequence`、`ByteSet` 或 `ByteMap`。语义 reply 记录 element count、payload lengths、retained source bytes 和同步 emitter；`PreparedCommands.owned(...)` 让 prepared command 持有 source。
 
+`LRANGE`、`SMEMBERS`、`HGETALL` 和 `ZRANGE*` 在 prepare 时把选中元素拷进独立 source。这些集合会 in-place 改同一 native handle；reply-capacity 若把 render 推迟到其他连接写入之后，live emit 会和冻结的 elementCount 错位并拆开 RESP。GET 仍 pin native string；SCAN window 仍按既有 pin/materialize 规则，不保证跨 mutation 的快照。
+
 executor 先把 source 的 retained memory 纳入 reply preflight，再执行并交给 renderer。renderer 在 command owner thread 同步调用 emitter；渲染完成后 executor 关闭 prepared command，source 才 unpin 或释放。source ownership 不会转移给 `RedisReplyWriter` 或 Netty event loop。
 
 `EXEC` 的 streamed child 也遵守这一规则：child prepared command 持有 source，外层 transaction prepared command 持有 child，直到整个 aggregate 被 renderer 消费完才逆序关闭。

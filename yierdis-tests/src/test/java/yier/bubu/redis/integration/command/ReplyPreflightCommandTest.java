@@ -188,10 +188,10 @@ public class ReplyPreflightCommandTest {
                 client.execute(cmd("SADD", "set", "a", "bb"));
                 client.execute(cmd("ZADD", "zset", "1", "a"));
 
-                assertAggregatePreflight(dispatcher, cmd("LRANGE", "list", "0", "-1"), 19L);
-                assertAggregatePreflight(dispatcher, cmd("HGETALL", "hash"), 26L);
-                assertAggregatePreflight(dispatcher, cmd("SMEMBERS", "set"), 19L);
-                assertAggregatePreflight(dispatcher, cmd("ZRANGE", "zset", "0", "-1"), 11L);
+                assertAggregatePreflight(dispatcher, cmd("LRANGE", "list", "0", "-1"), 19L, 3L);
+                assertAggregatePreflight(dispatcher, cmd("HGETALL", "hash"), 26L, 10L);
+                assertAggregatePreflight(dispatcher, cmd("SMEMBERS", "set"), 19L, 3L);
+                assertAggregatePreflight(dispatcher, cmd("ZRANGE", "zset", "0", "-1"), 11L, 1L);
             }
         });
     }
@@ -535,6 +535,15 @@ public class ReplyPreflightCommandTest {
             List<byte[]> command,
             long expectedEncodedBytes
     ) {
+        assertAggregatePreflight(dispatcher, command, expectedEncodedBytes, 0L);
+    }
+
+    private static void assertAggregatePreflight(
+            CommandDispatcher dispatcher,
+            List<byte[]> command,
+            long expectedEncodedBytes,
+            long expectedRetainedSourceBytes
+    ) {
         EngineSession session = new EngineSession(16, 16 * 1024L);
         CapacityGate capacity = CapacityGate.rejecting();
         Assert.assertThrows(
@@ -542,7 +551,7 @@ public class ReplyPreflightCommandTest {
                 () -> execute(dispatcher, session, capacity, new TrackingReplyWriter(), command)
         );
         Assert.assertEquals(expectedEncodedBytes, capacity.reservedPlan().encodedUpperBoundBytes());
-        Assert.assertEquals(0L, capacity.reservedPlan().retainedSourceBytes());
+        Assert.assertEquals(expectedRetainedSourceBytes, capacity.reservedPlan().retainedSourceBytes());
     }
 
     private static ReplyPlan execute(

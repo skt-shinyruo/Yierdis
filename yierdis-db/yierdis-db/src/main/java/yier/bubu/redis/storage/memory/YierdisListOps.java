@@ -29,7 +29,6 @@ import yier.bubu.redis.storage.memory.internal.key.AllocatorKeyHandle;
 import yier.bubu.redis.storage.memory.internal.value.PreparedPoppedValueSequence;
 import yier.bubu.redis.storage.memory.internal.value.PinnedPoppedValueSequence;
 import yier.bubu.redis.storage.memory.internal.value.ListValue;
-import yier.bubu.redis.storage.memory.internal.value.SemanticResultSupport;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 final class YierdisListOps implements ListOps {
@@ -75,13 +74,8 @@ final class YierdisListOps implements ListOps {
             return ByteSequenceSources.empty();
         }
         ValueHandle handle = requireListHandle(record);
-        int count = listRoot.rangeCount(handle, start, stop);
-        return ByteSequenceSources.of(
-                count,
-                0L,
-                out -> listRoot.rangeInto(handle, start, stop, SemanticResultSupport.lengthSink(out)),
-                out -> listRoot.rangeInto(handle, start, stop, out)
-        );
+        // packed list 会 in-place 改同一 handle；prepare 到 render 之间若被推迟，必须先物化。
+        return ByteSequenceSources.copiedFrom(out -> listRoot.rangeInto(handle, start, stop, out));
     }
 
     @Override
