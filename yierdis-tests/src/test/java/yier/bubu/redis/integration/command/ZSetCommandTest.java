@@ -35,13 +35,43 @@ public class ZSetCommandTest {
                 Assert.assertTrue(err1 instanceof ReplyError);
                 Assert.assertEquals("ERR value is not a valid float", ((ReplyError) err1).message());
 
-                ReplyObject err2 = client.execute(Arrays.asList(b("ZADD"), key, b("Infinity"), b("a")));
+                ReplyObject err2 = client.execute(Arrays.asList(b("ZADD"), key, b("nope"), b("a")));
                 Assert.assertTrue(err2 instanceof ReplyError);
                 Assert.assertEquals("ERR value is not a valid float", ((ReplyError) err2).message());
+            }
+        });
+    }
 
-                ReplyObject err3 = client.execute(Arrays.asList(b("ZADD"), key, b("nope"), b("a")));
-                Assert.assertTrue(err3 instanceof ReplyError);
-                Assert.assertEquals("ERR value is not a valid float", ((ReplyError) err3).message());
+    @Test
+    public void zaddAcceptsInfiniteScoresAndFormatsThemLikeRedis() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("z");
+
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("ZADD"), key, b("inf"), b("pinf")))).value());
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("ZADD"), key, b("-inf"), b("ninf")))).value());
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("ZADD"), key, b("+Infinity"), b("also-pinf")))).value());
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("ZADD"), key, b("1"), b("one")))).value());
+
+                ReplyArray withScores = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGEBYSCORE"), key, b("-inf"), b("+inf"), b("WITHSCORES")));
+                List<String> rendered = new ArrayList<>();
+                for (ReplyObject element : withScores.values()) {
+                    rendered.add(((ReplyBulkString) element).asString());
+                }
+                Assert.assertEquals(
+                        List.of("ninf", "-inf", "one", "1", "also-pinf", "inf", "pinf", "inf"),
+                        rendered
+                );
+
+                Assert.assertEquals(
+                        2L,
+                        ((ReplyInteger) client.execute(Arrays.asList(b("ZREMRANGEBYSCORE"), key, b("(100"), b("+inf")))).value()
+                );
+                ReplyArray survivors = (ReplyArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("-1")));
+                Assert.assertEquals(2, survivors.values().size());
             }
         });
     }

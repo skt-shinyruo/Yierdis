@@ -372,7 +372,6 @@ public class TransactionCommandTest {
         forEachDb(db -> {
             for (InvalidCommand invalid : List.of(
                     invalid("ERR value is not a valid float", "ZADD", "z", "NaN", "member"),
-                    invalid("ERR value is not a valid float", "ZADD", "z", "Infinity", "member"),
                     invalid("ERR value is not a valid float", "ZADD", "z", "bad", "member"),
                     invalid("ERR value is not an integer or out of range", "ZRANGE", "z", "bad", "-1"),
                     invalid("ERR syntax error", "ZRANGE", "z", "0", "-1", "WITHSCORES", "WITHSCORES"),

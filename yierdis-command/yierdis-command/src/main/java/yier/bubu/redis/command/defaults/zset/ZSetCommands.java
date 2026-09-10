@@ -2,6 +2,7 @@ package yier.bubu.redis.command.defaults.zset;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.function.Supplier;
 import yier.bubu.redis.command.api.CommandArgs;
@@ -227,16 +228,29 @@ public final class ZSetCommands {
         if (raw == null) {
             throw new CommandParseException(SCORE_ERROR);
         }
+        String text = new String(raw, StandardCharsets.US_ASCII);
         double value;
         try {
-            value = Double.parseDouble(new String(raw, StandardCharsets.US_ASCII));
+            value = Double.parseDouble(text);
         } catch (NumberFormatException failure) {
-            throw new CommandParseException(SCORE_ERROR);
+            value = parseInfinitySpelling(text);
         }
-        if (!Double.isFinite(value)) {
+        if (Double.isNaN(value)) {
             throw new CommandParseException(SCORE_ERROR);
         }
         return value;
+    }
+
+    private static double parseInfinitySpelling(String text) {
+        // strtod 接受任意大小写、可选符号的 inf/infinity，而 Double.parseDouble 只认精确拼写的 "Infinity"，
+        // Redis 的 ZADD 分数以前者为准，这里补上它不认的拼写。
+        String lowered = text.toLowerCase(Locale.ROOT);
+        boolean negative = lowered.startsWith("-");
+        String body = (lowered.startsWith("+") || negative) ? lowered.substring(1) : lowered;
+        if (body.equals("inf") || body.equals("infinity")) {
+            return negative ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
+        }
+        throw new CommandParseException(SCORE_ERROR);
     }
 
     private static ScoreBound parseScoreBound(byte[] raw) {

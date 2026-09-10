@@ -141,7 +141,6 @@ public class CommandParseIsolationTest {
 
         for (CommandArgs invalid : new CommandArgs[]{
                 argv("ZADD", "z", "NaN", "member"),
-                argv("ZADD", "z", "Infinity", "member"),
                 argv("ZADD", "z", "not-a-score", "member"),
                 argv("ZRANGE", "z", "rank", "-1"),
                 argv("ZRANGE", "z", "0", "-1", "WITHSCORES", "WITHSCORES"),

@@ -20,6 +20,7 @@ import yier.bubu.redis.storage.memory.internal.keyspace.YierdisGlobMatcher;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
@@ -1196,16 +1197,29 @@ public final class ZSetValue implements YierdisValue {
     }
 
     private static double parseScore(byte[] s) {
+        String text = new String(s, StandardCharsets.US_ASCII);
         double v;
         try {
-            v = Double.parseDouble(new String(s, StandardCharsets.US_ASCII));
+            v = Double.parseDouble(text);
         } catch (NumberFormatException e) {
-            throw new YierdisCommandException("ERR value is not a valid float");
+            v = parseInfinitySpelling(text);
         }
-        if (Double.isNaN(v) || Double.isInfinite(v)) {
+        if (Double.isNaN(v)) {
             throw new YierdisCommandException("ERR value is not a valid float");
         }
         return v == 0.0d ? 0.0d : v;
+    }
+
+    private static double parseInfinitySpelling(String text) {
+        // strtod 接受任意大小写、可选符号的 inf/infinity，而 Double.parseDouble 只认精确拼写的 "Infinity"，
+        // Redis 的 ZADD 分数以前者为准，这里补上它不认的拼写。
+        String lowered = text.toLowerCase(Locale.ROOT);
+        boolean negative = lowered.startsWith("-");
+        String body = (lowered.startsWith("+") || negative) ? lowered.substring(1) : lowered;
+        if (body.equals("inf") || body.equals("infinity")) {
+            return negative ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
+        }
+        throw new YierdisCommandException("ERR value is not a valid float");
     }
 
     private static boolean scoresEqual(double left, double right) {
@@ -1216,7 +1230,19 @@ public final class ZSetValue implements YierdisValue {
         return left < right ? -1 : left > right ? 1 : 0;
     }
 
+    // Redis 在 WITHSCORES 输出中把 ±inf 分数渲染为 "inf"/"-inf"；有限值返回 null，由调用方走常规格式化。
+    private static byte[] infiniteScoreBytes(double score) {
+        if (!Double.isInfinite(score)) {
+            return null;
+        }
+        return (score > 0 ? "inf" : "-inf").getBytes(StandardCharsets.US_ASCII);
+    }
+
     private static byte[] formatScoreBytes(double score) {
+        byte[] infinite = infiniteScoreBytes(score);
+        if (infinite != null) {
+            return infinite;
+        }
         if (score == Math.rint(score) && score >= Long.MIN_VALUE && score <= Long.MAX_VALUE) {
             return Long.toString((long) score).getBytes(StandardCharsets.US_ASCII);
         }
@@ -1224,6 +1250,11 @@ public final class ZSetValue implements YierdisValue {
     }
 
     private static void addScoreElement(NativeCollectionScanWindow.Builder builder, double score) {
+        byte[] infinite = infiniteScoreBytes(score);
+        if (infinite != null) {
+            builder.addBytes(infinite);
+            return;
+        }
         if (score == Math.rint(score) && score >= Long.MIN_VALUE && score <= Long.MAX_VALUE) {
             builder.addLong((long) score);
             return;
@@ -1232,6 +1263,11 @@ public final class ZSetValue implements YierdisValue {
     }
 
     private static void writeScoreTo(ByteValueSink out, double score) {
+        byte[] infinite = infiniteScoreBytes(score);
+        if (infinite != null) {
+            out.value(infinite, 0, infinite.length);
+            return;
+        }
         if (score == Math.rint(score) && score >= Long.MIN_VALUE && score <= Long.MAX_VALUE) {
             out.longAscii((long) score);
             return;
