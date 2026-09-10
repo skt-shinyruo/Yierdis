@@ -165,7 +165,8 @@ final class YierdisTtlOps implements TtlOps {
             return -1L;
         }
         long remainingMillis = expireAtMillis - now;
-        return remainingMillis <= 0 ? -2L : remainingMillis / 1000L;
+        // Redis 的 TTL 按 (剩余毫秒+500)/1000 四舍五入到秒；向下取整会让刚设置的 TTL 恒少 1 秒。
+        return remainingMillis <= 0 ? -2L : (remainingMillis + 500L) / 1000L;
     }
 
     @Override

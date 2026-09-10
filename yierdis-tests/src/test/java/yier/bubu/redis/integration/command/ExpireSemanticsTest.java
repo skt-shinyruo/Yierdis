@@ -109,4 +109,21 @@ public class ExpireSemanticsTest {
             }
         });
     }
+
+    @Test
+    public void ttlRoundsRemainingMillisToNearestSecondLikeRedis() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), b("k"), b("v")))).value());
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("PEXPIRE"), b("k"), b("99900")))).value());
+                long ttl = ((ReplyInteger) client.execute(Arrays.asList(b("TTL"), b("k")))).value();
+                Assert.assertEquals("TTL must round (ms+500)/1000 like Redis", 100L, ttl);
+                long pttl = ((ReplyInteger) client.execute(Arrays.asList(b("PTTL"), b("k")))).value();
+                Assert.assertTrue("PTTL must stay close to 99.9s but got " + pttl, pttl > 98_900L && pttl <= 99_900L);
+            }
+        });
+    }
 }

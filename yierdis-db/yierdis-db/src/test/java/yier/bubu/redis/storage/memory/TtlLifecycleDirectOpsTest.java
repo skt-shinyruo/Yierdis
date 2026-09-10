@@ -124,6 +124,15 @@ public class TtlLifecycleDirectOpsTest {
         });
     }
 
+    @Test
+    public void ttlSecondsRoundsRemainingMillisToNearestSecondLikeRedis() {
+        withDb(db -> {
+            db.strings().setString(b("k"), b("v"), SetMode.NORMAL, null);
+            Assert.assertTrue(db.ttl().pexpire(view("k"), 99_900L).value());
+            Assert.assertEquals(100L, db.ttl().ttlSeconds(view("k")));
+        });
+    }
+
     private static void withDb(DbConsumer consumer) {
         YierdisDb db = TestDbSupport.open();
         try {
