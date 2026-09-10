@@ -857,12 +857,20 @@ final class YierdisStringOps implements StringOps {
         int i = 0;
         boolean negative = false;
         byte first = buf[0];
-        if (first == '-' || first == '+') {
-            negative = first == '-';
+        // Redis 的 string2ll 只接受规范整数：拒绝 '+' 前缀，且除单独的 "0" 外不允许前导零（"-0" 同样拒绝）；
+        // INCR/DECR 的操作数校验在此与 Redis 对齐。
+        if (first == '+') {
+            throw new YierdisCommandException(INTEGER_RANGE_ERROR);
+        }
+        if (first == '-') {
+            negative = true;
             i = 1;
             if (i == buf.length) {
                 throw new YierdisCommandException(INTEGER_RANGE_ERROR);
             }
+        }
+        if (buf[i] == '0' && (negative || buf.length - i > 1)) {
+            throw new YierdisCommandException(INTEGER_RANGE_ERROR);
         }
 
         long limit = negative ? Long.MIN_VALUE : -Long.MAX_VALUE;

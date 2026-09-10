@@ -342,12 +342,12 @@ public class StringDirectOpsTest {
     }
 
     @Test
-    public void incrByAcceptsSignsAndRejectsMalformedOrOverflowingIntegers() {
+    public void incrByRequiresCanonicalIntegersAndRejectsMalformedOrOverflowing() {
         withDb(db -> {
-            db.strings().setString(b("positive"), b("+41"), SetMode.NORMAL, null);
-            Assert.assertEquals(Long.valueOf(42L), db.strings().incrBy(b("positive"), 1L).value());
             db.strings().setString(b("negative"), b("-41"), SetMode.NORMAL, null);
             Assert.assertEquals(Long.valueOf(-40L), db.strings().incrBy(b("negative"), 1L).value());
+            db.strings().setString(b("zero"), b("0"), SetMode.NORMAL, null);
+            Assert.assertEquals(Long.valueOf(1L), db.strings().incrBy(b("zero"), 1L).value());
 
             for (String invalid : List.of(
                     "",
@@ -355,6 +355,9 @@ public class StringDirectOpsTest {
                     "-",
                     "12x",
                     " 1",
+                    "+41",
+                    "007",
+                    "-0",
                     "9223372036854775808",
                     "-9223372036854775809"
             )) {

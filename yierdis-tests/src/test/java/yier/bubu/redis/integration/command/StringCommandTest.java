@@ -106,6 +106,28 @@ public class StringCommandTest {
     }
 
     @Test
+    public void counterCommandsRequireCanonicalIntegers() {
+        withClient(client -> {
+            assertSimpleString("OK", client.execute(cmd("SET", "plus", "+1")));
+            assertErrorContaining("not an integer or out of range", client.execute(cmd("INCR", "plus")));
+            assertBulkString("+1", client.execute(cmd("GET", "plus")));
+
+            assertSimpleString("OK", client.execute(cmd("SET", "zeros", "007")));
+            assertErrorContaining("not an integer or out of range", client.execute(cmd("INCR", "zeros")));
+            assertBulkString("007", client.execute(cmd("GET", "zeros")));
+
+            assertSimpleString("OK", client.execute(cmd("SET", "negzero", "-0")));
+            assertErrorContaining("not an integer or out of range", client.execute(cmd("INCR", "negzero")));
+            assertBulkString("-0", client.execute(cmd("GET", "negzero")));
+
+            assertSimpleString("OK", client.execute(cmd("SET", "zero", "0")));
+            assertInteger(1, client.execute(cmd("INCR", "zero")));
+            assertSimpleString("OK", client.execute(cmd("SET", "neg", "-41")));
+            assertInteger(-42, client.execute(cmd("DECR", "neg")));
+        });
+    }
+
+    @Test
     public void setCommandCoversSyntaxAndExpiryErrors() {
         withClient(client -> {
             assertErrorContaining("syntax error", client.execute(cmd("SET", "k", "v", "NX", "XX")));
