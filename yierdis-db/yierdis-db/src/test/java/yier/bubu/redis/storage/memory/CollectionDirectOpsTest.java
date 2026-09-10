@@ -1,6 +1,7 @@
 package yier.bubu.redis.storage.memory;
 
 import org.junit.Assert;
+import org.junit.Ignore;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.memory.api.NativeHandle;
@@ -9,6 +10,7 @@ import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MutationOutcome;
+import yier.bubu.redis.storage.api.PreparedMutation;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.YierdisCommandException;
@@ -390,6 +392,45 @@ public class CollectionDirectOpsTest {
             db.strings().setString(b("plain"), b("not-hll"), SetMode.NORMAL, null);
             expectWrongType(() -> db.hll().pfcount(List.of(b("plain"))));
             expectWrongType(() -> db.hll().pfmerge(b("other"), List.of(b("plain"))));
+        });
+    }
+
+    /**
+     * Regression lock for <a href="https://github.com/skt-shinyruo/Yierdis/issues/93">#93</a>.
+     * Remove {@code @Ignore} when streamed collection sources are snapshotted/pinned across
+     * reply-capacity deferral.
+     */
+    @Test
+    @Ignore("Reproduces #93: live LRANGE source observes later mutations (declared count vs emit mismatch)")
+    public void lrangeSourceMustStayStableAcrossLaterMutationsOfSameList() {
+        withDb(db -> {
+            Assert.assertEquals(3L, db.lists().rpush(b("list"), List.of(b("a"), b("b"), b("c"))).value().longValue());
+            ByteSequenceSource deferred = db.lists().lrange(b("list"), 0, -1);
+            try {
+                int declared = deferred.elementCount();
+                Assert.assertEquals(3, declared);
+                deferred.visitElementLengths(length -> Assert.assertTrue(length >= 0));
+
+                PreparedMutation<PoppedValueSequence> mutation = db.lists().preparePop(b("list"), 1, true);
+                try {
+                    Assert.assertFalse(mutation.preview().isNull());
+                    mutation.commit();
+                } finally {
+                    mutation.close();
+                }
+
+                Assert.assertEquals(2, sequence(db.lists().lrange(b("list"), 0, -1)).size());
+
+                RecordingByteValueSink sink = new RecordingByteValueSink();
+                deferred.emitTo(sink);
+                Assert.assertEquals(
+                        "streamed LRANGE source must not observe later pops of the same list",
+                        declared,
+                        sink.values.size()
+                );
+            } finally {
+                deferred.close();
+            }
         });
     }
 
