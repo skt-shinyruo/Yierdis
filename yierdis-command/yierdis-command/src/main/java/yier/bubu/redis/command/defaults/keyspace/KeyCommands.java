@@ -28,6 +28,7 @@ import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.execution.api.ValidationResult;
+import yier.bubu.redis.storage.api.ExpireCondition;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
@@ -38,6 +39,11 @@ public final class KeyCommands {
     private static final String KEYS_INCOMPLETE_ERROR = "ERR KEYS scan incomplete; use SCAN";
     private static final String SYNTAX_ERROR = "ERR syntax error";
     private static final String INTEGER_ERROR = "ERR value is not an integer or out of range";
+    private static final String EXPIRE_UNSUPPORTED_OPTION = "ERR Unsupported option ";
+    private static final String EXPIRE_NX_INCOMPATIBLE =
+            "ERR NX and XX, GT or LT options at the same time are not compatible";
+    private static final String EXPIRE_GT_LT_INCOMPATIBLE =
+            "ERR GT and LT options at the same time are not compatible";
     private static final CommandKeySpec KEY = new CommandKeySpec(1, 1, 1);
     private static final CommandKeySpec MULTI_KEYS = new CommandKeySpec(1, -1, 1);
     private static final MemoryStatField[] MEMORY_STATS_FIELDS = {
@@ -78,10 +84,10 @@ public final class KeyCommands {
         registration.register(new CommandSpec(syntax("SCAN", CommandArity.min(2), CommandKeySpec.NONE), this::scan));
         registration.register(new CommandSpec(syntax("DEL", CommandArity.min(2), MULTI_KEYS), this::del));
         registration.register(new CommandSpec(syntax("EXISTS", CommandArity.min(2), MULTI_KEYS), this::exists));
-        registration.register(new CommandSpec(syntax("EXPIRE", CommandArity.exact(3), KEY), this::expire));
-        registration.register(new CommandSpec(syntax("PEXPIRE", CommandArity.exact(3), KEY), this::pexpire));
-        registration.register(new CommandSpec(syntax("EXPIREAT", CommandArity.exact(3), KEY), this::expireat));
-        registration.register(new CommandSpec(syntax("PEXPIREAT", CommandArity.exact(3), KEY), this::pexpireat));
+        registration.register(new CommandSpec(syntax("EXPIRE", CommandArity.min(3), KEY), this::expire));
+        registration.register(new CommandSpec(syntax("PEXPIRE", CommandArity.min(3), KEY), this::pexpire));
+        registration.register(new CommandSpec(syntax("EXPIREAT", CommandArity.min(3), KEY), this::expireat));
+        registration.register(new CommandSpec(syntax("PEXPIREAT", CommandArity.min(3), KEY), this::pexpireat));
         registration.register(new CommandSpec(syntax("PERSIST", CommandArity.exact(2), KEY), this::persist));
         registration.register(new CommandSpec(syntax("TTL", CommandArity.exact(2), KEY), this::ttl));
         registration.register(new CommandSpec(syntax("PTTL", CommandArity.exact(2), KEY), this::pttl));
@@ -308,13 +314,14 @@ public final class KeyCommands {
         };
     }
 
-    private record TtlArgs(BytesSlice key, long value) {
+    private record TtlArgs(BytesSlice key, long value, ExpireCondition condition) {
     }
 
     private Function<CommandSession, PreparedCommand> expire(CommandArgs args) {
         TtlArgs parsed = ttlArgs(args);
         return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
-            boolean applied = support.commandDb(execution).ttl().expire(parsed.key(), parsed.value()).value();
+            boolean applied = support.commandDb(execution).ttl()
+                    .expire(parsed.key(), parsed.value(), parsed.condition()).value();
             return CommandResult.reply(RedisReplies.integer(applied ? 1L : 0L));
         });
     }
@@ -322,7 +329,8 @@ public final class KeyCommands {
     private Function<CommandSession, PreparedCommand> pexpire(CommandArgs args) {
         TtlArgs parsed = ttlArgs(args);
         return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
-            boolean applied = support.commandDb(execution).ttl().pexpire(parsed.key(), parsed.value()).value();
+            boolean applied = support.commandDb(execution).ttl()
+                    .pexpire(parsed.key(), parsed.value(), parsed.condition()).value();
             return CommandResult.reply(RedisReplies.integer(applied ? 1L : 0L));
         });
     }
@@ -331,7 +339,7 @@ public final class KeyCommands {
         TtlArgs parsed = ttlArgs(args);
         return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
             boolean applied = support.commandDb(execution).ttl()
-                    .expireAtSeconds(parsed.key(), parsed.value()).value();
+                    .expireAtSeconds(parsed.key(), parsed.value(), parsed.condition()).value();
             return CommandResult.reply(RedisReplies.integer(applied ? 1L : 0L));
         });
     }
@@ -340,13 +348,43 @@ public final class KeyCommands {
         TtlArgs parsed = ttlArgs(args);
         return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
             boolean applied = support.commandDb(execution).ttl()
-                    .expireAtMillis(parsed.key(), parsed.value()).value();
+                    .expireAtMillis(parsed.key(), parsed.value(), parsed.condition()).value();
             return CommandResult.reply(RedisReplies.integer(applied ? 1L : 0L));
         });
     }
 
     private static TtlArgs ttlArgs(CommandArgs args) {
-        return new TtlArgs(args.slice(1), args.longAt(2));
+        // Redis 先解析条件标志再解析整数：非法标志的错误优先于整数错误。
+        ExpireCondition condition = expireCondition(args);
+        return new TtlArgs(args.slice(1), args.longAt(2), condition);
+    }
+
+    private static ExpireCondition expireCondition(CommandArgs args) {
+        boolean nx = false;
+        boolean xx = false;
+        boolean gt = false;
+        boolean lt = false;
+        for (int index = 3; index < args.argc(); index++) {
+            if (args.is(index, "NX")) {
+                nx = true;
+            } else if (args.is(index, "XX")) {
+                xx = true;
+            } else if (args.is(index, "GT")) {
+                gt = true;
+            } else if (args.is(index, "LT")) {
+                lt = true;
+            } else {
+                // 未知标志按用户输入原样回显，与 Redis 的报错文案一致。
+                throw new CommandParseException(EXPIRE_UNSUPPORTED_OPTION + args.utf8(index));
+            }
+        }
+        if (nx && (xx || gt || lt)) {
+            throw new CommandParseException(EXPIRE_NX_INCOMPATIBLE);
+        }
+        if (gt && lt) {
+            throw new CommandParseException(EXPIRE_GT_LT_INCOMPATIBLE);
+        }
+        return new ExpireCondition(nx, xx, gt, lt);
     }
 
     private Function<CommandSession, PreparedCommand> persist(CommandArgs args) {

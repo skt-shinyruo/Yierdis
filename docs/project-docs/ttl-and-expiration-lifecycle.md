@@ -34,6 +34,7 @@ command
 - 设置或更新 TTL 会复用原 `EntryHandle`，只准备并发布新的 `EntryRecord`；upper bound 只包含 allocation-scope bookkeeping，不存在额外 TTL 数据结构 allocation。
 - `PERSIST` 使用 reclamation admission，upper bound 为 `0`，成功时把 deadline 改为 `-1`，结果为 `TTL_CHANGED`。
 - `EXPIRE 0`、`PEXPIRE 0` 或已经到期的绝对时间不会写入一个过期 deadline，而是准备删除当前 entry。
+- `EXPIRE/PEXPIRE/EXPIREAT/PEXPIREAT` 的 `NX/XX/GT/LT` 条件标志在删除分支之前判定：条件不满足时返回 unchanged，键与旧 TTL 都保留；无 TTL 按无限 TTL 参与比较（GT 必然失败、LT 必然成功）。
 - key 缺失或在提交前已发生变化时，prepared mutation 返回 unchanged，不覆盖较新的 record。
 - 相对或绝对时间计算溢出时 deadline 饱和到 `Long.MAX_VALUE`。
 - 读命令保持 Redis 兼容结果：key 不存在或已过期为 `-2`，persistent 为 `-1`，其余返回剩余时间。

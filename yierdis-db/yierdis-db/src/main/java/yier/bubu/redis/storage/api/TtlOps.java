@@ -7,13 +7,29 @@ public interface TtlOps {
 
     long ttlMillis(BytesView keyView);
 
-    WriteResult<Boolean> expire(BytesView keyView, long seconds);
+    default WriteResult<Boolean> expire(BytesView keyView, long seconds) {
+        return expire(keyView, seconds, ExpireCondition.NONE);
+    }
 
-    WriteResult<Boolean> pexpire(BytesView keyView, long milliseconds);
+    WriteResult<Boolean> expire(BytesView keyView, long seconds, ExpireCondition condition);
 
-    WriteResult<Boolean> expireAtSeconds(BytesView keyView, long unixSeconds);
+    default WriteResult<Boolean> pexpire(BytesView keyView, long milliseconds) {
+        return pexpire(keyView, milliseconds, ExpireCondition.NONE);
+    }
 
-    WriteResult<Boolean> expireAtMillis(BytesView keyView, long unixMillis);
+    WriteResult<Boolean> pexpire(BytesView keyView, long milliseconds, ExpireCondition condition);
+
+    default WriteResult<Boolean> expireAtSeconds(BytesView keyView, long unixSeconds) {
+        return expireAtSeconds(keyView, unixSeconds, ExpireCondition.NONE);
+    }
+
+    WriteResult<Boolean> expireAtSeconds(BytesView keyView, long unixSeconds, ExpireCondition condition);
+
+    default WriteResult<Boolean> expireAtMillis(BytesView keyView, long unixMillis) {
+        return expireAtMillis(keyView, unixMillis, ExpireCondition.NONE);
+    }
+
+    WriteResult<Boolean> expireAtMillis(BytesView keyView, long unixMillis, ExpireCondition condition);
 
     WriteResult<Boolean> persist(BytesView keyView);
 }

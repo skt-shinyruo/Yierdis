@@ -6,6 +6,7 @@ import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor.
 
 import java.util.Objects;
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.storage.api.ExpireCondition;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.TtlOps;
 import yier.bubu.redis.storage.api.WriteResult;
@@ -29,7 +30,7 @@ final class YierdisTtlOps implements TtlOps {
     }
 
     @Override
-    public WriteResult<Boolean> expire(BytesView keyView, long seconds) {
+    public WriteResult<Boolean> expire(BytesView keyView, long seconds, ExpireCondition condition) {
         kernel.checkOwner();
         AllocatorKeyHandle handle = keyLifecycle.keyHandle(keyView);
         if (handle == null) {
@@ -37,18 +38,21 @@ final class YierdisTtlOps implements TtlOps {
         }
         EntryRecord record = liveRecord(handle);
         if (record == null) {
+            return WriteResult.unchanged(Boolean.FALSE);
+        }
+        long expireAtMillis = safeExpireAtMillis(System.currentTimeMillis(), seconds);
+        // Redis 在 checkAlreadyExpired 删除分支之前判定条件：条件不满足时键与旧 TTL 都保留。
+        if (!condition.allows(record.expireAtMillis(), expireAtMillis)) {
             return WriteResult.unchanged(Boolean.FALSE);
         }
         if (seconds <= 0) {
             return deleteImmediately(handle, record);
         }
-
-        long expireAtMillis = safeExpireAtMillis(System.currentTimeMillis(), seconds);
         return setExpirePrepared(handle, record, expireAtMillis);
     }
 
     @Override
-    public WriteResult<Boolean> pexpire(BytesView keyView, long milliseconds) {
+    public WriteResult<Boolean> pexpire(BytesView keyView, long milliseconds, ExpireCondition condition) {
         kernel.checkOwner();
         AllocatorKeyHandle handle = keyLifecycle.keyHandle(keyView);
         if (handle == null) {
@@ -59,27 +63,29 @@ final class YierdisTtlOps implements TtlOps {
             return WriteResult.unchanged(Boolean.FALSE);
         }
 
+        long expireAtMillis = safeAddMillis(System.currentTimeMillis(), milliseconds);
+        if (!condition.allows(record.expireAtMillis(), expireAtMillis)) {
+            return WriteResult.unchanged(Boolean.FALSE);
+        }
         if (milliseconds <= 0) {
             return deleteImmediately(handle, record);
         }
-
-        long expireAtMillis = safeAddMillis(System.currentTimeMillis(), milliseconds);
         return setExpirePrepared(handle, record, expireAtMillis);
     }
 
     @Override
-    public WriteResult<Boolean> expireAtSeconds(BytesView keyView, long unixSeconds) {
+    public WriteResult<Boolean> expireAtSeconds(BytesView keyView, long unixSeconds, ExpireCondition condition) {
         long expireAtMillis;
         try {
             expireAtMillis = Math.multiplyExact(unixSeconds, 1000L);
         } catch (ArithmeticException e) {
             expireAtMillis = Long.MAX_VALUE;
         }
-        return expireAtMillis(keyView, expireAtMillis);
+        return expireAtMillis(keyView, expireAtMillis, condition);
     }
 
     @Override
-    public WriteResult<Boolean> expireAtMillis(BytesView keyView, long unixMillis) {
+    public WriteResult<Boolean> expireAtMillis(BytesView keyView, long unixMillis, ExpireCondition condition) {
         kernel.checkOwner();
         AllocatorKeyHandle handle = keyLifecycle.keyHandle(keyView);
         if (handle == null) {
@@ -91,10 +97,12 @@ final class YierdisTtlOps implements TtlOps {
             return WriteResult.unchanged(Boolean.FALSE);
         }
 
+        if (!condition.allows(record.expireAtMillis(), unixMillis)) {
+            return WriteResult.unchanged(Boolean.FALSE);
+        }
         if (unixMillis <= now) {
             return deleteImmediately(handle, record);
         }
-
         return setExpirePrepared(handle, record, unixMillis);
     }
 
