@@ -22,8 +22,6 @@ import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.AllocatorKeyHandle;
-import yier.bubu.redis.storage.memory.internal.value.SemanticResultSupport;
-
 import java.util.List;
 import java.util.Objects;
 
@@ -203,12 +201,8 @@ final class YierdisSetOps implements SetOps {
             return ByteSequenceSources.empty();
         }
         ValueHandle handle = requireSetHandle(record);
-        return ByteSequenceSources.of(
-                setRoot.size(handle),
-                0L,
-                out -> setRoot.membersInto(handle, SemanticResultSupport.lengthSink(out)),
-                out -> setRoot.membersInto(handle, out)
-        );
+        // SMEMBERS 在 prepare 持有 source；成员表 in-place 变更不能再被 emit 看到。
+        return ByteSequenceSources.copiedFrom(out -> setRoot.membersInto(handle, out));
     }
 
     @Override

@@ -13,6 +13,17 @@ public final class ByteMapSources {
         return of(0, 0L, ignored -> { }, ignored -> { });
     }
 
+    /**
+     * 把 live field/value emit 拷成独立 source。条目数必须成对，后续 emit/length 只回放这份快照。
+     */
+    public static ByteMapSource copiedFrom(Consumer<ByteValueSink> emitter) {
+        CapturedByteItems items = CapturedByteItems.capture(emitter);
+        if ((items.size() & 1) != 0) {
+            throw new IllegalStateException("captured map source emitted an odd number of values");
+        }
+        return of(items.size() / 2, items.retainedMemoryBytes(), items::visitLengths, items::emitTo);
+    }
+
     public static ByteMapSource of(
             int pairCount,
             long retainedMemoryBytes,

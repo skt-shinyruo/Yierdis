@@ -24,7 +24,6 @@ import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
 import yier.bubu.redis.storage.memory.internal.key.AllocatorKeyHandle;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
-import yier.bubu.redis.storage.memory.internal.value.SemanticResultSupport;
 import yier.bubu.redis.storage.memory.internal.value.ZSetValue.ZAddResult;
 
 import java.util.List;
@@ -271,12 +270,8 @@ final class YierdisZSetOps implements ZSetOps {
             return ByteSequenceSources.empty();
         }
         ValueHandle handle = requireZSetHandle(record);
-        return ByteSequenceSources.of(
-                zsetRoot.zrangeCount(handle, start, stop, withScores),
-                0L,
-                out -> zsetRoot.zrangeWriteTo(
-                        handle, start, stop, withScores, SemanticResultSupport.lengthSink(out)
-                ),
+        // ZRANGE 在 prepare 时物化 member/score，避免推迟渲染时读到已被 ZREM 改过的 skiplist。
+        return ByteSequenceSources.copiedFrom(
                 out -> zsetRoot.zrangeWriteTo(handle, start, stop, withScores, out)
         );
     }
@@ -289,12 +284,7 @@ final class YierdisZSetOps implements ZSetOps {
             return ByteSequenceSources.empty();
         }
         ValueHandle handle = requireZSetHandle(record);
-        return ByteSequenceSources.of(
-                zsetRoot.zrevrangeCount(handle, start, stop, withScores),
-                0L,
-                out -> zsetRoot.zrevrangeWriteTo(
-                        handle, start, stop, withScores, SemanticResultSupport.lengthSink(out)
-                ),
+        return ByteSequenceSources.copiedFrom(
                 out -> zsetRoot.zrevrangeWriteTo(handle, start, stop, withScores, out)
         );
     }
@@ -316,34 +306,17 @@ final class YierdisZSetOps implements ZSetOps {
             return ByteSequenceSources.empty();
         }
         ValueHandle handle = requireZSetHandle(record);
-        return ByteSequenceSources.of(
-                zsetRoot.zrangeByScoreCount(
-                        handle, min, minExclusive, max, maxExclusive, withScores, offset, count
-                ),
-                0L,
-                out -> zsetRoot.zrangeByScoreWriteTo(
-                        handle,
-                        min,
-                        minExclusive,
-                        max,
-                        maxExclusive,
-                        withScores,
-                        offset,
-                        count,
-                        SemanticResultSupport.lengthSink(out)
-                ),
-                out -> zsetRoot.zrangeByScoreWriteTo(
-                        handle,
-                        min,
-                        minExclusive,
-                        max,
-                        maxExclusive,
-                        withScores,
-                        offset,
-                        count,
-                        out
-                )
-        );
+        return ByteSequenceSources.copiedFrom(out -> zsetRoot.zrangeByScoreWriteTo(
+                handle,
+                min,
+                minExclusive,
+                max,
+                maxExclusive,
+                withScores,
+                offset,
+                count,
+                out
+        ));
     }
 
     @Override
@@ -363,34 +336,17 @@ final class YierdisZSetOps implements ZSetOps {
             return ByteSequenceSources.empty();
         }
         ValueHandle handle = requireZSetHandle(record);
-        return ByteSequenceSources.of(
-                zsetRoot.zrevrangeByScoreCount(
-                        handle, min, minExclusive, max, maxExclusive, withScores, offset, count
-                ),
-                0L,
-                out -> zsetRoot.zrevrangeByScoreWriteTo(
-                        handle,
-                        min,
-                        minExclusive,
-                        max,
-                        maxExclusive,
-                        withScores,
-                        offset,
-                        count,
-                        SemanticResultSupport.lengthSink(out)
-                ),
-                out -> zsetRoot.zrevrangeByScoreWriteTo(
-                        handle,
-                        min,
-                        minExclusive,
-                        max,
-                        maxExclusive,
-                        withScores,
-                        offset,
-                        count,
-                        out
-                )
-        );
+        return ByteSequenceSources.copiedFrom(out -> zsetRoot.zrevrangeByScoreWriteTo(
+                handle,
+                min,
+                minExclusive,
+                max,
+                maxExclusive,
+                withScores,
+                offset,
+                count,
+                out
+        ));
     }
 
     @Override

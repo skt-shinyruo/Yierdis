@@ -13,6 +13,14 @@ public final class ByteSequenceSources {
         return of(0, 0L, ignored -> { }, ignored -> { });
     }
 
+    /**
+     * 把 live emitter 的一次遍历拷成独立 source。后续 emit/length 只回放这份快照。
+     */
+    public static ByteSequenceSource copiedFrom(Consumer<ByteValueSink> emitter) {
+        CapturedByteItems items = CapturedByteItems.capture(emitter);
+        return of(items.size(), items.retainedMemoryBytes(), items::visitLengths, items::emitTo);
+    }
+
     public static ByteSequenceSource of(
             int elementCount,
             long retainedMemoryBytes,
