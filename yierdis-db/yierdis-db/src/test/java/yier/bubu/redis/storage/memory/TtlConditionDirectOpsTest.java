@@ -29,7 +29,9 @@ public class TtlConditionDirectOpsTest {
             long futureSeconds = (System.currentTimeMillis() / 1000L) + 60L;
             Assert.assertTrue(db.ttl().expireAtSeconds(view("abs"), futureSeconds, ExpireCondition.NX).value());
             Assert.assertFalse(db.ttl().expireAtSeconds(view("abs"), futureSeconds + 60L, ExpireCondition.NX).value());
-            Assert.assertEquals(60L, db.ttl().ttlSeconds(view("abs")));
+            // expireAtSeconds 按秒下界存毫秒，ttlSeconds 四舍五入后视 wall clock 落在该秒前后半段为 60/59。
+            long absTtl = db.ttl().ttlSeconds(view("abs"));
+            Assert.assertTrue("ttl should be 59 or 60 but was " + absTtl, absTtl == 59L || absTtl == 60L);
         });
     }
 
