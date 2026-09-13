@@ -113,4 +113,21 @@ final class NettyExecutionConnection implements ExecutionConnection {
         }
         return true;
     }
+
+    void initiateClose() {
+        // server 主动关闭连接的统一入口：先置 closing（executor 据此跳过已排队命令、事务状态被回收），
+        // 再关闭 transport；顺序不能交换，否则 close 完成到 closing 置位之间的窗口内已入队命令仍可能执行。
+        // reply sequencer/gate 等回复侧关闭不走这里，由 closeFuture 上的 markClosing 监听兜底。
+        markClosing();
+        channel.close();
+    }
+
+    static void initiateClose(Channel channel) {
+        NettyExecutionConnection connection = get(channel);
+        if (connection != null) {
+            connection.initiateClose();
+        } else {
+            channel.close();
+        }
+    }
 }

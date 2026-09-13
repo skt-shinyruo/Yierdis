@@ -43,7 +43,8 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
         }
         if (msg instanceof RespDecodedMessage decoded) {
             closeDecoded(decoded);
-            ctx.close();
+            // 裸解码消息本不应到达 ingress；关闭同样经 initiateClose 收敛，避免绕过 closing 语义。
+            NettyExecutionConnection.initiateClose(ctx.channel());
             return;
         }
         super.channelRead(ctx, msg);
@@ -119,7 +120,7 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
             if (connection != null && connection.markClosing()) {
                 safeDisableAutoRead(ctx);
             }
-            ctx.close();
+            NettyExecutionConnection.initiateClose(ctx.channel());
             return;
         }
 
@@ -138,7 +139,7 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
 
         ReplySlot slot = connection.replyGate().tryRegisterTerminalSlot().orElse(null);
         if (slot == null) {
-            ctx.close();
+            connection.initiateClose();
             return;
         }
         try {
@@ -147,7 +148,7 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
             slot.markReady(true);
         } catch (Throwable ignored) {
             slot.cancel();
-            ctx.close();
+            connection.initiateClose();
         }
     }
 

@@ -53,6 +53,35 @@ public class TransactionQueueCleanupTest {
         }
     }
 
+    @Test
+    public void initiateCloseMarksClosingDiscardsTransactionAndClosesTransport() {
+        EmbeddedChannel ch = new EmbeddedChannel();
+        AtomicInteger finalReleases = new AtomicInteger();
+        AtomicInteger retainedCloses = new AtomicInteger();
+        try {
+            NettyExecutionConnection connection = NettyExecutionConnection.getOrCreate(ch, 1, 16);
+            TransactionState tx = connection.session().transaction();
+            tx.begin();
+
+            try (LeaseBackedRequest queued = leasedRequest(finalReleases, retainedCloses, "SET", "k", "v")) {
+                Assert.assertNull(tx.tryEnqueue(queued));
+                Assert.assertEquals(1, tx.size());
+
+                connection.initiateClose();
+
+                Assert.assertTrue("close helper must mark closing before closing transport",
+                        connection.context().isClosing());
+                Assert.assertFalse("close helper must close the transport", ch.isOpen());
+                Assert.assertFalse(tx.active());
+                Assert.assertEquals(0, tx.size());
+                Assert.assertEquals(1, retainedCloses.get());
+            }
+            Assert.assertEquals(1, finalReleases.get());
+        } finally {
+            ch.finishAndReleaseAll();
+        }
+    }
+
     private static ByteArrayExecutionRequest request(String... args) {
         return ByteArrayExecutionRequest.fromUtf8(args[0], Arrays.asList(Arrays.copyOfRange(args, 1, args.length)));
     }

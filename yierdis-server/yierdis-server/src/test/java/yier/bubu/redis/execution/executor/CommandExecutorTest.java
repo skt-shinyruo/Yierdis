@@ -146,6 +146,44 @@ public class CommandExecutorTest {
     }
 
     @Test
+    public void executorSkipsQueuedWorkWhenTransportIsInactiveEvenWithoutClosingFlag() {
+        RecordingIoAdapter io = new RecordingIoAdapter();
+        ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+
+        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+                () -> {},
+                ExecutorCoreTestSupport.simpleCommandEngine(),
+                ownerExecutor,
+                ExecutorCoreTestSupport.simpleReplySizer(),
+                ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                io,
+                new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+        );
+        ExecutorCoreTestSupport.startExecutor(executor, ownerExecutor);
+
+        TestConnection connection = ExecutorCoreTestSupport.newConnection("c-inactive");
+        TrackingExecutionRequest ping = TrackingExecutionRequest.ofUtf8("PING");
+        ExecutorCoreTestSupport.publish(executor, connection, ping, ExecutorCoreTestSupport.ioReply(io, connection));
+
+        // transport 已断开但 closing 标记缺失（例如漏掉 markClosing 的关闭路径）时，
+        // 已排队命令也不允许继续产生 side effect。
+        io.setActive(connection, false);
+        Assert.assertFalse(connection.context().isClosing());
+        ownerExecutor.runAll();
+
+        Assert.assertEquals(1, ping.closeCalls());
+        Assert.assertEquals(0L, connection.context().statsSnapshot().commandsExecuted());
+        Assert.assertEquals(1L, connection.context().statsSnapshot().commandsSkippedClosing());
+        Assert.assertEquals("", io.replyBytes(connection));
+
+        CompletableFuture<Void> shutdown = executor.shutdownGracefully();
+        ownerExecutor.runAll();
+        Assert.assertTrue(shutdown.isDone());
+        executor.close();
+        ownerExecutor.runAll();
+    }
+
+    @Test
     public void schedulingRejectionAfterOfferRollsBackOwnershipAndAccounting() {
         for (SchedulingPolicy policy : SchedulingPolicy.values()) {
             AtomicBoolean rejectOwnerTask = new AtomicBoolean();

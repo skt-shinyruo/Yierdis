@@ -456,7 +456,7 @@ final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
 
     @Override
     public boolean isActive(TestConnection connection) {
-        return true;
+        return state(connection).active;
     }
 
     @Override
@@ -526,6 +526,10 @@ final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
         state(connection).writable = writable;
     }
 
+    void setActive(TestConnection connection, boolean active) {
+        state(connection).active = active;
+    }
+
     void fireClosed(TestConnection connection) {
         state(connection).closeCallback.run();
     }
@@ -537,6 +541,7 @@ final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
     private static final class ConnectionState {
         private Runnable closeCallback = () -> {};
         private IoExecutionReply readyReply;
+        private boolean active = true;
         private boolean writable = true;
         private boolean inputDisabled;
         private boolean inputEnabledAgain;

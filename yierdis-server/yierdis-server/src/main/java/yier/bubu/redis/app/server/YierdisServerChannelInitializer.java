@@ -213,12 +213,12 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
      * Disables autoRead when the channel becomes unwritable (outbound buffer high watermark), and asks the
      * executor to re-evaluate autoRead when it becomes writable again.
      */
-    private static final class WriteBufferBackpressureHandler extends io.netty.channel.ChannelInboundHandlerAdapter {
+    static final class WriteBufferBackpressureHandler extends io.netty.channel.ChannelInboundHandlerAdapter {
         private final CommandExecutor<NettyExecutionConnection> executor;
         private final long outputBufferOverLimitMillis;
         private ScheduledFuture<?> slowClientCloseFuture;
 
-        private WriteBufferBackpressureHandler(
+        WriteBufferBackpressureHandler(
                 CommandExecutor<NettyExecutionConnection> executor,
                 long outputBufferOverLimitMillis
         ) {
@@ -254,7 +254,8 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
             slowClientCloseFuture = ctx.executor().schedule(() -> {
                 slowClientCloseFuture = null;
                 if (!ctx.channel().isWritable()) {
-                    ctx.close();
+                    // 宽限期结束仍不可写：与 idle close 一样经 initiateClose 收敛，避免绕过 closing 语义。
+                    NettyExecutionConnection.initiateClose(ctx.channel());
                 }
             }, outputBufferOverLimitMillis, TimeUnit.MILLISECONDS);
         }
@@ -267,11 +268,12 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
         }
     }
 
-    private static final class CloseOnReadIdleHandler extends io.netty.channel.ChannelInboundHandlerAdapter {
+    static final class CloseOnReadIdleHandler extends io.netty.channel.ChannelInboundHandlerAdapter {
         @Override
         public void userEventTriggered(io.netty.channel.ChannelHandlerContext ctx, Object evt) throws Exception {
             if (evt instanceof IdleStateEvent idle && idle.state() == io.netty.handler.timeout.IdleState.READER_IDLE) {
-                ctx.close();
+                // 统一经 initiateClose 收敛：先 closing 语义（跳过排队命令、回收事务）再关 transport。
+                NettyExecutionConnection.initiateClose(ctx.channel());
                 return;
             }
             super.userEventTriggered(ctx, evt);

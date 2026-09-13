@@ -5,6 +5,7 @@ import java.util.function.BiFunction;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.DecoderException;
+import io.netty.handler.timeout.IdleStateEvent;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutor;
 import org.junit.Assert;
@@ -287,6 +288,64 @@ public class ClosingSkipSideEffectsIntegrationTest {
             awaitCounter(context, c -> c.statsSnapshot().commandsSkippedClosing(), 1L, 1000);
             Assert.assertEquals(0L, context.statsSnapshot().commandsExecuted());
             Assert.assertNull("no command reply should be produced after internal error closing is requested", readOutbound(ch));
+        } finally {
+            unblock.countDown();
+            executor.shutdownGracefully().join();
+            executor.executeOwnerTask(instance::close).join();
+            group.shutdownGracefully().syncUninterruptibly();
+            replies.close();
+        }
+    }
+
+    @Test
+    public void idleTimeoutCloseSkipsAlreadyQueuedCommands() throws Exception {
+        DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
+        EventExecutor eventExecutor = group.next();
+
+        YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
+        CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
+        BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
+        CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
+                instance.runtimeAccess()::bindToCurrentThread,
+                dispatcher::prepare,
+                new NettySerialOwnerExecutor(eventExecutor),
+                new RespReplySizer(),
+                replyWriterFactory,
+                new NettyExecutionIoAdapter(),
+                new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+        );
+        executor.start();
+
+        CountDownLatch blockerStarted = new CountDownLatch(1);
+        CountDownLatch unblock = new CountDownLatch(1);
+        eventExecutor.submit(() -> {
+            blockerStarted.countDown();
+            unblock.await();
+            return null;
+        });
+        Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
+
+        OrderedReplyTestFixture replies = OrderedReplyTestFixture.open(executor, replyWriterFactory);
+        try {
+            EmbeddedChannel ch = replies.channel();
+            NettyExecutionConnection connection = replies.connection();
+            ch.pipeline().addFirst(new YierdisServerChannelInitializer.CloseOnReadIdleHandler());
+
+            replies.write(request("PING"));
+            Assert.assertNull("expected no reply while executor is blocked", readOutbound(ch));
+
+            ExecutionConnectionContext context = connection.context();
+            Assert.assertEquals(1L, context.statsSnapshot().commandsEnqueued());
+
+            // idle 关闭必须先收敛 closing 语义再断开 transport。
+            ch.pipeline().fireUserEventTriggered(IdleStateEvent.READER_IDLE_STATE_EVENT);
+            Assert.assertTrue("idle close must mark closing", context.statsSnapshot().closing());
+            Assert.assertFalse("idle close must close the channel", ch.isOpen());
+
+            unblock.countDown();
+            awaitCounter(context, c -> c.statsSnapshot().commandsSkippedClosing(), 1L, 1000);
+            Assert.assertEquals(0L, context.statsSnapshot().commandsExecuted());
+            Assert.assertNull("no command reply should be produced after idle close", readOutbound(ch));
         } finally {
             unblock.countDown();
             executor.shutdownGracefully().join();

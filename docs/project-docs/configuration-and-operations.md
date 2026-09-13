@@ -167,8 +167,8 @@ maxmemory 参数：
 
 1. 当 output buffer limit 大于 `0` 时设置 Yierdis 自定义的 Netty `WriteBufferWaterMark`，low 为 high 的一半；为 `0` 时不覆盖 channel 原有 watermark。
 2. 始终安装 `WriteBufferBackpressureHandler`。channel 不可写时调用 `executor.onTransportUnwritable(...)`，executor 关闭该连接 `autoRead`；恢复可写时通过 owner executor 调用 `recoverInputIfPossible(...)`。
-3. 如果 channel 持续不可写超过 grace，则关闭连接；output buffer limit 为 `0` 时 handler 的 grace 为 `0`，不会调度这类慢客户端宽限关闭。
-4. 当 idle timeout 大于 `0` 时安装 `IdleStateHandler` 和 `CloseOnReadIdleHandler`，读空闲超时后关闭连接。
+3. 如果 channel 持续不可写超过 grace，则经 `NettyExecutionConnection.initiateClose()` 统一关闭：先标记 closing、回收事务状态，再关闭 transport；output buffer limit 为 `0` 时 handler 的 grace 为 `0`，不会调度这类慢客户端宽限关闭。
+4. 当 idle timeout 大于 `0` 时安装 `IdleStateHandler` 和 `CloseOnReadIdleHandler`，读空闲超时后同样经 `initiateClose()` 统一关闭连接。
 
 这层保护处理的是慢读客户端和闲置连接，和 executor queue/backpressure 互补：前者看 Netty outbound buffer 和读空闲，后者看入站请求积压。即使关闭 Yierdis 自定义 output-buffer limit，Netty channel 仍然有自身的 writability 状态；如果 channel 按当前 watermark 变为不可写，transport backpressure 仍会暂停 `autoRead`。
 

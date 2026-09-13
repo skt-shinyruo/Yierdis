@@ -63,7 +63,7 @@ CommandExecutor
 
 `EngineSession` 只是连接 session 状态的 owner，不是命令执行引擎，也不拥有 dispatcher、DB 或 reply writer。`NettyExecutionConnection` 才是 `Channel`、session 和 executor connection context 的连接 root。
 
-`NettyExecutionConnection.markClosing()` 会先标记 executor connection context，再把事务清理调度到 command owner；owner 已退出时才同步兜底清理。这样 `QUIT`、协议错误或 transport close 都不会把 retained transaction requests 留在队列里。
+`NettyExecutionConnection.markClosing()` 会先标记 executor connection context，再把事务清理调度到 command owner；owner 已退出时才同步兜底清理。这样 `QUIT`、协议错误或 transport close 都不会把 retained transaction requests 留在队列里。server 主动发起的关闭（idle timeout 的 `CloseOnReadIdleHandler`、慢客户端宽限期结束的 `WriteBufferBackpressureHandler`、ingress 异常路径）统一收敛到 `initiateClose()`：先 `markClosing()` 再 `channel.close()`；reply sequencer/gate 等回复写路径的关闭以及其余关闭来源由 `closeFuture` 上的 `markClosing()` 监听兜底。executor 执行前除 `isClosing()` 外还会回看 transport 是否 active，某条关闭路径漏掉 closing 标记时，已入队命令也不会在断开的连接上继续执行。
 
 ## Netty pipeline
 

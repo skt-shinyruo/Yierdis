@@ -62,7 +62,9 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
     ExecutionAttempt execute(CommandExecutorTask<C> task) {
         C connection = task.connection;
         ExecutionConnectionContext context = connection.context();
-        if (context.isClosing()) {
+        // 除 closing 标记外还回看 transport 活性：某条关闭路径漏掉 markClosing 时，
+        // 已入队命令也不允许在断开的连接上继续产生 side effect。
+        if (context.isClosing() || !ioAdapter.isActive(connection)) {
             context.recordSkippedClosing();
             commandsSkippedClosing.increment();
             task.cancelCapacityRegistration();

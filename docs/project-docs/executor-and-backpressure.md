@@ -125,7 +125,7 @@ executor 路径有五类输入暂停来源。
 
 第四类是 reply capacity。当前 ordering scope 的头部无法取得回复容量时，executor 保留同一个 prepared task，把连接上下文标记为 `inputPausedByReply`，并等待 reply slot 的一次性容量回调；恢复这个头部前，不能仅因 backlog 水位下降而重新收包。
 
-第五类是 Netty output writability。server 配置 `client-output-buffer-limit-bytes` 后，Netty channel 有 `WriteBufferWaterMark`。channel 变为不可写时，`WriteBufferBackpressureHandler` 调用 `CommandExecutor.onTransportUnwritable(...)`，executor 关闭该连接 `autoRead`；持续不可写超过 `client-output-buffer-over-limit-millis` 时，server 会关闭慢客户端。channel 恢复可写时，`onTransportWritable(...)` 调回 owner executor，由 execution support 统一判断是否恢复输入。
+第五类是 Netty output writability。server 配置 `client-output-buffer-limit-bytes` 后，Netty channel 有 `WriteBufferWaterMark`。channel 变为不可写时，`WriteBufferBackpressureHandler` 调用 `CommandExecutor.onTransportUnwritable(...)`，executor 关闭该连接 `autoRead`；持续不可写超过 `client-output-buffer-over-limit-millis` 时，server 经 `NettyExecutionConnection.initiateClose()` 关闭慢客户端（先收敛 closing 语义，再关闭 transport）。channel 恢复可写时，`onTransportWritable(...)` 调回 owner executor，由 execution support 统一判断是否恢复输入。
 
 executor 的队列、字节、连接水位、reply capacity 和 transport 信号都通过 `ExecutorBackpressureController` 协调实际输入开关；controller 直接读取连接上下文中的独立暂停状态，并调用 `ExecutionIoAdapter`，避免恢复一个原因时覆盖另一个仍有效的原因。ingress pending deque 还会通过 `InboundReadCreditHandler` 记录 executor-admission 暂停，直到 pending submission 真正发布完毕。
 
