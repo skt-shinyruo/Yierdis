@@ -33,7 +33,12 @@ public interface ZSetOps {
 
     CollectionScanWindow zscan(byte[] keyBytes, ScanCursorV2 cursor, byte[] globPattern, int count);
 
-    WriteResult<Long> zadd(byte[] keyBytes, List<byte[]> scoreMemberPairs);
+    default WriteResult<Long> zadd(byte[] keyBytes, List<byte[]> scoreMemberPairs) {
+        WriteResult<ZAddOutcome> result = zadd(keyBytes, scoreMemberPairs, ZAddOptions.plain());
+        return WriteResult.of(result.value().added(), result.mutationOutcome());
+    }
+
+    WriteResult<ZAddOutcome> zadd(byte[] keyBytes, List<byte[]> scoreMemberPairs, ZAddOptions options);
 
     WriteResult<Long> zremrangeByScore(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive);
 

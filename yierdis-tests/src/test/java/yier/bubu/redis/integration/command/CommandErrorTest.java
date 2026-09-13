@@ -105,8 +105,11 @@ public class CommandErrorTest {
             ReplyError hsetMissingValue = (ReplyError) client.execute(Arrays.asList(b("HSET"), b("k"), b("f1"), b("v1"), b("f2")));
             Assert.assertEquals("ERR wrong number of arguments for 'hset' command", hsetMissingValue.message());
 
-            ReplyError zaddWrongArity = (ReplyError) client.execute(Arrays.asList(b("ZADD"), b("k"), b("1"), b("a"), b("2")));
+            ReplyError zaddWrongArity = (ReplyError) client.execute(Arrays.asList(b("ZADD"), b("k"), b("1")));
             Assert.assertEquals("ERR wrong number of arguments for 'zadd' command", zaddWrongArity.message());
+
+            ReplyError zaddOddPairs = (ReplyError) client.execute(Arrays.asList(b("ZADD"), b("k"), b("1"), b("a"), b("2")));
+            Assert.assertEquals("ERR syntax error", zaddOddPairs.message());
 
             ReplyError zrangeSyntax = (ReplyError) client.execute(Arrays.asList(b("ZRANGE"), b("k"), b("0"), b("-1"), b("WITHSCORESX")));
             Assert.assertEquals("ERR syntax error", zrangeSyntax.message());

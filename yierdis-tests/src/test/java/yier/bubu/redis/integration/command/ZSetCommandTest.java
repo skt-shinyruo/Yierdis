@@ -10,6 +10,7 @@ import yier.bubu.redis.testutil.ReplyArray;
 import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyError;
 import yier.bubu.redis.testutil.ReplyInteger;
+import yier.bubu.redis.testutil.ReplyNull;
 import yier.bubu.redis.testutil.ReplyObject;
 import yier.bubu.redis.testutil.ReplySimpleString;
 
@@ -72,6 +73,277 @@ public class ZSetCommandTest {
                 );
                 ReplyArray survivors = (ReplyArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("-1")));
                 Assert.assertEquals(2, survivors.values().size());
+            }
+        });
+    }
+
+    @Test
+    public void zaddNxOnlyAddsNewMembers() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("znx");
+
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("NX"), b("1"), b("a")))).value());
+                Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("NX"), b("5"), b("a")))).value());
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("nx"), b("2"), b("b")))).value());
+
+                ReplyArray range = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGE"), key, b("0"), b("-1"), b("WITHSCORES")));
+                Assert.assertEquals(List.of("a", "1", "b", "2"), bulkStrings(range));
+            }
+        });
+    }
+
+    @Test
+    public void zaddXxOnlyUpdatesExistingMembers() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("zxx");
+
+                Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("XX"), b("1"), b("a")))).value());
+                Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key))).value());
+
+                Assert.assertEquals(2L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("1"), b("a"), b("2"), b("b")))).value());
+                Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("XX"), b("5"), b("a"), b("9"), b("missing")))).value());
+
+                ReplyArray range = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGE"), key, b("0"), b("-1"), b("WITHSCORES")));
+                Assert.assertEquals(List.of("b", "2", "a", "5"), bulkStrings(range));
+            }
+        });
+    }
+
+    @Test
+    public void zaddXxOnWrongTypeStillReturnsWrongType() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("zxx:string");
+                client.execute(Arrays.asList(b("SET"), key, b("v")));
+
+                ReplyObject error = client.execute(Arrays.asList(b("ZADD"), key, b("XX"), b("1"), b("a")));
+                Assert.assertTrue(error instanceof ReplyError);
+                Assert.assertTrue(((ReplyError) error).message().startsWith("WRONGTYPE"));
+            }
+        });
+    }
+
+    @Test
+    public void zaddGtLtGateUpdatesButNeverBlockAdds() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("zgtlt");
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("2"), b("a")))).value());
+
+                Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("GT"), b("3"), b("a")))).value());
+                Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("GT"), b("3"), b("a")))).value());
+                Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("LT"), b("1"), b("a")))).value());
+                Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("LT"), b("1"), b("a")))).value());
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("GT"), b("0"), b("new-gt")))).value());
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("LT"), b("9"), b("new-lt")))).value());
+
+                ReplyArray range = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGE"), key, b("0"), b("-1"), b("WITHSCORES")));
+                Assert.assertEquals(List.of("new-gt", "0", "a", "1", "new-lt", "9"), bulkStrings(range));
+
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("GT"), b("CH"), b("5"), b("a"), b("1"), b("new-lt")))).value());
+            }
+        });
+    }
+
+    @Test
+    public void zaddChCountsAddedAndUpdatedMembers() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("zch");
+                Assert.assertEquals(2L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("1"), b("a"), b("2"), b("b")))).value());
+
+                Assert.assertEquals(2L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("CH"), b("2"), b("a"), b("3"), b("c")))).value());
+                Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("CH"), b("2"), b("a")))).value());
+                Assert.assertEquals(2L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("CH"), b("5"), b("b"), b("3"), b("b")))).value());
+
+                ReplyArray range = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGE"), key, b("0"), b("-1"), b("WITHSCORES")));
+                Assert.assertEquals(List.of("a", "2", "b", "3", "c", "3"), bulkStrings(range));
+            }
+        });
+    }
+
+    @Test
+    public void zaddIncrReturnsNewScoreAsBulkString() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("zincr");
+
+                Assert.assertEquals("2", ((ReplyBulkString) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("INCR"), b("2"), b("a")))).asString());
+                Assert.assertEquals("4.5", ((ReplyBulkString) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("INCR"), b("2.5"), b("a")))).asString());
+                Assert.assertEquals("4", ((ReplyBulkString) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("INCR"), b("-0.5"), b("a")))).asString());
+                Assert.assertEquals("inf", ((ReplyBulkString) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("INCR"), b("inf"), b("a")))).asString());
+
+                ReplyArray range = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGE"), key, b("0"), b("-1"), b("WITHSCORES")));
+                Assert.assertEquals(List.of("a", "inf"), bulkStrings(range));
+            }
+        });
+    }
+
+    @Test
+    public void zaddIncrHonorsNxXxGtLt() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("zincr:flags");
+                Assert.assertEquals("5", ((ReplyBulkString) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("INCR"), b("5"), b("a")))).asString());
+
+                Assert.assertTrue(client.execute(Arrays.asList(
+                        b("ZADD"), key, b("INCR"), b("NX"), b("1"), b("a"))) instanceof ReplyNull);
+                Assert.assertEquals("1", ((ReplyBulkString) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("INCR"), b("NX"), b("1"), b("fresh")))).asString());
+                Assert.assertTrue(client.execute(Arrays.asList(
+                        b("ZADD"), key, b("INCR"), b("XX"), b("1"), b("missing"))) instanceof ReplyNull);
+                Assert.assertTrue(client.execute(Arrays.asList(
+                        b("ZADD"), key, b("INCR"), b("GT"), b("-1"), b("a"))) instanceof ReplyNull);
+                Assert.assertEquals("7", ((ReplyBulkString) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("INCR"), b("GT"), b("2"), b("a")))).asString());
+                Assert.assertTrue(client.execute(Arrays.asList(
+                        b("ZADD"), key, b("INCR"), b("LT"), b("1"), b("a"))) instanceof ReplyNull);
+                Assert.assertEquals("5", ((ReplyBulkString) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("INCR"), b("LT"), b("-2"), b("a")))).asString());
+                Assert.assertEquals("5", ((ReplyBulkString) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("INCR"), b("0"), b("a")))).asString());
+
+                ReplyArray range = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGE"), key, b("0"), b("-1"), b("WITHSCORES")));
+                Assert.assertEquals(List.of("fresh", "1", "a", "5"), bulkStrings(range));
+            }
+        });
+    }
+
+    @Test
+    public void zaddIncrRejectsNaNResult() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("zincr:nan");
+                Assert.assertEquals("inf", ((ReplyBulkString) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("INCR"), b("inf"), b("a")))).asString());
+
+                ReplyObject error = client.execute(Arrays.asList(b("ZADD"), key, b("INCR"), b("-inf"), b("a")));
+                Assert.assertTrue(error instanceof ReplyError);
+                Assert.assertEquals("ERR resulting score is not a number (NaN)", ((ReplyError) error).message());
+
+                Assert.assertEquals("PONG", ((ReplySimpleString) client.execute(List.of(b("PING")))).value());
+                ReplyArray range = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGE"), key, b("0"), b("-1"), b("WITHSCORES")));
+                Assert.assertEquals(List.of("a", "inf"), bulkStrings(range));
+            }
+        });
+    }
+
+    @Test
+    public void zaddRejectsIncompatibleFlagCombinationsWithRedisErrors() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("zcombo");
+
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("NX"), b("XX"), b("1"), b("a"))),
+                        "ERR XX and NX options at the same time are not compatible");
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("XX"), b("NX"), b("1"), b("a"))),
+                        "ERR XX and NX options at the same time are not compatible");
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("NX"), b("XX"), b("bad"), b("a"))),
+                        "ERR XX and NX options at the same time are not compatible");
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("GT"), b("NX"), b("1"), b("a"))),
+                        "ERR GT, LT, and/or NX options at the same time are not compatible");
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("LT"), b("NX"), b("1"), b("a"))),
+                        "ERR GT, LT, and/or NX options at the same time are not compatible");
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("GT"), b("LT"), b("1"), b("a"))),
+                        "ERR GT, LT, and/or NX options at the same time are not compatible");
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("INCR"), b("1"), b("a"), b("2"), b("b"))),
+                        "ERR INCR option supports a single increment-element pair");
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("NX"), b("XX"))),
+                        "ERR syntax error");
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("1"), b("a"), b("NX"))),
+                        "ERR syntax error");
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("NX"))),
+                        "ERR wrong number of arguments for 'zadd' command");
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("CH"), b("1"))),
+                        "ERR syntax error");
+                Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key))).value());
+            }
+        });
+    }
+
+    @Test
+    public void zaddFlagsWorkAfterUpgradeToSkiplist() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("zflags:upgrade");
+                int n = 129; // > YierdisEncodingThresholds.ZSET_MAX_LISTPACK_ENTRIES
+
+                ArrayList<byte[]> args = new ArrayList<>(2 + n * 2);
+                args.add(b("ZADD"));
+                args.add(key);
+                for (int i = 0; i < n; i++) {
+                    args.add(b(Integer.toString(i)));
+                    args.add(b(String.format("m%03d", i)));
+                }
+                Assert.assertEquals(n, ((ReplyInteger) client.execute(args)).value());
+
+                Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("XX"), b("GT"), b("1000"), b("m000")))).value());
+                Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("XX"), b("GT"), b("-1"), b("m001")))).value());
+                Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("NX"), b("5"), b("m002")))).value());
+                Assert.assertEquals("1001.5", ((ReplyBulkString) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("INCR"), b("1.5"), b("m000")))).asString());
+
+                ReplyArray top = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZREVRANGE"), key, b("0"), b("1"), b("WITHSCORES")));
+                Assert.assertEquals(List.of("m000", "1001.5", "m128", "128"), bulkStrings(top));
+                ReplyArray bottom = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGE"), key, b("0"), b("2"), b("WITHSCORES")));
+                Assert.assertEquals(List.of("m001", "1", "m002", "2", "m003", "3"), bulkStrings(bottom));
             }
         });
     }
@@ -244,7 +516,7 @@ public class ZSetCommandTest {
                 FastTestClient client = new FastTestClient(dispatcher);
 
         byte[] key = b("big-zset");
-        int n = 129; // > ZSetValue.LISTPACK_MAX_ENTRIES
+        int n = 129; // > YierdisEncodingThresholds.ZSET_MAX_LISTPACK_ENTRIES
 
         ArrayList<byte[]> args = new ArrayList<>(2 + n * 2);
         args.add(b("ZADD"));
@@ -513,6 +785,19 @@ public class ZSetCommandTest {
 
             }
         });
+    }
+
+    private static List<String> bulkStrings(ReplyArray array) {
+        List<String> rendered = new ArrayList<>(array.values().size());
+        for (ReplyObject element : array.values()) {
+            rendered.add(((ReplyBulkString) element).asString());
+        }
+        return rendered;
+    }
+
+    private static void assertError(ReplyObject reply, String message) {
+        Assert.assertTrue(reply instanceof ReplyError);
+        Assert.assertEquals(message, ((ReplyError) reply).message());
     }
 
     private static CommandDispatcher oversizedRangeDispatcher() {

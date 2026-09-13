@@ -8,6 +8,7 @@ import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisCommandException;
+import yier.bubu.redis.storage.api.ZAddOptions;
 import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
 import yier.bubu.redis.storage.memory.MaterializedCollectionScanWindow;
@@ -27,7 +28,8 @@ import java.util.function.IntConsumer;
 import java.nio.charset.StandardCharsets;
 
 public final class ZSetValue implements YierdisValue {
-    public record ZAddResult(int added, boolean changedAny) {
+    // newScore 仅服务 INCR：未被 NX/XX/GT/LT 阻挡时携带按 Redis 双精度格式渲染的结果分数。
+    public record ZAddResult(int added, int updated, boolean changedAny, byte[] newScore) {
     }
 
     private static final int REF_BYTES = 8;
@@ -38,6 +40,7 @@ public final class ZSetValue implements YierdisValue {
     private static final long NATIVE_BYTE_MAP_HEAP_BYTES = 256L;
     private static final long ARRAY_LIST_HEAP_BYTES = 32L;
     private static final long STAGED_PUT_HEAP_BYTES = 64L;
+    private static final String NAN_SCORE_ERROR = "ERR resulting score is not a number (NaN)";
 
     private enum ScoreRangeDirection {
         FORWARD,
@@ -156,6 +159,7 @@ public final class ZSetValue implements YierdisValue {
     public ZAddResult previewAdd(List<byte[]> scoreMemberPairs) {
         validateScoreMemberPairs(scoreMemberPairs);
         int added = 0;
+        int updated = 0;
         boolean changedAny = false;
         for (int pairIndex = 0; pairIndex < scoreMemberPairs.size(); pairIndex += 2) {
             double score = parseScore(scoreMemberPairs.get(pairIndex));
@@ -187,10 +191,11 @@ public final class ZSetValue implements YierdisValue {
                 added++;
                 changedAny = true;
             } else if (!scoresEqual(previousScore, score)) {
+                updated++;
                 changedAny = true;
             }
         }
-        return new ZAddResult(added, changedAny);
+        return new ZAddResult(added, updated, changedAny, null);
     }
 
     public boolean hasMemberTableMaintenanceDebt() {
@@ -232,9 +237,14 @@ public final class ZSetValue implements YierdisValue {
     }
 
     public ZAddResult add(List<byte[]> scoreMemberPairs) {
+        return add(scoreMemberPairs, ZAddOptions.plain());
+    }
+
+    public ZAddResult add(List<byte[]> scoreMemberPairs, ZAddOptions options) {
         validateScoreMemberPairs(scoreMemberPairs);
+        Objects.requireNonNull(options, "options");
         if (size() != 0) {
-            try (PreparedExistingAdd prepared = prepareExistingAdd(planExistingAdd(scoreMemberPairs))) {
+            try (PreparedExistingAdd prepared = prepareExistingAdd(planExistingAdd(scoreMemberPairs, options))) {
                 ZAddResult result = prepared.result();
                 if (!prepared.changedAny()) {
                     return result;
@@ -244,59 +254,85 @@ public final class ZSetValue implements YierdisValue {
                 return result;
             }
         }
-        return addDirectly(scoreMemberPairs);
+        return addDirectly(scoreMemberPairs, options);
     }
 
     public ZAddPlan planExistingAdd(List<byte[]> scoreMemberPairs) {
+        return planExistingAdd(scoreMemberPairs, ZAddOptions.plain());
+    }
+
+    // 逐对按 Redis zsetAdd 的顺序语义模拟：同一 member 在本命令内先被加入/更新后，后续出现以新分数
+    // 继续做 NX/XX/GT/LT 判定；INCR 的新分数在运行中的当前分数上累加，NaN 在 NX 放行后、GT/LT 前报错。
+    public ZAddPlan planExistingAdd(List<byte[]> scoreMemberPairs, ZAddOptions options) {
         validateScoreMemberPairs(scoreMemberPairs);
-        ArrayList<ScoreMemberInput> canonical = canonicalScoreMemberInputs(scoreMemberPairs);
-        ZAddPlanEntry[] entries = new ZAddPlanEntry[canonical.size()];
+        Objects.requireNonNull(options, "options");
+        ArrayList<ZAddPlanEntry> entries = new ArrayList<>(scoreMemberPairs.size() / 2);
+        ScoreMemberIndex index = new ScoreMemberIndex(entries, scoreMemberPairs.size() / 2, hashSeed);
         int added = 0;
-        int changed = 0;
-        for (int index = 0; index < canonical.size(); index++) {
-            ScoreMemberInput input = canonical.get(index);
-            ZSkipList.Node previousNode = null;
-            boolean present;
-            double previousScore;
-            if (listpack != null) {
-                int memberIndex = listpack.indexOfMember(input.member);
-                present = memberIndex >= 0;
-                previousScore = present ? listpack.scoreAt(memberIndex) : 0.0d;
-            } else {
-                previousNode = byMember.get(input.member);
-                present = previousNode != null;
-                previousScore = present ? previousNode.score : 0.0d;
+        int updated = 0;
+        double incrScore = 0.0d;
+        boolean incrProcessed = false;
+        for (int pairIndex = 0; pairIndex < scoreMemberPairs.size(); pairIndex += 2) {
+            double score = parseScore(scoreMemberPairs.get(pairIndex));
+            byte[] member = scoreMemberPairs.get(pairIndex + 1);
+            int entryIndex = index.find(member);
+            if (entryIndex < 0) {
+                entries.add(lookupCurrentEntry(member));
+                entryIndex = entries.size() - 1;
+                index.add(entryIndex);
             }
-            boolean scoreChanged = !present || !scoresEqual(previousScore, input.score);
-            entries[index] = new ZAddPlanEntry(
-                    input.member,
-                    input.score,
-                    present,
-                    previousScore,
-                    previousNode,
-                    scoreChanged
+            ZAddPlanEntry entry = entries.get(entryIndex);
+            // entry.score 是运行中的当前分数：首次出现取自存储，之后取本命令内已应用的最新值。
+            OccurrenceDecision decision = gateOccurrence(
+                    options,
+                    entry.present || entry.changed,
+                    entry.score,
+                    score
             );
-            if (!present) {
-                added++;
+            if (decision == null) {
+                continue;
             }
-            if (scoreChanged) {
-                changed++;
+            if (decision.add()) {
+                added++;
+            } else if (decision.mutate()) {
+                updated++;
+            }
+            if (decision.mutate()) {
+                entries.set(entryIndex, entry.withScore(decision.newScore()));
+            }
+            if (options.incr()) {
+                incrScore = decision.newScore();
+                incrProcessed = true;
             }
         }
 
+        int changed = 0;
+        int uniqueAdded = 0;
+        for (ZAddPlanEntry entry : entries) {
+            if (entry.changed) {
+                changed++;
+                if (!entry.present) {
+                    uniqueAdded++;
+                }
+            }
+        }
+        ZAddPlanEntry[] entryArray = entries.toArray(new ZAddPlanEntry[0]);
+        byte[] incrReply = options.incr() && incrProcessed ? formatScoreBytes(incrScore) : null;
         if (changed == 0) {
             return new ZAddPlan(
                     this,
                     listpack,
                     byMember,
                     byScore,
-                    entries,
+                    entryArray,
                     listpack == null ? ZAddPath.SKIPLIST_DELTA : ZAddPath.PACKED_REPLACEMENT,
                     List.of(),
                     0,
                     0,
                     new int[0],
-                    0L
+                    0L,
+                    updated,
+                    incrReply
             );
         }
 
@@ -305,7 +341,7 @@ public final class ZSetValue implements YierdisValue {
         if (listpack == null) {
             path = ZAddPath.SKIPLIST_DELTA;
         } else {
-            int finalSize = listpack.size() + added;
+            int finalSize = listpack.size() + uniqueAdded;
             boolean packed = finalSize <= YierdisEncodingThresholds.ZSET_MAX_LISTPACK_ENTRIES;
             for (ZAddPlanEntry entry : entries) {
                 if (entry.member.length > YierdisEncodingThresholds.ZSET_MAX_LISTPACK_VALUE_BYTES) {
@@ -313,25 +349,40 @@ public final class ZSetValue implements YierdisValue {
                     break;
                 }
             }
-            finalMembers = finalMembers(entries);
+            finalMembers = finalMembers(entryArray);
             path = packed ? ZAddPath.PACKED_REPLACEMENT : ZAddPath.PACKED_TO_SKIPLIST;
         }
 
-        int[] allocationSizes = allocationSizes(path, entries, finalMembers);
-        long stagedHeapBytes = stagedHeapUpperBound(path, changed, added, finalMembers);
+        int[] allocationSizes = allocationSizes(path, entryArray, finalMembers);
+        long stagedHeapBytes = stagedHeapUpperBound(path, changed, uniqueAdded, finalMembers);
         return new ZAddPlan(
                 this,
                 listpack,
                 byMember,
                 byScore,
-                entries,
+                entryArray,
                 path,
                 finalMembers,
                 added,
                 changed,
                 allocationSizes,
-                stagedHeapBytes
+                stagedHeapBytes,
+                updated,
+                incrReply
         );
+    }
+
+    private ZAddPlanEntry lookupCurrentEntry(byte[] member) {
+        if (listpack != null) {
+            int memberIndex = listpack.indexOfMember(member);
+            boolean present = memberIndex >= 0;
+            double previousScore = present ? listpack.scoreAt(memberIndex) : 0.0d;
+            return new ZAddPlanEntry(member, previousScore, present, previousScore, null, false);
+        }
+        ZSkipList.Node previousNode = byMember.get(member);
+        boolean present = previousNode != null;
+        double previousScore = present ? previousNode.score : 0.0d;
+        return new ZAddPlanEntry(member, previousScore, present, previousScore, previousNode, false);
     }
 
     public PreparedExistingAdd prepareExistingAdd(ZAddPlan plan) {
@@ -366,36 +417,98 @@ public final class ZSetValue implements YierdisValue {
         return add(scoreMemberPairs);
     }
 
-    private ZAddResult addDirectly(List<byte[]> scoreMemberPairs) {
+    private ZAddResult addDirectly(List<byte[]> scoreMemberPairs, ZAddOptions options) {
         validateScoreMemberPairs(scoreMemberPairs);
         int added = 0;
+        int updated = 0;
         boolean changedAny = false;
+        double incrScore = 0.0d;
+        boolean incrProcessed = false;
         for (int i = 0; i < scoreMemberPairs.size(); i += 2) {
             double score = parseScore(scoreMemberPairs.get(i));
             byte[] memberBytes = scoreMemberPairs.get(i + 1);
-
-            int outcome;
+            // 与 planExistingAdd 共用 gateOccurrence 的顺序语义：本命令内先加入的 member 对后续出现按新分数判定。
+            boolean present;
+            double currentScore = 0.0d;
             if (listpack != null) {
-                if (memberBytes != null && memberBytes.length > YierdisEncodingThresholds.ZSET_MAX_LISTPACK_VALUE_BYTES) {
-                    convertToSkipList();
-                }
-                if (listpack != null) {
-                    outcome = listpackZadd(score, memberBytes);
-                } else {
-                    outcome = skiplistZadd(score, memberBytes);
+                int memberIndex = listpack.indexOfMember(memberBytes);
+                present = memberIndex >= 0;
+                if (present) {
+                    currentScore = listpack.scoreAt(memberIndex);
                 }
             } else {
-                outcome = skiplistZadd(score, memberBytes);
-            }
-
-            if (outcome != 0) {
-                changedAny = true;
-                if (outcome > 0) {
-                    added++;
+                ZSkipList.Node node = byMember.get(memberBytes);
+                present = node != null;
+                if (present) {
+                    currentScore = node.score;
                 }
             }
+            OccurrenceDecision decision = gateOccurrence(options, present, currentScore, score);
+            if (decision == null) {
+                continue;
+            }
+            if (decision.add()) {
+                added++;
+            } else if (decision.mutate()) {
+                updated++;
+            }
+            if (decision.mutate()) {
+                zaddOne(decision.newScore(), memberBytes);
+                changedAny = true;
+            }
+            if (options.incr()) {
+                incrScore = decision.newScore();
+                incrProcessed = true;
+            }
         }
-        return new ZAddResult(added, changedAny);
+        return new ZAddResult(
+                added,
+                updated,
+                changedAny,
+                options.incr() && incrProcessed ? formatScoreBytes(incrScore) : null
+        );
+    }
+
+    private void zaddOne(double score, byte[] memberBytes) {
+        if (listpack != null) {
+            if (memberBytes != null && memberBytes.length > YierdisEncodingThresholds.ZSET_MAX_LISTPACK_VALUE_BYTES) {
+                convertToSkipList();
+            }
+            if (listpack != null) {
+                listpackZadd(score, memberBytes);
+            } else {
+                skiplistZadd(score, memberBytes);
+            }
+        } else {
+            skiplistZadd(score, memberBytes);
+        }
+    }
+
+    // 单对 score/member 的 Redis zsetAdd 条件判定：缺席时仅 XX 可挡；在场时先 NX，再 INCR 求新分数
+    // （inf 与 -inf 相加报 NaN 错），最后 GT/LT 门槛。被挡返回 null；放行时 mutate 表示存储值会变。
+    private static OccurrenceDecision gateOccurrence(
+            ZAddOptions options,
+            boolean present,
+            double currentScore,
+            double score
+    ) {
+        if (!present) {
+            return options.xx() ? null : new OccurrenceDecision(true, true, score);
+        }
+        if (options.nx()) {
+            return null;
+        }
+        double newScore = options.incr() ? currentScore + score : score;
+        if (options.incr() && Double.isNaN(newScore)) {
+            throw new YierdisCommandException(NAN_SCORE_ERROR);
+        }
+        if ((options.gt() && newScore <= currentScore) || (options.lt() && newScore >= currentScore)) {
+            return null;
+        }
+        return new OccurrenceDecision(false, !scoresEqual(currentScore, newScore), newScore);
+    }
+
+    private record OccurrenceDecision(boolean add, boolean mutate, double newScore) {
     }
 
     public int zrem(List<byte[]> members) {
@@ -1276,33 +1389,16 @@ public final class ZSetValue implements YierdisValue {
         out.value(encoded, 0, encoded.length);
     }
 
-    private ArrayList<ScoreMemberInput> canonicalScoreMemberInputs(List<byte[]> scoreMemberPairs) {
-        ArrayList<ScoreMemberInput> canonical = new ArrayList<>(scoreMemberPairs.size() / 2);
-        ScoreMemberIndex index = new ScoreMemberIndex(
-                canonical,
-                scoreMemberPairs.size() / 2,
-                hashSeed
-        );
-        for (int pairIndex = 0; pairIndex < scoreMemberPairs.size(); pairIndex += 2) {
-            double score = parseScore(scoreMemberPairs.get(pairIndex));
-            byte[] member = scoreMemberPairs.get(pairIndex + 1);
-            int existingIndex = index.find(member);
-            if (existingIndex >= 0) {
-                canonical.set(existingIndex, new ScoreMemberInput(member, score));
-                continue;
-            }
-            canonical.add(new ScoreMemberInput(member, score));
-            index.add(canonical.size() - 1);
-        }
-        return canonical;
-    }
-
     private List<FinalMember> finalMembers(ZAddPlanEntry[] entries) {
         ArrayList<FinalMember> members = new ArrayList<>(listpack.size() + entries.length);
         for (int index = 0; index < listpack.size(); index++) {
             members.add(new FinalMember(listpack.memberAt(index), listpack.scoreAt(index)));
         }
         for (ZAddPlanEntry entry : entries) {
+            // 被 XX/GT/LT/NX 挡住而未应用的新 member 不进最终列表；未变更的既有 member 原样重写无害。
+            if (!entry.present && !entry.changed) {
+                continue;
+            }
             int existingIndex = -1;
             for (int index = 0; index < members.size(); index++) {
                 if (Arrays.equals(members.get(index).member, entry.member)) {
@@ -1957,6 +2053,8 @@ public final class ZSetValue implements YierdisValue {
         private final int changedCount;
         private final int[] nativeAllocationSizes;
         private final long stagedHeapBytes;
+        private final int updated;
+        private final byte[] newScore;
 
         private ZAddPlan(
                 ZSetValue owner,
@@ -1969,7 +2067,9 @@ public final class ZSetValue implements YierdisValue {
                 int added,
                 int changedCount,
                 int[] nativeAllocationSizes,
-                long stagedHeapBytes
+                long stagedHeapBytes,
+                int updated,
+                byte[] newScore
         ) {
             this.owner = owner;
             this.sourcePacked = sourcePacked;
@@ -1983,10 +2083,20 @@ public final class ZSetValue implements YierdisValue {
             this.changedCount = changedCount;
             this.nativeAllocationSizes = nativeAllocationSizes;
             this.stagedHeapBytes = stagedHeapBytes;
+            this.updated = updated;
+            this.newScore = newScore;
         }
 
         public int added() {
             return added;
+        }
+
+        public int updated() {
+            return updated;
+        }
+
+        public byte[] newScore() {
+            return newScore;
         }
 
         public boolean changedAny() {
@@ -2087,7 +2197,7 @@ public final class ZSetValue implements YierdisValue {
         }
 
         public ZAddResult result() {
-            return new ZAddResult(plan.added(), plan.changedAny());
+            return new ZAddResult(plan.added(), plan.updated(), plan.changedAny(), plan.newScore());
         }
 
         public boolean changedAny() {
@@ -2337,9 +2447,6 @@ public final class ZSetValue implements YierdisValue {
         SKIPLIST_DELTA
     }
 
-    private record ScoreMemberInput(byte[] member, double score) {
-    }
-
     private record FinalMember(byte[] member, double score) {
     }
 
@@ -2366,16 +2473,28 @@ public final class ZSetValue implements YierdisValue {
             this.previousNode = previousNode;
             this.changed = changed;
         }
+
+        // changed 锚定命令开始前的 previousScore：分数来回改回原值等于未变更，不触发重写。
+        private ZAddPlanEntry withScore(double newScore) {
+            return new ZAddPlanEntry(
+                    member,
+                    newScore,
+                    present,
+                    previousScore,
+                    previousNode,
+                    !present || !scoresEqual(previousScore, newScore)
+            );
+        }
     }
 
     private static final class ScoreMemberIndex {
         private static final int MAX_CAPACITY = 1 << 30;
 
-        private final List<ScoreMemberInput> entries;
+        private final List<ZAddPlanEntry> entries;
         private final HashSeed hashSeed;
         private final int[] indexes;
 
-        private ScoreMemberIndex(List<ScoreMemberInput> entries, int expected, HashSeed hashSeed) {
+        private ScoreMemberIndex(List<ZAddPlanEntry> entries, int expected, HashSeed hashSeed) {
             this.entries = entries;
             this.hashSeed = hashSeed;
             this.indexes = new int[indexCapacity(expected)];

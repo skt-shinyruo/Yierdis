@@ -14,6 +14,8 @@ import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.WriteResult;
+import yier.bubu.redis.storage.api.ZAddOptions;
+import yier.bubu.redis.storage.api.ZAddOutcome;
 import yier.bubu.redis.storage.api.ZSetOps;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
 import yier.bubu.redis.storage.api.result.ByteSequenceSources;
@@ -48,15 +50,16 @@ final class YierdisZSetOps implements ZSetOps {
     }
 
     @Override
-    public WriteResult<Long> zadd(byte[] keyBytes, List<byte[]> scoreMemberPairs) {
+    public WriteResult<ZAddOutcome> zadd(byte[] keyBytes, List<byte[]> scoreMemberPairs, ZAddOptions options) {
         kernel.checkOwner();
         if (scoreMemberPairs.size() % 2 != 0) {
             throw new IllegalArgumentException("scoreMemberPairs must contain score/member pairs");
         }
         Objects.requireNonNull(keyBytes, "keyBytes");
+        Objects.requireNonNull(options, "options");
         long now = System.currentTimeMillis();
         kernel.reclaimExpiredBeforeMutation(keyBytes, now);
-        return kernel.execute(new MutationPlan<WriteResult<Long>>() {
+        return kernel.execute(new MutationPlan<WriteResult<ZAddOutcome>>() {
             private ZSetRoot.AddPlan cachedAddPlan;
             private boolean addPlanInitialized;
 
@@ -64,11 +67,12 @@ final class YierdisZSetOps implements ZSetOps {
             public long upperBoundBytes() {
                 EntryRecord existing = keyLifecycle.entryRecord(keyBytes);
                 if (existing == null) {
-                    return newZSetUpperBound(keyBytes, addPlan(null));
+                    // XX 在缺 key 时不建 key：admission 只留 bookkeeping 下限，prepare 直接 unchanged。
+                    return options.xx() ? withScopeBookkeeping(0L) : newZSetUpperBound(keyBytes, addPlan(null));
                 }
                 AllocatorKeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
                 if (keyLifecycle.isKeyExpired(keyHandle, now)) {
-                    return newZSetUpperBound(keyBytes, addPlan(null));
+                    return options.xx() ? withScopeBookkeeping(0L) : newZSetUpperBound(keyBytes, addPlan(null));
                 }
                 if (existing.type() != ValueType.ZSET) {
                     return withScopeBookkeeping(0L);
@@ -78,11 +82,14 @@ final class YierdisZSetOps implements ZSetOps {
             }
 
             @Override
-            public PreparedDbMutation<WriteResult<Long>> prepare() {
+            public PreparedDbMutation<WriteResult<ZAddOutcome>> prepare() {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(keyBytes);
                 EntryRecord current = currentEntry.record();
                 if (current != null) {
                     requireZSet(current);
+                }
+                if (current == null && options.xx()) {
+                    return kernel.unchanged(WriteResult.of(ZAddOutcome.blocked(), MutationOutcome.NONE));
                 }
 
                 StagedEntry staged = null;
@@ -103,7 +110,7 @@ final class YierdisZSetOps implements ZSetOps {
                     if (preparedAdd.stableHandle() && !preparedAdd.changedAny()) {
                         preparedAdd.close();
                         preparedAdd = null;
-                        return kernel.unchanged(WriteResult.of(0L, outcome));
+                        return kernel.unchanged(WriteResult.of(toOutcome(added), outcome));
                     }
 
                     boolean stableHandle = preparedAdd.stableHandle();
@@ -116,10 +123,10 @@ final class YierdisZSetOps implements ZSetOps {
                             current,
                             preparedAdd.targetEncoding()
                     );
-                    WriteResult<Long> result = WriteResult.of((long) added.added(), outcome);
+                    WriteResult<ZAddOutcome> result = WriteResult.of(toOutcome(added), outcome);
                     long deltaBytes = estimateRecordBytes(targetKey, next)
                             - estimateRecordBytes(targetKey, current);
-                    PreparedEntryMutation<WriteResult<Long>> prepared = kernel.upsert(
+                    PreparedEntryMutation<WriteResult<ZAddOutcome>> prepared = kernel.upsert(
                             result,
                             deltaBytes,
                             addSaturating(
@@ -155,7 +162,7 @@ final class YierdisZSetOps implements ZSetOps {
 
             private ZSetRoot.AddPlan addPlan(ValueHandle source) {
                 if (!addPlanInitialized) {
-                    cachedAddPlan = zsetRoot.planAdd(source, scoreMemberPairs);
+                    cachedAddPlan = zsetRoot.planAdd(source, scoreMemberPairs, options);
                     addPlanInitialized = true;
                     return cachedAddPlan;
                 }
@@ -165,6 +172,14 @@ final class YierdisZSetOps implements ZSetOps {
                 return cachedAddPlan;
             }
         });
+    }
+
+    private static ZAddOutcome toOutcome(ZAddResult result) {
+        return new ZAddOutcome(
+                result.added(),
+                (long) result.added() + result.updated(),
+                result.newScore()
+        );
     }
 
     private void abortStaged(StagedEntry staged, ValueHandle replacement, Throwable failure) {

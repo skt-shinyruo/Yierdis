@@ -23,13 +23,23 @@ import yier.bubu.redis.execution.api.PreparedCommand;
 import yier.bubu.redis.execution.api.PreparedCommands;
 import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.RedisReply;
+import yier.bubu.redis.execution.api.ReplyShape;
 import yier.bubu.redis.execution.api.ReplyShapes;
+import yier.bubu.redis.storage.api.ZAddOptions;
+import yier.bubu.redis.storage.api.ZAddOutcome;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
 
 public final class ZSetCommands {
     private static final String SYNTAX_ERROR = "ERR syntax error";
     private static final String SCORE_ERROR = "ERR value is not a valid float";
     private static final String SCORE_BOUND_ERROR = "ERR min or max is not a float";
+    private static final String ZADD_NX_XX_ERROR = "ERR XX and NX options at the same time are not compatible";
+    private static final String ZADD_GT_LT_NX_ERROR =
+            "ERR GT, LT, and/or NX options at the same time are not compatible";
+    private static final String ZADD_INCR_SINGLE_PAIR_ERROR =
+            "ERR INCR option supports a single increment-element pair";
+    // INCR 回复是按 Redis 双精度格式渲染的分数："inf"/long/Double.toString 最长 24 字节，预留取整上界。
+    private static final int INCR_SCORE_REPLY_MAX_BYTES = 32;
     private static final CommandKeySpec KEY = new CommandKeySpec(1, 1, 1);
 
     private final CommandSupport support;
@@ -40,7 +50,7 @@ public final class ZSetCommands {
 
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register(new CommandSpec(syntax("ZADD", CommandArity.pairTail(4, 2)), this::zadd));
+        registration.register(new CommandSpec(syntax("ZADD", CommandArity.min(4)), this::zadd));
         registration.register(new CommandSpec(syntax("ZRANGE", CommandArity.range(4, 6)), this::zrange));
         registration.register(new CommandSpec(syntax("ZREVRANGE", CommandArity.oneOf(4, 5)), this::zrevrange));
         registration.register(new CommandSpec(syntax("ZRANGEBYSCORE", CommandArity.min(4)),
@@ -59,15 +69,67 @@ public final class ZSetCommands {
         return new CommandSyntax(nameUpper, arity, KEY, TransactionPolicy.QUEUEABLE);
     }
 
+    // flag 解析与 Redis zaddGenericCommand 同序：先数对（syntax error），再组合错误，最后校验分数，
+    // 这样非法组合在 MULTI preflight 阶段就 EXECABORT，且错误文案与 Redis 一致。
     private Function<CommandSession, PreparedCommand> zadd(CommandArgs args) {
-        for (int index = 2; index < args.argc(); index += 2) {
-            parseScore(args.bytes(index));
+        int index = 2;
+        boolean nx = false;
+        boolean xx = false;
+        boolean gt = false;
+        boolean lt = false;
+        boolean ch = false;
+        boolean incr = false;
+        while (index < args.argc()) {
+            if (args.is(index, "NX")) {
+                nx = true;
+            } else if (args.is(index, "XX")) {
+                xx = true;
+            } else if (args.is(index, "GT")) {
+                gt = true;
+            } else if (args.is(index, "LT")) {
+                lt = true;
+            } else if (args.is(index, "CH")) {
+                ch = true;
+            } else if (args.is(index, "INCR")) {
+                incr = true;
+            } else {
+                break;
+            }
+            index++;
+        }
+        int elements = args.argc() - index;
+        if (elements == 0 || (elements & 1) != 0) {
+            throw syntaxFailure();
+        }
+        if (nx && xx) {
+            throw new CommandParseException(ZADD_NX_XX_ERROR);
+        }
+        if (((gt || lt) && nx) || (gt && lt)) {
+            throw new CommandParseException(ZADD_GT_LT_NX_ERROR);
+        }
+        if (incr && elements > 2) {
+            throw new CommandParseException(ZADD_INCR_SINGLE_PAIR_ERROR);
+        }
+        for (int pair = index; pair < args.argc(); pair += 2) {
+            parseScore(args.bytes(pair));
         }
         byte[] key = args.bytes(1);
-        List<byte[]> pairs = args.byteArraysFrom(2);
-        return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
-            long added = support.commandDb(execution).zsets().zadd(key, pairs).value();
-            return CommandResult.reply(RedisReplies.integer(added));
+        List<byte[]> pairs = args.byteArraysFrom(index);
+        ZAddOptions options = new ZAddOptions(nx, xx, gt, lt, incr);
+        boolean incrMode = incr;
+        boolean changedReply = ch;
+        ReplyShape reservationShape = incrMode
+                ? ReplyShapes.bulkString(INCR_SCORE_REPLY_MAX_BYTES, 0L)
+                : ReplyShapes.integerUpperBound();
+        return session -> CommandSupport.preparedAction(reservationShape, execution -> {
+            ZAddOutcome outcome = support.commandDb(execution).zsets().zadd(key, pairs, options).value();
+            if (incrMode) {
+                byte[] newScore = outcome.newScore();
+                return CommandResult.reply(newScore == null
+                        ? RedisReplies.nullValue()
+                        : RedisReplies.bulkString(newScore));
+            }
+            return CommandResult.reply(RedisReplies.integer(changedReply ? outcome.changed() : outcome.added()));
         });
     }
 

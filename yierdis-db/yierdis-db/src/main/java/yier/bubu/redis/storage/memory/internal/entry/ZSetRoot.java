@@ -4,6 +4,7 @@ import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.ScanCursorV2;
+import yier.bubu.redis.storage.api.ZAddOptions;
 import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
@@ -83,14 +84,20 @@ public final class ZSetRoot implements AutoCloseable {
     }
 
     public synchronized AddPlan planAdd(ValueHandle source, List<byte[]> scoreMemberPairs) {
+        return planAdd(source, scoreMemberPairs, ZAddOptions.plain());
+    }
+
+    public synchronized AddPlan planAdd(ValueHandle source, List<byte[]> scoreMemberPairs, ZAddOptions options) {
         ensureOpen();
         Objects.requireNonNull(scoreMemberPairs, "scoreMemberPairs");
+        Objects.requireNonNull(options, "options");
         if (source != null) {
-            ZSetValue.ZAddPlan deltaPlan = requireZSet(source).planExistingAdd(scoreMemberPairs);
+            ZSetValue.ZAddPlan deltaPlan = requireZSet(source).planExistingAdd(scoreMemberPairs, options);
             return new AddPlan(
                     source,
                     deltaPlan,
                     scoreMemberPairs,
+                    options,
                     deltaPlan.nativeAllocationSizes()
             );
         }
@@ -99,6 +106,7 @@ public final class ZSetRoot implements AutoCloseable {
                 null,
                 null,
                 scoreMemberPairs,
+                options,
                 newValueAllocationSizes(scoreMemberPairs, packedPlan)
         );
     }
@@ -132,7 +140,7 @@ public final class ZSetRoot implements AutoCloseable {
             }
             ZAddResult added;
             try {
-                added = value.add(plan.scoreMemberPairs());
+                added = value.add(plan.scoreMemberPairs(), plan.options());
             } finally {
                 zsets.refreshAdapter(replacement);
             }
@@ -479,10 +487,12 @@ public final class ZSetRoot implements AutoCloseable {
             ValueHandle source,
             ZSetValue.ZAddPlan deltaPlan,
             List<byte[]> scoreMemberPairs,
+            ZAddOptions options,
             int[] allocationSizes
     ) {
         public AddPlan {
             Objects.requireNonNull(scoreMemberPairs, "scoreMemberPairs");
+            Objects.requireNonNull(options, "options");
             if ((source == null) != (deltaPlan == null)) {
                 throw new IllegalArgumentException("ZADD plan source and delta path do not match");
             }

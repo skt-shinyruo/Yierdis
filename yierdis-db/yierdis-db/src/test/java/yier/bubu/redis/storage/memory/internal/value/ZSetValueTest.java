@@ -30,17 +30,17 @@ public class ZSetValueTest {
              StableMemoryBackend allocator = runtime.backend()) {
             ZSetValue zset = new ZSetValue(allocator, HashSeed.random(), new HashTableMaintenanceRegistry());
             try {
-                Assert.assertEquals(new ZSetValue.ZAddResult(1, true),
+                Assert.assertEquals(new ZSetValue.ZAddResult(1, 0, true, null),
                         zset.add(List.of(b("1"), b("member"))));
                 Assert.assertEquals(1, zset.size());
                 Assert.assertEquals("1", scoreFor(zset, "member"));
 
-                Assert.assertEquals(new ZSetValue.ZAddResult(0, true),
+                Assert.assertEquals(new ZSetValue.ZAddResult(0, 1, true, null),
                         zset.add(List.of(b("2"), b("member"))));
                 Assert.assertEquals(1, zset.size());
                 Assert.assertEquals("2", scoreFor(zset, "member"));
 
-                Assert.assertEquals(new ZSetValue.ZAddResult(0, false),
+                Assert.assertEquals(new ZSetValue.ZAddResult(0, 0, false, null),
                         zset.add(List.of(b("2"), b("member"))));
                 Assert.assertEquals(1, zset.size());
                 Assert.assertEquals("2", scoreFor(zset, "member"));
