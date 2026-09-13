@@ -82,6 +82,10 @@ dispatcher 的实际顺序是：
 - `ERR wrong number of arguments for '<cmd>' command`；
 - `ERR syntax error`；
 - `ERR value is not an integer or out of range`；
+- `ERR increment or decrement would overflow`（INCR/DECR 溢出）；
+- `ERR value is out of range, must be positive`（LPOP/RPOP 负 count）；
+- `ERR bit offset is not an integer or out of range`（SETBIT/GETBIT 非法 offset）；
+- `WRONGTYPE Key is not a valid HyperLogLog string value.`（普通 string 走 PF*）；
 - 命令家族定义的专用 parse error。
 
 parse 阶段不得调用 session、DB router、server info provider 或 slow-command governor。`CommandParseIsolationTest` 用所有默认命令的 fixture 集合验证这一点，`ServerCommandParseIsolationTest` 覆盖 `HELLO/INFO/STATS`，事务控制命令也有独立 parse-isolation 覆盖。

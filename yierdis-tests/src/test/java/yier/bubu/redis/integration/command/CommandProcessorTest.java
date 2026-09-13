@@ -307,7 +307,7 @@ public class CommandProcessorTest {
             client.execute(Arrays.asList(b("SET"), key, b(Long.toString(Long.MAX_VALUE))));
             ReplyObject err2 = client.execute(Arrays.asList(b("INCR"), key));
             Assert.assertTrue(err2 instanceof ReplyError);
-            Assert.assertEquals("ERR value is not an integer or out of range", ((ReplyError) err2).message());
+            Assert.assertEquals("ERR increment or decrement would overflow", ((ReplyError) err2).message());
 
             }
         });

@@ -31,7 +31,7 @@ public final class StringCommands {
     private static final String SYNTAX_ERROR = "ERR syntax error";
     private static final String INVALID_SET_EXPIRE = "ERR invalid expire time in 'set' command";
     private static final String INVALID_BIT = "ERR bit is not an integer or out of range";
-    private static final String STRING_TOO_LARGE = "ERR string exceeds maximum allowed size";
+    private static final String INVALID_BIT_OFFSET = "ERR bit offset is not an integer or out of range";
     private static final CommandKeySpec KEY = new CommandKeySpec(1, 1, 1);
 
     private final CommandSupport support;
@@ -73,53 +73,64 @@ public final class StringCommands {
         byte[] key = args.bytes(1);
         SetMode mode = SetMode.NORMAL;
         ExpireOption expire = null;
+        String expireKeyword = null;
         boolean getOld = false;
         for (int index = 3; index < args.argc(); index++) {
+            // 与 Redis parseExtendedStringArgumentsOrReply 对齐：重复书写同一个 flag 是幂等的，
+            // 只有互斥组合（NX/XX 混用、不同 expire 选项混用、expire 与 KEEPTTL 混用）才报 syntax error。
             if (args.is(index, "NX")) {
-                if (mode != SetMode.NORMAL) {
+                if (mode == SetMode.XX) {
                     throw syntaxFailure();
                 }
                 mode = SetMode.NX;
                 continue;
             }
             if (args.is(index, "XX")) {
-                if (mode != SetMode.NORMAL) {
+                if (mode == SetMode.NX) {
                     throw syntaxFailure();
                 }
                 mode = SetMode.XX;
                 continue;
             }
             if (args.is(index, "GET")) {
-                if (getOld) {
-                    throw syntaxFailure();
-                }
                 getOld = true;
                 continue;
             }
             if (args.is(index, "KEEPTTL")) {
-                if (expire != null) {
+                if (expireKeyword != null && !"KEEPTTL".equals(expireKeyword)) {
                     throw syntaxFailure();
                 }
+                expireKeyword = "KEEPTTL";
                 expire = ExpireOption.keepTtl();
                 continue;
             }
-            if (!args.is(index, "EX") && !args.is(index, "PX")
-                    && !args.is(index, "EXAT") && !args.is(index, "PXAT")) {
+            String option;
+            if (args.is(index, "EX")) {
+                option = "EX";
+            } else if (args.is(index, "PX")) {
+                option = "PX";
+            } else if (args.is(index, "EXAT")) {
+                option = "EXAT";
+            } else if (args.is(index, "PXAT")) {
+                option = "PXAT";
+            } else {
                 throw syntaxFailure();
             }
-            if (expire != null || index + 1 >= args.argc()) {
+            if (index + 1 >= args.argc()) {
                 throw syntaxFailure();
             }
-            String option = args.utf8(index);
+            if (expireKeyword != null && !expireKeyword.equals(option)) {
+                throw syntaxFailure();
+            }
             long value = args.longAt(++index);
             if (value <= 0L) {
                 throw new CommandParseException(INVALID_SET_EXPIRE);
             }
-            if ("EX".equalsIgnoreCase(option)) {
+            if ("EX".equals(option)) {
                 expire = ExpireOption.ex(value);
-            } else if ("PX".equalsIgnoreCase(option)) {
+            } else if ("PX".equals(option)) {
                 expire = ExpireOption.px(value);
-            } else if ("EXAT".equalsIgnoreCase(option)) {
+            } else if ("EXAT".equals(option)) {
                 long expireAtMillis;
                 try {
                     expireAtMillis = Math.multiplyExact(value, 1000L);
@@ -136,6 +147,7 @@ public final class StringCommands {
                 }
                 expire = ExpireOption.pxAt(value);
             }
+            expireKeyword = option;
         }
         SetArgs parsed = new SetArgs(key, args.slice(2), mode, expire, getOld);
         return session -> prepareSet(parsed, session);
@@ -181,7 +193,7 @@ public final class StringCommands {
     }
 
     private Function<CommandSession, PreparedCommand> setbit(CommandArgs args) {
-        long offset = args.nonNegativeLongAt(2);
+        long offset = bitOffsetAt(args, 2);
         long value;
         try {
             value = args.longAt(3);
@@ -191,8 +203,9 @@ public final class StringCommands {
         if (value != 0L && value != 1L) {
             throw new CommandParseException(INVALID_BIT);
         }
+        // Redis getBitOffsetFromArgument 对越界 offset 也复用同一条 offset 文案，而不是 string 过大错误。
         if (offset / 8L >= MAX_STRING_BYTES) {
-            throw new CommandParseException(STRING_TOO_LARGE);
+            throw new CommandParseException(INVALID_BIT_OFFSET);
         }
         SetBitArgs parsed = new SetBitArgs(args.bytes(1), offset, (int) value);
         return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
@@ -203,10 +216,24 @@ public final class StringCommands {
     }
 
     private Function<CommandSession, PreparedCommand> getbit(CommandArgs args) {
-        GetBitArgs parsed = new GetBitArgs(args.bytes(1), args.nonNegativeLongAt(2));
+        GetBitArgs parsed = new GetBitArgs(args.bytes(1), bitOffsetAt(args, 2));
         BytesSlice key = args.slice(1);
         return session -> PreparedCommands.ready(RedisReplies.integer(
                 support.commandDb(session).strings().getBit(key, parsed.offset())));
+    }
+
+    // Redis getBitOffsetFromArgument：非整数、负数 offset 共用同一条 "bit offset" 错误文案。
+    private static long bitOffsetAt(CommandArgs args, int index) {
+        long offset;
+        try {
+            offset = args.longAt(index);
+        } catch (CommandParseException failure) {
+            throw new CommandParseException(INVALID_BIT_OFFSET);
+        }
+        if (offset < 0L) {
+            throw new CommandParseException(INVALID_BIT_OFFSET);
+        }
+        return offset;
     }
 
     private Function<CommandSession, PreparedCommand> bitcount(CommandArgs args) {

@@ -38,6 +38,7 @@ final class YierdisStringOps implements StringOps {
     private static final int MAX_STRING_BYTES = 512 * 1024 * 1024;
     private static final int EMBSTR_BYTES_LIMIT = 44;
     private static final String INTEGER_RANGE_ERROR = "ERR value is not an integer or out of range";
+    private static final String INCREMENT_OVERFLOW_ERROR = "ERR increment or decrement would overflow";
 
     private final YierdisDbKernel kernel;
     private final YierdisDbKeyLifecycle keyLifecycle;
@@ -862,10 +863,10 @@ final class YierdisStringOps implements StringOps {
 
     private static long safeAdd(long a, long b) {
         if (b > 0 && a > Long.MAX_VALUE - b) {
-            throw new YierdisCommandException(INTEGER_RANGE_ERROR);
+            throw new YierdisCommandException(INCREMENT_OVERFLOW_ERROR);
         }
         if (b < 0 && a < Long.MIN_VALUE - b) {
-            throw new YierdisCommandException(INTEGER_RANGE_ERROR);
+            throw new YierdisCommandException(INCREMENT_OVERFLOW_ERROR);
         }
         return a + b;
     }

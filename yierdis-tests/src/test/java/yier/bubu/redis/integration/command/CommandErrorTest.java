@@ -139,8 +139,8 @@ public class CommandErrorTest {
             ReplyError setInvalidExpire = (ReplyError) client.execute(Arrays.asList(b("SET"), b("k"), b("v"), b("EX"), b("0")));
             Assert.assertEquals("ERR invalid expire time in 'set' command", setInvalidExpire.message());
 
-            ReplyError setDuplicateGet = (ReplyError) client.execute(Arrays.asList(b("SET"), b("k"), b("v"), b("GET"), b("GET")));
-            Assert.assertEquals("ERR syntax error", setDuplicateGet.message());
+            ReplyObject setDuplicateGet = client.execute(Arrays.asList(b("SET"), b("k"), b("v"), b("GET"), b("GET")));
+            Assert.assertFalse(setDuplicateGet instanceof ReplyError);
 
             }
         });

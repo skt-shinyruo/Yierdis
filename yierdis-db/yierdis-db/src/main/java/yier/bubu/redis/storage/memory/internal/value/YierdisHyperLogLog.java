@@ -29,6 +29,10 @@ public final class YierdisHyperLogLog {
     private static final int MAX_REGISTER = (1 << DENSE_REGISTER_BITS) - 1;
     private static final int SPARSE_ENTRY_BYTES = 3;
 
+    // 与 Redis isHLLObjectOrReply 的文案对齐：stored string 不是合法 HLL（magic/encoding/长度校验失败）时的统一文案。
+    // 注意 Redis 另有 INVALIDOBJ 错误，只用于 header 合法但 sparse 内容损坏的负载，这里不涉及。
+    public static final String INVALID_HLL_ERROR = "WRONGTYPE Key is not a valid HyperLogLog string value.";
+
     private YierdisHyperLogLog() {
     }
 
@@ -84,12 +88,12 @@ public final class YierdisHyperLogLog {
 
     public static void mergeHllIntoRegisters(byte[] raw, int[] registers) {
         if (!isValidHllBytes(raw)) {
-            throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+            throw new YierdisCommandException(INVALID_HLL_ERROR);
         }
         int enc = raw[HEADER_ENCODING_OFFSET] & 0xFF;
         if (enc == ENCODING_DENSE) {
             if (raw.length != HEADER_BYTES + DENSE_DATA_BYTES) {
-                throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+                throw new YierdisCommandException(INVALID_HLL_ERROR);
             }
             for (int i = 0; i < REGISTERS; i++) {
                 int v = denseGetRegister(raw, i);
@@ -102,13 +106,13 @@ public final class YierdisHyperLogLog {
         if (enc == ENCODING_SPARSE) {
             int dataLen = raw.length - HEADER_BYTES;
             if (dataLen < 0 || (dataLen % SPARSE_ENTRY_BYTES) != 0) {
-                throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+                throw new YierdisCommandException(INVALID_HLL_ERROR);
             }
             for (int pos = HEADER_BYTES; pos < raw.length; pos += SPARSE_ENTRY_BYTES) {
                 int idx = ((raw[pos] & 0xFF) << 8) | (raw[pos + 1] & 0xFF);
                 int v = raw[pos + 2] & 0xFF;
                 if (idx >= REGISTERS || v < 0 || v > MAX_REGISTER) {
-                    throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+                    throw new YierdisCommandException(INVALID_HLL_ERROR);
                 }
                 if (v > registers[idx]) {
                     registers[idx] = v;
@@ -116,17 +120,17 @@ public final class YierdisHyperLogLog {
             }
             return;
         }
-        throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+        throw new YierdisCommandException(INVALID_HLL_ERROR);
     }
 
     public static void mergeHllIntoRegisters(BytesSlice raw, int[] registers) {
         if (!isValidHllBytes(raw)) {
-            throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+            throw new YierdisCommandException(INVALID_HLL_ERROR);
         }
         int enc = raw.getByte(HEADER_ENCODING_OFFSET) & 0xFF;
         if (enc == ENCODING_DENSE) {
             if (raw.length() != HEADER_BYTES + DENSE_DATA_BYTES) {
-                throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+                throw new YierdisCommandException(INVALID_HLL_ERROR);
             }
             for (int i = 0; i < REGISTERS; i++) {
                 int v = denseGetRegister(raw, i);
@@ -139,13 +143,13 @@ public final class YierdisHyperLogLog {
         if (enc == ENCODING_SPARSE) {
             int dataLen = raw.length() - HEADER_BYTES;
             if (dataLen < 0 || (dataLen % SPARSE_ENTRY_BYTES) != 0) {
-                throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+                throw new YierdisCommandException(INVALID_HLL_ERROR);
             }
             for (int pos = HEADER_BYTES; pos < raw.length(); pos += SPARSE_ENTRY_BYTES) {
                 int idx = ((raw.getByte(pos) & 0xFF) << 8) | (raw.getByte(pos + 1) & 0xFF);
                 int v = raw.getByte(pos + 2) & 0xFF;
                 if (idx >= REGISTERS || v < 0 || v > MAX_REGISTER) {
-                    throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+                    throw new YierdisCommandException(INVALID_HLL_ERROR);
                 }
                 if (v > registers[idx]) {
                     registers[idx] = v;
@@ -153,7 +157,7 @@ public final class YierdisHyperLogLog {
             }
             return;
         }
-        throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+        throw new YierdisCommandException(INVALID_HLL_ERROR);
     }
 
     public static long estimateCardinality(int[] registers) {
@@ -215,7 +219,7 @@ public final class YierdisHyperLogLog {
     public static byte[] prepareAdd(byte[] current, List<byte[]> elements) {
         byte[] base = current == null ? newSparse() : current;
         if (!isValidHllBytes(base)) {
-            throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+            throw new YierdisCommandException(INVALID_HLL_ERROR);
         }
 
         int[] registers = new int[REGISTERS];
@@ -235,7 +239,7 @@ public final class YierdisHyperLogLog {
         }
         if (current != null) {
             if (!isValidHllBytes(current)) {
-                throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+                throw new YierdisCommandException(INVALID_HLL_ERROR);
             }
             int[] existing = new int[REGISTERS];
             mergeHllIntoRegisters(current, existing);

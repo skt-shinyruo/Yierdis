@@ -13,6 +13,7 @@ import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.WriteResult;
+import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
@@ -384,7 +385,8 @@ final class YierdisHllOps implements HllOps {
             throw new IllegalStateException("native hll value handle is not available: " + (handle == null ? "null" : handle.nativeHandle()));
         }
         if (!YierdisHyperLogLog.isHllString(stringRoot, handle)) {
-            throw new WrongTypeException();
+            // 普通 string 走 PF* 时，Redis 在 isHLLObjectOrReply 报专用文案，而不是通用 WRONGTYPE。
+            throw new YierdisCommandException(YierdisHyperLogLog.INVALID_HLL_ERROR);
         }
         return handle;
     }

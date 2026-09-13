@@ -377,7 +377,7 @@ public class StringDirectOpsTest {
                     null
             );
             expectCommandError(
-                    "ERR value is not an integer or out of range",
+                    "ERR increment or decrement would overflow",
                     () -> db.strings().incrBy(b("max"), 1L)
             );
             db.strings().setString(
@@ -387,7 +387,7 @@ public class StringDirectOpsTest {
                     null
             );
             expectCommandError(
-                    "ERR value is not an integer or out of range",
+                    "ERR increment or decrement would overflow",
                     () -> db.strings().incrBy(b("min"), -1L)
             );
         });

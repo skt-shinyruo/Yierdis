@@ -137,6 +137,26 @@ public class StringCommandTest {
         });
     }
 
+    @Test
+    public void setTreatsRepeatedFlagsAsIdempotentLikeRedis() {
+        withClient(client -> {
+            assertSimpleString("OK", client.execute(cmd("SET", "k", "v1", "NX", "NX")));
+            assertNull(client.execute(cmd("SET", "k", "ignored", "NX", "NX")));
+            assertSimpleString("OK", client.execute(cmd("SET", "k", "v2", "XX", "XX")));
+            assertBulkString("v2", client.execute(cmd("SET", "k", "v3", "GET", "GET")));
+            assertSimpleString("OK", client.execute(cmd("SET", "k", "v4", "KEEPTTL", "KEEPTTL")));
+
+            assertSimpleString("OK", client.execute(cmd("SET", "dup-expire", "v", "EX", "60", "EX", "70")));
+            long pttl = ((ReplyInteger) client.execute(cmd("PTTL", "dup-expire"))).value();
+            Assert.assertTrue("last repeated EX wins, pttl=" + pttl, pttl > 60_000L && pttl <= 70_000L);
+
+            assertErrorContaining("syntax error", client.execute(cmd("SET", "k", "v", "NX", "XX")));
+            assertErrorContaining("syntax error", client.execute(cmd("SET", "k", "v", "XX", "NX")));
+            assertErrorContaining("syntax error", client.execute(cmd("SET", "k", "v", "EX", "60", "PX", "60000")));
+            assertErrorContaining("syntax error", client.execute(cmd("SET", "k", "v", "KEEPTTL", "EX", "60")));
+        });
+    }
+
     private static void withClient(ClientCase test) {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);

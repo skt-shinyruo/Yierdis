@@ -390,8 +390,9 @@ public class CollectionDirectOpsTest {
             Assert.assertNull(db.keyspace().typeOf(view("h1")));
 
             db.strings().setString(b("plain"), b("not-hll"), SetMode.NORMAL, null);
-            expectWrongType(() -> db.hll().pfcount(List.of(b("plain"))));
-            expectWrongType(() -> db.hll().pfmerge(b("other"), List.of(b("plain"))));
+            // Redis isHLLObjectOrReply：普通 string 走 PF* 报专用文案而非通用 WRONGTYPE。
+            expectInvalidHll(() -> db.hll().pfcount(List.of(b("plain"))));
+            expectInvalidHll(() -> db.hll().pfmerge(b("other"), List.of(b("plain"))));
         });
     }
 
@@ -614,6 +615,18 @@ public class CollectionDirectOpsTest {
             Assert.fail("expected WrongTypeException");
         } catch (WrongTypeException expected) {
             // expected
+        }
+    }
+
+    private static void expectInvalidHll(ThrowingRunnable runnable) {
+        try {
+            runnable.run();
+            Assert.fail("expected invalid HyperLogLog error");
+        } catch (YierdisCommandException expected) {
+            Assert.assertEquals(
+                    "WRONGTYPE Key is not a valid HyperLogLog string value.",
+                    expected.getMessage()
+            );
         }
     }
 

@@ -7,6 +7,7 @@ import yier.bubu.redis.storage.memory.YierdisDb;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
 import yier.bubu.redis.testutil.ReplyBulkString;
+import yier.bubu.redis.testutil.ReplyError;
 import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplySimpleString;
 
@@ -145,6 +146,28 @@ public class ListCommandTest {
                     b("9223372036854775807"), b("9223372036854775807")
             ));
             Assert.assertTrue(empty.values().isEmpty());
+            }
+        });
+    }
+
+    @Test
+    public void lpopRpopRejectNegativeCountWithPositiveRangeError() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+
+            client.execute(Arrays.asList(b("RPUSH"), b("list"), b("a")));
+
+            // Redis 对负 count 报 "must be positive"，只有非整数 count 才报通用整数错误。
+            ReplyError lpopNegative = (ReplyError) client.execute(Arrays.asList(b("LPOP"), b("list"), b("-1")));
+            Assert.assertEquals("ERR value is out of range, must be positive", lpopNegative.message());
+
+            ReplyError rpopNegative = (ReplyError) client.execute(Arrays.asList(b("RPOP"), b("list"), b("-1")));
+            Assert.assertEquals("ERR value is out of range, must be positive", rpopNegative.message());
+
+            ReplyError notInteger = (ReplyError) client.execute(Arrays.asList(b("LPOP"), b("list"), b("abc")));
+            Assert.assertEquals("ERR value is not an integer or out of range", notInteger.message());
             }
         });
     }

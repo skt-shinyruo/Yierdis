@@ -141,7 +141,16 @@ public class HllCommandTest {
 
                 ReplyObject err = client.execute(Arrays.asList(b("PFADD"), b("k"), b("x")));
                 Assert.assertTrue(err instanceof ReplyError);
-                Assert.assertEquals("WRONGTYPE Operation against a key holding the wrong kind of value", ((ReplyError) err).message());
+                Assert.assertEquals("WRONGTYPE Key is not a valid HyperLogLog string value.", ((ReplyError) err).message());
+
+                ReplyObject countErr = client.execute(Arrays.asList(b("PFCOUNT"), b("k")));
+                Assert.assertTrue(countErr instanceof ReplyError);
+                Assert.assertEquals("WRONGTYPE Key is not a valid HyperLogLog string value.", ((ReplyError) countErr).message());
+
+                client.execute(cmd("PFADD", "real-hll", "a"));
+                ReplyObject mergeErr = client.execute(Arrays.asList(b("PFMERGE"), b("k"), b("real-hll")));
+                Assert.assertTrue(mergeErr instanceof ReplyError);
+                Assert.assertEquals("WRONGTYPE Key is not a valid HyperLogLog string value.", ((ReplyError) mergeErr).message());
             }
         });
     }

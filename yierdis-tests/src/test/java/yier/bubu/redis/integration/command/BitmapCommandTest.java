@@ -113,10 +113,13 @@ public class BitmapCommandTest {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             {
                 FastTestClient client = new FastTestClient(dispatcher);
-                assertError("not an integer or out of range", client.execute(cmd("SETBIT", "k", "-1", "0")));
+                assertError("bit offset is not an integer or out of range", client.execute(cmd("SETBIT", "k", "-1", "0")));
+                assertError("bit offset is not an integer or out of range", client.execute(cmd("SETBIT", "k", "nope", "0")));
                 assertError("bit is not an integer or out of range", client.execute(cmd("SETBIT", "k", "0", "2")));
                 assertError("bit is not an integer or out of range", client.execute(cmd("SETBIT", "k", "0", "nope")));
-                assertError("not an integer or out of range", client.execute(cmd("GETBIT", "k", "-1")));
+                assertError("bit offset is not an integer or out of range", client.execute(cmd("SETBIT", "k", "4294967296", "1")));
+                assertError("bit offset is not an integer or out of range", client.execute(cmd("GETBIT", "k", "-1")));
+                assertError("bit offset is not an integer or out of range", client.execute(cmd("GETBIT", "k", "nope")));
                 assertError("not an integer or out of range", client.execute(cmd("BITCOUNT", "k", "from", "2")));
             }
         });
