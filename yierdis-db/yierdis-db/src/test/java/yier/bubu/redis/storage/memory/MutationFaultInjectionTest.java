@@ -329,7 +329,7 @@ public class MutationFaultInjectionTest {
                         )
                 ),
                 new MutationCase(
-                        "PFMERGE replaces destination",
+                        "PFMERGE union into destination",
                         fixture -> {
                             fixture.hllOps.pfadd(PRIMARY_KEY, List.of(b("dest-seed")));
                             fixture.hllOps.pfadd(b("source-a"), Arrays.asList(b("a"), b("b"), b("c")));

@@ -200,7 +200,7 @@ bitmap 是 string bytes 的一种视图，因此 `SETBIT`、`GETBIT`、`BITCOUNT
 
 bitmap 没有独立逻辑类型，始终操作 string bytes。
 
-HLL 也没有独立 `ValueType`。命令层由 `HllCommands` 表达语义，DB 层由 HLL typed ops 处理，但底层对象仍是 `ValueType.STRING`；payload 是否为有效 HLL 由其格式约定判断。
+HLL 也没有独立 `ValueType`。命令层由 `HllCommands` 表达语义，DB 层由 HLL typed ops 处理，但底层对象仍是 `ValueType.STRING`；payload 是否为有效 HLL 由其格式约定判断。payload 格式与 Redis 对齐（`HYLL` header、sparse/dense 编码），因此 PF* 对相同 member 给出 Redis 类计数。
 
 这允许命令家族独立演进，同时避免在主类型系统里为 bitmap 和 HLL 增加额外逻辑类型。
 

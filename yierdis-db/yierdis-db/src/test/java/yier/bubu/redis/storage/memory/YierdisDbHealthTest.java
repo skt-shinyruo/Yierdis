@@ -25,6 +25,7 @@ import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 import yier.bubu.redis.storage.memory.internal.value.YierdisHyperLogLog;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -38,6 +39,15 @@ public class YierdisDbHealthTest {
     private static final BytesSlice SUSTAINED_VALUE_SLICE = slice(SUSTAINED_VALUE);
     private static final String MISCONF_DEGRADED =
             "MISCONF DB is in a degraded state; writes are disabled";
+
+    // 2000 个 member 足以让 sparse 超过 3000 字节晋升 dense（Redis hll-sparse-max-bytes 默认值）。
+    private static List<byte[]> densePrefillMembers() {
+        List<byte[]> members = new ArrayList<>(2000);
+        for (int i = 0; i < 2000; i++) {
+            members.add(b("dense-prefill:" + i));
+        }
+        return members;
+    }
 
     @Test
     public void sustainedStringAndSparseHllWritesLeaveDbWritableForDenseHllPrefill() {
@@ -70,9 +80,10 @@ public class YierdisDbHealthTest {
 
             Assert.assertFalse(db.health().toString(), db.health().degraded());
             byte[] sourceKey = b("hll:src");
+            // Redis 语义下 PFMERGE 的 dest 只有任一参与方为 dense 才是 dense：先把 source 喂过晋升阈值。
             Assert.assertEquals(Integer.valueOf(1), db.hll().pfadd(
                     sourceKey,
-                    List.of(b("seed"))
+                    densePrefillMembers()
             ).value());
             byte[] denseDestinationKey = b("hll:dense:0");
             db.hll().pfmerge(denseDestinationKey, List.of(sourceKey));
@@ -102,7 +113,8 @@ public class YierdisDbHealthTest {
         db.bindToCurrentThread();
         try {
             byte[] sourceKey = b("hll:merge-source");
-            db.hll().pfadd(sourceKey, List.of(b("seed")));
+            // 同上：source 先晋升 dense，PFMERGE 的 dest 才会写 dense。
+            db.hll().pfadd(sourceKey, densePrefillMembers());
 
             long stagedDirectoryGrowth = 0L;
             for (int index = 0; index < 100_000; index++) {

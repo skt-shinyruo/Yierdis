@@ -54,7 +54,7 @@ final class YierdisHllOps implements HllOps {
         return kernel.execute(new MutationPlan<WriteResult<Integer>>() {
             @Override
             public long upperBoundBytes() {
-                return estimatePfaddUpperBound(keyBytes, elements, now);
+                return estimatePfaddUpperBound(keyBytes, now);
             }
 
             @Override
@@ -159,18 +159,23 @@ final class YierdisHllOps implements HllOps {
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(destKeyBytes);
                 EntryRecord current = currentEntry.record();
                 byte[] currentBytes = null;
-                ValueHandle currentHandle = null;
                 if (current != null) {
                     requireString(current);
-                    currentHandle = requireHllHandle(current);
-                    currentBytes = stringRoot.copy(currentHandle);
+                    currentBytes = stringRoot.copy(requireHllHandle(current));
                 }
 
-                byte[] replacementBytes = YierdisHyperLogLog.prepareMerge(currentBytes, merged.registers());
+                // Redis pfmergeCommand 从 argv[1] 开始合并：已存在的 dest 自身也参与 union，
+                // 且 dest 的 TTL 保留（Redis 复用原 value 对象，不触碰 expire）。
+                boolean anySourceDense = merged.anySourceDense();
+                if (currentBytes != null) {
+                    anySourceDense = anySourceDense || YierdisHyperLogLog.isDenseBytes(currentBytes);
+                    YierdisHyperLogLog.mergeHllIntoRegisters(currentBytes, merged.registers());
+                }
+
+                byte[] replacementBytes = YierdisHyperLogLog.prepareMerge(currentBytes, anySourceDense, merged.registers());
                 boolean valueChanged = replacementBytes != null;
-                boolean ttlChanged = current != null && current.expireAtMillis() >= 0L;
-                MutationOutcome outcome = MutationOutcome.of(valueChanged, ttlChanged);
-                if (current != null && !outcome.changedAny()) {
+                MutationOutcome outcome = MutationOutcome.of(valueChanged, false);
+                if (current != null && !valueChanged) {
                     return kernel.unchanged(WriteResult.<Void>unchanged(null));
                 }
 
@@ -183,12 +188,13 @@ final class YierdisHllOps implements HllOps {
                         targetKey = staged.keyHandle();
                     }
 
-                    if (valueChanged) {
-                        replacement = stringRoot.store(replacementBytes);
-                    } else {
-                        replacement = currentHandle;
-                    }
-                    EntryRecord next = hllRecord(targetKey, replacement, -1L, current);
+                    replacement = stringRoot.store(replacementBytes);
+                    EntryRecord next = hllRecord(
+                            targetKey,
+                            replacement,
+                            current == null ? -1L : current.expireAtMillis(),
+                            current
+                    );
                     WriteResult<Void> result = WriteResult.of(null, outcome);
                     long deltaBytes = estimateRecordBytes(targetKey, next)
                             - estimateRecordBytes(targetKey, current);
@@ -199,22 +205,20 @@ final class YierdisHllOps implements HllOps {
                             currentEntry,
                             staged,
                             next,
-                            valueChanged
+                            true
                     );
                     staged = null;
-                    if (valueChanged) {
-                        replacement = null;
-                    }
+                    replacement = null;
                     return prepared;
                 } catch (RuntimeException | Error failure) {
-                    abortStaged(staged, valueChanged ? replacement : null, failure);
+                    abortStaged(staged, replacement, failure);
                     throw failure;
                 }
             }
         });
     }
 
-    private long estimatePfaddUpperBound(byte[] keyBytes, List<byte[]> elements, long nowMillis) {
+    private long estimatePfaddUpperBound(byte[] keyBytes, long nowMillis) {
         EntryRecord existing = keyLifecycle.entryRecord(keyBytes);
         int replacementLength = YierdisHyperLogLog.denseLength();
         if (existing == null) {
@@ -239,7 +243,9 @@ final class YierdisHllOps implements HllOps {
         }
         ValueHandle handle = requireHllHandle(existing);
         int existingLen = stringRoot.length(handle);
-        int targetLength = pfaddReplacementLengthUpperBound(existingLen, elements);
+        // 寄存器值 > 32 的晋升无法从长度预判（约 2^-33 概率但可被构造），admission 上界必须
+        // 始终覆盖 dense，避免在紧凑 maxmemory 下少预留 ~12KB。
+        int targetLength = YierdisHyperLogLog.denseLength();
         long heapGrowthBytes = addSaturating(
                 HLL_REGISTER_HEAP_BYTES,
                 addSaturating(existingLen, targetLength)
@@ -306,13 +312,6 @@ final class YierdisHllOps implements HllOps {
         ));
     }
 
-    private static int pfaddReplacementLengthUpperBound(int existingLen, List<byte[]> elements) {
-        int batchSparseLength = YierdisHyperLogLog.sparseLengthUpperBoundForElements(elements);
-        long additionalSparseBytes = Math.max(0L, (long) batchSparseLength - YierdisHyperLogLog.HEADER_BYTES);
-        long sparseUpperBound = addSaturating(existingLen, additionalSparseBytes);
-        return (int) Math.min(YierdisHyperLogLog.denseLength(), sparseUpperBound);
-    }
-
     private long sourceCopyBytesUpperBound(List<byte[]> sourceKeys, long nowMillis) {
         long bytes = 0L;
         if (sourceKeys == null) {
@@ -336,6 +335,7 @@ final class YierdisHllOps implements HllOps {
     private MergeRegisters mergeSourceRegisters(List<byte[]> sourceKeys, long nowMillis) {
         int[] registers = new int[YierdisHyperLogLog.REGISTERS];
         long copiedBytes = 0L;
+        boolean anySourceDense = false;
         for (byte[] sourceKey : sourceKeys) {
             EntryRecord record = liveStringRecordForPrepare(sourceKey, nowMillis);
             if (record == null) {
@@ -343,9 +343,10 @@ final class YierdisHllOps implements HllOps {
             }
             byte[] raw = stringRoot.copy(requireHllHandle(record));
             copiedBytes = addSaturating(copiedBytes, raw.length);
+            anySourceDense = anySourceDense || YierdisHyperLogLog.isDenseBytes(raw);
             YierdisHyperLogLog.mergeHllIntoRegisters(raw, registers);
         }
-        return new MergeRegisters(registers, copiedBytes);
+        return new MergeRegisters(registers, copiedBytes, anySourceDense);
     }
 
     private EntryRecord liveStringRecord(YierdisDbKernel kernel, byte[] keyBytes) {
@@ -423,6 +424,6 @@ final class YierdisHllOps implements HllOps {
         );
     }
 
-    private record MergeRegisters(int[] registers, long copiedBytes) {
+    private record MergeRegisters(int[] registers, long copiedBytes, boolean anySourceDense) {
     }
 }

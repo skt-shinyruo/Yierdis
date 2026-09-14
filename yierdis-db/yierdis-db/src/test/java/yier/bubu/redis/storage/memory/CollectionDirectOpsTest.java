@@ -381,8 +381,9 @@ public class CollectionDirectOpsTest {
 
             Assert.assertTrue(db.hll().pfmerge(b("dest"), List.of(b("h1"), b("h2")))
                     .mutationOutcome().changedAny());
-            Assert.assertEquals(-1L, db.ttl().ttlMillis(view("dest")));
-            Assert.assertTrue(db.hll().pfcount(List.of(b("dest"))) >= h1);
+            // Redis pfmergeCommand：dest 自身参与 union，且复用原 value 对象、保留 TTL。
+            Assert.assertTrue(db.ttl().ttlMillis(view("dest")) > 0L);
+            Assert.assertEquals(6L, db.hll().pfcount(List.of(b("dest"))));
 
             db.ttl().pexpire(view("h1"), 1);
             sleepPastTtl();

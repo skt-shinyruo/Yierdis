@@ -134,7 +134,7 @@ DB 内 key 到 entry handle/record 的索引结构。heap 路径和 FFM 路径�
 
 ### HLL string
 
-HyperLogLog 在 Yierdis 中不是独立 `ValueType`，而是带特定 header/payload 的 string 语义值。相关命令是 `PFADD`、`PFCOUNT`、`PFMERGE`。
+HyperLogLog 在 Yierdis 中不是独立 `ValueType`，而是带特定 header/payload 的 string 语义值。相关命令是 `PFADD`、`PFCOUNT`、`PFMERGE`。payload 使用 Redis 兼容格式（`HYLL` magic header、sparse/dense 编码、MurmurHash64A、tau/sigma 估计器），相同 member 得到与 Redis 相同的计数；不读取旧的 Yierdis 私有 `HLL1` payload。
 
 ### root / value
 
