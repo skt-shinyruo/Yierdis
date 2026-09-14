@@ -11,7 +11,7 @@ import java.util.Objects;
 
 public final class RespClientCodec {
     private static final byte[] CRLF = new byte[]{'\r', '\n'};
-    private static final byte[] EMPTY_BYTES = new byte[0];
+    private static final byte[] NULL_BULK_STRING = new byte[]{'$', '-', '1', '\r', '\n'};
     private static final ThreadLocal<byte[]> INT_BUF = ThreadLocal.withInitial(() -> new byte[20]);
 
     private RespClientCodec() {
@@ -35,11 +35,14 @@ public final class RespClientCodec {
         out.write(CRLF);
         for (int i = 0; i < args.size(); i++) {
             byte[] arg = args.get(i);
-            byte[] value = arg == null ? EMPTY_BYTES : arg;
+            if (arg == null) {
+                out.write(NULL_BULK_STRING);
+                continue;
+            }
             out.write('$');
-            writeNonNegativeInt(out, value.length);
+            writeNonNegativeInt(out, arg.length);
             out.write(CRLF);
-            out.write(value);
+            out.write(arg);
             out.write(CRLF);
         }
     }

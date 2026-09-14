@@ -98,7 +98,7 @@ SET raw "\x00\x01"
 
 - `encodeCommand(List<byte[]> args)` 返回完整 RESP frame bytes。
 - `writeCommand(OutputStream out, List<byte[]> args)` 写 RESP array，每个 argv 写成 bulk string。
-- `null` argv 会按空 bulk string 写出。
+- `null` argv 写成 RESP null bulk string（`$-1\r\n`），与 `readReply(...)` 把 `$-1` 读成 `NULL` 对称；空 `byte[]` 仍写成 `$0\r\n\r\n`，两者不再混淆。
 - 数字写出复用 `ThreadLocal<byte[]> INT_BUF`，减少临时分配。
 
 读回包：

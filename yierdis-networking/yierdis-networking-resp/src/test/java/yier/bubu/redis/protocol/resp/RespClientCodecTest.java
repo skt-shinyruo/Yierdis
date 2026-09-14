@@ -29,11 +29,11 @@ public class RespClientCodecTest {
     }
 
     @Test
-    public void encodesEmptyCommandAndNullArgumentsAsEmptyBulkStrings() throws Exception {
+    public void encodesEmptyCommandAndNullArgumentsAsNullBulkStrings() throws Exception {
         Assert.assertEquals("*0\r\n", ascii(RespClientCodec.encodeCommand(List.of())));
 
         List<byte[]> args = Arrays.asList(null, new byte[0], bytes("x"));
-        String expected = "*3\r\n$0\r\n\r\n$0\r\n\r\n$1\r\nx\r\n";
+        String expected = "*3\r\n$-1\r\n$0\r\n\r\n$1\r\nx\r\n";
         Assert.assertEquals(expected, ascii(RespClientCodec.encodeCommand(args)));
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -41,6 +41,13 @@ public class RespClientCodecTest {
         Assert.assertEquals(expected, out.toString(StandardCharsets.US_ASCII));
         Assert.assertThrows(NullPointerException.class, () -> RespClientCodec.writeCommand(null, args));
         Assert.assertThrows(NullPointerException.class, () -> RespClientCodec.writeCommand(out, null));
+    }
+
+    @Test
+    public void encodedNullArgumentDecodesBackAsRespNull() throws Exception {
+        byte[] frame = RespClientCodec.encodeCommand(Arrays.asList((byte[]) null));
+        byte[] argFrame = Arrays.copyOfRange(frame, "*1\r\n".length(), frame.length);
+        Assert.assertTrue(RespClientCodec.readReply(new ByteArrayInputStream(argFrame), 1024).isNull());
     }
 
     @Test
