@@ -93,6 +93,15 @@ public final class CoreConnectionCommands {
 
     private Function<CommandSession, PreparedCommand> client(CommandArgs args) {
         if (args.is(1, "SETINFO")) {
+            if (args.argc() != 4) {
+                throw new CommandParseException(
+                        "ERR wrong number of arguments for 'client|setinfo' command");
+            }
+            if (!args.is(2, "LIB-NAME") && !args.is(2, "LIB-VER")) {
+                // 未知属性按用户输入原样回显，与 Redis 的报错文案一致。
+                throw new CommandParseException(
+                        "ERR Unrecognized option '" + args.utf8(2) + "'");
+            }
             return session -> ok();
         }
         if (args.is(1, "SETNAME")) {

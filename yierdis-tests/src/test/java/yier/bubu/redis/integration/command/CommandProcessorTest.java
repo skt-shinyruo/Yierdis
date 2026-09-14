@@ -65,6 +65,35 @@ public class CommandProcessorTest {
     }
 
     @Test
+    public void clientSetinfoValidatesArityAndAttribute() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+
+                ReplyError missingValue = (ReplyError) client.execute(cmd("CLIENT", "SETINFO", "LIB-NAME"));
+                Assert.assertEquals(
+                        "ERR wrong number of arguments for 'client|setinfo' command",
+                        missingValue.message());
+
+                ReplyError extraArgument = (ReplyError) client.execute(cmd("CLIENT", "SETINFO", "LIB-NAME", "a", "b"));
+                Assert.assertEquals(
+                        "ERR wrong number of arguments for 'client|setinfo' command",
+                        extraArgument.message());
+
+                ReplyError unknownAttribute = (ReplyError) client.execute(cmd("CLIENT", "SETINFO", "FOO", "bar"));
+                Assert.assertEquals("ERR Unrecognized option 'FOO'", unknownAttribute.message());
+
+                ReplySimpleString libName = (ReplySimpleString) client.execute(cmd("CLIENT", "SETINFO", "LIB-NAME", "go-redis"));
+                Assert.assertEquals("OK", libName.value());
+
+                ReplySimpleString libVer = (ReplySimpleString) client.execute(cmd("CLIENT", "SETINFO", "lib-ver", "1.2.3"));
+                Assert.assertEquals("OK", libVer.value());
+            }
+        });
+    }
+
+    @Test
     public void authReportsNoPasswordConfigured() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);

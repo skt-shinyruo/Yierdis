@@ -161,7 +161,7 @@ maxmemory 参数：
 
 连接保护参数：
 
-- `--client-idle-timeout-millis`：读空闲关闭时间，默认 `300000` ms；`0` 禁用。
+- `--client-idle-timeout-millis`：读空闲关闭时间，默认 `0`（禁用）；大于 `0` 时按读空闲毫秒数关闭连接。
 - `--client-output-buffer-limit-bytes`：Yierdis 自定义慢客户端输出缓冲上限，默认 `67108864`；`0` 不设置自定义 `WriteBufferWaterMark`，并禁用 Yierdis 的宽限关闭。
 - `--client-output-buffer-over-limit-millis`：输出缓冲持续超过上限后的宽限期，默认 `10000` ms；启用 output buffer limit 时必须大于 `0`。
 

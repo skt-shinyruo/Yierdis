@@ -165,6 +165,31 @@ public class RespHandshakeIntegrationTest {
         }
     }
 
+    @Test
+    public void maxClientsRejectionDeliversErrorBeforeClosing() throws Exception {
+        YierdisServerRuntimeConfig config = ServerConfig.fromArgs(new String[]{
+                "--port", "0",
+                "--maxmemoryBytes", "0",
+                "--maxClients", "1"
+        });
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(config);
+             Socket first = new Socket("127.0.0.1", server.port());
+             Socket second = new Socket("127.0.0.1", server.port())) {
+            first.setSoTimeout(3000);
+            second.setSoTimeout(3000);
+
+            // 让第一条连接完成准入后再连第二条，避免两条连接竞争同一个 max-clients 名额。
+            OutputStream firstOut = first.getOutputStream();
+            firstOut.write("*1\r\n$4\r\nPING\r\n".getBytes(StandardCharsets.US_ASCII));
+            firstOut.flush();
+            Assert.assertEquals("+PONG\r\n", readAscii(first.getInputStream(), 7));
+
+            InputStream secondIn = second.getInputStream();
+            Assert.assertEquals("-ERR max number of clients reached\r\n", readAscii(secondIn, 36));
+            Assert.assertEquals(-1, secondIn.read());
+        }
+    }
+
     private static String readAscii(InputStream in, int len) throws Exception {
         return new String(in.readNBytes(len), StandardCharsets.US_ASCII);
     }

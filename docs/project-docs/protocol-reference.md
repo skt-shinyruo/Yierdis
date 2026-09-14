@@ -69,7 +69,7 @@ HELLO 3 SETNAME <name>
 
 `HELLO 2` 把连接设置为 RESP2 回包；`HELLO 3` 把连接切到基础 RESP3 reply encoding。切换成功后，作为连接 session owner 的 `EngineSession` 会记录当前版本。回复使用的协议版本在 prepare/容量预留时刻读取一次并被捕获进 `ReplyPlan`，命令执行返回语义 `RedisReply` 后，executor 按这份捕获值创建 `RespReplyWriter`，再由中央 renderer 编码成相应 RESP 形态；HELLO 自身在 prepare 时声明协商后的目标版本，因此协商回复的容量预留与写出都按协商后版本计算。
 
-`HELLO` 返回 5 个字段：`server`、`version`、`proto`、`mode`、`role`。在 RESP2 下这个 reply 是 flat array；在 RESP3 下是 map。例如 `HELLO 3` 成功后，响应包含 `proto: 3`，并且后续 map、null、bool、double 等语义会使用 RESP3 基础编码。
+`HELLO` 返回 5 个字段：`server`、`version`、`proto`、`mode`、`role`。在 RESP2 下这个 reply 是 flat array；在 RESP3 下是 map。例如 `HELLO 3` 成功后，响应包含 `proto: 3`，并且后续 map、set、null 语义会使用 RESP3 基础编码。
 
 需要注意：
 
@@ -93,9 +93,9 @@ RESP2 下的典型映射是：
 | `NullArray` | `*-1\r\n` |
 | `Aggregate(ARRAY, ...)` | `*<n>\r\n` |
 | `Aggregate(MAP, ...)` | flat array，长度为 field/value 元素数 |
-| `Aggregate(SET/PUSH, ...)` | array |
-| `BooleanValue(true/false)` | integer `1` / `0` |
-| `DoubleValue(v)` | bulk string |
+| `ByteSequence(...)` | array，逐元素 bulk string |
+| `ByteSet(...)` | array，逐元素 bulk string |
+| `ByteMap(...)` | flat array，交替 field/value bulk string |
 | `Error(message)` | `-ERR ...\r\n` 或已有 Redis error prefix |
 
 RESP3 下，已有专属形态的语义会换成 RESP3 编码：
@@ -104,16 +104,10 @@ RESP3 下，已有专属形态的语义会换成 RESP3 编码：
 | --- | --- |
 | `NullValue` / `NullArray` | `_\r\n` |
 | `Aggregate(MAP, ...)` | `%<pairs>\r\n` |
-| `Aggregate(SET, ...)` | `~<n>\r\n` |
-| `Aggregate(PUSH, ...)` | `><n>\r\n` |
-| `Aggregate(ATTRIBUTE, ...)` | `|<pairs>\r\n` |
-| `BooleanValue(true/false)` | `#t\r\n` / `#f\r\n` |
-| `DoubleValue(v)` | `,<value>\r\n` |
-| `BigNumber(v)` | `(<value>\r\n` |
-| `VerbatimString(format, data)` | `=<len>\r\n<format>:<data>\r\n` |
-| `BlobError(message)` | `!<len>\r\n<message>\r\n` |
+| `ByteSet(...)` | `~<n>\r\n` |
+| `ByteMap(...)` | `%<pairs>\r\n` |
 
-没有 RESP3 专属形态的语义仍使用通用表达，例如 simple string、integer、bulk string 和 array。
+`RedisReply` 没有 Boolean、Double、BigNumber、VerbatimString、BlobError 变体，`AggregateKind` 只有 `ARRAY` 和 `MAP`，因此 `HELLO 3` 之后也不会发出 RESP3 的 `#`、`,`、`(`、`=`、`!`、`>`、`|` 形态。没有 RESP3 专属形态的语义仍使用通用表达，例如 simple string、integer、bulk string、error 和 array。
 
 ## 协议错误和断连
 
@@ -152,7 +146,8 @@ Yierdis 支持 Redis 风格 RESP 入口和一组基础握手命令，但不声�
 
 - RESP2 是默认请求和回包兼容目标；
 - `HELLO 3` 可以切换到基础 RESP3 回包编码；
-- `CLIENT SETINFO`、`CLIENT SETNAME`、`CLIENT GETNAME` 和 `AUTH` 提供最小握手兼容；
+- `CLIENT SETINFO` 校验 arity 与 `LIB-NAME`/`LIB-VER` 属性名，`CLIENT SETNAME`/`CLIENT GETNAME` 维护连接名，`AUTH` 固定返回 no-password-configured 错误；
+- 达到 `--maxClients` 上限时，新连接先收到 `-ERR max number of clients reached` 再被关闭；
 - malformed RESP 会返回协议错误并关闭连接；
 - 命令语义以当前已实现命令为准。
 

@@ -1,6 +1,9 @@
 package yier.bubu.redis.app.server;
 
+import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelFutureListener;
+import java.nio.charset.StandardCharsets;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -9,6 +12,9 @@ import java.util.concurrent.CompletableFuture;
 
 /** Tracks accepted child channels until their close futures complete. */
 final class ChildChannelRegistry {
+    private static final byte[] MAX_CLIENTS_REJECTION =
+            "-ERR max number of clients reached\r\n".getBytes(StandardCharsets.US_ASCII);
+
     enum AdmissionResult {
         ACCEPTED,
         REJECTED_CLOSING,
@@ -80,7 +86,11 @@ final class ChildChannelRegistry {
         }
         if (result != AdmissionResult.ACCEPTED) {
             pauseInput(channel);
-            closeChannel(channel);
+            if (result == AdmissionResult.REJECTED_MAX_CLIENTS) {
+                writeRejectionThenClose(channel);
+            } else {
+                closeChannel(channel);
+            }
             return result;
         }
         if (!added) {
@@ -230,6 +240,23 @@ final class ChildChannelRegistry {
             }
         } catch (Throwable ignored) {
             pause.run();
+        }
+    }
+
+    /**
+     * 与 Redis 一致：max-clients 拒绝先把错误写回已打开的通道，写完成后再关闭，
+     * 让客户端能区分准入失败和崩溃。通道不可写时退化为静默关闭。
+     */
+    private static void writeRejectionThenClose(Channel channel) {
+        if (!channel.isOpen() || !channel.isWritable()) {
+            closeChannel(channel);
+            return;
+        }
+        try {
+            channel.writeAndFlush(Unpooled.wrappedBuffer(MAX_CLIENTS_REJECTION))
+                    .addListener(ChannelFutureListener.CLOSE);
+        } catch (Throwable ignored) {
+            closeChannel(channel);
         }
     }
 
