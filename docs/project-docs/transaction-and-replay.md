@@ -25,7 +25,7 @@ transaction state 保存：
 - `active`：是否已经执行 `MULTI`；
 - `aborted`：是否因排队前错误或 queue limit 失效；
 - `queue`：transaction 自己拥有的 retained `ExecutionRequest`；
-- `queuedBytes`：所有 queued request 的 retained bytes；
+- `queuedBytes`：所有 queued request 的 retained bytes，即各自 heap footprint 估算之和；
 - `maxQueuedCommands` 与 `maxQueuedBytes`：连接级队列上限。
 
 `EngineSession` 不拥有 `CommandDispatcher`、DB、executor 或 renderer。它只承载跨请求持续存在的连接状态；命令重放仍由 dispatcher 与 executor 完成。
@@ -39,7 +39,7 @@ transaction state 保存：
 1. 当前 task 在返回 `QUEUED` 后会关闭自己的 request owner，transaction queue 必须拥有可独立关闭的 view；
 2. `EXEC` 要复用普通命令链。保留 `ExecutionRequest` 就能再次走 lookup、arity、handler parse、准备函数应用和 prepared execution。
 
-生产网络 request 的 retained view 共享不可变 argv 与 reference-counted request-memory lease；heap request 可以通过自身实现提供稳定副本。transaction state 只依赖 `ExecutionRequest.retain()` 和 `retainedBytes()` 合同。
+生产网络 request 的 retained view 共享不可变 argv 与 reference-counted request-memory lease；heap request 可以通过自身实现提供稳定副本。transaction state 只依赖 `ExecutionRequest.retain()` 和 `retainedBytes()` 合同；`retainedBytes()` 是 `HeapRequestFootprint` 口径的 heap footprint 估算，所以“小 payload、多参数”的命令也会按真实驻留成本计入 `maxQueuedBytes`。
 
 ## `MULTI` 和入队 preflight
 

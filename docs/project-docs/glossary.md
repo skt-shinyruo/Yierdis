@@ -120,6 +120,8 @@ DB 内 key 到 entry handle/record 的索引结构。heap 路径和 FFM 路径�
 
 对象当前持有、仍需计入生命周期或 maxmemory 的字节数。它不一定等同于本次写入的参数大小，因为 native spare capacity、root metadata 和 heap topology 都可能参与计算。
 
+请求侧的 `ExecutionRequest.retainedBytes()` 是 heap request footprint 估算，统一由 `HeapRequestFootprint` 定义：请求对象、外层 argv 数组与引用槽位、每个非空参数的数组头和按 8 对齐的 payload 都计入，而不是只按参数 payload 长度求和。RESP array path、inline path 和 `ByteArrayExecutionRequest` 各工厂方法共用这一口径，executor queued bytes、连接 pending bytes 和事务 queue bytes 直接消费该值。
+
 ## Data Model
 
 ### value type

@@ -40,7 +40,7 @@ public class RespIngressAdmissionTest {
         InboundConnectionMemory connection = new InboundConnectionMemory(2_048, Runnable::run, () -> { });
         Assert.assertEquals(InboundMemoryBudget.ReservationResult.RESERVED, budget.tryReserve(blocker, 1_000));
         RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
-                1_024, 16, 1_024, 1_024, budget, connection, RespDecodedMessageGate.PASS_THROUGH
+                1_024, 16, 1_024, 4_096, budget, connection, RespDecodedMessageGate.PASS_THROUGH
         );
         EmbeddedChannel channel = new EmbeddedChannel(decoder);
         try {
@@ -335,7 +335,7 @@ public class RespIngressAdmissionTest {
         InboundMemoryBudget budget = new InboundMemoryBudget(2_048);
         InboundConnectionMemory blocker = new InboundConnectionMemory(2_048, Runnable::run, () -> { });
         InboundConnectionMemory connection = new InboundConnectionMemory(2_048, Runnable::run, () -> { });
-        Assert.assertEquals(InboundMemoryBudget.ReservationResult.RESERVED, budget.tryReserve(blocker, 1_455));
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.RESERVED, budget.tryReserve(blocker, 1_458));
         RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
                 1_024, 16, 1_024, 1_024, budget, connection, RespDecodedMessageGate.PASS_THROUGH
         );
@@ -343,7 +343,7 @@ public class RespIngressAdmissionTest {
         ExecutionRequest request = null;
         try {
             Assert.assertFalse(channel.writeInbound(unaccountedAscii("\r\n \t\r\n")));
-            Assert.assertEquals(1_455L, budget.stats().reservedBytes());
+            Assert.assertEquals(1_458L, budget.stats().reservedBytes());
 
             Assert.assertFalse(channel.writeInbound(unaccountedAscii("PING\r\n")));
             Assert.assertEquals("WAITING_FOR_INLINE", decoder.stateNameForTests());
@@ -361,7 +361,7 @@ public class RespIngressAdmissionTest {
                 request.close();
             }
             channel.finishAndReleaseAll();
-            budget.release(blocker, 855);
+            budget.release(blocker, 858);
         }
 
         Assert.assertEquals(0L, budget.stats().reservedBytes());

@@ -414,7 +414,7 @@ public class YierdisServerBootstrapCommandWiringTest {
             }
 
             YierdisServerRuntimeConfig byteLimitedConfig =
-                    TestCommandDispatchers.runtimeConfig(0, 4, 3, 2, 4, 5);
+                    TestCommandDispatchers.runtimeConfig(0, 128, 3, 2, 4, 5);
             NioSocketChannel byteLimitedChannel = new NioSocketChannel();
             try {
                 new YierdisServerChannelInitializer(byteLimitedConfig, env.executor, env.replyWriterFactory).initChannel(byteLimitedChannel);

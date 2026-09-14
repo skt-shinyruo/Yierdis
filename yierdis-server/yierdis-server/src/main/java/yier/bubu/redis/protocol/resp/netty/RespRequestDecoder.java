@@ -6,6 +6,7 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.util.ReferenceCountUtil;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
+import yier.bubu.redis.execution.api.HeapRequestFootprint;
 import yier.bubu.redis.execution.api.ReferenceCountedRequestMemoryLease;
 import yier.bubu.redis.execution.api.RequestMemoryLease;
 import yier.bubu.redis.protocol.resp.InlineCommandParser;
@@ -21,10 +22,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     private static final byte LF = (byte) '\n';
     private static final byte ARRAY = (byte) '*';
     private static final byte BULK = (byte) '$';
-    private static final int REQUEST_FIXED_BYTES = 32;
-    private static final int OUTER_ARGV_BYTES = 16;
-    private static final int REFERENCE_BYTES = 8;
-    private static final int ARRAY_HEADER_BYTES = 16;
     private static final long INLINE_DECODED_OBJECT_BYTES = 32L;
     private static final long INLINE_PARSER_TRANSIENT_FLOOR_BYTES = 512L;
     private static final int MAX_COMPONENTS = 16;
@@ -268,7 +265,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         }
 
         PendingAdmission admission = progressAdmission(
-                outerArgvCharge(argc),
+                HeapRequestFootprint.outerArgvBytes(argc),
                 cumulator.releasableChargeAfterRead(0)
         );
         ArgvAdmissionPhase pending = new ArgvAdmissionPhase(argc, admission);
@@ -294,7 +291,10 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             return false;
         }
         allocatedArgvArrays++;
-        phase = new ArrayPhase(new ArrayProgress(argv, reservedBytes));
+        ArrayProgress progress = new ArrayProgress(argv, reservedBytes);
+        // retainedBytes 从 argv 分配起就按 HeapRequestFootprint 口径累计，命令大小检查与最终请求共用同一估值。
+        progress.retainedBytes = HeapRequestFootprint.baseRetainedBytes(pending.argc());
+        phase = new ArrayPhase(progress);
         cumulator.discardFullyReadComponents();
         return true;
     }
@@ -348,12 +348,15 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
                     emitProtocolError(ctx, "ERR Protocol error: invalid bulk length");
                     return ParseResult.ERROR;
                 }
-                if (maxCommandBytes > 0 && array.retainedBytes > maxCommandBytes - length) {
+                if (maxCommandBytes > 0 && HeapRequestFootprint.addRetainedBytes(
+                        array.retainedBytes,
+                        HeapRequestFootprint.argumentRetainedBytes(length)
+                ) > maxCommandBytes) {
                     emitProtocolError(ctx, "ERR Protocol error: command is too large");
                     return ParseResult.ERROR;
                 }
                 PendingAdmission admission = progressAdmission(
-                        payloadCharge(length),
+                        HeapRequestFootprint.argumentBytes(length),
                         cumulator.releasableChargeAfterRead(0)
                 );
                 BulkAdmissionPhase pending = new BulkAdmissionPhase(array, length, admission);
@@ -391,7 +394,10 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
                 return ParseResult.ERROR;
             }
             array.argv[array.argIndex++] = bulk.buffer();
-            array.retainedBytes = saturatedAdd(array.retainedBytes, bulk.length());
+            array.retainedBytes = HeapRequestFootprint.addRetainedBytes(
+                    array.retainedBytes,
+                    HeapRequestFootprint.argumentRetainedBytes(bulk.length())
+            );
             phase = new ArrayPhase(array);
             bulk = null;
             cumulator.discardFullyReadComponents();
@@ -430,7 +436,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
 
     private ParseResult completeRequest(ChannelHandlerContext ctx, ArrayProgress array) {
         PendingAdmission admission = progressAdmission(
-                REQUEST_FIXED_BYTES,
+                HeapRequestFootprint.requestFixedBytes(),
                 cumulator.releasableChargeAfterRead(0)
         );
         RequestAdmissionPhase pending = new RequestAdmissionPhase(array, admission);
@@ -460,7 +466,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
                 ? new ReferenceCountedRequestMemoryLease(array.reservedBytes, ignored -> { })
                 : requestLease(array.reservedBytes);
         return new RespDecodedMessage.Request(
-                ByteArrayExecutionRequest.takeOwnership(array.argv, array.retainedBytes, lease)
+                ByteArrayExecutionRequest.takeOwnership(array.argv, lease)
         );
     }
 
@@ -585,7 +591,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             return false;
         }
 
-        long total = inlineAdmissionCharge(length, parsed.argc(), parsed.retainedBytes());
+        long total = inlineAdmissionCharge(length, parsed.retainedBytes());
         InlineAdmissionPhase next = new InlineAdmissionPhase(
                 parsed,
                 pending.admission().bytes,
@@ -617,7 +623,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         pending.reservedBytes = fullCharge;
         RequestMemoryLease lease = requestLease(fullCharge);
         RespDecodedMessage decoded = new RespDecodedMessage.Request(
-                ByteArrayExecutionRequest.takeOwnership(argv, parsed.retainedBytes(), lease)
+                ByteArrayExecutionRequest.takeOwnership(argv, lease)
         );
         HandoffPhase handoff = new HandoffPhase(decoded);
         phase = handoff;
@@ -793,11 +799,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         ReferenceCountUtil.safeRelease(msg);
     }
 
-    private static long outerArgvCharge(int argc) {
-        return InboundMemoryBudget.saturatedAdd(OUTER_ARGV_BYTES,
-                saturatedMultiply(Math.max(0, argc), REFERENCE_BYTES));
-    }
-
     private RequestMemoryLease requestLease(long reservedBytes) {
         if (budget == null) {
             return new ReferenceCountedRequestMemoryLease(reservedBytes, ignored -> { });
@@ -815,47 +816,22 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     }
 
     private static long inlineInspectionCharge(int lineLength) {
-        long lineArrays = InboundMemoryBudget.saturatedAdd(payloadCharge(lineLength), payloadCharge(lineLength));
+        long lineArrays = InboundMemoryBudget.saturatedAdd(
+                HeapRequestFootprint.argumentBytes(lineLength),
+                HeapRequestFootprint.argumentBytes(lineLength)
+        );
         return InboundMemoryBudget.saturatedAdd(lineArrays, INLINE_DECODED_OBJECT_BYTES);
     }
 
-    private static long inlineAdmissionCharge(int lineLength, int argc, int retainedBytes) {
-        long finalRequestCharge = inlineFinalChargeUpperBound(argc, retainedBytes);
-        long parserTransient = InboundMemoryBudget.saturatedAdd(payloadCharge(lineLength), payloadCharge(lineLength));
+    private static long inlineAdmissionCharge(int lineLength, int retainedBytes) {
+        // retainedBytes 与 argv 物化后的 HeapRequestFootprint 估算相等，准入只需额外覆盖 parser 的瞬态分配。
+        long parserTransient = InboundMemoryBudget.saturatedAdd(
+                HeapRequestFootprint.argumentBytes(lineLength),
+                HeapRequestFootprint.argumentBytes(lineLength)
+        );
         parserTransient = InboundMemoryBudget.saturatedAdd(parserTransient, INLINE_DECODED_OBJECT_BYTES);
         parserTransient = Math.max(parserTransient, INLINE_PARSER_TRANSIENT_FLOOR_BYTES);
-        return InboundMemoryBudget.saturatedAdd(finalRequestCharge, parserTransient);
-    }
-
-    private static long inlineFinalChargeUpperBound(int argc, int retainedBytes) {
-        long total = InboundMemoryBudget.saturatedAdd(REQUEST_FIXED_BYTES, outerArgvCharge(argc));
-        long perArgumentHeaders = saturatedMultiply(Math.max(0, argc), ARRAY_HEADER_BYTES);
-        long alignmentSlack = saturatedMultiply(Math.max(0, argc), 7L);
-        total = InboundMemoryBudget.saturatedAdd(total, perArgumentHeaders);
-        total = InboundMemoryBudget.saturatedAdd(total, Math.max(0, retainedBytes));
-        return InboundMemoryBudget.saturatedAdd(total, alignmentSlack);
-    }
-
-    private static long payloadCharge(int length) {
-        return InboundMemoryBudget.saturatedAdd(16L, align8(length));
-    }
-
-    private static long align8(int length) {
-        return align8((long) Math.max(0, length));
-    }
-
-    private static long align8(long length) {
-        if (length <= 0L) {
-            return 0L;
-        }
-        return length > Long.MAX_VALUE - 7L ? Long.MAX_VALUE : (length + 7L) & ~7L;
-    }
-
-    private static long saturatedMultiply(long left, long right) {
-        if (left <= 0L || right <= 0L) {
-            return 0L;
-        }
-        return left > Long.MAX_VALUE / right ? Long.MAX_VALUE : left * right;
+        return InboundMemoryBudget.saturatedAdd(Math.max(0, retainedBytes), parserTransient);
     }
 
     private static final class ByteBufLineView implements BytesView {
@@ -915,11 +891,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             }
         }
         return negative ? -value : value;
-    }
-
-    private static int saturatedAdd(int current, int value) {
-        long next = (long) Math.max(0, current) + Math.max(0, value);
-        return next >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) next;
     }
 
     private enum ParseResult {

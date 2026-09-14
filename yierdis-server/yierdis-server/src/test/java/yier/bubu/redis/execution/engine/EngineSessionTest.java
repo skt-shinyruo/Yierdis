@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class EngineSessionTest {
     @Test
     public void engineSessionOwnsDbClientAndTransactionState() {
-        EngineSession session = new EngineSession(1, 16);
+        EngineSession session = new EngineSession(1, 1024);
         session.setDbIndex(3);
         session.setClientName("  worker  ");
 
@@ -56,7 +56,7 @@ public class EngineSessionTest {
 
     @Test
     public void transactionRejectsCommandsThatOverflowQueuedBytes() {
-        EngineSession session = new EngineSession(4, 5);
+        EngineSession session = new EngineSession(4, 150);
         session.transaction().begin();
 
         ExecutionRequest first = ByteArrayExecutionRequest.fromUtf8("SET", List.of("a"));
@@ -67,6 +67,21 @@ public class EngineSessionTest {
         Assert.assertEquals("ERR Transaction queue is full", session.transaction().tryEnqueue(second));
         Assert.assertTrue(session.transaction().aborted());
         Assert.assertEquals(1, session.transaction().size());
+    }
+
+    @Test
+    public void transactionByteLimitCountsHeapFootprintOfManySmallArguments() {
+        // 5 个参数的 payload 只有 7 字节，但 retainedBytes 按 HeapRequestFootprint 估算为 208，
+        // maxQueuedBytes 必须按新口径而不是 payload 下界触发。
+        EngineSession session = new EngineSession(8, 100);
+        session.transaction().begin();
+
+        ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("SET", List.of("a", "b", "c", "d"));
+
+        Assert.assertEquals(208, request.retainedBytes());
+        Assert.assertEquals("ERR Transaction queue is full", session.transaction().tryEnqueue(request));
+        Assert.assertTrue(session.transaction().aborted());
+        Assert.assertEquals(0, session.transaction().size());
     }
 
     @Test
@@ -194,7 +209,7 @@ public class EngineSessionTest {
 
     @Test
     public void transactionResetPathsCloseOwnedSnapshots() throws Exception {
-        EngineSession session = new EngineSession(4, 64);
+        EngineSession session = new EngineSession(4, 1024);
         AtomicInteger closedSnapshots = new AtomicInteger();
 
         session.transaction().begin();

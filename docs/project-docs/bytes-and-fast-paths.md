@@ -33,9 +33,9 @@ Yierdis 选择中立 bytes 层：
 
 网络生产路径由 `RespRequestDecoder` 调用 `ByteArrayExecutionRequest.takeOwnership(...)`，把已经 materialize 的 heap `byte[][]` argv 和脱离 Netty 对象的 request-memory lease 一并移交给请求。`retain()` 共享不可变 argv，只增加 lease 引用；请求跨过 decoder 生命周期后仍保有稳定 argv 与 admission 元数据，也不会在协议边界做第二次逐参数复制。
 
-`copyOf(...)` 为 heap 输入创建独立 snapshot，`fromUtf8(...)` 用于测试、CLI 和固定文本输入。该实现负责 retained bytes 的饱和计数，不会因为 `int` 回绕变成负数。
+`copyOf(...)` 为 heap 输入创建独立 snapshot，`fromUtf8(...)` 用于测试、CLI 和固定文本输入。retained bytes 一律由 `HeapRequestFootprint` 按 heap footprint 估算（请求对象 + 外层 argv 与槽位 + 每参数数组头与对齐 payload）并做饱和计数，不会因为 `int` 回绕变成负数。
 
-`wrapReadOnly(...)` 只适合调用方已经拥有 argv、并且能持续遵守只读约定的场景。`readOnlyByteArray(...)` 是 heap-backed immutable request 的快速读路径，不等于把内部数组的所有权暴露给外部。`fromUtf8(...)` 只是测试、CLI 和固定输入构造的便利函数。
+`wrapReadOnly(...)` 只适合调用方已经拥有 argv、并且能持续遵守只读约定的场景；它同样内部按 `HeapRequestFootprint` 估算 retained bytes，调用方不再显式传值。`readOnlyByteArray(...)` 是 heap-backed immutable request 的快速读路径，不等于把内部数组的所有权暴露给外部。`fromUtf8(...)` 只是测试、CLI 和固定输入构造的便利函数。
 
 ## `BytesView` 与 `BytesSlice` 的 ownership
 
@@ -44,7 +44,7 @@ Yierdis 选择中立 bytes 层：
 
 ## 协议层如何使用 bytes
 
-RESP decode 后直接得到 `ByteArrayExecutionRequest`。它保存 `byte[][] argv`、payload retained bytes 和 reference-counted request-memory lease；网络层不再经过协议 DTO 或 adapter。decoder 在 bulk/inline 命令完整前就对 argv、payload 和 request 固定开销完成 admission，因此 heap materialization 是有意的 ownership snapshot：请求跨过 Netty decoder 生命周期后，需要稳定 argv 和 admission 计数供 executor 排队、budget 和 transaction 逻辑使用。
+RESP decode 后直接得到 `ByteArrayExecutionRequest`。它保存 `byte[][] argv`、`HeapRequestFootprint` 口径的 retained bytes 和 reference-counted request-memory lease；网络层不再经过协议 DTO 或 adapter。decoder 在 bulk/inline 命令完整前就对 argv、payload 和 request 固定开销完成 admission，因此 heap materialization 是有意的 ownership snapshot：请求跨过 Netty decoder 生命周期后，需要稳定 argv 和 admission 计数供 executor 排队、budget 和 transaction 逻辑使用。
 
 reply 编码方向相反。`RespReplyWriter.bulkString(BytesSlice)` 先写 RESP bulk header，再同步调用 `BytesSlice.writeTo(out)` 把内容写入 `BytesSink`，最后写 CRLF。生产路径中的 sink 通过 reply reservation 把输出限制在有界 `ByteBuf` chunk 内。
 

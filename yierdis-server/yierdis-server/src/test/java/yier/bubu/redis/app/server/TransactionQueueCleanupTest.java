@@ -21,7 +21,7 @@ public class TransactionQueueCleanupTest {
         AtomicInteger finalReleases = new AtomicInteger();
         AtomicInteger retainedCloses = new AtomicInteger();
         try {
-            NettyExecutionConnection connection = NettyExecutionConnection.getOrCreate(ch, 1, 16);
+            NettyExecutionConnection connection = NettyExecutionConnection.getOrCreate(ch, 1, 1024);
             TransactionState tx = connection.session().transaction();
 
             tx.begin();
@@ -59,7 +59,7 @@ public class TransactionQueueCleanupTest {
         AtomicInteger finalReleases = new AtomicInteger();
         AtomicInteger retainedCloses = new AtomicInteger();
         try {
-            NettyExecutionConnection connection = NettyExecutionConnection.getOrCreate(ch, 1, 16);
+            NettyExecutionConnection connection = NettyExecutionConnection.getOrCreate(ch, 1, 1024);
             TransactionState tx = connection.session().transaction();
             tx.begin();
 

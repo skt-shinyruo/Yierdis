@@ -1,6 +1,7 @@
 package yier.bubu.redis.protocol.resp;
 
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.execution.api.HeapRequestFootprint;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -68,6 +69,7 @@ public final class InlineCommandParser {
         int argc = 0;
         int end = off + len;
         int outPos = 0;
+        int argumentBytes = 0;
 
         int p = off;
         while (true) {
@@ -177,10 +179,14 @@ public final class InlineCommandParser {
                 args[argc] = new byte[tokenLen];
                 System.arraycopy(decoded, tokenStart, args[argc], 0, tokenLen);
             }
+            // retained bytes 与 ByteArrayExecutionRequest 同口径，物化 argv 前后不允许出现两种算法。
+            argumentBytes = HeapRequestFootprint.addRetainedBytes(
+                    argumentBytes, HeapRequestFootprint.argumentRetainedBytes(tokenLen));
             argc++;
         }
 
-        return new Parsed(input, off, len, argc, outPos);
+        return new Parsed(input, off, len, argc, HeapRequestFootprint.addRetainedBytes(
+                HeapRequestFootprint.baseRetainedBytes(argc), argumentBytes));
     }
 
     public static List<byte[]> splitUtf8(String line, int maxArgs) {

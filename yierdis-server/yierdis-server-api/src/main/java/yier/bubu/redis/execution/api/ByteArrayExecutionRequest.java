@@ -32,24 +32,20 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
     public static ByteArrayExecutionRequest copyOf(List<byte[]> args) {
         Objects.requireNonNull(args, "args");
         byte[][] argv = new byte[args.size()][];
-        int retainedBytes = 0;
         for (int i = 0; i < args.size(); i++) {
             byte[] arg = args.get(i);
             if (arg == null) {
                 continue;
             }
-            byte[] copy = arg.clone();
-            argv[i] = copy;
-            retainedBytes = saturatedRetainedBytes(retainedBytes, copy.length);
+            argv[i] = arg.clone();
         }
-        return new ByteArrayExecutionRequest(argv, retainedBytes, false);
+        return new ByteArrayExecutionRequest(argv, HeapRequestFootprint.estimateRetainedBytes(argv), false);
     }
 
     public static ByteArrayExecutionRequest copyOf(ExecutionRequest request) {
         Objects.requireNonNull(request, "request");
         int argc = request.argc();
         byte[][] argv = new byte[argc][];
-        int retainedBytes = 0;
         for (int i = 0; i < argc; i++) {
             if (request.isNull(i)) {
                 continue;
@@ -63,26 +59,22 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
                 request.copyToByteArray(i, copy, 0);
             }
             argv[i] = copy;
-            retainedBytes = saturatedRetainedBytes(retainedBytes, copy.length);
         }
-        return new ByteArrayExecutionRequest(argv, retainedBytes, false);
+        return new ByteArrayExecutionRequest(argv, HeapRequestFootprint.estimateRetainedBytes(argv), false);
     }
 
-    public static ByteArrayExecutionRequest wrapReadOnly(byte[][] argv, int retainedBytes) {
+    public static ByteArrayExecutionRequest wrapReadOnly(byte[][] argv) {
         Objects.requireNonNull(argv, "argv");
-        return new ByteArrayExecutionRequest(argv.clone(), Math.max(0, retainedBytes), true);
+        byte[][] copy = argv.clone();
+        return new ByteArrayExecutionRequest(copy, HeapRequestFootprint.estimateRetainedBytes(copy), true);
     }
 
-    public static ByteArrayExecutionRequest takeOwnership(
-            byte[][] argv,
-            int retainedBytes,
-            RequestMemoryLease lease
-    ) {
+    public static ByteArrayExecutionRequest takeOwnership(byte[][] argv, RequestMemoryLease lease) {
         Objects.requireNonNull(argv, "argv");
         Objects.requireNonNull(lease, "lease");
         return new ByteArrayExecutionRequest(
                 argv,
-                Math.max(0, retainedBytes),
+                HeapRequestFootprint.estimateRetainedBytes(argv),
                 true,
                 lease
         );
@@ -92,27 +84,15 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
         Objects.requireNonNull(commandName, "commandName");
         Objects.requireNonNull(args, "args");
         byte[][] argv = new byte[args.size() + 1][];
-        int retainedBytes = 0;
-
-        byte[] commandBytes = commandName.getBytes(StandardCharsets.UTF_8);
-        argv[0] = commandBytes;
-        retainedBytes = saturatedRetainedBytes(retainedBytes, commandBytes.length);
-
+        argv[0] = commandName.getBytes(StandardCharsets.UTF_8);
         for (int i = 0; i < args.size(); i++) {
             String arg = args.get(i);
             if (arg == null) {
                 continue;
             }
-            byte[] bytes = arg.getBytes(StandardCharsets.UTF_8);
-            argv[i + 1] = bytes;
-            retainedBytes = saturatedRetainedBytes(retainedBytes, bytes.length);
+            argv[i + 1] = arg.getBytes(StandardCharsets.UTF_8);
         }
-        return new ByteArrayExecutionRequest(argv, retainedBytes, true);
-    }
-
-    static int saturatedRetainedBytes(int retainedBytes, int argLength) {
-        long next = (long) Math.max(0, retainedBytes) + Math.max(0, argLength);
-        return next >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) next;
+        return new ByteArrayExecutionRequest(argv, HeapRequestFootprint.estimateRetainedBytes(argv), true);
     }
 
     @Override
@@ -189,23 +169,10 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
         lease.close();
     }
 
+    /**
+     * 请求视图保活期间占用的 heap footprint 估算，与 {@link HeapRequestFootprint} 同口径。
+     */
     public static long estimatedMemoryBytes(byte[][] argv) {
-        Objects.requireNonNull(argv, "argv");
-        long total = saturatedAdd(48L, argv.length * 8L);
-        for (byte[] arg : argv) {
-            if (arg != null) {
-                total = saturatedAdd(total, 16L);
-                total = saturatedAdd(total, align8(arg.length));
-            }
-        }
-        return total;
-    }
-
-    private static long align8(int length) {
-        return ((long) length + 7L) & ~7L;
-    }
-
-    private static long saturatedAdd(long left, long right) {
-        return left >= Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
+        return HeapRequestFootprint.estimateBytes(argv);
     }
 }

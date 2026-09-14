@@ -463,13 +463,10 @@ public class ClosingSkipSideEffectsIntegrationTest {
 
     private static ByteArrayExecutionRequest request(String cmd, String... args) {
         byte[][] argv = new byte[args.length + 1][];
-        int retainedBytes = 0;
         argv[0] = ascii(cmd);
-        retainedBytes += argv[0].length;
         for (int i = 0; i < args.length; i++) {
             argv[i + 1] = ascii(args[i]);
-            retainedBytes += argv[i + 1].length;
         }
-        return ByteArrayExecutionRequest.wrapReadOnly(argv, retainedBytes);
+        return ByteArrayExecutionRequest.wrapReadOnly(argv);
     }
 }

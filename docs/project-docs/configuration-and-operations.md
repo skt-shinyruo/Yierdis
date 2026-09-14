@@ -74,7 +74,7 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar STATS
 
 ## protocol limits
 
-`--protocolMaxBulkBytes`、`--protocolMaxArgs`、`--protocolMaxLineBytes` 和 `--protocolMaxCommandBytes` 会直接传给 `RespRequestDecoder`。它们分别约束 bulk body、参数个数、header/inline 行长度，以及单条命令累计字节数。暴露在不可信网络里时，优先收紧这四个入口上限，再考虑更深层的内存调参。
+`--protocolMaxBulkBytes`、`--protocolMaxArgs`、`--protocolMaxLineBytes` 和 `--protocolMaxCommandBytes` 会直接传给 `RespRequestDecoder`。它们分别约束 bulk body、参数个数、header/inline 行长度，以及单条命令的 heap footprint 估算字节数（`HeapRequestFootprint` 口径，含请求对象、argv 槽位和每个参数的数组头与对齐 payload，不是纯 payload 求和）。暴露在不可信网络里时，优先收紧这四个入口上限，再考虑更深层的内存调参。
 
 解析失败会走 RESP protocol error 路径：`RespRequestDecoder` 负责 RESP 解析、入口限制和 ingress admission，出错时把 `RespProtocolError` 放进已注册 reply slot；`NettyExecutionRequestIngress` 统一回协议错误并关闭连接，避免请求和回包错位。这个路径不会进入 command executor。
 
@@ -89,6 +89,8 @@ executor 参数分两类：全局队列预算和单连接背压。
 - `--executorDrainMillis`：每轮 drain 时间预算，默认 `2` ms。
 - `--backpressureHigh` / `--backpressureLow`：单连接 pending 命令高低水位，默认 `256/128`。
 - `--backpressureBytesHigh` / `--backpressureBytesLow`：单连接 pending bytes 高低水位，默认 `16777216/8388608`；high 为 `0` 时 bytes 背压禁用，low 也必须为 `0`。
+
+以上 bytes 类配置都按 `HeapRequestFootprint` 的 heap footprint 估算口径计量（请求对象 + argv 槽位 + 每参数数组头与对齐 payload），不是纯 payload 求和。统一口径后默认值保持不变：结构性开销按每参数至少 24 字节计入，而默认 `--executorQueueCapacity 1024` 通常先于 64 MiB 的 bytes cap 生效，背压水位与事务队列默认值的保护数量级不变。主要承载高 `argc` 小参数命令的部署应按新口径重新标定这些值。
 
 `YierdisServerRuntimeConfig.executorConfig()` 把已经校验的 runtime 字段映射成 `CommandExecutorConfig`。`CommandExecutor` 只有一个 owner executor，启动时调用 `runtimeAccess.bindToCurrentThread`，之后通过 `tryAcquire(...)` 和 `ExecutorAdmission.publish(...)` 接收 Netty pipeline 交来的请求。queue slot 或 bytes budget 暂时不足时，ingress 会暂停输入并等待容量，而不是立即生成 busy reply；单个请求本身超过 bytes hard limit 时返回：
 
@@ -107,7 +109,7 @@ ERR request exceeds executor queue byte limit
 
 传给 `EngineSession` 的 `DefaultTransactionState`。默认值分别是 `1024` 和 `67108864`；`0` 表示对应限制禁用。
 
-在 `MULTI` 状态下，命令入队会通过 `ExecutionRequest.retain()` 取得事务自己的所有权并累计 retained bytes；网络请求共享不可变 argv 和 request-memory lease。超过命令数或 bytes 上限时，事务被标记为 aborted，入队返回 `ERR Transaction queue is full`；后续 `EXEC` 会返回 Redis 风格 `EXECABORT Transaction discarded because of previous errors.` 并丢弃队列。这是为了防止大事务或大参数在连接状态里无界驻留。
+在 `MULTI` 状态下，命令入队会通过 `ExecutionRequest.retain()` 取得事务自己的所有权并累计 retained bytes（`HeapRequestFootprint` 口径的 heap footprint 估算）；网络请求共享不可变 argv 和 request-memory lease。超过命令数或 bytes 上限时，事务被标记为 aborted，入队返回 `ERR Transaction queue is full`；后续 `EXEC` 会返回 Redis 风格 `EXECABORT Transaction discarded because of previous errors.` 并丢弃队列。这是为了防止大事务或大参数在连接状态里无界驻留。
 
 推荐看 `TransactionQueueLimitTest` 和 `EngineSession`。
 

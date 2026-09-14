@@ -24,7 +24,7 @@ public class RespRequestDecoderTest {
                 Assert.assertEquals(2, req.argc());
                 Assert.assertArrayEquals(bytes("PING"), req.readOnlyByteArray(0));
                 Assert.assertArrayEquals(bytes("hey"), req.readOnlyByteArray(1));
-                Assert.assertEquals(7, req.retainedBytes());
+                Assert.assertEquals(112, req.retainedBytes());
             }
             Assert.assertNull(ch.readInbound());
         } finally {
@@ -45,7 +45,7 @@ public class RespRequestDecoderTest {
                 Assert.assertEquals(2, req.argc());
                 Assert.assertArrayEquals(bytes("ECHO"), req.readOnlyByteArray(0));
                 Assert.assertNull(req.readOnlyByteArray(1));
-                Assert.assertEquals(4, req.retainedBytes());
+                Assert.assertEquals(88, req.retainedBytes());
             }
             Assert.assertNull(ch.readInbound());
         } finally {
@@ -85,7 +85,7 @@ public class RespRequestDecoderTest {
                 Assert.assertEquals(2, req.argc());
                 Assert.assertArrayEquals(bytes("ECHO"), req.readOnlyByteArray(0));
                 Assert.assertArrayEquals(new byte[0], req.readOnlyByteArray(1));
-                Assert.assertEquals(4, req.retainedBytes());
+                Assert.assertEquals(104, req.retainedBytes());
             }
             Assert.assertNull(ch.readInbound());
         } finally {
@@ -141,7 +141,26 @@ public class RespRequestDecoderTest {
                 Assert.assertArrayEquals(bytes("SET"), req.readOnlyByteArray(0));
                 Assert.assertArrayEquals(bytes("a"), req.readOnlyByteArray(1));
                 Assert.assertArrayEquals(bytes("1"), req.readOnlyByteArray(2));
-                Assert.assertEquals(5, req.retainedBytes());
+                Assert.assertEquals(144, req.retainedBytes());
+            }
+        } finally {
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    public void arrayAndInlinePathsShareTheSameRetainedBytesEstimate() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024, 1024));
+        try {
+            Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer(
+                    "*2\r\n$4\r\nECHO\r\n$3\r\nhey\r\nECHO hey\r\n",
+                    StandardCharsets.US_ASCII
+            )));
+
+            try (ExecutionRequest arrayRequest = readExecutionRequest(ch);
+                 ExecutionRequest inlineRequest = readExecutionRequest(ch)) {
+                Assert.assertEquals(112, arrayRequest.retainedBytes());
+                Assert.assertEquals(arrayRequest.retainedBytes(), inlineRequest.retainedBytes());
             }
         } finally {
             ch.finishAndReleaseAll();
@@ -159,7 +178,7 @@ public class RespRequestDecoderTest {
                 Assert.assertArrayEquals(bytes("SET"), req.readOnlyByteArray(0));
                 Assert.assertArrayEquals(bytes("a b"), req.readOnlyByteArray(1));
                 Assert.assertArrayEquals(bytes("A"), req.readOnlyByteArray(2));
-                Assert.assertEquals(7, req.retainedBytes());
+                Assert.assertEquals(144, req.retainedBytes());
             }
         } finally {
             ch.finishAndReleaseAll();
@@ -200,7 +219,7 @@ public class RespRequestDecoderTest {
                 Assert.assertArrayEquals(bytes("SET"), request.readOnlyByteArray(0));
                 Assert.assertArrayEquals(bytes("a b"), request.readOnlyByteArray(1));
                 Assert.assertArrayEquals(bytes("it's"), request.readOnlyByteArray(2));
-                Assert.assertEquals(10, request.retainedBytes());
+                Assert.assertEquals(144, request.retainedBytes());
             }
             Object error = channel.readInbound();
             Assert.assertTrue(error instanceof RespProtocolError);
@@ -423,7 +442,7 @@ public class RespRequestDecoderTest {
             Assert.assertArrayEquals(bytes("ECHO"), request.readOnlyByteArray(0));
             Assert.assertTrue(request.isNull(1));
             Assert.assertNull(request.readOnlyByteArray(1));
-            Assert.assertEquals(4, request.retainedBytes());
+            Assert.assertEquals(88, request.retainedBytes());
         } finally {
             if (request != null) {
                 request.close();

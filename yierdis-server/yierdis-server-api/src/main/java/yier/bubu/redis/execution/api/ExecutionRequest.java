@@ -43,9 +43,13 @@ public interface ExecutionRequest extends AutoCloseable {
     }
 
     /**
-     * Estimated bytes retained by keeping this request alive while queued or replayed.
+     * 请求在 queued / replayed 生命周期内保活的 heap footprint 估算字节数。
      * <p>
-     * The returned value MUST be stable for the lifetime of the request.
+     * heap-backed 实现必须采用 {@link HeapRequestFootprint} 的统一口径：请求对象、外层 argv 数组与引用槽位、
+     * 每个非空参数的数组头和 8 对齐 payload 都计入，而不是只按参数 payload 长度求和。
+     * executor queued bytes、连接 pending bytes 与事务 queue bytes 都消费该值。
+     * <p>
+     * 返回值在请求存活期间必须保持稳定。
      */
     default int retainedBytes() {
         return 0;

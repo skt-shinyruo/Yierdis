@@ -22,7 +22,7 @@ public class ExecutionRequestContractTest {
         value[0] = (byte) 'X';
 
         Assert.assertEquals(3, request.argc());
-        Assert.assertEquals(8, request.retainedBytes());
+        Assert.assertEquals(120, request.retainedBytes());
         Assert.assertArrayEquals(ascii("SET"), request.toByteArray(0));
         Assert.assertTrue(request.isNull(1));
         Assert.assertArrayEquals(ascii("value"), request.toByteArray(2));
@@ -61,10 +61,7 @@ public class ExecutionRequestContractTest {
         byte[] cmd = ascii("SET");
         byte[] key = ascii("key");
 
-        ExecutionRequest request = ByteArrayExecutionRequest.wrapReadOnly(
-                new byte[][]{cmd, key, null},
-                cmd.length + key.length
-        );
+        ExecutionRequest request = ByteArrayExecutionRequest.wrapReadOnly(new byte[][]{cmd, key, null});
 
         Assert.assertSame(cmd, request.readOnlyByteArray(0));
         Assert.assertSame(key, request.readOnlyByteArray(1));
@@ -72,11 +69,22 @@ public class ExecutionRequestContractTest {
     }
 
     @Test
-    public void byteArrayExecutionRequestRetainedBytesHelperSaturatesOnOverflow() {
-        Assert.assertEquals(Integer.MAX_VALUE, ByteArrayExecutionRequest.saturatedRetainedBytes(Integer.MAX_VALUE - 1, 2));
-        Assert.assertEquals(Integer.MAX_VALUE, ByteArrayExecutionRequest.saturatedRetainedBytes(Integer.MAX_VALUE, 1));
-        Assert.assertEquals(5, ByteArrayExecutionRequest.saturatedRetainedBytes(3, 2));
-        Assert.assertEquals(3, ByteArrayExecutionRequest.saturatedRetainedBytes(-4, 3));
+    public void factoriesShareTheSameHeapFootprintEstimate() {
+        ExecutionRequest copy = ByteArrayExecutionRequest.copyOf(List.of(ascii("SET"), ascii("key")));
+        ExecutionRequest utf8 = ByteArrayExecutionRequest.fromUtf8("SET", List.of("key"));
+        ExecutionRequest wrapped = ByteArrayExecutionRequest.wrapReadOnly(new byte[][]{ascii("SET"), ascii("key")});
+
+        Assert.assertEquals(112, copy.retainedBytes());
+        Assert.assertEquals(112, utf8.retainedBytes());
+        Assert.assertEquals(112, wrapped.retainedBytes());
+    }
+
+    @Test
+    public void retainedBytesGrowWithArgumentCountForSamePayload() {
+        ExecutionRequest singleArgument = ByteArrayExecutionRequest.copyOf(List.of(ascii("ab")));
+        ExecutionRequest splitArguments = ByteArrayExecutionRequest.copyOf(List.of(ascii("a"), ascii("b")));
+
+        Assert.assertTrue(splitArguments.retainedBytes() > singleArgument.retainedBytes());
     }
 
     private static byte[] ascii(String value) {

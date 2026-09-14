@@ -1,9 +1,11 @@
 package yier.bubu.redis.execution.executor;
 
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
+import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionReply;
 import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.ReplyReservationResult;
@@ -108,6 +110,45 @@ public class ExecutorAdmissionTest {
         Assert.assertEquals(1, wakeups.get());
         registration.run();
         Assert.assertEquals(1, wakeups.get());
+    }
+
+    @Test
+    public void bytesBudgetAndPendingBytesBackpressureUseTheHeapFootprintEstimate() {
+        ManualOwnerExecutor owner = ExecutorCoreTestSupport.manualOwnerExecutor();
+        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+                () -> { },
+                ExecutorCoreTestSupport.simpleCommandEngine(),
+                owner,
+                ExecutorCoreTestSupport.simpleReplySizer(),
+                ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                new RecordingIoAdapter(),
+                new CommandExecutorConfig(8, 128L, 8, 0, 80L, 40L, 128, 10, SchedulingPolicy.FAIR)
+        );
+        TestConnection connection = ExecutorCoreTestSupport.newConnection("footprint");
+        // PING 的 payload 只有 4 字节，但 retainedBytes 按 HeapRequestFootprint 口径为 80；
+        // executor queued bytes、连接 pending bytes 和 bytes 背压水位都必须按新口径记账。
+        ByteArrayExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("PING", List.of());
+        TrackingReply reply = new TrackingReply();
+        try {
+            Assert.assertEquals(80, request.retainedBytes());
+
+            ExecutorAdmission<TestConnection> admission = acquired(
+                    executor.tryAcquire(connection, request.retainedBytes()));
+            admission.publish(request, reply);
+
+            Assert.assertEquals(80L, executor.statsSnapshot().queuedBytes());
+            Assert.assertEquals(80L, connection.context().pendingBytes());
+            Assert.assertTrue(connection.context().autoReadDisabledByExecutor());
+
+            ExecutorAdmissionAttempt<TestConnection> second = executor.tryAcquire(connection, 80);
+            Assert.assertEquals(
+                    ExecutorAdmissionAttempt.BlockReason.QUEUE_BYTES,
+                    ((ExecutorAdmissionAttempt.Unavailable<TestConnection>) second).reason()
+            );
+        } finally {
+            executor.close();
+            owner.runAll();
+        }
     }
 
     private static <C extends ExecutionConnection> ExecutorAdmission<C> acquired(

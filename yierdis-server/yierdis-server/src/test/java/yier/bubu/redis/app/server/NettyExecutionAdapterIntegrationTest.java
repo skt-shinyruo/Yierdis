@@ -190,7 +190,7 @@ public class NettyExecutionAdapterIntegrationTest {
             executor.start();
             OrderedReplyTestFixture fixture = OrderedReplyTestFixture.open(executor, replyWriterFactory);
             try {
-                fixture.write(ByteArrayExecutionRequest.wrapReadOnly(new byte[][]{ascii("ECHO"), null}, 4));
+                fixture.write(ByteArrayExecutionRequest.wrapReadOnly(new byte[][]{ascii("ECHO"), null}));
                 fixture.drain();
 
                 Assert.assertArrayEquals(ascii("$-1\r\n"), readOutbound(fixture));
@@ -218,8 +218,7 @@ public class NettyExecutionAdapterIntegrationTest {
             OrderedReplyTestFixture fixture = OrderedReplyTestFixture.open(executor, replyWriterFactory);
             try {
                 fixture.write(ByteArrayExecutionRequest.wrapReadOnly(
-                        new byte[][]{ascii("SET"), ascii("k"), null},
-                        4
+                        new byte[][]{ascii("SET"), ascii("k"), null}
                 ));
                 fixture.drain();
 
@@ -233,14 +232,11 @@ public class NettyExecutionAdapterIntegrationTest {
 
     private static ByteArrayExecutionRequest request(String command, String... arguments) {
         byte[][] argv = new byte[arguments.length + 1][];
-        int retainedBytes = 0;
         argv[0] = ascii(command);
-        retainedBytes += argv[0].length;
         for (int i = 0; i < arguments.length; i++) {
             argv[i + 1] = ascii(arguments[i]);
-            retainedBytes += argv[i + 1].length;
         }
-        return ByteArrayExecutionRequest.wrapReadOnly(argv, retainedBytes);
+        return ByteArrayExecutionRequest.wrapReadOnly(argv);
     }
 
     private static byte[] readOutbound(OrderedReplyTestFixture fixture) {

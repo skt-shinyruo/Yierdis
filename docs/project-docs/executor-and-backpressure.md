@@ -54,6 +54,8 @@ queue slot 或 bytes budget 暂时不足会返回 `Unavailable`，不是终态�
 - `queuedTasks`：当前已 reserve 但未释放的任务数。
 - `queuedBytes`：当前已 reserve 的 retained bytes。
 
+这里的 retained bytes 是请求的 heap footprint 估算（见 glossary 的 retained bytes 条目），包含请求对象、argv 数组与槽位、每个参数的数组头和对齐 payload；因此高 `argc` 小参数命令比纯 payload 求和更早触及 bytes cap。
+
 admission 时在同一个临界区检查 task 与 byte 上限，两项都满足才一起增加计数，因此不存在只取得其中一项再回滚的中间状态。尚未 publish 的 admission 可以显式释放，publish 失败会回收 task 或关闭连接。命令执行完成后，`CommandExecutorExecutionSupport` 在同一把锁下归还两项预算并减少连接 pending 状态；满足当前 task/byte 条件的 capacity waiter 会在锁内摘下、锁外回调。
 
 全局背压水位由 budget 根据硬上限推导：

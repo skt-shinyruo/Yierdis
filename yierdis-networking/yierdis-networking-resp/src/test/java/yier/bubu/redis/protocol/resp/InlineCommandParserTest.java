@@ -2,6 +2,7 @@ package yier.bubu.redis.protocol.resp;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.execution.api.HeapRequestFootprint;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -81,8 +82,33 @@ public class InlineCommandParserTest {
         InlineCommandParser.Parsed parsed = InlineCommandParser.parseResult(input, 0, input.length);
 
         Assert.assertEquals(0, parsed.argc());
-        Assert.assertEquals(0, parsed.retainedBytes());
+        Assert.assertEquals(HeapRequestFootprint.baseRetainedBytes(0), parsed.retainedBytes());
         Assert.assertEquals(0, parsed.takeArgs().length);
+    }
+
+    @Test
+    public void parsedRetainedBytesMatchTheSharedHeapFootprintEstimate() {
+        byte[] input = bytes("SET \"a\\x20b\" 'it\\'s'");
+
+        InlineCommandParser.Parsed parsed = InlineCommandParser.parseResult(input, 0, input.length);
+
+        // 与物化后的 argv 保持同一估算口径：请求对象 + 外层数组 + 槽位 + 每个参数的数组头与对齐 payload。
+        Assert.assertEquals(
+                HeapRequestFootprint.estimateRetainedBytes(parsed.takeArgs()),
+                parsed.retainedBytes()
+        );
+        Assert.assertEquals(144, parsed.retainedBytes());
+    }
+
+    @Test
+    public void parsedRetainedBytesGrowWithArgumentCountForSamePayload() {
+        byte[] merged = bytes("ECHO ab");
+        byte[] split = bytes("ECHO a b");
+
+        int mergedBytes = InlineCommandParser.parseResult(merged, 0, merged.length).retainedBytes();
+        int splitBytes = InlineCommandParser.parseResult(split, 0, split.length).retainedBytes();
+
+        Assert.assertTrue(splitBytes > mergedBytes);
     }
 
     @Test
