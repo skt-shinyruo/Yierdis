@@ -1,6 +1,7 @@
 package yier.bubu.redis.app.server;
 
 import java.util.function.BiFunction;
+import java.util.function.LongSupplier;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -145,7 +146,7 @@ public class RespIngressLifecycleIntegrationTest {
     }
 
     @Test
-    public void samePacketProtocolErrorCompletesDeferredRequestBeforeTerminalReply() throws Exception {
+    public void samePacketProtocolErrorCancelsDeferredSlotAndClosesWithoutBusyStandIn() throws Exception {
         AtomicInteger executions = new AtomicInteger();
         ProtocolExecutorFixture fixture = new ProtocolExecutorFixture(1, executions);
         CountDownLatch blockerStarted = new CountDownLatch(1);
@@ -162,17 +163,17 @@ public class RespIngressLifecycleIntegrationTest {
 
             Assert.assertEquals(1L, fixture.executor.statsSnapshot().submitRejectedQueueFull());
             Assert.assertNull(fixture.channel.readOutbound());
+            Assert.assertTrue("protocol error with an unpublished deferred slot must tear down the connection",
+                    awaitChannelClosed(fixture.channel));
 
             unblock.countDown();
+            awaitSkippedClosing(fixture, 1L);
 
-            Assert.assertEquals("-ERR busy queue_full\r\n", awaitOutboundAscii(fixture.channel));
-            String protocolError = awaitOutboundAscii(fixture.channel);
-            Assert.assertTrue(protocolError, protocolError.startsWith("-ERR Protocol error"));
-            Assert.assertTrue(awaitChannelClosed(fixture.channel));
+            Assert.assertNull("no busy stand-in and no later terminal error may be flushed "
+                    + "while the earlier unpublished slot is cancelled", fixture.channel.readOutbound());
             Assert.assertEquals(0, executions.get());
-            Assert.assertEquals(1L, fixture.connection.context().statsSnapshot().commandsSkippedClosing());
-            Assert.assertEquals(0L, fixture.inboundBudget.stats().reservedBytes());
-            Assert.assertEquals(0L, fixture.outboundBudget.stats().reservedBytes());
+            awaitBudgetReleased(fixture.inboundBudget);
+            awaitBudgetReleased(fixture.outboundBudget);
         } finally {
             unblock.countDown();
             fixture.close();
@@ -180,7 +181,7 @@ public class RespIngressLifecycleIntegrationTest {
     }
 
     @Test
-    public void internalErrorCompletesDeferredRequestBeforeTerminalReply() throws Exception {
+    public void internalErrorCancelsDeferredSlotAndClosesWithoutBusyStandIn() throws Exception {
         AtomicInteger executions = new AtomicInteger();
         ProtocolExecutorFixture fixture = new ProtocolExecutorFixture(1, executions);
         CountDownLatch blockerStarted = new CountDownLatch(1);
@@ -197,16 +198,17 @@ public class RespIngressLifecycleIntegrationTest {
 
             fixture.channel.pipeline().fireExceptionCaught(new IllegalStateException("injected internal failure"));
             Assert.assertNull(fixture.channel.readOutbound());
+            Assert.assertTrue("internal error with an unpublished deferred slot must tear down the connection",
+                    awaitChannelClosed(fixture.channel));
 
             unblock.countDown();
+            awaitSkippedClosing(fixture, 1L);
 
-            Assert.assertEquals("-ERR busy queue_full\r\n", awaitOutboundAscii(fixture.channel));
-            Assert.assertEquals("-ERR internal error\r\n", awaitOutboundAscii(fixture.channel));
-            Assert.assertTrue(awaitChannelClosed(fixture.channel));
+            Assert.assertNull("no busy stand-in and no later terminal error may be flushed "
+                    + "while the earlier unpublished slot is cancelled", fixture.channel.readOutbound());
             Assert.assertEquals(0, executions.get());
-            Assert.assertEquals(1L, fixture.connection.context().statsSnapshot().commandsSkippedClosing());
-            Assert.assertEquals(0L, fixture.inboundBudget.stats().reservedBytes());
-            Assert.assertEquals(0L, fixture.outboundBudget.stats().reservedBytes());
+            awaitBudgetReleased(fixture.inboundBudget);
+            awaitBudgetReleased(fixture.outboundBudget);
         } finally {
             unblock.countDown();
             fixture.close();
@@ -282,22 +284,36 @@ public class RespIngressLifecycleIntegrationTest {
         }
     }
 
-    private static String awaitOutboundAscii(EmbeddedChannel channel) throws InterruptedException {
+    private static void awaitSkippedClosing(ProtocolExecutorFixture fixture, long expected) throws InterruptedException {
         long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
         while (System.nanoTime() < deadlineNanos) {
-            channel.runPendingTasks();
-            channel.runScheduledPendingTasks();
-            ByteBuf buffer = channel.readOutbound();
-            if (buffer != null) {
-                try {
-                    return buffer.toString(StandardCharsets.US_ASCII);
-                } finally {
-                    buffer.release();
-                }
+            fixture.channel.runPendingTasks();
+            fixture.channel.runScheduledPendingTasks();
+            if (fixture.connection.context().statsSnapshot().commandsSkippedClosing() == expected) {
+                return;
             }
             Thread.sleep(1L);
         }
-        throw new AssertionError("timed out waiting for outbound reply");
+        Assert.assertEquals(expected, fixture.connection.context().statsSnapshot().commandsSkippedClosing());
+    }
+
+    private static void awaitBudgetReleased(InboundMemoryBudget budget) throws InterruptedException {
+        awaitReleasedBytes(budget.stats()::reservedBytes);
+    }
+
+    private static void awaitBudgetReleased(OutboundMemoryBudget budget) throws InterruptedException {
+        awaitReleasedBytes(budget.stats()::reservedBytes);
+    }
+
+    private static void awaitReleasedBytes(LongSupplier reservedBytes) throws InterruptedException {
+        long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+        while (System.nanoTime() < deadlineNanos) {
+            if (reservedBytes.getAsLong() == 0L) {
+                return;
+            }
+            Thread.sleep(1L);
+        }
+        Assert.assertEquals(0L, reservedBytes.getAsLong());
     }
 
     private static boolean awaitChannelClosed(EmbeddedChannel channel) throws InterruptedException {

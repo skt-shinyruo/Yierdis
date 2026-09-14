@@ -87,7 +87,7 @@ CommandExecutor
 - `Unavailable`：queue slot 或 bytes budget 暂时不足，submission 留在连接 pending queue，暂停输入并等待 `onAdmissionAvailable(...)`；
 - `REQUEST_TOO_LARGE`：当前请求永远无法装入 configured bytes budget，当前 slot 返回对应错误；
 - closing、not-running 或 publish invariant failure：清理 ownership 并终止连接，不破坏已有 reply 顺序；
-- 协议错误和 ingress 内部错误使用已经注册的 reply slot 完成 terminal 回包。
+- 协议错误和 ingress 内部错误使用已经注册的 reply slot 完成 terminal 回包；若此刻 pending deque 里还有未发布的延迟提交，ingress 取消这些 slot 并直接拆除连接，不刷出更晚的终端错误，也不伪造 `ERR busy` 替身回复。
 
 更细的提交预算和背压关系见 [`executor-and-backpressure.md`](./executor-and-backpressure.md)。
 

@@ -264,13 +264,13 @@ public class OrderedReplyPipelineTest {
         EmbeddedChannel channel = new EmbeddedChannel();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, connection, () -> { });
         ReplySlot command = register(sequencer, connection);
-        ReplySlot busy = register(sequencer, connection);
+        ReplySlot queued = register(sequencer, connection);
         ReplySlot protocol = register(sequencer, connection);
         ReplySlot internal = register(sequencer, connection);
         ReplySlot closeAfterReply = register(sequencer, connection);
         try {
             ready(internal, "-ERR internal error\r\n", false);
-            ready(busy, "-ERR busy queue_full\r\n", false);
+            ready(queued, "+QUEUED\r\n", false);
             ready(closeAfterReply, "+OK\r\n", true);
             ready(protocol, "-ERR Protocol error\r\n", false);
             Assert.assertNull(channel.readOutbound());
@@ -279,7 +279,7 @@ public class OrderedReplyPipelineTest {
             drain(channel);
 
             Assert.assertEquals("+PONG\r\n", readAscii(channel));
-            Assert.assertEquals("-ERR busy queue_full\r\n", readAscii(channel));
+            Assert.assertEquals("+QUEUED\r\n", readAscii(channel));
             Assert.assertEquals("-ERR Protocol error\r\n", readAscii(channel));
             Assert.assertEquals("-ERR internal error\r\n", readAscii(channel));
             Assert.assertEquals("+OK\r\n", readAscii(channel));

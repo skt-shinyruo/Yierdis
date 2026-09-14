@@ -20,7 +20,6 @@ import java.util.Objects;
 
 public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAdapter {
     private static final System.Logger LOG = System.getLogger(NettyExecutionRequestIngress.class.getName());
-    private static final String DEFERRED_BUSY_ERROR = "ERR busy queue_full";
 
     private final CommandExecutor<NettyExecutionConnection> executor;
     private final BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory;
@@ -73,7 +72,14 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
             }
             case RespProtocolError error -> {
                 cancelCapacityWait();
-                completePendingSubmissionsWithError(connection);
+                if (!pendingSubmissions.isEmpty()) {
+                    // FIFO：更早的容量延迟提交尚未发布，既不能以 busy 替身回复，也不能在静默取消它们之后
+                    // 再刷出这条更晚的终端错误。取消未发布 slot 并随连接拆除收敛（fail-closed EOF）。
+                    clearPendingSubmissions();
+                    registered.slot().cancel();
+                    connection.initiateClose();
+                    return;
+                }
                 try {
                     if (connection.markClosing()) {
                         safeDisableAutoRead(ctx);
@@ -132,7 +138,12 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
             return;
         }
         cancelCapacityWait();
-        completePendingSubmissionsWithError(connection);
+        if (!pendingSubmissions.isEmpty()) {
+            // 与协议错误同一 FIFO 契约：取消未发布 slot 时不得再刷出更晚的终端错误。
+            clearPendingSubmissions();
+            connection.initiateClose();
+            return;
+        }
         if (connection.markClosing()) {
             safeDisableAutoRead(ctx);
         }
@@ -289,21 +300,6 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
         while ((submission = pendingSubmissions.pollFirst()) != null) {
             closeRequest(submission.request);
             submission.slot.cancel();
-        }
-    }
-
-    private void completePendingSubmissionsWithError(NettyExecutionConnection connection) {
-        PendingSubmission submission;
-        while ((submission = pendingSubmissions.pollFirst()) != null) {
-            try {
-                RedisReplyWriter writer = controlReplyWriter(connection, submission.slot.sink());
-                writer.error(DEFERRED_BUSY_ERROR);
-                submission.slot.markReady(false);
-            } catch (Throwable ignored) {
-                submission.slot.cancel();
-            } finally {
-                closeRequest(submission.request);
-            }
         }
     }
 

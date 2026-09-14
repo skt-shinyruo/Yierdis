@@ -180,7 +180,7 @@ maxmemory 参数：
 
 `INFO yierdis` 返回结构化 map，更适合脚本和测试。它暴露 `server`、`version`、`port`、`io_threads`、`executor_policy`、`executor_queue_capacity`、`executor_queue_max_bytes`、`backpressure_high`、`backpressure_low`、`backpressure_bytes_high`、`backpressure_bytes_low`、`executor_max_drain`、`executor_drain_millis`、`started_millis`、`uptime_millis`。
 
-`STATS` 返回结构化 map，专注 executor 和当前连接统计。遇到 `ERR busy ...`、输入被暂停、吞吐抖动时先看它。
+`STATS` 返回结构化 map，专注 executor 和当前连接统计。遇到输入被暂停、吞吐抖动时先看它。
 
 每次 `INFO`、`INFO yierdis`、`INFO health` 或 `STATS` 执行时，`NettyServerInfoProvider` 都先构造一份请求级 `ServerStatsSnapshot`。executor、ingress、egress、child channels、runtime health 和 uptime 只采集一次，文本与结构化 writer 共享这份快照，避免同一个回复里的字段来自不同采样时刻。`INFO memory` 和 `INFO keyspace` 的 DB 聚合仍按 section 按需读取，不让轻量 health 探针承担全库聚合成本。
 

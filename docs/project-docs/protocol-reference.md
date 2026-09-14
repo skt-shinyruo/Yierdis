@@ -111,7 +111,7 @@ RESP3 下，已有专属形态的语义会换成 RESP3 编码：
 
 ## 协议错误和断连
 
-malformed RESP 没有可靠的重同步点。Yierdis 的策略是：尽量返回 RESP error reply，然后关闭当前连接。实现上，`RespRequestDecoder` 产出 `RespProtocolError` 变体，reply admission 把它与已注册槽位一起放入 `RegisteredRespMessage`；`NettyExecutionRequestIngress` 使用对应 `ReplySlot` 和当前 session 的 RESP 版本写入 control error，并把该 slot 标记为 terminal；sequencer flush 后断开连接。
+malformed RESP 没有可靠的重同步点。Yierdis 的策略是：尽量返回 RESP error reply，然后关闭当前连接。实现上，`RespRequestDecoder` 产出 `RespProtocolError` 变体，reply admission 把它与已注册槽位一起放入 `RegisteredRespMessage`；`NettyExecutionRequestIngress` 使用对应 `ReplySlot` 和当前 session 的 RESP 版本写入 control error，并把该 slot 标记为 terminal；sequencer flush 后断开连接。例外是 FIFO 保护：若仍有更早的容量延迟提交占着未发布 slot，ingress 不会把它们的回复伪造成 `ERR busy`，而是取消这些 slot 并直接拆除连接（fail-closed），避免更晚的终端错误与更早的命令错位。
 
 常见协议错误包括：
 
