@@ -443,6 +443,78 @@ public class TransactionCommandTest {
     }
 
     @Test
+    public void pastAbsoluteExpiryInsideMultiQueuesAndExecApplies() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            TestSession session = new TestSession();
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+
+                // 墙钟依赖不属于 preflight：过去但为正的 EXAT/PXAT 照常 QUEUED，EXEC 逐条给结果。
+                long pastExat = (System.currentTimeMillis() / 1000L) - 60L;
+                long pastPxat = System.currentTimeMillis() - 60_000L;
+                Assert.assertEquals(
+                        "QUEUED",
+                        ((ReplySimpleString) client.execute(List.of(
+                                b("SET"), b("exat-k"), b("v"), b("EXAT"), b(Long.toString(pastExat))))).value()
+                );
+                Assert.assertEquals(
+                        "QUEUED",
+                        ((ReplySimpleString) client.execute(List.of(
+                                b("SET"), b("pxat-k"), b("v"), b("PXAT"), b(Long.toString(pastPxat))))).value()
+                );
+
+                ReplyObject exec = client.execute(List.of(b("EXEC")));
+                Assert.assertTrue(exec instanceof ReplyArray);
+                ReplyArray results = (ReplyArray) exec;
+                Assert.assertNotNull(results.values());
+                Assert.assertEquals(2, results.values().size());
+                Assert.assertEquals("OK", ((ReplySimpleString) results.values().get(0)).value());
+                Assert.assertEquals("OK", ((ReplySimpleString) results.values().get(1)).value());
+
+                // set-then-expire：EXEC 之后两个 key 都不存在。
+                Assert.assertSame(ReplyNull.INSTANCE, client.execute(List.of(b("GET"), b("exat-k"))));
+                Assert.assertSame(ReplyNull.INSTANCE, client.execute(List.of(b("GET"), b("pxat-k"))));
+            }
+        });
+    }
+
+    @Test
+    public void timeIndependentSetErrorsInsideMultiStillAbort() {
+        forEachDb(db -> {
+            for (InvalidCommand invalid : List.of(
+                    invalid("ERR syntax error", "SET", "k", "v", "NOPE"),
+                    invalid("ERR invalid expire time in 'set' command", "SET", "k", "v", "EXAT", "0"),
+                    invalid("ERR invalid expire time in 'set' command", "SET", "k", "v", "PXAT", "-1")
+            )) {
+                CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+                TestSession session = new TestSession();
+                {
+                    FastTestClient client = new FastTestClient(dispatcher, session);
+                    Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+                    Assert.assertEquals(
+                            "QUEUED",
+                            ((ReplySimpleString) client.execute(List.of(b("SET"), b("queued-k"), b("v")))).value()
+                    );
+
+                    ReplyObject badSet = client.execute(invalid.args());
+                    Assert.assertTrue(badSet instanceof ReplyError);
+                    Assert.assertEquals(invalid.message(), ((ReplyError) badSet).message());
+
+                    ReplyObject exec = client.execute(List.of(b("EXEC")));
+                    Assert.assertTrue(exec instanceof ReplyError);
+                    Assert.assertEquals(
+                            "EXECABORT Transaction discarded because of previous errors.",
+                            ((ReplyError) exec).message()
+                    );
+                    Assert.assertSame(ReplyNull.INSTANCE, client.execute(List.of(b("GET"), b("queued-k"))));
+                }
+            }
+        });
+    }
+
+    @Test
     public void transactionControlParseErrorsAbortAndDiscardQueuedWrites() {
         forEachDb(db -> {
             for (String control : List.of("MULTI", "EXEC", "DISCARD")) {

@@ -128,11 +128,33 @@ public class StringCommandTest {
     }
 
     @Test
+    public void setWithPastAbsoluteExpirySetsThenExpires() {
+        withClient(client -> {
+            // Redis：过去但为正的 EXAT/PXAT 不是 parse 错误；SET 返回 OK，key 先写后过期。
+            long pastExat = (System.currentTimeMillis() / 1000L) - 60L;
+            assertSimpleString("OK", client.execute(cmd("SET", "past-exat", "v", "EXAT", Long.toString(pastExat))));
+            assertNull(client.execute(cmd("GET", "past-exat")));
+            assertInteger(0, client.execute(cmd("EXISTS", "past-exat")));
+
+            long pastPxat = System.currentTimeMillis() - 60_000L;
+            assertSimpleString("OK", client.execute(cmd("SET", "past-pxat", "v", "PXAT", Long.toString(pastPxat))));
+            assertNull(client.execute(cmd("GET", "past-pxat")));
+            assertInteger(0, client.execute(cmd("EXISTS", "past-pxat")));
+
+            assertSimpleString("OK", client.execute(cmd("SET", "overwrite", "old")));
+            assertSimpleString("OK", client.execute(cmd("SET", "overwrite", "new", "PXAT", Long.toString(pastPxat))));
+            assertNull(client.execute(cmd("GET", "overwrite")));
+        });
+    }
+
+    @Test
     public void setCommandCoversSyntaxAndExpiryErrors() {
         withClient(client -> {
             assertErrorContaining("syntax error", client.execute(cmd("SET", "k", "v", "NX", "XX")));
             assertErrorContaining("syntax error", client.execute(cmd("SET", "k", "v", "EX", "60", "KEEPTTL")));
             assertErrorContaining("invalid expire time", client.execute(cmd("SET", "k", "v", "EX", "0")));
+            assertErrorContaining("invalid expire time", client.execute(cmd("SET", "k", "v", "EXAT", "0")));
+            assertErrorContaining("invalid expire time", client.execute(cmd("SET", "k", "v", "PXAT", "-1")));
             assertErrorContaining("not an integer or out of range", client.execute(cmd("SET", "k", "v", "PX", "abc")));
         });
     }
