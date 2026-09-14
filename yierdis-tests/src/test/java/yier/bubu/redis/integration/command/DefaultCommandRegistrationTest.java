@@ -5,11 +5,14 @@ import org.junit.Test;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
 import yier.bubu.redis.testutil.ReplyBulkString;
+import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplyNullArray;
 import yier.bubu.redis.testutil.ReplyObject;
 
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 import static yier.bubu.redis.testutil.ReplyAssertions.assertArraySize;
@@ -54,5 +57,65 @@ public class DefaultCommandRegistrationTest {
             assertBulkString("ping", assertArraySize(6, info.values().get(0)).values().get(0));
             Assert.assertTrue(info.values().get(1) instanceof ReplyNullArray);
         });
+    }
+
+    @Test
+    public void commandMetadataExposesNonZeroArityAndWellFormedKeySpecs() {
+        forEachDb(db -> {
+            FastTestClient client = new FastTestClient(TestCommandComposition.createDispatcher(db));
+            ReplyArray commands = assertArraySize(DEFAULT_COMMANDS.size(), client.execute(cmd("COMMAND")));
+            Map<String, ReplyArray> byName = new HashMap<>();
+            for (ReplyObject entry : commands.values()) {
+                ReplyArray commandInfo = assertArraySize(6, entry);
+                byName.put(
+                        ((ReplyBulkString) commandInfo.values().get(0)).asString().toUpperCase(Locale.ROOT),
+                        commandInfo
+                );
+            }
+
+            for (Map.Entry<String, ReplyArray> command : byName.entrySet()) {
+                String name = command.getKey();
+                ReplyArray commandInfo = command.getValue();
+                long arity = ((ReplyInteger) commandInfo.values().get(1)).value();
+                Assert.assertNotEquals(name + " must publish a non-zero arity", 0L, arity);
+                long firstKey = ((ReplyInteger) commandInfo.values().get(3)).value();
+                long lastKey = ((ReplyInteger) commandInfo.values().get(4)).value();
+                long keyStep = ((ReplyInteger) commandInfo.values().get(5)).value();
+                if (firstKey == 0) {
+                    Assert.assertEquals(name + " keyless command must publish lastKey 0", 0L, lastKey);
+                    Assert.assertEquals(name + " keyless command must publish keyStep 0", 0L, keyStep);
+                } else {
+                    Assert.assertTrue(name + " firstKey must be >= 1", firstKey >= 1L);
+                    Assert.assertTrue(name + " keyed command must publish a positive keyStep", keyStep >= 1L);
+                    Assert.assertTrue(
+                            name + " lastKey must be -1 or >= firstKey",
+                            lastKey == -1L || lastKey >= firstKey
+                    );
+                }
+            }
+
+            assertMetadata(byName.get("GET"), 2, 1, 1, 1);
+            assertMetadata(byName.get("SET"), -3, 1, 1, 1);
+            assertMetadata(byName.get("EXPIRE"), -3, 1, 1, 1);
+            assertMetadata(byName.get("DEL"), -2, 1, -1, 1);
+            assertMetadata(byName.get("PFMERGE"), -3, 1, -1, 1);
+            assertMetadata(byName.get("PING"), -1, 0, 0, 0);
+            assertMetadata(byName.get("MULTI"), 1, 0, 0, 0);
+        });
+    }
+
+    private static void assertMetadata(
+            ReplyArray commandInfo,
+            long arity,
+            long firstKey,
+            long lastKey,
+            long keyStep
+    ) {
+        Assert.assertNotNull(commandInfo);
+        String name = ((ReplyBulkString) commandInfo.values().get(0)).asString();
+        Assert.assertEquals(name + " arity", arity, ((ReplyInteger) commandInfo.values().get(1)).value());
+        Assert.assertEquals(name + " firstKey", firstKey, ((ReplyInteger) commandInfo.values().get(3)).value());
+        Assert.assertEquals(name + " lastKey", lastKey, ((ReplyInteger) commandInfo.values().get(4)).value());
+        Assert.assertEquals(name + " keyStep", keyStep, ((ReplyInteger) commandInfo.values().get(5)).value());
     }
 }
