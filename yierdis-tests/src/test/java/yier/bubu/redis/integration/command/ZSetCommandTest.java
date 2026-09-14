@@ -312,6 +312,33 @@ public class ZSetCommandTest {
     }
 
     @Test
+    public void zaddIncompatibleFlagsInsideMultiAbortTransaction() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("zcombo:multi");
+
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+                Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("1"), b("seed")))).value());
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("NX"), b("XX"), b("1"), b("a"))),
+                        "ERR XX and NX options at the same time are not compatible");
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("GT"), b("NX"), b("1"), b("a"))),
+                        "ERR GT, LT, and/or NX options at the same time are not compatible");
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("INCR"), b("1"), b("a"), b("2"), b("b"))),
+                        "ERR INCR option supports a single increment-element pair");
+
+                ReplyObject exec = client.execute(List.of(b("EXEC")));
+                Assert.assertTrue(exec instanceof ReplyError);
+                Assert.assertEquals("EXECABORT Transaction discarded because of previous errors.",
+                        ((ReplyError) exec).message());
+                Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key))).value());
+            }
+        });
+    }
+
+    @Test
     public void zaddFlagsWorkAfterUpgradeToSkiplist() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
@@ -625,6 +652,39 @@ public class ZSetCommandTest {
         ));
         Assert.assertEquals(0, emptyWhenCountZero.values().size());
 
+            }
+        });
+    }
+
+    @Test
+    public void scoreRangeBoundsRejectLexStyleBracketPrefix() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("zbracket");
+                Assert.assertEquals(2L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("1"), b("a"), b("2"), b("b")))).value());
+
+                // '(' 开区间与裸数字是合法 score 边界
+                Assert.assertEquals(1, ((ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGEBYSCORE"), key, b("(1"), b("2")))).values().size());
+
+                // '[' 属于 lex range 语法，score range 命令按 Redis 拒绝
+                for (List<byte[]> command : List.of(
+                        Arrays.asList(b("ZRANGEBYSCORE"), key, b("[1"), b("2")),
+                        Arrays.asList(b("ZRANGEBYSCORE"), key, b("1"), b("[2")),
+                        Arrays.asList(b("ZRANGEBYSCORE"), key, b("["), b("+inf")),
+                        Arrays.asList(b("ZREVRANGEBYSCORE"), key, b("[2"), b("1")),
+                        Arrays.asList(b("ZREMRANGEBYSCORE"), key, b("1"), b("[2"))
+                )) {
+                    assertError(client.execute(command), "ERR min or max is not a float");
+                }
+
+                // 报错后连接存活，ZREMRANGEBYSCORE 的非法边界没有删除任何 member
+                Assert.assertEquals("PONG", ((ReplySimpleString) client.execute(List.of(b("PING")))).value());
+                Assert.assertEquals(2, ((ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGE"), key, b("0"), b("-1")))).values().size());
             }
         });
     }

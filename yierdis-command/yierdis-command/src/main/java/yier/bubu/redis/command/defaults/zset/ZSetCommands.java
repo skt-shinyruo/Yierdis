@@ -322,10 +322,10 @@ public final class ZSetCommands {
 
         int start = 0;
         boolean exclusive = false;
+        // 只有 '(' 是合法前缀（开区间）；'[' 属于 lex range 语法，Redis 在 score range 上拒绝它，
+        // 这里让它落入下方的 Double.parseDouble 失败路径，报 "min or max is not a float"。
         if (raw[0] == '(') {
             exclusive = true;
-            start = 1;
-        } else if (raw[0] == '[') {
             start = 1;
         }
         if (start >= raw.length) {
