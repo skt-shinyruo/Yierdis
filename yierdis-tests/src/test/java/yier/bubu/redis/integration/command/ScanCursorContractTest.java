@@ -6,9 +6,14 @@ import org.junit.Test;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
 import yier.bubu.redis.testutil.ReplyBulkString;
+import yier.bubu.redis.testutil.ReplyObject;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
@@ -114,6 +119,58 @@ public class ScanCursorContractTest {
                 }
 
                 Assert.assertEquals("expected scan to terminate", 0L, cursor);
+            }
+        });
+    }
+
+    @Test
+    public void arbitraryNonNegativeCursorRestartsIterationAndTerminatesAtZero() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                for (int i = 0; i < 30; i++) {
+                    client.execute(Arrays.asList(b("SET"), b("k" + i), b("v")));
+                }
+
+                // 不透明 cursor：phase 位超出内部 0/1 约定或 generation 不匹配的值都必须按
+                // 重启迭代处理（允许重复），不得报错，结束仍回 0。
+                List<String> cursors = new ArrayList<>(List.of(
+                        "8589934592",
+                        "12884901888",
+                        "9223372036854775807"
+                ));
+                // 伪造一个 generation 匹配但 phase 位非法的 cursor：改写在线 cursor 的 phase 位。
+                long live = parseCursor((ReplyArray) client.execute(Arrays.asList(
+                        b("SCAN"), b("0"), b("COUNT"), b("1"))));
+                Assert.assertNotEquals(0L, live);
+                cursors.add(Long.toString(live | (2L << 32)));
+
+                for (String initial : cursors) {
+                    Set<String> seen = new HashSet<>();
+                    String cursor = initial;
+                    for (int round = 0; round < 200; round++) {
+                        ReplyArray reply = (ReplyArray) client.execute(Arrays.asList(
+                                b("SCAN"), b(cursor), b("COUNT"), b("4")));
+                        for (ReplyObject element : ((ReplyArray) reply.values().get(1)).values()) {
+                            seen.add(((ReplyBulkString) element).asString());
+                        }
+                        cursor = ((ReplyBulkString) reply.values().get(0)).asString();
+                        if ("0".equals(cursor)) {
+                            break;
+                        }
+                    }
+                    Assert.assertEquals(
+                            "expected scan from opaque cursor " + initial + " to terminate at 0",
+                            "0",
+                            cursor
+                    );
+                    Assert.assertEquals(
+                            "expected restart from opaque cursor " + initial + " to cover every key",
+                            30,
+                            seen.size()
+                    );
+                }
             }
         });
     }

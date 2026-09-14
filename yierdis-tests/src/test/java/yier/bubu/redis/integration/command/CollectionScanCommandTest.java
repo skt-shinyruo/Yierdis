@@ -39,10 +39,11 @@ public class CollectionScanCommandTest {
                 assertError(client.execute(cmd("SSCAN", "string", "0")), WRONG_TYPE);
                 assertError(client.execute(cmd("ZSCAN", "string", "0")), WRONG_TYPE);
 
-                assertError(
-                        client.execute(cmd("HSCAN", "hash", "8589934592")),
-                        "ERR value is not an integer or out of range"
-                );
+                // 不透明 cursor：任意非负值（含 phase 位超出内部约定的值）都返回合法 scan 窗口，
+                // 而不是命令错误；不存在的 key 一律回空窗口且结束 cursor 为 0。
+                assertEmpty(scan(client, "HSCAN", "hash", "8589934592"));
+                assertEmpty(scan(client, "SSCAN", "set", "12884901888"));
+                assertEmpty(scan(client, "ZSCAN", "zset", "9223372036854775807"));
                 assertError(
                         client.execute(cmd("SSCAN", "set", "0", "COUNT", "0")),
                         "ERR value is not an integer or out of range"
@@ -112,6 +113,75 @@ public class CollectionScanCommandTest {
                 Assert.assertEquals(fieldCount, seen.size());
                 for (int index = 0; index < fieldCount; index++) {
                     Assert.assertEquals("value:" + index, seen.get("field:" + index));
+                }
+            }
+        });
+    }
+
+    @Test
+    public void collectionScansRestartFromArbitraryNonNegativeCursors() {
+        runDefaultFfm(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                int fieldCount = 513;
+                List<byte[]> hset = new ArrayList<>(2 + fieldCount * 2);
+                hset.add(b("HSET"));
+                hset.add(b("large-hash"));
+                List<byte[]> sadd = new ArrayList<>(2 + fieldCount);
+                sadd.add(b("SADD"));
+                sadd.add(b("large-set"));
+                List<byte[]> zadd = new ArrayList<>(2 + fieldCount * 2);
+                zadd.add(b("ZADD"));
+                zadd.add(b("large-zset"));
+                for (int index = 0; index < fieldCount; index++) {
+                    hset.add(b("field:" + index));
+                    hset.add(b("value:" + index));
+                    sadd.add(b("member:" + index));
+                    zadd.add(b(Integer.toString(index)));
+                    zadd.add(b("member:" + index));
+                }
+                client.execute(hset);
+                client.execute(sadd);
+                client.execute(zadd);
+
+                // 不透明 cursor：phase 位非法值与极大值都必须按重启迭代处理（允许重复），
+                // 不得报错，结束仍回 0；集合 scan 与 key SCAN 行为一致。
+                for (String command : new String[]{"HSCAN", "SSCAN", "ZSCAN"}) {
+                    String key = switch (command) {
+                        case "HSCAN" -> "large-hash";
+                        case "SSCAN" -> "large-set";
+                        default -> "large-zset";
+                    };
+                    List<String> cursors = new ArrayList<>(List.of(
+                            "8589934592",
+                            "12884901888",
+                            "9223372036854775807"
+                    ));
+                    // 伪造一个 generation 匹配但 phase 位非法的 cursor：改写该集合在线 cursor 的 phase 位。
+                    String live = scan(client, command, key, "0", "COUNT", "1").cursor();
+                    Assert.assertNotEquals("0", live);
+                    cursors.add(Long.toString(Long.parseLong(live) | (2L << 32)));
+
+                    for (String initial : cursors) {
+                        Set<String> seen = new HashSet<>();
+                        String cursor = initial;
+                        int iterations = 0;
+                        do {
+                            ScanReply page = scan(client, command, key, cursor, "COUNT", "7");
+                            seen.addAll(strings(page.elements()));
+                            cursor = page.cursor();
+                            Assert.assertTrue(
+                                    command + " from opaque cursor " + initial + " did not terminate",
+                                    ++iterations < 4096
+                            );
+                        } while (!"0".equals(cursor));
+                        Assert.assertEquals(
+                                command + " from opaque cursor " + initial + " must restart and cover every member",
+                                fieldCount * ("HSCAN".equals(command) || "ZSCAN".equals(command) ? 2 : 1),
+                                seen.size()
+                        );
+                    }
                 }
             }
         });

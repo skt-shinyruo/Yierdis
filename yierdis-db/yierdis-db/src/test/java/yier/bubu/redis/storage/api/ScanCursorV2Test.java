@@ -22,7 +22,24 @@ public class ScanCursorV2Test {
         Assert.assertThrows(IllegalArgumentException.class, () -> ScanCursorV2.of(0x20000000, 0, 0));
         Assert.assertThrows(IllegalArgumentException.class, () -> ScanCursorV2.of(0, 2, 0));
         Assert.assertThrows(IllegalArgumentException.class, () -> ScanCursorV2.of(0, 0, 0x1_0000_0000L));
-        Assert.assertThrows(IllegalArgumentException.class, () -> ScanCursorV2.of(2L << 32));
+        Assert.assertThrows(IllegalArgumentException.class, () -> ScanCursorV2.of(-1L));
+    }
+
+    @Test
+    public void wireParsingAcceptsAnyNonNegativeCursorAsOpaque() {
+        // 客户端可把 cursor 当不透明整数乱填：phase 位超出内部使用的 0/1 时也必须可解析，
+        // 是否重启迭代由存储层决定，解析本身不得拒绝。
+        for (long value : new long[]{1L, 2L << 32, 3L << 32, Long.MAX_VALUE}) {
+            ScanCursorV2 parsed = ScanCursorV2.of(value);
+
+            Assert.assertEquals(value, parsed.value());
+            Assert.assertArrayEquals(
+                    Long.toString(value).getBytes(StandardCharsets.US_ASCII),
+                    parsed.toAsciiBytes()
+            );
+        }
+        Assert.assertEquals(2, ScanCursorV2.of(2L << 32).phase());
+        Assert.assertEquals(0L, ScanCursorV2.of(0L).value());
     }
 
     @Test

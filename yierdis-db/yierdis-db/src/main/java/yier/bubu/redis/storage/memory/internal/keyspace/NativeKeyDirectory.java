@@ -563,6 +563,11 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         if (cursor.value() == 0L || cursor.generation() != currentGeneration) {
             return ScanCursorV2.of(currentGeneration, 0, 0L);
         }
+        // 客户端可把 cursor 当不透明整数乱填：phase 位超出 0/1 时无法映射到当前双表拓扑，
+        // 按从 active 表头重启处理（允许重复），绝不让非法 phase 进入扫描循环。
+        if (cursor.phase() > 1) {
+            return ScanCursorV2.of(currentGeneration, 0, 0L);
+        }
         if (cursor.phase() == 1 && !topology.metrics().rehashing()) {
             return ScanCursorV2.of(currentGeneration, 0, 0L);
         }

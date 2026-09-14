@@ -29,12 +29,9 @@ public final class CollectionScanCommandSupport {
     }
 
     private static Arguments parse(CommandArgs args, NoValuesPolicy noValuesPolicy) {
-        ScanCursorV2 cursor;
-        try {
-            cursor = ScanCursorV2.of(args.nonNegativeLongAt(2));
-        } catch (IllegalArgumentException failure) {
-            throw integerFailure();
-        }
+        // cursor 是不透明非负整数：负数与溢出由 nonNegativeLongAt 拒绝；其余任意值（含 phase 位
+        // 超出内部约定的值）都可解析，无法映射到当前表拓扑时由存储层按重启迭代处理。
+        ScanCursorV2 cursor = ScanCursorV2.of(args.nonNegativeLongAt(2));
 
         byte[] match = null;
         int count = DEFAULT_COUNT;
