@@ -16,6 +16,12 @@ public class String2llTest {
         Assert.assertEquals(-41L, String2ll.parse(bytes("-41")));
         Assert.assertEquals(Long.MAX_VALUE, String2ll.parse(bytes("9223372036854775807")));
         Assert.assertEquals(Long.MIN_VALUE, String2ll.parse(bytes("-9223372036854775808")));
+
+        // tryParse 与 parse 接受集一致，只是以 OptionalLong 返回。
+        Assert.assertEquals(0L, String2ll.tryParse(bytes("0")).orElseThrow());
+        Assert.assertEquals(-1L, String2ll.tryParse(bytes("-1")).orElseThrow());
+        Assert.assertEquals(Long.MAX_VALUE, String2ll.tryParse(bytes("9223372036854775807")).orElseThrow());
+        Assert.assertEquals(Long.MIN_VALUE, String2ll.tryParse(bytes("-9223372036854775808")).orElseThrow());
     }
 
     @Test
@@ -50,11 +56,13 @@ public class String2llTest {
     }
 
     private static void assertRejected(byte[] value) {
+        String description = value == null ? "null" : new String(value, StandardCharsets.US_ASCII);
         Assert.assertThrows(
-                "expected rejection of " + (value == null ? "null" : new String(value, StandardCharsets.US_ASCII)),
+                "expected rejection of " + description,
                 NumberFormatException.class,
                 () -> String2ll.parse(value)
         );
+        Assert.assertTrue("expected empty OptionalLong for " + description, String2ll.tryParse(value).isEmpty());
     }
 
     private static byte[] bytes(String value) {

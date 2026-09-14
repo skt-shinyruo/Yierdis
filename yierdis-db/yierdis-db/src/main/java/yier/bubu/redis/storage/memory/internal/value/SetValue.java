@@ -2,6 +2,7 @@ package yier.bubu.redis.storage.memory.internal.value;
 
 import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
 
+import yier.bubu.redis.bytes.String2ll;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
@@ -150,7 +151,7 @@ public final class SetValue implements YierdisValue {
             return members.get(member) != null;
         }
 
-        OptionalLong parsed = parseCanonicalLong(member);
+        OptionalLong parsed = String2ll.tryParse(member);
         if (parsed.isEmpty()) {
             return false;
         }
@@ -291,7 +292,7 @@ public final class SetValue implements YierdisValue {
             return members.put(member, PRESENT) == null;
         }
 
-        OptionalLong parsed = parseCanonicalLong(member);
+        OptionalLong parsed = String2ll.tryParse(member);
         if (parsed.isEmpty()) {
             convertToHashSet();
             return members.put(member, PRESENT) == null;
@@ -313,7 +314,7 @@ public final class SetValue implements YierdisValue {
             return members.remove(member) != null;
         }
 
-        OptionalLong parsed = parseCanonicalLong(member);
+        OptionalLong parsed = String2ll.tryParse(member);
         if (parsed.isEmpty()) {
             return false;
         }
@@ -634,51 +635,5 @@ public final class SetValue implements YierdisValue {
             }
         }
         return false;
-    }
-
-    /** 只接受 canonical ASCII long；拒绝 "+1"、"01" 和 "-0"，保持 binary-safe Set 语义。 */
-    private static OptionalLong parseCanonicalLong(byte[] bytes) {
-        if (bytes == null || bytes.length == 0) {
-            return OptionalLong.empty();
-        }
-
-        int i = 0;
-        boolean negative = false;
-        byte first = bytes[0];
-        if (first == '+') {
-            return OptionalLong.empty();
-        }
-        if (first == '-') {
-            negative = true;
-            i = 1;
-            if (i == bytes.length) {
-                return OptionalLong.empty();
-            }
-        }
-
-        if (bytes[i] == '0') {
-            return !negative && i == bytes.length - 1 ? OptionalLong.of(0L) : OptionalLong.empty();
-        }
-
-        long limit = negative ? Long.MIN_VALUE : -Long.MAX_VALUE;
-        long multMin = limit / 10;
-        long result = 0;
-
-        while (i < bytes.length) {
-            int digit = bytes[i++] - '0';
-            if (digit < 0 || digit > 9) {
-                return OptionalLong.empty();
-            }
-            if (result < multMin) {
-                return OptionalLong.empty();
-            }
-            result *= 10;
-            if (result < limit + digit) {
-                return OptionalLong.empty();
-            }
-            result -= digit;
-        }
-
-        return OptionalLong.of(negative ? result : -result);
     }
 }
