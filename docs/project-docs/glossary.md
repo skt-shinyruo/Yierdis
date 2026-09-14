@@ -110,7 +110,7 @@ DB 内 key 到 entry handle/record 的索引结构。heap 路径和 FFM 路径�
 
 ### TTL deadline
 
-`EntryRecord.expireAtMillis` 中保存的绝对过期时间。它是当前唯一 TTL 状态；主动清理直接扫描 key directory，并用派生 `expireCount` 快速判断是否有 TTL 工作。
+`EntryRecord.expireAtMillis` 中保存的绝对过期时间。它是当前唯一 TTL 状态；主动清理消费按过期时间排序的派生 expires 索引（不再扫描 key directory），并用派生 `expireCount` 快速判断是否有 TTL 工作。
 
 ### maxmemory
 

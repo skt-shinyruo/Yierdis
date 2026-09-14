@@ -156,29 +156,22 @@ final class YierdisTtlOps implements TtlOps {
 
     @Override
     public long ttlSeconds(BytesView keyView) {
-        kernel.checkOwner();
-        AllocatorKeyHandle handle = keyLifecycle.keyHandle(keyView);
-        if (handle == null) {
-            return -2L;
+        long remainingMillis = remainingTtlMillis(keyView);
+        if (remainingMillis < 0L) {
+            return remainingMillis;
         }
-        EntryRecord record = kernel.liveEntryRecord(handle);
-        if (record == null) {
-            return -2L;
-        }
-        keyLifecycle.touchRecord(handle, record);
-
-        long now = System.currentTimeMillis();
-        long expireAtMillis = record.expireAtMillis();
-        if (expireAtMillis < 0L) {
-            return -1L;
-        }
-        long remainingMillis = expireAtMillis - now;
         // Redis 的 TTL 按 (剩余毫秒+500)/1000 四舍五入到秒；向下取整会让刚设置的 TTL 恒少 1 秒。
-        return remainingMillis <= 0 ? -2L : (remainingMillis + 500L) / 1000L;
+        return (remainingMillis + 500L) / 1000L;
     }
 
     @Override
     public long ttlMillis(BytesView keyView) {
+        return remainingTtlMillis(keyView);
+    }
+
+    // 剩余毫秒；-1 表示 persistent；-2 表示 key 已不在（回答 -2 前先 reclaim，
+    // 保证后续 GET/EXISTS 观察不到它；仍存在的 key 永远不会得到 -2）。
+    private long remainingTtlMillis(BytesView keyView) {
         kernel.checkOwner();
         AllocatorKeyHandle handle = keyLifecycle.keyHandle(keyView);
         if (handle == null) {
@@ -188,7 +181,9 @@ final class YierdisTtlOps implements TtlOps {
         if (record == null) {
             return -2L;
         }
-        keyLifecycle.touchRecord(handle, record);
+        // touch 在 LRU 下会写回新 record；后续 reclaim 必须以 touched record 校验 identity，
+        // 否则 expectedRecord 与 current 的 lruOrLfu 不一致会让 reclamation 静默空转。
+        record = keyLifecycle.touchRecord(handle, record);
 
         long now = System.currentTimeMillis();
         long expireAtMillis = record.expireAtMillis();
@@ -196,7 +191,11 @@ final class YierdisTtlOps implements TtlOps {
             return -1L;
         }
         long remainingMillis = expireAtMillis - now;
-        return remainingMillis <= 0 ? -2L : remainingMillis;
+        if (remainingMillis <= 0) {
+            kernel.reclaimExpired(handle, record, now);
+            return -2L;
+        }
+        return remainingMillis;
     }
 
     private WriteResult<Boolean> deleteImmediately(

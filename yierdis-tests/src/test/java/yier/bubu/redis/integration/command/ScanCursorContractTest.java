@@ -175,6 +175,52 @@ public class ScanCursorContractTest {
         });
     }
 
+    @Test
+    public void scanAndKeysOmitExpiredKeyNames() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                client.execute(Arrays.asList(b("SET"), b("live"), b("v")));
+                // EXAT 取过去时间：key 写入即过期，但在被回收前物理驻留在目录中。
+                long pastExat = (System.currentTimeMillis() / 1000L) - 60L;
+                client.execute(Arrays.asList(
+                        b("SET"), b("gone"), b("v"),
+                        b("EXAT"), Long.toString(pastExat).getBytes(StandardCharsets.US_ASCII)
+                ));
+
+                Set<String> scanned = new HashSet<>();
+                long cursor = 0L;
+                for (int round = 0; round < 50; round++) {
+                    ReplyArray reply = (ReplyArray) client.execute(Arrays.asList(
+                            b("SCAN"),
+                            Long.toString(cursor).getBytes(StandardCharsets.US_ASCII),
+                            b("COUNT"), b("10")
+                    ));
+                    ReplyArray keys = (ReplyArray) reply.values().get(1);
+                    for (ReplyObject key : keys.values()) {
+                        scanned.add(new String(((ReplyBulkString) key).data(), StandardCharsets.UTF_8));
+                    }
+                    long next = parseCursor(reply);
+                    if (next == 0L) {
+                        break;
+                    }
+                    cursor = next;
+                }
+                Assert.assertTrue("scan must return the live key", scanned.contains("live"));
+                Assert.assertFalse("scan must not return expired names", scanned.contains("gone"));
+
+                ReplyArray keysReply = (ReplyArray) client.execute(Arrays.asList(b("KEYS"), b("*")));
+                Set<String> keyNames = new HashSet<>();
+                for (ReplyObject key : keysReply.values()) {
+                    keyNames.add(new String(((ReplyBulkString) key).data(), StandardCharsets.UTF_8));
+                }
+                Assert.assertTrue(keyNames.contains("live"));
+                Assert.assertFalse("KEYS must not return expired names", keyNames.contains("gone"));
+            }
+        });
+    }
+
     private static long parseCursor(ReplyArray reply) {
         Assert.assertNotNull(reply);
         Assert.assertNotNull(reply.values());

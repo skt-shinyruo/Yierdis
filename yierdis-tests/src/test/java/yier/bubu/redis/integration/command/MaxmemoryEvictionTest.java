@@ -255,6 +255,37 @@ public class MaxmemoryEvictionTest {
     }
 
     @Test
+    public void allkeysLruReclaimsExpiredKeyInsteadOfRejectingWrite() {
+        // 新 maxmemory 契约：keyspace 只剩过期占用可回收时，LRU admission 回收过期 key 而不是 OOM；
+        // 存活 key 不得被误淘汰。EXAT 取过去时间：key 写入即过期，但在被回收前物理驻留。
+        byte[] value = repeat((byte) 'x', 40_000);
+        long maxmemoryBytes = minMaxmemoryThatAllowsSetKeys(value, List.of(b("a"), b("b"), b("c"))) - 1L;
+        forEachDbWithMaxmemory(maxmemoryBytes, MaxmemoryPolicy.ALLKEYS_LRU, 5, db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                Assert.assertTrue(client.execute(List.of(b("SET"), b("a"), value)) instanceof ReplySimpleString);
+                long pastExat = (System.currentTimeMillis() / 1000L) - 60L;
+                Assert.assertTrue(client.execute(List.of(b("SET"), b("b"), value, b("EXAT"), b(Long.toString(pastExat))))
+                        instanceof ReplySimpleString);
+
+                ReplyObject candidateSet = client.execute(List.of(b("SET"), b("c"), value));
+                Assert.assertTrue(
+                        "SET must succeed by reclaiming the expired key: reply=" + replyDescription(candidateSet)
+                                + ", usedAfter=" + usedBytesForMaxmemory(db)
+                                + ", limit=" + maxmemoryBytes,
+                        candidateSet instanceof ReplySimpleString
+                );
+
+                Assert.assertTrue(client.execute(List.of(b("GET"), b("b"))) instanceof ReplyNull);
+                Assert.assertTrue(client.execute(List.of(b("GET"), b("a"))) instanceof ReplyBulkString);
+                Assert.assertTrue(client.execute(List.of(b("GET"), b("c"))) instanceof ReplyBulkString);
+                Assert.assertTrue("used bytes must be <= maxmemory", usedBytesForMaxmemory(db) <= maxmemoryBytes);
+            }
+        });
+    }
+
+    @Test
     public void objectEncodingAndMemoryUsageAreExposed() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);

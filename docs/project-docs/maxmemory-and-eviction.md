@@ -74,7 +74,7 @@ degraded 不是终态：`RuntimeDbEngine.reconcileAccounting()` 在 owner thread
 5. 淘汰结束后再次采样；仍超限且本次写入会增长时，OOM。
 6. 只有通过这些检查后，才增加 `reservedBytes`。
 
-写 admission 不再内联跑过期清理：过期 key 由维护节拍和读路径惰性过期回收，admission 只按当前 owned physical snapshot 做预算判定。eviction 采样到已过期候选时仍先走 expiration reclamation，这部分与旧行为一致。
+写 admission 不内联跑 expires 索引清理（那仍是维护节拍的工作），但 `allkeys-lru`/`allkeys-random` 的 victim 选择不再把过期 key 当成不可回收而跳过：抽样抽到或扫描到过期 key 时，它作为最优候选先走 expiration reclamation。因此「只剩过期条目」的 keyspace 不会再把 admission 卡进 OOM——只要回收过期占用能把 owned physical snapshot 压回目标线，本会 OOM 的写入就会成功。物理占用仍超限，或策略是 `noeviction`（永不选 victim）时，增长型写入才被拒绝。
 
 这解释了几个容易混淆的现象：
 
@@ -88,7 +88,7 @@ global scope 下，本地 ledger 不自己算跨 DB 预算，而是先委托 `Yi
 
 governor 的主线是：
 
-1. 按 budget 轮转调用所有 participant 的 `trimMemory(...)`。过期清理由各 DB 的维护节拍驱动，`prepareWrite` 不再对所有 DB 内联触发。
+1. 按 budget 轮转调用所有 participant 的 `trimMemory(...)`。expires 索引清理由各 DB 的维护节拍驱动，`prepareWrite` 不内联触发；但 participant 抽样/扫描上报的 candidate 可以是过期 key，governor 的 `evict(candidate)` 会先走 expiration reclamation 回收它（见下文收敛规则）。
 2. 计算本次写入前的目标线 `limit = maxmemoryBytes - estimatedExtraBytes`。
 3. 汇总所有 participant 最新的 owned physical snapshots；总量不超过 `limit` 时直接通过。
 4. `noeviction` 在 trim/resnapshot 后仍超限时，只允许不增长的维护路径继续。
@@ -117,7 +117,7 @@ maintenance 时的顺序由 `YierdisInstanceRuntimeAccess.maintenanceTick()` 固
 
 还有两条收敛规则：
 
-- cleanup 先于 eviction。候选 key 如果已经过期，会先走 expiration reclamation，不再进入 victim 淘汰。
+- 过期候选优先于 live victim。`allkeys-lru`/`allkeys-random` 的 candidate selection 抽到或扫描到过期 key 时直接把它上报为候选（LRU 比较中按 `lruClock=0` 排在所有 live key 之前，live 访问时钟恒 ≥ 1），`evict(...)` 对它先走 expiration reclamation；只有 live key 才进入真正的 victim 淘汰。
 - 真正 eviction 时，`YierdisDbMaxmemorySupport` 调用 `YierdisDbKernel.evict(...)`；reclamation plan 在 prepare 阶段复制稳定 key bytes，commit 时移除 directory entry 并释放完整 entry/value/key graph，随后结算 ledger。
 
 所以“淘汰”和“过期”都会删除 key，但触发原因和测试入口不同。

@@ -153,7 +153,7 @@ heap estimated
 
 per-db scope 先 cleanup expired，再按 `maxmemoryBytes - estimatedExtraBytes` trim/resample/evict。global scope 把相同 participant 操作交给 `YierdisGlobalMaxmemoryGovernor`，由它跨 DB 汇总 snapshots 和挑选 victim。各 DB backend runtime counter 只用于 lifecycle 诊断，不作为第二套 global usage source。
 
-`noeviction` 不选 victim；`allkeys-random` 随机取候选；`allkeys-lru` 比较 `EntryRecord.lruOrLfu()`。过期候选先走 expiration reclamation，真正 victim 通过 `YierdisDbKernel.evict(...)` 删除。
+`noeviction` 不选 victim；`allkeys-random` 随机取候选；`allkeys-lru` 比较 `EntryRecord.lruOrLfu()`。candidate selection 不跳过过期 key（抽到或扫描到即作为最优候选），过期候选先走 expiration reclamation，真正 victim 通过 `YierdisDbKernel.evict(...)` 删除。
 
 ledger 逻辑账本与 admission 的物理重算是两套账，估算漂移触发 invariant failure 后 DB 进入 degraded、拒绝写入（MISCONF）。`RuntimeDbEngine.reconcileAccounting()` 是唯一的显式恢复入口：在 owner thread 上重算物理用量、用 `realignUsage` 把逻辑账本对齐到物理值、清除 degraded 并恢复写入；每次尝试与结果（成功/失败/修正量）记入 `DbHealthSnapshot.lastReconciliation`。快照的失败字段只描述当前未恢复的 episode，对账成功后随之关闭，下一场事故重新入账。恢复不会自动发生，持续性记账 bug 仍以事故形式暴露。
 

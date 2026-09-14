@@ -37,7 +37,7 @@ command
 - `EXPIRE/PEXPIRE/EXPIREAT/PEXPIREAT` 的 `NX/XX/GT/LT` 条件标志在删除分支之前判定：条件不满足时返回 unchanged，键与旧 TTL 都保留；无 TTL 按无限 TTL 参与比较（GT 必然失败、LT 必然成功）。
 - key 缺失或在提交前已发生变化时，prepared mutation 返回 unchanged，不覆盖较新的 record。
 - 相对或绝对时间计算溢出时 deadline 饱和到 `Long.MAX_VALUE`。
-- 读命令保持 Redis 兼容结果：key 不存在或已过期为 `-2`，persistent 为 `-1`，其余返回剩余时间。
+- 读命令保持 Redis 兼容结果：key 不存在或已过期为 `-2`，persistent 为 `-1`，其余返回剩余时间。`TTL`/`PTTL` 回答 `-2` 前会先 reclaim 该 key（惰性过期的同一笔 reclamation），保证 `-2` 之后 `GET`/`EXISTS` 观察不到它；仍存在的 key 永远不会得到 `-2`。
 
 TTL deadline 本身位于既有 entry metadata 中。只改变 deadline 不增加 DB 的物理 committed footprint；maxmemory 仍会对 mutation scope 的保守 bookkeeping 做 admission。
 
@@ -86,7 +86,7 @@ Netty worker timer
 
 真正的 DB cleanup 只在 owner thread 上执行。expires 索引让"是否还有到期候选"成为 O(1) 判断，因此维护节拍会在时间预算内循环调用单次 cleanup，直到没有到期候选或预算耗尽；短 TTL churn 在节拍之间不会无限积压。
 
-写 admission（local 与 global 两种 maxmemory 模式）不再内联触发过期清理：预算判定只看 owned physical snapshot、trim 和 eviction。过期 key 的回收时机是维护节拍与读路径惰性过期；eviction 候选如果已经过期，仍会在淘汰路径上先走 expiration reclamation。
+写 admission（local 与 global 两种 maxmemory 模式）不内联触发 expires 索引清理：预算判定只看 owned physical snapshot、trim 和 eviction。过期 key 的回收时机是维护节拍、读路径惰性过期，以及 eviction candidate selection——`allkeys-lru`/`allkeys-random` 抽样或扫描到过期 key 时把它作为最优候选，在淘汰路径上先走 expiration reclamation，而不是跳过；因此「只剩过期条目」的 keyspace 不会再把写入卡进 OOM。`noeviction` 不选 victim，过期占用只能等维护节拍或读路径惰性过期，admission 仍按 OOM 拒绝增长写入。
 
 ## 维护约束
 
@@ -99,7 +99,7 @@ Netty worker timer
 ## 相关测试
 
 - `TtlLifecycleDirectOpsTest`：`TTL/PTTL` 的 `-2/-1/>0`、`PERSIST`、即时过期和溢出饱和。
-- `ActiveExpirationTest`：索引消费只访问过期候选、单次候选上限、rehash 全程排空、stale 索引项惰性校验（re-SET/PERSIST/overwrite/删除重建）、写 admission 不内联清理，以及 churn 在维护节拍间排空。
-- `ExpireSemanticsTest`：各 value type 的即时过期和后续重建。
+- `ActiveExpirationTest`：索引消费只访问过期候选、单次候选上限、rehash 全程排空、stale 索引项惰性校验（re-SET/PERSIST/overwrite/删除重建）、LRU/RANDOM 写 admission 回收过期占用而 noeviction 仍 OOM，以及 churn 在维护节拍间排空。
+- `ExpireSemanticsTest`：各 value type 的即时过期和后续重建、`TTL/PTTL` 的 `-2` 只在 key 已不在时回答。
 - `TtlMaxmemoryTest`：TTL mutation 的 maxmemory admission 与失败原子性。
 - `PhysicalMemoryAccountingTest`、`ActiveExpirationTest`：deadline-only mutation 不改变物理 committed footprint。

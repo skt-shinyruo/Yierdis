@@ -111,6 +111,39 @@ public class ExpireSemanticsTest {
     }
 
     @Test
+    public void ttlMinusTwoMeansKeyIsGoneAndNeverReturnedForLiveKeys() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+
+                // 仍存在的 key 不得回答 -2：persistent 为 -1，带 TTL 为正值。
+                Assert.assertTrue(client.execute(Arrays.asList(b("SET"), b("live"), b("v"))) instanceof ReplySimpleString);
+                Assert.assertEquals(-1L, ((ReplyInteger) client.execute(Arrays.asList(b("TTL"), b("live")))).value());
+                Assert.assertEquals(-1L, ((ReplyInteger) client.execute(Arrays.asList(b("PTTL"), b("live")))).value());
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("EXPIRE"), b("live"), b("60")))).value());
+                Assert.assertTrue(((ReplyInteger) client.execute(Arrays.asList(b("TTL"), b("live")))).value() > 0L);
+                Assert.assertTrue(((ReplyInteger) client.execute(Arrays.asList(b("PTTL"), b("live")))).value() > 0L);
+
+                // -2 表示 key 已不在：回答后 GET/EXISTS 必须观察不到它。
+                long pastExat = (System.currentTimeMillis() / 1000L) - 60L;
+                Assert.assertTrue(client.execute(Arrays.asList(
+                        b("SET"), b("gone"), b("v"), b("EXAT"), b(Long.toString(pastExat))
+                )) instanceof ReplySimpleString);
+                Assert.assertEquals(-2L, ((ReplyInteger) client.execute(Arrays.asList(b("TTL"), b("gone")))).value());
+                Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), b("gone")))).value());
+                Assert.assertTrue(client.execute(Arrays.asList(b("GET"), b("gone"))) instanceof ReplyNull);
+
+                Assert.assertTrue(client.execute(Arrays.asList(
+                        b("SET"), b("gone2"), b("v"), b("EXAT"), b(Long.toString(pastExat))
+                )) instanceof ReplySimpleString);
+                Assert.assertEquals(-2L, ((ReplyInteger) client.execute(Arrays.asList(b("PTTL"), b("gone2")))).value());
+                Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), b("gone2")))).value());
+            }
+        });
+    }
+
+    @Test
     public void ttlRoundsRemainingMillisToNearestSecondLikeRedis() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);

@@ -180,9 +180,154 @@ public class ActiveExpirationTest {
     }
 
     @Test
-    public void writeAdmissionUnderLocalMaxmemoryDoesNotRunExpiryCleanup() {
-        // 写 admission 不再内联过期清理：local maxmemory 下过期的 B 仍占内存时写 C 必须被 OOM 拒绝；
-        // 只有维护节拍回收 B 之后，同样的写入才被接受。
+    public void writeAdmissionUnderAllkeysLruReclaimsExpiredKeysInsteadOfOom() {
+        // 新 maxmemory 契约：local maxmemory 下过期的 B 仍占内存时，LRU admission 把 B 作为 reclaim
+        // victim 回收而不是 OOM；存活 key A 不得被当作 eviction victim。
+        byte[] value = new byte[2048];
+        final long limitBytes;
+        YierdisDb probe = TestDbSupport.open(
+                0L,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                5L,
+                Long.MAX_VALUE
+        );
+        try {
+            probe.strings().setString(b("a"), value, SetMode.NORMAL, null);
+            probe.strings().setString(b("b"), value, SetMode.NORMAL, ExpireOption.px(0));
+            long usedAfterAB = probe.usedBytesForMaxmemory();
+            probe.strings().setString(b("c"), value, SetMode.NORMAL, null);
+            long usedAfterABC = probe.usedBytesForMaxmemory();
+            Assert.assertTrue(usedAfterABC > usedAfterAB);
+            limitBytes = usedAfterABC - 1L;
+        } finally {
+            probe.shutdown();
+        }
+
+        YierdisDb db = TestDbSupport.open(
+                limitBytes,
+                MaxmemoryPolicy.ALLKEYS_LRU,
+                5,
+                5L,
+                Long.MAX_VALUE
+        );
+        try {
+            db.strings().setString(b("a"), value, SetMode.NORMAL, null);
+            db.strings().setString(b("b"), value, SetMode.NORMAL, ExpireOption.px(0));
+            // 过期 key 物理驻留，等待 admission 抽样回收。
+            Assert.assertNotNull(db.keyLifecycle().entryRecord(b("b")));
+
+            Assert.assertTrue(db.strings().setString(b("c"), value, SetMode.NORMAL, null).value());
+
+            // admission 回收了过期 key；存活 key 未被误淘汰；物理占用（强制口径）回到 limit 内。
+            Assert.assertNull(db.keyLifecycle().entryRecord(b("b")));
+            Assert.assertArrayEquals(value, OwnedReplyValueAssertions.stringValue(db.strings(), b("a")));
+            Assert.assertArrayEquals(value, OwnedReplyValueAssertions.stringValue(db.strings(), b("c")));
+            Assert.assertEquals(2, db.size());
+            Assert.assertTrue(db.usedBytesForMaxmemory() <= limitBytes);
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    @Test
+    public void writeAdmissionUnderAllkeysLruSamplingReclaimsExpiredKeys() {
+        // samples < keyCount 的随机抽样路径：keyspace 只剩过期 key 时，任何样本都是 reclaim victim，
+        // 写入必须通过回收过期占用成功，而不是因为抽不到 live victim 而无故 OOM。
+        byte[] value = new byte[2048];
+        final long limitBytes;
+        List<byte[]> expiredKeys = List.of(b("b1"), b("b2"), b("b3"), b("b4"));
+        YierdisDb probe = TestDbSupport.open(
+                0L,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                5L,
+                Long.MAX_VALUE
+        );
+        try {
+            for (byte[] key : expiredKeys) {
+                probe.strings().setString(key, value, SetMode.NORMAL, ExpireOption.px(0));
+            }
+            long usedAfterExpired = probe.usedBytesForMaxmemory();
+            probe.strings().setString(b("c"), value, SetMode.NORMAL, null);
+            long usedAfterAll = probe.usedBytesForMaxmemory();
+            Assert.assertTrue(usedAfterAll > usedAfterExpired);
+            limitBytes = usedAfterAll - 1L;
+        } finally {
+            probe.shutdown();
+        }
+
+        YierdisDb db = TestDbSupport.open(
+                limitBytes,
+                MaxmemoryPolicy.ALLKEYS_LRU,
+                1,
+                5L,
+                Long.MAX_VALUE
+        );
+        try {
+            for (byte[] key : expiredKeys) {
+                db.strings().setString(key, value, SetMode.NORMAL, ExpireOption.px(0));
+            }
+
+            Assert.assertTrue(db.strings().setString(b("c"), value, SetMode.NORMAL, null).value());
+
+            Assert.assertArrayEquals(value, OwnedReplyValueAssertions.stringValue(db.strings(), b("c")));
+            Assert.assertTrue("admission must reclaim at least one expired key", db.size() <= expiredKeys.size());
+            Assert.assertTrue(db.usedBytesForMaxmemory() <= limitBytes);
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    @Test
+    public void writeAdmissionUnderAllkeysRandomReclaimsExpiredKeys() {
+        // RANDOM 不回归：全过期 keyspace 中任何随机 victim 都走 expiration reclamation，写入成功。
+        byte[] value = new byte[2048];
+        final long limitBytes;
+        List<byte[]> expiredKeys = List.of(b("b1"), b("b2"), b("b3"), b("b4"));
+        YierdisDb probe = TestDbSupport.open(
+                0L,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                5L,
+                Long.MAX_VALUE
+        );
+        try {
+            for (byte[] key : expiredKeys) {
+                probe.strings().setString(key, value, SetMode.NORMAL, ExpireOption.px(0));
+            }
+            probe.strings().setString(b("c"), value, SetMode.NORMAL, null);
+            limitBytes = probe.usedBytesForMaxmemory() - 1L;
+        } finally {
+            probe.shutdown();
+        }
+
+        YierdisDb db = TestDbSupport.open(
+                limitBytes,
+                MaxmemoryPolicy.ALLKEYS_RANDOM,
+                5,
+                5L,
+                Long.MAX_VALUE
+        );
+        try {
+            for (byte[] key : expiredKeys) {
+                db.strings().setString(key, value, SetMode.NORMAL, ExpireOption.px(0));
+            }
+
+            Assert.assertTrue(db.strings().setString(b("c"), value, SetMode.NORMAL, null).value());
+
+            Assert.assertArrayEquals(value, OwnedReplyValueAssertions.stringValue(db.strings(), b("c")));
+            Assert.assertTrue("admission must reclaim at least one expired key", db.size() <= expiredKeys.size());
+            Assert.assertTrue(db.usedBytesForMaxmemory() <= limitBytes);
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    @Test
+    public void writeAdmissionUnderNoevictionStillRejectsWhenOnlyExpiredOccupancyRemains() {
+        // noeviction 永不选 victim：过期占用只能由维护节拍或读路径惰性过期回收，
+        // admission 仍按 OOM 拒绝增长写入（与 Redis noeviction 一致）。
         byte[] value = new byte[2048];
         final long limitBytes;
         YierdisDb probe = TestDbSupport.open(
@@ -217,11 +362,11 @@ public class ActiveExpirationTest {
 
             try {
                 db.strings().setString(b("c"), value, SetMode.NORMAL, null);
-                Assert.fail("admission must not reclaim the expired key inline");
+                Assert.fail("noeviction admission must not reclaim the expired key inline");
             } catch (YierdisCommandException expected) {
                 Assert.assertEquals(MaxmemoryErrors.OOM_ERR, expected.getMessage());
             }
-            // 过期 key 物理驻留：admission 没有顺手回收它。
+            // 过期 key 物理驻留：noeviction admission 没有顺手回收它。
             Assert.assertNotNull(db.keyLifecycle().entryRecord(b("b")));
             Assert.assertEquals(2, db.size());
 

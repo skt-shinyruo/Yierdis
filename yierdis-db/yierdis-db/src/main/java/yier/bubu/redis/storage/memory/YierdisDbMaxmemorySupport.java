@@ -109,7 +109,9 @@ final class YierdisDbMaxmemorySupport {
             return null;
         }
         if (keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
-            return null;
+            // 过期 key 必须作为可回收候选上报，而不是跳过：lruClock=0 让它在 LRU 比较中先于任何
+            // live key（live 访问时钟恒 >= 1）被选中，evict(...) 会走 expiration reclamation 回收它。
+            return new MaxmemoryCandidate(owner, keyHandle, 0L);
         }
 
         long lruClock = policy == MaxmemoryPolicy.ALLKEYS_LRU ? record.lruOrLfu() : 0L;
@@ -130,22 +132,12 @@ final class YierdisDbMaxmemorySupport {
             return null;
         }
 
-        BestLruCandidate best = new BestLruCandidate();
-        keyLifecycle.forEachKeyHandle((k, record) -> {
-            if (k == null || record == null) {
-                return;
-            }
-            if (keyLifecycle.isKeyExpired(k, nowMillis)) {
-                return;
-            }
-            best.consider(k, record);
-        });
-
-        AllocatorKeyHandle bestKeyHandle = best.keyHandle();
-        if (bestKeyHandle == null) {
+        VictimPick pick = pickFullScanVictim(nowMillis);
+        if (pick == null) {
             return null;
         }
-        return new MaxmemoryCandidate(owner, bestKeyHandle, best.lru());
+        // 与 sampleCandidate 同一口径：过期 key 是最优可回收候选，lruClock=0 排在所有 live key 之前。
+        return new MaxmemoryCandidate(owner, pick.keyHandle(), pick.expired() ? 0L : pick.lru());
     }
 
     boolean evict(MaxmemoryParticipant owner, MaxmemoryCandidate candidate, long nowMillis) {
@@ -187,17 +179,8 @@ final class YierdisDbMaxmemorySupport {
 
         if (samples >= total) {
             // 样本数覆盖全量时退化为完整扫描，避免随机抽样在小 keyspace 上错过最旧 key。
-            BestLruCandidate best = new BestLruCandidate();
-            keyLifecycle.forEachKeyHandle((k, record) -> {
-                if (keyLifecycle.isKeyExpired(k, nowMillis)) {
-                    return;
-                }
-                if (record == null) {
-                    return;
-                }
-                best.consider(k, record);
-            });
-            return best.keyHandle();
+            VictimPick pick = pickFullScanVictim(nowMillis);
+            return pick == null ? null : pick.keyHandle();
         }
 
         for (int i = 0; i < samples; i++) {
@@ -210,7 +193,8 @@ final class YierdisDbMaxmemorySupport {
                 continue;
             }
             if (keyLifecycle.isKeyExpired(key, nowMillis)) {
-                continue;
+                // 抽到过期 key 直接作为 reclaim victim（与 ALLKEYS_RANDOM 已具备的能力一致）。
+                return key;
             }
             long lru = record.lruOrLfu();
             if (bestKey == null || lru < bestLru) {
@@ -227,6 +211,33 @@ final class YierdisDbMaxmemorySupport {
 
     private void trimEmptyNativePages() {
         memoryContext.trimEmptyNativePages(MemoryPressureBudget.UNLIMITED);
+    }
+
+    // 全量扫描的 victim 选择：过期 key 永远先于 live victim（跳过它们会让「只剩过期条目」的
+    // keyspace 无故 OOM）；没有过期 key 时退化为最小 LRU clock 的 live key。
+    private VictimPick pickFullScanVictim(long nowMillis) {
+        BestLruCandidate best = new BestLruCandidate();
+        AllocatorKeyHandle[] expiredKey = new AllocatorKeyHandle[1];
+        keyLifecycle.forEachKeyHandle((k, record) -> {
+            if (k == null || record == null) {
+                return;
+            }
+            if (keyLifecycle.isKeyExpired(k, nowMillis)) {
+                if (expiredKey[0] == null) {
+                    expiredKey[0] = k;
+                }
+                return;
+            }
+            best.consider(k, record);
+        });
+        if (expiredKey[0] != null) {
+            return new VictimPick(expiredKey[0], 0L, true);
+        }
+        AllocatorKeyHandle bestKeyHandle = best.keyHandle();
+        return bestKeyHandle == null ? null : new VictimPick(bestKeyHandle, best.lru(), false);
+    }
+
+    private record VictimPick(AllocatorKeyHandle keyHandle, long lru, boolean expired) {
     }
 
     private static final class BestLruCandidate {
