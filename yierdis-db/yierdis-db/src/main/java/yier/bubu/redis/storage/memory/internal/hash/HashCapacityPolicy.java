@@ -9,10 +9,14 @@ public final class HashCapacityPolicy {
     private HashCapacityPolicy() {
     }
 
+    public static boolean exceedsGrowThreshold(long filledSlots, int capacity) {
+        return filledSlots > capacity - capacity / 4L;
+    }
+
     public static Decision nextAction(int capacity, int size, int filledSlots, int tombstones) {
         validate(capacity, size, filledSlots, tombstones);
 
-        if (filledSlots > capacity - capacity / 4) {
+        if (exceedsGrowThreshold(filledSlots, capacity)) {
             if (capacity == MAX_CAPACITY) {
                 throw new NativeCapacityExceededException("hash table capacity limit reached: " + capacity);
             }

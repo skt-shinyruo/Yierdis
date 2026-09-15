@@ -241,6 +241,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
     public V put(byte[] keyBytes, V value) {
         Objects.requireNonNull(keyBytes, "keyBytes");
         requireOwnedKeys();
+        validateValue(value);
         advanceRehashOnWrite();
         int hash = hash(keyBytes);
         ProbeResult probe = probe(keyBytes, hash);
@@ -258,10 +259,16 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         Replacement staged = stageTableForInsert(hash);
         NativeHandle keyHandle = byteStore.store(keyBytes, keyKind);
         long keyBytesSize = byteStore.allocatedBytes(keyHandle);
-        if (staged != null) {
-            publishStagedTable(staged);
+        try {
+            if (staged != null) {
+                publishStagedTable(staged);
+            }
+            insertActive(keyHandle, value, hash);
+        } catch (RuntimeException | Error failure) {
+            // 句柄尚未进入任何表：发布或插入失败时必须在这里归还，否则 key 占用的 native 内存会泄漏。
+            byteStore.release(keyHandle);
+            throw failure;
         }
-        insertActive(keyHandle, value, hash);
         nativeBytes += keyBytesSize;
         contentGeneration++;
         return null;
@@ -491,7 +498,10 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
     public long estimatedInsertHeapGrowthBytes() {
         HashTableMetrics metrics = topology.metrics();
         if (metrics.rehashing()) {
-            return 0L;
+            // rehash 期间插入只在新表装不下合并占用时才分配：预估必须与 stageTableForInsert 的坍缩口径一致。
+            return insertExhaustsMergedTopology(metrics)
+                    ? stagedReplacementHeapBytesForCapacity(collapsedTopologyCapacity(metrics), valueLayout)
+                    : 0L;
         }
         int projectedFilled = Math.min(metrics.capacity(), metrics.filledSlots() + 1);
         int projectedSize = metrics.size() + 1;
@@ -697,10 +707,14 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
     }
 
     private Replacement stageTableForInsert(int hash) {
-        if (old != null) {
-            return null;
-        }
         HashTableMetrics metrics = topology.metrics();
+        if (old != null) {
+            // rehash 期间不能叠加第二次 beginRehash；合并占用（全量迁移完成后 active 必须容纳的
+            // size + active tombstone）越过 grow 阈值时，同步坍缩成一张装得下全部存活 entry 的
+            // standalone 表，否则继续插入终将耗尽缩小后的 active 槽位，插入与后台迁移都会在
+            // OpenAddressingTopology 里抛出 "active topology has no insertion slot"。
+            return insertExhaustsMergedTopology(metrics) ? collapsedReplacement(metrics) : null;
+        }
         int insertionIndex = topology.probe(hash, ignored -> false).location().slot();
         SlotState previousState = topology.slotState(TableSide.ACTIVE, insertionIndex);
         int projectedSize = metrics.size() + 1;
@@ -717,24 +731,68 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
                 : emptyReplacement(decision.targetCapacity());
     }
 
+    private static boolean insertExhaustsMergedTopology(HashTableMetrics metrics) {
+        return HashCapacityPolicy.exceedsGrowThreshold(
+                (long) metrics.size() + metrics.tombstones() + 1L,
+                metrics.capacity()
+        );
+    }
+
+    private Replacement collapsedReplacement(HashTableMetrics metrics) {
+        Table table = new Table(collapsedTopologyCapacity(metrics), valueLayout);
+        OpenAddressingTopology collapsed = new OpenAddressingTopology(table.capacity);
+        copyFilledSlots(TableSide.ACTIVE, active, table, collapsed);
+        copyFilledSlots(TableSide.OLD, old, table, collapsed);
+        return new Replacement(table, collapsed, true);
+    }
+
+    private static int collapsedTopologyCapacity(HashTableMetrics metrics) {
+        int capacity = metrics.capacity();
+        long finalSize = metrics.size() + 1L;
+        while (HashCapacityPolicy.exceedsGrowThreshold(finalSize, capacity)) {
+            if (capacity == HashCapacityPolicy.MAX_CAPACITY) {
+                throw new NativeCapacityExceededException("hash table capacity limit reached: " + capacity);
+            }
+            capacity <<= 1;
+        }
+        return capacity;
+    }
+
     private Replacement emptyReplacement(int capacity) {
         return new Replacement(
                 new Table(capacity, valueLayout),
-                new OpenAddressingTopology(capacity)
+                new OpenAddressingTopology(capacity),
+                false
         );
     }
 
     private void publishStagedTable(Replacement staged) {
+        Replacement replacement = Objects.requireNonNull(staged, "staged");
+        if (replacement.standalone()) {
+            publishCollapsedRehash(replacement);
+            return;
+        }
         if (old != null) {
             throw new IllegalStateException("cannot start a second native byte-map rehash");
         }
-        Replacement replacement = Objects.requireNonNull(staged, "staged");
         Table previous = active;
         topology.beginRehash(replacement.topology);
         old = previous;
         active = replacement.table;
         maintenanceDebt = true;
         refreshMaintenanceRegistration();
+        notifyHeapChanged();
+    }
+
+    // 坍缩替换已携带全部存活 entry：replaceActive 一步结束 rehash，不经过 beginRehash 的双表阶段。
+    private void publishCollapsedRehash(Replacement replacement) {
+        if (old == null) {
+            throw new IllegalStateException("native byte-map rehash is no longer active");
+        }
+        topology.replaceActive(replacement.topology);
+        active = replacement.table;
+        old = null;
+        recordMaintenanceDebt();
         notifyHeapChanged();
     }
 
@@ -993,7 +1051,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         }
 
         int capacity = active.capacity;
-        while (finalSize > capacity - capacity / 4L) {
+        while (HashCapacityPolicy.exceedsGrowThreshold(finalSize, capacity)) {
             if (capacity == HashCapacityPolicy.MAX_CAPACITY) {
                 throw new NativeCapacityExceededException("hash table capacity limit reached: " + capacity);
             }
@@ -1033,7 +1091,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
             writeValue(replacementTable, replacementIndex, put.nextValue);
             replacementTopology.occupyActive(replacementIndex, hashes[index]);
         }
-        return new Replacement(replacementTable, replacementTopology);
+        return new Replacement(replacementTable, replacementTopology, true);
     }
 
     private void copyFilledSlots(
@@ -1149,7 +1207,7 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         }
     }
 
-    private record Replacement(Table table, OpenAddressingTopology topology) {
+    private record Replacement(Table table, OpenAddressingTopology topology, boolean standalone) {
         private Replacement {
             Objects.requireNonNull(table, "table");
             Objects.requireNonNull(topology, "topology");

@@ -322,6 +322,100 @@ public class NativeByteMapTest {
     }
 
     @Test
+    public void putsDuringShrinkRehashCollapseIntoAStandaloneTableInsteadOfFailing() {
+        try (TestBackend runtime = TestBackend.open("native-byte-map-shrink-rehash-put");
+             StableMemoryBackend allocator = runtime.backend()) {
+            NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES);
+            try (NativeByteMap<Integer> map = new NativeByteMap<>(
+                    store,
+                    NativeObjectKind.SET_MEMBER_BYTES,
+                    FIXED_SEED
+            )) {
+                for (int i = 0; i < 64; i++) {
+                    Assert.assertNull(map.put(bytes("shrink-" + i), i));
+                }
+                drainRehash(map);
+                for (int i = 0; i < 60; i++) {
+                    Assert.assertEquals(Integer.valueOf(i), map.remove(bytes("shrink-" + i)));
+                }
+
+                // 先 compact 清掉 tombstone 再发布 shrink，把表留在 active=64 / old=128 的 mid-shrink 状态。
+                publishMaintenanceResize(map);
+                drainRehash(map);
+                publishMaintenanceResize(map);
+                Assert.assertTrue(map.metrics().rehashing());
+                Assert.assertEquals(64, map.metrics().capacity());
+                Assert.assertEquals(128, map.metrics().oldCapacity());
+                Assert.assertEquals(4, map.metrics().size());
+
+                // 写路径每次只推进 2 个 old 槽位，44 次插入后 rehash 仍在进行（cursor 88 < 128）。
+                for (int i = 0; i < 44; i++) {
+                    Assert.assertNull(map.put(bytes("new-" + i), i));
+                }
+                Assert.assertTrue(map.metrics().rehashing());
+
+                // size=48 时下一个插入的合并占用越过 64 的 grow 阈值，预估必须覆盖坍缩出的 128 替换表。
+                Assert.assertEquals(
+                        32L + mapHeapBytes(128, true),
+                        map.estimatedInsertHeapGrowthBytes()
+                );
+
+                // 第 45 个新 key 触发坍缩：rehash 直接结束，而不是把 64 槽的 active 塞满后抛 IllegalStateException。
+                Assert.assertNull(map.put(bytes("new-44"), 44));
+                Assert.assertFalse(map.metrics().rehashing());
+                Assert.assertEquals(128, map.metrics().capacity());
+                Assert.assertEquals(49, map.metrics().size());
+
+                for (int i = 45; i < 60; i++) {
+                    Assert.assertNull(map.put(bytes("new-" + i), i));
+                }
+                Assert.assertEquals(64, map.size());
+                for (int i = 60; i < 64; i++) {
+                    Assert.assertEquals(Integer.valueOf(i), map.get(bytes("shrink-" + i)));
+                }
+                for (int i = 0; i < 60; i++) {
+                    Assert.assertEquals(Integer.valueOf(i), map.get(bytes("new-" + i)));
+                }
+
+                // 关闭前清表：任何在插入路径上泄漏的 key handle 都会留在 store 账上。
+                map.clear();
+                Assert.assertEquals(0L, store.nativeBytes());
+            }
+        }
+    }
+
+    @Test
+    public void rejectedPutReleasesTheAllocatedKeyHandle() {
+        try (TestBackend runtime = TestBackend.open("native-byte-map-rejected-put");
+             StableMemoryBackend allocator = runtime.backend()) {
+            NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.HASH_FIELD_BYTES);
+            Object present = new Object();
+            try (NativeByteMap<Object> map = NativeByteMap.constantValues(
+                    store,
+                    NativeObjectKind.HASH_FIELD_BYTES,
+                    FIXED_SEED,
+                    null,
+                    null,
+                    present
+            )) {
+                Assert.assertNull(map.put(bytes("kept"), present));
+                long nativeBytesAfterKept = store.nativeBytes();
+
+                // constant 布局在 put 入口、native 分配之前校验 value：被拒的 put 不得在 store 账上留下
+                // key 字节（修复前分配先于校验，抛错后句柄泄漏，nativeBytes 会随之增长）。
+                Assert.assertThrows(
+                        IllegalArgumentException.class,
+                        () -> map.put(bytes("rejected"), new Object())
+                );
+
+                Assert.assertEquals(nativeBytesAfterKept, store.nativeBytes());
+                Assert.assertNull(map.get(bytes("rejected")));
+            }
+            Assert.assertEquals(0L, store.nativeBytes());
+        }
+    }
+
+    @Test
     public void putGetReplaceRemoveAndClearReleaseNativeKeys() {
         try (TestBackend runtime = TestBackend.open("native-byte-map");
              StableMemoryBackend allocator = runtime.backend()) {
@@ -825,6 +919,13 @@ public class NativeByteMapTest {
     private static void drainRehash(NativeByteMap<?> map) {
         while (map.metrics().rehashing()) {
             map.advanceRehash(HashTableWorkBudget.of(64L, Long.MAX_VALUE));
+        }
+    }
+
+    private static <V> void publishMaintenanceResize(NativeByteMap<V> map) {
+        try (NativeByteMap<V>.StagedResize staged = map.stageMaintenanceResize()) {
+            Assert.assertNotNull(staged);
+            map.publishStagedResize(staged);
         }
     }
 

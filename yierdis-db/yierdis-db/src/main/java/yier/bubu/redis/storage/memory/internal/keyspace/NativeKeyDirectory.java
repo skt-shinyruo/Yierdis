@@ -4,6 +4,7 @@ import java.util.Arrays;
 import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 import yier.bubu.redis.memory.api.NativeAccessMode;
+import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
@@ -80,7 +81,10 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         ensureOpen();
         HashTableMetrics metrics = topology.metrics();
         if (metrics.rehashing()) {
-            return 0L;
+            // rehash 期间插入只在新表装不下合并占用时才分配：预估必须与 stageTableForInsert 的坍缩口径一致。
+            return insertExhaustsMergedTopology(metrics)
+                    ? stagedReplacementHeapBytesForCapacity(collapsedTopologyCapacity(metrics))
+                    : 0L;
         }
         int projectedFilled = Math.min(metrics.capacity(), metrics.filledSlots() + 1);
         int projectedSize = metrics.size() + 1;
@@ -632,10 +636,14 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
     }
 
     private Replacement stageTableForInsert(int hash) {
-        if (topology.metrics().rehashing()) {
-            return null;
-        }
         HashTableMetrics metrics = topology.metrics();
+        if (metrics.rehashing()) {
+            // rehash 期间不能叠加第二次 beginRehash；合并占用（全量迁移完成后 active 必须容纳的
+            // size + active tombstone）越过 grow 阈值时，同步坍缩成一张装得下全部存活 entry 的
+            // standalone 表，否则继续插入终将耗尽缩小后的 active 槽位，插入与后台迁移都会在
+            // OpenAddressingTopology 里抛出 "active topology has no insertion slot"。
+            return insertExhaustsMergedTopology(metrics) ? collapsedReplacement(metrics) : null;
+        }
         int insertionIndex = topology.probe(hash, ignored -> false).location().slot();
         SlotState previousState = topology.slotState(TableSide.ACTIVE, insertionIndex);
         int projectedSize = metrics.size() + 1;
@@ -652,21 +660,85 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
                 : emptyReplacement(decision.targetCapacity());
     }
 
+    private static boolean insertExhaustsMergedTopology(HashTableMetrics metrics) {
+        return HashCapacityPolicy.exceedsGrowThreshold(
+                (long) metrics.size() + metrics.tombstones() + 1L,
+                metrics.capacity()
+        );
+    }
+
+    private Replacement collapsedReplacement(HashTableMetrics metrics) {
+        Table table = new Table(collapsedTopologyCapacity(metrics));
+        OpenAddressingTopology collapsed = new OpenAddressingTopology(table.capacity);
+        copyFilledSlots(TableSide.ACTIVE, active, table, collapsed);
+        copyFilledSlots(TableSide.OLD, old, table, collapsed);
+        return new Replacement(table, collapsed, true);
+    }
+
+    private static int collapsedTopologyCapacity(HashTableMetrics metrics) {
+        int capacity = metrics.capacity();
+        long finalSize = metrics.size() + 1L;
+        while (HashCapacityPolicy.exceedsGrowThreshold(finalSize, capacity)) {
+            if (capacity == HashCapacityPolicy.MAX_CAPACITY) {
+                throw new NativeCapacityExceededException("hash table capacity limit reached: " + capacity);
+            }
+            capacity <<= 1;
+        }
+        return capacity;
+    }
+
+    // 坍缩只搬 FILLED 槽：old 里已迁移槽位的 key 句柄所有权已随迁移转到 active，shadow 引用随旧表整体丢弃即可。
+    private void copyFilledSlots(
+            TableSide sourceSide,
+            Table source,
+            Table target,
+            OpenAddressingTopology targetTopology
+    ) {
+        if (source == null) {
+            return;
+        }
+        for (int index = 0; index < source.capacity; index++) {
+            if (topology.slotState(sourceSide, index) != SlotState.FILLED) {
+                continue;
+            }
+            int hash = topology.hashAt(new Location(sourceSide, index));
+            int targetIndex = targetTopology.probe(hash, ignored -> false).location().slot();
+            target.keyHandles[targetIndex] = source.keyHandles[index];
+            target.entryHandles[targetIndex] = source.entryHandles[index];
+            targetTopology.occupyActive(targetIndex, hash);
+        }
+    }
+
     private Replacement emptyReplacement(int capacity) {
-        return new Replacement(new Table(capacity), new OpenAddressingTopology(capacity));
+        return new Replacement(new Table(capacity), new OpenAddressingTopology(capacity), false);
     }
 
     private void publishStagedDirectory(Replacement staged) {
+        Replacement replacement = Objects.requireNonNull(staged, "staged");
+        if (replacement.standalone()) {
+            publishCollapsedRehash(replacement);
+            return;
+        }
         if (topology.metrics().rehashing()) {
             throw new IllegalStateException("cannot start a second key-directory rehash");
         }
-        Replacement replacement = Objects.requireNonNull(staged, "staged");
         Table previous = active;
         topology.beginRehash(replacement.topology);
         old = previous;
         active = replacement.table;
         maintenanceDebt = true;
         refreshMaintenanceRegistration();
+    }
+
+    // 坍缩替换已携带全部存活 entry：replaceActive 一步结束 rehash，不经过 beginRehash 的双表阶段。
+    private void publishCollapsedRehash(Replacement replacement) {
+        if (!topology.metrics().rehashing()) {
+            throw new IllegalStateException("key-directory rehash is no longer active");
+        }
+        topology.replaceActive(replacement.topology);
+        active = replacement.table;
+        old = null;
+        recordMaintenanceDebt();
     }
 
     private void insertActive(NativeHandle keyHandle, EntryHandle entryHandle, int hash) {
@@ -1017,7 +1089,7 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         }
     }
 
-    private record Replacement(Table table, OpenAddressingTopology topology) {
+    private record Replacement(Table table, OpenAddressingTopology topology, boolean standalone) {
         private Replacement {
             Objects.requireNonNull(table, "table");
             Objects.requireNonNull(topology, "topology");

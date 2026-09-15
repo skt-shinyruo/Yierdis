@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static yier.bubu.redis.storage.memory.internal.keyspace.TestNativeKeyDirectories.insert;
+import static yier.bubu.redis.storage.testkit.TestBytes.view;
 
 public class HashTableMaintenanceTest {
     @Test
@@ -78,6 +79,52 @@ public class HashTableMaintenanceTest {
             drainMaintenance(db);
             Assert.assertTrue(KeyLifecycleTestAccess.inspect(db.keyLifecycle()).keyDirectory().metrics().capacity() < peakCapacity);
             Assert.assertFalse(KeyLifecycleTestAccess.inspect(db.keyLifecycle()).keyDirectory().hasMaintenanceDebt());
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    @Test
+    public void setBurstDuringDirectoryShrinkRehashStaysWritable() {
+        YierdisDb db = TestDbSupport.open();
+        try {
+            db.bindToCurrentThread();
+            List<byte[]> keys = new ArrayList<>();
+            for (int i = 0; i < 64; i++) {
+                byte[] key = bytes("shrink-" + i);
+                keys.add(key);
+                Assert.assertTrue(db.strings().setString(key, bytes("value"), SetMode.NORMAL, null).value());
+            }
+            drainMaintenance(db);
+            Assert.assertEquals(Long.valueOf(60L), db.keyspace().del(keys.subList(0, 60)).value());
+
+            // 逐槽推进 maintenance：先 compact 再发布 shrink，把目录停在 active=64 / old=128 的 mid-shrink 状态。
+            NativeKeyDirectory directory = KeyLifecycleTestAccess.inspect(db.keyLifecycle()).keyDirectory();
+            HashTableMetrics midShrink = null;
+            for (int tick = 0; tick < 1_000 && midShrink == null; tick++) {
+                HashTableMetrics metrics = directory.metrics();
+                if (metrics.rehashing() && metrics.capacity() == 64 && metrics.oldCapacity() == 128) {
+                    midShrink = metrics;
+                    break;
+                }
+                db.rehashMaintenance(HashTableWorkBudget.of(1L, Long.MAX_VALUE));
+            }
+            Assert.assertNotNull("setup must leave the directory mid-shrink", midShrink);
+            Assert.assertEquals(4, midShrink.size());
+
+            // 收缩后的 active 只有 64 槽：突发写入必须继续被接受，而不是抛出内部 IllegalStateException。
+            for (int i = 0; i < 70; i++) {
+                Assert.assertTrue(db.strings().setString(bytes("burst-" + i), bytes("v"), SetMode.NORMAL, null).value());
+            }
+
+            Assert.assertEquals(74, db.size());
+            for (int i = 60; i < 64; i++) {
+                Assert.assertTrue(db.keyspace().existsKey(view(keys.get(i))));
+            }
+            for (int i = 0; i < 70; i++) {
+                Assert.assertTrue(db.keyspace().existsKey(view(bytes("burst-" + i))));
+            }
+            Assert.assertFalse(db.health().toString(), db.health().degraded());
         } finally {
             db.shutdown();
         }
