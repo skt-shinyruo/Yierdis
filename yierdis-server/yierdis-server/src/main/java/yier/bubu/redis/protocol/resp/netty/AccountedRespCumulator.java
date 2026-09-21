@@ -123,27 +123,25 @@ final class AccountedRespCumulator implements AutoCloseable {
         for (Component component : components) {
             oldCharge = InboundMemoryBudget.saturatedAdd(oldCharge, component.lease.reservedBytes());
         }
-        if (budget != null && connection != null) {
-            PendingConsolidation candidate = new PendingConsolidation(newCharge);
-            pendingConsolidation = candidate;
-            connection.setResumeCallback(
-                    Objects.requireNonNull(resumeExecutor, "resumeExecutor"),
-                    () -> {
-                        if (pendingConsolidation == candidate
-                                && connection.claimGrantedReservation(candidate.newCharge)) {
-                            candidate.granted = true;
-                            resumeCallback.run();
-                        }
+        PendingConsolidation candidate = new PendingConsolidation(newCharge);
+        pendingConsolidation = candidate;
+        connection.setResumeCallback(
+                Objects.requireNonNull(resumeExecutor, "resumeExecutor"),
+                () -> {
+                    if (pendingConsolidation == candidate
+                            && connection.claimGrantedReservation(candidate.newCharge)) {
+                        candidate.granted = true;
+                        resumeCallback.run();
                     }
-            );
-            InboundMemoryBudget.ReservationResult result = budget.tryTransfer(connection, newCharge, oldCharge);
-            if (result == InboundMemoryBudget.ReservationResult.WAITING) {
-                return ConsolidationResult.WAITING;
-            }
-            pendingConsolidation = null;
-            if (result != InboundMemoryBudget.ReservationResult.RESERVED) {
-                return ConsolidationResult.REQUEST_LIMIT;
-            }
+                }
+        );
+        InboundMemoryBudget.ReservationResult result = budget.tryTransfer(connection, newCharge, oldCharge);
+        if (result == InboundMemoryBudget.ReservationResult.WAITING) {
+            return ConsolidationResult.WAITING;
+        }
+        pendingConsolidation = null;
+        if (result != InboundMemoryBudget.ReservationResult.RESERVED) {
+            return ConsolidationResult.REQUEST_LIMIT;
         }
         return consolidateReserved(newCharge);
     }
@@ -163,21 +161,19 @@ final class AccountedRespCumulator implements AutoCloseable {
             if (actualCharge > newCharge) {
                 throw new IllegalStateException("allocator returned capacity larger than admission credit");
             }
-            if (budget != null && connection != null && actualCharge < newCharge) {
+            if (actualCharge < newCharge) {
                 budget.release(connection, newCharge - actualCharge);
                 newCharge = actualCharge;
             }
-            if (budget != null && connection != null) {
-                budget.adjustConsolidation(newCharge);
-                consolidationCharge = newCharge;
-            }
+            budget.adjustConsolidation(newCharge);
+            consolidationCharge = newCharge;
             merged.writeBytes(cumulation, cumulation.readerIndex(), readable);
             replacement = allocator.compositeBuffer(Integer.MAX_VALUE);
             replacement.addComponent(true, merged);
             merged = null;
             mergedLease = InboundBufferLease.admitted(
                     budget,
-                    connection == null ? null : connection.account(),
+                    connection.account(),
                     newCharge
             );
             mergedLeaseOwnsAdmission = true;
@@ -202,12 +198,12 @@ final class AccountedRespCumulator implements AutoCloseable {
             if (mergedLease != null) {
                 mergedLease.close();
             }
-            if (!mergedLeaseOwnsAdmission && budget != null && connection != null) {
+            if (!mergedLeaseOwnsAdmission) {
                 budget.release(connection, newCharge);
             }
             return ConsolidationResult.REQUEST_LIMIT;
         } finally {
-            if (consolidationCharge > 0L && budget != null && connection != null) {
+            if (consolidationCharge > 0L) {
                 budget.adjustConsolidation(-consolidationCharge);
             }
         }
@@ -227,7 +223,7 @@ final class AccountedRespCumulator implements AutoCloseable {
     private void cancelPendingConsolidation() {
         PendingConsolidation pending = pendingConsolidation;
         pendingConsolidation = null;
-        if (pending == null || budget == null || connection == null) {
+        if (pending == null) {
             return;
         }
         if (pending.granted || connection.claimGrantedReservation(pending.newCharge)) {

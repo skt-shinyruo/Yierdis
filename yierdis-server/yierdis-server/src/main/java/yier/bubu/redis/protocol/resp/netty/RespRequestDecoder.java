@@ -12,6 +12,7 @@ import yier.bubu.redis.execution.api.RequestMemoryLease;
 import yier.bubu.redis.protocol.resp.InlineCommandParser;
 import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -37,15 +38,9 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     private final RespDecodedMessageGate decodedMessageGate;
     private final ByteBufLineView inlineLineView = new ByteBufLineView();
 
+    private final InboundReadControl readControl;
     private DecodePhase phase = SimplePhase.READ_COMMAND;
     private AccountedRespCumulator cumulator;
-    private InboundReadControl readControl = InboundReadControl.NOOP;
-    private int allocatedArgvArrays;
-    private int allocatedBulkArrays;
-
-    RespRequestDecoder(int maxBulkBytes, int maxArgs, int maxInlineBytes, int maxCommandBytes) {
-        this(maxBulkBytes, maxArgs, maxInlineBytes, maxCommandBytes, null, null, RespDecodedMessageGate.PASS_THROUGH);
-    }
 
     public static RespRequestDecoder withIngressAdmission(
             int maxBulkBytes,
@@ -54,7 +49,8 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             int maxCommandBytes,
             InboundMemoryBudget budget,
             InboundConnectionMemory connection,
-            RespDecodedMessageGate decodedMessageGate
+            RespDecodedMessageGate decodedMessageGate,
+            InboundReadControl readControl
     ) {
         return new RespRequestDecoder(
                 maxBulkBytes,
@@ -63,7 +59,8 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
                 maxCommandBytes,
                 budget,
                 connection,
-                decodedMessageGate
+                decodedMessageGate,
+                readControl
         );
     }
 
@@ -74,18 +71,17 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             int maxCommandBytes,
             InboundMemoryBudget budget,
             InboundConnectionMemory connection,
-            RespDecodedMessageGate decodedMessageGate
+            RespDecodedMessageGate decodedMessageGate,
+            InboundReadControl readControl
     ) {
-        if ((budget == null) != (connection == null)) {
-            throw new IllegalArgumentException("budget and connection must be supplied together");
-        }
         this.maxBulkBytes = Math.max(0, maxBulkBytes);
         this.maxArgs = Math.max(0, maxArgs);
         this.maxInlineBytes = Math.max(0, maxInlineBytes);
         this.maxCommandBytes = Math.max(0, maxCommandBytes);
-        this.budget = budget;
-        this.connection = connection;
-        this.decodedMessageGate = decodedMessageGate == null ? RespDecodedMessageGate.PASS_THROUGH : decodedMessageGate;
+        this.budget = Objects.requireNonNull(budget, "budget");
+        this.connection = Objects.requireNonNull(connection, "connection");
+        this.decodedMessageGate = Objects.requireNonNull(decodedMessageGate, "decodedMessageGate");
+        this.readControl = Objects.requireNonNull(readControl, "readControl");
     }
 
     @Override
@@ -132,22 +128,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         super.handlerRemoved(ctx);
     }
 
-    public void setReadControl(InboundReadControl readControl) {
-        this.readControl = readControl == null ? InboundReadControl.NOOP : readControl;
-    }
-
-    int allocatedArgvArraysForTests() {
-        return allocatedArgvArrays;
-    }
-
-    int allocatedBulkArraysForTests() {
-        return allocatedBulkArrays;
-    }
-
-    String stateNameForTests() {
-        return phase.stateName();
-    }
-
     private void ensureCumulator(ChannelHandlerContext ctx) {
         if (cumulator == null) {
             cumulator = new AccountedRespCumulator(ctx.alloc(), budget, connection, MAX_COMPONENTS);
@@ -155,9 +135,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     }
 
     private InboundBufferLease admitRawInput(ChannelHandlerContext ctx, ByteBuf input) {
-        if (budget == null) {
-            return InboundBufferLease.unaccounted();
-        }
         long charge = InboundBufferLease.chargeForRetainedBuffer(input);
         InboundMemoryBudget.ReservationResult result = budget.tryReserve(connection, charge);
         if (result != InboundMemoryBudget.ReservationResult.RESERVED) {
@@ -290,7 +267,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             emitRequestMemoryError(ctx);
             return false;
         }
-        allocatedArgvArrays++;
         ArrayProgress progress = new ArrayProgress(argv, reservedBytes);
         // retainedBytes 从 argv 分配起就按 HeapRequestFootprint 口径累计，命令大小检查与最终请求共用同一估值。
         progress.retainedBytes = HeapRequestFootprint.baseRetainedBytes(pending.argc());
@@ -428,7 +404,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             emitRequestMemoryError(ctx);
             return false;
         }
-        allocatedBulkArrays++;
         phase = new BulkBodyPhase(array, ready.length(), buffer);
         cumulator.discardFullyReadComponents();
         return true;
@@ -462,9 +437,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     }
 
     private RespDecodedMessage buildCompletedRequest(ArrayProgress array) {
-        RequestMemoryLease lease = budget == null
-                ? new ReferenceCountedRequestMemoryLease(array.reservedBytes, ignored -> { })
-                : requestLease(array.reservedBytes);
+        RequestMemoryLease lease = requestLease(array.reservedBytes);
         return new RespDecodedMessage.Request(
                 ByteArrayExecutionRequest.takeOwnership(array.argv, lease)
         );
@@ -613,7 +586,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         );
         InlineCommandParser.Parsed parsed = pending.parsed();
         byte[][] argv = parsed.takeArgs();
-        allocatedArgvArrays++;
         long fullCharge = ByteArrayExecutionRequest.estimatedMemoryBytes(argv);
         if (fullCharge > pending.reservedBytes) {
             emitRequestMemoryError(ctx);
@@ -640,10 +612,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         if (requested.bytes < 0L || requested.inputReleaseCredit < 0L) {
             emitRequestMemoryError(ctx);
             return false;
-        }
-        if (budget == null) {
-            requested.granted = true;
-            return true;
         }
         connection.setResumeCallback(ctx.executor(), () -> {
             if (phase == requestedPhase && connection.claimGrantedReservation(requested.bytes)) {
@@ -775,7 +743,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     }
 
     private void releasePendingAdmission(PendingAdmission pending) {
-        if (pending.consumed || budget == null || connection == null) {
+        if (pending.consumed) {
             return;
         }
         if (pending.granted || connection.claimGrantedReservation(pending.bytes)) {
@@ -786,7 +754,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     }
 
     private void releaseReservedBytes(long reservedBytes) {
-        if (reservedBytes > 0L && budget != null) {
+        if (reservedBytes > 0L) {
             budget.release(connection.account(), reservedBytes);
         }
     }
@@ -800,9 +768,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     }
 
     private RequestMemoryLease requestLease(long reservedBytes) {
-        if (budget == null) {
-            return new ReferenceCountedRequestMemoryLease(reservedBytes, ignored -> { });
-        }
         InboundMemoryBudget ownerBudget = budget;
         ConnectionMemoryAccount account = connection.account();
         return new ReferenceCountedRequestMemoryLease(reservedBytes, bytes -> ownerBudget.release(account, bytes));
@@ -810,7 +775,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
 
     private void releaseInlineTransient(long admittedBytes, long retainedBytes) {
         long transientBytes = admittedBytes - retainedBytes;
-        if (transientBytes > 0L && budget != null) {
+        if (transientBytes > 0L) {
             budget.release(connection.account(), transientBytes);
         }
     }
@@ -903,7 +868,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     /** 当前 phase 独占恢复解码所需的数据、预算和 handoff 消息。 */
     private sealed interface DecodePhase
             permits SimplePhase, AdmissionPhase, ArrayPhase, BulkReadyPhase, BulkBodyPhase, HandoffPhase {
-        String stateName();
 
         default boolean acceptsInput() {
             return true;
@@ -919,11 +883,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         CLOSING;
 
         @Override
-        public String stateName() {
-            return name();
-        }
-
-        @Override
         public boolean acceptsInput() {
             return this != CLOSING;
         }
@@ -936,10 +895,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     }
 
     private record ArgvAdmissionPhase(int argc, PendingAdmission admission) implements AdmissionPhase {
-        @Override
-        public String stateName() {
-            return "WAITING_FOR_ARGV";
-        }
 
         @Override
         public long reservedBytes() {
@@ -960,10 +915,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     }
 
     private record ArrayPhase(ArrayProgress array) implements DecodePhase {
-        @Override
-        public String stateName() {
-            return "READ_ARRAY_BODY";
-        }
 
         @Override
         public long reservedBytes() {
@@ -976,10 +927,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             int length,
             PendingAdmission admission
     ) implements AdmissionPhase {
-        @Override
-        public String stateName() {
-            return "WAITING_FOR_BULK";
-        }
 
         @Override
         public long reservedBytes() {
@@ -988,10 +935,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     }
 
     private record BulkReadyPhase(ArrayProgress array, int length) implements DecodePhase {
-        @Override
-        public String stateName() {
-            return "READ_ARRAY_BODY";
-        }
 
         @Override
         public long reservedBytes() {
@@ -1024,11 +967,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         }
 
         @Override
-        public String stateName() {
-            return "READ_ARRAY_BODY";
-        }
-
-        @Override
         public long reservedBytes() {
             return array.reservedBytes;
         }
@@ -1038,10 +976,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             int length,
             PendingAdmission admission
     ) implements AdmissionPhase {
-        @Override
-        public String stateName() {
-            return "WAITING_FOR_INLINE";
-        }
 
         @Override
         public long reservedBytes() {
@@ -1074,11 +1008,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         }
 
         @Override
-        public String stateName() {
-            return "WAITING_FOR_INLINE";
-        }
-
-        @Override
         public long reservedBytes() {
             return reservedBytes;
         }
@@ -1088,10 +1017,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             ArrayProgress array,
             PendingAdmission admission
     ) implements AdmissionPhase {
-        @Override
-        public String stateName() {
-            return "WAITING_FOR_HANDOFF";
-        }
 
         @Override
         public long reservedBytes() {
@@ -1113,11 +1038,6 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
 
         private boolean terminal() {
             return message instanceof RespProtocolError;
-        }
-
-        @Override
-        public String stateName() {
-            return terminal() ? "CLOSING" : "WAITING_FOR_HANDOFF";
         }
 
         @Override

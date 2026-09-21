@@ -442,9 +442,9 @@ public class RespIngressLifecycleIntegrationTest {
                     1_024,
                     inboundBudget,
                     inboundMemory,
-                    gate
+                    gate,
+                    readCredits
             );
-            decoder.setReadControl(readCredits);
             channel.pipeline()
                     .addLast("inboundReadCredit", readCredits)
                     .addLast("inboundByteAccounting", new InboundByteAccountingHandler(readCredits))

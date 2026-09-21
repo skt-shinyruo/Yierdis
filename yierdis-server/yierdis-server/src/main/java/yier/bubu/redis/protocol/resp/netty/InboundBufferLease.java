@@ -26,14 +26,10 @@ final class InboundBufferLease implements AutoCloseable {
             ConnectionMemoryAccount account,
             long reservedBytes
     ) {
-        if (budget != null && account != null && reservedBytes > 0L) {
+        if (reservedBytes > 0L) {
             budget.adjustRetainedInputCapacity(reservedBytes);
         }
         return new InboundBufferLease(budget, account, Math.max(0L, reservedBytes));
-    }
-
-    static InboundBufferLease unaccounted() {
-        return new InboundBufferLease(null, null, 0L);
     }
 
     static long chargeForCapacity(int capacity) {
@@ -57,7 +53,7 @@ final class InboundBufferLease implements AutoCloseable {
 
     @Override
     public void close() {
-        if (!closed.compareAndSet(false, true) || budget == null || account == null || reservedBytes == 0L) {
+        if (!closed.compareAndSet(false, true) || reservedBytes == 0L) {
             return;
         }
         budget.adjustRetainedInputCapacity(-reservedBytes);

@@ -8,6 +8,7 @@ import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.protocol.resp.netty.InboundConnectionMemory;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudgetStats;
+import yier.bubu.redis.protocol.resp.netty.InboundReadControl;
 import yier.bubu.redis.protocol.resp.netty.RespDecodedMessage;
 import yier.bubu.redis.protocol.resp.netty.RespDecodedMessageGate;
 import yier.bubu.redis.protocol.resp.netty.RespRequestDecoder;
@@ -37,7 +38,8 @@ public class RespIngressFuzzTest {
                     65_536,
                     budget,
                     connection,
-                    RespDecodedMessageGate.PASS_THROUGH
+                    RespDecodedMessageGate.PASS_THROUGH,
+                    InboundReadControl.NOOP
             );
             EmbeddedChannel channel = new EmbeddedChannel(decoder);
             try {
@@ -68,7 +70,8 @@ public class RespIngressFuzzTest {
                 128 * 1024,
                 budget,
                 connection,
-                RespDecodedMessageGate.PASS_THROUGH
+                RespDecodedMessageGate.PASS_THROUGH,
+                InboundReadControl.NOOP
         );
         EmbeddedChannel channel = new EmbeddedChannel(decoder);
         try {

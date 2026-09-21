@@ -14,7 +14,9 @@ import yier.bubu.redis.command.kernel.CommandRegistries;
 import yier.bubu.redis.execution.api.ReplyAdmissionRequirement;
 import yier.bubu.redis.protocol.resp.netty.InboundConnectionMemory;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
+import yier.bubu.redis.protocol.resp.netty.InboundReadControl;
 import yier.bubu.redis.protocol.resp.netty.RespDecodedMessage;
+import yier.bubu.redis.protocol.resp.netty.RespDecodedMessageGate;
 import yier.bubu.redis.protocol.resp.netty.RespRequestDecoder;
 
 import java.nio.charset.StandardCharsets;
@@ -36,15 +38,7 @@ public class OrderedReplyPipelineTest {
                 sequencer,
                 ignored -> ReplyAdmissionRequirement.BARRIER_UNTIL_CLEANUP
         );
-        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
-                1_024,
-                16,
-                1_024,
-                1_024,
-                null,
-                null,
-                gate
-        );
+        RespRequestDecoder decoder = newIngressDecoder(1_024, gate);
         CapturingHandler capture = new CapturingHandler();
         channel.pipeline().addLast("decoder", decoder);
         channel.pipeline().addLast("capture", capture);
@@ -85,15 +79,7 @@ public class OrderedReplyPipelineTest {
                 sequencer,
                 dispatcher::replyAdmissionRequirement
         );
-        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
-                1_024,
-                16,
-                1_024,
-                1_024,
-                null,
-                null,
-                gate
-        );
+        RespRequestDecoder decoder = newIngressDecoder(1_024, gate);
         CapturingHandler capture = new CapturingHandler();
         channel.pipeline().addLast("decoder", decoder);
         channel.pipeline().addLast("capture", capture);
@@ -141,7 +127,8 @@ public class OrderedReplyPipelineTest {
                 1_024,
                 inboundBudget,
                 inboundConnection,
-                gate
+                gate,
+                InboundReadControl.NOOP
         );
         CapturingHandler capture = new CapturingHandler();
         channel.pipeline().addLast("decoder", decoder);
@@ -180,15 +167,7 @@ public class OrderedReplyPipelineTest {
         EmbeddedChannel channel = new EmbeddedChannel();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, outboundConnection, () -> { });
         NettyReplyDecodedMessageGate gate = new NettyReplyDecodedMessageGate(4_096L, 4_096L, outboundConnection, sequencer);
-        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
-                1_024,
-                16,
-                1_024,
-                1_024,
-                null,
-                null,
-                gate
-        );
+        RespRequestDecoder decoder = newIngressDecoder(1_024, gate);
         CapturingHandler capture = new CapturingHandler();
         channel.pipeline().addLast("decoder", decoder);
         channel.pipeline().addLast("capture", capture);
@@ -226,15 +205,7 @@ public class OrderedReplyPipelineTest {
         EmbeddedChannel channel = new EmbeddedChannel();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, outboundConnection, () -> { });
         NettyReplyDecodedMessageGate gate = new NettyReplyDecodedMessageGate(4_096L, 4_096L, outboundConnection, sequencer);
-        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
-                4,
-                16,
-                1_024,
-                1_024,
-                null,
-                null,
-                gate
-        );
+        RespRequestDecoder decoder = newIngressDecoder(4, gate);
         CapturingHandler capture = new CapturingHandler();
         channel.pipeline().addLast("decoder", decoder);
         channel.pipeline().addLast("capture", capture);
@@ -361,6 +332,19 @@ public class OrderedReplyPipelineTest {
             channel.finishAndReleaseAll();
             sequencer.close();
         }
+    }
+
+    private static RespRequestDecoder newIngressDecoder(int maxBulkBytes, RespDecodedMessageGate gate) {
+        return RespRequestDecoder.withIngressAdmission(
+                maxBulkBytes,
+                16,
+                1_024,
+                1_024,
+                new InboundMemoryBudget(4_096L),
+                new InboundConnectionMemory(4_096L, Runnable::run, () -> { }),
+                gate,
+                InboundReadControl.NOOP
+        );
     }
 
     private static ReplySlot register(ConnectionReplySequencer sequencer, OutboundConnectionMemory connection) {

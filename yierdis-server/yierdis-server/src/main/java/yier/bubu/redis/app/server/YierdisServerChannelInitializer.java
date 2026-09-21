@@ -161,9 +161,9 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
                     config.protocolMaxCommandBytes(),
                     inboundMemoryBudget,
                     inboundConnection,
-                    replyGate
+                    replyGate,
+                    inboundReadCredit
             );
-            decoder.setReadControl(inboundReadCredit);
 
             ch.pipeline().addLast("writeBufferBackpressure", new WriteBufferBackpressureHandler(
                     executor,

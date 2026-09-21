@@ -107,9 +107,9 @@ public class RespIngressPressureTest {
                     65_536,
                     budget,
                     memory,
-                    RespDecodedMessageGate.PASS_THROUGH
+                    RespDecodedMessageGate.PASS_THROUGH,
+                    readCredits
             );
-            decoder.setReadControl(readCredits);
             channel = new EmbeddedChannel(readCredits, new InboundByteAccountingHandler(readCredits), decoder);
         }
 
