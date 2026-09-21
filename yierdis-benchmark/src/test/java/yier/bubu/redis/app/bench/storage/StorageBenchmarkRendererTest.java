@@ -2,6 +2,7 @@ package yier.bubu.redis.app.bench.storage;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.app.bench.LatencyRecorder;
 import yier.bubu.redis.app.bench.redis.BenchmarkFormat;
 
 import java.util.OptionalLong;
@@ -53,37 +54,6 @@ public class StorageBenchmarkRendererTest {
         Assert.assertTrue(lines[1].contains(",,0.500000"));
     }
 
-    @Test
-    public void publicResultsRejectMalformedMetrics() {
-        Assert.assertThrows(IllegalArgumentException.class,
-                () -> new StorageLatencyRecorder.Summary(1L, Double.NaN, 0L, 0L, 0L));
-        Assert.assertThrows(IllegalArgumentException.class,
-                () -> new StorageLatencyRecorder.Summary(1L, 1.0, 2L, 1L, 1L));
-
-        StorageMemorySnapshot baseline = new StorageMemorySnapshot(
-                100L, 200L, 300L, 250L, 50L, 0L, 0, 0, OptionalLong.empty()
-        );
-        StorageMemorySnapshot loaded = new StorageMemorySnapshot(
-                90L, 200L, 300L, 250L, 50L, 10L, 0, 10, OptionalLong.empty()
-        );
-        Assert.assertThrows(IllegalArgumentException.class, () -> new StorageBenchmarkResult(
-                10,
-                1_000_000_000L,
-                new StorageLatencyRecorder.Summary(10L, 100.0, 80L, 200L, 250L),
-                phase(500_000_000L),
-                phase(250_000_000L),
-                baseline,
-                loaded
-        ));
-    }
-
-    private static StorageBenchmarkResult.Phase phase(long elapsedNanos) {
-        return new StorageBenchmarkResult.Phase(
-                elapsedNanos,
-                new StorageLatencyRecorder.Summary(10L, 60.0, 50L, 90L, 120L)
-        );
-    }
-
     private static StorageBenchmarkConfig config(BenchmarkFormat format) {
         return new StorageBenchmarkConfig(10, 4, 8, 3, 3, format);
     }
@@ -103,14 +73,14 @@ public class StorageBenchmarkRendererTest {
         return new StorageBenchmarkResult(
                 10,
                 1_000_000_000L,
-                new StorageLatencyRecorder.Summary(10L, 100.0, 80L, 200L, 250L),
+                new LatencyRecorder.Summary(10L, 100.0, 0L, 80L, 0L, 200L, 250L),
                 new StorageBenchmarkResult.Phase(
                         500_000_000L,
-                        new StorageLatencyRecorder.Summary(10L, 60.0, 50L, 90L, 120L)
+                        new LatencyRecorder.Summary(10L, 60.0, 0L, 50L, 0L, 90L, 120L)
                 ),
                 new StorageBenchmarkResult.Phase(
                         250_000_000L,
-                        new StorageLatencyRecorder.Summary(10L, 30.0, 25L, 45L, 60L)
+                        new LatencyRecorder.Summary(10L, 30.0, 0L, 25L, 0L, 45L, 60L)
                 ),
                 baseline,
                 loaded

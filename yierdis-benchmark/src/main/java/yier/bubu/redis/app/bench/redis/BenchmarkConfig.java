@@ -19,16 +19,12 @@ public record BenchmarkConfig(
         int precision,
         long seed,
         BenchmarkFormat format,
-        String username,
-        String password,
         int database
 ) {
     public BenchmarkConfig {
         host = Objects.requireNonNull(host, "host").trim();
         keyspace = Objects.requireNonNull(keyspace, "keyspace");
         format = Objects.requireNonNull(format, "format");
-        username = username == null ? "" : username;
-        password = password == null ? "" : password;
         tests = tests == null ? Set.of() : tests.stream()
                 .map(value -> value.trim().toLowerCase(Locale.ROOT))
                 .filter(value -> !value.isEmpty())
@@ -42,6 +38,5 @@ public record BenchmarkConfig(
         if (keyspace.isPresent() && keyspace.getAsLong() < 0) throw new IllegalArgumentException("keyspace must be >= 0");
         if (precision < 0 || precision > 4) throw new IllegalArgumentException("precision must be in range 0..4");
         if (database < 0) throw new IllegalArgumentException("database must be >= 0");
-        if (!username.isEmpty() && password.isEmpty()) throw new IllegalArgumentException("username requires password");
     }
 }

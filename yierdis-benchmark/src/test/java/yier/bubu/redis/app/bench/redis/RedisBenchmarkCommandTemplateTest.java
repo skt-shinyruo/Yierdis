@@ -21,11 +21,10 @@ import java.util.regex.Pattern;
 
 public class RedisBenchmarkCommandTemplateTest {
     private static final long TWELVE_DIGIT_LIMIT = 1_000_000_000_000L;
-    private final RedisBenchmarkCatalog catalog = new RedisBenchmarkCatalog();
 
     @Test
     public void inlinePingUsesOfficialBytes() {
-        RedisBenchmarkCase ping = catalog.caseById("ping_inline");
+        RedisBenchmarkCase ping = CaseSelection.caseById("ping_inline");
         PreparedPipeline pipeline = ping.template()
                 .prepare(1, new byte[]{'x'}, OptionalLong.empty());
 
@@ -37,7 +36,7 @@ public class RedisBenchmarkCommandTemplateTest {
 
     @Test
     public void omittedKeyspaceKeepsLiteralPlaceholder() {
-        PreparedPipeline pipeline = catalog.caseById("set").template()
+        PreparedPipeline pipeline = CaseSelection.caseById("set").template()
                 .prepare(1, new byte[]{'a', 'b', 'c'}, OptionalLong.empty());
 
         String wire = wire(pipeline.bytesForWrite(new BenchmarkRandom(1L)));
@@ -47,7 +46,7 @@ public class RedisBenchmarkCommandTemplateTest {
 
     @Test
     public void explicitZeroAndPositiveKeyspaceRenderTwelveDigitsPerOccurrence() {
-        RedisBenchmarkCommandTemplate mset = catalog.caseById("mset").template();
+        RedisBenchmarkCommandTemplate mset = CaseSelection.caseById("mset").template();
         PreparedPipeline zero = mset.prepare(1, new byte[]{'x'}, OptionalLong.of(0));
         String zeroWire = wire(zero.bytesForWrite(new BenchmarkRandom(1L)));
         Assert.assertEquals(10, occurrences(zeroWire, "key:000000000000"));
@@ -94,7 +93,7 @@ public class RedisBenchmarkCommandTemplateTest {
 
     @Test
     public void randomizedZaddUsesIndependentTwelveDigitScoreAndMember() {
-        PreparedPipeline zadd = catalog.caseById("zadd").template()
+        PreparedPipeline zadd = CaseSelection.caseById("zadd").template()
                 .prepare(1, new byte[]{'x'}, OptionalLong.of(1_000_000));
 
         String wire = wire(zadd.bytesForWrite(new BenchmarkRandom(11L)));
@@ -143,7 +142,7 @@ public class RedisBenchmarkCommandTemplateTest {
     @Test
     public void pipelineConcatenatesCompleteInlineAndRespFrames() {
         byte[] inlineFrame = ascii("PING\r\n");
-        PreparedPipeline inline = catalog.caseById("ping_inline").template()
+        PreparedPipeline inline = CaseSelection.caseById("ping_inline").template()
                 .prepare(3, ascii("abc"), OptionalLong.empty());
         Assert.assertArrayEquals(
                 repeated(inlineFrame, 3),
@@ -151,7 +150,7 @@ public class RedisBenchmarkCommandTemplateTest {
         );
 
         byte[] respFrame = resp("GET", "key:__rand_int__");
-        PreparedPipeline resp = catalog.caseById("get").template()
+        PreparedPipeline resp = CaseSelection.caseById("get").template()
                 .prepare(3, ascii("abc"), OptionalLong.empty());
         Assert.assertArrayEquals(
                 repeated(respFrame, 3),
@@ -162,17 +161,17 @@ public class RedisBenchmarkCommandTemplateTest {
     @Test(timeout = 1_000)
     public void oversizedPipelineIsRejectedBeforeCombinedAllocation() {
         assertMessage(IllegalArgumentException.class, "capacity",
-                () -> catalog.caseById("ping_inline").template()
+                () -> CaseSelection.caseById("ping_inline").template()
                         .prepare(Integer.MAX_VALUE, new byte[0], OptionalLong.empty()));
         assertMessage(IllegalArgumentException.class, "capacity",
-                () -> catalog.caseById("ping_mbulk").template()
+                () -> CaseSelection.caseById("ping_mbulk").template()
                         .prepare(Integer.MAX_VALUE, new byte[0], OptionalLong.empty()));
     }
 
     @Test
     public void everyPipelineMarkerConsumesStreamAndEveryWriteRerandomizesAllOffsets() {
         long bound = 10_000;
-        PreparedPipeline mset = catalog.caseById("mset").template()
+        PreparedPipeline mset = CaseSelection.caseById("mset").template()
                 .prepare(2, ascii("abc"), OptionalLong.of(bound));
         BenchmarkRandom actual = new BenchmarkRandom(91L);
         BenchmarkRandom expected = new BenchmarkRandom(91L);
@@ -187,7 +186,7 @@ public class RedisBenchmarkCommandTemplateTest {
 
     @Test
     public void fixedModeLeavesZaddScoreAtAsciiZeroAndConsumesNoRandomValues() {
-        PreparedPipeline zadd = catalog.caseById("zadd").template()
+        PreparedPipeline zadd = CaseSelection.caseById("zadd").template()
                 .prepare(1, ascii("abc"), OptionalLong.empty());
         BenchmarkRandom actual = new BenchmarkRandom(37L);
 
@@ -205,7 +204,7 @@ public class RedisBenchmarkCommandTemplateTest {
 
     @Test
     public void copyForClientOwnsIndependentMutableBytesAndOffsets() throws Exception {
-        PreparedPipeline source = catalog.caseById("set").template()
+        PreparedPipeline source = CaseSelection.caseById("set").template()
                 .prepare(1, ascii("abc"), OptionalLong.of(1_000_000));
         PreparedPipeline firstClient = source.copyForClient();
         PreparedPipeline sibling = source.copyForClient();
@@ -253,7 +252,7 @@ public class RedisBenchmarkCommandTemplateTest {
 
     @Test
     public void invalidPreparationAndGenerationInputsAreRejectedClearly() {
-        RedisBenchmarkCommandTemplate set = catalog.caseById("set").template();
+        RedisBenchmarkCommandTemplate set = CaseSelection.caseById("set").template();
 
         assertMessage(IllegalArgumentException.class, "pipeline",
                 () -> set.prepare(0, ascii("abc"), OptionalLong.empty()));
@@ -291,7 +290,7 @@ public class RedisBenchmarkCommandTemplateTest {
 
     @Test
     public void maximumRepresentableKeyspaceIsAcceptedAndRendersTwelveDigits() {
-        PreparedPipeline pipeline = catalog.caseById("set").template()
+        PreparedPipeline pipeline = CaseSelection.caseById("set").template()
                 .prepare(1, ascii("abc"), OptionalLong.of(TWELVE_DIGIT_LIMIT));
 
         List<String> keys = renderedKeys(wire(
@@ -327,7 +326,7 @@ public class RedisBenchmarkCommandTemplateTest {
 
     @Test
     public void msetEncodesTwentyOneArgumentsAndTenKeyValuePairs() {
-        String wire = wire(catalog.caseById("mset").template()
+        String wire = wire(CaseSelection.caseById("mset").template()
                 .prepare(1, ascii("abc"), OptionalLong.empty())
                 .bytesForWrite(new BenchmarkRandom(1L)));
 
@@ -340,7 +339,7 @@ public class RedisBenchmarkCommandTemplateTest {
 
     private void assertFixedResp(String id, String... arguments) {
         byte[] expected = resp(arguments);
-        PreparedPipeline prepared = catalog.caseById(id).template()
+        PreparedPipeline prepared = CaseSelection.caseById(id).template()
                 .prepare(1, ascii("abc"), OptionalLong.empty());
         Assert.assertArrayEquals(
                 id,

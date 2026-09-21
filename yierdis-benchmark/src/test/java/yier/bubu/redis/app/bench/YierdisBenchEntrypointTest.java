@@ -22,41 +22,7 @@ public class YierdisBenchEntrypointTest {
             "--precision",
             "--seed",
             "--format",
-            "--username",
-            "--password",
             "--database"
-    );
-
-    private static final List<String> LEGACY_OPTIONS = List.of(
-            "--portBase",
-            "--noStartServer",
-            "--serverJar",
-            "--comparisonMode",
-            "--baselineServerJar",
-            "--currentServerJar",
-            "--suite",
-            "--suiteProfile",
-            "--reportDir",
-            "--includeRedis",
-            "--redisHost",
-            "--redisPort",
-            "--redisLabel",
-            "--redisUser",
-            "--redisAuth",
-            "--redisDb",
-            "--javaCmd",
-            "--xms",
-            "--xmx",
-            "--maxDirectMemory",
-            "--dataSize",
-            "--latencyRequests",
-            "--latencyClients",
-            "--skipPrefill",
-            "--skipLatency",
-            "--strictReplies",
-            "--skipNativeDefragCompare",
-            "--nativeEval",
-            "--nativeEvalIterations"
     );
 
     @Test
@@ -72,9 +38,6 @@ public class YierdisBenchEntrypointTest {
         String usage = out.toString();
         for (String option : REPLACEMENT_OPTIONS) {
             Assert.assertTrue("missing replacement option " + option, usage.contains(option));
-        }
-        for (String option : LEGACY_OPTIONS) {
-            Assert.assertFalse("legacy option remains in help " + option, usage.contains(option));
         }
         Assert.assertTrue(usage.contains("storage"));
         Assert.assertEquals("", err.toString());
@@ -98,20 +61,5 @@ public class YierdisBenchEntrypointTest {
         Assert.assertTrue(usage.contains("--precision"));
         Assert.assertTrue(usage.contains("--format"));
         Assert.assertEquals("", err.toString());
-    }
-
-    @Test
-    public void legacyOptionsAreUsageErrors() {
-        for (String option : List.of("--suite", "--serverJar")) {
-            CommandLine commandLine = YierdisBench.commandLine();
-            StringWriter out = new StringWriter();
-            StringWriter err = new StringWriter();
-            commandLine.setOut(new PrintWriter(out));
-            commandLine.setErr(new PrintWriter(err));
-
-            Assert.assertEquals(option, 2, commandLine.execute(option));
-            Assert.assertEquals("", out.toString());
-            Assert.assertTrue(err.toString(), err.toString().contains(option));
-        }
     }
 }

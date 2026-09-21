@@ -2,6 +2,7 @@ package yier.bubu.redis.app.bench.redis;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.app.bench.LatencyRecorder;
 
 import java.util.List;
 import java.util.Locale;
@@ -13,7 +14,6 @@ public class BenchmarkOutputRendererTest {
             + "\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\","
             + "\"p99_latency_ms\",\"max_latency_ms\",\"status\",\"reason\"";
 
-    private final RedisBenchmarkCatalog catalog = new RedisBenchmarkCatalog();
     private final BenchmarkOutputRenderer renderer = new BenchmarkOutputRenderer();
 
     @Test
@@ -21,7 +21,7 @@ public class BenchmarkOutputRendererTest {
         BenchmarkRunResult run = new BenchmarkRunResult(List.of(
                 success("ping_inline"),
                 BenchmarkCaseResult.unsupported(
-                        catalog.caseById("spop"),
+                        CaseSelection.caseById("spop"),
                         "Yierdis does not support SPOP"
                 )
         ));
@@ -49,7 +49,7 @@ public class BenchmarkOutputRendererTest {
     @Test
     public void quietAndHumanOutputNeverRenderFakeMetricsForFailure() {
         BenchmarkRunResult run = new BenchmarkRunResult(List.of(
-                BenchmarkCaseResult.failed(catalog.caseById("set"), 7, "disconnect")
+                BenchmarkCaseResult.failed(CaseSelection.caseById("set"), 7, "disconnect")
         ));
 
         String quiet = renderer.render(config(BenchmarkFormat.QUIET, true, 3), run);
@@ -236,7 +236,7 @@ public class BenchmarkOutputRendererTest {
     public void humanReportEscapesTrailingReasonLineBreaksWithoutLosingData() {
         BenchmarkRunResult run = new BenchmarkRunResult(List.of(
                 BenchmarkCaseResult.failed(
-                        catalog.caseById("set"),
+                        CaseSelection.caseById("set"),
                         7,
                         "disconnect\r\n\n"
                 )
@@ -268,14 +268,14 @@ public class BenchmarkOutputRendererTest {
     }
 
     private BenchmarkCaseResult success(String id) {
-        return BenchmarkCaseResult.success(catalog.caseById(id), statistics());
+        return BenchmarkCaseResult.success(CaseSelection.caseById(id), statistics());
     }
 
     private BenchmarkRunResult nonSuccessRun() {
         return new BenchmarkRunResult(List.of(
-                BenchmarkCaseResult.unsupported(catalog.caseById("spop"), "missing command"),
-                BenchmarkCaseResult.skipped(catalog.caseById("get"), "setup failed"),
-                BenchmarkCaseResult.failed(catalog.caseById("set"), 7, "disconnect")
+                BenchmarkCaseResult.unsupported(CaseSelection.caseById("spop"), "missing command"),
+                BenchmarkCaseResult.skipped(CaseSelection.caseById("get"), "setup failed"),
+                BenchmarkCaseResult.failed(CaseSelection.caseById("set"), 7, "disconnect")
         ));
     }
 
@@ -287,11 +287,11 @@ public class BenchmarkOutputRendererTest {
                         "disconnect\\nraw\r\nretry\r\n"
                 ),
                 BenchmarkCaseResult.unsupported(
-                        catalog.caseById("spop"),
+                        CaseSelection.caseById("spop"),
                         "missing\r\ncommand\r\n"
                 ),
                 BenchmarkCaseResult.skipped(
-                        catalog.caseById("get"),
+                        CaseSelection.caseById("get"),
                         "setup\r\nfailed\r\n"
                 )
         ));
@@ -311,7 +311,7 @@ public class BenchmarkOutputRendererTest {
     }
 
     private static BenchmarkStatistics statistics() {
-        BenchmarkLatencyRecorder.Summary latency = new BenchmarkLatencyRecorder.Summary(
+        LatencyRecorder.Summary latency = new LatencyRecorder.Summary(
                 2,
                 1_234.0,
                 100,
@@ -320,7 +320,7 @@ public class BenchmarkOutputRendererTest {
                 3_000,
                 4_567
         );
-        return BenchmarkStatistics.from(2, 5, 6, 2, 2, latency);
+        return new BenchmarkStatistics(2, 5, 6, 2, 2, latency);
     }
 
     private static BenchmarkConfig config(
@@ -341,8 +341,6 @@ public class BenchmarkOutputRendererTest {
                 precision,
                 7L,
                 format,
-                "",
-                "",
                 0
         );
     }

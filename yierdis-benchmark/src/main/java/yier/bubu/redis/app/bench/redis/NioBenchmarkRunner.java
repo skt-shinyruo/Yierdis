@@ -1,5 +1,6 @@
 package yier.bubu.redis.app.bench.redis;
 
+import yier.bubu.redis.app.bench.LatencyRecorder;
 import yier.bubu.redis.protocol.resp.RespClientCodec;
 
 import java.io.EOFException;
@@ -20,7 +21,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
 
 public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
-    private static final byte[] AUTH = ascii("AUTH");
     private static final byte[] SELECT = ascii("SELECT");
     private static final byte[] EMPTY_PREFIX = new byte[0];
     private static final Duration DEFAULT_NO_PROGRESS_TIMEOUT = Duration.ofSeconds(30);
@@ -42,64 +42,6 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
                 System::nanoTime,
                 DEFAULT_NO_PROGRESS_TIMEOUT,
                 NioBenchmarkClient::close,
-                DEFAULT_CLIENT_WRITE_FACTORY
-        );
-    }
-
-    public NioBenchmarkRunner(LongSupplier clock) {
-        this(
-                clock,
-                NioBenchmarkClient.ReplyLimits.defaults(),
-                System::nanoTime,
-                DEFAULT_NO_PROGRESS_TIMEOUT,
-                NioBenchmarkClient::close,
-                DEFAULT_CLIENT_WRITE_FACTORY
-        );
-    }
-
-    NioBenchmarkRunner(
-            LongSupplier clock,
-            NioBenchmarkClient.ReplyLimits replyLimits
-    ) {
-        this(
-                clock,
-                replyLimits,
-                System::nanoTime,
-                DEFAULT_NO_PROGRESS_TIMEOUT,
-                NioBenchmarkClient::close,
-                DEFAULT_CLIENT_WRITE_FACTORY
-        );
-    }
-
-    NioBenchmarkRunner(
-            LongSupplier clock,
-            NioBenchmarkClient.ReplyLimits replyLimits,
-            LongSupplier progressClock,
-            Duration noProgressTimeout
-    ) {
-        this(
-                clock,
-                replyLimits,
-                progressClock,
-                noProgressTimeout,
-                NioBenchmarkClient::close,
-                DEFAULT_CLIENT_WRITE_FACTORY
-        );
-    }
-
-    NioBenchmarkRunner(
-            LongSupplier clock,
-            NioBenchmarkClient.ReplyLimits replyLimits,
-            LongSupplier progressClock,
-            Duration noProgressTimeout,
-            ClientCleanup clientCleanup
-    ) {
-        this(
-                clock,
-                replyLimits,
-                progressClock,
-                noProgressTimeout,
-                clientCleanup,
                 DEFAULT_CLIENT_WRITE_FACTORY
         );
     }
@@ -148,8 +90,7 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
                 requiredConfig.keyspace()
         );
         PreparedPrefix prefix = preparePrefix(requiredConfig);
-        BenchmarkLatencyRecorder latencyRecorder =
-                new BenchmarkLatencyRecorder(requiredConfig.precision());
+        LatencyRecorder latencyRecorder = LatencyRecorder.micros(requiredConfig.precision());
         List<NioBenchmarkClient> clients = new ArrayList<>(requiredConfig.clients());
         RunState state = new RunState(requiredConfig.requests(), requiredConfig.pipeline());
 
@@ -194,7 +135,7 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
 
         long elapsedNanos = Math.max(0L, state.stopNanos - state.measuredStartNanos);
         long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(elapsedNanos);
-        return BenchmarkStatistics.from(
+        return new BenchmarkStatistics(
                 requiredConfig.requests(),
                 state.completedReplies,
                 state.issued,
@@ -274,7 +215,7 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
             BenchmarkConfig config,
             BenchmarkReplyExpectation expectation,
             BenchmarkRandom random,
-            BenchmarkLatencyRecorder latencyRecorder,
+            LatencyRecorder latencyRecorder,
             RunState state
     ) throws IOException {
         while (!state.stopping) {
@@ -380,7 +321,7 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
             BenchmarkConfig config,
             BenchmarkReplyExpectation expectation,
             BenchmarkRandom random,
-            BenchmarkLatencyRecorder latencyRecorder,
+            LatencyRecorder latencyRecorder,
             RunState state
     ) throws IOException {
         if (client.needsBatchLatency()) {
@@ -414,7 +355,7 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
                 validateMeasuredReply(expectation, reply);
                 state.completedReplies++;
                 if (state.histogramSamples < state.requested) {
-                    latencyRecorder.recordMicros(client.batchLatencyMicros);
+                    latencyRecorder.record(client.batchLatencyMicros);
                     state.histogramSamples++;
                     if (state.histogramSamples == state.requested) {
                         state.thresholdClient = client;
@@ -569,36 +510,16 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
     }
 
     private static PreparedPrefix preparePrefix(BenchmarkConfig config) {
-        List<byte[]> frames = new ArrayList<>(2);
-        if (!config.password().isEmpty()) {
-            List<byte[]> arguments = new ArrayList<>(3);
-            arguments.add(AUTH);
-            if (!config.username().isEmpty()) {
-                arguments.add(utf8(config.username()));
-            }
-            arguments.add(utf8(config.password()));
-            frames.add(RespClientCodec.encodeCommand(arguments));
-        }
-        if (config.database() != 0) {
-            frames.add(RespClientCodec.encodeCommand(List.of(
-                    SELECT,
-                    ascii(Integer.toString(config.database()))
-            )));
-        }
-        if (frames.isEmpty()) {
+        if (config.database() == 0) {
             return new PreparedPrefix(EMPTY_PREFIX, 0);
         }
-        int length = 0;
-        for (byte[] frame : frames) {
-            length = Math.addExact(length, frame.length);
-        }
-        byte[] bytes = new byte[length];
-        int offset = 0;
-        for (byte[] frame : frames) {
-            System.arraycopy(frame, 0, bytes, offset, frame.length);
-            offset += frame.length;
-        }
-        return new PreparedPrefix(bytes, frames.size());
+        return new PreparedPrefix(
+                RespClientCodec.encodeCommand(List.of(
+                        SELECT,
+                        ascii(Integer.toString(config.database()))
+                )),
+                1
+        );
     }
 
     private void closeClients(List<NioBenchmarkClient> clients) throws Throwable {
@@ -621,10 +542,6 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
 
     private static byte[] ascii(String value) {
         return value.getBytes(StandardCharsets.US_ASCII);
-    }
-
-    private static byte[] utf8(String value) {
-        return value.getBytes(StandardCharsets.UTF_8);
     }
 
     private record PreparedPrefix(byte[] bytes, int replyCount) {

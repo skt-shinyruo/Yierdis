@@ -5,8 +5,8 @@ import picocli.CommandLine.Mixin;
 import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.ParameterException;
 import picocli.CommandLine.Spec;
+import yier.bubu.redis.app.bench.BenchCommands;
 
-import java.io.PrintWriter;
 import java.util.Objects;
 import java.util.concurrent.Callable;
 import java.util.function.Function;
@@ -42,12 +42,7 @@ public final class RedisBenchmarkCommand implements Callable<Integer> {
 
     @Override
     public Integer call() {
-        BenchmarkConfig config;
-        try {
-            config = options.toConfig(System::nanoTime);
-        } catch (IllegalArgumentException failure) {
-            throw new ParameterException(spec.commandLine(), failure.getMessage(), failure);
-        }
+        BenchmarkConfig config = BenchCommands.parseConfig(spec, () -> options.toConfig(System::nanoTime));
 
         BenchmarkRunResult result;
         try {
@@ -56,12 +51,7 @@ public final class RedisBenchmarkCommand implements Callable<Integer> {
             throw new ParameterException(spec.commandLine(), failure.getMessage(), failure);
         }
 
-        PrintWriter out = spec.commandLine().getOut();
-        out.print(renderer.render(config, result));
-        out.flush();
-        if (out.checkError()) {
-            throw new IllegalStateException("failed to write benchmark output");
-        }
+        BenchCommands.writeOutput(spec, renderer.render(config, result));
         return result.exitCode();
     }
 }

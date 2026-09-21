@@ -3,10 +3,8 @@ package yier.bubu.redis.app.bench.redis;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static yier.bubu.redis.app.bench.redis.BenchmarkReplyExpectation.ARRAY;
@@ -139,25 +137,9 @@ public final class RedisBenchmarkCatalog {
             )
     );
 
-    private static final Map<String, RedisBenchmarkCase> CASES_BY_ID = CASES.stream()
-            .collect(Collectors.toUnmodifiableMap(RedisBenchmarkCase::id, Function.identity()));
-
     private static final Set<String> SELECTION_TRIGGERS = CASES.stream()
             .flatMap(testCase -> testCase.selectionTriggers().stream())
             .collect(Collectors.toUnmodifiableSet());
-
-    public List<RedisBenchmarkCase> allCases() {
-        return CASES;
-    }
-
-    public RedisBenchmarkCase caseById(String id) {
-        String normalizedId = normalize(id, "case id");
-        RedisBenchmarkCase testCase = CASES_BY_ID.get(normalizedId);
-        if (testCase == null) {
-            throw new IllegalArgumentException("unknown benchmark case id: " + normalizedId);
-        }
-        return testCase;
-    }
 
     public List<RedisBenchmarkCase> select(Set<String> selectors) {
         if (selectors == null) {

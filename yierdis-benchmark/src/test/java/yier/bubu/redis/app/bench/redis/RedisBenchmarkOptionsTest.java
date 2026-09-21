@@ -27,8 +27,6 @@ public class RedisBenchmarkOptionsTest {
         Assert.assertEquals(3, config.precision());
         Assert.assertEquals(BenchmarkFormat.HUMAN, config.format());
         Assert.assertEquals(123L, config.seed());
-        Assert.assertEquals("", config.username());
-        Assert.assertEquals("", config.password());
         Assert.assertEquals(0, config.database());
     }
 
@@ -59,8 +57,6 @@ public class RedisBenchmarkOptionsTest {
                 "--precision", "4",
                 "--seed", "42",
                 "--format", "QuIeT",
-                "--username", "benchmark-user",
-                "--password", "secret",
                 "--database", "2"
         );
 
@@ -80,8 +76,6 @@ public class RedisBenchmarkOptionsTest {
         Assert.assertEquals(4, config.precision());
         Assert.assertEquals(42L, config.seed());
         Assert.assertEquals(BenchmarkFormat.QUIET, config.format());
-        Assert.assertEquals("benchmark-user", config.username());
-        Assert.assertEquals("secret", config.password());
         Assert.assertEquals(2, config.database());
     }
 
@@ -106,8 +100,6 @@ public class RedisBenchmarkOptionsTest {
                 "--precision",
                 "--seed",
                 "--format",
-                "--username",
-                "--password",
                 "--database"
         ), optionNames);
     }
@@ -127,9 +119,5 @@ public class RedisBenchmarkOptionsTest {
         RedisBenchmarkOptions invalidFormat = new RedisBenchmarkOptions();
         new CommandLine(invalidFormat).parseArgs("--format", "json");
         Assert.assertThrows(IllegalArgumentException.class, () -> invalidFormat.toConfig(() -> 1L));
-
-        RedisBenchmarkOptions usernameWithoutPassword = new RedisBenchmarkOptions();
-        new CommandLine(usernameWithoutPassword).parseArgs("--username", "benchmark-user");
-        Assert.assertThrows(IllegalArgumentException.class, () -> usernameWithoutPassword.toConfig(() -> 1L));
     }
 }

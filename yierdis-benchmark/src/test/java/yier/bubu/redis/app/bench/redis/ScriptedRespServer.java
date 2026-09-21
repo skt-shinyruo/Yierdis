@@ -104,25 +104,25 @@ final class ScriptedRespServer implements AutoCloseable {
         return immediate(1, ascii("+PONG\r\n+PONG\r\n"));
     }
 
-    static ScriptedRespServer authAndSelectAware() throws IOException {
-        return new ScriptedRespServer(1, new AuthAndSelectScript(null));
+    static ScriptedRespServer selectAware() throws IOException {
+        return new ScriptedRespServer(1, new SelectScript(null));
     }
 
-    static ScriptedRespServer authAndSelectAware(Runnable beforePrefixReply)
+    static ScriptedRespServer selectAware(Runnable beforePrefixReply)
             throws IOException {
         return new ScriptedRespServer(
                 1,
-                new AuthAndSelectScript(
+                new SelectScript(
                         Objects.requireNonNull(beforePrefixReply, "beforePrefixReply")
                 )
         );
     }
 
-    static ScriptedRespServer rejectingAuth(String reply) throws IOException {
+    static ScriptedRespServer rejectingSelect(String reply) throws IOException {
         byte[] response = Objects.requireNonNull(reply, "reply")
                 .getBytes(StandardCharsets.US_ASCII);
         return new ScriptedRespServer(1, (connection, command, connectionCount, totalCount) -> {
-            if (command.name().equals("AUTH")) {
+            if (command.name().equals("SELECT")) {
                 connection.sendReplies(response, 1);
             }
         });
@@ -163,11 +163,6 @@ final class ScriptedRespServer implements AutoCloseable {
                 (connection, command, connectionCount, totalCount) ->
                         connection.sendEveryByte(response)
         );
-    }
-
-    static ScriptedRespServer error(int expectedClients, String message) throws IOException {
-        Objects.requireNonNull(message, "message");
-        return immediate(expectedClients, ascii("-" + message + "\r\n"));
     }
 
     static ScriptedRespServer closeAfterCommand(
@@ -218,10 +213,6 @@ final class ScriptedRespServer implements AutoCloseable {
 
     int measuredCommandReplies() {
         return measuredCommandReplies.get();
-    }
-
-    boolean stallWasReleased() {
-        return responseScript.stallWasReleased();
     }
 
     LongSupplier coordinatedClock(LongSupplier delegate) {
@@ -287,10 +278,6 @@ final class ScriptedRespServer implements AutoCloseable {
 
     void awaitSentReplies(int expected, Duration timeout) throws InterruptedException {
         awaitState(() -> sentReplies.get() >= expected, timeout, "sent replies");
-    }
-
-    void releaseStall() throws IOException {
-        responseScript.releaseStall();
     }
 
     @Override
@@ -601,13 +588,6 @@ final class ScriptedRespServer implements AutoCloseable {
                 int totalCommandCount
         ) throws Exception;
 
-        default boolean stallWasReleased() {
-            return false;
-        }
-
-        default void releaseStall() throws IOException {
-            throw new UnsupportedOperationException("this response script has no stall");
-        }
     }
 
     private final class Connection implements AutoCloseable {
@@ -687,13 +667,13 @@ final class ScriptedRespServer implements AutoCloseable {
         }
     }
 
-    private static final class AuthAndSelectScript implements ResponseScript {
+    private static final class SelectScript implements ResponseScript {
         private static final Duration COORDINATION_TIMEOUT = Duration.ofSeconds(5);
 
         private final Runnable beforePrefixReply;
         private ScriptedRespServer server;
 
-        private AuthAndSelectScript(Runnable beforePrefixReply) {
+        private SelectScript(Runnable beforePrefixReply) {
             this.beforePrefixReply = beforePrefixReply;
         }
 
@@ -710,8 +690,7 @@ final class ScriptedRespServer implements AutoCloseable {
                 int totalCommandCount
         ) throws IOException, InterruptedException {
             switch (command.name()) {
-                case "AUTH" -> sendPrefixReply(connection);
-                case "SELECT" -> connection.sendReplies(OK, 1);
+                case "SELECT" -> sendPrefixReply(connection);
                 case "PING" -> {
                     connection.sendReplies(PONG, 1);
                     server.measuredCommandReplies.incrementAndGet();
@@ -737,7 +716,6 @@ final class ScriptedRespServer implements AutoCloseable {
         private static final Duration COORDINATION_TIMEOUT = Duration.ofSeconds(5);
 
         private final AtomicBoolean coordinationStarted = new AtomicBoolean();
-        private final AtomicBoolean stallReleased = new AtomicBoolean();
         private ScriptedRespServer server;
 
         @Override
@@ -756,18 +734,6 @@ final class ScriptedRespServer implements AutoCloseable {
                     && server.everyConnectionHasAtLeast(3)
                     && coordinationStarted.compareAndSet(false, true)) {
                 server.execute(this::coordinateReplies);
-            }
-        }
-
-        @Override
-        public boolean stallWasReleased() {
-            return stallReleased.get();
-        }
-
-        @Override
-        public void releaseStall() throws IOException {
-            if (stallReleased.compareAndSet(false, true)) {
-                server.connection(1).sendReplies(PONG, 2);
             }
         }
 

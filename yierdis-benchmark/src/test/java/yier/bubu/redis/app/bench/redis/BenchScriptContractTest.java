@@ -3,6 +3,7 @@ package yier.bubu.redis.app.bench.redis;
 import org.junit.Assert;
 import org.junit.Rule;
 import org.junit.Test;
+import yier.bubu.redis.app.bench.BenchTestRoot;
 import org.junit.rules.TemporaryFolder;
 
 import java.io.IOException;
@@ -21,7 +22,7 @@ public class BenchScriptContractTest {
             "SKIP_BUILD", "MVN_ARGS", "BENCH_JVM_OPTS", "HOST", "PORT",
             "REQUESTS", "CLIENTS", "DATA_SIZE", "PIPELINE", "FORMAT",
             "KEYSPACE", "TESTS", "KEEP_ALIVE", "PRECISION", "SEED",
-            "BENCH_USERNAME", "USERNAME", "PASSWORD", "DATABASE"
+            "DATABASE"
     );
 
     @Rule
@@ -52,8 +53,6 @@ public class BenchScriptContractTest {
     @Test
     public void customInvocationSkipsBuildAndForwardsPortableArgumentsExactly() throws Exception {
         ScriptFixture fixture = createScriptFixture(true, false);
-        String username = "acl user;$(not executed)";
-        String password = "s e c r e t;$(not executed)";
 
         ScriptResult result = runScript(fixture, Map.ofEntries(
                 Map.entry("SKIP_BUILD", "1"),
@@ -70,9 +69,6 @@ public class BenchScriptContractTest {
                 Map.entry("KEEP_ALIVE", "false"),
                 Map.entry("PRECISION", "4"),
                 Map.entry("SEED", "42"),
-                Map.entry("BENCH_USERNAME", username),
-                Map.entry("USERNAME", "reserved-shell-user"),
-                Map.entry("PASSWORD", password),
                 Map.entry("DATABASE", "2")
         ));
 
@@ -93,8 +89,6 @@ public class BenchScriptContractTest {
                 "--keep-alive=false",
                 "--precision", "4",
                 "--seed", "42",
-                "--username", username,
-                "--password", password,
                 "--database", "2"
         ), readNulArguments(fixture.javaLog()));
     }
@@ -118,39 +112,17 @@ public class BenchScriptContractTest {
         Path nestedFallback = Files.createDirectories(fallbackRoot.resolve("one/two"));
         Path invalid = temporaryFolder.newFolder("invalid-root").toPath();
 
-        Assert.assertEquals(explicitRoot, discoverRepoRoot(explicitRoot, invalid));
-        Assert.assertEquals(fallbackRoot, discoverRepoRoot(invalid, nestedFallback));
+        Assert.assertEquals(explicitRoot, BenchTestRoot.discoverRepoRoot(explicitRoot, invalid));
+        Assert.assertEquals(fallbackRoot, BenchTestRoot.discoverRepoRoot(invalid, nestedFallback));
         IllegalStateException failure = Assert.assertThrows(
                 IllegalStateException.class,
-                () -> discoverRepoRoot(invalid, invalid.resolve("missing"))
+                () -> BenchTestRoot.discoverRepoRoot(invalid, invalid.resolve("missing"))
         );
         Assert.assertTrue(failure.getMessage().contains("repository root"));
     }
 
     private static Path repoRoot() {
-        return discoverRepoRoot(
-                propertyPath("maven.multiModuleProjectDirectory"),
-                propertyPath("basedir"),
-                propertyPath("user.dir")
-        );
-    }
-
-    static Path discoverRepoRoot(Path multiModuleProjectDirectory, Path... fallbackCandidates) {
-        Path configuredRoot = normalize(multiModuleProjectDirectory);
-        if (isRepositoryRoot(configuredRoot)) {
-            return configuredRoot;
-        }
-        for (Path candidate : fallbackCandidates) {
-            for (Path current = normalize(candidate); current != null; current = current.getParent()) {
-                if (isRepositoryRoot(current)) {
-                    return current;
-                }
-            }
-        }
-        throw new IllegalStateException(
-                "Unable to locate repository root containing pom.xml, scripts/bench.sh, "
-                        + "and yierdis-benchmark/pom.xml"
-        );
+        return BenchTestRoot.repoRoot();
     }
 
     private ScriptFixture createScriptFixture(boolean includeMainJar, boolean includeClassifiers)
@@ -160,6 +132,10 @@ public class BenchScriptContractTest {
         Path script = scriptDirectory.resolve("bench.sh");
         Files.copy(repoRoot().resolve("scripts/bench.sh"), script);
         makeExecutable(script);
+        Files.copy(
+                repoRoot().resolve("scripts/lib.sh"),
+                scriptDirectory.resolve("lib.sh")
+        );
 
         Path bin = Files.createDirectories(root.resolve("bin"));
         writeExecutable(bin.resolve("mvn"), """
@@ -258,22 +234,6 @@ public class BenchScriptContractTest {
 
     private static void makeExecutable(Path path) throws IOException {
         Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rwx------"));
-    }
-
-    private static Path propertyPath(String name) {
-        String value = System.getProperty(name);
-        return value == null || value.isBlank() ? null : Path.of(value);
-    }
-
-    private static Path normalize(Path path) {
-        return path == null ? null : path.toAbsolutePath().normalize();
-    }
-
-    private static boolean isRepositoryRoot(Path path) {
-        return path != null
-                && Files.isRegularFile(path.resolve("pom.xml"))
-                && Files.isRegularFile(path.resolve("scripts/bench.sh"))
-                && Files.isRegularFile(path.resolve("yierdis-benchmark/pom.xml"));
     }
 
     private record ScriptFixture(

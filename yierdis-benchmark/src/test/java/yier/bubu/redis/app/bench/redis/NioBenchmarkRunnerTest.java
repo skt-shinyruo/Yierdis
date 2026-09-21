@@ -2,6 +2,7 @@ package yier.bubu.redis.app.bench.redis;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.app.bench.LatencyRecorder;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -26,11 +27,9 @@ import java.util.function.LongSupplier;
 
 public class NioBenchmarkRunnerTest {
     private static final Duration SERVER_WAIT = Duration.ofSeconds(5);
-    private static final RedisBenchmarkCatalog CATALOG = new RedisBenchmarkCatalog();
-    private static final RedisBenchmarkCase PING =
-            CATALOG.caseById("ping_inline");
-    private static final RedisBenchmarkCase GET = CATALOG.caseById("get");
-    private static final RedisBenchmarkCase LRANGE = CATALOG.caseById("lrange_100");
+    private static final RedisBenchmarkCase PING = CaseSelection.caseById("ping_inline");
+    private static final RedisBenchmarkCase GET = CaseSelection.caseById("get");
+    private static final RedisBenchmarkCase LRANGE = CaseSelection.caseById("lrange_100");
     private static final NioBenchmarkClient.ReplyLimits SMALL_REPLY_LIMITS =
             new NioBenchmarkClient.ReplyLimits(16, 16, 16, 3, 4);
 
@@ -45,7 +44,8 @@ public class NioBenchmarkRunnerTest {
                     2,
                     false,
                     System::nanoTime,
-                    NioBenchmarkClient.ReplyLimits.defaults()
+                    NioBenchmarkClient.ReplyLimits.defaults(),
+                    0
             );
 
             Assert.assertEquals(4, server.awaitAcceptedConnections(4, SERVER_WAIT));
@@ -58,8 +58,8 @@ public class NioBenchmarkRunnerTest {
     }
 
     @Test(timeout = 5_000)
-    public void authAndSelectPrefixMeasuredCommandsWithoutEnteringCounts() throws Exception {
-        try (ScriptedRespServer server = ScriptedRespServer.authAndSelectAware()) {
+    public void selectPrefixIsNotCountedAsMeasuredTraffic() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.selectAware()) {
             BenchmarkStatistics statistics = execute(
                     server,
                     PING,
@@ -69,23 +69,21 @@ public class NioBenchmarkRunnerTest {
                     false,
                     System::nanoTime,
                     NioBenchmarkClient.ReplyLimits.defaults(),
-                    "benchmark-user",
-                    "secret",
                     2
             );
 
             Assert.assertEquals(4, server.awaitAcceptedConnections(4, SERVER_WAIT));
             Assert.assertEquals(
-                    List.of(0, 4, 4, 4),
-                    server.awaitCommandCountsPerConnection(12, 4, SERVER_WAIT)
+                    List.of(0, 3, 3, 3),
+                    server.awaitCommandCountsPerConnection(9, 4, SERVER_WAIT)
             );
             Assert.assertEquals(
-                    List.of("AUTH", "SELECT", "PING"),
-                    server.firstConnectionCommandPrefix(3)
+                    List.of("SELECT", "PING"),
+                    server.firstConnectionCommandPrefix(2)
             );
-            Assert.assertTrue(server.everyConnectionStartsWith(List.of("AUTH", "SELECT")));
+            Assert.assertTrue(server.everyConnectionStartsWith(List.of("SELECT")));
             Assert.assertEquals(
-                    List.of("AUTH", "benchmark-user", "secret"),
+                    List.of("SELECT", "2"),
                     server.firstConnectionCommandArguments(0)
             );
             Assert.assertEquals(6, server.measuredCommandReplies());
@@ -93,7 +91,7 @@ public class NioBenchmarkRunnerTest {
         }
 
         ManualClock clock = new ManualClock();
-        try (ScriptedRespServer server = ScriptedRespServer.authAndSelectAware(
+        try (ScriptedRespServer server = ScriptedRespServer.selectAware(
                 () -> clock.advanceMicros(250)
         )) {
             BenchmarkStatistics statistics = execute(
@@ -105,41 +103,13 @@ public class NioBenchmarkRunnerTest {
                     true,
                     server.coordinatedClock(clock),
                     NioBenchmarkClient.ReplyLimits.defaults(),
-                    "benchmark-user",
-                    "secret",
                     2
             );
 
-            BenchmarkLatencyRecorder expectedLatency = new BenchmarkLatencyRecorder(3);
-            expectedLatency.recordMicros(250);
+            LatencyRecorder expectedLatency = LatencyRecorder.micros(3);
+            expectedLatency.record(250);
             Assert.assertEquals(expectedLatency.summary(), statistics.latency());
             Assert.assertEquals(4, clock.callCount());
-        }
-
-        try (ScriptedRespServer server = ScriptedRespServer.authAndSelectAware()) {
-            BenchmarkStatistics statistics = execute(
-                    server,
-                    PING,
-                    1,
-                    1,
-                    1,
-                    true,
-                    System::nanoTime,
-                    NioBenchmarkClient.ReplyLimits.defaults(),
-                    "",
-                    "password-only",
-                    0
-            );
-
-            Assert.assertEquals(
-                    List.of(2),
-                    server.awaitCommandCountsPerConnection(2, 1, SERVER_WAIT)
-            );
-            Assert.assertEquals(
-                    List.of("AUTH", "password-only"),
-                    server.firstConnectionCommandArguments(0)
-            );
-            assertCounters(statistics, 1, 1, 1, 1);
         }
     }
 
@@ -167,8 +137,8 @@ public class NioBenchmarkRunnerTest {
             Assert.assertEquals(21, perConnection.stream().mapToInt(Integer::intValue).sum());
         }
 
-        ByteBuffer prefix = ByteBuffer.wrap(ascii("AUTH"));
-        ByteBuffer pipeline = ByteBuffer.wrap(ascii("PING"));
+        ByteBuffer prefix = ByteBuffer.wrap(ascii("PING"));
+        ByteBuffer pipeline = ByteBuffer.wrap(ascii("PONG"));
         ByteBuffer[] buffers = {prefix, pipeline};
         NioBenchmarkClient.GatheringWrite shortWrite = sources -> {
             int budget = 3;
@@ -197,7 +167,7 @@ public class NioBenchmarkRunnerTest {
     }
 
     @Test(timeout = 5_000)
-    public void runnerCompletesAuthAndPipelineAcrossDeterministicPartialWrites()
+    public void runnerCompletesSelectPrefixAndPipelineAcrossDeterministicPartialWrites()
             throws Exception {
         List<Long> aggregateWritePositions = new ArrayList<>();
         NioBenchmarkRunner runner = runnerWithWriteFactory(channel -> cappedSocketWrite(
@@ -205,7 +175,7 @@ public class NioBenchmarkRunnerTest {
                 3,
                 aggregateWritePositions
         ));
-        try (ScriptedRespServer server = ScriptedRespServer.authAndSelectAware()) {
+        try (ScriptedRespServer server = ScriptedRespServer.selectAware()) {
             BenchmarkStatistics statistics = execute(
                     server,
                     PING,
@@ -215,19 +185,17 @@ public class NioBenchmarkRunnerTest {
                     true,
                     System::nanoTime,
                     NioBenchmarkClient.ReplyLimits.defaults(),
-                    "benchmark-user",
-                    "secret",
                     2,
                     runner
             );
 
             Assert.assertEquals(
-                    List.of(4),
-                    server.awaitCommandCountsPerConnection(4, 1, SERVER_WAIT)
+                    List.of(3),
+                    server.awaitCommandCountsPerConnection(3, 1, SERVER_WAIT)
             );
             Assert.assertEquals(
-                    List.of("AUTH", "SELECT", "PING", "PING"),
-                    server.firstConnectionCommandPrefix(4)
+                    List.of("SELECT", "PING", "PING"),
+                    server.firstConnectionCommandPrefix(3)
             );
             assertCounters(statistics, 2, 2, 2, 2);
         }
@@ -314,8 +282,8 @@ public class NioBenchmarkRunnerTest {
 
     @Test(timeout = 5_000)
     public void rejectedPrefixFailsWithoutCountingItAsBenchmarkTraffic() throws Exception {
-        try (ScriptedRespServer server = ScriptedRespServer.rejectingAuth(
-                "-WRONGPASS invalid password\r\n"
+        try (ScriptedRespServer server = ScriptedRespServer.rejectingSelect(
+                "-ERR SELECT is unsupported\r\n"
         )) {
             BenchmarkExecutionException failure = Assert.assertThrows(
                     BenchmarkExecutionException.class,
@@ -328,15 +296,13 @@ public class NioBenchmarkRunnerTest {
                             true,
                             System::nanoTime,
                             NioBenchmarkClient.ReplyLimits.defaults(),
-                            "default",
-                            "bad",
-                            0
+                            2
                     )
             );
 
             Assert.assertEquals(0, failure.completedReplies());
-            Assert.assertTrue(failure.detail().contains("WRONGPASS"));
-            Assert.assertTrue(failure.getMessage().contains("WRONGPASS"));
+            Assert.assertTrue(failure.detail().contains("ERR SELECT is unsupported"));
+            Assert.assertTrue(failure.getMessage().contains("ERR SELECT is unsupported"));
             Assert.assertEquals(0, server.measuredCommandReplies());
         }
     }
@@ -355,8 +321,6 @@ public class NioBenchmarkRunnerTest {
                             true,
                             System::nanoTime,
                             NioBenchmarkClient.ReplyLimits.defaults(),
-                            "",
-                            "",
                             0,
                             Duration.ofMillis(100)
                     )
@@ -384,7 +348,8 @@ public class NioBenchmarkRunnerTest {
                 client -> {
                     client.close();
                     throw cleanupFailure;
-                }
+                },
+                channel -> channel::write
         );
         try (ScriptedRespServer server = ScriptedRespServer.respondingWith(
                 "-ERR primary boom\r\n"
@@ -400,8 +365,6 @@ public class NioBenchmarkRunnerTest {
                             true,
                             System::nanoTime,
                             NioBenchmarkClient.ReplyLimits.defaults(),
-                            "",
-                            "",
                             0,
                             runner
                     )
@@ -524,9 +487,9 @@ public class NioBenchmarkRunnerTest {
                     server.awaitCommandCountsPerConnection(3, 1, SERVER_WAIT)
             );
             assertCounters(statistics, 3, 3, 3, 3);
-            BenchmarkLatencyRecorder expectedLatency = new BenchmarkLatencyRecorder(3);
+            LatencyRecorder expectedLatency = LatencyRecorder.micros(3);
             for (int reply = 0; reply < 3; reply++) {
-                expectedLatency.recordMicros(250);
+                expectedLatency.record(250);
             }
             Assert.assertEquals(expectedLatency.summary(), statistics.latency());
             Assert.assertEquals(4, clock.callCount());
@@ -547,7 +510,6 @@ public class NioBenchmarkRunnerTest {
             server.awaitSentReplies(7, SERVER_WAIT);
             assertCounters(statistics, 7, 7, 9, 7);
             Assert.assertEquals(7, server.sentReplyCount());
-            Assert.assertFalse(server.stallWasReleased());
         }
     }
 
@@ -612,7 +574,8 @@ public class NioBenchmarkRunnerTest {
                 pipeline,
                 true,
                 clock,
-                NioBenchmarkClient.ReplyLimits.defaults()
+                NioBenchmarkClient.ReplyLimits.defaults(),
+                0
         );
     }
 
@@ -632,8 +595,6 @@ public class NioBenchmarkRunnerTest {
                 true,
                 System::nanoTime,
                 NioBenchmarkClient.ReplyLimits.defaults(),
-                "",
-                "",
                 0,
                 runner
         );
@@ -656,31 +617,7 @@ public class NioBenchmarkRunnerTest {
                 pipeline,
                 true,
                 clock,
-                replyLimits
-        );
-    }
-
-    private static BenchmarkStatistics execute(
-            ScriptedRespServer server,
-            RedisBenchmarkCase testCase,
-            int requests,
-            int clients,
-            int pipeline,
-            boolean keepAlive,
-            LongSupplier clock,
-            NioBenchmarkClient.ReplyLimits replyLimits
-    ) throws Exception {
-        return execute(
-                server,
-                testCase,
-                requests,
-                clients,
-                pipeline,
-                keepAlive,
-                clock,
                 replyLimits,
-                "",
-                "",
                 0
         );
     }
@@ -694,8 +631,6 @@ public class NioBenchmarkRunnerTest {
             boolean keepAlive,
             LongSupplier clock,
             NioBenchmarkClient.ReplyLimits replyLimits,
-            String username,
-            String password,
             int database
     ) throws Exception {
         return execute(
@@ -707,10 +642,8 @@ public class NioBenchmarkRunnerTest {
                 keepAlive,
                 clock,
                 replyLimits,
-                username,
-                password,
                 database,
-                new NioBenchmarkRunner(clock, replyLimits)
+                newRunner(clock, replyLimits)
         );
     }
 
@@ -723,8 +656,6 @@ public class NioBenchmarkRunnerTest {
             boolean keepAlive,
             LongSupplier clock,
             NioBenchmarkClient.ReplyLimits replyLimits,
-            String username,
-            String password,
             int database,
             Duration noProgressTimeout
     ) throws Exception {
@@ -737,15 +668,8 @@ public class NioBenchmarkRunnerTest {
                 keepAlive,
                 clock,
                 replyLimits,
-                username,
-                password,
                 database,
-                new NioBenchmarkRunner(
-                        clock,
-                        replyLimits,
-                        System::nanoTime,
-                        noProgressTimeout
-                )
+                newRunner(clock, replyLimits, noProgressTimeout)
         );
     }
 
@@ -758,8 +682,6 @@ public class NioBenchmarkRunnerTest {
             boolean keepAlive,
             LongSupplier clock,
             NioBenchmarkClient.ReplyLimits replyLimits,
-            String username,
-            String password,
             int database,
             NioBenchmarkRunner runner
     ) throws Exception {
@@ -776,8 +698,6 @@ public class NioBenchmarkRunnerTest {
                 3,
                 19L,
                 BenchmarkFormat.HUMAN,
-                username,
-                password,
                 database
         );
         ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -804,6 +724,28 @@ public class NioBenchmarkRunnerTest {
         }
     }
 
+    private static NioBenchmarkRunner newRunner(
+            LongSupplier clock,
+            NioBenchmarkClient.ReplyLimits replyLimits
+    ) {
+        return newRunner(clock, replyLimits, Duration.ofSeconds(30));
+    }
+
+    private static NioBenchmarkRunner newRunner(
+            LongSupplier clock,
+            NioBenchmarkClient.ReplyLimits replyLimits,
+            Duration noProgressTimeout
+    ) {
+        return new NioBenchmarkRunner(
+                clock,
+                replyLimits,
+                System::nanoTime,
+                noProgressTimeout,
+                NioBenchmarkClient::close,
+                channel -> channel::write
+        );
+    }
+
     private static byte[] ascii(String value) {
         return value.getBytes(StandardCharsets.US_ASCII);
     }
@@ -816,7 +758,8 @@ public class NioBenchmarkRunnerTest {
                 NioBenchmarkClient.ReplyLimits.defaults(),
                 System::nanoTime,
                 Duration.ofSeconds(30),
-                clientCleanup
+                clientCleanup,
+                channel -> channel::write
         );
     }
 

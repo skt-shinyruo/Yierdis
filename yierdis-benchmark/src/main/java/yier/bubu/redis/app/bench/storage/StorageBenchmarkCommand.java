@@ -3,8 +3,8 @@ package yier.bubu.redis.app.bench.storage;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Mixin;
 import picocli.CommandLine.Model.CommandSpec;
-import picocli.CommandLine.ParameterException;
 import picocli.CommandLine.Spec;
+import yier.bubu.redis.app.bench.BenchCommands;
 
 import java.io.PrintWriter;
 import java.util.Objects;
@@ -42,12 +42,7 @@ public final class StorageBenchmarkCommand implements Callable<Integer> {
 
     @Override
     public Integer call() {
-        StorageBenchmarkConfig config;
-        try {
-            config = options.toConfig();
-        } catch (IllegalArgumentException failure) {
-            throw new ParameterException(spec.commandLine(), failure.getMessage(), failure);
-        }
+        StorageBenchmarkConfig config = BenchCommands.parseConfig(spec, options::toConfig);
 
         StorageBenchmarkResult result;
         try {
@@ -59,12 +54,7 @@ public final class StorageBenchmarkCommand implements Callable<Integer> {
             return 1;
         }
 
-        PrintWriter out = spec.commandLine().getOut();
-        out.print(renderer.render(config, result));
-        out.flush();
-        if (out.checkError()) {
-            throw new IllegalStateException("failed to write benchmark output");
-        }
+        BenchCommands.writeOutput(spec, renderer.render(config, result));
         return 0;
     }
 

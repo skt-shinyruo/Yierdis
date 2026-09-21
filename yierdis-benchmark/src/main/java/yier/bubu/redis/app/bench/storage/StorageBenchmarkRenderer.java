@@ -1,8 +1,10 @@
 package yier.bubu.redis.app.bench.storage;
 
-import java.util.Locale;
 import java.util.Objects;
 import java.util.OptionalLong;
+
+import static yier.bubu.redis.app.bench.BenchOutput.append;
+import static yier.bubu.redis.app.bench.BenchOutput.format;
 
 public final class StorageBenchmarkRenderer {
     private static final String CSV_HEADER = "\"keys\",\"key_size_bytes\",\"value_size_bytes\","
@@ -37,8 +39,8 @@ public final class StorageBenchmarkRenderer {
         append(out, "  warmup operations: %d\n", config.warmupOperations());
         append(out, "  elapsed: %.6f seconds\n", result.elapsedNanos() / 1_000_000_000.0);
         append(out, "  throughput: %.2f ops/s\n", result.operationsPerSecond());
-        append(out, "  latency p50: %d ns\n", result.latency().p50Nanos());
-        append(out, "  latency p99: %d ns\n", result.latency().p99Nanos());
+        append(out, "  latency p50: %d ns\n", result.latency().p50());
+        append(out, "  latency p99: %d ns\n", result.latency().p99());
         append(out, "  heap estimated: %d bytes\n", loaded.heapEstimatedBytes());
         append(out, "  native metadata committed: %d bytes\n", loaded.nativeMetadataCommittedBytes());
         append(out, "  native data committed: %d bytes\n", loaded.nativeDataCommittedBytes());
@@ -62,33 +64,33 @@ public final class StorageBenchmarkRenderer {
         append(out, "  operations: %d\n", phase.latency().count());
         append(out, "  elapsed: %.6f seconds\n", phase.elapsedNanos() / 1_000_000_000.0);
         append(out, "  throughput: %.2f ops/s\n", phase.operationsPerSecond());
-        append(out, "  latency p50: %d ns\n", phase.latency().p50Nanos());
-        append(out, "  latency p99: %d ns\n", phase.latency().p99Nanos());
+        append(out, "  latency p50: %d ns\n", phase.latency().p50());
+        append(out, "  latency p99: %d ns\n", phase.latency().p99());
     }
 
     private static String renderQuiet(StorageBenchmarkResult result) {
-        return rootFormat(
+        return format(
                 "storage-set: %.2f ops/s, p50=%d ns, p99=%d ns, %.3f bytes/key, "
                         + "live_objects=%d, pending_tables=%d, rss=%s, "
                         + "ttl_churn_p50=%d ns, ttl_churn_p99=%d ns, "
                         + "del_p50=%d ns, del_p99=%d ns\n",
                 result.operationsPerSecond(),
-                result.latency().p50Nanos(),
-                result.latency().p99Nanos(),
+                result.latency().p50(),
+                result.latency().p99(),
                 result.accountedDeltaBytesPerKey(),
                 result.loaded().liveObjectCount(),
                 result.loaded().pendingHashTableCount(),
                 optional(result.loaded().rssBytes()),
-                result.ttlChurn().latency().p50Nanos(),
-                result.ttlChurn().latency().p99Nanos(),
-                result.deletion().latency().p50Nanos(),
-                result.deletion().latency().p99Nanos()
+                result.ttlChurn().latency().p50(),
+                result.ttlChurn().latency().p99(),
+                result.deletion().latency().p50(),
+                result.deletion().latency().p99()
         );
     }
 
     private static String renderCsv(StorageBenchmarkConfig config, StorageBenchmarkResult result) {
         StorageMemorySnapshot loaded = result.loaded();
-        return CSV_HEADER + '\n' + rootFormat(
+        return CSV_HEADER + '\n' + format(
                 "%d,%d,%d,%d,%.6f,%.2f,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%.3f,%d,%d,%s,%s,"
                         + "%.6f,%.2f,%d,%d,%.6f,%.2f,%d,%d\n",
                 result.completedOperations(),
@@ -97,8 +99,8 @@ public final class StorageBenchmarkRenderer {
                 config.warmupOperations(),
                 result.elapsedNanos() / 1_000_000_000.0,
                 result.operationsPerSecond(),
-                result.latency().p50Nanos(),
-                result.latency().p99Nanos(),
+                result.latency().p50(),
+                result.latency().p99(),
                 loaded.heapEstimatedBytes(),
                 loaded.nativeMetadataCommittedBytes(),
                 loaded.nativeDataCommittedBytes(),
@@ -114,17 +116,13 @@ public final class StorageBenchmarkRenderer {
                 optionalCsv(result.rssDeltaBytes()),
                 result.ttlChurn().elapsedNanos() / 1_000_000_000.0,
                 result.ttlChurn().operationsPerSecond(),
-                result.ttlChurn().latency().p50Nanos(),
-                result.ttlChurn().latency().p99Nanos(),
+                result.ttlChurn().latency().p50(),
+                result.ttlChurn().latency().p99(),
                 result.deletion().elapsedNanos() / 1_000_000_000.0,
                 result.deletion().operationsPerSecond(),
-                result.deletion().latency().p50Nanos(),
-                result.deletion().latency().p99Nanos()
+                result.deletion().latency().p50(),
+                result.deletion().latency().p99()
         );
-    }
-
-    private static void append(StringBuilder out, String format, Object... arguments) {
-        out.append(rootFormat(format, arguments));
     }
 
     private static void appendOptional(StringBuilder out, String format, OptionalLong value) {
@@ -137,9 +135,5 @@ public final class StorageBenchmarkRenderer {
 
     private static String optionalCsv(OptionalLong value) {
         return value.isPresent() ? Long.toString(value.getAsLong()) : "";
-    }
-
-    private static String rootFormat(String format, Object... arguments) {
-        return String.format(Locale.ROOT, format, arguments);
     }
 }

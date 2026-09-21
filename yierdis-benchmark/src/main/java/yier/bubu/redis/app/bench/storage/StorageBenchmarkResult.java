@@ -1,52 +1,22 @@
 package yier.bubu.redis.app.bench.storage;
 
-import java.util.Objects;
+import yier.bubu.redis.app.bench.LatencyRecorder;
+
 import java.util.OptionalLong;
 
 public record StorageBenchmarkResult(
         int completedOperations,
         long elapsedNanos,
-        StorageLatencyRecorder.Summary latency,
+        LatencyRecorder.Summary latency,
         Phase ttlChurn,
         Phase deletion,
         StorageMemorySnapshot baseline,
         StorageMemorySnapshot loaded
 ) {
-    public StorageBenchmarkResult {
-        if (completedOperations <= 0) {
-            throw new IllegalArgumentException("completedOperations must be > 0");
-        }
-        if (elapsedNanos < 0L) {
-            throw new IllegalArgumentException("elapsedNanos must be >= 0");
-        }
-        latency = Objects.requireNonNull(latency, "latency");
-        ttlChurn = Objects.requireNonNull(ttlChurn, "ttlChurn");
-        deletion = Objects.requireNonNull(deletion, "deletion");
-        baseline = Objects.requireNonNull(baseline, "baseline");
-        loaded = Objects.requireNonNull(loaded, "loaded");
-        if (latency.count() != completedOperations) {
-            throw new IllegalArgumentException("latency count must equal completedOperations");
-        }
-        if (ttlChurn.latency().count() != completedOperations) {
-            throw new IllegalArgumentException("ttl-churn latency count must equal completedOperations");
-        }
-        if (deletion.latency().count() != completedOperations) {
-            throw new IllegalArgumentException("deletion latency count must equal completedOperations");
-        }
-        if (loaded.keyCount() != completedOperations) {
-            throw new IllegalArgumentException("loaded key count must equal completedOperations");
-        }
-        if (loaded.accountedBytes() < baseline.accountedBytes()) {
-            throw new IllegalArgumentException(
-                    "loaded accounted footprint must not be smaller than the baseline"
-            );
-        }
-    }
-
     static StorageBenchmarkResult from(
             int completedOperations,
             long elapsedNanos,
-            StorageLatencyRecorder.Summary latency,
+            LatencyRecorder.Summary latency,
             Phase ttlChurn,
             Phase deletion,
             StorageMemorySnapshot baseline,
@@ -93,17 +63,7 @@ public record StorageBenchmarkResult(
         }
     }
 
-    public record Phase(long elapsedNanos, StorageLatencyRecorder.Summary latency) {
-        public Phase {
-            if (elapsedNanos < 0L) {
-                throw new IllegalArgumentException("phase elapsedNanos must be >= 0");
-            }
-            latency = Objects.requireNonNull(latency, "latency");
-            if (latency.count() <= 0L) {
-                throw new IllegalArgumentException("phase latency count must be > 0");
-            }
-        }
-
+    public record Phase(long elapsedNanos, LatencyRecorder.Summary latency) {
         public double operationsPerSecond() {
             return perSecond(latency.count(), elapsedNanos);
         }

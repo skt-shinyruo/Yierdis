@@ -124,7 +124,7 @@ RedisBenchmarkOptions
   -> RedisBenchmarkCatalog.select()
   -> RedisBenchmark
   -> NioBenchmarkRunner (one Selector)
-  -> BenchmarkLatencyRecorder
+  -> LatencyRecorder
   -> BenchmarkCaseResult / BenchmarkRunResult
   -> BenchmarkOutputRenderer
 ```
@@ -169,7 +169,7 @@ RedisBenchmarkOptions
 
 `NioBenchmarkRunner` 为一个 case 打开一个 `Selector`，把配置数量的 non-blocking `SocketChannel` 注册到同一个 event loop。它预编译 pipeline frame，只在需要时改写随机 placeholder，处理 partial connect/write/read，并用 incremental RESP decoder 验证每个 reply 的最小 shape。keepalive 关闭时每个 pipeline 后重连；认证和 DB selection 会作为每个新连接第一次 measured write 的 prefix，其 replies 不进入 request 或 histogram count。
 
-measurement 以 selector run 的起止边界计算 elapsed time 和 completed-reply throughput。每个 pipeline 以第一次可读时间作为该 batch replies 的 latency；histogram 只保留配置的前 `requests` 个 samples，而 throughput 使用 stop boundary 已完成的 replies。`BenchmarkLatencyRecorder` 用 HdrHistogram 生成 mean、min、p50、p95、p99 和 max，最大记录延迟 clamp 到 3 秒。
+measurement 以 selector run 的起止边界计算 elapsed time 和 completed-reply throughput。每个 pipeline 以第一次可读时间作为该 batch replies 的 latency；histogram 只保留配置的前 `requests` 个 samples，而 throughput 使用 stop boundary 已完成的 replies。`LatencyRecorder`（micros 刻度）用 HdrHistogram 生成 mean、min、p50、p95、p99 和 max，最大记录延迟 clamp 到 3 秒。
 
 `BenchmarkCaseResult` 的状态只有 `SUCCESS`、`UNSUPPORTED`、`SKIPPED`、`FAILED`；`BenchmarkRunResult` 保留 catalog 顺序并由任意 `FAILED` 决定非零退出码。`BenchmarkOutputRenderer` 提供 human、quiet 和 CSV。吞吐与延迟仍是观测值，不是 correctness oracle，也不替代协议、命令或 DB direct-op tests。
 
@@ -203,7 +203,7 @@ StorageBenchmarkOptions
   -> StorageBenchmarkRunner
   -> disposable warmup RuntimeDbEngine
   -> measured single-owner RuntimeDbEngine
-  -> StorageLatencyRecorder / StorageMemorySnapshot
+  -> LatencyRecorder / StorageMemorySnapshot
   -> StorageBenchmarkResult
   -> StorageBenchmarkRenderer
 ```

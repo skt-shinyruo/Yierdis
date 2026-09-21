@@ -12,7 +12,7 @@ import java.util.stream.Collectors;
 public class RedisBenchmarkCatalogTest {
     @Test
     public void catalogMatchesOfficialBuiltInOrderAndSupport() {
-        List<RedisBenchmarkCase> cases = new RedisBenchmarkCatalog().allCases();
+        List<RedisBenchmarkCase> cases = CaseSelection.allCases();
         Assert.assertEquals(List.of(
                 "PING_INLINE", "PING_MBULK", "SET", "GET", "INCR", "LPUSH", "RPUSH",
                 "LPOP", "RPOP", "SADD", "HSET", "SPOP", "ZADD", "ZPOPMIN",
@@ -56,7 +56,7 @@ public class RedisBenchmarkCatalogTest {
 
         Assert.assertEquals(21, catalog.select(Set.of()).size());
         Assert.assertEquals(
-                catalog.allCases().stream().map(RedisBenchmarkCase::id).toList(),
+                CaseSelection.allCases().stream().map(RedisBenchmarkCase::id).toList(),
                 catalog.select(Set.of()).stream().map(RedisBenchmarkCase::id).toList()
         );
     }
@@ -75,18 +75,8 @@ public class RedisBenchmarkCatalogTest {
     }
 
     @Test
-    public void caseByIdNormalizesInputAndRejectsUnknownIds() {
-        RedisBenchmarkCatalog catalog = new RedisBenchmarkCatalog();
-
-        Assert.assertSame(catalog.allCases().get(2), catalog.caseById(" SET "));
-        Assert.assertThrows(IllegalArgumentException.class, () -> catalog.caseById(null));
-        Assert.assertThrows(IllegalArgumentException.class, () -> catalog.caseById(" "));
-        Assert.assertThrows(IllegalArgumentException.class, () -> catalog.caseById("no_such_case"));
-    }
-
-    @Test
     public void exactCaseMetadataIsDeclared() {
-        List<RedisBenchmarkCase> cases = new RedisBenchmarkCatalog().allCases();
+        List<RedisBenchmarkCase> cases = CaseSelection.allCases();
 
         Assert.assertEquals(List.of(
                 "ping_inline", "ping_mbulk", "set", "get", "incr", "lpush", "rpush",
@@ -138,7 +128,7 @@ public class RedisBenchmarkCatalogTest {
 
     @Test
     public void templatesMatchOfficialWireDeclarations() {
-        List<String> templates = new RedisBenchmarkCatalog().allCases().stream()
+        List<String> templates = CaseSelection.allCases().stream()
                 .map(RedisBenchmarkCase::template)
                 .map(RedisBenchmarkCatalogTest::describeTemplate)
                 .toList();
@@ -175,12 +165,12 @@ public class RedisBenchmarkCatalogTest {
     @Test
     public void declarationCollectionsAndByteArraysAreDefensivelyImmutable() {
         RedisBenchmarkCatalog catalog = new RedisBenchmarkCatalog();
-        List<RedisBenchmarkCase> cases = catalog.allCases();
+        List<RedisBenchmarkCase> cases = CaseSelection.allCases();
         Assert.assertThrows(UnsupportedOperationException.class, () -> cases.remove(0));
         Assert.assertThrows(UnsupportedOperationException.class,
                 () -> catalog.select(Set.of("ping")).clear());
 
-        RedisBenchmarkCase setCase = catalog.caseById("set");
+        RedisBenchmarkCase setCase = CaseSelection.caseById("set");
         Assert.assertThrows(UnsupportedOperationException.class,
                 () -> setCase.selectionTriggers().add("other"));
         Assert.assertThrows(UnsupportedOperationException.class,
@@ -188,7 +178,7 @@ public class RedisBenchmarkCatalogTest {
         Assert.assertThrows(UnsupportedOperationException.class,
                 () -> setCase.template().arguments().clear());
 
-        RedisBenchmarkCommandTemplate inline = catalog.caseById("ping_inline").template();
+        RedisBenchmarkCommandTemplate inline = CaseSelection.caseById("ping_inline").template();
         byte[] inlineFrame = inline.inlineFrame();
         inlineFrame[0] = 'X';
         Assert.assertArrayEquals("PING\r\n".getBytes(StandardCharsets.US_ASCII), inline.inlineFrame());

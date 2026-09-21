@@ -1,5 +1,6 @@
 package yier.bubu.redis.app.bench.storage;
 
+import yier.bubu.redis.app.bench.LatencyRecorder;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.memory.api.StableMemoryBackendFactory;
 import yier.bubu.redis.memory.foreign.YierdisFfmStableMemoryBackend;
@@ -132,14 +133,14 @@ public final class StorageBenchmarkRunner {
             byte[] key,
             TimedOperation operation
     ) {
-        StorageLatencyRecorder latency = new StorageLatencyRecorder(config.precision());
+        LatencyRecorder latency = LatencyRecorder.nanos(config.precision());
         long measuredStart = nanoClock.getAsLong();
         for (int index = 0; index < config.keys(); index++) {
             encodeKeyIndex(key, index);
             long operationStart = nanoClock.getAsLong();
             operation.run(index, key);
             long operationStop = nanoClock.getAsLong();
-            latency.recordNanos(Math.max(0L, operationStop - operationStart));
+            latency.record(Math.max(0L, operationStop - operationStart));
         }
         long measuredStop = nanoClock.getAsLong();
         return new StorageBenchmarkResult.Phase(

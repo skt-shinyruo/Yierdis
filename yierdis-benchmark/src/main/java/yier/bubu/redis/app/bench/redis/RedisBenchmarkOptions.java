@@ -46,12 +46,6 @@ public final class RedisBenchmarkOptions {
     @Option(names = "--format", defaultValue = "human", description = "Output format: human, quiet, or csv.")
     String format = "human";
 
-    @Option(names = "--username", description = "Optional ACL username.")
-    String username = "";
-
-    @Option(names = "--password", description = "Optional authentication password.")
-    String password = "";
-
     @Option(names = "--database", defaultValue = "0", description = "Logical database to select.")
     int database;
 
@@ -70,8 +64,6 @@ public final class RedisBenchmarkOptions {
                 precision,
                 resolvedSeed,
                 BenchmarkFormat.parse(format),
-                username,
-                password,
                 database
         );
     }

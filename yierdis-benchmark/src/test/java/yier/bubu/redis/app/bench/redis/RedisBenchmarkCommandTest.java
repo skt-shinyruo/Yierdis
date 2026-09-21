@@ -2,6 +2,7 @@ package yier.bubu.redis.app.bench.redis;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.app.bench.LatencyRecorder;
 import picocli.CommandLine;
 
 import java.io.IOException;
@@ -24,7 +25,7 @@ public class RedisBenchmarkCommandTest {
         Function<BenchmarkConfig, BenchmarkRunResult> fake = config -> {
             calls.incrementAndGet();
             return new BenchmarkRunResult(List.of(
-                    BenchmarkCaseResult.unsupported(catalog.caseById("spop"), "missing")
+                    BenchmarkCaseResult.unsupported(CaseSelection.caseById("spop"), "missing")
             ));
         };
         CommandCapture capture = commandLine(new RedisBenchmarkCommand(fake, renderer));
@@ -43,7 +44,7 @@ public class RedisBenchmarkCommandTest {
         Function<BenchmarkConfig, BenchmarkRunResult> fake = config -> {
             calls.incrementAndGet();
             return new BenchmarkRunResult(List.of(
-                    BenchmarkCaseResult.failed(catalog.caseById("set"), 7, "disconnect")
+                    BenchmarkCaseResult.failed(CaseSelection.caseById("set"), 7, "disconnect")
             ));
         };
         CommandCapture capture = commandLine(new RedisBenchmarkCommand(fake, renderer));
@@ -62,7 +63,7 @@ public class RedisBenchmarkCommandTest {
         Function<BenchmarkConfig, BenchmarkRunResult> fake = config -> {
             calls.incrementAndGet();
             return new BenchmarkRunResult(List.of(
-                    BenchmarkCaseResult.success(catalog.caseById("set"), statistics())
+                    BenchmarkCaseResult.success(CaseSelection.caseById("set"), statistics())
             ));
         };
         CommandLine commandLine = new CommandLine(new RedisBenchmarkCommand(fake, renderer));
@@ -151,7 +152,7 @@ public class RedisBenchmarkCommandTest {
         Function<BenchmarkConfig, BenchmarkRunResult> fake = config -> {
             suppliedConfig.set(config);
             return new BenchmarkRunResult(List.of(
-                    BenchmarkCaseResult.unsupported(catalog.caseById("spop"), "missing")
+                    BenchmarkCaseResult.unsupported(CaseSelection.caseById("spop"), "missing")
             ));
         };
         CommandCapture capture = commandLine(new RedisBenchmarkCommand(fake, renderer));
@@ -169,8 +170,6 @@ public class RedisBenchmarkCommandTest {
                 "--precision", "4",
                 "--seed", "42",
                 "--format", "QuIeT",
-                "--username", "benchmark-user",
-                "--password", "secret",
                 "--database", "2"
         );
 
@@ -189,8 +188,6 @@ public class RedisBenchmarkCommandTest {
         Assert.assertEquals(4, config.precision());
         Assert.assertEquals(42L, config.seed());
         Assert.assertEquals(BenchmarkFormat.QUIET, config.format());
-        Assert.assertEquals("benchmark-user", config.username());
-        Assert.assertEquals("secret", config.password());
         Assert.assertEquals(2, config.database());
         Assert.assertEquals("SPOP: UNSUPPORTED (missing)\n", capture.out.toString());
         Assert.assertEquals("", capture.err.toString());
@@ -270,7 +267,7 @@ public class RedisBenchmarkCommandTest {
     }
 
     private static BenchmarkStatistics statistics() {
-        BenchmarkLatencyRecorder.Summary latency = new BenchmarkLatencyRecorder.Summary(
+        LatencyRecorder.Summary latency = new LatencyRecorder.Summary(
                 2,
                 1_234.0,
                 100,
@@ -279,7 +276,7 @@ public class RedisBenchmarkCommandTest {
                 3_000,
                 4_567
         );
-        return BenchmarkStatistics.from(2, 5, 6, 2, 2, latency);
+        return new BenchmarkStatistics(2, 5, 6, 2, 2, latency);
     }
 
     private record CommandCapture(CommandLine commandLine, StringWriter out, StringWriter err) {

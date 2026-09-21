@@ -23,7 +23,7 @@ public class RedisBenchmarkCatalogCoverageGuardTest {
     @Test
     public void supportDeclarationsMatchDefaultCommandRegistration() {
         Set<String> commands = DefaultCommandRegistrationTest.defaultCommandNames();
-        List<RedisBenchmarkCase> cases = new RedisBenchmarkCatalog().allCases();
+        List<RedisBenchmarkCase> cases = new RedisBenchmarkCatalog().select(Set.of());
 
         Assert.assertEquals(21, cases.size());
         for (RedisBenchmarkCase testCase : cases) {
@@ -40,7 +40,7 @@ public class RedisBenchmarkCatalogCoverageGuardTest {
 
     @Test
     public void inlinePingRequiresRegisteredPing() {
-        RedisBenchmarkCase inlinePing = new RedisBenchmarkCatalog().caseById("ping_inline");
+        RedisBenchmarkCase inlinePing = new RedisBenchmarkCatalog().select(Set.of("ping_inline")).getFirst();
         Set<String> commands = DefaultCommandRegistrationTest.defaultCommandNames();
 
         Assert.assertEquals(Set.of("PING"), inlinePing.requiredCommands());
@@ -50,7 +50,7 @@ public class RedisBenchmarkCatalogCoverageGuardTest {
     @Test
     public void unsupportedCasesFollowCanonicalOrderAndRequireMissingCommands() {
         Set<String> commands = DefaultCommandRegistrationTest.defaultCommandNames();
-        List<RedisBenchmarkCase> unsupportedCases = new RedisBenchmarkCatalog().allCases().stream()
+        List<RedisBenchmarkCase> unsupportedCases = new RedisBenchmarkCatalog().select(Set.of()).stream()
                 .filter(testCase -> !testCase.support().supported())
                 .toList();
 

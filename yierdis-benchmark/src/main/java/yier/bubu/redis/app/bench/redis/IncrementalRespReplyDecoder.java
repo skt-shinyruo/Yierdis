@@ -23,13 +23,12 @@ public final class IncrementalRespReplyDecoder {
     private boolean active;
     private Stage stage = Stage.MARKER;
     private int stackSize;
-    private int rootArrayLength = -1;
+    private boolean rootArray;
 
     private byte currentMarker;
     private boolean currentTopLevel;
     private int lineLength;
 
-    private int bulkLength;
     private int bulkRemaining;
 
     public IncrementalRespReplyDecoder(
@@ -135,9 +134,9 @@ public final class IncrementalRespReplyDecoder {
     }
 
     private BenchmarkRespReply processInteger() throws IOException {
-        long value = parseLong();
+        parseLong();
         if (currentTopLevel) {
-            return BenchmarkRespReply.integer(value);
+            return BenchmarkRespReply.integer();
         }
         return completeDiscardedReply();
     }
@@ -157,8 +156,7 @@ public final class IncrementalRespReplyDecoder {
             throw malformed("bulk length exceeds " + maxBulkBytes);
         }
 
-        bulkLength = (int) declaredLength;
-        bulkRemaining = bulkLength;
+        bulkRemaining = (int) declaredLength;
         stage = bulkRemaining == 0 ? Stage.BULK_CR : Stage.BULK_PAYLOAD;
         return null;
     }
@@ -181,12 +179,12 @@ public final class IncrementalRespReplyDecoder {
         int length = (int) declaredLength;
         if (length == 0) {
             if (currentTopLevel) {
-                return BenchmarkRespReply.array(0);
+                return BenchmarkRespReply.array();
             }
             return completeDiscardedReply();
         }
         if (currentTopLevel) {
-            rootArrayLength = length;
+            rootArray = true;
         }
         arrayRemaining[stackSize++] = length;
         if (stackSize > maxDepth) {
@@ -219,7 +217,7 @@ public final class IncrementalRespReplyDecoder {
         }
         stage = Stage.MARKER;
         if (currentTopLevel) {
-            return BenchmarkRespReply.bulkString(bulkLength);
+            return BenchmarkRespReply.bulkString();
         }
         return completeDiscardedReply();
     }
@@ -234,10 +232,10 @@ public final class IncrementalRespReplyDecoder {
             }
             stackSize = top;
         }
-        if (rootArrayLength < 0) {
+        if (!rootArray) {
             throw new IllegalStateException("completed child without a root array");
         }
-        return BenchmarkRespReply.array(rootArrayLength);
+        return BenchmarkRespReply.array();
     }
 
     private void appendLineByte(byte value) throws IOException {
@@ -288,11 +286,10 @@ public final class IncrementalRespReplyDecoder {
         active = false;
         stage = Stage.MARKER;
         stackSize = 0;
-        rootArrayLength = -1;
+        rootArray = false;
         currentMarker = 0;
         currentTopLevel = false;
         lineLength = 0;
-        bulkLength = 0;
         bulkRemaining = 0;
     }
 

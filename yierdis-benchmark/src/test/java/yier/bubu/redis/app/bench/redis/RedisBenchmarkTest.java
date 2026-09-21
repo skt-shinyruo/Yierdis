@@ -2,6 +2,7 @@ package yier.bubu.redis.app.bench.redis;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.app.bench.LatencyRecorder;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -52,10 +53,10 @@ public class RedisBenchmarkTest {
         BenchmarkRunResult result = benchmark.run(configWithTests("lrange,set"));
 
         Assert.assertEquals(List.of("set", "lrange_setup"), executed);
-        Assert.assertEquals(BenchmarkStatus.SUCCESS, result.caseById("set").status());
-        Assert.assertEquals(BenchmarkStatus.FAILED, result.caseById("lrange_setup").status());
+        Assert.assertEquals(BenchmarkStatus.SUCCESS, caseById(result, "set").status());
+        Assert.assertEquals(BenchmarkStatus.FAILED, caseById(result, "lrange_setup").status());
         for (String id : List.of("lrange_100", "lrange_300", "lrange_500", "lrange_600")) {
-            BenchmarkCaseResult dependent = result.caseById(id);
+            BenchmarkCaseResult dependent = caseById(result, id);
             Assert.assertEquals(BenchmarkStatus.SKIPPED, dependent.status());
             Assert.assertEquals("dependency lrange_setup did not succeed", dependent.reason());
         }
@@ -67,7 +68,7 @@ public class RedisBenchmarkTest {
         BenchmarkConfig config = new BenchmarkConfig(
                 "127.0.0.1", 16378, 2, 1, 3, 1,
                 OptionalLong.of(10_000), true, Set.of("set", "get"),
-                3, 73L, BenchmarkFormat.HUMAN, "", "", 0
+                3, 73L, BenchmarkFormat.HUMAN, 0
         );
         List<byte[]> payloads = new ArrayList<>();
         List<BenchmarkRandom> randoms = new ArrayList<>();
@@ -120,7 +121,7 @@ public class RedisBenchmarkTest {
         });
 
         BenchmarkRunResult result = benchmark.run(configWithTests("set"));
-        BenchmarkCaseResult failed = result.caseById("set");
+        BenchmarkCaseResult failed = caseById(result, "set");
 
         Assert.assertEquals(BenchmarkStatus.FAILED, failed.status());
         Assert.assertEquals(7, failed.completedReplies());
@@ -142,12 +143,12 @@ public class RedisBenchmarkTest {
 
         BenchmarkRunResult result = benchmark.run(configWithTests("set,get"));
 
-        BenchmarkCaseResult failed = result.caseById("set");
+        BenchmarkCaseResult failed = caseById(result, "set");
         Assert.assertEquals(List.of("set", "get"), executed);
         Assert.assertEquals(BenchmarkStatus.FAILED, failed.status());
         Assert.assertEquals(0, failed.completedReplies());
         Assert.assertEquals("connection reset after 9 replies", failed.reason());
-        Assert.assertEquals(BenchmarkStatus.SUCCESS, result.caseById("get").status());
+        Assert.assertEquals(BenchmarkStatus.SUCCESS, caseById(result, "get").status());
         Assert.assertEquals(1, result.exitCode());
     }
 
@@ -157,7 +158,7 @@ public class RedisBenchmarkTest {
             throw new IOException(" \t");
         });
 
-        BenchmarkCaseResult failed = benchmark.run(configWithTests("set")).caseById("set");
+        BenchmarkCaseResult failed = caseById(benchmark.run(configWithTests("set")), "set");
 
         Assert.assertEquals(BenchmarkStatus.FAILED, failed.status());
         Assert.assertEquals(0, failed.completedReplies());
@@ -196,6 +197,13 @@ public class RedisBenchmarkTest {
         Assert.assertFalse(executed.get());
     }
 
+    private static BenchmarkCaseResult caseById(BenchmarkRunResult result, String id) {
+        return result.cases().stream()
+                .filter(row -> row.testCase().id().equals(id))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("missing case " + id));
+    }
+
     private static RedisBenchmark benchmark(BenchmarkCaseExecutor executor) {
         return new RedisBenchmark(new RedisBenchmarkCatalog(), executor);
     }
@@ -204,16 +212,16 @@ public class RedisBenchmarkTest {
         return new BenchmarkConfig(
                 "127.0.0.1", 16378, 2, 1, 3, 1,
                 OptionalLong.of(10_000), true, Set.of(commaSeparatedTests.split(",")),
-                3, 73L, BenchmarkFormat.HUMAN, "", "", 0
+                3, 73L, BenchmarkFormat.HUMAN, 0
         );
     }
 
     private static BenchmarkStatistics success(BenchmarkConfig config) {
-        BenchmarkLatencyRecorder recorder = new BenchmarkLatencyRecorder(config.precision());
+        LatencyRecorder recorder = LatencyRecorder.micros(config.precision());
         for (int sample = 0; sample < config.requests(); sample++) {
-            recorder.recordMicros(100 + sample);
+            recorder.record(100 + sample);
         }
-        return BenchmarkStatistics.from(
+        return new BenchmarkStatistics(
                 config.requests(),
                 config.requests(),
                 config.requests(),

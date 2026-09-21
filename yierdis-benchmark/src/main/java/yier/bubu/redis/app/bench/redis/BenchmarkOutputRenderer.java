@@ -1,7 +1,11 @@
 package yier.bubu.redis.app.bench.redis;
 
-import java.util.Locale;
+import yier.bubu.redis.app.bench.LatencyRecorder;
+
 import java.util.Objects;
+
+import static yier.bubu.redis.app.bench.BenchOutput.append;
+import static yier.bubu.redis.app.bench.BenchOutput.format;
 
 public final class BenchmarkOutputRenderer {
     private static final String CSV_HEADER = "\"test\",\"rps\",\"avg_latency_ms\","
@@ -41,34 +45,34 @@ public final class BenchmarkOutputRenderer {
             BenchmarkConfig config,
             BenchmarkStatistics statistics
     ) {
-        appendRootFormat(
+        append(
                 output,
                 "  %d requests completed in %.3f seconds\n",
                 statistics.completedRequests(),
                 statistics.elapsedMillis() / 1_000.0
         );
-        appendRootFormat(output, "  %d parallel clients\n", config.clients());
-        appendRootFormat(output, "  %d bytes payload\n", config.dataSize());
-        appendRootFormat(output, "  keep alive: %d\n", config.keepAlive() ? 1 : 0);
+        append(output, "  %d parallel clients\n", config.clients());
+        append(output, "  %d bytes payload\n", config.dataSize());
+        append(output, "  keep alive: %d\n", config.keepAlive() ? 1 : 0);
         output.append('\n')
                 .append("Summary:\n");
-        appendRootFormat(
+        append(
                 output,
                 "  throughput summary: %.2f requests per second\n",
                 statistics.requestsPerSecond()
         );
         output.append("  latency summary (msec):\n")
                 .append("          avg       min       p50       p95       p99       max\n");
-        BenchmarkLatencyRecorder.Summary latency = statistics.latency();
-        appendRootFormat(
+        LatencyRecorder.Summary latency = statistics.latency();
+        append(
                 output,
                 "        %.3f     %.3f     %.3f     %.3f     %.3f     %.3f\n",
-                milliseconds(latency.meanMicros()),
-                milliseconds(latency.minMicros()),
-                milliseconds(latency.p50Micros()),
-                milliseconds(latency.p95Micros()),
-                milliseconds(latency.p99Micros()),
-                milliseconds(latency.maxMicros())
+                milliseconds(latency.mean()),
+                milliseconds(latency.min()),
+                milliseconds(latency.p50()),
+                milliseconds(latency.p95()),
+                milliseconds(latency.p99()),
+                milliseconds(latency.max())
         );
     }
 
@@ -95,11 +99,11 @@ public final class BenchmarkOutputRenderer {
             appendDisplayText(output, result.testCase().title());
             output.append(": ");
             switch (result.status()) {
-                case SUCCESS -> appendRootFormat(
+                case SUCCESS -> append(
                         output,
                         "%.2f requests per second, p50=%.3f msec\n",
                         result.statistics().requestsPerSecond(),
-                        milliseconds(result.statistics().latency().p50Micros())
+                        milliseconds(result.statistics().latency().p50())
                 );
                 case FAILED -> {
                     output.append("FAILED after ")
@@ -123,17 +127,17 @@ public final class BenchmarkOutputRenderer {
         for (BenchmarkCaseResult result : run.cases()) {
             if (result.status() == BenchmarkStatus.SUCCESS) {
                 BenchmarkStatistics statistics = result.statistics();
-                BenchmarkLatencyRecorder.Summary latency = statistics.latency();
+                LatencyRecorder.Summary latency = statistics.latency();
                 appendCsvRow(
                         output,
                         result.testCase().title(),
-                        rootFormat("%.2f", statistics.requestsPerSecond()),
-                        rootFormat("%.3f", milliseconds(latency.meanMicros())),
-                        rootFormat("%.3f", milliseconds(latency.minMicros())),
-                        rootFormat("%.3f", milliseconds(latency.p50Micros())),
-                        rootFormat("%.3f", milliseconds(latency.p95Micros())),
-                        rootFormat("%.3f", milliseconds(latency.p99Micros())),
-                        rootFormat("%.3f", milliseconds(latency.maxMicros())),
+                        format("%.2f", statistics.requestsPerSecond()),
+                        format("%.3f", milliseconds(latency.mean())),
+                        format("%.3f", milliseconds(latency.min())),
+                        format("%.3f", milliseconds(latency.p50())),
+                        format("%.3f", milliseconds(latency.p95())),
+                        format("%.3f", milliseconds(latency.p99())),
+                        format("%.3f", milliseconds(latency.max())),
                         result.status().name(),
                         ""
                 );
@@ -166,18 +170,6 @@ public final class BenchmarkOutputRenderer {
                     .append('"');
         }
         output.append('\n');
-    }
-
-    private static void appendRootFormat(
-            StringBuilder output,
-            String format,
-            Object... arguments
-    ) {
-        output.append(rootFormat(format, arguments));
-    }
-
-    private static String rootFormat(String format, Object... arguments) {
-        return String.format(Locale.ROOT, format, arguments);
     }
 
     private static void appendDisplayText(StringBuilder output, String value) {

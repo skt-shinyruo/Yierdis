@@ -22,24 +22,12 @@ public class IncrementalRespReplyDecoderTest {
     }
 
     @Test
-    public void integersAcceptZeroSignedValuesAndLongBoundaries() throws Exception {
-        Assert.assertEquals(0L, defaults().tryDecode(ascii(":0\r\n")).integerValue());
-        Assert.assertEquals(-42L, defaults().tryDecode(ascii(":-42\r\n")).integerValue());
-        Assert.assertEquals(Long.MAX_VALUE,
-                defaults().tryDecode(ascii(":" + Long.MAX_VALUE + "\r\n")).integerValue());
-        Assert.assertEquals(Long.MIN_VALUE,
-                defaults().tryDecode(ascii(":" + Long.MIN_VALUE + "\r\n")).integerValue());
-    }
-
-    @Test
-    public void bulkRepliesReportEmptyAndNonemptyLengths() throws Exception {
+    public void bulkRepliesReportEmptyAndNonempty() throws Exception {
         BenchmarkRespReply empty = defaults().tryDecode(ascii("$0\r\n\r\n"));
         BenchmarkRespReply nonempty = defaults().tryDecode(ascii("$5\r\nhello\r\n"));
 
         Assert.assertEquals(BenchmarkRespReply.Kind.BULK_STRING, empty.kind());
-        Assert.assertEquals(0, empty.bulkLength());
         Assert.assertEquals(BenchmarkRespReply.Kind.BULK_STRING, nonempty.kind());
-        Assert.assertEquals(5, nonempty.bulkLength());
     }
 
     @Test
@@ -52,7 +40,7 @@ public class IncrementalRespReplyDecoderTest {
     }
 
     @Test
-    public void emptyAndNonemptyArraysReportOnlyTopLevelElementCount() throws Exception {
+    public void emptyAndNonemptyArraysDecodeToArrayReplies() throws Exception {
         BenchmarkRespReply empty = defaults().tryDecode(ascii("*0\r\n"));
         ByteBuffer nestedFrame = ascii(
                 "*3\r\n:1\r\n$3\r\nfoo\r\n*2\r\n+OK\r\n$-1\r\n"
@@ -60,9 +48,7 @@ public class IncrementalRespReplyDecoderTest {
         BenchmarkRespReply nested = defaults().tryDecode(nestedFrame);
 
         Assert.assertEquals(BenchmarkRespReply.Kind.ARRAY, empty.kind());
-        Assert.assertEquals(0, empty.arrayLength());
         Assert.assertEquals(BenchmarkRespReply.Kind.ARRAY, nested.kind());
-        Assert.assertEquals(3, nested.arrayLength());
         Assert.assertFalse(nestedFrame.hasRemaining());
     }
 
@@ -76,7 +62,6 @@ public class IncrementalRespReplyDecoderTest {
         ByteBuffer second = ascii("c\r\n");
         BenchmarkRespReply reply = decoder.tryDecode(second);
         Assert.assertEquals(BenchmarkRespReply.Kind.BULK_STRING, reply.kind());
-        Assert.assertEquals(3, reply.bulkLength());
         Assert.assertFalse(second.hasRemaining());
     }
 
@@ -108,7 +93,7 @@ public class IncrementalRespReplyDecoderTest {
 
         ByteBuffer finalChild = ByteBuffer.wrap(child);
         BenchmarkRespReply reply = decoder.tryDecode(finalChild);
-        Assert.assertEquals(childCount, reply.arrayLength());
+        Assert.assertEquals(BenchmarkRespReply.Kind.ARRAY, reply.kind());
         Assert.assertFalse(finalChild.hasRemaining());
         Assert.assertEquals(0, decoder.arrayDepth());
     }
@@ -134,7 +119,8 @@ public class IncrementalRespReplyDecoderTest {
         Assert.assertNull(bulkDecoder.tryDecode(bulkPayloadAndCr));
         Assert.assertFalse(bulkPayloadAndCr.hasRemaining());
         ByteBuffer bulkLf = ascii("\n");
-        Assert.assertEquals(5, bulkDecoder.tryDecode(bulkLf).bulkLength());
+        Assert.assertEquals(BenchmarkRespReply.Kind.BULK_STRING,
+                bulkDecoder.tryDecode(bulkLf).kind());
         Assert.assertFalse(bulkLf.hasRemaining());
     }
 
@@ -154,7 +140,7 @@ public class IncrementalRespReplyDecoderTest {
 
         ByteBuffer third = ascii("o\r\n");
         BenchmarkRespReply reply = decoder.tryDecode(third);
-        Assert.assertEquals(1, reply.arrayLength());
+        Assert.assertEquals(BenchmarkRespReply.Kind.ARRAY, reply.kind());
         Assert.assertFalse(third.hasRemaining());
     }
 
@@ -171,7 +157,7 @@ public class IncrementalRespReplyDecoderTest {
 
         input.compact().put(":2\r\n".getBytes(StandardCharsets.US_ASCII)).flip();
         BenchmarkRespReply reply = decoder.tryDecode(input);
-        Assert.assertEquals(2, reply.arrayLength());
+        Assert.assertEquals(BenchmarkRespReply.Kind.ARRAY, reply.kind());
         Assert.assertFalse(input.hasRemaining());
     }
 
@@ -187,7 +173,7 @@ public class IncrementalRespReplyDecoderTest {
         ByteBuffer grown = ByteBuffer.allocateDirect(64);
         grown.put("c\r\n:2\r\n".getBytes(StandardCharsets.US_ASCII)).flip();
         BenchmarkRespReply reply = decoder.tryDecode(grown);
-        Assert.assertEquals(2, reply.arrayLength());
+        Assert.assertEquals(BenchmarkRespReply.Kind.ARRAY, reply.kind());
         Assert.assertFalse(grown.hasRemaining());
     }
 
@@ -214,7 +200,7 @@ public class IncrementalRespReplyDecoderTest {
         }
 
         Assert.assertNotNull(reply);
-        Assert.assertEquals(childCount, reply.arrayLength());
+        Assert.assertEquals(BenchmarkRespReply.Kind.ARRAY, reply.kind());
     }
 
     @Test
@@ -266,9 +252,9 @@ public class IncrementalRespReplyDecoderTest {
         IncrementalRespReplyDecoder decoder = defaults();
         Assert.assertEquals("PONG", decoder.tryDecode(input).text());
         Assert.assertEquals(7, input.position());
-        Assert.assertEquals(1L, decoder.tryDecode(input).integerValue());
+        Assert.assertEquals(BenchmarkRespReply.Kind.INTEGER, decoder.tryDecode(input).kind());
         Assert.assertEquals(11, input.position());
-        Assert.assertEquals(2, decoder.tryDecode(input).arrayLength());
+        Assert.assertEquals(BenchmarkRespReply.Kind.ARRAY, decoder.tryDecode(input).kind());
         Assert.assertFalse(input.hasRemaining());
     }
 
@@ -356,7 +342,8 @@ public class IncrementalRespReplyDecoderTest {
     public void bulkLimitAcceptsBoundaryAndRejectsBoundaryPlusOneBeforePayload() throws Exception {
         IncrementalRespReplyDecoder decoder = new IncrementalRespReplyDecoder(3, 32, 10, 4);
 
-        Assert.assertEquals(3, decoder.tryDecode(ascii("$3\r\nabc\r\n")).bulkLength());
+        Assert.assertEquals(BenchmarkRespReply.Kind.BULK_STRING,
+                decoder.tryDecode(ascii("$3\r\nabc\r\n")).kind());
         Assert.assertThrows(IOException.class, () -> decoder.tryDecode(ascii("$4\r\n")));
     }
 
@@ -376,7 +363,8 @@ public class IncrementalRespReplyDecoderTest {
     public void arrayLimitAcceptsBoundaryAndRejectsBoundaryPlusOneBeforeChildren() throws Exception {
         IncrementalRespReplyDecoder decoder = new IncrementalRespReplyDecoder(10, 32, 2, 4);
 
-        Assert.assertEquals(2, decoder.tryDecode(ascii("*2\r\n$-1\r\n$-1\r\n")).arrayLength());
+        Assert.assertEquals(BenchmarkRespReply.Kind.ARRAY,
+                decoder.tryDecode(ascii("*2\r\n$-1\r\n$-1\r\n")).kind());
         Assert.assertThrows(IOException.class, () -> decoder.tryDecode(ascii("*3\r\n")));
     }
 
@@ -385,7 +373,7 @@ public class IncrementalRespReplyDecoderTest {
         IncrementalRespReplyDecoder decoder = new IncrementalRespReplyDecoder(10, 32, 10, 2);
 
         BenchmarkRespReply reply = decoder.tryDecode(ascii("*1\r\n*1\r\n+OK\r\n"));
-        Assert.assertEquals(1, reply.arrayLength());
+        Assert.assertEquals(BenchmarkRespReply.Kind.ARRAY, reply.kind());
         Assert.assertThrows(IOException.class,
                 () -> decoder.tryDecode(ascii("*1\r\n*1\r\n*1\r\n+OK\r\n")));
     }
@@ -398,7 +386,7 @@ public class IncrementalRespReplyDecoderTest {
         );
 
         BenchmarkRespReply reply = decoder.tryDecode(singletonArrays(supportedMaximumDepth));
-        Assert.assertEquals(1, reply.arrayLength());
+        Assert.assertEquals(BenchmarkRespReply.Kind.ARRAY, reply.kind());
     }
 
     @Test
@@ -413,7 +401,8 @@ public class IncrementalRespReplyDecoderTest {
     public void zeroDepthAllowsRootAndRejectsEveryArrayChild() throws Exception {
         IncrementalRespReplyDecoder decoder = new IncrementalRespReplyDecoder(10, 32, 10, 0);
 
-        Assert.assertEquals(0, decoder.tryDecode(ascii("*0\r\n")).arrayLength());
+        Assert.assertEquals(BenchmarkRespReply.Kind.ARRAY,
+                decoder.tryDecode(ascii("*0\r\n")).kind());
         Assert.assertEquals(BenchmarkRespReply.Kind.NULL_ARRAY,
                 decoder.tryDecode(ascii("*-1\r\n")).kind());
         Assert.assertEquals("OK", decoder.tryDecode(ascii("+OK\r\n")).text());
@@ -453,7 +442,7 @@ public class IncrementalRespReplyDecoderTest {
 
         Assert.assertEquals("OK", defaults().tryDecode(readOnly).text());
         Assert.assertEquals(7, readOnly.position());
-        Assert.assertEquals(2L, defaults().tryDecode(readOnly).integerValue());
+        Assert.assertEquals(BenchmarkRespReply.Kind.INTEGER, defaults().tryDecode(readOnly).kind());
         Assert.assertEquals(11, readOnly.position());
         Assert.assertEquals(readOnlyLimit, readOnly.limit());
 
@@ -464,7 +453,7 @@ public class IncrementalRespReplyDecoderTest {
         int parentLimit = parent.limit();
         ByteBuffer slice = parent.slice().asReadOnlyBuffer();
 
-        Assert.assertEquals(3, defaults().tryDecode(slice).bulkLength());
+        Assert.assertEquals(BenchmarkRespReply.Kind.BULK_STRING, defaults().tryDecode(slice).kind());
         Assert.assertFalse(slice.hasRemaining());
         Assert.assertEquals(parentPosition, parent.position());
         Assert.assertEquals(parentLimit, parent.limit());
@@ -475,9 +464,9 @@ public class IncrementalRespReplyDecoderTest {
         BenchmarkRespReply bulk = defaults().tryDecode(ascii("$5\r\nhello\r\n"));
         BenchmarkRespReply array = defaults().tryDecode(ascii("*2\r\n+first\r\n$6\r\nsecond\r\n"));
 
-        Assert.assertEquals(5, bulk.bulkLength());
+        Assert.assertEquals(BenchmarkRespReply.Kind.BULK_STRING, bulk.kind());
         Assert.assertNull(bulk.text());
-        Assert.assertEquals(2, array.arrayLength());
+        Assert.assertEquals(BenchmarkRespReply.Kind.ARRAY, array.kind());
         Assert.assertNull(array.text());
         for (Field field : BenchmarkRespReply.class.getDeclaredFields()) {
             Assert.assertFalse(field.getType().isArray());
@@ -494,16 +483,6 @@ public class IncrementalRespReplyDecoderTest {
 
         Assert.assertEquals(text, simple.text());
         Assert.assertEquals(text, error.text());
-    }
-
-    @Test
-    public void integerReplyStoresPrimitiveValueAndBoxesOnlyOnExplicitAccess() throws Exception {
-        Field integerField = BenchmarkRespReply.class.getDeclaredField("integer");
-        Assert.assertEquals(long.class, integerField.getType());
-
-        BenchmarkRespReply reply = defaults().tryDecode(ascii(":257\r\n"));
-        Assert.assertEquals(257L, reply.integerValue());
-        Assert.assertEquals(Long.valueOf(257L), reply.integer());
     }
 
     private static IncrementalRespReplyDecoder defaults() {

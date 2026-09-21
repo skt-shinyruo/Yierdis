@@ -36,8 +36,6 @@ public class RedisBenchmarkRealServerTest {
                     3,
                     1L,
                     BenchmarkFormat.CSV,
-                    "",
-                    "",
                     0
             );
 
