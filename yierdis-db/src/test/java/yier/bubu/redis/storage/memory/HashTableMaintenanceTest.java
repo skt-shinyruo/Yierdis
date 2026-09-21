@@ -169,7 +169,8 @@ public class HashTableMaintenanceTest {
                     new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES),
                     NativeObjectKind.SET_MEMBER_BYTES,
                     seed,
-                    registry
+                    registry,
+                    null
             );
             try {
                 for (int i = 0; i < 64; i++) {
@@ -215,26 +216,29 @@ public class HashTableMaintenanceTest {
                     new NativeByteStore(allocator, NativeObjectKind.HASH_FIELD_BYTES),
                     NativeObjectKind.HASH_FIELD_BYTES,
                     seed,
-                    registry
+                    registry,
+                    null
             );
             NativeByteMap<Integer> setMembers = new NativeByteMap<>(
                     new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES),
                     NativeObjectKind.SET_MEMBER_BYTES,
                     seed,
-                    registry
+                    registry,
+                    null
             );
             NativeByteMap<Integer> zsetMembers = new NativeByteMap<>(
                     new NativeByteStore(allocator, NativeObjectKind.ZSET_MEMBER_BYTES),
                     NativeObjectKind.ZSET_MEMBER_BYTES,
                     seed,
-                    registry
+                    registry,
+                    null
             );
             List<NativeByteMap<Integer>> idleMaps = new ArrayList<>(10_000);
             List<NativeHandle> entries = new ArrayList<>();
             try {
                 NativeByteStore idleStore = new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES);
                 for (int i = 0; i < 10_000; i++) {
-                    idleMaps.add(new NativeByteMap<>(idleStore, NativeObjectKind.SET_MEMBER_BYTES, seed, registry));
+                    idleMaps.add(new NativeByteMap<>(idleStore, NativeObjectKind.SET_MEMBER_BYTES, seed, registry, null));
                 }
                 long idleRegistryHeapBytes = registry.heapEstimatedBytes();
 
@@ -283,7 +287,8 @@ public class HashTableMaintenanceTest {
                         new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES),
                         NativeObjectKind.SET_MEMBER_BYTES,
                         seed,
-                        registry
+                        registry,
+                        null
                 );
                 try {
                     for (int i = 0; i < 13; i++) {

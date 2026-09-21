@@ -5,7 +5,6 @@ import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
-import java.util.function.ToIntFunction;
 import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
@@ -35,7 +34,6 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
     private final NativeByteStore byteStore;
     private final NativeObjectKind keyKind;
     private final HashSeed hashSeed;
-    private final ToIntFunction<byte[]> hashOverride;
     private final HashTableMaintenanceRegistry maintenanceRegistry;
     private final HashTableMaintenanceRegistry.Registration maintenanceRegistration;
     private final Runnable heapChangeListener;
@@ -49,57 +47,10 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
     private long contentGeneration;
     private boolean maintenanceDebt;
 
-    public NativeByteMap(NativeByteStore byteStore, NativeObjectKind keyKind) {
-        this(byteStore, keyKind, HashSeed.random());
-    }
-
-    public NativeByteMap(NativeByteStore byteStore, NativeObjectKind keyKind, HashSeed hashSeed) {
-        this(byteStore, keyKind, hashSeed, null, null, null);
-    }
-
     public NativeByteMap(
             NativeByteStore byteStore,
             NativeObjectKind keyKind,
             HashSeed hashSeed,
-            HashTableMaintenanceRegistry maintenanceRegistry
-    ) {
-        this(byteStore, keyKind, hashSeed, maintenanceRegistry, null);
-    }
-
-    public NativeByteMap(
-            NativeByteStore byteStore,
-            NativeObjectKind keyKind,
-            HashSeed hashSeed,
-            HashTableMaintenanceRegistry maintenanceRegistry,
-            Runnable heapChangeListener
-    ) {
-        this(byteStore, keyKind, hashSeed, null, maintenanceRegistry, heapChangeListener);
-    }
-
-    NativeByteMap(
-            NativeByteStore byteStore,
-            NativeObjectKind keyKind,
-            HashSeed hashSeed,
-            ToIntFunction<byte[]> hashOverride
-    ) {
-        this(byteStore, keyKind, hashSeed, hashOverride, null, null);
-    }
-
-    NativeByteMap(
-            NativeByteStore byteStore,
-            NativeObjectKind keyKind,
-            HashSeed hashSeed,
-            ToIntFunction<byte[]> hashOverride,
-            HashTableMaintenanceRegistry maintenanceRegistry
-    ) {
-        this(byteStore, keyKind, hashSeed, hashOverride, maintenanceRegistry, null);
-    }
-
-    NativeByteMap(
-            NativeByteStore byteStore,
-            NativeObjectKind keyKind,
-            HashSeed hashSeed,
-            ToIntFunction<byte[]> hashOverride,
             HashTableMaintenanceRegistry maintenanceRegistry,
             Runnable heapChangeListener
     ) {
@@ -107,7 +58,6 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
                 byteStore,
                 keyKind,
                 hashSeed,
-                hashOverride,
                 maintenanceRegistry,
                 heapChangeListener,
                 ValueLayout.OBJECT_REFERENCES,
@@ -127,28 +77,8 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
                 byteStore,
                 keyKind,
                 hashSeed,
-                null,
                 maintenanceRegistry,
                 heapChangeListener,
-                ValueLayout.NATIVE_HANDLES,
-                null,
-                true
-        );
-    }
-
-    static NativeByteMap<NativeHandle> nativeHandleValues(
-            NativeByteStore byteStore,
-            NativeObjectKind keyKind,
-            HashSeed hashSeed,
-            ToIntFunction<byte[]> hashOverride
-    ) {
-        return new NativeByteMap<>(
-                byteStore,
-                keyKind,
-                hashSeed,
-                hashOverride,
-                null,
-                null,
                 ValueLayout.NATIVE_HANDLES,
                 null,
                 true
@@ -167,7 +97,6 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
                 byteStore,
                 keyKind,
                 hashSeed,
-                null,
                 maintenanceRegistry,
                 heapChangeListener,
                 ValueLayout.CONSTANT,
@@ -187,7 +116,6 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
                 byteStore,
                 keyKind,
                 hashSeed,
-                null,
                 maintenanceRegistry,
                 heapChangeListener,
                 ValueLayout.OBJECT_REFERENCES,
@@ -200,7 +128,6 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
             NativeByteStore byteStore,
             NativeObjectKind keyKind,
             HashSeed hashSeed,
-            ToIntFunction<byte[]> hashOverride,
             HashTableMaintenanceRegistry maintenanceRegistry,
             Runnable heapChangeListener,
             ValueLayout valueLayout,
@@ -210,7 +137,6 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
         this.byteStore = Objects.requireNonNull(byteStore, "byteStore");
         this.keyKind = Objects.requireNonNull(keyKind, "keyKind");
         this.hashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
-        this.hashOverride = hashOverride;
         this.maintenanceRegistry = maintenanceRegistry;
         this.maintenanceRegistration = maintenanceRegistry == null ? null : maintenanceRegistry.registration(this);
         this.heapChangeListener = heapChangeListener;
@@ -993,15 +919,11 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
     }
 
     private int hash(byte[] keyBytes) {
-        return hashOverride == null
-                ? SipHash24.foldToInt(SipHash24.hash(hashSeed, keyBytes))
-                : hashOverride.applyAsInt(keyBytes);
+        return SipHash24.foldToInt(SipHash24.hash(hashSeed, keyBytes));
     }
 
     private int hashHandle(NativeHandle keyHandle) {
-        return hashOverride == null
-                ? byteStore.sipHash(keyHandle, hashSeed)
-                : hashOverride.applyAsInt(byteStore.toByteArray(keyHandle));
+        return byteStore.sipHash(keyHandle, hashSeed);
     }
 
     private void requireOwnedKeys() {

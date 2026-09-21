@@ -92,7 +92,8 @@ public class OpenAddressingTopologyCompatibilityTest {
                     mapKeyStore,
                     NativeObjectKind.SET_MEMBER_BYTES,
                     FIXED_SEED,
-                    new HashTableMaintenanceRegistry()
+                    new HashTableMaintenanceRegistry(),
+                    null
             ); NativeKeyDirectory directory = new NativeKeyDirectory(
                     backend,
                     FIXED_SEED,

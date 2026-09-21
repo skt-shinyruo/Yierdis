@@ -14,6 +14,7 @@ import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceResult;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkResult;
+import yier.bubu.redis.storage.memory.internal.hash.SipHash24;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -90,7 +91,9 @@ public class NativeByteMapTest {
             ); NativeByteMap<Integer> objects = new NativeByteMap<>(
                     keyStore,
                     NativeObjectKind.HASH_FIELD_BYTES,
-                    FIXED_SEED
+                    FIXED_SEED,
+                    null,
+                    null
             )) {
                 NativeHandle value = valueStore.store(bytes("value"));
                 try {
@@ -122,7 +125,9 @@ public class NativeByteMapTest {
              NativeByteMap<Integer> map = new NativeByteMap<>(
                      new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES),
                      NativeObjectKind.SET_MEMBER_BYTES,
-                     FIXED_SEED
+                     FIXED_SEED,
+                     null,
+                     null
              )) {
             for (int i = 0; i < 12; i++) {
                 map.put(bytes("growth-" + i), i);
@@ -144,7 +149,8 @@ public class NativeByteMapTest {
                     new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES),
                     NativeObjectKind.SET_MEMBER_BYTES,
                     FIXED_SEED,
-                    registry
+                    registry,
+                    null
             )) {
                 for (int i = 0; i < 13; i++) {
                     map.put(bytes("registry-" + i), i);
@@ -168,16 +174,18 @@ public class NativeByteMapTest {
 
     @Test
     public void collisionKeysGrowIntoTwoTablesAndMigrateWithinBudget() {
+        List<byte[]> keys = collidingKeys(13, 1);
         try (TestBackend runtime = TestBackend.open("native-byte-map-bounded-rehash");
              StableMemoryBackend allocator = runtime.backend();
              NativeByteMap<Integer> map = new NativeByteMap<>(
                      new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES),
                      NativeObjectKind.SET_MEMBER_BYTES,
                      FIXED_SEED,
-                     ignored -> 7
+                     null,
+                     null
              )) {
             for (int i = 0; i < 13; i++) {
-                Assert.assertNull(map.put(bytes("collision-" + i), i));
+                Assert.assertNull(map.put(keys.get(i), i));
             }
 
             Assert.assertTrue(map.metrics().rehashing());
@@ -185,27 +193,30 @@ public class NativeByteMapTest {
             Assert.assertEquals(3L, step.inspectedSlots());
             Assert.assertTrue(step.migratedSlots() <= 3L);
             for (int i = 0; i < 13; i++) {
-                Assert.assertEquals(Integer.valueOf(i), map.get(bytes("collision-" + i)));
+                Assert.assertEquals(Integer.valueOf(i), map.get(keys.get(i)));
             }
         }
     }
 
     @Test
     public void reusingATombstoneDoesNotStartAnUnnecessaryGrow() {
+        List<byte[]> keys = collidingKeys(12, 1);
+        byte[] replacement = collidingKeys(1, 1, "replacement-").getFirst();
         try (TestBackend runtime = TestBackend.open("native-byte-map-tombstone-reuse");
              StableMemoryBackend allocator = runtime.backend();
              NativeByteMap<Integer> map = new NativeByteMap<>(
                      new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES),
                      NativeObjectKind.SET_MEMBER_BYTES,
                      FIXED_SEED,
-                     ignored -> 7
+                     null,
+                     null
              )) {
             for (int i = 0; i < 12; i++) {
-                map.put(bytes("collision-" + i), i);
+                map.put(keys.get(i), i);
             }
 
-            Assert.assertEquals(Integer.valueOf(0), map.remove(bytes("collision-0")));
-            Assert.assertNull(map.put(bytes("replacement"), 12));
+            Assert.assertEquals(Integer.valueOf(0), map.remove(keys.get(0)));
+            Assert.assertNull(map.put(replacement, 12));
 
             Assert.assertFalse(map.metrics().rehashing());
             Assert.assertEquals(12, map.metrics().filledSlots());
@@ -215,48 +226,52 @@ public class NativeByteMapTest {
 
     @Test
     public void everyWriteAdvancesAnActiveRehash() {
+        List<byte[]> keys = collidingKeys(13, 1);
         try (TestBackend runtime = TestBackend.open("native-byte-map-write-rehash");
              StableMemoryBackend allocator = runtime.backend();
              NativeByteMap<Integer> map = new NativeByteMap<>(
                      new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES),
                      NativeObjectKind.SET_MEMBER_BYTES,
                      FIXED_SEED,
-                     ignored -> 7
+                     null,
+                     null
              )) {
             for (int i = 0; i < 13; i++) {
-                map.put(bytes("collision-" + i), i);
+                map.put(keys.get(i), i);
             }
             Assert.assertTrue(map.metrics().rehashing());
             Assert.assertEquals(0, map.metrics().rehashCursor());
 
-            Assert.assertEquals(Integer.valueOf(0), map.replace(bytes("collision-0"), 99));
+            Assert.assertEquals(Integer.valueOf(0), map.replace(keys.get(0), 99));
 
             Assert.assertTrue(map.metrics().rehashCursor() >= 2);
-            Assert.assertEquals(Integer.valueOf(99), map.get(bytes("collision-0")));
+            Assert.assertEquals(Integer.valueOf(99), map.get(keys.get(0)));
         }
     }
 
     @Test
     public void collidingKeysCompactAndShrinkThroughBoundedMaintenance() {
+        List<byte[]> keys = collidingKeys(512, 1);
         try (TestBackend runtime = TestBackend.open("native-byte-map-maintenance");
              StableMemoryBackend allocator = runtime.backend();
              NativeByteMap<Integer> map = new NativeByteMap<>(
                      new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES),
                      NativeObjectKind.SET_MEMBER_BYTES,
                      FIXED_SEED,
-                     ignored -> 7
+                     null,
+                     null
              )) {
             for (int i = 0; i < 512; i++) {
-                Assert.assertNull(map.put(bytes("collision-" + i), i));
+                Assert.assertNull(map.put(keys.get(i), i));
             }
             drainRehash(map);
             int peakCapacity = map.metrics().capacity();
 
-            Assert.assertEquals(Integer.valueOf(17), map.put(bytes("collision-17"), 9_999));
+            Assert.assertEquals(Integer.valueOf(17), map.put(keys.get(17), 9_999));
             Assert.assertEquals(512, map.size());
 
             for (int i = 0; i < 480; i++) {
-                Assert.assertEquals(Integer.valueOf(i == 17 ? 9_999 : i), map.remove(bytes("collision-" + i)));
+                Assert.assertEquals(Integer.valueOf(i == 17 ? 9_999 : i), map.remove(keys.get(i)));
             }
 
             Assert.assertTrue(map.hasMaintenanceDebt());
@@ -275,10 +290,10 @@ public class NativeByteMapTest {
             ));
             Assert.assertEquals(32, map.size());
             for (int i = 0; i < 480; i++) {
-                Assert.assertNull(map.get(bytes("collision-" + i)));
+                Assert.assertNull(map.get(keys.get(i)));
             }
             for (int i = 480; i < 512; i++) {
-                Assert.assertEquals(Integer.valueOf(i), map.get(bytes("collision-" + i)));
+                Assert.assertEquals(Integer.valueOf(i), map.get(keys.get(i)));
             }
 
             map.clear();
@@ -296,7 +311,9 @@ public class NativeByteMapTest {
              NativeByteMap<Integer> map = new NativeByteMap<>(
                      new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES),
                      NativeObjectKind.SET_MEMBER_BYTES,
-                     FIXED_SEED
+                     FIXED_SEED,
+                     null,
+                     null
              )) {
             for (int i = 0; i < 64; i++) {
                 map.put(bytes("staged-" + i), i);
@@ -329,7 +346,9 @@ public class NativeByteMapTest {
             try (NativeByteMap<Integer> map = new NativeByteMap<>(
                     store,
                     NativeObjectKind.SET_MEMBER_BYTES,
-                    FIXED_SEED
+                    FIXED_SEED,
+                    null,
+                    null
             )) {
                 for (int i = 0; i < 64; i++) {
                     Assert.assertNull(map.put(bytes("shrink-" + i), i));
@@ -420,7 +439,13 @@ public class NativeByteMapTest {
         try (TestBackend runtime = TestBackend.open("native-byte-map");
              StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.HASH_FIELD_BYTES);
-            NativeByteMap<String> map = new NativeByteMap<>(store, NativeObjectKind.HASH_FIELD_BYTES);
+            NativeByteMap<String> map = new NativeByteMap<>(
+                    store,
+                    NativeObjectKind.HASH_FIELD_BYTES,
+                    FIXED_SEED,
+                    null,
+                    null
+            );
 
             Assert.assertNull(map.put(bytes("a"), "one"));
             Assert.assertNull(map.put(bytes("b"), "two"));
@@ -450,7 +475,9 @@ public class NativeByteMapTest {
             try (NativeByteMap<String> map = new NativeByteMap<>(
                     store,
                     NativeObjectKind.HASH_FIELD_BYTES,
-                    FIXED_SEED
+                    FIXED_SEED,
+                    null,
+                    null
             )) {
                 map.put(bytes("existing"), "before");
                 NativeHandle existingHandle = keyHandle(map, store, "existing");
@@ -489,7 +516,9 @@ public class NativeByteMapTest {
             try (NativeByteMap<String> map = new NativeByteMap<>(
                     store,
                     NativeObjectKind.HASH_FIELD_BYTES,
-                    FIXED_SEED
+                    FIXED_SEED,
+                    null,
+                    null
             )) {
                 for (int i = 0; i < 12; i++) {
                     map.put(bytes("field-" + i), "value-" + i);
@@ -527,7 +556,9 @@ public class NativeByteMapTest {
             try (NativeByteMap<String> map = new NativeByteMap<>(
                     store,
                     NativeObjectKind.HASH_FIELD_BYTES,
-                    FIXED_SEED
+                    FIXED_SEED,
+                    null,
+                    null
             )) {
                 for (int index = 0; index < 12; index++) {
                     map.put(bytes("field-" + index), "value-" + index);
@@ -569,7 +600,9 @@ public class NativeByteMapTest {
             try (NativeByteMap<String> map = new NativeByteMap<>(
                     store,
                     NativeObjectKind.HASH_FIELD_BYTES,
-                    FIXED_SEED
+                    FIXED_SEED,
+                    null,
+                    null
             )) {
                 for (int index = 0; index < 13; index++) {
                     map.put(bytes("field-" + index), "value-" + index);
@@ -641,7 +674,13 @@ public class NativeByteMapTest {
         try (TestBackend runtime = TestBackend.open("native-byte-map-rehash");
              StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES);
-            NativeByteMap<Integer> map = new NativeByteMap<>(store, NativeObjectKind.SET_MEMBER_BYTES);
+            NativeByteMap<Integer> map = new NativeByteMap<>(
+                    store,
+                    NativeObjectKind.SET_MEMBER_BYTES,
+                    FIXED_SEED,
+                    null,
+                    null
+            );
 
             for (int i = 0; i < 40; i++) {
                 Assert.assertNull(map.put(bytes("k" + i), i));
@@ -670,7 +709,9 @@ public class NativeByteMapTest {
             try (NativeByteMap<Integer> map = new NativeByteMap<>(
                     store,
                     NativeObjectKind.SET_MEMBER_BYTES,
-                    FIXED_SEED
+                    FIXED_SEED,
+                    null,
+                    null
             )) {
                 for (int i = 0; i < 40; i++) {
                     map.put(bytes("scan-" + i), i);
@@ -700,6 +741,7 @@ public class NativeByteMapTest {
 
     @Test
     public void scanUsesMigratedOldSlotsAndRestartsAfterGenerationChange() {
+        List<byte[]> keys = collidingKeys(13, 1);
         try (TestBackend runtime = TestBackend.open("native-byte-map-scan-rehash");
              StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES);
@@ -707,10 +749,11 @@ public class NativeByteMapTest {
                     store,
                     NativeObjectKind.SET_MEMBER_BYTES,
                     FIXED_SEED,
-                    ignored -> 7
+                    null,
+                    null
             )) {
                 for (int i = 0; i < 13; i++) {
-                    map.put(bytes("collision-" + i), i);
+                    map.put(keys.get(i), i);
                 }
 
                 Assert.assertTrue(map.metrics().rehashing());
@@ -731,7 +774,7 @@ public class NativeByteMapTest {
                     return true;
                 });
 
-                Assert.assertTrue(migratedFromOldPhase.contains("collision-0"));
+                Assert.assertTrue(migratedFromOldPhase.contains(string(keys.get(0))));
                 Assert.assertEquals(1, afterOldPrefix.phase());
                 Assert.assertEquals(8L, afterOldPrefix.position());
 
@@ -760,7 +803,7 @@ public class NativeByteMapTest {
 
                 Assert.assertFalse(map.metrics().rehashing());
                 for (int i = 0; i < 13; i++) {
-                    Assert.assertTrue(seenWhileMigrating.contains("collision-" + i));
+                    Assert.assertTrue(seenWhileMigrating.contains(string(keys.get(i))));
                 }
 
                 Set<String> restarted = new HashSet<>();
@@ -771,7 +814,7 @@ public class NativeByteMapTest {
 
                 Assert.assertEquals(0L, complete.value());
                 for (int i = 0; i < 13; i++) {
-                    Assert.assertTrue(restarted.contains("collision-" + i));
+                    Assert.assertTrue(restarted.contains(string(keys.get(i))));
                 }
             }
         }
@@ -779,6 +822,7 @@ public class NativeByteMapTest {
 
     @Test
     public void scanResolvesMigratedShadowValueFromTheActiveTable() {
+        List<byte[]> keys = collidingKeys(13, 1, "field-");
         try (TestBackend runtime = TestBackend.open("native-byte-map-scan-shadow-value");
              StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore keyStore = new NativeByteStore(allocator, NativeObjectKind.HASH_FIELD_BYTES);
@@ -787,11 +831,12 @@ public class NativeByteMapTest {
                     keyStore,
                     NativeObjectKind.HASH_FIELD_BYTES,
                     FIXED_SEED,
-                    ignored -> 7
+                    null,
+                    null
             )) {
                 try {
                     for (int i = 0; i < 13; i++) {
-                        map.put(bytes("field-" + i), valueStore.store(bytes("value-" + i)));
+                        map.put(keys.get(i), valueStore.store(bytes("value-" + i)));
                     }
                     Assert.assertTrue(map.metrics().rehashing());
 
@@ -803,7 +848,7 @@ public class NativeByteMapTest {
                     map.advanceRehash(HashTableWorkBudget.of(8L, Long.MAX_VALUE));
 
                     NativeHandle replacement = valueStore.store(bytes("replacement"));
-                    NativeHandle released = map.replace(bytes("field-0"), replacement);
+                    NativeHandle released = map.replace(keys.get(0), replacement);
                     Assert.assertNotNull(released);
                     valueStore.release(released);
 
@@ -811,14 +856,14 @@ public class NativeByteMapTest {
                     ScanCursorV2 next = map.scan(oldPhase, 8, (keyHandle, valueHandle) -> {
                         String field = new String(keyStore.toByteArray(keyHandle), StandardCharsets.US_ASCII);
                         scanned.add(field);
-                        if (field.equals("field-0")) {
+                        if (field.equals(string(keys.get(0)))) {
                             Assert.assertEquals(replacement, valueHandle);
                             Assert.assertArrayEquals(bytes("replacement"), valueStore.toByteArray(valueHandle));
                         }
                         return true;
                     });
 
-                    Assert.assertTrue(scanned.contains("field-0"));
+                    Assert.assertTrue(scanned.contains(string(keys.get(0))));
                     Assert.assertEquals(1, next.phase());
                     Assert.assertEquals(8L, next.position());
                 } finally {
@@ -831,6 +876,7 @@ public class NativeByteMapTest {
 
     @Test
     public void collisionLifecycleRemainsVisibleAcrossRehashPreparedPutAndTombstoneReuse() {
+        List<byte[]> keys = collidingKeys(13, 1);
         try (TestBackend runtime = TestBackend.open("native-byte-map-shared-topology");
              StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.HASH_FIELD_BYTES);
@@ -838,15 +884,16 @@ public class NativeByteMapTest {
                     store,
                     NativeObjectKind.HASH_FIELD_BYTES,
                     FIXED_SEED,
-                    ignored -> 7
+                    null,
+                    null
             )) {
                 for (int i = 0; i < 13; i++) {
-                    map.put(bytes("collision-" + i), "value-" + i);
+                    map.put(keys.get(i), "value-" + i);
                 }
                 Assert.assertTrue(map.metrics().rehashing());
 
                 try (NativeByteMap.PreparedMutation<String> prepared = map.preparePuts(List.of(
-                        new NativeByteMap.StagedPut<>(bytes("collision-0"), "updated", true),
+                        new NativeByteMap.StagedPut<>(keys.get(0), "updated", true),
                         new NativeByteMap.StagedPut<>(bytes("prepared"), "added", false)
                 ))) {
                     prepared.commit();
@@ -854,9 +901,11 @@ public class NativeByteMapTest {
                 }
                 drainRehash(map);
 
-                Assert.assertEquals("value-1", map.remove(bytes("collision-1")));
+                Assert.assertEquals("value-1", map.remove(keys.get(1)));
                 Assert.assertEquals(1, map.metrics().tombstones());
-                map.put(bytes("replacement"), "replacement-value");
+                int mask = map.metrics().capacity() - 1;
+                byte[] replacement = collidingKeys(1, hash(keys.get(1)) & mask, mask, "replacement-").getFirst();
+                map.put(replacement, "replacement-value");
                 Assert.assertEquals(0, map.metrics().tombstones());
 
                 Set<String> seen = new HashSet<>();
@@ -871,12 +920,12 @@ public class NativeByteMapTest {
                 } while (cursor.value() != 0L);
 
                 Assert.assertEquals(14, map.size());
-                Assert.assertEquals("updated", map.get(bytes("collision-0")));
-                Assert.assertNull(map.get(bytes("collision-1")));
+                Assert.assertEquals("updated", map.get(keys.get(0)));
+                Assert.assertNull(map.get(keys.get(1)));
                 Assert.assertEquals("added", map.get(bytes("prepared")));
-                Assert.assertEquals("replacement-value", map.get(bytes("replacement")));
+                Assert.assertEquals("replacement-value", map.get(replacement));
                 Assert.assertEquals(14, seen.size());
-                Assert.assertFalse(seen.contains("collision-1"));
+                Assert.assertFalse(seen.contains(string(keys.get(1))));
             }
             Assert.assertEquals(0L, store.nativeBytes());
         }
@@ -887,7 +936,13 @@ public class NativeByteMapTest {
         try (TestBackend runtime = TestBackend.open("native-byte-map-scan-stop");
              StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.HASH_FIELD_BYTES);
-            try (NativeByteMap<Integer> map = new NativeByteMap<>(store, NativeObjectKind.HASH_FIELD_BYTES)) {
+            try (NativeByteMap<Integer> map = new NativeByteMap<>(
+                    store,
+                    NativeObjectKind.HASH_FIELD_BYTES,
+                    FIXED_SEED,
+                    null,
+                    null
+            )) {
                 map.put(bytes("one"), 1);
                 map.put(bytes("two"), 2);
 
@@ -914,6 +969,33 @@ public class NativeByteMapTest {
 
     private static byte[] bytes(String value) {
         return value.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static List<byte[]> collidingKeys(int count, int bucket) {
+        return collidingKeys(count, bucket, "collision-");
+    }
+
+    private static List<byte[]> collidingKeys(int count, int bucket, String prefix) {
+        return collidingKeys(count, bucket, 15, prefix);
+    }
+
+    private static List<byte[]> collidingKeys(int count, int bucket, int mask, String prefix) {
+        List<byte[]> keys = new ArrayList<>(count);
+        for (int suffix = 0; keys.size() < count; suffix++) {
+            byte[] key = (prefix + suffix).getBytes(StandardCharsets.US_ASCII);
+            if ((hash(key) & mask) == bucket) {
+                keys.add(key);
+            }
+        }
+        return keys;
+    }
+
+    private static int hash(byte[] key) {
+        return SipHash24.foldToInt(SipHash24.hash(FIXED_SEED, key));
+    }
+
+    private static String string(byte[] key) {
+        return new String(key, StandardCharsets.US_ASCII);
     }
 
     private static void drainRehash(NativeByteMap<?> map) {
