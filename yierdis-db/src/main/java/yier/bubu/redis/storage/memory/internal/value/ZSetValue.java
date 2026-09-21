@@ -225,17 +225,6 @@ public final class ZSetValue implements YierdisValue {
         heapChangeListener = Objects.requireNonNull(listener, "listener");
     }
 
-    public int[] nativePayloadSizes() {
-        List<byte[]> memberScorePairs = zrange(0, -1, true);
-        int[] sizes = new int[memberScorePairs.size() / 2];
-        int next = 0;
-        for (int i = 0; i + 1 < memberScorePairs.size(); i += 2) {
-            byte[] member = memberScorePairs.get(i);
-            sizes[next++] = member == null ? 0 : member.length;
-        }
-        return sizes;
-    }
-
     public ZAddResult add(List<byte[]> scoreMemberPairs) {
         return add(scoreMemberPairs, ZAddOptions.plain());
     }
@@ -552,31 +541,6 @@ public final class ZSetValue implements YierdisValue {
         return removed;
     }
 
-    public List<byte[]> zrangeByScore(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        if (count <= 0) {
-            return new ArrayList<>();
-        }
-        return materializeScoreRange(
-                new ScoreRangeQuery(
-                        min, minExclusive, max, maxExclusive, offset, count, ScoreRangeDirection.FORWARD
-                ),
-                withScores
-        );
-    }
-
-    public List<byte[]> zrevrangeByScore(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        if (count <= 0) {
-            return new ArrayList<>();
-        }
-
-        return materializeScoreRange(
-                new ScoreRangeQuery(
-                        min, minExclusive, max, maxExclusive, offset, count, ScoreRangeDirection.REVERSE
-                ),
-                withScores
-        );
-    }
-
     public int zremrangeByScore(double min, boolean minExclusive, double max, boolean maxExclusive) {
         if (listpack != null) {
             int removed = 0;
@@ -754,32 +718,12 @@ public final class ZSetValue implements YierdisValue {
         return rangeByIndex(start, stop, withScores, true);
     }
 
-    public int zrangeCount(long start, long stop, boolean withScores) {
-        return rangeByIndexCount(start, stop, withScores, false);
-    }
-
     public void zrangeWriteTo(long start, long stop, boolean withScores, ByteValueSink out) {
         rangeByIndexWriteTo(start, stop, withScores, false, out);
     }
 
-    public int zrevrangeCount(long start, long stop, boolean withScores) {
-        return rangeByIndexCount(start, stop, withScores, true);
-    }
-
     public void zrevrangeWriteTo(long start, long stop, boolean withScores, ByteValueSink out) {
         rangeByIndexWriteTo(start, stop, withScores, true, out);
-    }
-
-    public int zrangeByScoreCount(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        if (count <= 0) {
-            return 0;
-        }
-        return countScoreRange(
-                new ScoreRangeQuery(
-                        min, minExclusive, max, maxExclusive, offset, count, ScoreRangeDirection.FORWARD
-                ),
-                withScores
-        );
     }
 
     public void zrangeByScoreWriteTo(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, ByteValueSink out) {
@@ -795,18 +739,6 @@ public final class ZSetValue implements YierdisValue {
                 ),
                 withScores,
                 out
-        );
-    }
-
-    public int zrevrangeByScoreCount(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        if (count <= 0) {
-            return 0;
-        }
-        return countScoreRange(
-                new ScoreRangeQuery(
-                        min, minExclusive, max, maxExclusive, offset, count, ScoreRangeDirection.REVERSE
-                ),
-                withScores
         );
     }
 
@@ -883,43 +815,6 @@ public final class ZSetValue implements YierdisValue {
             node = stepBackwards ? node.backward : node.forward[0];
         }
         return out;
-    }
-
-    private int rangeByIndexCount(long start, long stop, boolean withScores, boolean reverse) {
-        int size = size();
-        if (size == 0) {
-            return 0;
-        }
-
-        long normalizedStart = normalizeIndex(start, size);
-        long normalizedStop = normalizeIndex(stop, size);
-
-        if (normalizedStart < 0) {
-            normalizedStart = 0;
-        }
-        if (normalizedStop < 0) {
-            return 0;
-        }
-        if (normalizedStop >= size) {
-            normalizedStop = size - 1;
-        }
-        if (normalizedStart > normalizedStop) {
-            return 0;
-        }
-
-        int remaining = (int) (normalizedStop - normalizedStart + 1);
-        if (remaining <= 0) {
-            return 0;
-        }
-        if (!withScores) {
-            return remaining;
-        }
-
-        long elementCount = (long) remaining * 2;
-        if (elementCount > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException("response is too large");
-        }
-        return (int) elementCount;
     }
 
     private void rangeByIndexWriteTo(long start, long stop, boolean withScores, boolean reverse, ByteValueSink out) {
@@ -1004,37 +899,6 @@ public final class ZSetValue implements YierdisValue {
             }
             node = stepBackwards ? node.backward : node.forward[0];
         }
-    }
-
-    private List<byte[]> materializeScoreRange(ScoreRangeQuery query, boolean withScores) {
-        int expected = (int) Math.min(size(), query.count());
-        List<byte[]> out = new ArrayList<>(withScores ? expected * 2 : expected);
-        forEachScoreRange(
-                query,
-                index -> {
-                    out.add(listpack.memberAt(index));
-                    if (withScores) {
-                        out.add(formatScoreBytes(listpack.scoreAt(index)));
-                    }
-                },
-                node -> {
-                    out.add(memberStore.toByteArray(node.member));
-                    if (withScores) {
-                        out.add(formatScoreBytes(node.score));
-                    }
-                }
-        );
-        return out;
-    }
-
-    private int countScoreRange(ScoreRangeQuery query, boolean withScores) {
-        int selected = forEachScoreRange(query, index -> {
-        }, node -> {
-        });
-        if (withScores && selected > Integer.MAX_VALUE / 2) {
-            throw new IllegalArgumentException("response is too large");
-        }
-        return selected * (withScores ? 2 : 1);
     }
 
     private void writeScoreRange(ScoreRangeQuery query, boolean withScores, ByteValueSink out) {

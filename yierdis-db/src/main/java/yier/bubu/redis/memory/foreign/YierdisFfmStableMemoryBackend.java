@@ -171,10 +171,6 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
             return localRaw;
         }
 
-        if (policy == NativeReallocPolicy.NO_MOVE) {
-            throw new NativeMemoryException("native object cannot grow in place");
-        }
-
         YierdisNativeBlock previous = pageAllocator.moveSource(meta);
         YierdisNativeBlock next = pageAllocator.allocate(physicalAllocationBytes(newSize));
         boolean moved = false;

@@ -5,9 +5,7 @@ public enum NativeHandleDomain {
     STORAGE_OBJECT(1),
     ENTRY_OBJECT(2),
     KEY_BYTES(3),
-    TYPE_ROOT(4),
-    INDEX_NODE(5),
-    ALLOCATOR_METADATA(6);
+    TYPE_ROOT(4);
 
     private final int code;
 
@@ -26,8 +24,6 @@ public enum NativeHandleDomain {
             case 2 -> ENTRY_OBJECT;
             case 3 -> KEY_BYTES;
             case 4 -> TYPE_ROOT;
-            case 5 -> INDEX_NODE;
-            case 6 -> ALLOCATOR_METADATA;
             default -> throw new IllegalArgumentException("unknown native handle domain: " + code);
         };
     }

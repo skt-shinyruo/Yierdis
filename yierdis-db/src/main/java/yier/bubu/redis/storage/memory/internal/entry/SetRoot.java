@@ -55,22 +55,6 @@ public final class SetRoot implements AutoCloseable {
         return sets.create(ignored -> newSetValue());
     }
 
-    public synchronized ValueHandle store(SetValue value) {
-        ensureOpen();
-        Objects.requireNonNull(value, "value");
-        ValueHandle handle = create();
-        boolean ok = false;
-        try {
-            sadd(handle, value.members());
-            ok = true;
-            return handle;
-        } finally {
-            if (!ok) {
-                release(handle);
-            }
-        }
-    }
-
     public synchronized int sadd(ValueHandle handle, List<byte[]> members) {
         ensureOpen();
         SetValue set = requireSet(handle);

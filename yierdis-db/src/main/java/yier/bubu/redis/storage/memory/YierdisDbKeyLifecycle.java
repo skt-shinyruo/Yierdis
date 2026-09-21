@@ -607,13 +607,6 @@ final class YierdisDbKeyLifecycle implements AutoCloseable {
         };
     }
 
-    byte[] copyStringValue(EntryRecord record) {
-        if (record == null || record.type() != ValueType.STRING || record.valueHandle() == null) {
-            return null;
-        }
-        return ownedResources.stringRoot.copy(record.valueHandle());
-    }
-
     long componentRetainedHeapBytes() {
         return yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating(
                 ownedResources.keyDirectory.heapBytes(),

@@ -105,9 +105,8 @@ FFM `NativeObjectView` 在 copy/comparison/typed default 前完成 lifecycle、w
 `reallocate(handle, newSize, policy)` 保持完整 `NativeHandle` 不变：
 
 1. 新 logical size 可放进现有 capacity 时，只更新 object metadata。
-2. `NO_MOVE` 且容量不足时失败，旧对象不变。
-3. 允许移动时分配 target block，用一次 block-to-block native copy 保留旧 prefix。
-4. object table 发布新 location 后，旧 block 立即释放或进入 retired list。
+2. 容量不足时分配 target block，用一次 block-to-block native copy 保留旧 prefix。
+3. object table 发布新 location 后，旧 block 立即释放或进入 retired list。
 
 复制、metadata 校验或 publication 前的任何失败都会关闭未发布 target，并 abort move；handle 继续解析到旧 block。publication 后不会假装旧状态仍可回滚。
 

@@ -667,7 +667,16 @@ public class MutationFaultInjectionTest {
                 case LIST -> bytesListSnapshot(listRoot.range(record.valueHandle(), 0, -1));
                 case HASH -> bytesPairsSnapshot(hashRoot.hgetallPairs(record.valueHandle()));
                 case SET -> bytesSetSnapshot(setRoot.members(record.valueHandle()));
-                case ZSET -> bytesListSnapshot(zsetRoot.zrange(record.valueHandle(), 0, -1, true));
+                case ZSET -> {
+                    List<byte[]> values = new ArrayList<>();
+                    zsetRoot.zrangeWriteTo(record.valueHandle(), 0, -1, true, new MaterializingByteValueSink() {
+                        @Override
+                        public void value(byte[] data) {
+                            values.add(data);
+                        }
+                    });
+                    yield bytesListSnapshot(values);
+                }
             };
         }
 

@@ -64,23 +64,6 @@ public final class ListRoot implements AutoCloseable {
         }
     }
 
-    public synchronized ValueHandle store(ListValue value) {
-        ensureOpen();
-        Objects.requireNonNull(value, "value");
-        ValueHandle handle = create();
-        ListValue stored = requireList(handle);
-        boolean ok = false;
-        try {
-            rpush(handle, value.range(0, -1));
-            ok = true;
-            return handle;
-        } finally {
-            if (!ok) {
-                release(handle);
-            }
-        }
-    }
-
     public synchronized void lpush(ValueHandle handle, List<byte[]> values) {
         ensureOpen();
         if (values == null || values.isEmpty()) {
@@ -140,11 +123,6 @@ public final class ListRoot implements AutoCloseable {
     public synchronized void rangeInto(ValueHandle handle, int start, int stop, ByteValueSink out) {
         ensureOpen();
         requireList(handle).rangeInto(start, stop, out);
-    }
-
-    public synchronized void emitPopRange(ValueHandle handle, int count, boolean left, ByteValueSink out) {
-        ensureOpen();
-        requireList(handle).emitPopRange(count, left, out);
     }
 
     public synchronized NativeListEntryRef[] popEntries(ValueHandle handle, int count, boolean left) {

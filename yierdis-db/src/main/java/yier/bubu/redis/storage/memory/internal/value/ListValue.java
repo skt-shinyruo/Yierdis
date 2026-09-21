@@ -852,51 +852,6 @@ public final class ListValue implements YierdisValue {
         }
     }
 
-    public void emitPopRange(int count, boolean left, ByteValueSink out) {
-        if (out == null) {
-            throw new IllegalArgumentException("out must not be null");
-        }
-        int remaining = Math.min(Math.max(0, count), totalSize);
-        if (remaining == 0) {
-            return;
-        }
-        if (quicklist == null) {
-            if (left) {
-                for (int i = 0; i < remaining; i++) {
-                    listpack.writeAt(i, out);
-                }
-            } else {
-                int start = totalSize - remaining;
-                for (int i = totalSize - 1; i >= start; i--) {
-                    listpack.writeAt(i, out);
-                }
-            }
-            return;
-        }
-
-        if (left) {
-            for (ListNode node : quicklist) {
-                for (int i = 0; i < node.size() && remaining > 0; i++) {
-                    node.writeAt(i, out);
-                    remaining--;
-                }
-                if (remaining == 0) {
-                    return;
-                }
-            }
-            return;
-        }
-
-        java.util.Iterator<ListNode> iterator = quicklist.descendingIterator();
-        while (iterator.hasNext() && remaining > 0) {
-            ListNode node = iterator.next();
-            for (int i = node.size() - 1; i >= 0 && remaining > 0; i--) {
-                node.writeAt(i, out);
-                remaining--;
-            }
-        }
-    }
-
     public void releaseExcept(PreparedPoppedValueSequence retained) {
         Objects.requireNonNull(retained, "retained");
         RuntimeException failure = null;

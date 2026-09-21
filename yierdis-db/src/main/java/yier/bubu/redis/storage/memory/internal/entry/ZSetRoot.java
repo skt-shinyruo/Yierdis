@@ -14,7 +14,6 @@ import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 import yier.bubu.redis.storage.memory.internal.value.ZSetValue;
 import yier.bubu.redis.storage.memory.internal.value.ZSetValue.ZAddResult;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
@@ -61,22 +60,6 @@ public final class ZSetRoot implements AutoCloseable {
     public synchronized ValueHandle create() {
         ensureOpen();
         return zsets.create(ignored -> newZSetValue());
-    }
-
-    public synchronized ValueHandle copy(ValueHandle source) {
-        ensureOpen();
-        ZSetValue current = requireZSet(source);
-        ValueHandle replacement = create();
-        boolean ok = false;
-        try {
-            zadd(replacement, memberScorePairsToScoreMemberPairs(current.zrange(0, -1, true)));
-            ok = true;
-            return replacement;
-        } finally {
-            if (!ok) {
-                release(replacement);
-            }
-        }
     }
 
     public synchronized PreparedAddResult prepareAdd(ValueHandle source, List<byte[]> scoreMemberPairs) {
@@ -194,22 +177,6 @@ public final class ZSetRoot implements AutoCloseable {
         return zsets.estimatedNewAdapterHeapGrowthBytes(replacementHeapBytes);
     }
 
-    public synchronized ValueHandle store(ZSetValue value) {
-        ensureOpen();
-        Objects.requireNonNull(value, "value");
-        ValueHandle handle = create();
-        boolean ok = false;
-        try {
-            zadd(handle, memberScorePairsToScoreMemberPairs(value.zrange(0, -1, true)));
-            ok = true;
-            return handle;
-        } finally {
-            if (!ok) {
-                release(handle);
-            }
-        }
-    }
-
     public synchronized ZAddResult zaddResult(ValueHandle handle, List<byte[]> scoreMemberPairs) {
         ensureOpen();
         ZSetValue value = requireZSet(handle);
@@ -287,16 +254,6 @@ public final class ZSetRoot implements AutoCloseable {
         return requireZSet(handle).countRemovalsByScore(min, minExclusive, max, maxExclusive);
     }
 
-    public synchronized int zrangeCount(ValueHandle handle, long start, long stop, boolean withScores) {
-        ensureOpen();
-        return requireZSet(handle).zrangeCount(start, stop, withScores);
-    }
-
-    public synchronized List<byte[]> zrange(ValueHandle handle, long start, long stop, boolean withScores) {
-        ensureOpen();
-        return requireZSet(handle).zrange(start, stop, withScores);
-    }
-
     public synchronized void zrangeWriteTo(ValueHandle handle, long start, long stop, boolean withScores, ByteValueSink out) {
         ensureOpen();
         requireZSet(handle).zrangeWriteTo(start, stop, withScores, out);
@@ -312,28 +269,9 @@ public final class ZSetRoot implements AutoCloseable {
         return requireZSet(handle).zscan(cursor, globPattern, count);
     }
 
-    public synchronized int zrevrangeCount(ValueHandle handle, long start, long stop, boolean withScores) {
-        ensureOpen();
-        return requireZSet(handle).zrevrangeCount(start, stop, withScores);
-    }
-
     public synchronized void zrevrangeWriteTo(ValueHandle handle, long start, long stop, boolean withScores, ByteValueSink out) {
         ensureOpen();
         requireZSet(handle).zrevrangeWriteTo(start, stop, withScores, out);
-    }
-
-    public synchronized int zrangeByScoreCount(
-            ValueHandle handle,
-            double min,
-            boolean minExclusive,
-            double max,
-            boolean maxExclusive,
-            boolean withScores,
-            long offset,
-            long count
-    ) {
-        ensureOpen();
-        return requireZSet(handle).zrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
     }
 
     public synchronized void zrangeByScoreWriteTo(
@@ -349,20 +287,6 @@ public final class ZSetRoot implements AutoCloseable {
     ) {
         ensureOpen();
         requireZSet(handle).zrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
-    }
-
-    public synchronized int zrevrangeByScoreCount(
-            ValueHandle handle,
-            double min,
-            boolean minExclusive,
-            double max,
-            boolean maxExclusive,
-            boolean withScores,
-            long offset,
-            long count
-    ) {
-        ensureOpen();
-        return requireZSet(handle).zrevrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
     }
 
     public synchronized void zrevrangeByScoreWriteTo(
@@ -383,11 +307,6 @@ public final class ZSetRoot implements AutoCloseable {
     public synchronized int size(ValueHandle handle) {
         ensureOpen();
         return requireZSet(handle).size();
-    }
-
-    public synchronized int[] nativePayloadSizes(ValueHandle handle) {
-        ensureOpen();
-        return requireZSet(handle).nativePayloadSizes();
     }
 
     public synchronized long estimatedBytes(ValueHandle handle) {
@@ -439,48 +358,6 @@ public final class ZSetRoot implements AutoCloseable {
         if (closed) {
             throw new IllegalStateException("zset root is closed");
         }
-    }
-
-    private static List<byte[]> memberScorePairsToScoreMemberPairs(List<byte[]> memberScorePairs) {
-        ArrayList<byte[]> out = new ArrayList<>(memberScorePairs.size());
-        for (int i = 0; i + 1 < memberScorePairs.size(); i += 2) {
-            out.add(memberScorePairs.get(i + 1));
-            out.add(memberScorePairs.get(i));
-        }
-        return out;
-    }
-
-    private static int nonNullMemberCount(List<byte[]> scoreMemberPairs) {
-        int count = 0;
-        for (int index = 1; index < scoreMemberPairs.size(); index += 2) {
-            if (scoreMemberPairs.get(index) != null) {
-                count++;
-            }
-        }
-        return count;
-    }
-
-    private static int appendPayloadSizes(int[] target, int offset, int[] payloadSizes) {
-        int next = offset;
-        for (int size : payloadSizes) {
-            target[next++] = Math.max(1, size);
-        }
-        return next;
-    }
-
-    private static int appendMemberPayloadSizes(
-            int[] target,
-            int offset,
-            List<byte[]> scoreMemberPairs
-    ) {
-        int next = offset;
-        for (int index = 1; index < scoreMemberPairs.size(); index += 2) {
-            byte[] member = scoreMemberPairs.get(index);
-            if (member != null) {
-                target[next++] = Math.max(1, member.length);
-            }
-        }
-        return next;
     }
 
     public record AddPlan(

@@ -689,12 +689,6 @@ public class ZSetValueTest {
             long count,
             List<String> expected
     ) {
-        List<byte[]> materialized = reverse
-                ? zset.zrevrangeByScore(min, minExclusive, max, maxExclusive, withScores, offset, count)
-                : zset.zrangeByScore(min, minExclusive, max, maxExclusive, withScores, offset, count);
-        int elementCount = reverse
-                ? zset.zrevrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count)
-                : zset.zrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
         RecordingSink streamed = new RecordingSink();
         if (reverse) {
             zset.zrevrangeByScoreWriteTo(
@@ -706,8 +700,6 @@ public class ZSetValueTest {
             );
         }
 
-        Assert.assertEquals(expected, strings(materialized));
-        Assert.assertEquals(expected.size(), elementCount);
         Assert.assertEquals(expected, streamed.values);
     }
 
@@ -786,11 +778,12 @@ public class ZSetValueTest {
 
                 Assert.assertEquals(0L, allocator.allocationAttempts());
                 Assert.assertEquals("0", scoreFor(zset, "zero-member"));
-                Assert.assertEquals(
-                        List.of("zero-member"),
-                        strings(zset.zrangeByScore(-0.0d, false, +0.0d, false, false, 0, 10))
-                );
-                Assert.assertTrue(zset.zrangeByScore(-0.0d, true, +0.0d, false, false, 0, 10).isEmpty());
+                RecordingSink zeroRange = new RecordingSink();
+                zset.zrangeByScoreWriteTo(-0.0d, false, +0.0d, false, false, 0, 10, zeroRange);
+                Assert.assertEquals(List.of("zero-member"), zeroRange.values);
+                RecordingSink exclusiveZeroRange = new RecordingSink();
+                zset.zrangeByScoreWriteTo(-0.0d, true, +0.0d, false, false, 0, 10, exclusiveZeroRange);
+                Assert.assertTrue(exclusiveZeroRange.values.isEmpty());
             } finally {
                 allocator.disableFailures();
                 zset.close();
@@ -812,25 +805,24 @@ public class ZSetValueTest {
                         zset.encoding()
                 );
 
-                Assert.assertEquals(
-                        List.of("d"),
-                        strings(zset.zrangeByScore(2, true, 4, true, false, 0, 10))
-                );
-                Assert.assertEquals(
-                        List.of("b", "2", "c", "2"),
-                        strings(zset.zrangeByScore(1, false, 4, false, true, 1, 2))
-                );
-                Assert.assertEquals(
-                        List.of("d", "3", "c", "2", "b", "2"),
-                        strings(zset.zrevrangeByScore(1, false, 4, false, true, 1, 3))
-                );
-                Assert.assertTrue(zset.zrangeByScore(1, false, 4, false, false, 0, 0).isEmpty());
-                Assert.assertTrue(zset.zrevrangeByScore(1, false, 4, false, false, 0, -1).isEmpty());
+                RecordingSink range = new RecordingSink();
+                zset.zrangeByScoreWriteTo(2, true, 4, true, false, 0, 10, range);
+                Assert.assertEquals(List.of("d"), range.values);
+                range = new RecordingSink();
+                zset.zrangeByScoreWriteTo(1, false, 4, false, true, 1, 2, range);
+                Assert.assertEquals(List.of("b", "2", "c", "2"), range.values);
+                range = new RecordingSink();
+                zset.zrevrangeByScoreWriteTo(1, false, 4, false, true, 1, 3, range);
+                Assert.assertEquals(List.of("d", "3", "c", "2", "b", "2"), range.values);
+                range = new RecordingSink();
+                zset.zrangeByScoreWriteTo(1, false, 4, false, false, 0, 0, range);
+                Assert.assertTrue(range.values.isEmpty());
+                range = new RecordingSink();
+                zset.zrevrangeByScoreWriteTo(1, false, 4, false, false, 0, -1, range);
+                Assert.assertTrue(range.values.isEmpty());
 
                 Assert.assertEquals(List.of("e", "d", "c"), strings(zset.zrevrange(0, 2, false)));
                 Assert.assertEquals(List.of("d", "e"), strings(zset.zrange(-2, -1, false)));
-                Assert.assertEquals(4, zset.zrangeByScoreCount(1, false, 4, false, false, 1, 10));
-                Assert.assertEquals(6, zset.zrevrangeByScoreCount(1, false, 4, false, true, 1, 3));
 
                 RecordingSink out = new RecordingSink();
                 zset.zrevrangeByScoreWriteTo(1, false, 4, false, true, 1, 2, out);

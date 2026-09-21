@@ -134,22 +134,6 @@ public final class HashRoot implements AutoCloseable {
         return plan.nativeAllocationSizes();
     }
 
-    public synchronized ValueHandle store(HashValue value) {
-        ensureOpen();
-        Objects.requireNonNull(value, "value");
-        ValueHandle handle = create();
-        boolean ok = false;
-        try {
-            hsetMany(handle, value.hgetallPairs());
-            ok = true;
-            return handle;
-        } finally {
-            if (!ok) {
-                release(handle);
-            }
-        }
-    }
-
     public synchronized int hsetMany(ValueHandle handle, List<byte[]> fieldValuePairs) {
         ensureOpen();
         HashValue value = requireHash(handle);

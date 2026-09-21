@@ -21,10 +21,7 @@ public enum NativeObjectKind {
     HASH_TABLE(6, NativeHandleDomain.TYPE_ROOT),
     SET_TABLE(7, NativeHandleDomain.TYPE_ROOT),
     ZSET_TABLE(8, NativeHandleDomain.TYPE_ROOT),
-    ZSET_NODE(9, NativeHandleDomain.TYPE_ROOT),
-
-    INDEX_NODE(1, NativeHandleDomain.INDEX_NODE),
-    METADATA_RECORD(1, NativeHandleDomain.ALLOCATOR_METADATA);
+    ZSET_NODE(9, NativeHandleDomain.TYPE_ROOT);
 
     private final int code;
     private final NativeHandleDomain domain;
