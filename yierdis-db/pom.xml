@@ -8,13 +8,16 @@
         <groupId>yier.bubu.redis</groupId>
         <artifactId>yierdis-parent</artifactId>
         <version>0.1.0-SNAPSHOT</version>
-        <relativePath>../../pom.xml</relativePath>
+        <relativePath>../pom.xml</relativePath>
     </parent>
 
-    <artifactId>yierdis-common</artifactId>
-    <description>Small shared byte, memory, and command value types.</description>
+    <artifactId>yierdis-db</artifactId>
+    <description>Storage contracts, native memory backend, and in-memory database.</description>
 
     <dependencies>
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-common</artifactId>
+        </dependency>
     </dependencies>
-
 </project>

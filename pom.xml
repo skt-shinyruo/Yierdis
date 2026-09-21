@@ -22,12 +22,12 @@
     </properties>
 
     <modules>
-        <module>yierdis-common/yierdis-common</module>
-        <module>yierdis-networking/yierdis-networking-resp</module>
+        <module>yierdis-common</module>
+        <module>yierdis-networking-resp</module>
         <module>yierdis-server/yierdis-server-api</module>
         <module>yierdis-server/yierdis-server</module>
-        <module>yierdis-command/yierdis-command</module>
-        <module>yierdis-db/yierdis-db</module>
+        <module>yierdis-command</module>
+        <module>yierdis-db</module>
         <module>yierdis-cli</module>
         <module>yierdis-benchmark</module>
         <module>yierdis-tests</module>

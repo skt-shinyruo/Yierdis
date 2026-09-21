@@ -29,7 +29,7 @@ Yierdis 的测试大致分成七层：
 先跑最窄协议测试：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server,yierdis-networking/yierdis-networking-resp -am -Dtest=RespRequestDecoderTest,RespIngressAdmissionTest,RespReplyWriterTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server,yierdis-networking-resp -am -Dtest=RespRequestDecoderTest,RespIngressAdmissionTest,RespReplyWriterTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 再跑 server 协议集成：
@@ -74,7 +74,7 @@ CommandExecutor
 先跑 direct ops，确认不依赖命令解析也能复现：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db -am -Dtest=StringDirectOpsTest,CollectionDirectOpsTest,TtlLifecycleDirectOpsTest,NativeStorageRegressionTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db -am -Dtest=StringDirectOpsTest,CollectionDirectOpsTest,TtlLifecycleDirectOpsTest,NativeStorageRegressionTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 再跑相关命令家族，确认回包语义没有偏移：
@@ -124,7 +124,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 先跑 allocator / handle contract：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db,yierdis-db/yierdis-db -am -Dtest=NativeHandleTest,YierdisNativeObjectTableTest,YierdisFfmStableMemoryBackendTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db -am -Dtest=NativeHandleTest,YierdisNativeObjectTableTest,YierdisFfmStableMemoryBackendTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 再跑 DB native path：

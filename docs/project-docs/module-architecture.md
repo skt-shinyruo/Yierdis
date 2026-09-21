@@ -74,7 +74,7 @@ Netty decoder、admission、reply reservation、chunk allocation、顺序写回�
 
 在一个 artifact 内保存 storage API、单机内存 DB、TTL/maxmemory、JDK FFM backend 和 stable native handle。`storage.api` 是 command/runtime 使用的契约包；`storage.memory` 与 `memory.foreign` 是实现包。
 
-DB 不依赖 command、server 或 RESP。DB 专用测试 helper 位于 `yierdis-db/yierdis-db/src/test/java`，不发布 testkit artifact。
+DB 不依赖 command、server 或 RESP。DB 专用测试 helper 位于 `yierdis-db/src/test/java`，不发布 testkit artifact。
 
 ### `yierdis-cli`
 

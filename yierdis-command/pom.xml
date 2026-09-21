@@ -8,20 +8,26 @@
         <groupId>yier.bubu.redis</groupId>
         <artifactId>yierdis-parent</artifactId>
         <version>0.1.0-SNAPSHOT</version>
-        <relativePath>../../pom.xml</relativePath>
+        <relativePath>../pom.xml</relativePath>
     </parent>
 
-    <artifactId>yierdis-networking-resp</artifactId>
-    <description>RESP wire protocol model, codecs, and reply writer.</description>
+    <artifactId>yierdis-command</artifactId>
+    <description>Command contracts, dispatch, transactions, and built-in commands.</description>
 
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-common</artifactId>
+            <artifactId>yierdis-server-api</artifactId>
         </dependency>
+
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-server-api</artifactId>
+            <artifactId>yierdis-db</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-common</artifactId>
         </dependency>
     </dependencies>
 </project>

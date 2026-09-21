@@ -44,15 +44,15 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 
 | 模块区域 | 主要职责 |
 | --- | --- |
-| `yierdis-common/yierdis-common` | 共享 bytes、memory 和 command 小型值类型与基础契约。 |
-| `yierdis-networking/yierdis-networking-resp` | RESP wire model、客户端 codec、`RespReplyWriter` 和 inline command parsing。 |
+| `yierdis-common` | 共享 bytes、memory 和 command 小型值类型与基础契约。 |
+| `yierdis-networking-resp` | RESP wire model、客户端 codec、`RespReplyWriter` 和 inline command parsing。 |
 | `yierdis-server/yierdis-server-api` | `ExecutionRequest`、`PreparedCommand`、`CommandResult`、语义 `RedisReply`、`RedisReplyRenderer` 和渲染端口 `RedisReplyWriter` 等执行层公共契约。 |
 | `yierdis-server/yierdis-server` | 进程入口、embedded runtime、executor、Netty transport、连接状态和最终组装。 |
-| `yierdis-command/yierdis-command` | 命令契约、registry/dispatcher、事务和 Redis 风格内建命令。 |
-| `yierdis-db/yierdis-db` | storage API、内存 DB、TTL/maxmemory、FFM backend 和 stable native handle。 |
+| `yierdis-command` | 命令契约、registry/dispatcher、事务和 Redis 风格内建命令。 |
+| `yierdis-db` | storage API、内存 DB、TTL/maxmemory、FFM backend 和 stable native handle。 |
 | `yierdis-cli` | 项目自带 RESP 客户端入口。 |
 | `yierdis-benchmark` | 基准压测入口和请求生成。 |
-| `yierdis-tests` | 跨模块行为和架构测试；DB 级 helper 归属 `yierdis-db/yierdis-db/src/test/java`。 |
+| `yierdis-tests` | 跨模块行为和架构测试；DB 级 helper 归属 `yierdis-db/src/test/java`。 |
 
 更完整的模块依赖方向看 [`module-architecture.md`](./module-architecture.md)。
 
@@ -111,11 +111,11 @@ DB 内部读 [`db-internals.md`](./db-internals.md)，FFM runtime 和 native-mem
 - `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java`
 - `yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ByteArrayExecutionRequest.java`
 - `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java`
-- `yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java`
-- `yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java`
+- `yierdis-command/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java`
+- `yierdis-command/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java`
 - `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java`
-- `yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java`
-- `yierdis-db/yierdis-db/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
+- `yierdis-command/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java`
+- `yierdis-db/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
 - `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`
 
 ## 接下来读什么

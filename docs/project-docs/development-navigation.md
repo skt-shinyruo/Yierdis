@@ -32,7 +32,7 @@ CommandExecutor
 - [`RespRequestDecoder.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java)
 - [`ByteArrayExecutionRequest.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ByteArrayExecutionRequest.java)
 - [`InboundMemoryBudget.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/protocol/resp/netty/InboundMemoryBudget.java)
-- [`RespReplyWriter.java`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java)
+- [`RespReplyWriter.java`](../../yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java)
 - [`NettyExecutionIoAdapter.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/NettyExecutionIoAdapter.java)
 
 继续追：
@@ -55,14 +55,14 @@ CommandExecutor
 
 先打开：
 
-- [`CommandSpec.java`](../../yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/api/CommandSpec.java)
-- [`CommandSyntax.java`](../../yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/api/CommandSyntax.java)
-- [`CommandArgs.java`](../../yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/api/CommandArgs.java)
-- [`CommandHandler.java`](../../yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/api/CommandHandler.java)
+- [`CommandSpec.java`](../../yierdis-command/src/main/java/yier/bubu/redis/command/api/CommandSpec.java)
+- [`CommandSyntax.java`](../../yierdis-command/src/main/java/yier/bubu/redis/command/api/CommandSyntax.java)
+- [`CommandArgs.java`](../../yierdis-command/src/main/java/yier/bubu/redis/command/api/CommandArgs.java)
+- [`CommandHandler.java`](../../yierdis-command/src/main/java/yier/bubu/redis/command/api/CommandHandler.java)
 - [`PreparedCommand.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/PreparedCommand.java)
-- [`CommandRegistry.java`](../../yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java)
-- [`CommandDispatcher.java`](../../yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java)
-- [`CommandSupport.java`](../../yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java)
+- [`CommandRegistry.java`](../../yierdis-command/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java)
+- [`CommandDispatcher.java`](../../yierdis-command/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java)
+- [`CommandSupport.java`](../../yierdis-command/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java)
 - 对应家族的 `*Commands.java`
 - 需要 server 观测或握手状态时，再看 [`ServerCommandModule.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/ServerCommandModule.java)
 
@@ -85,8 +85,8 @@ CommandExecutor
 
 先打开：
 
-- [`CommandDispatcher.java`](../../yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java)
-- [`TransactionCommands.java`](../../yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/kernel/TransactionCommands.java)
+- [`CommandDispatcher.java`](../../yierdis-command/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java)
+- [`TransactionCommands.java`](../../yierdis-command/src/main/java/yier/bubu/redis/command/kernel/TransactionCommands.java)
 - [`TransactionState.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/TransactionState.java)
 - [`EngineSession.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java)
 
@@ -111,8 +111,8 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 - HLL command：对应 `HllCommands`
 - API：`StringOps`、`HllOps`
 - DB 实现：`YierdisStringOps`、HLL 相关 ops
-- 共享 entry staging 与 ownership：[`YierdisDbKeyLifecycle.java`](../../yierdis-db/yierdis-db/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java)
-- entry 提交生命周期：[`PreparedEntryMutation.java`](../../yierdis-db/yierdis-db/src/main/java/yier/bubu/redis/storage/memory/PreparedEntryMutation.java)
+- 共享 entry staging 与 ownership：[`YierdisDbKeyLifecycle.java`](../../yierdis-db/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java)
+- entry 提交生命周期：[`PreparedEntryMutation.java`](../../yierdis-db/src/main/java/yier/bubu/redis/storage/memory/PreparedEntryMutation.java)
 - 内部结构：`StringRoot`、`YierdisHyperLogLog`
 
 继续追：
@@ -138,8 +138,8 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 - 对应 command 家族：`ListCommands`、`HashCommands`、`SetCommands`、`ZSetCommands`
 - API：`ListOps`、`HashOps`、`SetOps`、`ZSetOps`
 - DB 实现：对应 `Yierdis*Ops`
-- 共享 entry staging 与 ownership：[`YierdisDbKeyLifecycle.java`](../../yierdis-db/yierdis-db/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java)
-- entry 提交生命周期：[`PreparedEntryMutation.java`](../../yierdis-db/yierdis-db/src/main/java/yier/bubu/redis/storage/memory/PreparedEntryMutation.java)
+- 共享 entry staging 与 ownership：[`YierdisDbKeyLifecycle.java`](../../yierdis-db/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java)
+- entry 提交生命周期：[`PreparedEntryMutation.java`](../../yierdis-db/src/main/java/yier/bubu/redis/storage/memory/PreparedEntryMutation.java)
 - root/value：`ListRoot`、`HashRoot`、`SetRoot`、`ZSetRoot`、`ListValue`、`HashValue`、`SetValue`、`ZSetValue`
 
 继续追：
@@ -203,13 +203,13 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 
 先打开：
 
-- [`NativeHandle.java`](../../yierdis-db/yierdis-db/src/main/java/yier/bubu/redis/memory/api/NativeHandle.java)
-- [`YierdisNativeObjectTable.java`](../../yierdis-db/yierdis-db/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativeObjectTable.java)
-- [`YierdisFfmStableMemoryBackend.java`](../../yierdis-db/yierdis-db/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmStableMemoryBackend.java)
+- [`NativeHandle.java`](../../yierdis-db/src/main/java/yier/bubu/redis/memory/api/NativeHandle.java)
+- [`YierdisNativeObjectTable.java`](../../yierdis-db/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativeObjectTable.java)
+- [`YierdisFfmStableMemoryBackend.java`](../../yierdis-db/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmStableMemoryBackend.java)
 - `EntryHandle`、`ValueHandle`、`KeyHandle`
 - `NativeKeyDirectory`
 - `NativeBytesSlice`、`NativeByteStore`、`NativeByteMap`、`NativeListpack`
-- 测试侧 reachable graph：[`YierdisDbNativeHandleGraph.java`](../../yierdis-db/yierdis-db/src/test/java/yier/bubu/redis/storage/memory/YierdisDbNativeHandleGraph.java)
+- 测试侧 reachable graph：[`YierdisDbNativeHandleGraph.java`](../../yierdis-db/src/test/java/yier/bubu/redis/storage/memory/YierdisDbNativeHandleGraph.java)
 
 继续追：
 
@@ -265,7 +265,7 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 - [`ServerCommandModule.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/ServerCommandModule.java)
 - [`NettyServerInfoProvider.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/NettyServerInfoProvider.java)
 - [`YierdisInstanceObservability.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceObservability.java)
-- [`YierdisDbMemoryReporter.java`](../../yierdis-db/yierdis-db/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporter.java)
+- [`YierdisDbMemoryReporter.java`](../../yierdis-db/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporter.java)
 - `CommandExecutor` stats accessors
 
 `NettyServerInfoProvider.serverStatsSnapshot(...)` 是 INFO / STATS / health 的公共采样边界。新增公共统计时先进入这份请求级快照；memory/keyspace 这类 DB 聚合保持按 section 读取，避免 health 路径无条件扫描实例数据。
@@ -289,10 +289,10 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 
 - [`proxy-logic.md`](./proxy-logic.md)
 - [`CommandSession.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/CommandSession.java)
-- [`YierdisDbRouter.java`](../../yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/api/YierdisDbRouter.java)
-- [`CommandSupport.java`](../../yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java)
-- [`ServerInfoProvider.java`](../../yierdis-command/yierdis-command/src/main/java/yier/bubu/redis/command/api/ServerInfoProvider.java)
-- [`YierdisDbMutationExecutor.java`](../../yierdis-db/yierdis-db/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java)
+- [`YierdisDbRouter.java`](../../yierdis-command/src/main/java/yier/bubu/redis/command/api/YierdisDbRouter.java)
+- [`CommandSupport.java`](../../yierdis-command/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java)
+- [`ServerInfoProvider.java`](../../yierdis-command/src/main/java/yier/bubu/redis/command/api/ServerInfoProvider.java)
+- [`YierdisDbMutationExecutor.java`](../../yierdis-db/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java)
 
 继续追：
 
