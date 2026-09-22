@@ -15,7 +15,7 @@ public class CommandExecutorBackpressureTest {
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
 
         BiFunction<CommandSession, ExecutionRequest, PreparedCommand> engine = ExecutorCoreTestSupport.simpleCommandEngine();
-        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+        CommandExecutor executor = new CommandExecutor(
                 () -> {},
                 engine,
                 ownerExecutor,
@@ -55,7 +55,7 @@ public class CommandExecutorBackpressureTest {
     public void transportRecoveryWaitsForWritabilityAndClosedConnectionsLeaveTheTrackingSet() {
         RecordingIoAdapter io = new RecordingIoAdapter();
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
-        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+        CommandExecutor executor = new CommandExecutor(
                 () -> { },
                 ExecutorCoreTestSupport.simpleCommandEngine(),
                 ownerExecutor,

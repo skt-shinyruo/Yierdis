@@ -6,10 +6,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BooleanSupplier;
 
-final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
+final class CommandExecutorDrainLoop {
     private final SerialOwnerExecutor ownerExecutor;
-    private final ExecutorTaskQueue<C, CommandExecutorTask<C>> taskQueue;
-    private final CommandExecutorExecutionSupport<C> executionSupport;
+    private final ExecutorTaskQueue<ExecutionConnection, CommandExecutorTask> taskQueue;
+    private final CommandExecutorExecutionSupport executionSupport;
     private final int maxDrainCommands;
     private final long drainTimeLimitNanos;
     private final BooleanSupplier running;
@@ -20,8 +20,8 @@ final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
 
     CommandExecutorDrainLoop(
             SerialOwnerExecutor ownerExecutor,
-            ExecutorTaskQueue<C, CommandExecutorTask<C>> taskQueue,
-            CommandExecutorExecutionSupport<C> executionSupport,
+            ExecutorTaskQueue<ExecutionConnection, CommandExecutorTask> taskQueue,
+            CommandExecutorExecutionSupport executionSupport,
             int maxDrainCommands,
             long drainTimeLimitNanos,
             BooleanSupplier running
@@ -76,7 +76,7 @@ final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
                 break;
             }
 
-            CommandExecutorTask<C> task = taskQueue.poll();
+            CommandExecutorTask task = taskQueue.poll();
             if (task == null) {
                 break;
             }
@@ -108,7 +108,7 @@ final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
         }
     }
 
-    private void requeueStaleTask(CommandExecutorTask<C> task) {
+    private void requeueStaleTask(CommandExecutorTask task) {
         if (task == null || task.connection == null || !taskQueue.retryAtHead(task.connection, task)) {
             executionSupport.recycleAndRelease(task);
         }
@@ -124,7 +124,7 @@ final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
         }
     }
 
-    private void registerBlockedReplyTask(CommandExecutorTask<C> task) {
+    private void registerBlockedReplyTask(CommandExecutorTask task) {
         if (task == null || task.connection == null || task.reply == null || !taskQueue.block(task.connection, task)) {
             executionSupport.recycleAndRelease(task);
             return;

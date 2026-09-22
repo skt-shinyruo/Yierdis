@@ -31,7 +31,7 @@ import java.util.function.Function;
 
 final class YierdisServerChannelInitializer extends ChannelInitializer<SocketChannel> {
     private final YierdisServerRuntimeConfig config;
-    private final CommandExecutor<NettyExecutionConnection> executor;
+    private final CommandExecutor executor;
     private final BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory;
     private final Function<ExecutionRequest, ReplyAdmissionRequirement> replyAdmissionRequirement;
     private final InboundMemoryBudget inboundMemoryBudget;
@@ -41,7 +41,7 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
 
     YierdisServerChannelInitializer(
             YierdisServerRuntimeConfig config,
-            CommandExecutor<NettyExecutionConnection> executor,
+            CommandExecutor executor,
             BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory
     ) {
         this(
@@ -58,7 +58,7 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
 
     YierdisServerChannelInitializer(
             YierdisServerRuntimeConfig config,
-            CommandExecutor<NettyExecutionConnection> executor,
+            CommandExecutor executor,
             BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory,
             InboundMemoryBudget inboundMemoryBudget,
             OutboundMemoryBudget outboundMemoryBudget,
@@ -78,7 +78,7 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
 
     YierdisServerChannelInitializer(
             YierdisServerRuntimeConfig config,
-            CommandExecutor<NettyExecutionConnection> executor,
+            CommandExecutor executor,
             BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory,
             Function<ExecutionRequest, ReplyAdmissionRequirement> replyAdmissionRequirement,
             InboundMemoryBudget inboundMemoryBudget,
@@ -212,12 +212,12 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
      * executor to re-evaluate autoRead when it becomes writable again.
      */
     static final class WriteBufferBackpressureHandler extends io.netty.channel.ChannelInboundHandlerAdapter {
-        private final CommandExecutor<NettyExecutionConnection> executor;
+        private final CommandExecutor executor;
         private final long outputBufferOverLimitMillis;
         private ScheduledFuture<?> slowClientCloseFuture;
 
         WriteBufferBackpressureHandler(
-                CommandExecutor<NettyExecutionConnection> executor,
+                CommandExecutor executor,
                 long outputBufferOverLimitMillis
         ) {
             this.executor = Objects.requireNonNull(executor, "executor");

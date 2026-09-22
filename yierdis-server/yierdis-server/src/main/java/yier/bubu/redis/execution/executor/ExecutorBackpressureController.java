@@ -9,16 +9,16 @@ import java.util.function.BooleanSupplier;
 /**
  * 直接协调连接上下文与 I/O adapter，在串行 owner 上按全局水位恢复输入。
  */
-final class ExecutorBackpressureController<C extends ExecutionConnection> {
+final class ExecutorBackpressureController {
     private final SerialOwnerExecutor decisionExecutor;
     private final ExecutorBacklogBudget backlogBudget;
     private final int backpressureLowWatermark;
     private final long backpressureBytesHighWatermark;
     private final long backpressureBytesLowWatermark;
-    private final ExecutionIoAdapter<C> ioAdapter;
+    private final ExecutionIoAdapter ioAdapter;
     private final BooleanSupplier isRunning;
     private final AtomicBoolean globalRecoveryScheduled = new AtomicBoolean(false);
-    private final ConcurrentHashMap<C, Boolean> connectionsWithAutoReadDisabled = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<ExecutionConnection, Boolean> connectionsWithAutoReadDisabled = new ConcurrentHashMap<>();
     private final LongAdder backpressureEnter = new LongAdder();
     private final LongAdder backpressureExit = new LongAdder();
 
@@ -28,7 +28,7 @@ final class ExecutorBackpressureController<C extends ExecutionConnection> {
             int backpressureLowWatermark,
             long backpressureBytesHighWatermark,
             long backpressureBytesLowWatermark,
-            ExecutionIoAdapter<C> ioAdapter,
+            ExecutionIoAdapter ioAdapter,
             BooleanSupplier isRunning
     ) {
         this.decisionExecutor = Objects.requireNonNull(decisionExecutor, "decisionExecutor");
@@ -52,7 +52,7 @@ final class ExecutorBackpressureController<C extends ExecutionConnection> {
         return backpressureExit.sum();
     }
 
-    void disableAutoRead(C connection) {
+    void disableAutoRead(ExecutionConnection connection) {
         if (connection == null) {
             return;
         }
@@ -70,7 +70,7 @@ final class ExecutorBackpressureController<C extends ExecutionConnection> {
         }
     }
 
-    void enableAutoReadIfWeDisabled(C connection) {
+    void enableAutoReadIfWeDisabled(ExecutionConnection connection) {
         if (connection == null) {
             return;
         }
@@ -115,7 +115,7 @@ final class ExecutorBackpressureController<C extends ExecutionConnection> {
             return;
         }
 
-        for (C connection : connectionsWithAutoReadDisabled.keySet()) {
+        for (ExecutionConnection connection : connectionsWithAutoReadDisabled.keySet()) {
             if (!ioAdapter.isActive(connection)) {
                 connectionsWithAutoReadDisabled.remove(connection);
                 continue;
@@ -138,7 +138,7 @@ final class ExecutorBackpressureController<C extends ExecutionConnection> {
         }
     }
 
-    private void trackAutoReadDisabled(C connection) {
+    private void trackAutoReadDisabled(ExecutionConnection connection) {
         if (connectionsWithAutoReadDisabled.putIfAbsent(connection, Boolean.TRUE) == null) {
             try {
                 ioAdapter.onClose(connection, () -> connectionsWithAutoReadDisabled.remove(connection));

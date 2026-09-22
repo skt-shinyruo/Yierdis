@@ -87,7 +87,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
 
     private final YierdisServerRuntimeConfig config;
     private final long startedMillis;
-    private volatile CommandExecutor<NettyExecutionConnection> executor;
+    private volatile CommandExecutor executor;
     private volatile YierdisInstanceObservability observability;
     private volatile InboundMemoryBudget inboundMemoryBudget;
     private volatile OutboundMemoryBudget outboundMemoryBudget;
@@ -100,11 +100,11 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         this.startedMillis = System.currentTimeMillis();
     }
 
-    void bindExecutor(CommandExecutor<NettyExecutionConnection> executor) {
+    void bindExecutor(CommandExecutor executor) {
         this.executor = Objects.requireNonNull(executor, "executor");
     }
 
-    CommandExecutor<NettyExecutionConnection> boundExecutorForTests() {
+    CommandExecutor boundExecutorForTests() {
         return executor;
     }
 
@@ -135,7 +135,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     @Override
     public RedisReply info(CommandArgs args, CommandSession session) {
         Objects.requireNonNull(session, "session");
-        CommandExecutor<NettyExecutionConnection> ex = executor;
+        CommandExecutor ex = executor;
         if (ex == null) {
             return RedisReplies.error("ERR INFO not ready");
         }
@@ -157,7 +157,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     @Override
     public RedisReply stats(CommandSession session) {
         Objects.requireNonNull(session, "session");
-        CommandExecutor<NettyExecutionConnection> ex = executor;
+        CommandExecutor ex = executor;
         if (ex == null) {
             return RedisReplies.error("ERR STATS not ready");
         }
@@ -536,7 +536,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
                 : registry.statsSnapshot();
     }
 
-    private ServerStatsSnapshot serverStatsSnapshot(CommandExecutor<NettyExecutionConnection> executor) {
+    private ServerStatsSnapshot serverStatsSnapshot(CommandExecutor executor) {
         InboundMemoryBudgetStats inbound = inboundStats();
         OutboundMemoryBudgetStats outbound = outboundStats();
         YierdisInstanceObservability runtimeObservability = observability;

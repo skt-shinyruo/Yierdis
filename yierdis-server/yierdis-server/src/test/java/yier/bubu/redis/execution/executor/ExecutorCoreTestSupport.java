@@ -42,7 +42,7 @@ final class ExecutorCoreTestSupport {
         return new ManualOwnerExecutor();
     }
 
-    static void startExecutor(CommandExecutor<?> executor, ManualOwnerExecutor ownerExecutor) {
+    static void startExecutor(CommandExecutor executor, ManualOwnerExecutor ownerExecutor) {
         Thread startThread = new Thread(executor::start);
         startThread.start();
         long deadlineNanos = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(1);
@@ -129,15 +129,15 @@ final class ExecutorCoreTestSupport {
         };
     }
 
-    static <C extends ExecutionConnection> void publish(
-            CommandExecutor<C> executor,
-            C connection,
+    static void publish(
+            CommandExecutor executor,
+            ExecutionConnection connection,
             ExecutionRequest request,
             ExecutionReply reply
     ) {
-        ExecutorAdmissionAttempt<C> attempt = executor.tryAcquire(connection, request.retainedBytes());
-        Assert.assertTrue(attempt instanceof ExecutorAdmissionAttempt.Acquired<C>);
-        ((ExecutorAdmissionAttempt.Acquired<C>) attempt).admission().publish(request, reply);
+        ExecutorAdmissionAttempt attempt = executor.tryAcquire(connection, request.retainedBytes());
+        Assert.assertTrue(attempt instanceof ExecutorAdmissionAttempt.Acquired);
+        ((ExecutorAdmissionAttempt.Acquired) attempt).admission().publish(request, reply);
     }
 
     static ExecutionReply ioReply(RecordingIoAdapter io, TestConnection connection) {
@@ -449,38 +449,38 @@ final class TrackingExecutionRequest implements ExecutionRequest {
     }
 }
 
-final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
-    private final Map<TestConnection, ConnectionState> states = new IdentityHashMap<>();
+final class RecordingIoAdapter implements ExecutionIoAdapter {
+    private final Map<ExecutionConnection, ConnectionState> states = new IdentityHashMap<>();
     private final List<String> executionOrder = new ArrayList<>();
     private RuntimeException closeFailure;
 
     @Override
-    public boolean isActive(TestConnection connection) {
+    public boolean isActive(ExecutionConnection connection) {
         return state(connection).active;
     }
 
     @Override
-    public boolean isWritable(TestConnection connection) {
+    public boolean isWritable(ExecutionConnection connection) {
         return state(connection).writable;
     }
 
     @Override
-    public void disableInput(TestConnection connection) {
+    public void disableInput(ExecutionConnection connection) {
         state(connection).inputDisabled = true;
     }
 
     @Override
-    public void enableInput(TestConnection connection) {
+    public void enableInput(ExecutionConnection connection) {
         state(connection).inputEnabledAgain = true;
     }
 
     @Override
-    public void onClose(TestConnection connection, Runnable callback) {
+    public void onClose(ExecutionConnection connection, Runnable callback) {
         state(connection).closeCallback = callback;
     }
 
     @Override
-    public void closeConnection(TestConnection connection) {
+    public void closeConnection(ExecutionConnection connection) {
         state(connection).closeCalls++;
         if (closeFailure != null) {
             throw closeFailure;
@@ -534,7 +534,7 @@ final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
         state(connection).closeCallback.run();
     }
 
-    private ConnectionState state(TestConnection connection) {
+    private ConnectionState state(ExecutionConnection connection) {
         return states.computeIfAbsent(connection, ignored -> new ConnectionState());
     }
 

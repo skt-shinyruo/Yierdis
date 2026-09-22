@@ -639,13 +639,13 @@ public class YierdisServerBootstrapCommandWiringTest {
     private static final class InitializerTestEnv implements AutoCloseable {
         private final YierdisInstance instance;
         private final BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory;
-        private final CommandExecutor<NettyExecutionConnection> executor;
+        private final CommandExecutor executor;
 
         private InitializerTestEnv() {
             this.instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
             CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
             this.replyWriterFactory = RespReplyWriter::new;
-            this.executor = new CommandExecutor<>(
+            this.executor = new CommandExecutor(
                     instance.runtimeAccess()::bindToCurrentThread,
                     dispatcher::prepare,
                     new NettySerialOwnerExecutor(ImmediateEventExecutor.INSTANCE),

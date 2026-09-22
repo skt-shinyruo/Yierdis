@@ -14,7 +14,7 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
-public final class CommandExecutor<C extends ExecutionConnection> implements AutoCloseable {
+public final class CommandExecutor implements AutoCloseable {
     private final Runnable bindToCurrentThread;
     public enum SubmitRejectReason {
         NOT_RUNNING,
@@ -27,11 +27,11 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
 
     private final SerialOwnerExecutor ownerExecutor;
     private final ExecutorBacklogBudget backlogBudget;
-    private final ExecutorBackpressureController<C> backpressureController;
-    private final ExecutorTaskQueue<C, CommandExecutorTask<C>> taskQueue;
-    private final CommandExecutorSubmitter<C> submitter;
-    private final CommandExecutorDrainLoop<C> drainLoop;
-    private final CommandExecutorExecutionSupport<C> executionSupport;
+    private final ExecutorBackpressureController backpressureController;
+    private final ExecutorTaskQueue<ExecutionConnection, CommandExecutorTask> taskQueue;
+    private final CommandExecutorSubmitter submitter;
+    private final CommandExecutorDrainLoop drainLoop;
+    private final CommandExecutorExecutionSupport executionSupport;
     private final SchedulingPolicy schedulingPolicy;
     private volatile boolean running = true;
 
@@ -41,7 +41,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
             SerialOwnerExecutor ownerExecutor,
             BiFunction<Integer, ReplyShape, ReplyPlan> replySizer,
             BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory,
-            ExecutionIoAdapter<C> ioAdapter,
+            ExecutionIoAdapter ioAdapter,
             CommandExecutorConfig config
     ) {
         this.bindToCurrentThread = Objects.requireNonNull(bindToCurrentThread, "bindToCurrentThread");
@@ -49,7 +49,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
         this.ownerExecutor = Objects.requireNonNull(ownerExecutor, "ownerExecutor");
         this.schedulingPolicy = config.schedulingPolicy();
         this.backlogBudget = new ExecutorBacklogBudget(config.queueCapacity(), config.queueMaxBytes());
-        this.backpressureController = new ExecutorBackpressureController<>(
+        this.backpressureController = new ExecutorBackpressureController(
                 this.ownerExecutor,
                 backlogBudget,
                 config.backpressureLowWatermark(),
@@ -60,7 +60,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
         );
 
         this.taskQueue = new ExecutorTaskQueue<>(this.schedulingPolicy);
-        this.executionSupport = new CommandExecutorExecutionSupport<>(
+        this.executionSupport = new CommandExecutorExecutionSupport(
                 commandProcessor,
                 replySizer,
                 replyWriterFactory,
@@ -72,7 +72,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
                 config.backpressureBytesLowWatermark(),
                 () -> running
         );
-        this.drainLoop = new CommandExecutorDrainLoop<>(
+        this.drainLoop = new CommandExecutorDrainLoop(
                 this.ownerExecutor,
                 taskQueue,
                 executionSupport,
@@ -80,7 +80,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
                 TimeUnit.MILLISECONDS.toNanos(config.drainTimeLimitMillis()),
                 () -> running
         );
-        this.submitter = new CommandExecutorSubmitter<>(
+        this.submitter = new CommandExecutorSubmitter(
                 taskQueue,
                 backlogBudget,
                 backpressureController,
@@ -97,7 +97,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
         drainLoop.markStarted();
     }
 
-    public ExecutorAdmissionAttempt<C> tryAcquire(C connection, int retainedBytes) {
+    public ExecutorAdmissionAttempt tryAcquire(ExecutionConnection connection, int retainedBytes) {
         return submitter.tryAcquire(connection, retainedBytes);
     }
 
@@ -159,14 +159,14 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
         return future;
     }
 
-    public void onTransportUnwritable(C connection) {
+    public void onTransportUnwritable(ExecutionConnection connection) {
         if (connection == null || !running) {
             return;
         }
         backpressureController.disableAutoRead(connection);
     }
 
-    public void onTransportWritable(C connection) {
+    public void onTransportWritable(ExecutionConnection connection) {
         if (connection == null || !running) {
             return;
         }

@@ -1,16 +1,16 @@
 package yier.bubu.redis.execution.executor;
 
-public interface ExecutionIoAdapter<C extends ExecutionConnection> {
-    boolean isActive(C connection);
+public interface ExecutionIoAdapter {
+    boolean isActive(ExecutionConnection connection);
 
-    boolean isWritable(C connection);
+    boolean isWritable(ExecutionConnection connection);
 
-    void disableInput(C connection);
+    void disableInput(ExecutionConnection connection);
 
-    void enableInput(C connection);
+    void enableInput(ExecutionConnection connection);
 
-    void onClose(C connection, Runnable callback);
+    void onClose(ExecutionConnection connection, Runnable callback);
 
-    default void closeConnection(C connection) {
+    default void closeConnection(ExecutionConnection connection) {
     }
 }

@@ -131,7 +131,7 @@ public class ReplyProtocolVersionCaptureTest {
     ) throws Exception {
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
         RecordingIoAdapter io = new RecordingIoAdapter();
-        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+        CommandExecutor executor = new CommandExecutor(
                 () -> { },
                 engine,
                 ownerExecutor,

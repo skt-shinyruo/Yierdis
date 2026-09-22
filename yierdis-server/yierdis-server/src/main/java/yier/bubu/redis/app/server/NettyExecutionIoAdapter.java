@@ -1,24 +1,25 @@
 package yier.bubu.redis.app.server;
 
 import io.netty.channel.Channel;
+import yier.bubu.redis.execution.executor.ExecutionConnection;
 import yier.bubu.redis.execution.executor.ExecutionIoAdapter;
 import yier.bubu.redis.protocol.resp.netty.InboundReadCreditHandler;
 
 import java.util.Objects;
 
-final class NettyExecutionIoAdapter implements ExecutionIoAdapter<NettyExecutionConnection> {
+final class NettyExecutionIoAdapter implements ExecutionIoAdapter {
     @Override
-    public boolean isActive(NettyExecutionConnection connection) {
-        return connection != null && connection.channel().isActive();
+    public boolean isActive(ExecutionConnection connection) {
+        return connection instanceof NettyExecutionConnection netty && netty.channel().isActive();
     }
 
     @Override
-    public boolean isWritable(NettyExecutionConnection connection) {
-        return connection != null && connection.channel().isWritable();
+    public boolean isWritable(ExecutionConnection connection) {
+        return connection instanceof NettyExecutionConnection netty && netty.channel().isWritable();
     }
 
     @Override
-    public void disableInput(NettyExecutionConnection connection) {
+    public void disableInput(ExecutionConnection connection) {
         withChannel(connection, channel -> channel.eventLoop().execute(() -> {
             InboundReadCreditHandler readCredits = channel.pipeline().get(InboundReadCreditHandler.class);
             if (readCredits != null) {
@@ -30,7 +31,7 @@ final class NettyExecutionIoAdapter implements ExecutionIoAdapter<NettyExecution
     }
 
     @Override
-    public void enableInput(NettyExecutionConnection connection) {
+    public void enableInput(ExecutionConnection connection) {
         withChannel(connection, channel -> channel.eventLoop().execute(() -> {
             InboundReadCreditHandler readCredits = channel.pipeline().get(InboundReadCreditHandler.class);
             if (readCredits != null) {
@@ -42,23 +43,23 @@ final class NettyExecutionIoAdapter implements ExecutionIoAdapter<NettyExecution
     }
 
     @Override
-    public void onClose(NettyExecutionConnection connection, Runnable callback) {
-        if (connection == null || callback == null) {
+    public void onClose(ExecutionConnection connection, Runnable callback) {
+        if (callback == null || !(connection instanceof NettyExecutionConnection netty)) {
             return;
         }
-        connection.channel().closeFuture().addListener(ignored -> callback.run());
+        netty.channel().closeFuture().addListener(ignored -> callback.run());
     }
 
     @Override
-    public void closeConnection(NettyExecutionConnection connection) {
+    public void closeConnection(ExecutionConnection connection) {
         withChannel(connection, Channel::close);
     }
 
-    private static void withChannel(NettyExecutionConnection connection, java.util.function.Consumer<Channel> action) {
-        if (connection == null || action == null) {
+    private static void withChannel(ExecutionConnection connection, java.util.function.Consumer<Channel> action) {
+        if (action == null || !(connection instanceof NettyExecutionConnection netty)) {
             return;
         }
-        Channel channel = connection.channel();
+        Channel channel = netty.channel();
         if (channel == null) {
             return;
         }

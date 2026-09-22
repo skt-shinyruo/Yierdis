@@ -26,7 +26,7 @@ final class OrderedReplyTestFixture implements AutoCloseable {
     private final OutboundConnectionMemory connectionMemory;
 
     private OrderedReplyTestFixture(
-            CommandExecutor<NettyExecutionConnection> executor,
+            CommandExecutor executor,
             BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory
     ) {
         channel = new EmbeddedChannel(new NettyExecutionRequestIngress(executor, replyWriterFactory));
@@ -54,7 +54,7 @@ final class OrderedReplyTestFixture implements AutoCloseable {
     }
 
     static OrderedReplyTestFixture open(
-            CommandExecutor<NettyExecutionConnection> executor,
+            CommandExecutor executor,
             BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory
     ) {
         return new OrderedReplyTestFixture(executor, replyWriterFactory);

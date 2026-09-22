@@ -7,11 +7,11 @@ import java.util.Objects;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BooleanSupplier;
 
-final class CommandExecutorSubmitter<C extends ExecutionConnection> {
-    private final ExecutorTaskQueue<C, CommandExecutorTask<C>> taskQueue;
+final class CommandExecutorSubmitter {
+    private final ExecutorTaskQueue<ExecutionConnection, CommandExecutorTask> taskQueue;
     private final ExecutorBacklogBudget backlogBudget;
-    private final ExecutorBackpressureController<C> backpressureController;
-    private final ExecutionIoAdapter<C> ioAdapter;
+    private final ExecutorBackpressureController backpressureController;
+    private final ExecutionIoAdapter ioAdapter;
     private final int backpressureHighWatermark;
     private final long backpressureBytesHighWatermark;
     private final BooleanSupplier running;
@@ -24,10 +24,10 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
     private final LongAdder submitRejectedOfferFailed = new LongAdder();
 
     CommandExecutorSubmitter(
-            ExecutorTaskQueue<C, CommandExecutorTask<C>> taskQueue,
+            ExecutorTaskQueue<ExecutionConnection, CommandExecutorTask> taskQueue,
             ExecutorBacklogBudget backlogBudget,
-            ExecutorBackpressureController<C> backpressureController,
-            ExecutionIoAdapter<C> ioAdapter,
+            ExecutorBackpressureController backpressureController,
+            ExecutionIoAdapter ioAdapter,
             int backpressureHighWatermark,
             long backpressureBytesHighWatermark,
             BooleanSupplier running,
@@ -43,7 +43,7 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
         this.scheduleDrain = Objects.requireNonNull(scheduleDrain, "scheduleDrain");
     }
 
-    ExecutorAdmissionAttempt<C> tryAcquire(C connection, int retainedBytes) {
+    ExecutorAdmissionAttempt tryAcquire(ExecutionConnection connection, int retainedBytes) {
         Objects.requireNonNull(connection, "connection");
         if (retainedBytes < 0) {
             throw new IllegalArgumentException("retainedBytes must be >= 0");
@@ -53,16 +53,16 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
         if (!running.getAsBoolean()) {
             context.recordCommandRejected();
             submitRejectedNotRunning.increment();
-            return new ExecutorAdmissionAttempt.Rejected<>(CommandExecutor.SubmitRejectReason.NOT_RUNNING);
+            return new ExecutorAdmissionAttempt.Rejected(CommandExecutor.SubmitRejectReason.NOT_RUNNING);
         }
         if (context.isClosing()) {
             context.recordCommandRejected();
             submitRejectedClosing.increment();
-            return new ExecutorAdmissionAttempt.Rejected<>(CommandExecutor.SubmitRejectReason.CONNECTION_CLOSING);
+            return new ExecutorAdmissionAttempt.Rejected(CommandExecutor.SubmitRejectReason.CONNECTION_CLOSING);
         }
         if (!backlogBudget.canEverReserveQueuedBytes(retainedBytes)) {
             context.recordCommandRejected();
-            return new ExecutorAdmissionAttempt.Rejected<>(CommandExecutor.SubmitRejectReason.REQUEST_TOO_LARGE);
+            return new ExecutorAdmissionAttempt.Rejected(CommandExecutor.SubmitRejectReason.REQUEST_TOO_LARGE);
         }
 
         ExecutorAdmissionAttempt.BlockReason blocked = backlogBudget.tryReserve(retainedBytes);
@@ -73,23 +73,23 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
             } else {
                 submitRejectedBytesBudget.increment();
             }
-            return new ExecutorAdmissionAttempt.Unavailable<>(blocked);
+            return new ExecutorAdmissionAttempt.Unavailable(blocked);
         }
         if (backlogBudget.isGlobalBackpressureHigh()) {
             backpressureController.disableAutoRead(connection);
         }
-        return new ExecutorAdmissionAttempt.Acquired<>(new ExecutorAdmission<>(this, connection, retainedBytes));
+        return new ExecutorAdmissionAttempt.Acquired(new ExecutorAdmission(this, connection, retainedBytes));
     }
 
     // OPEN -> PUBLISHED 后，request 和 reply 的唯一所有者就是此方法；失败不能把它们重新交给调用方。
     void publish(
-            ExecutorAdmission<C> admission,
+            ExecutorAdmission admission,
             ExecutionRequest request,
             ExecutionReply reply
     ) {
-        C connection = admission.connection();
+        ExecutionConnection connection = admission.connection();
         int retainedBytes = admission.retainedBytes();
-        CommandExecutorTask<C> task = new CommandExecutorTask<>(connection, request, retainedBytes, reply);
+        CommandExecutorTask task = new CommandExecutorTask(connection, request, retainedBytes, reply);
         boolean recorded = false;
         boolean offered = false;
         try {
@@ -129,13 +129,13 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
         }
     }
 
-    void releaseUnpublished(ExecutorAdmission<C> admission) {
+    void releaseUnpublished(ExecutorAdmission admission) {
         backlogBudget.release(admission.retainedBytes());
     }
 
     private Boolean removeAfterPublishFailure(
-            C connection,
-            CommandExecutorTask<C> task,
+            ExecutionConnection connection,
+            CommandExecutorTask task,
             boolean offered
     ) {
         if (!offered) {
@@ -148,7 +148,7 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
         }
     }
 
-    private void closeAcceptedTask(CommandExecutorTask<C> task) {
+    private void closeAcceptedTask(CommandExecutorTask task) {
         try {
             task.request.close();
         } catch (Throwable ignored) {
@@ -163,7 +163,7 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
         }
     }
 
-    private void terminateAfterPublishFailure(C connection) {
+    private void terminateAfterPublishFailure(ExecutionConnection connection) {
         try {
             connection.markClosing();
         } catch (Throwable ignored) {

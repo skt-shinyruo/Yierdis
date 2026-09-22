@@ -21,13 +21,13 @@ import java.util.Objects;
 public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAdapter {
     private static final System.Logger LOG = System.getLogger(NettyExecutionRequestIngress.class.getName());
 
-    private final CommandExecutor<NettyExecutionConnection> executor;
+    private final CommandExecutor executor;
     private final BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory;
     private final ArrayDeque<PendingSubmission> pendingSubmissions = new ArrayDeque<>();
     private Runnable capacityRegistration;
 
     public NettyExecutionRequestIngress(
-            CommandExecutor<NettyExecutionConnection> executor,
+            CommandExecutor executor,
             BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory
     ) {
         this.executor = Objects.requireNonNull(executor, "executor");
@@ -198,18 +198,18 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
             NettyExecutionConnection connection,
             PendingSubmission submission
     ) {
-        ExecutorAdmissionAttempt<NettyExecutionConnection> attempt = executor.tryAcquire(
+        ExecutorAdmissionAttempt attempt = executor.tryAcquire(
                 connection,
                 submission.request.retainedBytes()
         );
-        if (attempt instanceof ExecutorAdmissionAttempt.Acquired<NettyExecutionConnection> acquired) {
+        if (attempt instanceof ExecutorAdmissionAttempt.Acquired acquired) {
             acquired.admission().publish(submission.request, submission.slot);
             return SubmissionAttempt.PUBLISHED;
         }
-        if (attempt instanceof ExecutorAdmissionAttempt.Unavailable<NettyExecutionConnection>) {
+        if (attempt instanceof ExecutorAdmissionAttempt.Unavailable) {
             return SubmissionAttempt.CAPACITY_UNAVAILABLE;
         }
-        if (attempt instanceof ExecutorAdmissionAttempt.Rejected<NettyExecutionConnection> rejected) {
+        if (attempt instanceof ExecutorAdmissionAttempt.Rejected rejected) {
             terminateRejectedSubmission(ctx, connection, submission, rejected.reason());
             return SubmissionAttempt.REJECTED;
         }

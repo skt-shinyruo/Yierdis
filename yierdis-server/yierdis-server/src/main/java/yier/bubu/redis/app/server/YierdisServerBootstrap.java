@@ -75,7 +75,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
 
     // Core resources (closed in reverse order).
     private YierdisInstance instance;
-    private CommandExecutor<NettyExecutionConnection> executor;
+    private CommandExecutor executor;
     private NettyServerInfoProvider infoProvider;
     private InboundMemoryBudget inboundMemoryBudget;
     private OutboundMemoryBudget outboundMemoryBudget;
@@ -209,7 +209,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
         CommandExecutorConfig executorConfig = runtimeConfig.executorConfig();
         SerialOwnerExecutor commandOwner = new NettySerialOwnerExecutor(commandGroup.next());
-        executor = new CommandExecutor<>(
+        executor = new CommandExecutor(
                 runtimeAccess::bindToCurrentThread,
                 executionEngine,
                 commandOwner,
@@ -236,7 +236,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             maintenancePeriodMillis = DEFERRED_RECLAMATION_INTERVAL_MILLIS;
             scheduledMaintenance = runtimeAccess::deferredReclamationTick;
         }
-        CommandExecutor<NettyExecutionConnection> exForTask = executor;
+        CommandExecutor exForTask = executor;
         java.util.concurrent.atomic.AtomicBoolean maintenancePending = new java.util.concurrent.atomic.AtomicBoolean(false);
         cleanupFuture = workerGroup.next().scheduleWithFixedDelay(() -> {
             if (!maintenancePending.compareAndSet(false, true)) {
@@ -339,7 +339,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         }
         cleanupFuture = null;
 
-        CommandExecutor<NettyExecutionConnection> ex = executor;
+        CommandExecutor ex = executor;
         if (ex != null) {
             try {
                 ex.shutdownGracefully().join();
@@ -457,7 +457,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
     private ChildDrainResult drainChildReplies(
             ChildChannelRegistry children,
             List<Channel> acceptedChildren,
-            CommandExecutor<NettyExecutionConnection> commandExecutor
+            CommandExecutor commandExecutor
     ) {
         if (children == null) {
             return ChildDrainResult.success();
@@ -540,7 +540,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         return closed;
     }
 
-    private void flushReplyCleanupTasks(CommandExecutor<NettyExecutionConnection> commandExecutor) {
+    private void flushReplyCleanupTasks(CommandExecutor commandExecutor) {
         if (commandExecutor != null) {
             commandExecutor.executeOwnerTask(() -> { }).join();
         }
@@ -581,7 +581,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         }
     }
 
-    private static void closeRuntimeAccess(CommandExecutor<?> executor, YierdisInstanceRuntimeAccess runtimeAccess) throws Throwable {
+    private static void closeRuntimeAccess(CommandExecutor executor, YierdisInstanceRuntimeAccess runtimeAccess) throws Throwable {
         Objects.requireNonNull(runtimeAccess, "runtimeAccess");
         if (executor == null) {
             runtimeAccess.close();

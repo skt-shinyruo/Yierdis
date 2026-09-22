@@ -82,7 +82,7 @@ public class CommandExecutorTest {
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
 
         BiFunction<CommandSession, ExecutionRequest, PreparedCommand> engine = ExecutorCoreTestSupport.simpleCommandEngine();
-        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+        CommandExecutor executor = new CommandExecutor(
                 () -> {},
                 engine,
                 ownerExecutor,
@@ -150,7 +150,7 @@ public class CommandExecutorTest {
         RecordingIoAdapter io = new RecordingIoAdapter();
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
 
-        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+        CommandExecutor executor = new CommandExecutor(
                 () -> {},
                 ExecutorCoreTestSupport.simpleCommandEngine(),
                 ownerExecutor,
@@ -194,7 +194,7 @@ public class CommandExecutorTest {
                 }
                 task.run();
             });
-            CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+            CommandExecutor executor = new CommandExecutor(
                     () -> { },
                     ExecutorCoreTestSupport.simpleCommandEngine(),
                     ownerExecutor,
@@ -256,7 +256,7 @@ public class CommandExecutorTest {
                 delegate.execute(task);
             });
             RecordingIoAdapter io = new RecordingIoAdapter();
-            CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+            CommandExecutor executor = new CommandExecutor(
                     () -> { },
                     ExecutorCoreTestSupport.simpleCommandEngine(),
                     ownerExecutor,
@@ -331,7 +331,7 @@ public class CommandExecutorTest {
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
 
         BiFunction<CommandSession, ExecutionRequest, PreparedCommand> engine = ExecutorCoreTestSupport.simpleCommandEngine();
-        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+        CommandExecutor executor = new CommandExecutor(
                 () -> {},
                 engine,
                 ownerExecutor,
@@ -401,7 +401,7 @@ public class CommandExecutorTest {
                 },
                 () -> lifecycle.add("close")
         );
-        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+        CommandExecutor executor = new CommandExecutor(
                 () -> {},
                 engine,
                 ownerExecutor,
@@ -450,7 +450,7 @@ public class CommandExecutorTest {
                 },
                 closes::incrementAndGet
         );
-        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+        CommandExecutor executor = new CommandExecutor(
                 () -> { },
                 engine,
                 ownerExecutor,
@@ -501,7 +501,7 @@ public class CommandExecutorTest {
                 },
                 preparedCloses::incrementAndGet
         );
-        CommandExecutor<TestConnection> executor = newStartedExecutor(
+        CommandExecutor executor = newStartedExecutor(
                 ownerExecutor,
                 engine,
                 (version, shape) -> ReplyPlan.exact(2L, 0L, version),
@@ -551,7 +551,7 @@ public class CommandExecutorTest {
                 },
                 preparedCloses::incrementAndGet
         );
-        CommandExecutor<TestConnection> executor = newStartedExecutor(
+        CommandExecutor executor = newStartedExecutor(
                 ownerExecutor,
                 engine,
                 (version, shape) -> ReplyPlan.exact(2L, 0L, version),
@@ -607,7 +607,7 @@ public class CommandExecutorTest {
             writerCreations.incrementAndGet();
             throw writerFailure;
         };
-        CommandExecutor<TestConnection> executor = newStartedExecutor(
+        CommandExecutor executor = newStartedExecutor(
                 ownerExecutor,
                 engine,
                 ExecutorCoreTestSupport.simpleReplySizer(),
@@ -655,7 +655,7 @@ public class CommandExecutorTest {
                 },
                 preparedCloses::incrementAndGet
         );
-        CommandExecutor<TestConnection> executor = newStartedExecutor(
+        CommandExecutor executor = newStartedExecutor(
                 ownerExecutor,
                 engine,
                 (version, shape) -> ReplyPlan.exact(2L, 0L, version),
@@ -713,7 +713,7 @@ public class CommandExecutorTest {
                 },
                 preparedCloses::incrementAndGet
         );
-        CommandExecutor<TestConnection> executor = newStartedExecutor(
+        CommandExecutor executor = newStartedExecutor(
                 ownerExecutor,
                 engine,
                 ExecutorCoreTestSupport.simpleReplySizer(),
@@ -767,7 +767,7 @@ public class CommandExecutorTest {
                 },
                 closes::incrementAndGet
         );
-        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+        CommandExecutor executor = new CommandExecutor(
                 () -> { },
                 engine,
                 ownerExecutor,
@@ -816,7 +816,7 @@ public class CommandExecutorTest {
                 },
                 closes::incrementAndGet
         );
-        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+        CommandExecutor executor = new CommandExecutor(
                 () -> { },
                 engine,
                 ownerExecutor,
@@ -862,7 +862,7 @@ public class CommandExecutorTest {
                     return CommandResult.reply(RedisReplies.simpleString("OK"));
                 }
         );
-        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+        CommandExecutor executor = new CommandExecutor(
                 () -> { },
                 engine,
                 ownerExecutor,
@@ -900,7 +900,7 @@ public class CommandExecutorTest {
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
 
         BiFunction<CommandSession, ExecutionRequest, PreparedCommand> engine = ExecutorCoreTestSupport.simpleCommandEngine();
-        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+        CommandExecutor executor = new CommandExecutor(
                 () -> {},
                 engine,
                 ownerExecutor,
@@ -950,7 +950,7 @@ public class CommandExecutorTest {
         CountDownLatch releaseBind = new CountDownLatch(1);
 
         BiFunction<CommandSession, ExecutionRequest, PreparedCommand> engine = ExecutorCoreTestSupport.simpleCommandEngine();
-        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+        CommandExecutor executor = new CommandExecutor(
                 () -> {
                     bindStarted.countDown();
                     try {
@@ -987,21 +987,21 @@ public class CommandExecutorTest {
         }
     }
 
-    private static <C extends ExecutionConnection> CommandExecutor.SubmitRejectReason rejectedReason(
-            ExecutorAdmissionAttempt<C> attempt
+    private static CommandExecutor.SubmitRejectReason rejectedReason(
+            ExecutorAdmissionAttempt attempt
     ) {
-        Assert.assertTrue(attempt instanceof ExecutorAdmissionAttempt.Rejected<C>);
-        return ((ExecutorAdmissionAttempt.Rejected<C>) attempt).reason();
+        Assert.assertTrue(attempt instanceof ExecutorAdmissionAttempt.Rejected);
+        return ((ExecutorAdmissionAttempt.Rejected) attempt).reason();
     }
 
-    private static CommandExecutor<TestConnection> newStartedExecutor(
+    private static CommandExecutor newStartedExecutor(
             ManualOwnerExecutor ownerExecutor,
             BiFunction<CommandSession, ExecutionRequest, PreparedCommand> engine,
             BiFunction<Integer, ReplyShape, ReplyPlan> replySizer,
             BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory,
             RecordingIoAdapter io
     ) {
-        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+        CommandExecutor executor = new CommandExecutor(
                 () -> { },
                 engine,
                 ownerExecutor,

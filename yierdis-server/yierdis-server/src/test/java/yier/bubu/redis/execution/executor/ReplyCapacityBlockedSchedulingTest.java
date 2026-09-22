@@ -37,7 +37,7 @@ public class ReplyCapacityBlockedSchedulingTest {
             prepares.incrementAndGet();
             return countingPrepared(ValidationResult.VALID, executes, closes);
         };
-        CommandExecutor<TestConnection> executor = newLifecycleExecutor(ownerExecutor, engine);
+        CommandExecutor executor = newLifecycleExecutor(ownerExecutor, engine);
         BlockingReply reply = new BlockingReply(false);
         try {
             ExecutorCoreTestSupport.publish(
@@ -66,7 +66,7 @@ public class ReplyCapacityBlockedSchedulingTest {
     @Test
     public void capacityWakeupRegistrationIsCancelledAfterTheReplyIsReserved() {
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
-        CommandExecutor<TestConnection> executor = newLifecycleExecutor(
+        CommandExecutor executor = newLifecycleExecutor(
                 ownerExecutor,
                 (session, request) -> countingPrepared(
                         ValidationResult.VALID,
@@ -105,7 +105,7 @@ public class ReplyCapacityBlockedSchedulingTest {
                 executes,
                 closes
         );
-        CommandExecutor<TestConnection> executor = newLifecycleExecutor(ownerExecutor, engine);
+        CommandExecutor executor = newLifecycleExecutor(ownerExecutor, engine);
         try {
             ExecutorCoreTestSupport.publish(
                     executor,
@@ -128,7 +128,7 @@ public class ReplyCapacityBlockedSchedulingTest {
     public void fairRunsOtherConnectionsWhileTheBlockedHeadKeepsItsOwnConnectionOrder() {
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
         List<String> completed = new ArrayList<>();
-        CommandExecutor<TestConnection> executor = newExecutor(ownerExecutor, completed, SchedulingPolicy.FAIR);
+        CommandExecutor executor = newExecutor(ownerExecutor, completed, SchedulingPolicy.FAIR);
         TestConnection a = ExecutorCoreTestSupport.newConnection("a");
         TestConnection b = ExecutorCoreTestSupport.newConnection("b");
         TrackingExecutionRequest a1 = TrackingExecutionRequest.ofUtf8("A1");
@@ -173,7 +173,7 @@ public class ReplyCapacityBlockedSchedulingTest {
     public void globalDoesNotPassTheBlockedHeadUntilItsCapacityWakeup() {
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
         List<String> completed = new ArrayList<>();
-        CommandExecutor<TestConnection> executor = newExecutor(ownerExecutor, completed, SchedulingPolicy.GLOBAL);
+        CommandExecutor executor = newExecutor(ownerExecutor, completed, SchedulingPolicy.GLOBAL);
         TestConnection a = ExecutorCoreTestSupport.newConnection("a");
         TestConnection b = ExecutorCoreTestSupport.newConnection("b");
         BlockingReply blocked = new BlockingReply(false);
@@ -200,7 +200,7 @@ public class ReplyCapacityBlockedSchedulingTest {
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
         RecordingIoAdapter io = new RecordingIoAdapter();
         List<String> completed = new ArrayList<>();
-        CommandExecutor<TestConnection> executor = newExecutor(ownerExecutor, completed, SchedulingPolicy.FAIR, io);
+        CommandExecutor executor = newExecutor(ownerExecutor, completed, SchedulingPolicy.FAIR, io);
         TestConnection blockedConnection = ExecutorCoreTestSupport.newConnection("blocked");
         TestConnection runnableConnection = ExecutorCoreTestSupport.newConnection("runnable");
         TrackingExecutionRequest blockedRequest = TrackingExecutionRequest.ofUtf8("A1");
@@ -250,7 +250,7 @@ public class ReplyCapacityBlockedSchedulingTest {
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
         RecordingIoAdapter io = new RecordingIoAdapter();
         List<String> completed = new ArrayList<>();
-        CommandExecutor<TestConnection> executor = newExecutor(ownerExecutor, completed, SchedulingPolicy.GLOBAL, io);
+        CommandExecutor executor = newExecutor(ownerExecutor, completed, SchedulingPolicy.GLOBAL, io);
         TestConnection blockedConnection = ExecutorCoreTestSupport.newConnection("blocked");
         TestConnection runnableConnection = ExecutorCoreTestSupport.newConnection("runnable");
         TrackingExecutionRequest blockedRequest = TrackingExecutionRequest.ofUtf8("A1");
@@ -285,7 +285,7 @@ public class ReplyCapacityBlockedSchedulingTest {
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
         RecordingIoAdapter io = new RecordingIoAdapter();
         List<String> completed = new ArrayList<>();
-        CommandExecutor<TestConnection> executor = newExecutor(ownerExecutor, completed, SchedulingPolicy.GLOBAL, io);
+        CommandExecutor executor = newExecutor(ownerExecutor, completed, SchedulingPolicy.GLOBAL, io);
         TestConnection blockedConnection = ExecutorCoreTestSupport.newConnection("blocked");
         TestConnection runnableConnection = ExecutorCoreTestSupport.newConnection("runnable");
         TrackingExecutionRequest blockedRequest = TrackingExecutionRequest.ofUtf8("A1");
@@ -320,7 +320,7 @@ public class ReplyCapacityBlockedSchedulingTest {
     public void globalShutdownReleasesTheBlockedHead() {
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
         List<String> completed = new ArrayList<>();
-        CommandExecutor<TestConnection> executor = newExecutor(ownerExecutor, completed, SchedulingPolicy.GLOBAL);
+        CommandExecutor executor = newExecutor(ownerExecutor, completed, SchedulingPolicy.GLOBAL);
         TestConnection connection = ExecutorCoreTestSupport.newConnection("a");
         TrackingExecutionRequest request = TrackingExecutionRequest.ofUtf8("A1");
         BlockingReply reply = new BlockingReply(false);
@@ -342,7 +342,7 @@ public class ReplyCapacityBlockedSchedulingTest {
         }
     }
 
-    private static CommandExecutor<TestConnection> newExecutor(
+    private static CommandExecutor newExecutor(
             ManualOwnerExecutor ownerExecutor,
             List<String> completed,
             SchedulingPolicy policy
@@ -350,7 +350,7 @@ public class ReplyCapacityBlockedSchedulingTest {
         return newExecutor(ownerExecutor, completed, policy, new RecordingIoAdapter());
     }
 
-    private static CommandExecutor<TestConnection> newExecutor(
+    private static CommandExecutor newExecutor(
             ManualOwnerExecutor ownerExecutor,
             List<String> completed,
             SchedulingPolicy policy,
@@ -366,7 +366,7 @@ public class ReplyCapacityBlockedSchedulingTest {
                     }
             );
         };
-        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+        CommandExecutor executor = new CommandExecutor(
                 () -> { },
                 engine,
                 ownerExecutor,
@@ -379,11 +379,11 @@ public class ReplyCapacityBlockedSchedulingTest {
         return executor;
     }
 
-    private static CommandExecutor<TestConnection> newLifecycleExecutor(
+    private static CommandExecutor newLifecycleExecutor(
             ManualOwnerExecutor ownerExecutor,
             BiFunction<CommandSession, ExecutionRequest, PreparedCommand> engine
     ) {
-        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+        CommandExecutor executor = new CommandExecutor(
                 () -> { },
                 engine,
                 ownerExecutor,

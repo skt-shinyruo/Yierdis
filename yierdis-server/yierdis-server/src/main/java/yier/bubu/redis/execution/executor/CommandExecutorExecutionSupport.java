@@ -20,13 +20,13 @@ import java.util.Objects;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BooleanSupplier;
 
-final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
+final class CommandExecutorExecutionSupport {
     private final BiFunction<CommandSession, ExecutionRequest, PreparedCommand> commandProcessor;
     private final BiFunction<Integer, ReplyShape, ReplyPlan> replySizer;
     private final BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory;
-    private final ExecutionIoAdapter<C> ioAdapter;
+    private final ExecutionIoAdapter ioAdapter;
     private final ExecutorBacklogBudget backlogBudget;
-    private final ExecutorBackpressureController<C> backpressureController;
+    private final ExecutorBackpressureController backpressureController;
     private final int backpressureLowWatermark;
     private final long backpressureBytesHighWatermark;
     private final long backpressureBytesLowWatermark;
@@ -39,9 +39,9 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
             BiFunction<CommandSession, ExecutionRequest, PreparedCommand> commandProcessor,
             BiFunction<Integer, ReplyShape, ReplyPlan> replySizer,
             BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory,
-            ExecutionIoAdapter<C> ioAdapter,
+            ExecutionIoAdapter ioAdapter,
             ExecutorBacklogBudget backlogBudget,
-            ExecutorBackpressureController<C> backpressureController,
+            ExecutorBackpressureController backpressureController,
             int backpressureLowWatermark,
             long backpressureBytesHighWatermark,
             long backpressureBytesLowWatermark,
@@ -59,8 +59,8 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         this.running = Objects.requireNonNull(running, "running");
     }
 
-    ExecutionAttempt execute(CommandExecutorTask<C> task) {
-        C connection = task.connection;
+    ExecutionAttempt execute(CommandExecutorTask task) {
+        ExecutionConnection connection = task.connection;
         ExecutionConnectionContext context = connection.context();
         // 除 closing 标记外还回看 transport 活性：某条关闭路径漏掉 markClosing 时，
         // 已入队命令也不允许在断开的连接上继续产生 side effect。
@@ -156,7 +156,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         return ExecutionAttempt.CONNECTION_CLOSED;
     }
 
-    void recycleAndRelease(CommandExecutorTask<C> task) {
+    void recycleAndRelease(CommandExecutorTask task) {
         try {
             task.cancelCapacityRegistration();
         } catch (Throwable ignored) {
@@ -169,11 +169,11 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         finishTask(task.connection, task.retainedBytes, false);
     }
 
-    void recoverInputIfPossible(C connection) {
+    void recoverInputIfPossible(ExecutionConnection connection) {
         maybeRecoverInput(connection);
     }
 
-    void onConnectionClosed(C connection, Runnable callback) {
+    void onConnectionClosed(ExecutionConnection connection, Runnable callback) {
         try {
             ioAdapter.onClose(connection, callback);
         } catch (Throwable ignored) {
@@ -193,7 +193,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         return closeAfterReply.sum();
     }
 
-    private void finishTask(C connection, int retainedBytes, boolean executed) {
+    private void finishTask(ExecutionConnection connection, int retainedBytes, boolean executed) {
         try {
             connection.context().recordCommandFinished(retainedBytes, executed);
         } finally {
@@ -202,7 +202,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         maybeRecoverInput(connection);
     }
 
-    private static void closePrepared(CommandExecutorTask<?> task) {
+    private static void closePrepared(CommandExecutorTask task) {
         try {
             task.closePrepared();
         } catch (Throwable ignored) {
@@ -214,7 +214,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         backlogBudget.release(retainedBytes);
     }
 
-    private void maybeRecoverInput(C connection) {
+    private void maybeRecoverInput(ExecutionConnection connection) {
         if (!running.getAsBoolean()) {
             return;
         }
@@ -231,7 +231,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
     }
 
     private void handleReplyExecutionFailure(
-            C connection,
+            ExecutionConnection connection,
             ExecutionConnectionContext context,
             ExecutionReply reply
     ) {
@@ -262,7 +262,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
     }
 
     private void closeResultUnknown(
-            C connection,
+            ExecutionConnection connection,
             ExecutionReply reply,
             Throwable primaryFailure
     ) {
@@ -287,7 +287,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
     }
 
     private void closeOversizedReply(
-            C connection,
+            ExecutionConnection connection,
             ExecutionReply reply
     ) {
         try {
@@ -301,7 +301,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         closeTransport(connection);
     }
 
-    private void closeTransport(C connection) {
+    private void closeTransport(ExecutionConnection connection) {
         try {
             ioAdapter.closeConnection(connection);
         } catch (Throwable ignored) {

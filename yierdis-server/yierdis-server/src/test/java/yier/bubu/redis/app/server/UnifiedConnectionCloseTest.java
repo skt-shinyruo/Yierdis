@@ -62,7 +62,7 @@ public class UnifiedConnectionCloseTest {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         try {
             // executor 不启动：handler 只会回调 onTransportUnwritable，该路径不依赖 drain loop。
-            CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
+            CommandExecutor executor = new CommandExecutor(
                     () -> { },
                     (session, request) -> { throw new UnsupportedOperationException(); },
                     new NettySerialOwnerExecutor(group.next()),

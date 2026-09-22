@@ -17,7 +17,7 @@ public class CommandExecutorFairSchedulingTest {
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
 
         BiFunction<CommandSession, ExecutionRequest, PreparedCommand> engine = ExecutorCoreTestSupport.simpleCommandEngine();
-        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+        CommandExecutor executor = new CommandExecutor(
                 () -> {},
                 engine,
                 ownerExecutor,

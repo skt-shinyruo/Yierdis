@@ -7,8 +7,8 @@ import yier.bubu.redis.execution.api.ReplyPlan;
 
 import java.util.Objects;
 
-final class CommandExecutorTask<C extends ExecutionConnection> {
-    final C connection;
+final class CommandExecutorTask {
+    final ExecutionConnection connection;
     final ExecutionRequest request;
     final int retainedBytes;
     final ExecutionReply reply;
@@ -16,7 +16,7 @@ final class CommandExecutorTask<C extends ExecutionConnection> {
     ReplyPlan replyPlan;
     private Runnable capacityRegistration;
 
-    CommandExecutorTask(C connection, ExecutionRequest request, int retainedBytes, ExecutionReply reply) {
+    CommandExecutorTask(ExecutionConnection connection, ExecutionRequest request, int retainedBytes, ExecutionReply reply) {
         this.connection = connection;
         this.request = request;
         this.retainedBytes = retainedBytes;

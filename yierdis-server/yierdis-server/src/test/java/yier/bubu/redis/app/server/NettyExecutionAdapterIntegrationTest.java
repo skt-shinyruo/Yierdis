@@ -49,7 +49,7 @@ public class NettyExecutionAdapterIntegrationTest {
         try (YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build())) {
             CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
             BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
-            CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
+            CommandExecutor executor = new CommandExecutor(
                     instance.runtimeAccess()::bindToCurrentThread,
                     dispatcher::prepare,
                     new NettySerialOwnerExecutor(ImmediateEventExecutor.INSTANCE),
@@ -78,7 +78,7 @@ public class NettyExecutionAdapterIntegrationTest {
         EventExecutor eventExecutor = group.next();
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
         BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
-        CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
+        CommandExecutor executor = new CommandExecutor(
                 instance.runtimeAccess()::bindToCurrentThread,
                 TestCommandDispatchers.forInstance(instance)::prepare,
                 new NettySerialOwnerExecutor(eventExecutor),
@@ -130,7 +130,7 @@ public class NettyExecutionAdapterIntegrationTest {
         EventExecutor eventExecutor = group.next();
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
         BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
-        CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
+        CommandExecutor executor = new CommandExecutor(
                 instance.runtimeAccess()::bindToCurrentThread,
                 TestCommandDispatchers.forInstance(instance)::prepare,
                 new NettySerialOwnerExecutor(eventExecutor),
@@ -178,7 +178,7 @@ public class NettyExecutionAdapterIntegrationTest {
     public void echoNullBulkStringUsesTheRegisteredRequestSlot() {
         try (YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build())) {
             BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
-            CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
+            CommandExecutor executor = new CommandExecutor(
                     instance.runtimeAccess()::bindToCurrentThread,
                     TestCommandDispatchers.forInstance(instance)::prepare,
                     new NettySerialOwnerExecutor(ImmediateEventExecutor.INSTANCE),
@@ -205,7 +205,7 @@ public class NettyExecutionAdapterIntegrationTest {
     public void setNullBulkStringUsesTheRegisteredRequestSlot() {
         try (YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build())) {
             BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
-            CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
+            CommandExecutor executor = new CommandExecutor(
                     instance.runtimeAccess()::bindToCurrentThread,
                     TestCommandDispatchers.forInstance(instance)::prepare,
                     new NettySerialOwnerExecutor(ImmediateEventExecutor.INSTANCE),

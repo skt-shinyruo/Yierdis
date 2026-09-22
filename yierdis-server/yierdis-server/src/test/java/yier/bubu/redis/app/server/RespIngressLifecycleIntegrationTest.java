@@ -329,13 +329,13 @@ public class RespIngressLifecycleIntegrationTest {
     private static final class ExecutorFixture implements AutoCloseable {
         private final DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         private final EventExecutor owner = group.next();
-        private final CommandExecutor<NettyExecutionConnection> executor;
+        private final CommandExecutor executor;
         private final OrderedReplyTestFixture replies;
         private final EmbeddedChannel channel;
         private final NettyExecutionConnection connection;
 
         private ExecutorFixture(int queueCapacity, AtomicInteger executions) {
-            executor = new CommandExecutor<>(
+            executor = new CommandExecutor(
                     () -> { },
                     (session, request) -> okPrepared(executions),
                     new NettySerialOwnerExecutor(owner),
@@ -386,7 +386,7 @@ public class RespIngressLifecycleIntegrationTest {
 
         private final DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         private final EventExecutor owner = group.next();
-        private final CommandExecutor<NettyExecutionConnection> executor;
+        private final CommandExecutor executor;
         private final InboundMemoryBudget inboundBudget = new InboundMemoryBudget(INBOUND_CAPACITY_BYTES);
         private final InboundConnectionMemory inboundMemory = connectionMemory(INBOUND_CAPACITY_BYTES);
         private final OutboundMemoryBudget outboundBudget = new OutboundMemoryBudget(OUTBOUND_GLOBAL_BYTES);
@@ -396,7 +396,7 @@ public class RespIngressLifecycleIntegrationTest {
 
         private ProtocolExecutorFixture(int queueCapacity, AtomicInteger executions) {
             BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
-            executor = new CommandExecutor<>(
+            executor = new CommandExecutor(
                     () -> { },
                     (session, request) -> okPrepared(executions),
                     new NettySerialOwnerExecutor(owner),

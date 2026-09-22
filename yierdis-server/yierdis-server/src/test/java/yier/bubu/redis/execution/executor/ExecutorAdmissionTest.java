@@ -14,26 +14,26 @@ public class ExecutorAdmissionTest {
     @Test
     public void unpublishedAdmissionReservesCapacityButNotRequestOwnership() {
         ManualOwnerExecutor owner = ExecutorCoreTestSupport.manualOwnerExecutor();
-        CommandExecutor<TestConnection> executor = newExecutor(owner, 1, 64L);
+        CommandExecutor executor = newExecutor(owner, 1, 64L);
         TestConnection connection = ExecutorCoreTestSupport.newConnection("admission");
         TrackingExecutionRequest request = TrackingExecutionRequest.ofUtf8("PING");
         TrackingReply reply = new TrackingReply();
         try {
-            ExecutorAdmissionAttempt<TestConnection> first = executor.tryAcquire(connection, 32);
-            Assert.assertTrue(first instanceof ExecutorAdmissionAttempt.Acquired<TestConnection>);
+            ExecutorAdmissionAttempt first = executor.tryAcquire(connection, 32);
+            Assert.assertTrue(first instanceof ExecutorAdmissionAttempt.Acquired);
             Assert.assertEquals(1, executor.statsSnapshot().queuedTasks());
             Assert.assertEquals(0, connection.context().pending());
             Assert.assertEquals(0, request.closeCalls());
             Assert.assertEquals(0, reply.cancelCalls());
 
-            ExecutorAdmissionAttempt<TestConnection> second = executor.tryAcquire(connection, 32);
+            ExecutorAdmissionAttempt second = executor.tryAcquire(connection, 32);
             Assert.assertEquals(
                     ExecutorAdmissionAttempt.BlockReason.QUEUE_SLOTS,
-                    ((ExecutorAdmissionAttempt.Unavailable<TestConnection>) second).reason()
+                    ((ExecutorAdmissionAttempt.Unavailable) second).reason()
             );
 
-            ExecutorAdmission<TestConnection> admission =
-                    ((ExecutorAdmissionAttempt.Acquired<TestConnection>) first).admission();
+            ExecutorAdmission admission =
+                    ((ExecutorAdmissionAttempt.Acquired) first).admission();
             admission.close();
             admission.close();
 
@@ -51,12 +51,12 @@ public class ExecutorAdmissionTest {
     @Test
     public void publishTransfersRequestAndReplyExactlyOnce() {
         ManualOwnerExecutor owner = ExecutorCoreTestSupport.manualOwnerExecutor();
-        CommandExecutor<TestConnection> executor = newExecutor(owner, 1, 64L);
+        CommandExecutor executor = newExecutor(owner, 1, 64L);
         TestConnection connection = ExecutorCoreTestSupport.newConnection("publish");
         TrackingExecutionRequest request = TrackingExecutionRequest.ofUtf8("PING");
         TrackingReply reply = new TrackingReply();
 
-        ExecutorAdmission<TestConnection> admission = acquired(
+        ExecutorAdmission admission = acquired(
                 executor.tryAcquire(connection, request.retainedBytes())
         );
         admission.publish(request, reply);
@@ -79,9 +79,9 @@ public class ExecutorAdmissionTest {
     @Test
     public void capacityRegistrationWakesOnceAndCanBeCancelled() {
         ManualOwnerExecutor owner = ExecutorCoreTestSupport.manualOwnerExecutor();
-        CommandExecutor<TestConnection> executor = newExecutor(owner, 1, 64L);
+        CommandExecutor executor = newExecutor(owner, 1, 64L);
         TestConnection connection = ExecutorCoreTestSupport.newConnection("wait");
-        ExecutorAdmission<TestConnection> held = acquired(executor.tryAcquire(connection, 32));
+        ExecutorAdmission held = acquired(executor.tryAcquire(connection, 32));
         AtomicInteger wakeups = new AtomicInteger();
 
         Runnable registration = executor.onAdmissionAvailable(32, wakeups::incrementAndGet);
@@ -100,7 +100,7 @@ public class ExecutorAdmissionTest {
     @Test
     public void capacityRegistrationAfterExecutorCloseWakesImmediately() {
         ManualOwnerExecutor owner = ExecutorCoreTestSupport.manualOwnerExecutor();
-        CommandExecutor<TestConnection> executor = newExecutor(owner, 1, 64L);
+        CommandExecutor executor = newExecutor(owner, 1, 64L);
         AtomicInteger wakeups = new AtomicInteger();
 
         executor.close();
@@ -115,7 +115,7 @@ public class ExecutorAdmissionTest {
     @Test
     public void bytesBudgetAndPendingBytesBackpressureUseTheHeapFootprintEstimate() {
         ManualOwnerExecutor owner = ExecutorCoreTestSupport.manualOwnerExecutor();
-        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+        CommandExecutor executor = new CommandExecutor(
                 () -> { },
                 ExecutorCoreTestSupport.simpleCommandEngine(),
                 owner,
@@ -132,7 +132,7 @@ public class ExecutorAdmissionTest {
         try {
             Assert.assertEquals(80, request.retainedBytes());
 
-            ExecutorAdmission<TestConnection> admission = acquired(
+            ExecutorAdmission admission = acquired(
                     executor.tryAcquire(connection, request.retainedBytes()));
             admission.publish(request, reply);
 
@@ -140,10 +140,10 @@ public class ExecutorAdmissionTest {
             Assert.assertEquals(80L, connection.context().pendingBytes());
             Assert.assertTrue(connection.context().autoReadDisabledByExecutor());
 
-            ExecutorAdmissionAttempt<TestConnection> second = executor.tryAcquire(connection, 80);
+            ExecutorAdmissionAttempt second = executor.tryAcquire(connection, 80);
             Assert.assertEquals(
                     ExecutorAdmissionAttempt.BlockReason.QUEUE_BYTES,
-                    ((ExecutorAdmissionAttempt.Unavailable<TestConnection>) second).reason()
+                    ((ExecutorAdmissionAttempt.Unavailable) second).reason()
             );
         } finally {
             executor.close();
@@ -151,19 +151,19 @@ public class ExecutorAdmissionTest {
         }
     }
 
-    private static <C extends ExecutionConnection> ExecutorAdmission<C> acquired(
-            ExecutorAdmissionAttempt<C> attempt
+    private static ExecutorAdmission acquired(
+            ExecutorAdmissionAttempt attempt
     ) {
-        Assert.assertTrue(attempt instanceof ExecutorAdmissionAttempt.Acquired<C>);
-        return ((ExecutorAdmissionAttempt.Acquired<C>) attempt).admission();
+        Assert.assertTrue(attempt instanceof ExecutorAdmissionAttempt.Acquired);
+        return ((ExecutorAdmissionAttempt.Acquired) attempt).admission();
     }
 
-    private static CommandExecutor<TestConnection> newExecutor(
+    private static CommandExecutor newExecutor(
             ManualOwnerExecutor owner,
             int queueCapacity,
             long queueMaxBytes
     ) {
-        return new CommandExecutor<>(
+        return new CommandExecutor(
                 () -> { },
                 ExecutorCoreTestSupport.simpleCommandEngine(),
                 owner,
