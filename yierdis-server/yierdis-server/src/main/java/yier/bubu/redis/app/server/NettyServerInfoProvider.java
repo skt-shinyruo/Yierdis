@@ -1,6 +1,8 @@
 package yier.bubu.redis.app.server;
 
 // INFO/STATS 提供器：基于 transport-neutral executor 统计与连接态输出可观测性摘要，避免在热路径做额外分配。
+// 所有 INFO/STATS/HEALTH 字段在 fields() 中只声明一次（名称 + 取值 + 分组 + 生效渲染面），
+// 由 mapReply / appendText 两个渲染器过滤输出；map 输出顺序 = 声明顺序，文本输出顺序由组序列给出。
 
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
@@ -18,6 +20,7 @@ import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -30,95 +33,57 @@ import java.util.function.Supplier;
  * pre-aggregated counters updated on the hot path.
  */
 final class NettyServerInfoProvider implements ServerInfoProvider {
-    private static final byte[] KEY_SERVER = ascii("server");
-    private static final byte[] VALUE_SERVER = ascii("yierdis");
-    private static final byte[] KEY_VERSION = ascii("version");
-    private static final byte[] VALUE_VERSION = YierdisBuildInfo.versionAsciiBytes();
-    private static final byte[] KEY_PORT = ascii("port");
-    private static final byte[] KEY_IO_THREADS = ascii("io_threads");
-    private static final byte[] KEY_EXECUTOR_POLICY = ascii("executor_policy");
-    private static final byte[] KEY_EXECUTOR_QUEUE_CAPACITY = ascii("executor_queue_capacity");
-    private static final byte[] KEY_EXECUTOR_QUEUE_MAX_BYTES = ascii("executor_queue_max_bytes");
-    private static final byte[] KEY_BACKPRESSURE_HIGH = ascii("backpressure_high");
-    private static final byte[] KEY_BACKPRESSURE_LOW = ascii("backpressure_low");
-    private static final byte[] KEY_BACKPRESSURE_BYTES_HIGH = ascii("backpressure_bytes_high");
-    private static final byte[] KEY_BACKPRESSURE_BYTES_LOW = ascii("backpressure_bytes_low");
-    private static final byte[] KEY_EXECUTOR_MAX_DRAIN = ascii("executor_max_drain");
-    private static final byte[] KEY_EXECUTOR_DRAIN_MILLIS = ascii("executor_drain_millis");
-    private static final byte[] KEY_STARTED_MILLIS = ascii("started_millis");
-    private static final byte[] KEY_UPTIME_MILLIS = ascii("uptime_millis");
-    private static final byte[] KEY_INBOUND_CAPACITY_BYTES = ascii("inbound_capacity_bytes");
-    private static final byte[] KEY_INBOUND_RESERVED_BYTES = ascii("inbound_reserved_bytes");
-    private static final byte[] KEY_INBOUND_PEAK_RESERVED_BYTES = ascii("inbound_peak_reserved_bytes");
-    private static final byte[] KEY_INBOUND_WAITING_CONNECTIONS = ascii("inbound_waiting_connections");
-    private static final byte[] KEY_INBOUND_BACKPRESSURED = ascii("inbound_backpressured");
-    private static final byte[] KEY_INBOUND_REJECTED_CONNECTIONS = ascii("inbound_rejected_connections");
-    private static final byte[] KEY_INBOUND_CLOSED = ascii("inbound_closed");
-    private static final byte[] KEY_REPLY_GLOBAL_CAPACITY_BYTES = ascii("reply_global_capacity_bytes");
-    private static final byte[] KEY_REPLY_PER_CONNECTION_CAPACITY_BYTES = ascii("reply_per_connection_capacity_bytes");
-    private static final byte[] KEY_REPLY_MAX_TOTAL_BYTES = ascii("reply_max_total_bytes");
-    private static final byte[] KEY_REPLY_CHUNK_PAYLOAD_BYTES = ascii("reply_chunk_payload_bytes");
-    private static final byte[] KEY_REPLY_CONTROL_RESERVATION_BYTES = ascii("reply_control_reservation_bytes");
-    private static final byte[] KEY_REPLY_DRAIN_TIMEOUT_MILLIS = ascii("reply_drain_timeout_millis");
-    private static final byte[] KEY_OUTBOUND_RESERVED_BYTES = ascii("outbound_reserved_bytes");
-    private static final byte[] KEY_OUTBOUND_ALLOCATED_BYTES = ascii("outbound_allocated_bytes");
-    private static final byte[] KEY_OUTBOUND_PEAK_RESERVED_BYTES = ascii("outbound_peak_reserved_bytes");
-    private static final byte[] KEY_OUTBOUND_PEAK_ALLOCATED_BYTES = ascii("outbound_peak_allocated_bytes");
-    private static final byte[] KEY_OUTBOUND_CAPACITY_REJECTS = ascii("outbound_capacity_rejects");
-    private static final byte[] KEY_OUTBOUND_WAITING_CONNECTIONS = ascii("outbound_waiting_connections");
-    private static final byte[] KEY_OUTBOUND_ACTIVE_CONNECTIONS = ascii("outbound_active_connections");
-    private static final byte[] KEY_OUTBOUND_ACTIVE_SLOTS = ascii("outbound_active_slots");
-    private static final byte[] KEY_OUTBOUND_CLOSED = ascii("outbound_closed");
-    private static final byte[] KEY_OUTBOUND_ACTIVE_CHUNKS = ascii("outbound_active_chunks");
-    private static final byte[] KEY_OUTBOUND_ACTIVE_SOURCES = ascii("outbound_active_sources");
-    private static final byte[] KEY_OUTBOUND_OVERSIZED_REPLIES = ascii("outbound_oversized_replies");
-    private static final byte[] KEY_OUTBOUND_CANCELLED_SLOTS = ascii("outbound_cancelled_slots");
-    private static final byte[] KEY_OUTBOUND_FAILED_SLOTS = ascii("outbound_failed_slots");
-    private static final byte[] KEY_OUTBOUND_WRITE_FAILURES = ascii("outbound_write_failures");
-    private static final byte[] KEY_RESULT_UNKNOWN_CLOSES = ascii("result_unknown_closes");
-    private static final byte[] KEY_REPLY_SHUTDOWN_TIMEOUTS = ascii("reply_shutdown_timeouts");
-    private static final byte[] KEY_LIVE_CHILD_CHANNELS = ascii("live_child_channels");
-    private static final byte[] KEY_LIFECYCLE_STATE = ascii("lifecycle_state");
-    private static final byte[] KEY_READY = ascii("ready");
-    private static final byte[] KEY_WRITABLE = ascii("writable");
-    private static final byte[] KEY_DEGRADED_DATABASES = ascii("degraded_databases");
-    private static final byte[] KEY_DATABASES = ascii("databases");
-    private static final byte[] KEY_TOTAL_CONNECTIONS_RECEIVED = ascii("total_connections_received");
-    private static final byte[] KEY_REJECTED_CONNECTIONS = ascii("rejected_connections");
-    private static final byte[] KEY_MAX_CLIENTS = ascii("max_clients");
-    private static final byte[] KEY_FIRST_FAILURE_TYPE = ascii("first_failure_type");
-    private static final byte[] KEY_FIRST_FAILURE_MESSAGE = ascii("first_failure_message");
 
-    private static final byte[] KEY_QUEUED_TASKS = ascii("queued_tasks");
-    private static final byte[] KEY_QUEUED_BYTES = ascii("queued_bytes");
-    private static final byte[] KEY_CHANNELS_AUTOREAD_DISABLED = ascii("channels_autoread_disabled");
-    private static final byte[] KEY_SUBMIT_ACCEPTED_TOTAL = ascii("submit_accepted_total");
-    private static final byte[] KEY_SUBMIT_REJECTED_NOT_RUNNING_TOTAL = ascii("submit_rejected_not_running_total");
-    private static final byte[] KEY_SUBMIT_REJECTED_CLOSING_TOTAL = ascii("submit_rejected_closing_total");
-    private static final byte[] KEY_SUBMIT_REJECTED_QUEUE_FULL_TOTAL = ascii("submit_rejected_queue_full_total");
-    private static final byte[] KEY_SUBMIT_REJECTED_BYTES_BUDGET_TOTAL = ascii("submit_rejected_bytes_budget_total");
-    private static final byte[] KEY_SUBMIT_REJECTED_OFFER_FAILED_TOTAL = ascii("submit_rejected_offer_failed_total");
-    private static final byte[] KEY_COMMANDS_EXECUTED_TOTAL = ascii("commands_executed_total");
-    private static final byte[] KEY_COMMANDS_SKIPPED_CLOSING_TOTAL = ascii("commands_skipped_closing_total");
-    private static final byte[] KEY_CLOSE_AFTER_REPLY_TOTAL = ascii("close_after_reply_total");
-    private static final byte[] KEY_BACKPRESSURE_ENTER_TOTAL = ascii("backpressure_enter_total");
-    private static final byte[] KEY_BACKPRESSURE_EXIT_TOTAL = ascii("backpressure_exit_total");
-    private static final byte[] KEY_DRAIN_LIMITED_MAX_COMMANDS_TOTAL = ascii("drain_limited_max_commands_total");
-    private static final byte[] KEY_DRAIN_LIMITED_TIME_BUDGET_TOTAL = ascii("drain_limited_time_budget_total");
-    private static final byte[] KEY_DEFERRED_FAIR_REPLY_HEADS = ascii("deferred_fair_reply_heads");
-    private static final byte[] KEY_DEFERRED_GLOBAL_REPLY_HEADS = ascii("deferred_global_reply_heads");
+    /** 渲染面：字段清单的一个消费输出。 */
+    private enum Surface {STATS_MAP, STRUCTURED_MAP, HEALTH_MAP, STATS_TEXT, HEALTH_TEXT, CLIENTS_TEXT}
 
-    private static final byte[] KEY_CONN_PENDING = ascii("conn_pending");
-    private static final byte[] KEY_CONN_PENDING_BYTES = ascii("conn_pending_bytes");
-    private static final byte[] KEY_CONN_AUTOREAD_DISABLED = ascii("conn_autoread_disabled_by_executor");
-    private static final byte[] KEY_CONN_CLOSING = ascii("conn_closing");
-    private static final byte[] KEY_CONN_COMMANDS_ENQUEUED = ascii("conn_commands_enqueued");
-    private static final byte[] KEY_CONN_COMMANDS_EXECUTED = ascii("conn_commands_executed");
-    private static final byte[] KEY_CONN_COMMANDS_REJECTED = ascii("conn_commands_rejected");
-    private static final byte[] KEY_CONN_COMMANDS_SKIPPED_CLOSING = ascii("conn_commands_skipped_closing");
-    private static final byte[] KEY_CONN_CLOSE_AFTER_REPLY = ascii("conn_close_after_reply");
-    private static final byte[] KEY_CONN_BACKPRESSURE_ENTER = ascii("conn_backpressure_enter");
-    private static final byte[] KEY_CONN_BACKPRESSURE_EXIT = ascii("conn_backpressure_exit");
+    /** 渲染分组：map 渲染面按声明顺序输出，文本渲染面按各自组序列输出。 */
+    private enum Group {
+        SERVER, QUEUED, EXECUTOR, DEFERRED, INBOUND, REPLY_CAPACITY, OUTBOUND, EGRESS, LIVE_CHANNELS,
+        HEALTH, DEGRADED, DATABASES, FAILURE, CONNECTIONS_TOTAL, CONNECTIONS_REJECTED, MAX_CLIENTS,
+        CLIENTS, CONNECTION
+    }
+
+    private static final EnumSet<Surface> STRUCTURED_ONLY = EnumSet.of(Surface.STRUCTURED_MAP);
+    private static final EnumSet<Surface> STATS_ONLY = EnumSet.of(Surface.STATS_MAP);
+    private static final EnumSet<Surface> MAPS_ONLY = EnumSet.of(Surface.STATS_MAP, Surface.STRUCTURED_MAP);
+    private static final EnumSet<Surface> STATS_MAP_AND_TEXT = EnumSet.of(Surface.STATS_MAP, Surface.STATS_TEXT);
+    private static final EnumSet<Surface> MAPS_AND_TEXT = EnumSet.of(
+            Surface.STATS_MAP, Surface.STRUCTURED_MAP, Surface.STATS_TEXT);
+    private static final EnumSet<Surface> MAPS_AND_HEALTH_TEXT = EnumSet.of(
+            Surface.STATS_MAP, Surface.STRUCTURED_MAP, Surface.HEALTH_MAP, Surface.HEALTH_TEXT);
+    private static final EnumSet<Surface> MAPS_HEALTH_AND_STATS_TEXT = EnumSet.of(
+            Surface.STATS_MAP, Surface.STRUCTURED_MAP, Surface.HEALTH_MAP, Surface.HEALTH_TEXT, Surface.STATS_TEXT);
+
+    /**
+     * 一个可观测字段：名称 + 取值（Long 或 String）+ 分组 + 渲染面集合。
+     * <p>
+     * textHidden 仅作用于文本渲染面，用于 first_failure_* 这类无故障时省略的行；sanitize 让文本值过滤 CR/LF。
+     */
+    private record Field(
+            Group group,
+            String name,
+            Object value,
+            EnumSet<Surface> surfaces,
+            boolean sanitize,
+            boolean textHidden
+    ) {
+        /** first_failure_*：仅在存在首个故障时出现在文本输出中。 */
+        static Field failure(String name, String value, boolean hasFailure) {
+            return new Field(Group.FAILURE, name, value == null ? "" : value,
+                    MAPS_AND_HEALTH_TEXT, true, !hasFailure);
+        }
+    }
+
+    /** INFO 文本 # Health 段组顺序（与 map 不同：databases/degraded 互换、connected_clients 插入、first_failure 置尾）。 */
+    private static final Group[] HEALTH_TEXT_ORDER = {
+            Group.HEALTH, Group.DATABASES, Group.DEGRADED, Group.CLIENTS,
+            Group.CONNECTIONS_TOTAL, Group.CONNECTIONS_REJECTED, Group.MAX_CLIENTS, Group.FAILURE};
+
+    /** INFO 文本 # Stats 段 yierdis_ 前缀字段的组顺序。 */
+    private static final Group[] STATS_TEXT_ORDER = {
+            Group.QUEUED, Group.INBOUND, Group.REPLY_CAPACITY,
+            Group.OUTBOUND, Group.EGRESS, Group.LIVE_CHANNELS, Group.DEFERRED};
 
     private final YierdisServerRuntimeConfig config;
     private final long startedMillis;
@@ -177,14 +142,15 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
 
         ServerStatsSnapshot snapshot = serverStatsSnapshot(ex);
         String section = args != null && args.argc() == 2 ? asciiLower(args, 1) : null;
+        List<Field> fields = fields(snapshot, null);
         if ("health".equals(section)) {
-            return healthReply(snapshot);
+            return mapReply(fields, Surface.HEALTH_MAP);
         }
         if ("yierdis".equals(section)) {
-            return yierdisStructuredInfo(snapshot);
+            return mapReply(fields, Surface.STRUCTURED_MAP);
         }
 
-        byte[] response = buildRedisInfo(section, snapshot).getBytes(StandardCharsets.UTF_8);
+        byte[] response = buildRedisInfo(section, snapshot, fields).getBytes(StandardCharsets.UTF_8);
         return RedisReplies.bulkString(response);
     }
 
@@ -196,7 +162,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             return RedisReplies.error("ERR STATS not ready");
         }
 
-        return statsReply(serverStatsSnapshot(ex), connectionStats(session));
+        return mapReply(fields(serverStatsSnapshot(ex), connectionStats(session)), Surface.STATS_MAP);
     }
 
     @Override
@@ -207,81 +173,184 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         return aggregatedMemoryStats();
     }
 
-    private RedisReply statsReply(
-            ServerStatsSnapshot snapshot,
-            ConnectionStatsView connectionStats
-    ) {
+    /**
+     * 全量字段清单：每个字段只声明一次；声明顺序即 map 渲染面（STATS / INFO yierdis / INFO health）的输出顺序。
+     */
+    private List<Field> fields(ServerStatsSnapshot snapshot, ConnectionStatsView connectionStats) {
         CommandExecutor.StatsSnapshot stats = snapshot.executor();
-        List<RedisReply> fields = new ArrayList<>(160);
+        InboundMemoryBudgetStats inbound = snapshot.inbound();
+        OutboundMemoryBudgetStats outbound = snapshot.outbound();
+        ReplyEgressStats.Snapshot egress = snapshot.egress();
+        ChildChannelRegistry.StatsSnapshot children = snapshot.children();
+        HealthView health = snapshot.health();
+        boolean hasFailure = health.firstFailureType() != null && !health.firstFailureType().isBlank();
 
-        addPair(fields, KEY_QUEUED_TASKS, stats.queuedTasks());
-        addPair(fields, KEY_QUEUED_BYTES, stats.queuedBytes());
-        addPair(fields, KEY_CHANNELS_AUTOREAD_DISABLED, stats.channelsAutoReadDisabled());
-        addPair(fields, KEY_SUBMIT_ACCEPTED_TOTAL, stats.submitAccepted());
-        addPair(fields, KEY_SUBMIT_REJECTED_NOT_RUNNING_TOTAL, stats.submitRejectedNotRunning());
-        addPair(fields, KEY_SUBMIT_REJECTED_CLOSING_TOTAL, stats.submitRejectedClosing());
-        addPair(fields, KEY_SUBMIT_REJECTED_QUEUE_FULL_TOTAL, stats.submitRejectedQueueFull());
-        addPair(fields, KEY_SUBMIT_REJECTED_BYTES_BUDGET_TOTAL, stats.submitRejectedBytesBudget());
-        addPair(fields, KEY_SUBMIT_REJECTED_OFFER_FAILED_TOTAL, stats.submitRejectedOfferFailed());
-        addPair(fields, KEY_COMMANDS_EXECUTED_TOTAL, stats.commandsExecuted());
-        addPair(fields, KEY_COMMANDS_SKIPPED_CLOSING_TOTAL, stats.commandsSkippedClosing());
-        addPair(fields, KEY_CLOSE_AFTER_REPLY_TOTAL, stats.closeAfterReply());
-        addPair(fields, KEY_BACKPRESSURE_ENTER_TOTAL, stats.backpressureEnter());
-        addPair(fields, KEY_BACKPRESSURE_EXIT_TOTAL, stats.backpressureExit());
-        addPair(fields, KEY_DRAIN_LIMITED_MAX_COMMANDS_TOTAL, stats.drainLimitedByMaxCommands());
-        addPair(fields, KEY_DRAIN_LIMITED_TIME_BUDGET_TOTAL, stats.drainLimitedByTimeBudget());
-        addPair(fields, KEY_DEFERRED_FAIR_REPLY_HEADS, stats.deferredFairReplyHeads());
-        addPair(fields, KEY_DEFERRED_GLOBAL_REPLY_HEADS, stats.deferredGlobalReplyHeads());
-        addInboundStats(fields, snapshot.inbound());
-        addOutboundStats(fields, snapshot.outbound(), snapshot.egress(), snapshot.liveChildChannels());
-        addHealthPairs(fields, snapshot.health(), snapshot.children(), config.maxClients());
+        List<Field> fields = new ArrayList<>(96);
+        add(fields, Group.SERVER, STRUCTURED_ONLY,
+                "server", "yierdis", "version", YierdisBuildInfo.version());
+        add(fields, Group.SERVER, STRUCTURED_ONLY,
+                "port", config.port(), "io_threads", config.ioThreads());
+        add(fields, Group.SERVER, STRUCTURED_ONLY,
+                "executor_policy", String.valueOf(stats.schedulingPolicy()),
+                "executor_queue_capacity", config.executorQueueCapacity(),
+                "executor_queue_max_bytes", config.executorQueueMaxBytes(),
+                "backpressure_high", config.backpressureHighWatermark(),
+                "backpressure_low", config.backpressureLowWatermark(),
+                "backpressure_bytes_high", config.backpressureBytesHighWatermark(),
+                "backpressure_bytes_low", config.backpressureBytesLowWatermark(),
+                "executor_max_drain", config.executorMaxDrainCommands(),
+                "executor_drain_millis", config.executorDrainTimeLimitMillis(),
+                "started_millis", startedMillis,
+                "uptime_millis", snapshot.uptimeMillis());
 
-        if (connectionStats == null) {
-            return mapReply(fields);
+        add(fields, Group.QUEUED, STATS_MAP_AND_TEXT,
+                "queued_tasks", stats.queuedTasks(), "queued_bytes", stats.queuedBytes());
+        add(fields, Group.EXECUTOR, STATS_ONLY,
+                "channels_autoread_disabled", stats.channelsAutoReadDisabled(),
+                "submit_accepted_total", stats.submitAccepted(),
+                "submit_rejected_not_running_total", stats.submitRejectedNotRunning(),
+                "submit_rejected_closing_total", stats.submitRejectedClosing(),
+                "submit_rejected_queue_full_total", stats.submitRejectedQueueFull(),
+                "submit_rejected_bytes_budget_total", stats.submitRejectedBytesBudget(),
+                "submit_rejected_offer_failed_total", stats.submitRejectedOfferFailed(),
+                "commands_executed_total", stats.commandsExecuted(),
+                "commands_skipped_closing_total", stats.commandsSkippedClosing(),
+                "close_after_reply_total", stats.closeAfterReply(),
+                "backpressure_enter_total", stats.backpressureEnter(),
+                "backpressure_exit_total", stats.backpressureExit(),
+                "drain_limited_max_commands_total", stats.drainLimitedByMaxCommands(),
+                "drain_limited_time_budget_total", stats.drainLimitedByTimeBudget());
+        add(fields, Group.DEFERRED, MAPS_AND_TEXT,
+                "deferred_fair_reply_heads", stats.deferredFairReplyHeads(),
+                "deferred_global_reply_heads", stats.deferredGlobalReplyHeads());
+
+        add(fields, Group.INBOUND, MAPS_AND_TEXT,
+                "inbound_capacity_bytes", inbound.capacityBytes(),
+                "inbound_reserved_bytes", inbound.reservedBytes(),
+                "inbound_peak_reserved_bytes", inbound.peakReservedBytes(),
+                "inbound_waiting_connections", inbound.waitingConnections(),
+                "inbound_backpressured", inbound.backpressured() ? 1L : 0L,
+                "inbound_rejected_connections", inbound.rejectedConnections(),
+                "inbound_closed", inbound.closed() ? 1L : 0L);
+
+        add(fields, Group.REPLY_CAPACITY, MAPS_AND_TEXT,
+                "reply_global_capacity_bytes", config.replyGlobalCapacityBytes(),
+                "reply_per_connection_capacity_bytes", config.replyPerConnectionCapacityBytes(),
+                "reply_max_total_bytes", config.replyMaxTotalBytes(),
+                "reply_chunk_payload_bytes", config.replyChunkPayloadBytes(),
+                "reply_control_reservation_bytes", config.replyControlReservationBytes(),
+                "reply_drain_timeout_millis", config.replyDrainTimeoutMillis());
+
+        add(fields, Group.OUTBOUND, MAPS_AND_TEXT,
+                "outbound_reserved_bytes", outbound.reservedBytes(),
+                "outbound_allocated_bytes", outbound.allocatedBytes(),
+                "outbound_peak_reserved_bytes", outbound.peakReservedBytes(),
+                "outbound_peak_allocated_bytes", outbound.peakAllocatedBytes(),
+                "outbound_capacity_rejects", outbound.capacityRejectedReservations(),
+                "outbound_waiting_connections", outbound.waitingConnections(),
+                "outbound_active_connections", outbound.activeConnections(),
+                "outbound_active_slots", outbound.activeSlots());
+        add(fields, Group.OUTBOUND, MAPS_ONLY,
+                "outbound_closed", outbound.closed() ? 1L : 0L);
+        add(fields, Group.EGRESS, MAPS_AND_TEXT,
+                "outbound_active_chunks", egress.activeChunks(),
+                "outbound_active_sources", egress.activeSources(),
+                "outbound_oversized_replies", egress.oversizedReplies(),
+                "outbound_cancelled_slots", egress.cancelledSlots(),
+                "outbound_failed_slots", egress.failedSlots(),
+                "outbound_write_failures", egress.writeFailures(),
+                "result_unknown_closes", egress.resultUnknownCloses(),
+                "reply_shutdown_timeouts", egress.shutdownTimeouts());
+        add(fields, Group.LIVE_CHANNELS, MAPS_AND_TEXT, "live_child_channels", snapshot.liveChildChannels());
+
+        add(fields, Group.HEALTH, MAPS_AND_HEALTH_TEXT,
+                "lifecycle_state", health.lifecycleState(),
+                "ready", health.ready() ? 1L : 0L,
+                "writable", health.writable() ? 1L : 0L);
+        add(fields, Group.DEGRADED, MAPS_AND_HEALTH_TEXT, "degraded_databases", health.degradedDatabases());
+        add(fields, Group.DATABASES, MAPS_AND_HEALTH_TEXT, "databases", health.databases());
+        fields.add(Field.failure("first_failure_type", health.firstFailureType(), hasFailure));
+        fields.add(Field.failure("first_failure_message", health.firstFailureMessage(), hasFailure));
+        add(fields, Group.CONNECTIONS_TOTAL, MAPS_HEALTH_AND_STATS_TEXT,
+                "total_connections_received", children.acceptedConnections());
+        add(fields, Group.CONNECTIONS_REJECTED, MAPS_HEALTH_AND_STATS_TEXT,
+                "rejected_connections", children.rejectedConnections());
+        add(fields, Group.MAX_CLIENTS, MAPS_AND_HEALTH_TEXT, "max_clients", config.maxClients());
+        add(fields, Group.CLIENTS, EnumSet.of(Surface.HEALTH_TEXT, Surface.CLIENTS_TEXT),
+                "connected_clients", children.activeConnections());
+
+        if (connectionStats != null) {
+            add(fields, Group.CONNECTION, STATS_ONLY,
+                    "conn_pending", connectionStats.pending(),
+                    "conn_pending_bytes", connectionStats.pendingBytes(),
+                    "conn_autoread_disabled_by_executor", connectionStats.inputDisabledByExecutor() ? 1L : 0L,
+                    "conn_closing", connectionStats.closing() ? 1L : 0L,
+                    "conn_commands_enqueued", connectionStats.commandsEnqueued(),
+                    "conn_commands_executed", connectionStats.commandsExecuted(),
+                    "conn_commands_rejected", connectionStats.commandsRejected(),
+                    "conn_commands_skipped_closing", connectionStats.commandsSkippedClosing(),
+                    "conn_close_after_reply", connectionStats.closeAfterReply(),
+                    "conn_backpressure_enter", connectionStats.backpressureEnter(),
+                    "conn_backpressure_exit", connectionStats.backpressureExit());
         }
-
-        addPair(fields, KEY_CONN_PENDING, connectionStats.pending());
-        addPair(fields, KEY_CONN_PENDING_BYTES, connectionStats.pendingBytes());
-        addPair(fields, KEY_CONN_AUTOREAD_DISABLED, connectionStats.inputDisabledByExecutor() ? 1 : 0);
-        addPair(fields, KEY_CONN_CLOSING, connectionStats.closing() ? 1 : 0);
-        addPair(fields, KEY_CONN_COMMANDS_ENQUEUED, connectionStats.commandsEnqueued());
-        addPair(fields, KEY_CONN_COMMANDS_EXECUTED, connectionStats.commandsExecuted());
-        addPair(fields, KEY_CONN_COMMANDS_REJECTED, connectionStats.commandsRejected());
-        addPair(fields, KEY_CONN_COMMANDS_SKIPPED_CLOSING, connectionStats.commandsSkippedClosing());
-        addPair(fields, KEY_CONN_CLOSE_AFTER_REPLY, connectionStats.closeAfterReply());
-        addPair(fields, KEY_CONN_BACKPRESSURE_ENTER, connectionStats.backpressureEnter());
-        addPair(fields, KEY_CONN_BACKPRESSURE_EXIT, connectionStats.backpressureExit());
-        return mapReply(fields);
+        return fields;
     }
 
-    private RedisReply yierdisStructuredInfo(ServerStatsSnapshot snapshot) {
-        CommandExecutor.StatsSnapshot stats = snapshot.executor();
-        List<RedisReply> fields = new ArrayList<>(136);
-
-        addPair(fields, KEY_SERVER, VALUE_SERVER);
-        addPair(fields, KEY_VERSION, VALUE_VERSION);
-        addPair(fields, KEY_PORT, config.port());
-        addPair(fields, KEY_IO_THREADS, config.ioThreads());
-        addPair(fields, KEY_EXECUTOR_POLICY, ascii(String.valueOf(stats.schedulingPolicy())));
-        addPair(fields, KEY_EXECUTOR_QUEUE_CAPACITY, config.executorQueueCapacity());
-        addPair(fields, KEY_EXECUTOR_QUEUE_MAX_BYTES, config.executorQueueMaxBytes());
-        addPair(fields, KEY_BACKPRESSURE_HIGH, config.backpressureHighWatermark());
-        addPair(fields, KEY_BACKPRESSURE_LOW, config.backpressureLowWatermark());
-        addPair(fields, KEY_BACKPRESSURE_BYTES_HIGH, config.backpressureBytesHighWatermark());
-        addPair(fields, KEY_BACKPRESSURE_BYTES_LOW, config.backpressureBytesLowWatermark());
-        addPair(fields, KEY_EXECUTOR_MAX_DRAIN, config.executorMaxDrainCommands());
-        addPair(fields, KEY_EXECUTOR_DRAIN_MILLIS, config.executorDrainTimeLimitMillis());
-        addPair(fields, KEY_STARTED_MILLIS, startedMillis);
-        addPair(fields, KEY_UPTIME_MILLIS, snapshot.uptimeMillis());
-        addPair(fields, KEY_DEFERRED_FAIR_REPLY_HEADS, stats.deferredFairReplyHeads());
-        addPair(fields, KEY_DEFERRED_GLOBAL_REPLY_HEADS, stats.deferredGlobalReplyHeads());
-        addInboundStats(fields, snapshot.inbound());
-        addOutboundStats(fields, snapshot.outbound(), snapshot.egress(), snapshot.liveChildChannels());
-        addHealthPairs(fields, snapshot.health(), snapshot.children(), config.maxClients());
-        return mapReply(fields);
+    private static void add(List<Field> fields, Group group, EnumSet<Surface> surfaces, Object... nameValues) {
+        if (nameValues.length % 2 != 0) {
+            throw new IllegalArgumentException(group + ": name/value list must contain whole pairs");
+        }
+        for (int i = 0; i < nameValues.length; i += 2) {
+            Object name = nameValues[i];
+            Object value = nameValues[i + 1];
+            if (!(name instanceof String) || !(value instanceof Number || value instanceof String)) {
+                throw new IllegalArgumentException(group + ": expected (String name, Number|String value) pairs");
+            }
+            fields.add(new Field(group, (String) name,
+                    value instanceof Number number ? number.longValue() : value, surfaces, false, false));
+        }
     }
 
-    private String buildRedisInfo(String section, ServerStatsSnapshot snapshot) {
+    /** map 渲染器：按声明顺序输出某渲染面的字段（key 为 bulkString，数值为 integer，字符串为 bulkString）。 */
+    private static RedisReply mapReply(List<Field> fields, Surface surface) {
+        List<RedisReply> reply = new ArrayList<>(fields.size() * 2);
+        for (Field field : fields) {
+            if (!field.surfaces().contains(surface)) {
+                continue;
+            }
+            reply.add(RedisReplies.bulkString(ascii(field.name())));
+            reply.add(field.value() instanceof String text
+                    ? RedisReplies.bulkString(ascii(text))
+                    : RedisReplies.integer((Long) field.value()));
+        }
+        return RedisReplies.map(reply);
+    }
+
+    /** INFO 文本渲染器：按组序列输出某文本渲染面的字段，格式为 "prefix+name:value\r\n"。 */
+    private static void appendText(
+            StringBuilder sb,
+            List<Field> fields,
+            String prefix,
+            Surface surface,
+            Group... groups
+    ) {
+        for (Group group : groups) {
+            for (Field field : fields) {
+                if (field.group() != group || !field.surfaces().contains(surface) || field.textHidden()) {
+                    continue;
+                }
+                sb.append(prefix).append(field.name()).append(':');
+                if (field.value() instanceof String text) {
+                    sb.append(field.sanitize() ? sanitizeInfoValue(text) : text);
+                } else {
+                    sb.append((Long) field.value());
+                }
+                sb.append("\r\n");
+            }
+        }
+    }
+
+    private String buildRedisInfo(String section, ServerStatsSnapshot snapshot, List<Field> fields) {
         CommandExecutor.StatsSnapshot statsSnapshot = snapshot.executor();
         long uptimeMillis = snapshot.uptimeMillis();
         long uptimeSeconds = Math.max(0, uptimeMillis / 1000L);
@@ -295,8 +364,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         boolean keyspace = all || "keyspace".equals(section);
 
         StringBuilder sb = new StringBuilder(512);
-        ChildChannelRegistry.StatsSnapshot childStats = snapshot.children();
-        HealthView healthView = snapshot.health();
 
         if (server) {
             sb.append("# Server\r\n");
@@ -309,13 +376,13 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
 
         if (health) {
             sb.append("# Health\r\n");
-            appendHealthText(sb, healthView, childStats, config.maxClients());
+            appendText(sb, fields, "", Surface.HEALTH_TEXT, HEALTH_TEXT_ORDER);
             sb.append("\r\n");
         }
 
         if (clients) {
             sb.append("# Clients\r\n");
-            sb.append("connected_clients:").append(childStats.activeConnections()).append("\r\n");
+            appendText(sb, fields, "", Surface.CLIENTS_TEXT, Group.CLIENTS);
             sb.append("blocked_clients:0\r\n");
             sb.append("\r\n");
         }
@@ -370,53 +437,13 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
 
         if (stats) {
-            InboundMemoryBudgetStats inboundStats = snapshot.inbound();
-            OutboundMemoryBudgetStats outboundStats = snapshot.outbound();
-            ReplyEgressStats.Snapshot egressStats = snapshot.egress();
             sb.append("# Stats\r\n");
             sb.append("total_commands_processed:").append(statsSnapshot.commandsExecuted()).append("\r\n");
-            sb.append("rejected_connections:").append(childStats.rejectedConnections()).append("\r\n");
-            sb.append("total_connections_received:").append(childStats.acceptedConnections()).append("\r\n");
+            appendText(sb, fields, "", Surface.STATS_TEXT, Group.CONNECTIONS_REJECTED);
+            appendText(sb, fields, "", Surface.STATS_TEXT, Group.CONNECTIONS_TOTAL);
             sb.append("instantaneous_ops_per_sec:")
                     .append(instantaneousOpsPerSecond(statsSnapshot, uptimeSeconds)).append("\r\n");
-            sb.append("yierdis_queued_tasks:").append(statsSnapshot.queuedTasks()).append("\r\n");
-            sb.append("yierdis_queued_bytes:").append(statsSnapshot.queuedBytes()).append("\r\n");
-            sb.append("yierdis_inbound_capacity_bytes:").append(inboundStats.capacityBytes()).append("\r\n");
-            sb.append("yierdis_inbound_reserved_bytes:").append(inboundStats.reservedBytes()).append("\r\n");
-            sb.append("yierdis_inbound_peak_reserved_bytes:").append(inboundStats.peakReservedBytes()).append("\r\n");
-            sb.append("yierdis_inbound_waiting_connections:").append(inboundStats.waitingConnections()).append("\r\n");
-            sb.append("yierdis_inbound_backpressured:").append(inboundStats.backpressured() ? 1 : 0).append("\r\n");
-            sb.append("yierdis_inbound_rejected_connections:").append(inboundStats.rejectedConnections()).append("\r\n");
-            sb.append("yierdis_inbound_closed:").append(inboundStats.closed() ? 1 : 0).append("\r\n");
-            sb.append("yierdis_reply_global_capacity_bytes:").append(config.replyGlobalCapacityBytes()).append("\r\n");
-            sb.append("yierdis_reply_per_connection_capacity_bytes:")
-                    .append(config.replyPerConnectionCapacityBytes()).append("\r\n");
-            sb.append("yierdis_reply_max_total_bytes:").append(config.replyMaxTotalBytes()).append("\r\n");
-            sb.append("yierdis_reply_chunk_payload_bytes:").append(config.replyChunkPayloadBytes()).append("\r\n");
-            sb.append("yierdis_reply_control_reservation_bytes:")
-                    .append(config.replyControlReservationBytes()).append("\r\n");
-            sb.append("yierdis_reply_drain_timeout_millis:").append(config.replyDrainTimeoutMillis()).append("\r\n");
-            sb.append("yierdis_outbound_reserved_bytes:").append(outboundStats.reservedBytes()).append("\r\n");
-            sb.append("yierdis_outbound_allocated_bytes:").append(outboundStats.allocatedBytes()).append("\r\n");
-            sb.append("yierdis_outbound_peak_reserved_bytes:").append(outboundStats.peakReservedBytes()).append("\r\n");
-            sb.append("yierdis_outbound_peak_allocated_bytes:").append(outboundStats.peakAllocatedBytes()).append("\r\n");
-            sb.append("yierdis_outbound_capacity_rejects:").append(outboundStats.capacityRejectedReservations()).append("\r\n");
-            sb.append("yierdis_outbound_waiting_connections:").append(outboundStats.waitingConnections()).append("\r\n");
-            sb.append("yierdis_outbound_active_connections:").append(outboundStats.activeConnections()).append("\r\n");
-            sb.append("yierdis_outbound_active_slots:").append(outboundStats.activeSlots()).append("\r\n");
-            sb.append("yierdis_outbound_active_chunks:").append(egressStats.activeChunks()).append("\r\n");
-            sb.append("yierdis_outbound_active_sources:").append(egressStats.activeSources()).append("\r\n");
-            sb.append("yierdis_outbound_oversized_replies:").append(egressStats.oversizedReplies()).append("\r\n");
-            sb.append("yierdis_outbound_cancelled_slots:").append(egressStats.cancelledSlots()).append("\r\n");
-            sb.append("yierdis_outbound_failed_slots:").append(egressStats.failedSlots()).append("\r\n");
-            sb.append("yierdis_outbound_write_failures:").append(egressStats.writeFailures()).append("\r\n");
-            sb.append("yierdis_result_unknown_closes:").append(egressStats.resultUnknownCloses()).append("\r\n");
-            sb.append("yierdis_reply_shutdown_timeouts:").append(egressStats.shutdownTimeouts()).append("\r\n");
-            sb.append("yierdis_live_child_channels:").append(snapshot.liveChildChannels()).append("\r\n");
-            sb.append("yierdis_deferred_fair_reply_heads:")
-                    .append(statsSnapshot.deferredFairReplyHeads()).append("\r\n");
-            sb.append("yierdis_deferred_global_reply_heads:")
-                    .append(statsSnapshot.deferredGlobalReplyHeads()).append("\r\n");
+            appendText(sb, fields, "yierdis_", Surface.STATS_TEXT, STATS_TEXT_ORDER);
             sb.append("\r\n");
         }
 
@@ -557,51 +584,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         );
     }
 
-    private RedisReply healthReply(ServerStatsSnapshot snapshot) {
-        List<RedisReply> fields = new ArrayList<>(22);
-        addHealthPairs(fields, snapshot.health(), snapshot.children(), config.maxClients());
-        return mapReply(fields);
-    }
-
-    private static void addHealthPairs(
-            List<RedisReply> fields,
-            HealthView health,
-            ChildChannelRegistry.StatsSnapshot child,
-            int maxClients
-    ) {
-        addPair(fields, KEY_LIFECYCLE_STATE, ascii(health.lifecycleState()));
-        addPair(fields, KEY_READY, health.ready ? 1L : 0L);
-        addPair(fields, KEY_WRITABLE, health.writable ? 1L : 0L);
-        addPair(fields, KEY_DEGRADED_DATABASES, health.degradedDatabases);
-        addPair(fields, KEY_DATABASES, health.databases);
-        addPair(fields, KEY_FIRST_FAILURE_TYPE, ascii(health.firstFailureType));
-        addPair(fields, KEY_FIRST_FAILURE_MESSAGE, ascii(health.firstFailureMessage));
-        addPair(fields, KEY_TOTAL_CONNECTIONS_RECEIVED, child.acceptedConnections());
-        addPair(fields, KEY_REJECTED_CONNECTIONS, child.rejectedConnections());
-        addPair(fields, KEY_MAX_CLIENTS, maxClients);
-    }
-
-    private static void appendHealthText(
-            StringBuilder sb,
-            HealthView health,
-            ChildChannelRegistry.StatsSnapshot child,
-            int maxClients
-    ) {
-        sb.append("lifecycle_state:").append(health.lifecycleState).append("\r\n");
-        sb.append("ready:").append(health.ready ? 1 : 0).append("\r\n");
-        sb.append("writable:").append(health.writable ? 1 : 0).append("\r\n");
-        sb.append("databases:").append(health.databases).append("\r\n");
-        sb.append("degraded_databases:").append(health.degradedDatabases).append("\r\n");
-        sb.append("connected_clients:").append(child.activeConnections()).append("\r\n");
-        sb.append("total_connections_received:").append(child.acceptedConnections()).append("\r\n");
-        sb.append("rejected_connections:").append(child.rejectedConnections()).append("\r\n");
-        sb.append("max_clients:").append(maxClients).append("\r\n");
-        if (health.firstFailureType != null && !health.firstFailureType.isBlank()) {
-            sb.append("first_failure_type:").append(sanitizeInfoValue(health.firstFailureType)).append("\r\n");
-            sb.append("first_failure_message:").append(sanitizeInfoValue(health.firstFailureMessage)).append("\r\n");
-        }
-    }
-
     private static long instantaneousOpsPerSecond(CommandExecutor.StatsSnapshot stats, long uptimeSeconds) {
         long elapsed = Math.max(1L, uptimeSeconds);
         long commands = Math.max(0L, stats.commandsExecuted());
@@ -638,62 +620,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         private int liveChildChannels() {
             return children.activeConnections();
         }
-    }
-
-    private void addOutboundStats(
-            List<RedisReply> fields,
-            OutboundMemoryBudgetStats outboundStats,
-            ReplyEgressStats.Snapshot egressStats,
-            int liveChildChannels
-    ) {
-        addPair(fields, KEY_REPLY_GLOBAL_CAPACITY_BYTES, config.replyGlobalCapacityBytes());
-        addPair(fields, KEY_REPLY_PER_CONNECTION_CAPACITY_BYTES, config.replyPerConnectionCapacityBytes());
-        addPair(fields, KEY_REPLY_MAX_TOTAL_BYTES, config.replyMaxTotalBytes());
-        addPair(fields, KEY_REPLY_CHUNK_PAYLOAD_BYTES, config.replyChunkPayloadBytes());
-        addPair(fields, KEY_REPLY_CONTROL_RESERVATION_BYTES, config.replyControlReservationBytes());
-        addPair(fields, KEY_REPLY_DRAIN_TIMEOUT_MILLIS, config.replyDrainTimeoutMillis());
-        addPair(fields, KEY_OUTBOUND_RESERVED_BYTES, outboundStats.reservedBytes());
-        addPair(fields, KEY_OUTBOUND_ALLOCATED_BYTES, outboundStats.allocatedBytes());
-        addPair(fields, KEY_OUTBOUND_PEAK_RESERVED_BYTES, outboundStats.peakReservedBytes());
-        addPair(fields, KEY_OUTBOUND_PEAK_ALLOCATED_BYTES, outboundStats.peakAllocatedBytes());
-        addPair(fields, KEY_OUTBOUND_CAPACITY_REJECTS, outboundStats.capacityRejectedReservations());
-        addPair(fields, KEY_OUTBOUND_WAITING_CONNECTIONS, outboundStats.waitingConnections());
-        addPair(fields, KEY_OUTBOUND_ACTIVE_CONNECTIONS, outboundStats.activeConnections());
-        addPair(fields, KEY_OUTBOUND_ACTIVE_SLOTS, outboundStats.activeSlots());
-        addPair(fields, KEY_OUTBOUND_CLOSED, outboundStats.closed() ? 1L : 0L);
-        addPair(fields, KEY_OUTBOUND_ACTIVE_CHUNKS, egressStats.activeChunks());
-        addPair(fields, KEY_OUTBOUND_ACTIVE_SOURCES, egressStats.activeSources());
-        addPair(fields, KEY_OUTBOUND_OVERSIZED_REPLIES, egressStats.oversizedReplies());
-        addPair(fields, KEY_OUTBOUND_CANCELLED_SLOTS, egressStats.cancelledSlots());
-        addPair(fields, KEY_OUTBOUND_FAILED_SLOTS, egressStats.failedSlots());
-        addPair(fields, KEY_OUTBOUND_WRITE_FAILURES, egressStats.writeFailures());
-        addPair(fields, KEY_RESULT_UNKNOWN_CLOSES, egressStats.resultUnknownCloses());
-        addPair(fields, KEY_REPLY_SHUTDOWN_TIMEOUTS, egressStats.shutdownTimeouts());
-        addPair(fields, KEY_LIVE_CHILD_CHANNELS, liveChildChannels);
-    }
-
-    private static void addInboundStats(List<RedisReply> fields, InboundMemoryBudgetStats stats) {
-        addPair(fields, KEY_INBOUND_CAPACITY_BYTES, stats.capacityBytes());
-        addPair(fields, KEY_INBOUND_RESERVED_BYTES, stats.reservedBytes());
-        addPair(fields, KEY_INBOUND_PEAK_RESERVED_BYTES, stats.peakReservedBytes());
-        addPair(fields, KEY_INBOUND_WAITING_CONNECTIONS, stats.waitingConnections());
-        addPair(fields, KEY_INBOUND_BACKPRESSURED, stats.backpressured() ? 1L : 0L);
-        addPair(fields, KEY_INBOUND_REJECTED_CONNECTIONS, stats.rejectedConnections());
-        addPair(fields, KEY_INBOUND_CLOSED, stats.closed() ? 1L : 0L);
-    }
-
-    private static void addPair(List<RedisReply> fields, byte[] key, byte[] value) {
-        fields.add(RedisReplies.bulkString(key));
-        fields.add(RedisReplies.bulkString(value));
-    }
-
-    private static void addPair(List<RedisReply> fields, byte[] key, long value) {
-        fields.add(RedisReplies.bulkString(key));
-        fields.add(RedisReplies.integer(value));
-    }
-
-    private static RedisReply mapReply(List<RedisReply> fields) {
-        return RedisReplies.map(fields);
     }
 
     private static String asciiLower(CommandArgs args, int argIndex) {
