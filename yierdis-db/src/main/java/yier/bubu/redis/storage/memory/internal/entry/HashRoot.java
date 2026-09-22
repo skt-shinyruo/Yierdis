@@ -11,12 +11,11 @@ import yier.bubu.redis.storage.api.result.ByteValue;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
-import yier.bubu.redis.storage.memory.internal.hash.SipHash24;
+import yier.bubu.redis.storage.memory.internal.hash.SipHashIntIndex;
 import yier.bubu.redis.storage.memory.internal.value.HashValue;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -336,16 +335,22 @@ public final class HashRoot implements AutoCloseable {
         ArrayList<byte[]> merged = source == null
                 ? new ArrayList<>(fieldValuePairs.size())
                 : new ArrayList<>(requireHash(source).hgetallPairs());
-        FieldPairIndex pairIndex = new FieldPairIndex(
-                merged,
-                fieldValuePairs.size() / 2,
-                hashSeed
+        SipHashIntIndex fieldIndex = new SipHashIntIndex(
+                merged::get,
+                (long) merged.size() / 2L + fieldValuePairs.size() / 2L,
+                hashSeed,
+                "too many hash fields to stage"
         );
+        for (int pairIndex = 0; pairIndex < merged.size(); pairIndex += 2) {
+            if (!fieldIndex.addIfAbsent(pairIndex)) {
+                throw new IllegalStateException("hash source contains duplicate fields");
+            }
+        }
         int added = 0;
-        for (int index = 0; index < fieldValuePairs.size(); index += 2) {
-            byte[] field = Objects.requireNonNull(fieldValuePairs.get(index), "hash field");
-            byte[] value = fieldValuePairs.get(index + 1);
-            int existingPairIndex = pairIndex.find(field);
+        for (int position = 0; position < fieldValuePairs.size(); position += 2) {
+            byte[] field = Objects.requireNonNull(fieldValuePairs.get(position), "hash field");
+            byte[] value = fieldValuePairs.get(position + 1);
+            int existingPairIndex = fieldIndex.find(field);
             if (existingPairIndex >= 0) {
                 merged.set(existingPairIndex + 1, value);
                 continue;
@@ -353,7 +358,7 @@ public final class HashRoot implements AutoCloseable {
             int appendedPairIndex = merged.size();
             merged.add(field);
             merged.add(value);
-            pairIndex.add(appendedPairIndex);
+            fieldIndex.add(appendedPairIndex);
             added++;
         }
         return new MergedFieldValuePairs(merged, added);
@@ -476,69 +481,4 @@ public final class HashRoot implements AutoCloseable {
     private record MergedFieldValuePairs(List<byte[]> values, int added) {
     }
 
-    private static final class FieldPairIndex {
-        private static final int MAX_CAPACITY = 1 << 30;
-
-        private final List<byte[]> fieldValuePairs;
-        private final HashSeed hashSeed;
-        private final int[] pairIndexes;
-
-        private FieldPairIndex(List<byte[]> fieldValuePairs, int additionalPairs, HashSeed hashSeed) {
-            this.fieldValuePairs = Objects.requireNonNull(fieldValuePairs, "fieldValuePairs");
-            this.hashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
-            long expectedPairs = (long) fieldValuePairs.size() / 2L + additionalPairs;
-            this.pairIndexes = new int[indexCapacity(expectedPairs)];
-            for (int pairIndex = 0; pairIndex < fieldValuePairs.size(); pairIndex += 2) {
-                add(pairIndex);
-            }
-        }
-
-        private int find(byte[] field) {
-            int slot = slot(field);
-            int mask = pairIndexes.length - 1;
-            while (true) {
-                int encodedPairIndex = pairIndexes[slot];
-                if (encodedPairIndex == 0) {
-                    return -1;
-                }
-                int pairIndex = encodedPairIndex - 1;
-                if (Arrays.equals(fieldValuePairs.get(pairIndex), field)) {
-                    return pairIndex;
-                }
-                slot = (slot + 1) & mask;
-            }
-        }
-
-        private void add(int pairIndex) {
-            byte[] field = fieldValuePairs.get(pairIndex);
-            int slot = slot(field);
-            int mask = pairIndexes.length - 1;
-            while (pairIndexes[slot] != 0) {
-                int existingPairIndex = pairIndexes[slot] - 1;
-                if (Arrays.equals(fieldValuePairs.get(existingPairIndex), field)) {
-                    throw new IllegalStateException("hash source contains duplicate fields");
-                }
-                slot = (slot + 1) & mask;
-            }
-            pairIndexes[slot] = pairIndex + 1;
-        }
-
-        private int slot(byte[] field) {
-            int hash = SipHash24.foldToInt(SipHash24.hash(hashSeed, field));
-            hash ^= hash >>> 16;
-            return hash & (pairIndexes.length - 1);
-        }
-
-        private static int indexCapacity(long expectedPairs) {
-            long required = Math.max(16L, expectedPairs * 2L);
-            if (required > MAX_CAPACITY) {
-                throw new IllegalArgumentException("too many hash fields to stage");
-            }
-            int capacity = 16;
-            while (capacity < required) {
-                capacity <<= 1;
-            }
-            return capacity;
-        }
-    }
 }

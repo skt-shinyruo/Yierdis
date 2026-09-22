@@ -15,7 +15,7 @@ import yier.bubu.redis.storage.memory.MaterializedCollectionScanWindow;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMetrics;
-import yier.bubu.redis.storage.memory.internal.hash.SipHash24;
+import yier.bubu.redis.storage.memory.internal.hash.SipHashIntIndex;
 import yier.bubu.redis.storage.memory.internal.keyspace.YierdisGlobMatcher;
 
 import java.util.ArrayList;
@@ -256,7 +256,12 @@ public final class ZSetValue implements YierdisValue {
         validateScoreMemberPairs(scoreMemberPairs);
         Objects.requireNonNull(options, "options");
         ArrayList<ZAddPlanEntry> entries = new ArrayList<>(scoreMemberPairs.size() / 2);
-        ScoreMemberIndex index = new ScoreMemberIndex(entries, scoreMemberPairs.size() / 2, hashSeed);
+        SipHashIntIndex index = new SipHashIntIndex(
+                entryIndex -> entries.get(entryIndex).member,
+                scoreMemberPairs.size() / 2L,
+                hashSeed,
+                "too many ZADD members to plan"
+        );
         int added = 0;
         int updated = 0;
         double incrScore = 0.0d;
@@ -2348,62 +2353,6 @@ public final class ZSetValue implements YierdisValue {
                     previousNode,
                     !present || !scoresEqual(previousScore, newScore)
             );
-        }
-    }
-
-    private static final class ScoreMemberIndex {
-        private static final int MAX_CAPACITY = 1 << 30;
-
-        private final List<ZAddPlanEntry> entries;
-        private final HashSeed hashSeed;
-        private final int[] indexes;
-
-        private ScoreMemberIndex(List<ZAddPlanEntry> entries, int expected, HashSeed hashSeed) {
-            this.entries = entries;
-            this.hashSeed = hashSeed;
-            this.indexes = new int[indexCapacity(expected)];
-        }
-
-        private int find(byte[] member) {
-            int slot = slot(member);
-            int mask = indexes.length - 1;
-            while (true) {
-                int encoded = indexes[slot];
-                if (encoded == 0) {
-                    return -1;
-                }
-                int index = encoded - 1;
-                if (Arrays.equals(entries.get(index).member, member)) {
-                    return index;
-                }
-                slot = (slot + 1) & mask;
-            }
-        }
-
-        private void add(int index) {
-            int slot = slot(entries.get(index).member);
-            int mask = indexes.length - 1;
-            while (indexes[slot] != 0) {
-                slot = (slot + 1) & mask;
-            }
-            indexes[slot] = index + 1;
-        }
-
-        private int slot(byte[] member) {
-            int hash = SipHash24.foldToInt(SipHash24.hash(hashSeed, member));
-            return (hash ^ (hash >>> 16)) & (indexes.length - 1);
-        }
-
-        private static int indexCapacity(int expected) {
-            long required = Math.max(16L, (long) expected * 2L);
-            if (required > MAX_CAPACITY) {
-                throw new IllegalArgumentException("too many ZADD members to plan");
-            }
-            int capacity = 16;
-            while (capacity < required) {
-                capacity <<= 1;
-            }
-            return capacity;
         }
     }
 

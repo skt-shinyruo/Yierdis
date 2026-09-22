@@ -14,7 +14,7 @@ import yier.bubu.redis.storage.memory.MaterializedCollectionScanWindow;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMetrics;
-import yier.bubu.redis.storage.memory.internal.hash.SipHash24;
+import yier.bubu.redis.storage.memory.internal.hash.SipHashIntIndex;
 import yier.bubu.redis.storage.memory.internal.keyspace.YierdisGlobMatcher;
 
 import java.util.ArrayList;
@@ -768,10 +768,11 @@ public final class HashValue implements YierdisValue {
 
     private ArrayList<byte[]> canonicalFieldValuePairs(List<byte[]> fieldValuePairs) {
         ArrayList<byte[]> canonical = new ArrayList<>(fieldValuePairs.size());
-        CanonicalFieldIndex index = new CanonicalFieldIndex(
-                canonical,
-                fieldValuePairs.size() / 2,
-                hashSeed
+        SipHashIntIndex index = new SipHashIntIndex(
+                canonical::get,
+                fieldValuePairs.size() / 2L,
+                hashSeed,
+                "too many hash fields to plan"
         );
         for (int pairIndex = 0; pairIndex < fieldValuePairs.size(); pairIndex += 2) {
             byte[] field = fieldValuePairs.get(pairIndex);
@@ -987,62 +988,6 @@ public final class HashValue implements YierdisValue {
             this.present = present;
             this.previousValue = previousValue;
             this.changed = changed;
-        }
-    }
-
-    private static final class CanonicalFieldIndex {
-        private static final int MAX_CAPACITY = 1 << 30;
-
-        private final List<byte[]> pairs;
-        private final HashSeed hashSeed;
-        private final int[] pairIndexes;
-
-        private CanonicalFieldIndex(List<byte[]> pairs, int expectedPairs, HashSeed hashSeed) {
-            this.pairs = pairs;
-            this.hashSeed = hashSeed;
-            this.pairIndexes = new int[indexCapacity(expectedPairs)];
-        }
-
-        private int find(byte[] field) {
-            int slot = slot(field);
-            int mask = pairIndexes.length - 1;
-            while (true) {
-                int encodedPairIndex = pairIndexes[slot];
-                if (encodedPairIndex == 0) {
-                    return -1;
-                }
-                int pairIndex = encodedPairIndex - 1;
-                if (Arrays.equals(pairs.get(pairIndex), field)) {
-                    return pairIndex;
-                }
-                slot = (slot + 1) & mask;
-            }
-        }
-
-        private void add(int pairIndex) {
-            int slot = slot(pairs.get(pairIndex));
-            int mask = pairIndexes.length - 1;
-            while (pairIndexes[slot] != 0) {
-                slot = (slot + 1) & mask;
-            }
-            pairIndexes[slot] = pairIndex + 1;
-        }
-
-        private int slot(byte[] field) {
-            int hash = SipHash24.foldToInt(SipHash24.hash(hashSeed, field));
-            return (hash ^ (hash >>> 16)) & (pairIndexes.length - 1);
-        }
-
-        private static int indexCapacity(int expectedPairs) {
-            long required = Math.max(16L, (long) expectedPairs * 2L);
-            if (required > MAX_CAPACITY) {
-                throw new IllegalArgumentException("too many hash fields to plan");
-            }
-            int capacity = 16;
-            while (capacity < required) {
-                capacity <<= 1;
-            }
-            return capacity;
         }
     }
 

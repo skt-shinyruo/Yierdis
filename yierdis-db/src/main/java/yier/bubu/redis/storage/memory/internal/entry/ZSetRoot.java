@@ -9,12 +9,11 @@ import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
-import yier.bubu.redis.storage.memory.internal.hash.SipHash24;
+import yier.bubu.redis.storage.memory.internal.hash.SipHashIntIndex;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 import yier.bubu.redis.storage.memory.internal.value.ZSetValue;
 import yier.bubu.redis.storage.memory.internal.value.ZSetValue.ZAddResult;
 
-import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -478,7 +477,12 @@ public final class ZSetRoot implements AutoCloseable {
                     ? new int[0]
                     : new int[]{packedPlan.encodedBytes()};
         }
-        MemberIndex memberIndex = new MemberIndex(scoreMemberPairs, hashSeed);
+        SipHashIntIndex memberIndex = new SipHashIntIndex(
+                scoreMemberPairs::get,
+                scoreMemberPairs.size() / 2L,
+                hashSeed,
+                "too many ZADD members to stage"
+        );
         int uniqueCount = 0;
         for (int index = 1; index < scoreMemberPairs.size(); index += 2) {
             if (memberIndex.addIfAbsent(index)) {
@@ -494,53 +498,6 @@ public final class ZSetRoot implements AutoCloseable {
             }
         }
         return sizes;
-    }
-
-    private static final class MemberIndex {
-        private static final int MAX_CAPACITY = 1 << 30;
-
-        private final List<byte[]> pairs;
-        private final HashSeed hashSeed;
-        private final int[] memberIndexes;
-
-        private MemberIndex(List<byte[]> pairs, HashSeed hashSeed) {
-            this.pairs = pairs;
-            this.hashSeed = hashSeed;
-            long members = pairs.size() / 2L;
-            long required = Math.max(16L, members * 2L);
-            if (required > MAX_CAPACITY) {
-                throw new IllegalArgumentException("too many ZADD members to stage");
-            }
-            int capacity = 16;
-            while (capacity < required) {
-                capacity <<= 1;
-            }
-            this.memberIndexes = new int[capacity];
-        }
-
-        private boolean addIfAbsent(int memberIndex) {
-            byte[] member = pairs.get(memberIndex);
-            int mask = memberIndexes.length - 1;
-            int slot = slot(member);
-            while (memberIndexes[slot] != 0) {
-                int existingIndex = memberIndexes[slot] - 1;
-                if (Arrays.equals(pairs.get(existingIndex), member)) {
-                    return false;
-                }
-                slot = (slot + 1) & mask;
-            }
-            memberIndexes[slot] = memberIndex + 1;
-            return true;
-        }
-
-        private void clear() {
-            Arrays.fill(memberIndexes, 0);
-        }
-
-        private int slot(byte[] member) {
-            int hash = SipHash24.foldToInt(SipHash24.hash(hashSeed, member));
-            return (hash ^ (hash >>> 16)) & (memberIndexes.length - 1);
-        }
     }
 
     private long retainedHeapBytes() {
