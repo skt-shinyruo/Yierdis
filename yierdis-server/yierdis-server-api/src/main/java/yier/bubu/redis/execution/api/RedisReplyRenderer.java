@@ -18,16 +18,12 @@ public final class RedisReplyRenderer {
             case RedisReply.NullValue ignored -> out.nullValue();
             case RedisReply.NullArray ignored -> out.nullArray();
             case RedisReply.Aggregate value -> renderAggregate(value, out);
-            case RedisReply.ByteSequence value -> {
-                out.arrayHeader(value.elementCount());
-                value.emitter().accept(out);
-            }
-            case RedisReply.ByteSet value -> {
-                out.setHeader(value.elementCount());
-                value.emitter().accept(out);
-            }
-            case RedisReply.ByteMap value -> {
-                out.mapHeader(value.pairCount());
+            case RedisReply.ByteAggregate value -> {
+                switch (value.kind()) {
+                    case SEQUENCE -> out.arrayHeader(value.count());
+                    case SET -> out.setHeader(value.count());
+                    case MAP -> out.mapHeader(value.count());
+                }
                 value.emitter().accept(out);
             }
         }

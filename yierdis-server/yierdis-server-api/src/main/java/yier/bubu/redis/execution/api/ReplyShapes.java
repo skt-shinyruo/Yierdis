@@ -57,28 +57,13 @@ public final class ReplyShapes {
         return aggregate(ReplyShape.AggregateKind.MAP, fieldValues);
     }
 
-    public static ReplyShape sequence(
+    public static ReplyShape byteAggregate(
+            ReplyShape.ByteAggregateKind kind,
             int count,
             long retainedSourceBytes,
             Consumer<IntConsumer> lengths
     ) {
-        return new ReplyShape.ByteSequence(count, lengths, retainedSourceBytes);
-    }
-
-    public static ReplyShape byteSet(
-            int count,
-            long retainedSourceBytes,
-            Consumer<IntConsumer> lengths
-    ) {
-        return new ReplyShape.ByteSet(count, lengths, retainedSourceBytes);
-    }
-
-    public static ReplyShape byteMap(
-            int pairCount,
-            long retainedSourceBytes,
-            Consumer<IntConsumer> lengths
-    ) {
-        return new ReplyShape.ByteMap(pairCount, lengths, retainedSourceBytes);
+        return new ReplyShape.ByteAggregate(kind, count, lengths, retainedSourceBytes);
     }
 
     public static ReplyShape maximum() {

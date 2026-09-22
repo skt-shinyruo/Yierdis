@@ -54,31 +54,13 @@ public final class RedisReplies {
         return new RedisReply.Aggregate(ReplyShape.AggregateKind.MAP, fieldValues);
     }
 
-    public static RedisReply sequence(
-            int elementCount,
+    public static RedisReply byteAggregate(
+            ReplyShape.ByteAggregateKind kind,
+            int count,
             long retainedSourceBytes,
             Consumer<IntConsumer> payloadLengths,
             Consumer<ReplySink> emitter
     ) {
-        return new RedisReply.ByteSequence(
-                elementCount, retainedSourceBytes, payloadLengths, emitter);
-    }
-
-    public static RedisReply byteSet(
-            int elementCount,
-            long retainedSourceBytes,
-            Consumer<IntConsumer> payloadLengths,
-            Consumer<ReplySink> emitter
-    ) {
-        return new RedisReply.ByteSet(elementCount, retainedSourceBytes, payloadLengths, emitter);
-    }
-
-    public static RedisReply byteMap(
-            int pairCount,
-            long retainedSourceBytes,
-            Consumer<IntConsumer> payloadLengths,
-            Consumer<ReplySink> emitter
-    ) {
-        return new RedisReply.ByteMap(pairCount, retainedSourceBytes, payloadLengths, emitter);
+        return new RedisReply.ByteAggregate(kind, count, retainedSourceBytes, payloadLengths, emitter);
     }
 }

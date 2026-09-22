@@ -9,7 +9,7 @@ import java.util.function.IntConsumer;
 public sealed interface RedisReply permits
         RedisReply.SimpleString, RedisReply.Error, RedisReply.ControlError,
         RedisReply.IntegerValue, RedisReply.BulkString, RedisReply.NullValue, RedisReply.NullArray,
-        RedisReply.Aggregate, RedisReply.ByteSequence, RedisReply.ByteSet, RedisReply.ByteMap {
+        RedisReply.Aggregate, RedisReply.ByteAggregate {
 
     default ReplyShape shape() {
         return switch (this) {
@@ -21,12 +21,8 @@ public sealed interface RedisReply permits
             case NullValue ignored -> ReplyShapes.nullValue();
             case NullArray ignored -> ReplyShapes.nullArray();
             case Aggregate value -> aggregateShape(value);
-            case ByteSequence value -> ReplyShapes.sequence(
-                    value.elementCount, value.retainedSourceBytes, value.payloadLengths);
-            case ByteSet value -> ReplyShapes.byteSet(
-                    value.elementCount, value.retainedSourceBytes, value.payloadLengths);
-            case ByteMap value -> ReplyShapes.byteMap(
-                    value.pairCount, value.retainedSourceBytes, value.payloadLengths);
+            case ByteAggregate value -> ReplyShapes.byteAggregate(
+                    value.kind, value.count, value.retainedSourceBytes, value.payloadLengths);
         };
     }
 
@@ -67,42 +63,19 @@ public sealed interface RedisReply permits
         }
     }
 
-    record ByteSequence(
-            int elementCount,
+    /**
+     * 流式字节聚合：SEQUENCE/SET 的 count 是元素数，MAP 的 count 是键值对数。
+     */
+    record ByteAggregate(
+            ReplyShape.ByteAggregateKind kind,
+            int count,
             long retainedSourceBytes,
             Consumer<IntConsumer> payloadLengths,
             Consumer<ReplySink> emitter
     ) implements RedisReply {
-        public ByteSequence {
-            requireNonNegative(elementCount, "elementCount");
-            requireNonNegative(retainedSourceBytes, "retainedSourceBytes");
-            Objects.requireNonNull(payloadLengths, "payloadLengths");
-            Objects.requireNonNull(emitter, "emitter");
-        }
-    }
-
-    record ByteSet(
-            int elementCount,
-            long retainedSourceBytes,
-            Consumer<IntConsumer> payloadLengths,
-            Consumer<ReplySink> emitter
-    ) implements RedisReply {
-        public ByteSet {
-            requireNonNegative(elementCount, "elementCount");
-            requireNonNegative(retainedSourceBytes, "retainedSourceBytes");
-            Objects.requireNonNull(payloadLengths, "payloadLengths");
-            Objects.requireNonNull(emitter, "emitter");
-        }
-    }
-
-    record ByteMap(
-            int pairCount,
-            long retainedSourceBytes,
-            Consumer<IntConsumer> payloadLengths,
-            Consumer<ReplySink> emitter
-    ) implements RedisReply {
-        public ByteMap {
-            requireNonNegative(pairCount, "pairCount");
+        public ByteAggregate {
+            Objects.requireNonNull(kind, "kind");
+            requireNonNegative(count, "count");
             requireNonNegative(retainedSourceBytes, "retainedSourceBytes");
             Objects.requireNonNull(payloadLengths, "payloadLengths");
             Objects.requireNonNull(emitter, "emitter");

@@ -93,9 +93,9 @@ RESP2 下的典型映射是：
 | `NullArray` | `*-1\r\n` |
 | `Aggregate(ARRAY, ...)` | `*<n>\r\n` |
 | `Aggregate(MAP, ...)` | flat array，长度为 field/value 元素数 |
-| `ByteSequence(...)` | array，逐元素 bulk string |
-| `ByteSet(...)` | array，逐元素 bulk string |
-| `ByteMap(...)` | flat array，交替 field/value bulk string |
+| `ByteAggregate(SEQUENCE, ...)` | array，逐元素 bulk string |
+| `ByteAggregate(SET, ...)` | array，逐元素 bulk string |
+| `ByteAggregate(MAP, ...)` | flat array，交替 field/value bulk string |
 | `Error(message)` | `-ERR ...\r\n` 或已有 Redis error prefix |
 
 RESP3 下，已有专属形态的语义会换成 RESP3 编码：
@@ -104,8 +104,8 @@ RESP3 下，已有专属形态的语义会换成 RESP3 编码：
 | --- | --- |
 | `NullValue` / `NullArray` | `_\r\n` |
 | `Aggregate(MAP, ...)` | `%<pairs>\r\n` |
-| `ByteSet(...)` | `~<n>\r\n` |
-| `ByteMap(...)` | `%<pairs>\r\n` |
+| `ByteAggregate(SET, ...)` | `~<n>\r\n` |
+| `ByteAggregate(MAP, ...)` | `%<pairs>\r\n` |
 
 `RedisReply` 没有 Boolean、Double、BigNumber、VerbatimString、BlobError 变体，`AggregateKind` 只有 `ARRAY` 和 `MAP`，因此 `HELLO 3` 之后也不会发出 RESP3 的 `#`、`,`、`(`、`=`、`!`、`>`、`|` 形态。没有 RESP3 专属形态的语义仍使用通用表达，例如 simple string、integer、bulk string、error 和 array。
 

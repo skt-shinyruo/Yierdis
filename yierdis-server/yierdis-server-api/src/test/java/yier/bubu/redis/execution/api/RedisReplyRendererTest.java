@@ -54,7 +54,8 @@ public class RedisReplyRendererTest {
 
     @Test
     public void rendererWritesStreamingHeadersBeforePayloadEmission() {
-        RedisReply sequence = RedisReplies.sequence(
+        RedisReply sequence = RedisReplies.byteAggregate(
+                ReplyShape.ByteAggregateKind.SEQUENCE,
                 2,
                 17,
                 lengths -> {
@@ -65,7 +66,8 @@ public class RedisReplyRendererTest {
                     sink.bulkString(bytes("a"));
                     sink.bulkStringNull();
                 });
-        RedisReply map = RedisReplies.byteMap(
+        RedisReply map = RedisReplies.byteAggregate(
+                ReplyShape.ByteAggregateKind.MAP,
                 1,
                 23,
                 lengths -> {
@@ -76,7 +78,8 @@ public class RedisReplyRendererTest {
                     sink.bulkString(bytes("k"));
                     sink.bulkString(bytes("vv"));
                 });
-        RedisReply set = RedisReplies.byteSet(
+        RedisReply set = RedisReplies.byteAggregate(
+                ReplyShape.ByteAggregateKind.SET,
                 2,
                 11,
                 lengths -> {

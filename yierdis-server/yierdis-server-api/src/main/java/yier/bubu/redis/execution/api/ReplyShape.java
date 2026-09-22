@@ -16,9 +16,7 @@ public sealed interface ReplyShape permits
         ReplyShape.NullValue,
         ReplyShape.NullArray,
         ReplyShape.Aggregate,
-        ReplyShape.ByteSequence,
-        ReplyShape.ByteSet,
-        ReplyShape.ByteMap,
+        ReplyShape.ByteAggregate,
         ReplyShape.Maximum {
 
     default long retainedSourceBytes() {
@@ -75,37 +73,24 @@ public sealed interface ReplyShape permits
         }
     }
 
-    record ByteSequence(
-            int elementCount,
-            Consumer<IntConsumer> payloadLengths,
-            long retainedSourceBytes
-    ) implements ReplyShape {
-        public ByteSequence {
-            requireNonNegative(elementCount, "elementCount");
-            Objects.requireNonNull(payloadLengths, "payloadLengths");
-            requireNonNegative(retainedSourceBytes, "retainedSourceBytes");
-        }
+    enum ByteAggregateKind {
+        SEQUENCE,
+        SET,
+        MAP
     }
 
-    record ByteSet(
-            int elementCount,
+    /**
+     * 流式字节聚合：SEQUENCE/SET 的 count 是元素数，MAP 的 count 是键值对数。
+     */
+    record ByteAggregate(
+            ByteAggregateKind kind,
+            int count,
             Consumer<IntConsumer> payloadLengths,
             long retainedSourceBytes
     ) implements ReplyShape {
-        public ByteSet {
-            requireNonNegative(elementCount, "elementCount");
-            Objects.requireNonNull(payloadLengths, "payloadLengths");
-            requireNonNegative(retainedSourceBytes, "retainedSourceBytes");
-        }
-    }
-
-    record ByteMap(
-            int pairCount,
-            Consumer<IntConsumer> payloadLengths,
-            long retainedSourceBytes
-    ) implements ReplyShape {
-        public ByteMap {
-            requireNonNegative(pairCount, "pairCount");
+        public ByteAggregate {
+            Objects.requireNonNull(kind, "kind");
+            requireNonNegative(count, "count");
             Objects.requireNonNull(payloadLengths, "payloadLengths");
             requireNonNegative(retainedSourceBytes, "retainedSourceBytes");
         }

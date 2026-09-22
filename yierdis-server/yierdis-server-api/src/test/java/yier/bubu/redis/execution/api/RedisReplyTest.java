@@ -99,7 +99,8 @@ public class RedisReplyTest {
     @Test
     public void streamingReplyDoesNotMaterializeItsPayload() {
         AtomicInteger emitted = new AtomicInteger();
-        RedisReply reply = RedisReplies.sequence(
+        RedisReply reply = RedisReplies.byteAggregate(
+                ReplyShape.ByteAggregateKind.SEQUENCE,
                 2,
                 19L,
                 lengths -> {
@@ -131,25 +132,37 @@ public class RedisReplyTest {
         AtomicInteger sequenceEmissions = new AtomicInteger();
         AtomicInteger mapEmissions = new AtomicInteger();
         AtomicInteger setEmissions = new AtomicInteger();
-        RedisReply.ByteSequence sequence = (RedisReply.ByteSequence) RedisReplies.sequence(
-                2, 19L, sequenceLengths, sink -> sequenceEmissions.incrementAndGet());
-        RedisReply.ByteMap map = (RedisReply.ByteMap) RedisReplies.byteMap(
-                1, 23L, mapLengths, sink -> mapEmissions.incrementAndGet());
-        RedisReply.ByteSet set = (RedisReply.ByteSet) RedisReplies.byteSet(
-                2, 29L, setLengths, sink -> setEmissions.incrementAndGet());
+        RedisReply.ByteAggregate sequence = (RedisReply.ByteAggregate) RedisReplies.byteAggregate(
+                ReplyShape.ByteAggregateKind.SEQUENCE, 2, 19L, sequenceLengths,
+                sink -> sequenceEmissions.incrementAndGet());
+        RedisReply.ByteAggregate map = (RedisReply.ByteAggregate) RedisReplies.byteAggregate(
+                ReplyShape.ByteAggregateKind.MAP, 1, 23L, mapLengths,
+                sink -> mapEmissions.incrementAndGet());
+        RedisReply.ByteAggregate set = (RedisReply.ByteAggregate) RedisReplies.byteAggregate(
+                ReplyShape.ByteAggregateKind.SET, 2, 29L, setLengths,
+                sink -> setEmissions.incrementAndGet());
 
-        Assert.assertEquals(2, sequence.elementCount());
+        Assert.assertEquals(ReplyShape.ByteAggregateKind.SEQUENCE, sequence.kind());
+        Assert.assertEquals(2, sequence.count());
         Assert.assertSame(sequenceLengths, sequence.payloadLengths());
         Assert.assertEquals(19L, sequence.retainedSourceBytes());
-        Assert.assertEquals(new ReplyShape.ByteSequence(2, sequenceLengths, 19L), sequence.shape());
-        Assert.assertEquals(1, map.pairCount());
+        Assert.assertEquals(
+                new ReplyShape.ByteAggregate(ReplyShape.ByteAggregateKind.SEQUENCE, 2, sequenceLengths, 19L),
+                sequence.shape());
+        Assert.assertEquals(ReplyShape.ByteAggregateKind.MAP, map.kind());
+        Assert.assertEquals(1, map.count());
         Assert.assertSame(mapLengths, map.payloadLengths());
         Assert.assertEquals(23L, map.retainedSourceBytes());
-        Assert.assertEquals(new ReplyShape.ByteMap(1, mapLengths, 23L), map.shape());
-        Assert.assertEquals(2, set.elementCount());
+        Assert.assertEquals(
+                new ReplyShape.ByteAggregate(ReplyShape.ByteAggregateKind.MAP, 1, mapLengths, 23L),
+                map.shape());
+        Assert.assertEquals(ReplyShape.ByteAggregateKind.SET, set.kind());
+        Assert.assertEquals(2, set.count());
         Assert.assertSame(setLengths, set.payloadLengths());
         Assert.assertEquals(29L, set.retainedSourceBytes());
-        Assert.assertEquals(new ReplyShape.ByteSet(2, setLengths, 29L), set.shape());
+        Assert.assertEquals(
+                new ReplyShape.ByteAggregate(ReplyShape.ByteAggregateKind.SET, 2, setLengths, 29L),
+                set.shape());
         Assert.assertEquals(0, sequenceEmissions.get());
         Assert.assertEquals(0, mapEmissions.get());
         Assert.assertEquals(0, setEmissions.get());
@@ -164,18 +177,14 @@ public class RedisReplyTest {
         assertIllegalArgument(() -> RedisReplies.bulkString(-1, 0, emitter));
         assertIllegalArgument(() -> new RedisReply.BulkString(0, -1, emitter));
         assertIllegalArgument(() -> RedisReplies.bulkString(0, -1, emitter));
-        assertIllegalArgument(() -> new RedisReply.ByteSequence(-1, 0, lengths, emitter));
-        assertIllegalArgument(() -> RedisReplies.sequence(-1, 0, lengths, emitter));
-        assertIllegalArgument(() -> new RedisReply.ByteSequence(0, -1, lengths, emitter));
-        assertIllegalArgument(() -> RedisReplies.sequence(0, -1, lengths, emitter));
-        assertIllegalArgument(() -> new RedisReply.ByteSet(-1, 0, lengths, emitter));
-        assertIllegalArgument(() -> RedisReplies.byteSet(-1, 0, lengths, emitter));
-        assertIllegalArgument(() -> new RedisReply.ByteSet(0, -1, lengths, emitter));
-        assertIllegalArgument(() -> RedisReplies.byteSet(0, -1, lengths, emitter));
-        assertIllegalArgument(() -> new RedisReply.ByteMap(-1, 0, lengths, emitter));
-        assertIllegalArgument(() -> RedisReplies.byteMap(-1, 0, lengths, emitter));
-        assertIllegalArgument(() -> new RedisReply.ByteMap(0, -1, lengths, emitter));
-        assertIllegalArgument(() -> RedisReplies.byteMap(0, -1, lengths, emitter));
+        assertIllegalArgument(() -> new RedisReply.ByteAggregate(
+                ReplyShape.ByteAggregateKind.SEQUENCE, -1, 0, lengths, emitter));
+        assertIllegalArgument(() -> RedisReplies.byteAggregate(
+                ReplyShape.ByteAggregateKind.SET, -1, 0, lengths, emitter));
+        assertIllegalArgument(() -> new RedisReply.ByteAggregate(
+                ReplyShape.ByteAggregateKind.MAP, 0, -1, lengths, emitter));
+        assertIllegalArgument(() -> RedisReplies.byteAggregate(
+                ReplyShape.ByteAggregateKind.SEQUENCE, 0, -1, lengths, emitter));
     }
 
     @Test
@@ -185,18 +194,16 @@ public class RedisReplyTest {
 
         assertNullPointer(() -> new RedisReply.BulkString(0, 0, null));
         assertNullPointer(() -> RedisReplies.bulkString(0, 0, null));
-        assertNullPointer(() -> new RedisReply.ByteSequence(0, 0, null, emitter));
-        assertNullPointer(() -> new RedisReply.ByteSequence(0, 0, lengths, null));
-        assertNullPointer(() -> RedisReplies.sequence(0, 0, null, emitter));
-        assertNullPointer(() -> RedisReplies.sequence(0, 0, lengths, null));
-        assertNullPointer(() -> new RedisReply.ByteSet(0, 0, null, emitter));
-        assertNullPointer(() -> new RedisReply.ByteSet(0, 0, lengths, null));
-        assertNullPointer(() -> RedisReplies.byteSet(0, 0, null, emitter));
-        assertNullPointer(() -> RedisReplies.byteSet(0, 0, lengths, null));
-        assertNullPointer(() -> new RedisReply.ByteMap(0, 0, null, emitter));
-        assertNullPointer(() -> new RedisReply.ByteMap(0, 0, lengths, null));
-        assertNullPointer(() -> RedisReplies.byteMap(0, 0, null, emitter));
-        assertNullPointer(() -> RedisReplies.byteMap(0, 0, lengths, null));
+        assertNullPointer(() -> new RedisReply.ByteAggregate(null, 0, 0, lengths, emitter));
+        assertNullPointer(() -> new RedisReply.ByteAggregate(
+                ReplyShape.ByteAggregateKind.SEQUENCE, 0, 0, null, emitter));
+        assertNullPointer(() -> new RedisReply.ByteAggregate(
+                ReplyShape.ByteAggregateKind.MAP, 0, 0, lengths, null));
+        assertNullPointer(() -> RedisReplies.byteAggregate(null, 0, 0, lengths, emitter));
+        assertNullPointer(() -> RedisReplies.byteAggregate(
+                ReplyShape.ByteAggregateKind.SET, 0, 0, null, emitter));
+        assertNullPointer(() -> RedisReplies.byteAggregate(
+                ReplyShape.ByteAggregateKind.SEQUENCE, 0, 0, lengths, null));
         assertNullPointer(() -> RedisReplies.bulkString((byte[]) null));
     }
 

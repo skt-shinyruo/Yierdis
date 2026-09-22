@@ -11,11 +11,13 @@ public class RespReplySizerTest {
 
         Assert.assertThrows(IllegalArgumentException.class, () -> sizer.apply(
                 2,
-                new ReplyShape.ByteSequence(1, consumer -> consumer.accept(-2), 0)
+                new ReplyShape.ByteAggregate(
+                        ReplyShape.ByteAggregateKind.SEQUENCE, 1, consumer -> consumer.accept(-2), 0)
         ));
         Assert.assertThrows(IllegalArgumentException.class, () -> sizer.apply(
                 2,
-                new ReplyShape.ByteMap(1, consumer -> consumer.accept(1), 0)
+                new ReplyShape.ByteAggregate(
+                        ReplyShape.ByteAggregateKind.MAP, 1, consumer -> consumer.accept(1), 0)
         ));
     }
 

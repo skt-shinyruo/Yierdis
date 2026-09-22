@@ -11,7 +11,7 @@ public class ReplyShapeTest {
         ReplyShape shape = ReplyShapes.array(List.of(
                 ReplyShapes.bulkString(3, 11),
                 ReplyShapes.integer(7),
-                ReplyShapes.sequence(2, 13, consumer -> {
+                ReplyShapes.byteAggregate(ReplyShape.ByteAggregateKind.SEQUENCE, 2, 13, consumer -> {
                     consumer.accept(1);
                     consumer.accept(-1);
                 })
@@ -22,8 +22,8 @@ public class ReplyShapeTest {
 
     @Test
     public void semanticLengthViewIsRepeatableAndKeepsNullSemantic() {
-        ReplyShape.ByteSequence sequence = (ReplyShape.ByteSequence) ReplyShapes.sequence(
-                3, 9, consumer -> {
+        ReplyShape.ByteAggregate sequence = (ReplyShape.ByteAggregate) ReplyShapes.byteAggregate(
+                ReplyShape.ByteAggregateKind.SEQUENCE, 3, 9, consumer -> {
                     consumer.accept(2);
                     consumer.accept(-1);
                     consumer.accept(5);
@@ -45,7 +45,7 @@ public class ReplyShapeTest {
         Assert.assertThrows(IllegalArgumentException.class,
                 () -> new ReplyShape.BulkString(1, -1));
         Assert.assertThrows(NullPointerException.class,
-                () -> new ReplyShape.ByteSequence(1, null, 0));
+                () -> new ReplyShape.ByteAggregate(ReplyShape.ByteAggregateKind.SEQUENCE, 1, null, 0));
 
         List<ReplyShape> mutable = new ArrayList<>();
         mutable.add(new ReplyShape.IntegerValue(1));

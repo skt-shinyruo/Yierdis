@@ -4,6 +4,7 @@ import java.util.Objects;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.RedisReply;
+import yier.bubu.redis.execution.api.ReplyShape;
 import yier.bubu.redis.execution.api.ReplySink;
 import yier.bubu.redis.storage.api.result.ByteMapSource;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
@@ -27,7 +28,8 @@ public final class DbReplies {
 
     public static RedisReply sequence(ByteSequenceSource source) {
         ByteSequenceSource values = Objects.requireNonNull(source, "source");
-        return RedisReplies.sequence(
+        return RedisReplies.byteAggregate(
+                ReplyShape.ByteAggregateKind.SEQUENCE,
                 values.elementCount(),
                 values.retainedMemoryBytes(),
                 consumer -> values.visitElementLengths(consumer::accept),
@@ -36,7 +38,8 @@ public final class DbReplies {
 
     public static RedisReply set(ByteSequenceSource source) {
         ByteSequenceSource values = Objects.requireNonNull(source, "source");
-        return RedisReplies.byteSet(
+        return RedisReplies.byteAggregate(
+                ReplyShape.ByteAggregateKind.SET,
                 values.elementCount(),
                 values.retainedMemoryBytes(),
                 consumer -> values.visitElementLengths(consumer::accept),
@@ -58,7 +61,8 @@ public final class DbReplies {
 
     public static RedisReply map(ByteMapSource source) {
         ByteMapSource values = Objects.requireNonNull(source, "source");
-        return RedisReplies.byteMap(
+        return RedisReplies.byteAggregate(
+                ReplyShape.ByteAggregateKind.MAP,
                 values.pairCount(),
                 values.retainedMemoryBytes(),
                 consumer -> values.visitPairLengths(consumer::accept),

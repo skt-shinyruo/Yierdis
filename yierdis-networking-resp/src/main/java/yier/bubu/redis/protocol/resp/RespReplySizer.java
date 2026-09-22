@@ -5,6 +5,7 @@ import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
 import java.util.function.BiFunction;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.ReplyShape;
@@ -35,9 +36,7 @@ public final class RespReplySizer implements BiFunction<Integer, ReplyShape, Rep
             case ReplyShape.NullValue ignored -> version.nullValueEncoding().length;
             case ReplyShape.NullArray ignored -> version.nullArrayEncoding().length;
             case ReplyShape.Aggregate value -> aggregateBytes(value, version);
-            case ReplyShape.ByteSequence value -> byteSequenceBytes(value, version);
-            case ReplyShape.ByteSet value -> byteSetBytes(value, version);
-            case ReplyShape.ByteMap value -> byteMapBytes(value, version);
+            case ReplyShape.ByteAggregate value -> byteAggregateBytes(value, version);
             case ReplyShape.Maximum ignored -> throw new AssertionError("maximum was handled before sizing");
         };
     }
@@ -61,26 +60,19 @@ public final class RespReplySizer implements BiFunction<Integer, ReplyShape, Rep
         return encoded;
     }
 
-    private static long byteSequenceBytes(ReplyShape.ByteSequence sequence, RespProtocolVersion version) {
-        PayloadAccumulator payloads = new PayloadAccumulator(sequence.elementCount(), version);
-        sequence.payloadLengths().accept(payloads::accept);
-        payloads.verifyComplete("sequence");
-        return addSaturating(aggregateHeaderBytes('*', sequence.elementCount()), payloads.encodedBytes());
-    }
-
-    private static long byteSetBytes(ReplyShape.ByteSet set, RespProtocolVersion version) {
-        PayloadAccumulator payloads = new PayloadAccumulator(set.elementCount(), version);
-        set.payloadLengths().accept(payloads::accept);
-        payloads.verifyComplete("set");
-        return addSaturating(aggregateHeaderBytes(version.setPrefix(), set.elementCount()), payloads.encodedBytes());
-    }
-
-    private static long byteMapBytes(ReplyShape.ByteMap map, RespProtocolVersion version) {
-        long expectedValues = Math.multiplyExact((long) map.pairCount(), 2L);
+    private static long byteAggregateBytes(ReplyShape.ByteAggregate aggregate, RespProtocolVersion version) {
+        ReplyShape.ByteAggregateKind kind = aggregate.kind();
+        long expectedValues = kind == ReplyShape.ByteAggregateKind.MAP
+                ? Math.multiplyExact((long) aggregate.count(), 2L)
+                : aggregate.count();
         PayloadAccumulator payloads = new PayloadAccumulator(expectedValues, version);
-        map.payloadLengths().accept(payloads::accept);
-        payloads.verifyComplete("map");
-        long header = aggregateHeaderBytes(version.mapPrefix(), version.mapHeaderCount(map.pairCount()));
+        aggregate.payloadLengths().accept(payloads::accept);
+        payloads.verifyComplete(kind.name().toLowerCase(Locale.ROOT));
+        long header = switch (kind) {
+            case SEQUENCE -> aggregateHeaderBytes('*', aggregate.count());
+            case SET -> aggregateHeaderBytes(version.setPrefix(), aggregate.count());
+            case MAP -> aggregateHeaderBytes(version.mapPrefix(), version.mapHeaderCount(aggregate.count()));
+        };
         return addSaturating(header, payloads.encodedBytes());
     }
 

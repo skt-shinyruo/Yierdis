@@ -62,7 +62,7 @@ DB API 的很多读方法接受 `BytesView`，例如 `StringOps`、`TtlOps`、`K
 
 ## 语义回复和 Netty 写回
 
-命令层把 storage source 包装成 `RedisReply.BulkString`、`ByteSequence` 或 `ByteMap`，并把 source owner 挂在 `PreparedCommand` 上。executor 先按 reply shape 完成 slot reservation，执行得到 `CommandResult` 后才创建 `RedisReplyWriter`；`RedisReplyRenderer` 随后同步运行 payload emitter。当前 Netty sink 按固定上限分配 `ByteBuf` chunk，renderer 返回后 prepared owner 才会关闭。
+命令层把 storage source 包装成 `RedisReply.BulkString` 或 `ByteAggregate`（kind 为 SEQUENCE/SET/MAP），并把 source owner 挂在 `PreparedCommand` 上。executor 先按 reply shape 完成 slot reservation，执行得到 `CommandResult` 后才创建 `RedisReplyWriter`；`RedisReplyRenderer` 随后同步运行 payload emitter。当前 Netty sink 按固定上限分配 `ByteBuf` chunk，renderer 返回后 prepared owner 才会关闭。
 
 写回路径大致是：
 

@@ -11,6 +11,7 @@ import yier.bubu.redis.execution.api.RedisReplyRenderer;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.ReplyReservationSink;
+import yier.bubu.redis.execution.api.ReplyShape;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -177,7 +178,7 @@ public class RedisReplyRespContractTest {
     }
 
     private static List<ReplyFixture> streamedFixtures() {
-        RedisReply sequence = RedisReplies.sequence(3, 17L, consumer -> {
+        RedisReply sequence = RedisReplies.byteAggregate(ReplyShape.ByteAggregateKind.SEQUENCE, 3, 17L, consumer -> {
             consumer.accept(1);
             consumer.accept(-1);
             consumer.accept(3);
@@ -186,7 +187,7 @@ public class RedisReplyRespContractTest {
             sink.bulkStringNull();
             sink.bulkString(bytes("xyz"));
         });
-        RedisReply map = RedisReplies.byteMap(2, 23L, consumer -> {
+        RedisReply map = RedisReplies.byteAggregate(ReplyShape.ByteAggregateKind.MAP, 2, 23L, consumer -> {
             consumer.accept(1);
             consumer.accept(1);
             consumer.accept(1);
@@ -197,7 +198,7 @@ public class RedisReplyRespContractTest {
             sink.bulkString(bytes("n"));
             sink.bulkStringNull();
         });
-        RedisReply set = RedisReplies.byteSet(2, 29L, consumer -> {
+        RedisReply set = RedisReplies.byteAggregate(ReplyShape.ByteAggregateKind.SET, 2, 29L, consumer -> {
             consumer.accept(1);
             consumer.accept(-1);
         }, sink -> {

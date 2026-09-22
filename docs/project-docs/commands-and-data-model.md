@@ -101,7 +101,7 @@ RESP2 / RESP3 的标量与 aggregate 编码由协议 writer 根据 session versi
 - `ByteMapSource`：field/value pairs；
 - `CollectionScanWindow`：带 cursor 的一次 scan window。
 
-`DbReplies` 把这些 source 转成 `RedisReply.BulkString`、`ByteSequence`、`ByteSet` 或 `ByteMap`。语义 reply 记录 element count、payload lengths、retained source bytes 和同步 emitter；`PreparedCommands.owned(...)` 让 prepared command 持有 source。
+`DbReplies` 把这些 source 转成 `RedisReply.BulkString` 或 `ByteAggregate`（kind 为 SEQUENCE/SET/MAP）。语义 reply 记录元素/键值对计数、payload lengths、retained source bytes 和同步 emitter；`PreparedCommands.owned(...)` 让 prepared command 持有 source。
 
 `LRANGE`、`SMEMBERS`、`HGETALL` 和 `ZRANGE*` 在 prepare 时把选中元素拷进独立 source。这些集合会 in-place 改同一 native handle；reply-capacity 若把 render 推迟到其他连接写入之后，live emit 会和冻结的 elementCount 错位并拆开 RESP。GET 仍 pin native string；SCAN window 仍按既有 pin/materialize 规则，不保证跨 mutation 的快照。
 

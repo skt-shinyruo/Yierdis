@@ -36,8 +36,9 @@ public class DbRepliesTest {
         PreparedCommand prepared = PreparedCommands.owned(CommandResult.reply(reply), source);
 
         Assert.assertEquals(0, source.emitCount());
-        ReplyShape.ByteSequence shape = (ReplyShape.ByteSequence) reply.shape();
-        Assert.assertEquals(3, shape.elementCount());
+        ReplyShape.ByteAggregate shape = (ReplyShape.ByteAggregate) reply.shape();
+        Assert.assertEquals(ReplyShape.ByteAggregateKind.SEQUENCE, shape.kind());
+        Assert.assertEquals(3, shape.count());
         shape.payloadLengths().accept(ignored -> { });
         Assert.assertEquals(3, source.lengthVisitCount());
         Assert.assertEquals(0, source.emitCount());
@@ -79,8 +80,9 @@ public class DbRepliesTest {
         PreparedCommand prepared = PreparedCommands.owned(CommandResult.reply(reply), source);
 
         Assert.assertEquals(0, source.emitCount());
-        ReplyShape.ByteMap shape = (ReplyShape.ByteMap) reply.shape();
-        Assert.assertEquals(2, shape.pairCount());
+        ReplyShape.ByteAggregate shape = (ReplyShape.ByteAggregate) reply.shape();
+        Assert.assertEquals(ReplyShape.ByteAggregateKind.MAP, shape.kind());
+        Assert.assertEquals(2, shape.count());
         shape.payloadLengths().accept(ignored -> { });
         Assert.assertEquals(4, source.lengthVisitCount());
         Assert.assertEquals(0, source.emitCount());
