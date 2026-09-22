@@ -1,8 +1,9 @@
 package yier.bubu.redis.storage.memory.internal.value;
 
-import java.util.function.IntConsumer;
-
 import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
+
+import java.util.function.BiConsumer;
+import java.util.function.IntConsumer;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -14,6 +15,7 @@ import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.CollectionScanWindow;
+import yier.bubu.redis.storage.memory.internal.keyspace.YierdisGlobMatcher;
 
 /**
  * HT 编码集合的一次有界 scan 结果。窗口只 pin 已发现元素的 native handle，不复制 payload。
@@ -63,6 +65,45 @@ final class NativeCollectionScanWindow implements CollectionScanWindow {
             throw new IllegalArgumentException("boundedMatchCount is out of range");
         }
         return Math.max(MIN_SLOT_BUDGET, (long) boundedMatchCount * SLOT_MULTIPLIER);
+    }
+
+    /**
+     * 共享 HT 编码集合的 bounded scan：glob 过滤、去重前先按 key slice 命中计数、builder 生命周期与游标推进。
+     * 每种 value 的差异（是否附带 value/score 等元素）由 {@code extraElements} 补齐，元素总数由
+     * {@code elementsPerMatch} 决定。
+     */
+    static <V> CollectionScanWindow scanNativeMap(
+            NativeByteMap<V> map,
+            NativeByteStore store,
+            ScanCursorV2 current,
+            byte[] globPattern,
+            int count,
+            int elementsPerMatch,
+            BiConsumer<Builder, V> extraElements
+    ) {
+        Objects.requireNonNull(map, "map");
+        Objects.requireNonNull(store, "store");
+        Objects.requireNonNull(current, "current");
+        Objects.requireNonNull(extraElements, "extraElements");
+        int boundedCount = boundedMatchCount(count);
+        int[] matched = {0};
+        try (Builder builder = builder(store.backend(), boundedCount * elementsPerMatch)) {
+            NativeByteMap.ScanResult result = map.scanWithWork(
+                    current,
+                    slotBudget(boundedCount),
+                    (keyRef, value) -> {
+                        var keySlice = store.slice(keyRef);
+                        if (globPattern != null && !YierdisGlobMatcher.matches(globPattern, keySlice)) {
+                            return true;
+                        }
+                        builder.addNative(keyRef, keySlice.length());
+                        extraElements.accept(builder, value);
+                        matched[0]++;
+                        return matched[0] < boundedCount;
+                    }
+            );
+            return builder.build(result.nextCursor());
+        }
     }
 
     @Override

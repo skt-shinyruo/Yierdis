@@ -18,7 +18,6 @@ import yier.bubu.redis.storage.memory.internal.keyspace.YierdisGlobMatcher;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.OptionalLong;
@@ -191,34 +190,11 @@ public final class SetValue implements YierdisValue {
     }
 
     public int countAdditions(List<byte[]> candidates) {
-        Objects.requireNonNull(candidates, "candidates");
-        int count = 0;
-        for (int i = 0; i < candidates.size(); i++) {
-            byte[] member = candidates.get(i);
-            Objects.requireNonNull(member, "member");
-            if (containsDuplicateBefore(candidates, i, member)) {
-                continue;
-            }
-            if (!contains(member)) {
-                count++;
-            }
-        }
-        return count;
+        return DistinctCandidates.count(candidates, member -> !contains(member));
     }
 
     public int countExistingMembers(List<byte[]> candidates) {
-        Objects.requireNonNull(candidates, "candidates");
-        int count = 0;
-        for (int i = 0; i < candidates.size(); i++) {
-            byte[] member = candidates.get(i);
-            if (member == null || containsDuplicateBefore(candidates, i, member)) {
-                continue;
-            }
-            if (contains(member)) {
-                count++;
-            }
-        }
-        return count;
+        return DistinctCandidates.count(candidates, this::contains);
     }
 
     public void membersInto(ByteValueSink out) {
@@ -240,25 +216,16 @@ public final class SetValue implements YierdisValue {
         }
         ScanCursorV2 current = cursor == null ? ScanCursorV2.start() : cursor;
         if (members != null) {
-            int boundedCount = NativeCollectionScanWindow.boundedMatchCount(count);
-            int[] matched = {0};
-            try (NativeCollectionScanWindow.Builder builder =
-                         NativeCollectionScanWindow.builder(memberStore.backend(), boundedCount)) {
-                NativeByteMap.ScanResult result = members.scanWithWork(
-                        current,
-                        NativeCollectionScanWindow.slotBudget(boundedCount),
-                        (memberRef, ignored) -> {
-                            var memberSlice = memberStore.slice(memberRef);
-                            if (globPattern != null && !YierdisGlobMatcher.matches(globPattern, memberSlice)) {
-                                return true;
-                            }
-                            builder.addNative(memberRef, memberSlice.length());
-                            matched[0]++;
-                            return matched[0] < boundedCount;
-                        }
-                );
-                return builder.build(result.nextCursor());
-            }
+            return NativeCollectionScanWindow.scanNativeMap(
+                    members,
+                    memberStore,
+                    current,
+                    globPattern,
+                    count,
+                    1,
+                    (builder, ignored) -> {
+                    }
+            );
         }
 
         // intset 数量受编码阈值限制，一次返回可避免删除导致后续元素左移并越过旧位置游标。
@@ -617,7 +584,7 @@ public final class SetValue implements YierdisValue {
 
     private static int longStringByteLength(long v) {
         if (v == Long.MIN_VALUE) {
-            return LONG_MIN_VALUE_BYTES.length;
+            return 20;
         }
         long x = v < 0 ? -v : v;
         int digits = 1;
@@ -626,14 +593,5 @@ public final class SetValue implements YierdisValue {
             digits++;
         }
         return v < 0 ? digits + 1 : digits;
-    }
-
-    private static boolean containsDuplicateBefore(List<byte[]> values, int endExclusive, byte[] candidate) {
-        for (int i = 0; i < endExclusive; i++) {
-            if (Arrays.equals(values.get(i), candidate)) {
-                return true;
-            }
-        }
-        return false;
     }
 }

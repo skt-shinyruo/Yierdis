@@ -11,7 +11,7 @@ import org.junit.Test;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 
-public class PinnedPoppedValueSequenceTest {
+public class NativePoppedValueSequenceTest {
     @Test
     public void emptyHandleSetHasExplicitCapacityBoundary() {
         NativeHandleSet handles = new NativeHandleSet(0);
@@ -53,13 +53,13 @@ public class PinnedPoppedValueSequenceTest {
                 }
         );
 
-        PinnedPoppedValueSequence pinned = PinnedPoppedValueSequence.capture(allocator, entries);
+        NativePoppedValueSequence pinned = NativePoppedValueSequence.pinned(allocator, entries);
         Assert.assertEquals(uniqueHandleCount, pinAttempts.get());
         Assert.assertEquals((long) uniqueHandleCount * 32L, pinned.retainedMemoryBytes());
         pinned.close();
         Assert.assertEquals(uniqueHandleCount, unpinAttempts.get());
 
-        PreparedPoppedValueSequence prepared = PreparedPoppedValueSequence.owned(allocator, entries);
+        NativePoppedValueSequence prepared = NativePoppedValueSequence.owned(allocator, entries);
         Assert.assertEquals((long) uniqueHandleCount * 32L, prepared.retainedMemoryBytes());
         prepared.activateOwnership();
         prepared.close();
@@ -84,7 +84,7 @@ public class PinnedPoppedValueSequenceTest {
                 }
         );
         NativeHandle shared = handle(1);
-        PinnedPoppedValueSequence sequence = PinnedPoppedValueSequence.capture(
+        NativePoppedValueSequence sequence = NativePoppedValueSequence.pinned(
                 allocator,
                 new NativeListEntryRef[] {
                         NativeListEntryRef.handle(shared, 2, 3, 64),
@@ -128,13 +128,13 @@ public class PinnedPoppedValueSequenceTest {
                 NativeListEntryRef.handle(right, 1, 32)
         };
 
-        PinnedPoppedValueSequence pinnedSequence = PinnedPoppedValueSequence.capture(allocator, entries);
+        NativePoppedValueSequence pinnedSequence = NativePoppedValueSequence.pinned(allocator, entries);
         Assert.assertEquals(64L, pinnedSequence.retainedMemoryBytes());
         Assert.assertEquals(Set.of(left, right), new HashSet<>(pinned));
         pinnedSequence.close();
         Assert.assertEquals(Set.of(left, right), new HashSet<>(unpinned));
 
-        PreparedPoppedValueSequence prepared = PreparedPoppedValueSequence.owned(allocator, entries);
+        NativePoppedValueSequence prepared = NativePoppedValueSequence.owned(allocator, entries);
         Assert.assertEquals(64L, prepared.retainedMemoryBytes());
         prepared.activateOwnership();
         prepared.close();
@@ -155,7 +155,7 @@ public class PinnedPoppedValueSequenceTest {
                 }
         );
         NativeHandle shared = handle(1);
-        PreparedPoppedValueSequence sequence = PreparedPoppedValueSequence.owned(
+        NativePoppedValueSequence sequence = NativePoppedValueSequence.owned(
                 allocator,
                 new NativeListEntryRef[] {
                         NativeListEntryRef.handle(shared, 2, 3, 64),
@@ -182,7 +182,7 @@ public class PinnedPoppedValueSequenceTest {
                     return null;
                 }
         );
-        PinnedPoppedValueSequence sequence = PinnedPoppedValueSequence.capture(
+        NativePoppedValueSequence sequence = NativePoppedValueSequence.pinned(
                 allocator,
                 new NativeListEntryRef[] {
                         NativeListEntryRef.handle(handle(1), 1, 1),

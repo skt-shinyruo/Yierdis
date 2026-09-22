@@ -12,8 +12,7 @@ import yier.bubu.redis.storage.memory.internal.ledger.MemoryLedger;
 import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
 import yier.bubu.redis.storage.memory.internal.value.NativeBytesSlice;
 import yier.bubu.redis.storage.memory.internal.value.NativeListEntryRef;
-import yier.bubu.redis.storage.memory.internal.value.PinnedPoppedValueSequence;
-import yier.bubu.redis.storage.memory.internal.value.PreparedPoppedValueSequence;
+import yier.bubu.redis.storage.memory.internal.value.NativePoppedValueSequence;
 
 /**
  * 集中封装 family 与维护任务共享的 stable-memory 能力，避免 allocator 细节重新渗入 mutation kernel。
@@ -61,12 +60,12 @@ final class YierdisDbMemoryContext {
         );
     }
 
-    PinnedPoppedValueSequence capturePoppedValues(NativeListEntryRef[] entries) {
-        return PinnedPoppedValueSequence.capture(stableMemoryBackend, entries);
+    NativePoppedValueSequence capturePoppedValues(NativeListEntryRef[] entries) {
+        return NativePoppedValueSequence.pinned(stableMemoryBackend, entries);
     }
 
-    PreparedPoppedValueSequence ownPoppedValues(NativeListEntryRef[] entries) {
-        return PreparedPoppedValueSequence.owned(stableMemoryBackend, entries);
+    NativePoppedValueSequence ownPoppedValues(NativeListEntryRef[] entries) {
+        return NativePoppedValueSequence.owned(stableMemoryBackend, entries);
     }
 
     MemoryReclaimResult trimEmptyNativePages(MemoryPressureBudget budget) {

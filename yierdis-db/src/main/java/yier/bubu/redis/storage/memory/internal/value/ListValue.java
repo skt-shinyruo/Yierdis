@@ -770,22 +770,22 @@ public final class ListValue implements YierdisValue {
             return new ArrayList<>();
         }
 
-        RangeBounds bounds = bounds(start, stop, size);
-        if (bounds == null) {
+        NormalizedRange range = NormalizedRange.of(size, start, stop);
+        if (range == null) {
             return new ArrayList<>();
         }
 
-        List<byte[]> out = new ArrayList<>(bounds.stop - bounds.start + 1);
+        List<byte[]> out = new ArrayList<>((int) (range.stop() - range.start() + 1));
         int idx = 0;
         if (quicklist != null) {
             outer:
             for (ListNode n : quicklist) {
                 NativeListpack.Cursor c = n.cursor();
                 while (c.next()) {
-                    if (idx > bounds.stop) {
+                    if (idx > range.stop()) {
                         break outer;
                     }
-                    if (idx >= bounds.start) {
+                    if (idx >= range.start()) {
                         out.add(c.toByteArray());
                     }
                     idx++;
@@ -796,10 +796,10 @@ public final class ListValue implements YierdisValue {
 
         NativeListpack.Cursor c = listpack.cursor();
         while (c.next()) {
-            if (idx > bounds.stop) {
+            if (idx > range.stop()) {
                 break;
             }
-            if (idx >= bounds.start) {
+            if (idx >= range.start()) {
                 out.add(c.toByteArray());
             }
             idx++;
@@ -808,8 +808,8 @@ public final class ListValue implements YierdisValue {
     }
 
     public int rangeCount(int start, int stop) {
-        RangeBounds bounds = bounds(start, stop, size());
-        return bounds == null ? 0 : bounds.stop - bounds.start + 1;
+        NormalizedRange range = NormalizedRange.of(size(), start, stop);
+        return range == null ? 0 : (int) (range.stop() - range.start() + 1);
     }
 
     public void rangeInto(int start, int stop, ByteValueSink out) {
@@ -817,8 +817,8 @@ public final class ListValue implements YierdisValue {
             throw new IllegalArgumentException("out must not be null");
         }
 
-        RangeBounds bounds = bounds(start, stop, size());
-        if (bounds == null) {
+        NormalizedRange range = NormalizedRange.of(size(), start, stop);
+        if (range == null) {
             return;
         }
 
@@ -828,10 +828,10 @@ public final class ListValue implements YierdisValue {
             for (ListNode n : quicklist) {
                 NativeListpack.Cursor c = n.cursor();
                 while (c.next()) {
-                    if (idx > bounds.stop) {
+                    if (idx > range.stop()) {
                         break outer;
                     }
-                    if (idx >= bounds.start) {
+                    if (idx >= range.start()) {
                         c.writeTo(out);
                     }
                     idx++;
@@ -842,17 +842,17 @@ public final class ListValue implements YierdisValue {
 
         NativeListpack.Cursor c = listpack.cursor();
         while (c.next()) {
-            if (idx > bounds.stop) {
+            if (idx > range.stop()) {
                 break;
             }
-            if (idx >= bounds.start) {
+            if (idx >= range.start()) {
                 c.writeTo(out);
             }
             idx++;
         }
     }
 
-    public void releaseExcept(PreparedPoppedValueSequence retained) {
+    public void releaseExcept(NativePoppedValueSequence retained) {
         Objects.requireNonNull(retained, "retained");
         RuntimeException failure = null;
         if (listpack != null) {
@@ -1281,31 +1281,6 @@ public final class ListValue implements YierdisValue {
         return failure;
     }
 
-    private static RangeBounds bounds(int start, int stop, int size) {
-        if (size == 0) {
-            return null;
-        }
-        int normalizedStart = normalizeIndex(start, size);
-        int normalizedStop = normalizeIndex(stop, size);
-        if (normalizedStart < 0) {
-            normalizedStart = 0;
-        }
-        if (normalizedStop < 0) {
-            return null;
-        }
-        if (normalizedStop >= size) {
-            normalizedStop = size - 1;
-        }
-        if (normalizedStart > normalizedStop) {
-            return null;
-        }
-        return new RangeBounds(normalizedStart, normalizedStop);
-    }
-
-    private static int normalizeIndex(int idx, int size) {
-        return idx >= 0 ? idx : size + idx;
-    }
-
     private static int entryEncodedBytes(byte[] v) {
         return NativeListpack.entryEncodedBytes(v);
     }
@@ -1432,9 +1407,6 @@ public final class ListValue implements YierdisValue {
             return 0L;
         }
         return left > Long.MAX_VALUE / right ? Long.MAX_VALUE : left * right;
-    }
-
-    private record RangeBounds(int start, int stop) {
     }
 
     private record BuildPlan(boolean quicklist, int[] blockEntryCounts, int[] blockEncodedBytes) {
@@ -1613,7 +1585,7 @@ public final class ListValue implements YierdisValue {
             releaseSuperseded(null);
         }
 
-        public final void releaseSuperseded(PreparedPoppedValueSequence retained) {
+        public final void releaseSuperseded(NativePoppedValueSequence retained) {
             if (!committed) {
                 throw new IllegalStateException("prepared list mutation is not committed");
             }
@@ -1624,7 +1596,7 @@ public final class ListValue implements YierdisValue {
             released = true;
         }
 
-        protected abstract void releaseSupersededPrepared(PreparedPoppedValueSequence retained);
+        protected abstract void releaseSupersededPrepared(NativePoppedValueSequence retained);
 
         @Override
         public final void close() {
@@ -1720,7 +1692,7 @@ public final class ListValue implements YierdisValue {
 
         static void closePacked(
                 NativeListpack packed,
-                PreparedPoppedValueSequence retained
+                NativePoppedValueSequence retained
         ) {
             if (retained == null) {
                 packed.close();
@@ -1779,7 +1751,7 @@ public final class ListValue implements YierdisValue {
         }
 
         @Override
-        protected void releaseSupersededPrepared(PreparedPoppedValueSequence retained) {
+        protected void releaseSupersededPrepared(NativePoppedValueSequence retained) {
         }
 
         @Override
@@ -1831,7 +1803,7 @@ public final class ListValue implements YierdisValue {
         }
 
         @Override
-        protected void releaseSupersededPrepared(PreparedPoppedValueSequence retained) {
+        protected void releaseSupersededPrepared(NativePoppedValueSequence retained) {
             Throwable failure = null;
             if (!accountingRefreshed) {
                 try {
@@ -1910,7 +1882,7 @@ public final class ListValue implements YierdisValue {
         }
 
         @Override
-        protected void releaseSupersededPrepared(PreparedPoppedValueSequence retained) {
+        protected void releaseSupersededPrepared(NativePoppedValueSequence retained) {
             Throwable failure = null;
             if (!metadataRefreshed) {
                 try {
@@ -2059,7 +2031,7 @@ public final class ListValue implements YierdisValue {
         }
 
         @Override
-        protected void releaseSupersededPrepared(PreparedPoppedValueSequence retained) {
+        protected void releaseSupersededPrepared(NativePoppedValueSequence retained) {
             Throwable failure = null;
             if (!metadataRefreshed) {
                 try {
@@ -2185,7 +2157,7 @@ public final class ListValue implements YierdisValue {
         }
 
         @Override
-        protected void releaseSupersededPrepared(PreparedPoppedValueSequence retained) {
+        protected void releaseSupersededPrepared(NativePoppedValueSequence retained) {
             Throwable failure = null;
             if (!metadataRefreshed) {
                 try {
@@ -2410,7 +2382,7 @@ public final class ListValue implements YierdisValue {
             }
         }
 
-        void closeExcept(PreparedPoppedValueSequence retained) {
+        void closeExcept(NativePoppedValueSequence retained) {
             if (payloadClosed && nodeFreed) {
                 return;
             }

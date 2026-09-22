@@ -529,21 +529,8 @@ public final class ZSetValue implements YierdisValue {
     }
 
     public int countExistingMembers(List<byte[]> members) {
-        Objects.requireNonNull(members, "members");
-        int removed = 0;
-        for (int index = 0; index < members.size(); index++) {
-            byte[] member = members.get(index);
-            if (appearedEarlier(members, index, member)) {
-                continue;
-            }
-            boolean exists = listpack != null
-                    ? indexOfMember(member) >= 0
-                    : byMember.get(member) != null;
-            if (exists) {
-                removed++;
-            }
-        }
-        return removed;
+        return DistinctCandidates.count(members, member ->
+                listpack != null ? indexOfMember(member) >= 0 : byMember.get(member) != null);
     }
 
     public int zremrangeByScore(double min, boolean minExclusive, double max, boolean maxExclusive) {
@@ -582,21 +569,12 @@ public final class ZSetValue implements YierdisValue {
             return 0;
         }
 
-        long normalizedStart = normalizeIndex(start, size);
-        long normalizedStop = normalizeIndex(stop, size);
-
-        if (normalizedStart < 0) {
-            normalizedStart = 0;
-        }
-        if (normalizedStop < 0) {
+        NormalizedRange range = NormalizedRange.of(size, start, stop);
+        if (range == null) {
             return 0;
         }
-        if (normalizedStop >= size) {
-            normalizedStop = size - 1;
-        }
-        if (normalizedStart > normalizedStop) {
-            return 0;
-        }
+        long normalizedStart = range.start();
+        long normalizedStop = range.stop();
 
         if (listpack != null) {
             int removed = 0;
@@ -653,20 +631,12 @@ public final class ZSetValue implements YierdisValue {
         if (size == 0) {
             return 0;
         }
-        long normalizedStart = normalizeIndex(start, size);
-        long normalizedStop = normalizeIndex(stop, size);
-        if (normalizedStart < 0) {
-            normalizedStart = 0;
-        }
-        if (normalizedStop < 0) {
+        NormalizedRange range = NormalizedRange.of(size, start, stop);
+        if (range == null) {
             return 0;
         }
-        if (normalizedStop >= size) {
-            normalizedStop = size - 1;
-        }
-        if (normalizedStart > normalizedStop) {
-            return 0;
-        }
+        long normalizedStart = range.start();
+        long normalizedStop = range.stop();
         return Math.toIntExact(normalizedStop - normalizedStart + 1L);
     }
 
@@ -680,26 +650,15 @@ public final class ZSetValue implements YierdisValue {
         }
         ScanCursorV2 current = cursor == null ? ScanCursorV2.start() : cursor;
         if (byMember != null) {
-            int boundedCount = NativeCollectionScanWindow.boundedMatchCount(count);
-            int[] matched = {0};
-            try (NativeCollectionScanWindow.Builder builder =
-                         NativeCollectionScanWindow.builder(memberStore.backend(), boundedCount * 2)) {
-                NativeByteMap.ScanResult result = byMember.scanWithWork(
-                        current,
-                        NativeCollectionScanWindow.slotBudget(boundedCount),
-                        (memberRef, node) -> {
-                            var memberSlice = memberStore.slice(memberRef);
-                            if (globPattern != null && !YierdisGlobMatcher.matches(globPattern, memberSlice)) {
-                                return true;
-                            }
-                            builder.addNative(memberRef, memberSlice.length());
-                            addScoreElement(builder, node.score);
-                            matched[0]++;
-                            return matched[0] < boundedCount;
-                        }
-                );
-                return builder.build(result.nextCursor());
-            }
+            return NativeCollectionScanWindow.scanNativeMap(
+                    byMember,
+                    memberStore,
+                    current,
+                    globPattern,
+                    count,
+                    2,
+                    (builder, node) -> addScoreElement(builder, node.score)
+            );
         }
 
         // packed ZSET 按 score 排序；一次返回完整编码，避免改分重排让稳定 member 落到旧游标之前。
@@ -773,21 +732,12 @@ public final class ZSetValue implements YierdisValue {
             return new ArrayList<>();
         }
 
-        long normalizedStart = normalizeIndex(start, size);
-        long normalizedStop = normalizeIndex(stop, size);
-
-        if (normalizedStart < 0) {
-            normalizedStart = 0;
-        }
-        if (normalizedStop < 0) {
+        NormalizedRange range = NormalizedRange.of(size, start, stop);
+        if (range == null) {
             return new ArrayList<>();
         }
-        if (normalizedStop >= size) {
-            normalizedStop = size - 1;
-        }
-        if (normalizedStart > normalizedStop) {
-            return new ArrayList<>();
-        }
+        long normalizedStart = range.start();
+        long normalizedStop = range.stop();
 
         int remaining;
         ZSkipList.Node node;
@@ -840,21 +790,12 @@ public final class ZSetValue implements YierdisValue {
             return;
         }
 
-        long normalizedStart = normalizeIndex(start, size);
-        long normalizedStop = normalizeIndex(stop, size);
-
-        if (normalizedStart < 0) {
-            normalizedStart = 0;
-        }
-        if (normalizedStop < 0) {
+        NormalizedRange range = NormalizedRange.of(size, start, stop);
+        if (range == null) {
             return;
         }
-        if (normalizedStop >= size) {
-            normalizedStop = size - 1;
-        }
-        if (normalizedStart > normalizedStop) {
-            return;
-        }
+        long normalizedStart = range.start();
+        long normalizedStop = range.stop();
 
         for (long i = normalizedStart; i <= normalizedStop; i++) {
             int idx = !reverse ? (int) i : (size - 1 - (int) i);
@@ -871,21 +812,12 @@ public final class ZSetValue implements YierdisValue {
             return;
         }
 
-        long normalizedStart = normalizeIndex(start, size);
-        long normalizedStop = normalizeIndex(stop, size);
-
-        if (normalizedStart < 0) {
-            normalizedStart = 0;
-        }
-        if (normalizedStop < 0) {
+        NormalizedRange range = NormalizedRange.of(size, start, stop);
+        if (range == null) {
             return;
         }
-        if (normalizedStop >= size) {
-            normalizedStop = size - 1;
-        }
-        if (normalizedStart > normalizedStop) {
-            return;
-        }
+        long normalizedStart = range.start();
+        long normalizedStop = range.stop();
 
         int remaining = (int) (normalizedStop - normalizedStart + 1);
         boolean stepBackwards = reverse;
@@ -1067,21 +999,12 @@ public final class ZSetValue implements YierdisValue {
             return new ArrayList<>();
         }
 
-        long normalizedStart = normalizeIndex(start, size);
-        long normalizedStop = normalizeIndex(stop, size);
-
-        if (normalizedStart < 0) {
-            normalizedStart = 0;
-        }
-        if (normalizedStop < 0) {
+        NormalizedRange range = NormalizedRange.of(size, start, stop);
+        if (range == null) {
             return new ArrayList<>();
         }
-        if (normalizedStop >= size) {
-            normalizedStop = size - 1;
-        }
-        if (normalizedStart > normalizedStop) {
-            return new ArrayList<>();
-        }
+        long normalizedStart = range.start();
+        long normalizedStop = range.stop();
 
         int remaining = (int) (normalizedStop - normalizedStart + 1);
         if (!withScores) {
@@ -1100,22 +1023,6 @@ public final class ZSetValue implements YierdisValue {
             out.add(formatScoreBytes(listpack.scoreAt(idx)));
         }
         return out;
-    }
-
-    private static long normalizeIndex(long idx, int size) {
-        if (idx >= 0) {
-            return idx;
-        }
-        return (long) size + idx;
-    }
-
-    private static boolean appearedEarlier(List<byte[]> values, int limit, byte[] candidate) {
-        for (int index = 0; index < limit; index++) {
-            if (Arrays.equals(values.get(index), candidate)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private static PackedBuildPlan packedBuildPlan(

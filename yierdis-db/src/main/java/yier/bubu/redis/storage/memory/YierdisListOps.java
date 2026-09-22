@@ -26,8 +26,7 @@ import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
 import yier.bubu.redis.storage.memory.internal.entry.NativeStorageLayout;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.AllocatorKeyHandle;
-import yier.bubu.redis.storage.memory.internal.value.PreparedPoppedValueSequence;
-import yier.bubu.redis.storage.memory.internal.value.PinnedPoppedValueSequence;
+import yier.bubu.redis.storage.memory.internal.value.NativePoppedValueSequence;
 import yier.bubu.redis.storage.memory.internal.value.ListValue;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
@@ -89,7 +88,7 @@ final class YierdisListOps implements ListOps {
                     count,
                     left,
                     preparedEntryState(preparedKey),
-                    PinnedPoppedValueSequence.empty()
+                    NativePoppedValueSequence.empty()
             );
         }
         if (count < 0) {
@@ -99,7 +98,7 @@ final class YierdisListOps implements ListOps {
         EntryRecord record = state.liveRecord();
         PoppedValueSequence preview;
         if (record == null) {
-            preview = PinnedPoppedValueSequence.nullValue();
+            preview = NativePoppedValueSequence.nullValue();
         } else {
             requireList(record);
             preview = memoryContext.capturePoppedValues(
@@ -180,7 +179,7 @@ final class YierdisListOps implements ListOps {
             boolean left
     ) {
         if (count == 0) {
-            return WriteResult.unchanged(PreparedPoppedValueSequence.empty());
+            return WriteResult.unchanged(NativePoppedValueSequence.empty());
         }
         if (count < 0) {
             throw new IllegalArgumentException("count must be >= 0");
@@ -210,7 +209,7 @@ final class YierdisListOps implements ListOps {
                 EntryRecord current = currentEntry.record();
                 if (current == null) {
                     return kernel.unchanged(
-                            WriteResult.unchanged(PreparedPoppedValueSequence.nullValue())
+                            WriteResult.unchanged(NativePoppedValueSequence.nullValue())
                     );
                 }
 
@@ -219,13 +218,13 @@ final class YierdisListOps implements ListOps {
                 int oldSize = listRoot.size(oldHandle);
                 if (oldSize == 0) {
                     WriteResult<PoppedValueSequence> result = WriteResult.unchanged(
-                            PreparedPoppedValueSequence.empty()
+                            NativePoppedValueSequence.empty()
                     );
                     return preparedDelete(kernel, currentEntry, current, result, true);
                 }
 
                 int popCount = Math.min(count, oldSize);
-                PreparedPoppedValueSequence popped = memoryContext.ownPoppedValues(
+                NativePoppedValueSequence popped = memoryContext.ownPoppedValues(
                         listRoot.popEntries(oldHandle, popCount, left)
                 );
                 WriteResult<PoppedValueSequence> result = WriteResult.of(popped, MutationOutcome.VALUE_CHANGED);
@@ -304,7 +303,7 @@ final class YierdisListOps implements ListOps {
             ValueHandle handle,
             int popCount,
             boolean left,
-            PreparedPoppedValueSequence popped,
+            NativePoppedValueSequence popped,
             WriteResult<PoppedValueSequence> result
     ) {
         ListValue.PreparedMutation valueMutation = null;
@@ -551,7 +550,7 @@ final class YierdisListOps implements ListOps {
                 : prepared.releaseReplacedValueWith(releaseReplacedValueHook);
     }
 
-    private Runnable releaseOldListToPopped(ValueHandle oldHandle, PreparedPoppedValueSequence popped) {
+    private Runnable releaseOldListToPopped(ValueHandle oldHandle, NativePoppedValueSequence popped) {
         return () -> {
             // 先声明 reply 对 retained block 的唯一 ownership；后续 root/node free 失败也不能让 block 失去 owner。
             popped.activateOwnership();
@@ -570,7 +569,7 @@ final class YierdisListOps implements ListOps {
 
     private void releasePreparedPopToReply(
             ListValue.PreparedMutation valueMutation,
-            PreparedPoppedValueSequence popped
+            NativePoppedValueSequence popped
     ) {
         popped.activateOwnership();
         try {

@@ -18,7 +18,6 @@ import yier.bubu.redis.storage.memory.internal.hash.SipHashIntIndex;
 import yier.bubu.redis.storage.memory.internal.keyspace.YierdisGlobMatcher;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -408,19 +407,7 @@ public final class HashValue implements YierdisValue {
     }
 
     public int countExistingFields(List<byte[]> fields) {
-        Objects.requireNonNull(fields, "fields");
-        int count = 0;
-        for (int i = 0; i < fields.size(); i++) {
-            byte[] field = fields.get(i);
-            Objects.requireNonNull(field, "field");
-            if (containsDuplicateBefore(fields, i, field)) {
-                continue;
-            }
-            if (containsField(field)) {
-                count++;
-            }
-        }
-        return count;
+        return DistinctCandidates.count(fields, this::containsField);
     }
 
     public List<byte[]> hgetallPairs() {
@@ -480,33 +467,24 @@ public final class HashValue implements YierdisValue {
         }
         ScanCursorV2 current = cursor == null ? ScanCursorV2.start() : cursor;
         if (map != null) {
-            int boundedCount = NativeCollectionScanWindow.boundedMatchCount(count);
-            int[] matched = {0};
-            int expectedElements = boundedCount * (noValues ? 1 : 2);
-            try (NativeCollectionScanWindow.Builder builder =
-                         NativeCollectionScanWindow.builder(fieldStore.backend(), expectedElements)) {
-                NativeByteMap.ScanResult result = map.scanWithWork(
-                        current,
-                        NativeCollectionScanWindow.slotBudget(boundedCount),
-                        (fieldRef, valueRef) -> {
-                            var fieldSlice = fieldStore.slice(fieldRef);
-                            if (globPattern != null && !YierdisGlobMatcher.matches(globPattern, fieldSlice)) {
-                                return true;
-                            }
-                            builder.addNative(fieldRef, fieldSlice.length());
-                            if (!noValues) {
-                                if (valueRef == null) {
-                                    builder.addNull();
-                                } else {
-                                    builder.addNative(valueRef, valueStore.length(valueRef));
-                                }
-                            }
-                            matched[0]++;
-                            return matched[0] < boundedCount;
+            return NativeCollectionScanWindow.scanNativeMap(
+                    map,
+                    fieldStore,
+                    current,
+                    globPattern,
+                    count,
+                    noValues ? 1 : 2,
+                    (builder, valueRef) -> {
+                        if (noValues) {
+                            return;
                         }
-                );
-                return builder.build(result.nextCursor());
-            }
+                        if (valueRef == null) {
+                            builder.addNull();
+                        } else {
+                            builder.addNative(valueRef, valueStore.length(valueRef));
+                        }
+                    }
+            );
         }
 
         // Redis 的 compact hash 在一次调用中完整返回；这样数组位置变化不会破坏跨调用完整迭代语义。
@@ -755,15 +733,6 @@ public final class HashValue implements YierdisValue {
 
     private void notifyHeapChanged() {
         heapChangeListener.run();
-    }
-
-    private static boolean containsDuplicateBefore(List<byte[]> values, int endExclusive, byte[] candidate) {
-        for (int i = 0; i < endExclusive; i++) {
-            if (Arrays.equals(values.get(i), candidate)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private ArrayList<byte[]> canonicalFieldValuePairs(List<byte[]> fieldValuePairs) {

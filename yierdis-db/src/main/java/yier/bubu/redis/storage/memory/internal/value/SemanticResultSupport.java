@@ -15,16 +15,7 @@ public final class SemanticResultSupport {
     }
 
     public static int signedLongAsciiLength(long value) {
-        if (value == Long.MIN_VALUE) {
-            return 20;
-        }
-        long remaining = value < 0L ? -value : value;
-        int length = value < 0L ? 2 : 1;
-        while (remaining >= 10L) {
-            remaining /= 10L;
-            length++;
-        }
-        return length;
+        return Long.toString(value).length();
     }
 
     private static final class LengthSink implements ByteValueSink {

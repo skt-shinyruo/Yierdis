@@ -6,7 +6,7 @@ import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.memory.internal.value.ListValue;
 import yier.bubu.redis.storage.memory.internal.value.NativeListEntryRef;
-import yier.bubu.redis.storage.memory.internal.value.PreparedPoppedValueSequence;
+import yier.bubu.redis.storage.memory.internal.value.NativePoppedValueSequence;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.util.List;
@@ -232,7 +232,7 @@ public final class ListRoot implements AutoCloseable {
         lists.release(handle);
     }
 
-    public synchronized void releaseExcept(ValueHandle handle, PreparedPoppedValueSequence retained) {
+    public synchronized void releaseExcept(ValueHandle handle, NativePoppedValueSequence retained) {
         ensureOpen();
         if (handle == null) {
             return;
