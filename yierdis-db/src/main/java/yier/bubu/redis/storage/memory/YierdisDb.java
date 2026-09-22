@@ -142,8 +142,7 @@ public final class YierdisDb
                     keyLifecycle,
                     storage.hashTableMaintenanceRegistry(),
                     maxmemoryBytes,
-                    ledger,
-                    runtimeState::lastNativeDefragReport
+                    ledger
             );
             YierdisDbMaxmemorySupport maxmemorySupport = new YierdisDbMaxmemorySupport(
                     kernel,

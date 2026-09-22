@@ -1012,36 +1012,6 @@ public class YierdisFfmStableMemoryBackendTest {
     }
 
     @Test
-    public void defragValidationFailureRollsBackMove() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
-             YierdisFfmStableMemoryBackend allocator = newAllocator(
-                     runtime,
-                     1024,
-                     (handle, sourceMeta, target) -> {
-                         throw new NativeMemoryException("validation failed");
-                     }
-             )) {
-
-            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
-            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
-                view.setByte(0, (byte) 7);
-            }
-            NativeLocation beforeLocation = locationOf(allocator.objectMeta(handle.localRaw(), false));
-
-            NativeDefragReport report = allocator.defragCycle(new NativeDefragOptions(24, 10, Long.MAX_VALUE));
-
-            Assert.assertEquals(0L, report.movedObjects());
-            Assert.assertEquals(1L, report.failedMoves());
-            Assert.assertEquals(beforeLocation, locationOf(allocator.objectMeta(handle.localRaw(), false)));
-            Assert.assertEquals(0L, allocator.stats().defragMovedBytes());
-            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
-                Assert.assertEquals(7, view.getByte(0));
-            }
-            allocator.free(handle);
-        }
-    }
-
-    @Test
     public void statsExposeProductionAllocatorMetrics() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
              YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 1024)) {
@@ -1494,22 +1464,12 @@ public class YierdisFfmStableMemoryBackendTest {
             YierdisFfmMemoryRuntime runtime,
             int maxSlots
     ) {
-        return newAllocator(runtime, maxSlots, (localRaw, sourceMeta, target) -> {
-        });
-    }
-
-    private static YierdisFfmStableMemoryBackend newAllocator(
-            YierdisFfmMemoryRuntime runtime,
-            int maxSlots,
-            YierdisNativeDefragValidator validator
-    ) {
         FfmTestOwner owner = new FfmTestOwner();
         YierdisFfmStableMemoryBackend allocator = new YierdisFfmStableMemoryBackend(
                 runtime,
                 maxSlots,
                 StableMemoryBackendIds.nextId(),
-                owner,
-                validator
+                owner
         );
         owner.bindToCurrentThread();
         return allocator;

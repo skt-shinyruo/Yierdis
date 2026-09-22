@@ -13,6 +13,8 @@ import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.YierdisCommandException;
+import yier.bubu.redis.storage.memory.YierdisDb;
+import yier.bubu.redis.storage.memory.YierdisDbTestAccess;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
 import yier.bubu.redis.runtime.embedded.TestDbRouters;
@@ -96,8 +98,7 @@ public class YierdisInstanceTest {
                         "global used bytes should shrink: before=" + usedBefore
                                 + ", after=" + after.usedBytesForMaxmemory()
                                 + ", nativeCommitted=" + after.nativeDataCommittedBytes()
-                                + ", nativeLive=" + after.nativeDataLiveBytes()
-                                + ", reclaimable=" + after.nativeReclaimableBytes(),
+                                + ", nativeLive=" + after.nativeDataLiveBytes(),
                         after.usedBytesForMaxmemory() < usedBefore
                 );
             }
@@ -216,7 +217,7 @@ public class YierdisInstanceTest {
             instance.runtimeAccess().maintenanceTick();
 
             Assert.assertArrayEquals(b("value"), stringValue(instance.engines()[0].strings(), b("k")));
-            Assert.assertTrue(instance.engines()[0].memoryStats().nativeDefragLastMovedObjects() > 0L);
+            Assert.assertTrue(YierdisDbTestAccess.backend((YierdisDb) instance.engines()[0]).stats().defragMovedBytes() > 0L);
         }
     }
 

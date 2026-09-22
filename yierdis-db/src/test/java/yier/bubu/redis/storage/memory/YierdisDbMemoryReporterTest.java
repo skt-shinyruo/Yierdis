@@ -72,7 +72,6 @@ public class YierdisDbMemoryReporterTest {
                 Assert.assertEquals(usage.nativeMetadataCommittedBytes(), stats.nativeMetadataCommittedBytes());
                 Assert.assertEquals(usage.nativeDataCommittedBytes(), stats.nativeDataCommittedBytes());
                 Assert.assertEquals(usage.nativeDataLiveBytes(), stats.nativeDataLiveBytes());
-                Assert.assertEquals(usage.nativeReclaimableBytes(), stats.nativeReclaimableBytes());
                 Assert.assertEquals(
                         MemoryUsageSnapshot.addSaturating(
                                 usage.nativeMetadataCommittedBytes(),

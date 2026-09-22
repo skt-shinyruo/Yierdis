@@ -136,18 +136,17 @@ scope 的 `growth()` 保留从进入以来的峰值，包括 transient growth。
 
 ## Active defrag
 
-active defrag 选择未 pinned 的 live object，分配 target、复制 bytes、运行 validator，再发布新 location。handle、kind、logical size 和 DB graph identity不变。
+active defrag 选择未 pinned 的 live object，分配 target、复制 bytes，再发布新 location。handle、kind、logical size 和 DB graph identity不变。
 
 ```text
 beginMove(handle)
   -> allocate target
   -> copy current logical bytes
-  -> validate source/target
   -> publishMoved(...)
   -> retire old block through epoch reclaim
 ```
 
-validator 或 copy 在 publication 前失败时执行 `abortMove()` 并释放 target。`defragCycle(options)` 受 move bytes、object count 和 time budget 约束；pin rejection、budget skip、failed move 和 reclaimed pages 进入 stats。
+copy 在 publication 前失败时执行 `abortMove()` 并释放 target。`defragCycle(options)` 受 move bytes、object count 和 time budget 约束；pin rejection、budget skip、failed move 和 reclaimed pages 进入 stats。
 
 ## DB native layouts
 

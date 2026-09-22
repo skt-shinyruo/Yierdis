@@ -184,7 +184,7 @@ maxmemory 参数：
 
 每次 `INFO`、`INFO yierdis`、`INFO health` 或 `STATS` 执行时，`NettyServerInfoProvider` 都先构造一份请求级 `ServerStatsSnapshot`。executor、ingress、egress、child channels、runtime health 和 uptime 只采集一次，文本与结构化 writer 共享这份快照，避免同一个回复里的字段来自不同采样时刻。`INFO memory` 和 `INFO keyspace` 的 DB 聚合仍按 section 按需读取，不让轻量 health 探针承担全库聚合成本。
 
-`MEMORY STATS` 返回内存估算 map。常用字段包括 `maxmemory_bytes`、`used_bytes_for_maxmemory`、`effective_used_bytes_for_maxmemory`、`ledger_used_bytes`、`ledger_reserved_bytes`、`offheap_used_bytes`、`offheap_included_in_maxmemory`、`key_count`、`expire_count`、`keyspace_rehashing`、`expire_rehashing` 和 table capacity。global scope 下优先读聚合视角；per-db scope 下更贴近当前 DB。native defrag 摘要当前在 `INFO` memory section 中输出。
+`MEMORY STATS` 返回内存估算 map。常用字段包括 `maxmemory_bytes`、`used_bytes_for_maxmemory`、`effective_used_bytes_for_maxmemory`、`ledger_used_bytes`、`ledger_reserved_bytes`、`offheap_used_bytes`、`offheap_included_in_maxmemory`、`key_count` 和 `expire_count`。global scope 下优先读聚合视角；per-db scope 下更贴近当前 DB。
 
 `MEMORY USAGE key` 返回某个 key 的估算字节数，用于定位大 key。`OBJECT ENCODING key` 返回内部编码名，例如 string 的 `int` / `embstr` / `raw`，collection 的 `listpack` / `hashtable` / `intset` / `quicklist` / `skiplist` 等，用于理解数据结构升级和存储形态。
 

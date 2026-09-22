@@ -29,19 +29,10 @@ public class MemoryStatsCommandTest {
             "offheap_used_bytes",
             "ledger_reserved_bytes",
             "offheap_included_in_maxmemory",
-            "keyspace_table_overhead_bytes_estimate",
-            "expire_table_overhead_bytes_estimate",
-            "expire_value_objects_bytes_estimate",
             "total_estimated_bytes",
             "keys_stored_offheap",
             "key_count",
-            "expire_count",
-            "keyspace_rehashing",
-            "keyspace_table0_capacity",
-            "keyspace_table1_capacity",
-            "expire_rehashing",
-            "expire_table0_capacity",
-            "expire_table1_capacity"
+            "expire_count"
     );
 
     @Test

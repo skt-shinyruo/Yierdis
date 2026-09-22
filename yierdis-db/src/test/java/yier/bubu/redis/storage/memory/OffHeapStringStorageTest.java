@@ -259,7 +259,8 @@ public class OffHeapStringStorageTest {
                 stats.offHeapUsedBytes()
         );
         Assert.assertTrue(stats.usedBytesForMaxmemory() > 0L);
-        Assert.assertTrue(stats.nativeReclaimableBytes() <= stats.nativeDataCommittedBytes());
+        MemoryUsageSnapshot usage = db.memoryUsage();
+        Assert.assertTrue(usage.nativeReclaimableBytes() <= usage.nativeDataCommittedBytes());
     }
 
 }

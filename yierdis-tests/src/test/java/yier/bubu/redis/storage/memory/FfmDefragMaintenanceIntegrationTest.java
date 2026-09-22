@@ -8,7 +8,6 @@ import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.DbEngineConfig;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
-import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.testutil.TestDbs;
@@ -41,13 +40,8 @@ public class FfmDefragMaintenanceIntegrationTest {
                 Assert.assertEquals(1, values.elementCount());
             }
 
-            YierdisMemoryStats stats = db.memoryStats();
             NativeAllocatorStats after = YierdisDbTestAccess.backend(db).stats();
-            Assert.assertTrue(stats.nativeDefragLastMovedObjects() > 0L);
-            Assert.assertTrue(stats.nativeDefragLastMovedBytes() > 0L);
-            Assert.assertTrue(stats.nativeDefragMovedBytes() >= stats.nativeDefragLastMovedBytes());
-            Assert.assertEquals(after.quarantinedObjects(), stats.nativeDefragQuarantinedObjects());
-            Assert.assertEquals(after.quarantineBytes(), stats.nativeDefragQuarantineBytes());
+            Assert.assertTrue(after.defragMovedBytes() > before.defragMovedBytes());
             Assert.assertEquals(before.liveObjects(), after.liveObjects());
         } finally {
             db.shutdown();
@@ -66,9 +60,7 @@ public class FfmDefragMaintenanceIntegrationTest {
 
             db.defragMaintenance();
 
-            YierdisMemoryStats stats = db.memoryStats();
-            Assert.assertTrue(stats.nativeDefragLastSkippedPinnedObjects() >= 1L);
-            Assert.assertTrue(stats.nativeDefragSkippedPinnedObjects() >= 1L);
+            Assert.assertTrue(YierdisDbTestAccess.backend(db).stats().defragSkippedPinnedObjects() >= 1L);
             Assert.assertArrayEquals(b("value"), stringValue(db.strings(), b("pinned")));
             Assert.assertArrayEquals(b("other"), stringValue(db.strings(), b("moved")));
         } finally {
@@ -80,8 +72,7 @@ public class FfmDefragMaintenanceIntegrationTest {
     }
 
     @Test
-    public void repeatedDefragReportsStableObjectCounts() {
-        Long expectedMovedObjects = null;
+    public void repeatedDefragKeepsLiveObjectCountStable() {
         Long expectedLiveObjects = null;
 
         for (int cycle = 0; cycle < 4; cycle++) {
@@ -91,17 +82,13 @@ public class FfmDefragMaintenanceIntegrationTest {
                 NativeAllocatorStats before = YierdisDbTestAccess.backend(db).stats();
                 db.defragMaintenance();
 
-                YierdisMemoryStats memory = db.memoryStats();
                 NativeAllocatorStats after = YierdisDbTestAccess.backend(db).stats();
-                Assert.assertTrue(memory.nativeDefragLastMovedObjects() > 0L);
-                Assert.assertTrue(memory.nativeDefragLastMovedBytes() > 0L);
+                Assert.assertTrue(after.defragMovedBytes() > before.defragMovedBytes());
                 Assert.assertEquals(before.liveObjects(), after.liveObjects());
 
-                if (expectedMovedObjects == null) {
-                    expectedMovedObjects = memory.nativeDefragLastMovedObjects();
+                if (expectedLiveObjects == null) {
                     expectedLiveObjects = after.liveObjects();
                 } else {
-                    Assert.assertEquals(expectedMovedObjects.longValue(), memory.nativeDefragLastMovedObjects());
                     Assert.assertEquals(expectedLiveObjects.longValue(), after.liveObjects());
                 }
             } finally {

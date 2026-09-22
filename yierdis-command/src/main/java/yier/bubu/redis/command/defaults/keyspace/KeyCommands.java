@@ -54,19 +54,10 @@ public final class KeyCommands {
             memoryStat("offheap_used_bytes", YierdisMemoryStats::offHeapUsedBytes),
             memoryStat("ledger_reserved_bytes", YierdisMemoryStats::reservedBytes),
             memoryStat("offheap_included_in_maxmemory", stats -> stats.offHeapIncludedInMaxmemory() ? 1L : 0L),
-            memoryStat("keyspace_table_overhead_bytes_estimate", ignored -> 0L),
-            memoryStat("expire_table_overhead_bytes_estimate", ignored -> 0L),
-            memoryStat("expire_value_objects_bytes_estimate", ignored -> 0L),
             memoryStat("total_estimated_bytes", YierdisMemoryStats::totalEstimatedBytes),
             memoryStat("keys_stored_offheap", stats -> stats.keysStoredOffHeap() ? 1L : 0L),
             memoryStat("key_count", YierdisMemoryStats::keyCount),
-            memoryStat("expire_count", YierdisMemoryStats::expireCount),
-            memoryStat("keyspace_rehashing", ignored -> 0L),
-            memoryStat("keyspace_table0_capacity", ignored -> 0L),
-            memoryStat("keyspace_table1_capacity", ignored -> 0L),
-            memoryStat("expire_rehashing", ignored -> 0L),
-            memoryStat("expire_table0_capacity", ignored -> 0L),
-            memoryStat("expire_table1_capacity", ignored -> 0L)
+            memoryStat("expire_count", YierdisMemoryStats::expireCount)
     };
 
     private final CommandSupport support;

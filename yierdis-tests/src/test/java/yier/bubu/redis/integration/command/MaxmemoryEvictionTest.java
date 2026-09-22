@@ -92,8 +92,7 @@ public class MaxmemoryEvictionTest {
                         "shrinking command should reduce used bytes: before=" + usedBefore
                                 + ", after=" + after.usedBytesForMaxmemory()
                                 + ", nativeCommitted=" + after.nativeDataCommittedBytes()
-                                + ", nativeLive=" + after.nativeDataLiveBytes()
-                                + ", reclaimable=" + after.nativeReclaimableBytes(),
+                                + ", nativeLive=" + after.nativeDataLiveBytes(),
                         after.usedBytesForMaxmemory() < usedBefore
                 );
             }

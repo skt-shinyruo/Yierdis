@@ -1,11 +1,9 @@
 package yier.bubu.redis.storage.memory;
 
 import java.util.Objects;
-import java.util.function.Supplier;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
-import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
@@ -20,7 +18,6 @@ final class YierdisDbMemoryReporter {
     private final HashTableMaintenanceRegistry hashTableMaintenanceRegistry;
     private final long maxmemoryBytes;
     private final MemoryLedger ledger;
-    private final Supplier<NativeDefragReport> nativeDefragReportSupplier;
 
     YierdisDbMemoryReporter(
             YierdisDbKernel kernel,
@@ -28,8 +25,7 @@ final class YierdisDbMemoryReporter {
             YierdisDbKeyLifecycle keyLifecycle,
             HashTableMaintenanceRegistry hashTableMaintenanceRegistry,
             long maxmemoryBytes,
-            MemoryLedger ledger,
-            Supplier<NativeDefragReport> nativeDefragReportSupplier
+            MemoryLedger ledger
     ) {
         this.kernel = Objects.requireNonNull(kernel, "kernel");
         this.memoryContext = Objects.requireNonNull(memoryContext, "memoryContext");
@@ -40,10 +36,6 @@ final class YierdisDbMemoryReporter {
         );
         this.maxmemoryBytes = maxmemoryBytes;
         this.ledger = Objects.requireNonNull(ledger, "ledger");
-        this.nativeDefragReportSupplier = Objects.requireNonNull(
-                nativeDefragReportSupplier,
-                "nativeDefragReportSupplier"
-        );
     }
 
     long memoryUsage(BytesView keyView) {
@@ -62,7 +54,6 @@ final class YierdisDbMemoryReporter {
         kernel.checkOwner();
         MemoryUsageSnapshot usage = componentMemoryUsage();
         NativeAllocatorStats allocatorStats = safeNativeAllocatorStats();
-        NativeDefragReport defragReport = nativeDefragReportSupplier.get();
         long offHeapUsedBytes = MemoryUsageSnapshot.addSaturating(
                 usage.nativeMetadataCommittedBytes(),
                 usage.nativeDataCommittedBytes()
@@ -83,22 +74,9 @@ final class YierdisDbMemoryReporter {
                 keyLifecycle.keyCount(),
                 keyLifecycle.expireCount(),
                 totalEstimatedBytes,
-                defragReport == null ? 0L : defragReport.scannedObjects(),
-                defragReport == null ? 0L : defragReport.movedObjects(),
-                defragReport == null ? 0L : defragReport.movedBytes(),
-                defragReport == null ? 0L : defragReport.skippedPinnedObjects(),
-                defragReport == null ? 0L : defragReport.skippedBudgetObjects(),
-                defragReport == null ? 0L : defragReport.failedMoves(),
-                allocatorStats == null ? 0L : allocatorStats.defragMovedBytes(),
-                allocatorStats == null ? 0L : allocatorStats.defragSkippedPinnedObjects(),
-                allocatorStats == null ? 0L : allocatorStats.quarantinedObjects(),
-                allocatorStats == null ? 0L : allocatorStats.quarantineBytes(),
-                allocatorStats == null ? 0L : allocatorStats.staleHandleDetections(),
-                allocatorStats == null ? 0L : allocatorStats.defragReclaimedPages(),
                 usage.nativeMetadataCommittedBytes(),
                 usage.nativeDataCommittedBytes(),
                 usage.nativeDataLiveBytes(),
-                usage.nativeReclaimableBytes(),
                 pendingHashTableCount,
                 hashTableMaintenanceRegistry.lastStopReason().name(),
                 allocatorStats == null ? 0L : allocatorStats.liveObjects(),

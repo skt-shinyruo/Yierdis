@@ -47,13 +47,11 @@ final class YierdisNativeObjectTable implements AutoCloseable {
 
     static final int INITIAL_GENERATION = 1;
     private static final int MAX_GENERATION = 0x0fff;
-    private static final int STATE_COUNT = STATE_CORRUPT + 1;
 
     private final YierdisFfmMemoryRuntime runtime;
     private final int maxSlots;
     private final int maxSegments;
     private final CapacityResolver capacityResolver;
-    private final long[] stateCounts = new long[STATE_COUNT];
 
     private YierdisNativeObjectSegment[] segments = new YierdisNativeObjectSegment[0];
     private long liveSlots;
@@ -321,8 +319,7 @@ final class YierdisNativeObjectTable implements AutoCloseable {
                 liveSlots,
                 freeSlots,
                 retiredSlots,
-                peakLiveSlots,
-                stateCounts
+                peakLiveSlots
         );
     }
 
@@ -425,7 +422,6 @@ final class YierdisNativeObjectTable implements AutoCloseable {
                 }
                 freeSlots -= reusableSlots;
                 retiredSlots -= retired;
-                stateCounts[STATE_FREE] -= segment.validSlots();
                 segment.close();
             }
             segments = Arrays.copyOf(segments, checkpoint.segmentCount);
@@ -507,7 +503,6 @@ final class YierdisNativeObjectTable implements AutoCloseable {
         nextSegments[segmentIndex] = segment;
         segments = nextSegments;
         freeSlots += validSlots;
-        stateCounts[STATE_FREE] += validSlots;
         int offset = segment.allocateOffset();
         return new SegmentSlot(slotId(segmentIndex, offset), segmentIndex, offset, segment);
     }
@@ -614,8 +609,6 @@ final class YierdisNativeObjectTable implements AutoCloseable {
         if (oldState == newState) {
             return;
         }
-        stateCounts[oldState]--;
-        stateCounts[newState]++;
         slot.segment.writeInt(
                 slot.offset,
                 PACKED_METADATA_OFFSET,
@@ -781,8 +774,7 @@ final class YierdisNativeObjectTable implements AutoCloseable {
 
     private long baseHeapBytes() {
         long bytes = 200L;
-        bytes = MemoryUsageSnapshot.addSaturating(bytes, arrayHeapBytes(segments.length, REFERENCE_BYTES));
-        return MemoryUsageSnapshot.addSaturating(bytes, arrayHeapBytes(stateCounts.length, Long.BYTES));
+        return MemoryUsageSnapshot.addSaturating(bytes, arrayHeapBytes(segments.length, REFERENCE_BYTES));
     }
 
     private SegmentSlot stale(String message) {

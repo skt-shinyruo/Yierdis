@@ -59,7 +59,7 @@ YierdisNativePageAllocator
   owns FFM blocks allocated from runtime regions
 ```
 
-因此 realloc 和 active defrag 可以分配新 block、复制内容并发布新 location，同时保持 handle 不变。复制或 validator 在 publication 前失败时，新 block 被关闭，旧 location 继续有效。publication 后，旧 block 按 epoch 状态立即释放或进入 retired list。
+因此 realloc 和 active defrag 可以分配新 block、复制内容并发布新 location，同时保持 handle 不变。复制在 publication 前失败时，新 block 被关闭，旧 location 继续有效。publication 后，旧 block 按 epoch 状态立即释放或进入 retired list。
 
 `NativeObjectView` 提供 byte/bulk/copy/comparison/typed access。FFM view 在委托接口默认实现前仍会完整检查 lifecycle、writability 和范围，所以无效的 multi-byte/copy 写入不会留下部分修改，read-only/closed 异常优先级也保持稳定。block-to-block realloc/defrag 使用一次直接 native copy。
 

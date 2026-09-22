@@ -168,7 +168,7 @@ ledger 逻辑账本与 admission 的物理重算是两套账，估算漂移触�
 - owned physical snapshot 与 backend allocator stats；
 - ledger logical used/reserved；
 - type root estimates；
-- key count、derived expire count 和 rehash state；
+- key count 和 derived expire count；
 - `usedBytesForMaxmemory = heap + native metadata committed + native data committed`；
 - `effectiveUsedBytesForMaxmemory = usedBytesForMaxmemory + reservedBytes`。
 

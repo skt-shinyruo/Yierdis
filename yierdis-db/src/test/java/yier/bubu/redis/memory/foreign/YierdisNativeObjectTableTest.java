@@ -194,7 +194,7 @@ public class YierdisNativeObjectTableTest {
     }
 
     @Test
-    public void statsTrackLiveFreeAndPerStateTransitions() {
+    public void statsTrackLiveAndFreeTransitions() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("object-table-stats");
              YierdisNativeObjectTable table = newTable(runtime, 2)) {
             long firstLocalRaw = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 1, 11L, 1, 1L);
@@ -206,8 +206,6 @@ public class YierdisNativeObjectTableTest {
             Assert.assertEquals(2L, quarantined.liveSlots());
             Assert.assertEquals(0L, quarantined.freeSlots());
             Assert.assertEquals(2L, quarantined.peakLiveSlots());
-            Assert.assertEquals(1L, quarantined.stateCount(YierdisNativeObjectTable.STATE_ALLOCATED));
-            Assert.assertEquals(1L, quarantined.stateCount(YierdisNativeObjectTable.STATE_FREED_QUARANTINED));
 
             table.unpin(firstLocalRaw);
             table.free(secondLocalRaw, 3L);
@@ -215,7 +213,6 @@ public class YierdisNativeObjectTableTest {
             YierdisNativeObjectTableStats released = table.stats();
             Assert.assertEquals(0L, released.liveSlots());
             Assert.assertEquals(2L, released.freeSlots());
-            Assert.assertEquals(2L, released.stateCount(YierdisNativeObjectTable.STATE_FREE));
         }
     }
 

@@ -34,7 +34,6 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
 
     private final YierdisNativePageAllocator pageAllocator;
     private final YierdisNativeObjectTable objectTable;
-    private final YierdisNativeDefragValidator defragValidator;
     private final long allocatorId;
     private final MemoryOwner owner;
     private final YierdisFfmMemoryRuntime runtime;
@@ -70,17 +69,6 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
             long allocatorId,
             MemoryOwner owner
     ) {
-        this(runtime, maxSlots, allocatorId, owner, (localRaw, sourceMeta, target) -> {
-        });
-    }
-
-    YierdisFfmStableMemoryBackend(
-            YierdisFfmMemoryRuntime runtime,
-            int maxSlots,
-            long allocatorId,
-            MemoryOwner owner,
-            YierdisNativeDefragValidator defragValidator
-    ) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
         if (maxSlots < 0) {
             throw new IllegalArgumentException("maxSlots must be >= 0");
@@ -90,7 +78,6 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
         }
         this.allocatorId = allocatorId;
         this.owner = Objects.requireNonNull(owner, "owner");
-        this.defragValidator = Objects.requireNonNull(defragValidator, "defragValidator");
         this.pageAllocator = new YierdisNativePageAllocator(runtime);
         this.objectTable = new YierdisNativeObjectTable(runtime, maxSlots, pageAllocator);
     }
@@ -606,7 +593,6 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
             previous = pageAllocator.moveSource(sourceMeta);
             target = pageAllocator.allocate(physicalAllocationBytes(sourceMeta.size()));
             previous.copyTo(target, sourceMeta.size());
-            defragValidator.validate(localRaw, sourceMeta, target);
 
             int targetCapacity = target.capacity();
             objectTable.publishMoved(

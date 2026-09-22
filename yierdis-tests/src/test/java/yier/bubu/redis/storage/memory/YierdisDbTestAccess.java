@@ -4,11 +4,11 @@ import java.lang.reflect.Field;
 import java.util.Objects;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 
-final class YierdisDbTestAccess {
+public final class YierdisDbTestAccess {
     private YierdisDbTestAccess() {
     }
 
-    static StableMemoryBackend backend(YierdisDb db) {
+    public static StableMemoryBackend backend(YierdisDb db) {
         YierdisDbKeyLifecycle lifecycle = Objects.requireNonNull(db, "db").keyLifecycle();
         try {
             Field ownedResourcesField = YierdisDbKeyLifecycle.class.getDeclaredField("ownedResources");

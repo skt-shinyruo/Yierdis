@@ -724,13 +724,6 @@ public class NativeStorageRegressionTest {
         Assert.assertEquals(nativeEmptyDebug(db), usage.nativeMetadataCommittedBytes(), empty.nativeMetadataCommittedBytes());
         Assert.assertEquals(nativeEmptyDebug(db), usage.nativeDataCommittedBytes(), empty.nativeDataCommittedBytes());
         Assert.assertEquals(nativeEmptyDebug(db), usage.nativeDataLiveBytes(), empty.nativeDataLiveBytes());
-        Assert.assertEquals(nativeEmptyDebug(db), usage.nativeReclaimableBytes(), empty.nativeReclaimableBytes());
-        Assert.assertTrue(
-                nativeEmptyDebug(db),
-                empty.nativeReclaimableBytes() <= empty.nativeDataCommittedBytes()
-        );
-        Assert.assertEquals(0L, empty.nativeDefragQuarantinedObjects());
-        Assert.assertEquals(0L, empty.nativeDefragQuarantineBytes());
         Assert.assertEquals(0L, allocator.logicalUsedBytes());
         Assert.assertEquals(0L, allocator.liveObjects());
         Assert.assertEquals(0L, allocator.quarantinedObjects());

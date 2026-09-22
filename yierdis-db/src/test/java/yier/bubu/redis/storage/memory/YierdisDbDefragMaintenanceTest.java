@@ -4,7 +4,6 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.storage.api.SetMode;
-import yier.bubu.redis.storage.api.YierdisMemoryStats;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
@@ -18,11 +17,8 @@ public class YierdisDbDefragMaintenanceTest {
 
             db.defragMaintenance();
 
-            YierdisMemoryStats stats = db.memoryStats();
             NativeAllocatorStats after = KeyLifecycleTestAccess.backend(db).stats();
             Assert.assertEquals(before.defragMovedBytes(), after.defragMovedBytes());
-            Assert.assertEquals(0L, stats.nativeDefragLastMovedObjects());
-            Assert.assertEquals(0L, stats.nativeDefragLastMovedBytes());
         } finally {
             db.shutdown();
         }

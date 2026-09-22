@@ -14,7 +14,6 @@ import yier.bubu.redis.storage.api.DbEngineConfig;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.SetMode;
-import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.api.result.ByteValueSink;
 import yier.bubu.redis.storage.api.result.KeyScanWindow;
 import yier.bubu.redis.testutil.TestDbs;
@@ -38,10 +37,6 @@ public class FfmDbEpochLifecycleIntegrationTest {
                 Assert.assertTrue(during.reservedBytes() > 0L);
                 Assert.assertTrue(during.quarantinedObjects() > 0L);
                 Assert.assertTrue(during.liveObjects() > 0L);
-
-                YierdisMemoryStats memoryDuring = db.memoryStats();
-                Assert.assertTrue(memoryDuring.nativeDefragQuarantinedObjects() > 0L);
-                Assert.assertTrue(memoryDuring.nativeDefragQuarantineBytes() > 0L);
             }
 
             NativeAllocatorStats after = YierdisDbTestAccess.backend(db).stats();
@@ -66,9 +61,9 @@ public class FfmDbEpochLifecycleIntegrationTest {
                 Assert.assertEquals(0L, window.nextCursor().value());
                 window.emitTo(new CapturingSink(scanned, () -> {
                     Assert.assertEquals(Long.valueOf(1L), db.keyspace().del(List.of(key)).value());
-                    YierdisMemoryStats during = db.memoryStats();
-                    Assert.assertTrue(during.nativeDefragQuarantinedObjects() > 0L);
-                    Assert.assertTrue(during.nativeDefragQuarantineBytes() > 0L);
+                    NativeAllocatorStats during = YierdisDbTestAccess.backend(db).stats();
+                    Assert.assertTrue(during.quarantinedObjects() > 0L);
+                    Assert.assertTrue(during.quarantineBytes() > 0L);
                 }));
             }
 
@@ -93,7 +88,7 @@ public class FfmDbEpochLifecycleIntegrationTest {
 
             try (NativeEpochScope ignored = YierdisDbTestAccess.backend(db).beginEpoch()) {
                 Assert.assertEquals(Long.valueOf(1L), db.keyspace().del(List.of(b("cleanup:string"))).value());
-                Assert.assertTrue(db.memoryStats().nativeDefragQuarantinedObjects() > 0L);
+                Assert.assertTrue(YierdisDbTestAccess.backend(db).stats().quarantinedObjects() > 0L);
             }
 
             Assert.assertEquals(Long.valueOf(4L), db.keyspace().del(List.of(
@@ -125,9 +120,9 @@ public class FfmDbEpochLifecycleIntegrationTest {
     }
 
     private static void assertNoQuarantine(YierdisDb db) {
-        YierdisMemoryStats after = db.memoryStats();
-        Assert.assertEquals(0L, after.nativeDefragQuarantinedObjects());
-        Assert.assertEquals(0L, after.nativeDefragQuarantineBytes());
+        NativeAllocatorStats after = YierdisDbTestAccess.backend(db).stats();
+        Assert.assertEquals(0L, after.quarantinedObjects());
+        Assert.assertEquals(0L, after.quarantineBytes());
     }
 
     private static final class CapturingSink implements ByteValueSink {

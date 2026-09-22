@@ -104,11 +104,17 @@ public class YierdisClientTest {
             Assert.assertTrue(keys.contains("offheap_used_bytes"));
             Assert.assertTrue(keys.contains("offheap_included_in_maxmemory"));
             Assert.assertTrue(keys.contains("total_estimated_bytes"));
-            Assert.assertTrue(keys.contains("keyspace_rehashing"));
-            Assert.assertTrue(keys.contains("keyspace_table0_capacity"));
-            Assert.assertTrue(keys.contains("expire_rehashing"));
             Assert.assertTrue(keys.contains("key_count"));
             Assert.assertTrue(keys.contains("expire_count"));
+            Assert.assertFalse(keys.contains("keyspace_rehashing"));
+            Assert.assertFalse(keys.contains("keyspace_table0_capacity"));
+            Assert.assertFalse(keys.contains("expire_rehashing"));
+            Assert.assertFalse(keys.contains("keyspace_table_overhead_bytes_estimate"));
+            Assert.assertFalse(keys.contains("expire_table_overhead_bytes_estimate"));
+            Assert.assertFalse(keys.contains("expire_value_objects_bytes_estimate"));
+            Assert.assertFalse(keys.contains("keyspace_table1_capacity"));
+            Assert.assertFalse(keys.contains("expire_table0_capacity"));
+            Assert.assertFalse(keys.contains("expire_table1_capacity"));
         }
     }
 

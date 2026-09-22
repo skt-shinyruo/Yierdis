@@ -16,7 +16,6 @@ import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
-import yier.bubu.redis.storage.api.YierdisMemoryStats;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.view;
 
@@ -108,7 +107,7 @@ public class YierdisDbMaintenanceContractTest {
     }
 
     @Test
-    public void defragKeepsNullBackendReportCompatibleWithZeroAccounting() {
+    public void defragMaintenanceToleratesNullBackendReport() {
         AtomicInteger defragCycleCalls = new AtomicInteger();
         YierdisDb db = TestDbSupport.openWithFactory(
                 (name, maxSlots, owner) -> recordingDefragBackend(
@@ -132,14 +131,7 @@ public class YierdisDbMaintenanceContractTest {
         try {
             db.defragMaintenance();
 
-            YierdisMemoryStats stats = db.memoryStats();
             Assert.assertEquals(1, defragCycleCalls.get());
-            Assert.assertEquals(0L, stats.nativeDefragLastScannedObjects());
-            Assert.assertEquals(0L, stats.nativeDefragLastMovedObjects());
-            Assert.assertEquals(0L, stats.nativeDefragLastMovedBytes());
-            Assert.assertEquals(0L, stats.nativeDefragLastSkippedPinnedObjects());
-            Assert.assertEquals(0L, stats.nativeDefragLastSkippedBudgetObjects());
-            Assert.assertEquals(0L, stats.nativeDefragLastFailedMoves());
         } finally {
             db.shutdown();
         }

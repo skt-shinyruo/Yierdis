@@ -77,18 +77,6 @@ public final class YierdisInstanceObservability {
         long keyCount = 0L;
         long expireCount = 0L;
         boolean keysStoredOffHeap = false;
-        long nativeDefragLastScannedObjects = 0;
-        long nativeDefragLastMovedObjects = 0;
-        long nativeDefragLastMovedBytes = 0;
-        long nativeDefragLastSkippedPinnedObjects = 0;
-        long nativeDefragLastSkippedBudgetObjects = 0;
-        long nativeDefragLastFailedMoves = 0;
-        long nativeDefragMovedBytes = 0;
-        long nativeDefragSkippedPinnedObjects = 0;
-        long nativeDefragQuarantinedObjects = 0;
-        long nativeDefragQuarantineBytes = 0;
-        long nativeStaleHandleDetections = 0;
-        long nativeDefragReclaimedPages = 0;
         long nativeLiveObjects = 0;
         long nativeLiveRegions = 0;
         long pendingHashTableCount = 0L;
@@ -106,7 +94,7 @@ public final class YierdisInstanceObservability {
                             s.nativeMetadataCommittedBytes(),
                             s.nativeDataCommittedBytes(),
                             s.nativeDataLiveBytes(),
-                            s.nativeReclaimableBytes()
+                            0L
                     );
             if (dbUsage != null) {
                 physicalUsage = physicalUsage.plus(dbUsage);
@@ -115,18 +103,6 @@ public final class YierdisInstanceObservability {
             keyCount = addSaturating(keyCount, Math.max(0L, s.keyCount()));
             expireCount = addSaturating(expireCount, Math.max(0L, s.expireCount()));
             keysStoredOffHeap |= s.keysStoredOffHeap();
-            nativeDefragLastScannedObjects = addSaturating(nativeDefragLastScannedObjects, Math.max(0L, s.nativeDefragLastScannedObjects()));
-            nativeDefragLastMovedObjects = addSaturating(nativeDefragLastMovedObjects, Math.max(0L, s.nativeDefragLastMovedObjects()));
-            nativeDefragLastMovedBytes = addSaturating(nativeDefragLastMovedBytes, Math.max(0L, s.nativeDefragLastMovedBytes()));
-            nativeDefragLastSkippedPinnedObjects = addSaturating(nativeDefragLastSkippedPinnedObjects, Math.max(0L, s.nativeDefragLastSkippedPinnedObjects()));
-            nativeDefragLastSkippedBudgetObjects = addSaturating(nativeDefragLastSkippedBudgetObjects, Math.max(0L, s.nativeDefragLastSkippedBudgetObjects()));
-            nativeDefragLastFailedMoves = addSaturating(nativeDefragLastFailedMoves, Math.max(0L, s.nativeDefragLastFailedMoves()));
-            nativeDefragMovedBytes = addSaturating(nativeDefragMovedBytes, Math.max(0L, s.nativeDefragMovedBytes()));
-            nativeDefragSkippedPinnedObjects = addSaturating(nativeDefragSkippedPinnedObjects, Math.max(0L, s.nativeDefragSkippedPinnedObjects()));
-            nativeDefragQuarantinedObjects = addSaturating(nativeDefragQuarantinedObjects, Math.max(0L, s.nativeDefragQuarantinedObjects()));
-            nativeDefragQuarantineBytes = addSaturating(nativeDefragQuarantineBytes, Math.max(0L, s.nativeDefragQuarantineBytes()));
-            nativeStaleHandleDetections = addSaturating(nativeStaleHandleDetections, Math.max(0L, s.nativeStaleHandleDetections()));
-            nativeDefragReclaimedPages = addSaturating(nativeDefragReclaimedPages, Math.max(0L, s.nativeDefragReclaimedPages()));
             nativeLiveObjects = addSaturating(nativeLiveObjects, Math.max(0L, s.nativeLiveObjects()));
             if (sharedNativeRuntime) {
                 nativeLiveRegions = Math.max(nativeLiveRegions, Math.max(0L, s.nativeLiveRegions()));
@@ -158,22 +134,9 @@ public final class YierdisInstanceObservability {
                 (int) Math.min(Integer.MAX_VALUE, keyCount),
                 (int) Math.min(Integer.MAX_VALUE, expireCount),
                 totalEstimatedBytes,
-                nativeDefragLastScannedObjects,
-                nativeDefragLastMovedObjects,
-                nativeDefragLastMovedBytes,
-                nativeDefragLastSkippedPinnedObjects,
-                nativeDefragLastSkippedBudgetObjects,
-                nativeDefragLastFailedMoves,
-                nativeDefragMovedBytes,
-                nativeDefragSkippedPinnedObjects,
-                nativeDefragQuarantinedObjects,
-                nativeDefragQuarantineBytes,
-                nativeStaleHandleDetections,
-                nativeDefragReclaimedPages,
                 physicalUsage.nativeMetadataCommittedBytes(),
                 physicalUsage.nativeDataCommittedBytes(),
                 physicalUsage.nativeDataLiveBytes(),
-                physicalUsage.nativeReclaimableBytes(),
                 (int) Math.min(Integer.MAX_VALUE, pendingHashTableCount),
                 lastHashTableMaintenanceStopReason,
                 nativeLiveObjects,

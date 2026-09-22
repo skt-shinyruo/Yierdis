@@ -9,18 +9,6 @@ import java.util.Objects;
 import java.util.function.Function;
 
 final class YierdisDbRuntimeState {
-    private static final NativeDefragReport EMPTY_NATIVE_DEFRAG_REPORT = new NativeDefragReport(
-            0L,
-            0L,
-            0L,
-            0L,
-            0L,
-            0L,
-            false,
-            false,
-            false
-    );
-
     private final int dbIndex;
     private final DbThreadGuard threadGuard;
     private final boolean lruEnabled;
@@ -28,7 +16,6 @@ final class YierdisDbRuntimeState {
 
     private volatile MaxmemoryCoordinator maxmemoryCoordinator;
     private volatile MaxmemoryParticipant maxmemoryParticipant;
-    private NativeDefragReport lastNativeDefragReport = EMPTY_NATIVE_DEFRAG_REPORT;
     private long lruClock;
 
     YierdisDbRuntimeState(
@@ -89,11 +76,7 @@ final class YierdisDbRuntimeState {
         if (nativeDefragOptions == null) {
             return;
         }
-        lastNativeDefragReport = defragCycle.apply(nativeDefragOptions);
-    }
-
-    NativeDefragReport lastNativeDefragReport() {
-        return lastNativeDefragReport;
+        defragCycle.apply(nativeDefragOptions);
     }
 
     boolean beginShutdown() {
