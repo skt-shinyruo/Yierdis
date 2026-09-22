@@ -18,7 +18,7 @@ import java.util.function.Function;
 final class NettyReplyDecodedMessageGate implements RespDecodedMessageGate {
     private final long controlReservationBytes;
     private final long singleReplyLimitBytes;
-    private final OutboundConnectionMemory connectionMemory;
+    private final OutboundMemoryBudget.Connection connectionMemory;
     private final ConnectionReplySequencer sequencer;
     private final Function<ExecutionRequest, ReplyAdmissionRequirement> requirementResolver;
     private volatile CompletableFuture<Void> registrationBarrier;
@@ -26,7 +26,7 @@ final class NettyReplyDecodedMessageGate implements RespDecodedMessageGate {
     NettyReplyDecodedMessageGate(
             long controlReservationBytes,
             long singleReplyLimitBytes,
-            OutboundConnectionMemory connectionMemory,
+            OutboundMemoryBudget.Connection connectionMemory,
             ConnectionReplySequencer sequencer
     ) {
         this(
@@ -41,7 +41,7 @@ final class NettyReplyDecodedMessageGate implements RespDecodedMessageGate {
     NettyReplyDecodedMessageGate(
             long controlReservationBytes,
             long singleReplyLimitBytes,
-            OutboundConnectionMemory connectionMemory,
+            OutboundMemoryBudget.Connection connectionMemory,
             ConnectionReplySequencer sequencer,
             Function<ExecutionRequest, ReplyAdmissionRequirement> requirementResolver
     ) {
@@ -77,7 +77,7 @@ final class NettyReplyDecodedMessageGate implements RespDecodedMessageGate {
         }
         ReplyAdmissionRequirement requirement = requirement(decoded);
 
-        Optional<OutboundMemoryLease> reservation = connectionMemory.reserve(
+        Optional<OutboundMemoryBudget.Lease> reservation = connectionMemory.reserve(
                 controlReservationBytes,
                 singleReplyLimitBytes
         );
@@ -122,7 +122,7 @@ final class NettyReplyDecodedMessageGate implements RespDecodedMessageGate {
         return sequencer.shutdownGracefully();
     }
 
-    OutboundConnectionMemory connectionMemoryForTests() {
+    OutboundMemoryBudget.Connection connectionMemoryForTests() {
         return connectionMemory;
     }
 

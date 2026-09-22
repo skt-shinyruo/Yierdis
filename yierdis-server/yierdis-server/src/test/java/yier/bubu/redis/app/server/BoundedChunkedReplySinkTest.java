@@ -46,7 +46,7 @@ public class BoundedChunkedReplySinkTest {
             Assert.assertThrows(IllegalStateException.class, () -> sink.writeBytes(new byte[512], 0, 512));
             Assert.assertEquals(0L, fixture.budget.stats().allocatedBytes());
             Assert.assertEquals(0L, fixture.budget.stats().reservedBytes());
-            Assert.assertEquals(ReplySlotState.FAILED, fixture.slot.state());
+            Assert.assertEquals(ReplySlotOutcome.FAILED, fixture.slot.outcome());
         } finally {
             fixture.close();
         }
@@ -96,12 +96,12 @@ public class BoundedChunkedReplySinkTest {
     @Test
     public void blockedPreflightWakesTheSameSlotWhenAnotherLeaseReleasesCapacity() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(16 * 1024L);
-        OutboundConnectionMemory waitingConnection = budget.openConnection(16 * 1024L);
-        OutboundConnectionMemory holderConnection = budget.openConnection(16 * 1024L);
+        OutboundMemoryBudget.Connection waitingConnection = budget.openConnection(16 * 1024L);
+        OutboundMemoryBudget.Connection holderConnection = budget.openConnection(16 * 1024L);
         EmbeddedChannel channel = new EmbeddedChannel();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, waitingConnection, () -> { });
         ReplySlot slot = sequencer.register(waitingConnection.reserve(4_096L, 16 * 1024L).orElseThrow()).orElseThrow();
-        OutboundMemoryLease holder = holderConnection.reserve(12 * 1024L, 16 * 1024L).orElseThrow();
+        OutboundMemoryBudget.Lease holder = holderConnection.reserve(12 * 1024L, 16 * 1024L).orElseThrow();
         BoundedChunkedReplySink sink = new BoundedChunkedReplySink(
                 slot,
                 Unpooled::buffer,
@@ -195,7 +195,7 @@ public class BoundedChunkedReplySinkTest {
                     () -> sink.writeBytes(new byte[]{1}, 0, 1)
             );
             Assert.assertEquals((long) maximumPayload, sink.writtenBytes());
-            Assert.assertEquals(ReplySlotState.FAILED, fixture.slot.state());
+            Assert.assertEquals(ReplySlotOutcome.FAILED, fixture.slot.outcome());
         } finally {
             fixture.close();
         }
@@ -219,7 +219,7 @@ public class BoundedChunkedReplySinkTest {
             this.chunkPayloadBytes = chunkPayloadBytes;
             this.controlReservationBytes = controlReservationBytes;
             budget = new OutboundMemoryBudget(singleReplyLimitBytes);
-            OutboundConnectionMemory connection = budget.openConnection(singleReplyLimitBytes);
+            OutboundMemoryBudget.Connection connection = budget.openConnection(singleReplyLimitBytes);
             channel = new EmbeddedChannel();
             sequencer = new ConnectionReplySequencer(channel, connection, () -> { });
             slot = sequencer.register(

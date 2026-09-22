@@ -22,8 +22,8 @@ public class ConnectionReplySequencerTest {
     @Test
     public void cleanupIncludesAnAsyncResourceTransferredWhileTheLeaseIsClosing() throws Exception {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(4_096L);
-        OutboundConnectionMemory connection = budget.openConnection(4_096L);
-        OutboundConnectionMemory waiterConnection = budget.openConnection(4_096L);
+        OutboundMemoryBudget.Connection connection = budget.openConnection(4_096L);
+        OutboundMemoryBudget.Connection waiterConnection = budget.openConnection(4_096L);
         EmbeddedChannel channel = new EmbeddedChannel();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, connection, () -> { });
         ReplySlot slot = sequencer.register(connection.reserve(4_096L, 4_096L).orElseThrow()).orElseThrow();
@@ -78,7 +78,7 @@ public class ConnectionReplySequencerTest {
     @Test
     public void cancellationAfterChunksAreClaimedKeepsTheLeaseUntilEveryChunkIsReleased() throws Exception {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(4_096L);
-        OutboundConnectionMemory connection = budget.openConnection(4_096L);
+        OutboundMemoryBudget.Connection connection = budget.openConnection(4_096L);
         BlockingOutboundWrite blockedWrite = new BlockingOutboundWrite();
         EmbeddedChannel channel = new EmbeddedChannel(blockedWrite);
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, connection, () -> { });
@@ -116,7 +116,7 @@ public class ConnectionReplySequencerTest {
     @Test
     public void cleanupWaitsForAResourceTransferredWhileAnInFlightChunkKeepsTerminationOpen() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(4_096L);
-        OutboundConnectionMemory connection = budget.openConnection(4_096L);
+        OutboundMemoryBudget.Connection connection = budget.openConnection(4_096L);
         DelayedOutboundWrites delayedWrites = new DelayedOutboundWrites();
         EmbeddedChannel channel = new EmbeddedChannel(delayedWrites);
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, connection, () -> { });
@@ -160,7 +160,7 @@ public class ConnectionReplySequencerTest {
     @Test
     public void terminationWaitsForOwnerResourceCloseAfterTheTransportHasClosed() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(4_096L);
-        OutboundConnectionMemory connection = budget.openConnection(4_096L);
+        OutboundMemoryBudget.Connection connection = budget.openConnection(4_096L);
         EmbeddedChannel channel = new EmbeddedChannel();
         ReplyEgressStats stats = new ReplyEgressStats();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(
@@ -213,7 +213,7 @@ public class ConnectionReplySequencerTest {
     @Test
     public void shutdownWaitsForSourceCleanupWhenCancellationClosesTheTransport() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(4_096L);
-        OutboundConnectionMemory connection = budget.openConnection(4_096L);
+        OutboundMemoryBudget.Connection connection = budget.openConnection(4_096L);
         EmbeddedChannel channel = new EmbeddedChannel();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, connection, () -> { });
         ReplySlot slot = sequencer.register(connection.reserve(4_096L, 4_096L).orElseThrow()).orElseThrow();
@@ -254,7 +254,7 @@ public class ConnectionReplySequencerTest {
     @Test
     public void submitsFollowingReadySlotsBeforeThePriorWriteFutureCompletes() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(8_192L);
-        OutboundConnectionMemory connection = budget.openConnection(8_192L);
+        OutboundMemoryBudget.Connection connection = budget.openConnection(8_192L);
         DelayedOutboundWrites delayedWrites = new DelayedOutboundWrites();
         EmbeddedChannel channel = new EmbeddedChannel(delayedWrites);
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, connection, () -> { });
@@ -275,8 +275,8 @@ public class ConnectionReplySequencerTest {
             delayedWrites.succeedAll();
             drain(channel);
 
-            Assert.assertEquals(ReplySlotState.COMPLETED, first.state());
-            Assert.assertEquals(ReplySlotState.COMPLETED, second.state());
+            Assert.assertEquals(ReplySlotOutcome.COMPLETED, first.outcome());
+            Assert.assertEquals(ReplySlotOutcome.COMPLETED, second.outcome());
             Assert.assertEquals(0L, budget.stats().reservedBytes());
         } finally {
             delayedWrites.failAll();
@@ -288,7 +288,7 @@ public class ConnectionReplySequencerTest {
     @Test
     public void failureOfAnyChunkFailsTheWholeSlotEvenWhenTheLastChunkSucceeds() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(4_096L);
-        OutboundConnectionMemory connection = budget.openConnection(4_096L);
+        OutboundMemoryBudget.Connection connection = budget.openConnection(4_096L);
         DelayedOutboundWrites delayedWrites = new DelayedOutboundWrites();
         EmbeddedChannel channel = new EmbeddedChannel(delayedWrites);
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, connection, () -> { });
@@ -302,7 +302,7 @@ public class ConnectionReplySequencerTest {
             delayedWrites.failFirstAndSucceedRest();
             drain(channel);
 
-            Assert.assertEquals(ReplySlotState.FAILED, slot.state());
+            Assert.assertEquals(ReplySlotOutcome.FAILED, slot.outcome());
             Assert.assertFalse(channel.isOpen());
             Assert.assertEquals(0L, budget.stats().reservedBytes());
         } finally {
@@ -315,7 +315,7 @@ public class ConnectionReplySequencerTest {
     @Test
     public void cleanupWaitsForAnActiveProducerAndCannotAcceptLateChunks() throws Exception {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(4_096L);
-        OutboundConnectionMemory connection = budget.openConnection(4_096L);
+        OutboundMemoryBudget.Connection connection = budget.openConnection(4_096L);
         EmbeddedChannel channel = new EmbeddedChannel();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, connection, () -> { });
         ReplySlot slot = sequencer.register(connection.reserve(4_096L, 4_096L).orElseThrow()).orElseThrow();
@@ -349,7 +349,7 @@ public class ConnectionReplySequencerTest {
             Assert.assertFalse(producer.isAlive());
             Assert.assertFalse(cleanup.isAlive());
             Assert.assertEquals(0, chunk.refCnt());
-            Assert.assertEquals(ReplySlotState.CANCELLED, slot.state());
+            Assert.assertEquals(ReplySlotOutcome.CANCELLED, slot.outcome());
 
             ByteBuf late = Unpooled.buffer(1, 1);
             Assert.assertThrows(IllegalStateException.class, () -> slot.addChunk(late));
@@ -364,7 +364,7 @@ public class ConnectionReplySequencerTest {
     @Test
     public void writesReadySlotsInRegistrationOrder() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(12_288L);
-        OutboundConnectionMemory connection = budget.openConnection(12_288L);
+        OutboundMemoryBudget.Connection connection = budget.openConnection(12_288L);
         EmbeddedChannel channel = new EmbeddedChannel();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, connection, () -> { });
         ReplySlot first = sequencer.register(connection.reserve(4_096L, 4_096L).orElseThrow()).orElseThrow();
@@ -382,12 +382,12 @@ public class ConnectionReplySequencerTest {
             first.markReady(false);
             drain(channel);
 
-            Assert.assertEquals(ReplySlotState.COMPLETED, first.state());
+            Assert.assertEquals(ReplySlotOutcome.COMPLETED, first.outcome());
             Assert.assertEquals(2, channel.outboundMessages().size());
             Assert.assertEquals("first", readAscii(channel));
             Assert.assertEquals("second", readAscii(channel));
-            Assert.assertEquals(ReplySlotState.COMPLETED, first.state());
-            Assert.assertEquals(ReplySlotState.COMPLETED, second.state());
+            Assert.assertEquals(ReplySlotOutcome.COMPLETED, first.outcome());
+            Assert.assertEquals(ReplySlotOutcome.COMPLETED, second.outcome());
             Assert.assertEquals(0L, budget.stats().reservedBytes());
         } finally {
             channel.finishAndReleaseAll();
@@ -398,7 +398,7 @@ public class ConnectionReplySequencerTest {
     @Test
     public void closeAfterReplyRejectsLaterRegistrationAndCleansEverySlotOnce() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(12_288L);
-        OutboundConnectionMemory connection = budget.openConnection(12_288L);
+        OutboundMemoryBudget.Connection connection = budget.openConnection(12_288L);
         EmbeddedChannel channel = new EmbeddedChannel();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, connection, () -> { });
         ReplySlot first = sequencer.register(connection.reserve(4_096L, 4_096L).orElseThrow()).orElseThrow();
@@ -417,7 +417,7 @@ public class ConnectionReplySequencerTest {
             Assert.assertTrue(connection.reserve(4_096L, 4_096L).isEmpty());
             Assert.assertEquals(1, firstResourceCloses.get());
             Assert.assertEquals(1, laterResourceCloses.get());
-            Assert.assertEquals(ReplySlotState.CANCELLED, later.state());
+            Assert.assertEquals(ReplySlotOutcome.CANCELLED, later.outcome());
             Assert.assertEquals(0L, budget.stats().reservedBytes());
         } finally {
             channel.finishAndReleaseAll();
@@ -428,7 +428,7 @@ public class ConnectionReplySequencerTest {
     @Test
     public void racingTerminalCleanupClaimsOneOwnerAndReleasesTheLeaseOnce() throws Exception {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(4_096L);
-        OutboundConnectionMemory connection = budget.openConnection(4_096L);
+        OutboundMemoryBudget.Connection connection = budget.openConnection(4_096L);
         EmbeddedChannel channel = new EmbeddedChannel();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, connection, () -> { });
         ReplySlot slot = sequencer.register(connection.reserve(4_096L, 4_096L).orElseThrow()).orElseThrow();
@@ -443,7 +443,7 @@ public class ConnectionReplySequencerTest {
             Assert.assertTrue(slot.cleanupCompletion().isDone());
             Assert.assertEquals(1, closes.get());
             Assert.assertEquals(0L, budget.stats().reservedBytes());
-            Assert.assertEquals(ReplySlotState.CANCELLED, slot.state());
+            Assert.assertEquals(ReplySlotOutcome.CANCELLED, slot.outcome());
         } finally {
             channel.finishAndReleaseAll();
             sequencer.close();
@@ -453,7 +453,7 @@ public class ConnectionReplySequencerTest {
     @Test
     public void gracefulShutdownCancelsBlockedSlotsDrainsReadyHeadsAndThenClosesTheChild() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(12_288L);
-        OutboundConnectionMemory connection = budget.openConnection(12_288L);
+        OutboundMemoryBudget.Connection connection = budget.openConnection(12_288L);
         EmbeddedChannel channel = new EmbeddedChannel();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, connection, () -> { });
         ReplySlot blocked = sequencer.register(connection.reserve(4_096L, 4_096L).orElseThrow()).orElseThrow();
@@ -466,8 +466,8 @@ public class ConnectionReplySequencerTest {
             drain(channel);
 
             Assert.assertEquals("ready", readAscii(channel));
-            Assert.assertEquals(ReplySlotState.CANCELLED, blocked.state());
-            Assert.assertEquals(ReplySlotState.COMPLETED, ready.state());
+            Assert.assertEquals(ReplySlotOutcome.CANCELLED, blocked.outcome());
+            Assert.assertEquals(ReplySlotOutcome.COMPLETED, ready.outcome());
             Assert.assertTrue(drained.isDone());
             Assert.assertFalse(channel.isOpen());
             Assert.assertEquals(0L, budget.stats().reservedBytes());
@@ -480,7 +480,7 @@ public class ConnectionReplySequencerTest {
     @Test
     public void executionConnectionDelegatesGracefulReplyShutdownToItsGate() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(8_192L);
-        OutboundConnectionMemory connectionMemory = budget.openConnection(8_192L);
+        OutboundMemoryBudget.Connection connectionMemory = budget.openConnection(8_192L);
         EmbeddedChannel channel = new EmbeddedChannel();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, connectionMemory, () -> { });
         NettyReplyDecodedMessageGate gate = new NettyReplyDecodedMessageGate(
@@ -512,7 +512,7 @@ public class ConnectionReplySequencerTest {
     @Test
     public void egressStatsRetainTerminalCountsAndReleaseActiveOwnershipOnShutdown() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(12_288L);
-        OutboundConnectionMemory connection = budget.openConnection(12_288L);
+        OutboundMemoryBudget.Connection connection = budget.openConnection(12_288L);
         EmbeddedChannel channel = new EmbeddedChannel();
         ReplyEgressStats stats = new ReplyEgressStats();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(

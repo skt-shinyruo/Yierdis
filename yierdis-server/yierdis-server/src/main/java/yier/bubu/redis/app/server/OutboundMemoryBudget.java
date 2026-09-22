@@ -4,19 +4,23 @@ import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
 
 import java.util.ArrayDeque;
 import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
 /**
  * 统一管理全局回复额度、连接账户和 FIFO 等待者。
+ *
+ * <p>{@link Connection} 与 {@link Lease} 是预算拥有的嵌套句柄：对外只暴露委托入口，
+ * 句柄账目由预算在锁内直接改写，不存在反向的句柄 mutator。</p>
  */
 public final class OutboundMemoryBudget implements AutoCloseable {
     private final Object lock = new Object();
     private final long capacityBytes;
     private final ArrayDeque<Waiter> waiters = new ArrayDeque<>();
-    private final Map<OutboundConnectionMemory, Boolean> connections = new IdentityHashMap<>();
-    private final Map<OutboundConnectionMemory, Waiter> waitersByConnection = new IdentityHashMap<>();
+    private final Map<Connection, Boolean> connections = new IdentityHashMap<>();
+    private final Map<Connection, Waiter> waitersByConnection = new IdentityHashMap<>();
 
     private long reservedBytes;
     private long allocatedBytes;
@@ -34,14 +38,14 @@ public final class OutboundMemoryBudget implements AutoCloseable {
         this.capacityBytes = capacityBytes;
     }
 
-    public OutboundConnectionMemory openConnection(long connectionCapacityBytes) {
+    public Connection openConnection(long connectionCapacityBytes) {
         if (connectionCapacityBytes <= 0L || connectionCapacityBytes > capacityBytes) {
             throw new IllegalArgumentException("connectionCapacityBytes must be in range 1..capacityBytes");
         }
-        OutboundConnectionMemory connection = new OutboundConnectionMemory(this, connectionCapacityBytes);
+        Connection connection = new Connection(connectionCapacityBytes);
         synchronized (lock) {
             if (closed) {
-                connection.markClosed();
+                connection.closed = true;
                 return connection;
             }
             connections.put(connection, Boolean.TRUE);
@@ -67,19 +71,11 @@ public final class OutboundMemoryBudget implements AutoCloseable {
         }
     }
 
-    Optional<OutboundMemoryLease> reserve(
-            OutboundConnectionMemory connection,
-            long bytes,
-            long singleReplyLimitBytes
-    ) {
-        validateReservationArguments(bytes, singleReplyLimitBytes);
-        Objects.requireNonNull(connection, "connection");
-
+    private Optional<Lease> reserve(Connection connection, long bytes, long singleReplyLimitBytes) {
         Runnable callback;
-        OutboundMemoryLease lease;
+        Lease lease;
         synchronized (lock) {
-            requireOwner(connection);
-            if (closed || connection.closed()) {
+            if (closed || connection.closed) {
                 return Optional.empty();
             }
             requireAttached(connection);
@@ -103,31 +99,26 @@ public final class OutboundMemoryBudget implements AutoCloseable {
             }
 
             reserveLocked(connection, bytes);
-            lease = new OutboundMemoryLease(this, connection, bytes);
+            lease = new Lease(connection, bytes);
             callback = grantOneWaiterLocked();
         }
         invokeCallback(callback);
         return Optional.of(lease);
     }
 
-    boolean awaitCapacity(
-            OutboundConnectionMemory connection,
+    private boolean awaitCapacity(
+            Connection connection,
             long bytes,
             long singleReplyLimitBytes,
             Runnable callback
     ) {
-        validateReservationArguments(bytes, singleReplyLimitBytes);
-        Objects.requireNonNull(connection, "connection");
-        Objects.requireNonNull(callback, "callback");
-
         Runnable grantedCallback;
         synchronized (lock) {
-            requireOwner(connection);
-            if (closed || connection.closed()) {
+            if (closed || connection.closed) {
                 return false;
             }
             requireAttached(connection);
-            if (!fitsSingle(bytes, singleReplyLimitBytes) || bytes > connection.capacityBytes() || bytes > capacityBytes) {
+            if (!fitsSingle(bytes, singleReplyLimitBytes) || bytes > connection.capacityBytes || bytes > capacityBytes) {
                 capacityRejectedReservations = addSaturating(capacityRejectedReservations, 1L);
                 return false;
             }
@@ -148,8 +139,7 @@ public final class OutboundMemoryBudget implements AutoCloseable {
         return true;
     }
 
-    void cancelWaiter(OutboundConnectionMemory connection) {
-        Objects.requireNonNull(connection, "connection");
+    private void cancelWaiter(Connection connection) {
         Runnable callback;
         synchronized (lock) {
             if (!connections.containsKey(connection)) {
@@ -161,45 +151,34 @@ public final class OutboundMemoryBudget implements AutoCloseable {
         invokeCallback(callback);
     }
 
-    boolean convertToAllocated(OutboundMemoryLease lease, long bytes) {
-        if (bytes < 0L) {
-            throw new IllegalArgumentException("bytes must be non-negative");
-        }
-        Objects.requireNonNull(lease, "lease");
+    private boolean convertToAllocated(Lease lease, long bytes) {
         synchronized (lock) {
-            if (lease.closed()) {
+            if (lease.closed) {
                 return false;
             }
-            requireAttached(lease.connection());
-            if (bytes > lease.reservedBytes() - lease.allocatedBytes()) {
+            requireAttached(lease.connection);
+            if (bytes > lease.reservedBytes - lease.allocatedBytes) {
                 return false;
             }
-            lease.addAllocated(bytes);
-            lease.connection().addAllocated(bytes);
+            lease.allocatedBytes += bytes;
+            lease.connection.allocatedBytes += bytes;
             allocatedBytes += bytes;
             peakAllocatedBytes = Math.max(peakAllocatedBytes, allocatedBytes);
             return true;
         }
     }
 
-    boolean expandLease(OutboundMemoryLease lease, long bytes, long singleReplyLimitBytes) {
-        if (bytes < 0L) {
-            throw new IllegalArgumentException("bytes must be non-negative");
-        }
-        if (singleReplyLimitBytes <= 0L) {
-            throw new IllegalArgumentException("singleReplyLimitBytes must be > 0");
-        }
-        Objects.requireNonNull(lease, "lease");
+    private boolean expandLease(Lease lease, long bytes, long singleReplyLimitBytes) {
         if (bytes == 0L) {
-            return !lease.closed();
+            return !lease.closed;
         }
 
         Runnable callback;
         synchronized (lock) {
-            if (lease.closed() || closed || lease.connection().closed()) {
+            if (lease.closed || closed || lease.connection.closed) {
                 return false;
             }
-            OutboundConnectionMemory connection = lease.connection();
+            Connection connection = lease.connection;
             requireAttached(connection);
             Waiter waiter = waitersByConnection.get(connection);
             if (waiter != null) {
@@ -212,7 +191,7 @@ public final class OutboundMemoryBudget implements AutoCloseable {
             } else if (hasGrantedWaiterLocked()) {
                 return false;
             }
-            if (!fitsWithin(lease.reservedBytes(), bytes, singleReplyLimitBytes)
+            if (!fitsWithin(lease.reservedBytes, bytes, singleReplyLimitBytes)
                     || !fitsConnection(connection, bytes)
                     || !fitsGlobal(bytes)) {
                 capacityRejectedReservations = addSaturating(capacityRejectedReservations, 1L);
@@ -221,8 +200,8 @@ public final class OutboundMemoryBudget implements AutoCloseable {
             if (waiter != null) {
                 removeWaiterLocked(waiter);
             }
-            connection.extendReservation(bytes);
-            lease.addReservedBytes(bytes);
+            connection.reservedBytes += bytes;
+            lease.reservedBytes += bytes;
             reservedBytes += bytes;
             peakReservedBytes = Math.max(peakReservedBytes, reservedBytes);
             callback = grantOneWaiterLocked();
@@ -231,27 +210,22 @@ public final class OutboundMemoryBudget implements AutoCloseable {
         return true;
     }
 
-    boolean awaitLeaseExpansion(
-            OutboundMemoryLease lease,
+    private boolean awaitLeaseExpansion(
+            Lease lease,
             long bytes,
             long singleReplyLimitBytes,
             Runnable callback
     ) {
-        validateReservationArguments(bytes, singleReplyLimitBytes);
-        Objects.requireNonNull(lease, "lease");
-        Objects.requireNonNull(callback, "callback");
-
         Runnable grantedCallback;
         synchronized (lock) {
-            OutboundConnectionMemory connection = lease.connection();
-            requireOwner(connection);
-            if (lease.closed() || closed || connection.closed()) {
+            Connection connection = lease.connection;
+            if (lease.closed || closed || connection.closed) {
                 return false;
             }
             requireAttached(connection);
-            if (!fitsWithin(lease.reservedBytes(), bytes, singleReplyLimitBytes)
-                    || !fitsWithin(lease.reservedBytes(), bytes, connection.capacityBytes())
-                    || !fitsWithin(lease.reservedBytes(), bytes, capacityBytes)) {
+            if (!fitsWithin(lease.reservedBytes, bytes, singleReplyLimitBytes)
+                    || !fitsWithin(lease.reservedBytes, bytes, connection.capacityBytes)
+                    || !fitsWithin(lease.reservedBytes, bytes, capacityBytes)) {
                 capacityRejectedReservations = addSaturating(capacityRejectedReservations, 1L);
                 return false;
             }
@@ -272,11 +246,10 @@ public final class OutboundMemoryBudget implements AutoCloseable {
         return true;
     }
 
-    void cancelLeaseExpansionWaiter(OutboundMemoryLease lease) {
-        Objects.requireNonNull(lease, "lease");
+    private void cancelLeaseExpansionWaiter(Lease lease) {
         Runnable callback;
         synchronized (lock) {
-            OutboundConnectionMemory connection = lease.connection();
+            Connection connection = lease.connection;
             if (!connections.containsKey(connection)) {
                 return;
             }
@@ -290,21 +263,17 @@ public final class OutboundMemoryBudget implements AutoCloseable {
         invokeCallback(callback);
     }
 
-    void releaseAllocated(OutboundMemoryLease lease, long bytes) {
-        if (bytes < 0L) {
-            throw new IllegalArgumentException("bytes must be non-negative");
-        }
-        Objects.requireNonNull(lease, "lease");
+    private void releaseAllocated(Lease lease, long bytes) {
         synchronized (lock) {
-            if (lease.closed()) {
+            if (lease.closed) {
                 return;
             }
-            requireAttached(lease.connection());
-            if (bytes > lease.allocatedBytes()) {
+            requireAttached(lease.connection);
+            if (bytes > lease.allocatedBytes) {
                 throw new IllegalArgumentException("allocated release exceeds lease allocation");
             }
-            lease.releaseAllocatedBytes(bytes);
-            lease.connection().releaseAllocated(bytes);
+            lease.allocatedBytes -= bytes;
+            releaseConnectionAllocatedLocked(lease.connection, bytes);
             if (bytes > allocatedBytes) {
                 throw new IllegalStateException("outbound budget allocation underflow");
             }
@@ -312,49 +281,49 @@ public final class OutboundMemoryBudget implements AutoCloseable {
         }
     }
 
-    void closeLease(OutboundMemoryLease lease) {
-        Objects.requireNonNull(lease, "lease");
+    private void closeLease(Lease lease) {
         Runnable callback;
         synchronized (lock) {
-            if (lease.closed()) {
+            if (lease.closed) {
                 return;
             }
-            OutboundConnectionMemory connection = lease.connection();
+            Connection connection = lease.connection;
             requireAttached(connection);
             removeWaiterForLeaseLocked(lease);
-            long allocated = lease.allocatedBytes();
+            long allocated = lease.allocatedBytes;
             if (allocated > 0L) {
-                lease.releaseAllocatedBytes(allocated);
-                connection.releaseAllocated(allocated);
+                lease.allocatedBytes = 0L;
+                releaseConnectionAllocatedLocked(connection, allocated);
                 if (allocated > allocatedBytes) {
                     throw new IllegalStateException("outbound budget allocation underflow");
                 }
                 allocatedBytes -= allocated;
             }
-            long reserved = lease.reservedBytes();
-            connection.releaseReservation(reserved);
+            long reserved = lease.reservedBytes;
+            if (reserved > connection.reservedBytes || connection.activeSlots <= 0L) {
+                throw new IllegalStateException("outbound connection reservation underflow");
+            }
+            connection.reservedBytes -= reserved;
+            connection.activeSlots--;
             if (reserved > reservedBytes || activeSlots <= 0L) {
                 throw new IllegalStateException("outbound budget reservation underflow");
             }
             reservedBytes -= reserved;
             activeSlots--;
-            lease.markClosed();
+            lease.closed = true;
             removeClosedEmptyConnectionLocked(connection);
             callback = closed ? null : grantOneWaiterLocked();
         }
         invokeCallback(callback);
     }
 
-    void closeConnection(OutboundConnectionMemory connection) {
-        Objects.requireNonNull(connection, "connection");
+    private void closeConnection(Connection connection) {
         Runnable callback;
         synchronized (lock) {
             if (!connections.containsKey(connection)) {
                 return;
             }
-            if (!connection.closed()) {
-                connection.markClosed();
-            }
+            connection.closed = true;
             if (Boolean.TRUE.equals(connections.put(connection, Boolean.FALSE))) {
                 activeConnections--;
             }
@@ -374,12 +343,12 @@ public final class OutboundMemoryBudget implements AutoCloseable {
             closed = true;
             waiters.clear();
             waitersByConnection.clear();
-            java.util.Iterator<Map.Entry<OutboundConnectionMemory, Boolean>> iterator = connections.entrySet().iterator();
+            Iterator<Map.Entry<Connection, Boolean>> iterator = connections.entrySet().iterator();
             while (iterator.hasNext()) {
-                Map.Entry<OutboundConnectionMemory, Boolean> entry = iterator.next();
-                OutboundConnectionMemory connection = entry.getKey();
-                connection.markClosed();
-                if (connection.activeSlots() == 0L) {
+                Map.Entry<Connection, Boolean> entry = iterator.next();
+                Connection connection = entry.getKey();
+                connection.closed = true;
+                if (connection.activeSlots == 0L) {
                     if (Boolean.TRUE.equals(entry.getValue())) {
                         activeConnections--;
                     }
@@ -389,25 +358,33 @@ public final class OutboundMemoryBudget implements AutoCloseable {
         }
     }
 
-    private void reserveLocked(OutboundConnectionMemory connection, long bytes) {
-        connection.addReservation(bytes);
+    private void reserveLocked(Connection connection, long bytes) {
+        connection.reservedBytes += bytes;
+        connection.activeSlots++;
         reservedBytes += bytes;
         activeSlots++;
         peakReservedBytes = Math.max(peakReservedBytes, reservedBytes);
     }
 
+    private static void releaseConnectionAllocatedLocked(Connection connection, long bytes) {
+        if (bytes > connection.allocatedBytes) {
+            throw new IllegalStateException("outbound connection allocation underflow");
+        }
+        connection.allocatedBytes -= bytes;
+    }
+
     private Runnable grantOneWaiterLocked() {
         while (!waiters.isEmpty()) {
             Waiter waiter = waiters.peekFirst();
-            OutboundConnectionMemory connection = waiter.connection;
-            if (connection.closed() || !connections.containsKey(connection)
-                    || (waiter.lease != null && waiter.lease.closed())) {
+            Connection connection = waiter.connection;
+            if (connection.closed || !connections.containsKey(connection)
+                    || (waiter.lease != null && waiter.lease.closed)) {
                 removeWaiterLocked(waiter);
                 continue;
             }
             boolean fitsSingle = waiter.lease == null
                     ? fitsSingle(waiter.bytes, waiter.singleReplyLimitBytes)
-                    : fitsWithin(waiter.lease.reservedBytes(), waiter.bytes, waiter.singleReplyLimitBytes);
+                    : fitsWithin(waiter.lease.reservedBytes, waiter.bytes, waiter.singleReplyLimitBytes);
             if (waiter.granted || !fitsSingle || !fitsConnection(connection, waiter.bytes) || !fitsGlobal(waiter.bytes)) {
                 return null;
             }
@@ -446,15 +423,15 @@ public final class OutboundMemoryBudget implements AutoCloseable {
         }
     }
 
-    private void removeWaiterForLeaseLocked(OutboundMemoryLease lease) {
-        Waiter waiter = waitersByConnection.get(lease.connection());
+    private void removeWaiterForLeaseLocked(Lease lease) {
+        Waiter waiter = waitersByConnection.get(lease.connection);
         if (waiter != null && waiter.lease == lease) {
             removeWaiterLocked(waiter);
         }
     }
 
-    private void removeClosedEmptyConnectionLocked(OutboundConnectionMemory connection) {
-        if (connection.closed() && connection.activeSlots() == 0L) {
+    private void removeClosedEmptyConnectionLocked(Connection connection) {
+        if (connection.closed && connection.activeSlots == 0L) {
             Boolean counted = connections.remove(connection);
             if (Boolean.TRUE.equals(counted)) {
                 activeConnections--;
@@ -462,15 +439,9 @@ public final class OutboundMemoryBudget implements AutoCloseable {
         }
     }
 
-    private void requireAttached(OutboundConnectionMemory connection) {
+    private void requireAttached(Connection connection) {
         if (!connections.containsKey(connection)) {
             throw new IllegalStateException("connection memory account is not attached to this budget");
-        }
-    }
-
-    private void requireOwner(OutboundConnectionMemory connection) {
-        if (connection.budget() != this) {
-            throw new IllegalStateException("connection memory account belongs to another budget");
         }
     }
 
@@ -478,8 +449,8 @@ public final class OutboundMemoryBudget implements AutoCloseable {
         return bytes <= singleReplyLimitBytes;
     }
 
-    private boolean fitsConnection(OutboundConnectionMemory connection, long bytes) {
-        return fitsWithin(connection.reservedBytes(), bytes, connection.capacityBytes());
+    private boolean fitsConnection(Connection connection, long bytes) {
+        return fitsWithin(connection.reservedBytes, bytes, connection.capacityBytes);
     }
 
     private boolean fitsGlobal(long bytes) {
@@ -510,17 +481,138 @@ public final class OutboundMemoryBudget implements AutoCloseable {
         }
     }
 
+    /**
+     * 一个连接的出站回复账户，不持有 Channel 等传输对象。
+     */
+    public final class Connection implements AutoCloseable {
+        private final long capacityBytes;
+        private volatile long reservedBytes;
+        private volatile long allocatedBytes;
+        private volatile long activeSlots;
+        private volatile boolean closed;
+
+        private Connection(long capacityBytes) {
+            this.capacityBytes = capacityBytes;
+        }
+
+        public long capacityBytes() {
+            return capacityBytes;
+        }
+
+        public long reservedBytes() {
+            return reservedBytes;
+        }
+
+        public long allocatedBytes() {
+            return allocatedBytes;
+        }
+
+        public long activeSlots() {
+            return activeSlots;
+        }
+
+        public boolean closed() {
+            return closed;
+        }
+
+        public Optional<Lease> reserve(long bytes, long singleReplyLimitBytes) {
+            validateReservationArguments(bytes, singleReplyLimitBytes);
+            return OutboundMemoryBudget.this.reserve(this, bytes, singleReplyLimitBytes);
+        }
+
+        public boolean awaitCapacity(long bytes, long singleReplyLimitBytes, Runnable callback) {
+            validateReservationArguments(bytes, singleReplyLimitBytes);
+            Objects.requireNonNull(callback, "callback");
+            return OutboundMemoryBudget.this.awaitCapacity(this, bytes, singleReplyLimitBytes, callback);
+        }
+
+        public void cancelWaiter() {
+            OutboundMemoryBudget.this.cancelWaiter(this);
+        }
+
+        @Override
+        public void close() {
+            closeConnection(this);
+        }
+    }
+
+    /**
+     * 一个顶层回复槽位的预留额度，可重复关闭。
+     */
+    public final class Lease implements AutoCloseable {
+        private final Connection connection;
+        private volatile long reservedBytes;
+        private volatile long allocatedBytes;
+        private volatile boolean closed;
+
+        private Lease(Connection connection, long reservedBytes) {
+            this.connection = connection;
+            this.reservedBytes = reservedBytes;
+        }
+
+        public long reservedBytes() {
+            return reservedBytes;
+        }
+
+        public long allocatedBytes() {
+            return allocatedBytes;
+        }
+
+        public boolean closed() {
+            return closed;
+        }
+
+        public boolean convertToAllocated(long bytes) {
+            if (bytes < 0L) {
+                throw new IllegalArgumentException("bytes must be non-negative");
+            }
+            return OutboundMemoryBudget.this.convertToAllocated(this, bytes);
+        }
+
+        public boolean tryReserveAdditional(long bytes, long singleReplyLimitBytes) {
+            if (bytes < 0L) {
+                throw new IllegalArgumentException("bytes must be non-negative");
+            }
+            if (singleReplyLimitBytes <= 0L) {
+                throw new IllegalArgumentException("singleReplyLimitBytes must be > 0");
+            }
+            return expandLease(this, bytes, singleReplyLimitBytes);
+        }
+
+        public boolean awaitAdditionalCapacity(long bytes, long singleReplyLimitBytes, Runnable callback) {
+            validateReservationArguments(bytes, singleReplyLimitBytes);
+            Objects.requireNonNull(callback, "callback");
+            return awaitLeaseExpansion(this, bytes, singleReplyLimitBytes, callback);
+        }
+
+        void cancelAdditionalCapacityWaiter() {
+            cancelLeaseExpansionWaiter(this);
+        }
+
+        public void releaseAllocated(long bytes) {
+            if (bytes < 0L) {
+                throw new IllegalArgumentException("bytes must be non-negative");
+            }
+            OutboundMemoryBudget.this.releaseAllocated(this, bytes);
+        }
+
+        @Override
+        public void close() {
+            closeLease(this);
+        }
+    }
+
     private static final class Waiter {
-        private final OutboundConnectionMemory connection;
-        private final OutboundMemoryLease lease;
+        private final Connection connection;
+        private final Lease lease;
         private final long bytes;
         private final long singleReplyLimitBytes;
         private final Runnable callback;
         private boolean granted;
 
         private Waiter(
-                OutboundConnectionMemory connection,
-                OutboundMemoryLease lease,
+                Connection connection,
+                Lease lease,
                 long bytes,
                 long singleReplyLimitBytes,
                 Runnable callback

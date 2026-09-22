@@ -24,7 +24,7 @@ import java.util.function.Function;
  */
 final class ReplySlot implements ExecutionReply {
     private final long sequence;
-    private final OutboundMemoryLease lease;
+    private final OutboundMemoryBudget.Lease lease;
     private final ConnectionReplySequencer sequencer;
     private final Function<ReplySlot, BytesSink> sinkFactory;
     private final ReplyEgressStats replyEgressStats;
@@ -35,15 +35,17 @@ final class ReplySlot implements ExecutionReply {
     private final CompletableFuture<Void> cleanupCompletion = new CompletableFuture<>();
 
     private volatile ReplySlotState state = ReplySlotState.REGISTERED;
+    private volatile ReplySlotOutcome outcome;
     private volatile boolean closeAfterReply;
     private BytesSink sink;
     private int inFlightChunks;
     private int pendingCleanupTasks;
+    private boolean leaseClosing;
     private Throwable cleanupFailure;
 
     ReplySlot(
             long sequence,
-            OutboundMemoryLease lease,
+            OutboundMemoryBudget.Lease lease,
             ConnectionReplySequencer sequencer,
             Function<ReplySlot, BytesSink> sinkFactory,
             ReplyEgressStats replyEgressStats
@@ -63,7 +65,11 @@ final class ReplySlot implements ExecutionReply {
         return state;
     }
 
-    OutboundMemoryLease lease() {
+    ReplySlotOutcome outcome() {
+        return outcome;
+    }
+
+    OutboundMemoryBudget.Lease lease() {
         return lease;
     }
 
@@ -310,15 +316,15 @@ final class ReplySlot implements ExecutionReply {
     }
 
     boolean finish() {
-        return cleanup(ReplySlotState.COMPLETED);
+        return cleanup(ReplySlotOutcome.COMPLETED);
     }
 
     boolean fail() {
-        return cleanup(ReplySlotState.FAILED);
+        return cleanup(ReplySlotOutcome.FAILED);
     }
 
     boolean cancelNow() {
-        return cleanup(ReplySlotState.CANCELLED);
+        return cleanup(ReplySlotOutcome.CANCELLED);
     }
 
     void runProducerAction(Runnable action) {
@@ -344,7 +350,7 @@ final class ReplySlot implements ExecutionReply {
         return true;
     }
 
-    private boolean cleanup(ReplySlotState terminalState) {
+    private boolean cleanup(ReplySlotOutcome terminalOutcome) {
         List<ReplyChunk> chunks;
         List<OwnedResource> resources;
         boolean closeLease;
@@ -352,7 +358,8 @@ final class ReplySlot implements ExecutionReply {
             if (state.cleanupOwned()) {
                 return false;
             }
-            state = terminalState.beginCleanup();
+            outcome = terminalOutcome;
+            state = ReplySlotState.CLEANING;
             chunks = List.copyOf(pendingChunks);
             pendingChunks.clear();
             resources = List.copyOf(ownedResources);
@@ -370,9 +377,9 @@ final class ReplySlot implements ExecutionReply {
         for (OwnedResource resource : resources) {
             closeResource(resource).whenComplete((ignored, failure) -> resourceCloseCompleted(failure));
         }
-        if (terminalState == ReplySlotState.CANCELLED) {
+        if (terminalOutcome == ReplySlotOutcome.CANCELLED) {
             replyEgressStats.cancelledSlot();
-        } else if (terminalState == ReplySlotState.FAILED) {
+        } else if (terminalOutcome == ReplySlotOutcome.FAILED) {
             replyEgressStats.failedSlot();
         }
         if (closeLease) {
@@ -400,10 +407,10 @@ final class ReplySlot implements ExecutionReply {
     }
 
     private boolean claimLeaseClose() {
-        if (inFlightChunks != 0 || pendingCleanupTasks != 0 || !state.waitingToCloseLease()) {
+        if (inFlightChunks != 0 || pendingCleanupTasks != 0 || !state.cleanupInProgress() || leaseClosing) {
             return false;
         }
-        state = state.beginLeaseClose();
+        leaseClosing = true;
         // lease close 也是 cleanup task；计数保证并发转入的异步资源不能越过它发布 completion。
         pendingCleanupTasks++;
         return true;
@@ -428,10 +435,10 @@ final class ReplySlot implements ExecutionReply {
 
     private void completeCleanupIfReady() {
         synchronized (contentLock) {
-            if (pendingCleanupTasks != 0 || !state.closingLease()) {
+            if (pendingCleanupTasks != 0 || !leaseClosing || !state.cleanupInProgress()) {
                 return;
             }
-            state = state.completeCleanup();
+            state = ReplySlotState.TERMINATED;
             if (cleanupFailure == null) {
                 cleanupCompletion.complete(null);
             } else {

@@ -85,8 +85,8 @@ public class OutboundReplyPressureTest {
         OutboundMemoryBudget budget = server.outboundMemoryBudgetForTests();
         try (Socket blocked = RespTcpTestSupport.connect(server);
              Socket other = RespTcpTestSupport.connect(server)) {
-            OutboundConnectionMemory blockedMemory = awaitConnectionMemory(server, blocked);
-            OutboundMemoryLease heldConnectionCapacity = blockedMemory.reserve(5_800L, CONNECTION_CAPACITY).orElseThrow();
+            OutboundMemoryBudget.Connection blockedMemory = awaitConnectionMemory(server, blocked);
+            OutboundMemoryBudget.Lease heldConnectionCapacity = blockedMemory.reserve(5_800L, CONNECTION_CAPACITY).orElseThrow();
             try {
                 RespTcpTestSupport.writeCommand(blocked, "ECHO", "blocked");
                 awaitCapacityWaiter(budget);
@@ -139,7 +139,7 @@ public class OutboundReplyPressureTest {
         };
     }
 
-    private static OutboundConnectionMemory awaitConnectionMemory(YierdisServerBootstrap server, Socket client)
+    private static OutboundMemoryBudget.Connection awaitConnectionMemory(YierdisServerBootstrap server, Socket client)
             throws InterruptedException {
         int clientPort = client.getLocalPort();
         ChildChannelRegistry registry = server.childChannelRegistryForTests();

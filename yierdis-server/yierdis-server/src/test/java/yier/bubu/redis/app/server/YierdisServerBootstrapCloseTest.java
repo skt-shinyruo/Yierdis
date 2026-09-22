@@ -102,7 +102,7 @@ public class YierdisServerBootstrapCloseTest {
         setField(bootstrap, "replyEgressStats", egressStats);
         Assert.assertTrue(registry.register(child));
 
-        OutboundConnectionMemory connectionMemory = budget.openConnection(8_192L);
+        OutboundMemoryBudget.Connection connectionMemory = budget.openConnection(8_192L);
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(
                 child,
                 connectionMemory,

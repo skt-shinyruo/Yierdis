@@ -134,7 +134,7 @@ public class RespIngressLifecycleIntegrationTest {
             fixture.replies.drain();
 
             Assert.assertEquals("ready-before-shutdown", readOutboundAscii(fixture.channel));
-            Assert.assertEquals(ReplySlotState.COMPLETED, ready.state());
+            Assert.assertEquals(ReplySlotOutcome.COMPLETED, ready.outcome());
             Assert.assertTrue(repliesDrained.isDone());
             Assert.assertFalse(fixture.channel.isOpen());
             Assert.assertTrue(queued.awaitFinalRelease());
@@ -409,7 +409,7 @@ public class RespIngressLifecycleIntegrationTest {
 
             connection = NettyExecutionConnection.getOrCreate(channel, 16, 1_024L);
             connection.bindOwnerTaskExecutor(task -> executor.executeOwnerTask(task));
-            OutboundConnectionMemory outboundMemory = outboundBudget.openConnection(OUTBOUND_CONNECTION_BYTES);
+            OutboundMemoryBudget.Connection outboundMemory = outboundBudget.openConnection(OUTBOUND_CONNECTION_BYTES);
             sequencer = new ConnectionReplySequencer(
                     channel,
                     outboundMemory,

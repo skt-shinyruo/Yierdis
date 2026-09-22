@@ -23,7 +23,7 @@ final class OrderedReplyTestFixture implements AutoCloseable {
     private final OutboundMemoryBudget budget;
     private final ConnectionReplySequencer sequencer;
     private final NettyExecutionConnection connection;
-    private final OutboundConnectionMemory connectionMemory;
+    private final OutboundMemoryBudget.Connection connectionMemory;
 
     private OrderedReplyTestFixture(
             CommandExecutor executor,
@@ -77,13 +77,13 @@ final class OrderedReplyTestFixture implements AutoCloseable {
     }
 
     RegisteredRespMessage register(RespDecodedMessage message) {
-        OutboundMemoryLease lease = connectionMemory.reserve(CONTROL_BYTES, MAX_REPLY_BYTES).orElseThrow();
+        OutboundMemoryBudget.Lease lease = connectionMemory.reserve(CONTROL_BYTES, MAX_REPLY_BYTES).orElseThrow();
         ReplySlot slot = sequencer.register(lease).orElseThrow();
         return new RegisteredRespMessage(message, slot);
     }
 
     ReplySlot registerReadyAscii(String value) {
-        OutboundMemoryLease lease = connectionMemory.reserve(CONTROL_BYTES, MAX_REPLY_BYTES).orElseThrow();
+        OutboundMemoryBudget.Lease lease = connectionMemory.reserve(CONTROL_BYTES, MAX_REPLY_BYTES).orElseThrow();
         ReplySlot slot = sequencer.register(lease).orElseThrow();
         slot.addChunk(Unpooled.copiedBuffer(value, StandardCharsets.US_ASCII));
         slot.markReady(false);

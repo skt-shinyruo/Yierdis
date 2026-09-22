@@ -130,7 +130,7 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
                     inboundConnection,
                     receiveBufferCapacity(config)
             );
-            OutboundConnectionMemory outboundConnection = outboundMemoryBudget.openConnection(
+            OutboundMemoryBudget.Connection outboundConnection = outboundMemoryBudget.openConnection(
                     config.replyPerConnectionCapacityBytes()
             );
             ConnectionReplySequencer replySequencer = new ConnectionReplySequencer(

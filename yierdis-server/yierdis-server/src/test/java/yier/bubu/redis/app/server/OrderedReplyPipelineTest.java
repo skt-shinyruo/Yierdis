@@ -28,7 +28,7 @@ public class OrderedReplyPipelineTest {
     @Test
     public void terminalReplyCannotRegisterPastAnActiveReplyAdmissionBarrier() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(8_192L);
-        OutboundConnectionMemory outboundConnection = budget.openConnection(8_192L);
+        OutboundMemoryBudget.Connection outboundConnection = budget.openConnection(8_192L);
         EmbeddedChannel channel = new EmbeddedChannel();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, outboundConnection, () -> { });
         NettyReplyDecodedMessageGate gate = new NettyReplyDecodedMessageGate(
@@ -69,7 +69,7 @@ public class OrderedReplyPipelineTest {
     public void execMetadataLeavesRoomToExpandItsLeaseBeforeFollowingRegistration() {
         CommandDispatcher dispatcher = CommandRegistries.dispatcher();
         OutboundMemoryBudget budget = new OutboundMemoryBudget(8_192L);
-        OutboundConnectionMemory outboundConnection = budget.openConnection(8_192L);
+        OutboundMemoryBudget.Connection outboundConnection = budget.openConnection(8_192L);
         EmbeddedChannel channel = new EmbeddedChannel();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, outboundConnection, () -> { });
         NettyReplyDecodedMessageGate gate = new NettyReplyDecodedMessageGate(
@@ -111,7 +111,7 @@ public class OrderedReplyPipelineTest {
         InboundMemoryBudget inboundBudget = new InboundMemoryBudget(4_096L);
         InboundConnectionMemory inboundConnection = new InboundConnectionMemory(4_096L, Runnable::run, () -> { });
         OutboundMemoryBudget outboundBudget = new OutboundMemoryBudget(4_096L);
-        OutboundConnectionMemory outboundConnection = outboundBudget.openConnection(4_096L);
+        OutboundMemoryBudget.Connection outboundConnection = outboundBudget.openConnection(4_096L);
         EmbeddedChannel channel = new EmbeddedChannel();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, outboundConnection, () -> { });
         NettyReplyDecodedMessageGate gate = new NettyReplyDecodedMessageGate(
@@ -148,7 +148,7 @@ public class OrderedReplyPipelineTest {
             channel.runPendingTasks();
 
             Assert.assertThrows(IllegalStateException.class, registered::takeMessage);
-            Assert.assertEquals(ReplySlotState.CANCELLED, registered.slot().state());
+            Assert.assertEquals(ReplySlotOutcome.CANCELLED, registered.slot().outcome());
             Assert.assertEquals(0L, inboundBudget.stats().reservedBytes());
             Assert.assertEquals(0L, outboundBudget.stats().reservedBytes());
         } finally {
@@ -163,7 +163,7 @@ public class OrderedReplyPipelineTest {
     @Test
     public void decoderWaitsAtReplyAdmissionAndPreservesTheOriginalMessageUntilCapacityReturns() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(4_096L);
-        OutboundConnectionMemory outboundConnection = budget.openConnection(4_096L);
+        OutboundMemoryBudget.Connection outboundConnection = budget.openConnection(4_096L);
         EmbeddedChannel channel = new EmbeddedChannel();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, outboundConnection, () -> { });
         NettyReplyDecodedMessageGate gate = new NettyReplyDecodedMessageGate(4_096L, 4_096L, outboundConnection, sequencer);
@@ -201,7 +201,7 @@ public class OrderedReplyPipelineTest {
     @Test
     public void terminalProtocolErrorGetsTheNextRegisteredSlot() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(8_192L);
-        OutboundConnectionMemory outboundConnection = budget.openConnection(8_192L);
+        OutboundMemoryBudget.Connection outboundConnection = budget.openConnection(8_192L);
         EmbeddedChannel channel = new EmbeddedChannel();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, outboundConnection, () -> { });
         NettyReplyDecodedMessageGate gate = new NettyReplyDecodedMessageGate(4_096L, 4_096L, outboundConnection, sequencer);
@@ -231,7 +231,7 @@ public class OrderedReplyPipelineTest {
     @Test
     public void mixedReplyProducersCompleteOutOfOrderButWriteInReceiveOrder() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(32_768L);
-        OutboundConnectionMemory connection = budget.openConnection(32_768L);
+        OutboundMemoryBudget.Connection connection = budget.openConnection(32_768L);
         EmbeddedChannel channel = new EmbeddedChannel();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(channel, connection, () -> { });
         ReplySlot command = register(sequencer, connection);
@@ -277,7 +277,7 @@ public class OrderedReplyPipelineTest {
             }
         });
         OutboundMemoryBudget budget = new OutboundMemoryBudget(32_768L);
-        OutboundConnectionMemory connection = budget.openConnection(32_768L);
+        OutboundMemoryBudget.Connection connection = budget.openConnection(32_768L);
         ReplyEgressStats egressStats = new ReplyEgressStats();
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(
                 channel,
@@ -314,11 +314,11 @@ public class OrderedReplyPipelineTest {
             for (int index = 0; index < slots.size(); index++) {
                 Assert.assertEquals("slot resource should close once: " + index, 1, closes.get(index).get());
             }
-            Assert.assertEquals(ReplySlotState.COMPLETED, slots.getFirst().state());
+            Assert.assertEquals(ReplySlotOutcome.COMPLETED, slots.getFirst().outcome());
             for (int index = 1; index < slots.size(); index++) {
                 Assert.assertTrue(
                         "failed or later slot should terminate: " + index,
-                        slots.get(index).state() == ReplySlotState.FAILED || slots.get(index).state() == ReplySlotState.CANCELLED
+                        slots.get(index).outcome() == ReplySlotOutcome.FAILED || slots.get(index).outcome() == ReplySlotOutcome.CANCELLED
                 );
             }
             Assert.assertEquals(0L, budget.stats().reservedBytes());
@@ -347,7 +347,7 @@ public class OrderedReplyPipelineTest {
         );
     }
 
-    private static ReplySlot register(ConnectionReplySequencer sequencer, OutboundConnectionMemory connection) {
+    private static ReplySlot register(ConnectionReplySequencer sequencer, OutboundMemoryBudget.Connection connection) {
         return sequencer.register(connection.reserve(4_096L, 4_096L).orElseThrow()).orElseThrow();
     }
 

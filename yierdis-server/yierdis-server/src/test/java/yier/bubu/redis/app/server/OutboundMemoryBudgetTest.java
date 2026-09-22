@@ -9,13 +9,13 @@ public class OutboundMemoryBudgetTest {
     @Test
     public void enforcesGlobalConnectionAndSingleLimitsBeforeAllocation() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(1024L);
-        OutboundConnectionMemory a = budget.openConnection(600L);
-        OutboundConnectionMemory b = budget.openConnection(600L);
-        OutboundConnectionMemory c = budget.openConnection(600L);
-        OutboundMemoryLease a1 = a.reserve(200L, 400L).orElseThrow();
-        OutboundMemoryLease a2 = a.reserve(200L, 400L).orElseThrow();
+        OutboundMemoryBudget.Connection a = budget.openConnection(600L);
+        OutboundMemoryBudget.Connection b = budget.openConnection(600L);
+        OutboundMemoryBudget.Connection c = budget.openConnection(600L);
+        OutboundMemoryBudget.Lease a1 = a.reserve(200L, 400L).orElseThrow();
+        OutboundMemoryBudget.Lease a2 = a.reserve(200L, 400L).orElseThrow();
         Assert.assertTrue(a.reserve(300L, 400L).isEmpty());
-        OutboundMemoryLease b1 = b.reserve(300L, 400L).orElseThrow();
+        OutboundMemoryBudget.Lease b1 = b.reserve(300L, 400L).orElseThrow();
         Assert.assertTrue(c.reserve(500L, 600L).isEmpty());
 
         a1.close();
@@ -30,8 +30,8 @@ public class OutboundMemoryBudgetTest {
     @Test
     public void tracksConvertedAllocationSeparatelyFromAdmittedReservation() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(1024L);
-        OutboundConnectionMemory connection = budget.openConnection(800L);
-        OutboundMemoryLease lease = connection.reserve(400L, 600L).orElseThrow();
+        OutboundMemoryBudget.Connection connection = budget.openConnection(800L);
+        OutboundMemoryBudget.Lease lease = connection.reserve(400L, 600L).orElseThrow();
 
         Assert.assertTrue(lease.convertToAllocated(128L));
         Assert.assertEquals(400L, budget.stats().reservedBytes());
@@ -49,8 +49,8 @@ public class OutboundMemoryBudgetTest {
     @Test
     public void saturatingProjectionRejectsOverflowWithoutChangingCounters() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(Long.MAX_VALUE);
-        OutboundConnectionMemory connection = budget.openConnection(Long.MAX_VALUE);
-        OutboundMemoryLease full = connection.reserve(Long.MAX_VALUE, Long.MAX_VALUE).orElseThrow();
+        OutboundMemoryBudget.Connection connection = budget.openConnection(Long.MAX_VALUE);
+        OutboundMemoryBudget.Lease full = connection.reserve(Long.MAX_VALUE, Long.MAX_VALUE).orElseThrow();
 
         Assert.assertTrue(connection.reserve(1L, Long.MAX_VALUE).isEmpty());
         Assert.assertEquals(Long.MAX_VALUE, budget.stats().reservedBytes());
@@ -61,9 +61,9 @@ public class OutboundMemoryBudgetTest {
     @Test
     public void closeCancelsWaitersButKeepsActiveLeasesValidUntilTheirFinalClose() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(400L);
-        OutboundConnectionMemory first = budget.openConnection(400L);
-        OutboundConnectionMemory waiting = budget.openConnection(400L);
-        OutboundMemoryLease lease = first.reserve(400L, 400L).orElseThrow();
+        OutboundMemoryBudget.Connection first = budget.openConnection(400L);
+        OutboundMemoryBudget.Connection waiting = budget.openConnection(400L);
+        OutboundMemoryBudget.Lease lease = first.reserve(400L, 400L).orElseThrow();
         AtomicInteger wakeups = new AtomicInteger();
 
         Assert.assertTrue(waiting.awaitCapacity(100L, 400L, wakeups::incrementAndGet));
@@ -76,7 +76,7 @@ public class OutboundMemoryBudgetTest {
         Assert.assertTrue(first.reserve(1L, 400L).isEmpty());
         Assert.assertTrue(lease.convertToAllocated(100L));
 
-        OutboundConnectionMemory afterClose = budget.openConnection(400L);
+        OutboundMemoryBudget.Connection afterClose = budget.openConnection(400L);
         Assert.assertTrue(afterClose.reserve(1L, 400L).isEmpty());
         Assert.assertFalse(afterClose.awaitCapacity(1L, 400L, () -> Assert.fail("closed budget must not wake waiters")));
 
@@ -90,10 +90,10 @@ public class OutboundMemoryBudgetTest {
     @Test
     public void wakesOnlyTheOldestLiveWaiterWhenCapacityReturns() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(400L);
-        OutboundConnectionMemory holder = budget.openConnection(400L);
-        OutboundConnectionMemory first = budget.openConnection(400L);
-        OutboundConnectionMemory second = budget.openConnection(400L);
-        OutboundMemoryLease lease = holder.reserve(400L, 400L).orElseThrow();
+        OutboundMemoryBudget.Connection holder = budget.openConnection(400L);
+        OutboundMemoryBudget.Connection first = budget.openConnection(400L);
+        OutboundMemoryBudget.Connection second = budget.openConnection(400L);
+        OutboundMemoryBudget.Lease lease = holder.reserve(400L, 400L).orElseThrow();
         AtomicInteger firstWakeups = new AtomicInteger();
         AtomicInteger secondWakeups = new AtomicInteger();
 
@@ -110,13 +110,13 @@ public class OutboundMemoryBudgetTest {
     @Test
     public void grantedRetryCannotBeDisplacedBeforeItConsumesCapacity() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(400L);
-        OutboundConnectionMemory holder = budget.openConnection(400L);
-        OutboundConnectionMemory waiting = budget.openConnection(400L);
-        OutboundConnectionMemory competing = budget.openConnection(400L);
-        OutboundMemoryLease pressure = holder.reserve(400L, 400L).orElseThrow();
+        OutboundMemoryBudget.Connection holder = budget.openConnection(400L);
+        OutboundMemoryBudget.Connection waiting = budget.openConnection(400L);
+        OutboundMemoryBudget.Connection competing = budget.openConnection(400L);
+        OutboundMemoryBudget.Lease pressure = holder.reserve(400L, 400L).orElseThrow();
         AtomicInteger wakeups = new AtomicInteger();
-        Optional<OutboundMemoryLease> displaced = Optional.empty();
-        OutboundMemoryLease admitted = null;
+        Optional<OutboundMemoryBudget.Lease> displaced = Optional.empty();
+        OutboundMemoryBudget.Lease admitted = null;
         try {
             Assert.assertTrue(waiting.awaitCapacity(100L, 400L, wakeups::incrementAndGet));
 
@@ -133,7 +133,7 @@ public class OutboundMemoryBudgetTest {
             if (admitted != null) {
                 admitted.close();
             }
-            displaced.ifPresent(OutboundMemoryLease::close);
+            displaced.ifPresent(OutboundMemoryBudget.Lease::close);
             pressure.close();
             holder.close();
             waiting.close();
@@ -145,12 +145,12 @@ public class OutboundMemoryBudgetTest {
     @Test
     public void failedGrantCallbackHandsCapacityToTheNextWaiter() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(400L);
-        OutboundConnectionMemory holder = budget.openConnection(400L);
-        OutboundConnectionMemory failed = budget.openConnection(400L);
-        OutboundConnectionMemory next = budget.openConnection(400L);
-        OutboundMemoryLease pressure = holder.reserve(400L, 400L).orElseThrow();
+        OutboundMemoryBudget.Connection holder = budget.openConnection(400L);
+        OutboundMemoryBudget.Connection failed = budget.openConnection(400L);
+        OutboundMemoryBudget.Connection next = budget.openConnection(400L);
+        OutboundMemoryBudget.Lease pressure = holder.reserve(400L, 400L).orElseThrow();
         AtomicInteger nextWakeups = new AtomicInteger();
-        OutboundMemoryLease admitted = null;
+        OutboundMemoryBudget.Lease admitted = null;
         try {
             Assert.assertTrue(failed.awaitCapacity(100L, 400L, () -> {
                 throw new IllegalStateException("injected callback failure");
@@ -177,10 +177,10 @@ public class OutboundMemoryBudgetTest {
     @Test
     public void wakesAnExpandedLeaseWaiterWithoutReplacingItsControlReservation() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(400L);
-        OutboundConnectionMemory waitingConnection = budget.openConnection(400L);
-        OutboundConnectionMemory holderConnection = budget.openConnection(400L);
-        OutboundMemoryLease waitingLease = waitingConnection.reserve(100L, 400L).orElseThrow();
-        OutboundMemoryLease holderLease = holderConnection.reserve(300L, 400L).orElseThrow();
+        OutboundMemoryBudget.Connection waitingConnection = budget.openConnection(400L);
+        OutboundMemoryBudget.Connection holderConnection = budget.openConnection(400L);
+        OutboundMemoryBudget.Lease waitingLease = waitingConnection.reserve(100L, 400L).orElseThrow();
+        OutboundMemoryBudget.Lease holderLease = holderConnection.reserve(300L, 400L).orElseThrow();
         AtomicInteger wakeups = new AtomicInteger();
         try {
             Assert.assertFalse(waitingLease.tryReserveAdditional(200L, 400L));
@@ -201,13 +201,13 @@ public class OutboundMemoryBudgetTest {
     @Test
     public void grantedExpansionCannotBeDisplacedBeforeTheLeaseConsumesIt() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(400L);
-        OutboundConnectionMemory waitingConnection = budget.openConnection(400L);
-        OutboundConnectionMemory holderConnection = budget.openConnection(400L);
-        OutboundConnectionMemory competingConnection = budget.openConnection(400L);
-        OutboundMemoryLease waitingLease = waitingConnection.reserve(100L, 400L).orElseThrow();
-        OutboundMemoryLease holderLease = holderConnection.reserve(300L, 400L).orElseThrow();
+        OutboundMemoryBudget.Connection waitingConnection = budget.openConnection(400L);
+        OutboundMemoryBudget.Connection holderConnection = budget.openConnection(400L);
+        OutboundMemoryBudget.Connection competingConnection = budget.openConnection(400L);
+        OutboundMemoryBudget.Lease waitingLease = waitingConnection.reserve(100L, 400L).orElseThrow();
+        OutboundMemoryBudget.Lease holderLease = holderConnection.reserve(300L, 400L).orElseThrow();
         AtomicInteger wakeups = new AtomicInteger();
-        Optional<OutboundMemoryLease> displaced = Optional.empty();
+        Optional<OutboundMemoryBudget.Lease> displaced = Optional.empty();
         try {
             Assert.assertTrue(waitingLease.awaitAdditionalCapacity(200L, 400L, wakeups::incrementAndGet));
 
@@ -219,7 +219,7 @@ public class OutboundMemoryBudgetTest {
             Assert.assertTrue(waitingLease.tryReserveAdditional(200L, 400L));
             Assert.assertEquals(300L, waitingLease.reservedBytes());
         } finally {
-            displaced.ifPresent(OutboundMemoryLease::close);
+            displaced.ifPresent(OutboundMemoryBudget.Lease::close);
             holderLease.close();
             waitingLease.close();
             holderConnection.close();
@@ -232,16 +232,16 @@ public class OutboundMemoryBudgetTest {
     @Test
     public void connectionLimitedExpansionDoesNotBlockAnIndependentReservation() {
         OutboundMemoryBudget budget = new OutboundMemoryBudget(1_000L);
-        OutboundConnectionMemory constrained = budget.openConnection(600L);
-        OutboundConnectionMemory independent = budget.openConnection(600L);
-        OutboundMemoryLease retainedCapacity = constrained.reserve(500L, 600L).orElseThrow();
-        OutboundMemoryLease reply = constrained.reserve(100L, 600L).orElseThrow();
+        OutboundMemoryBudget.Connection constrained = budget.openConnection(600L);
+        OutboundMemoryBudget.Connection independent = budget.openConnection(600L);
+        OutboundMemoryBudget.Lease retainedCapacity = constrained.reserve(500L, 600L).orElseThrow();
+        OutboundMemoryBudget.Lease reply = constrained.reserve(100L, 600L).orElseThrow();
         AtomicInteger wakeups = new AtomicInteger();
         try {
             Assert.assertFalse(reply.tryReserveAdditional(100L, 600L));
             Assert.assertTrue(reply.awaitAdditionalCapacity(100L, 600L, wakeups::incrementAndGet));
 
-            OutboundMemoryLease unrelated = independent.reserve(100L, 600L).orElseThrow();
+            OutboundMemoryBudget.Lease unrelated = independent.reserve(100L, 600L).orElseThrow();
             unrelated.close();
 
             retainedCapacity.close();
@@ -260,7 +260,7 @@ public class OutboundMemoryBudgetTest {
         Assert.assertThrows(IllegalArgumentException.class, () -> new OutboundMemoryBudget(0L));
         OutboundMemoryBudget budget = new OutboundMemoryBudget(100L);
         Assert.assertThrows(IllegalArgumentException.class, () -> budget.openConnection(101L));
-        OutboundConnectionMemory connection = budget.openConnection(100L);
+        OutboundMemoryBudget.Connection connection = budget.openConnection(100L);
         Assert.assertThrows(IllegalArgumentException.class, () -> connection.reserve(0L, 100L));
         Assert.assertThrows(IllegalArgumentException.class, () -> connection.reserve(-1L, 100L));
         Assert.assertThrows(IllegalArgumentException.class, () -> connection.reserve(1L, 0L));

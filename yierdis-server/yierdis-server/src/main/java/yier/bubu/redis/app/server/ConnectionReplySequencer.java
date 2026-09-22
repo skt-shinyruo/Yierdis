@@ -25,7 +25,7 @@ import yier.bubu.redis.bytes.BytesSink;
 final class ConnectionReplySequencer implements AutoCloseable {
     private final Object lock = new Object();
     private final Channel channel;
-    private final OutboundConnectionMemory connectionMemory;
+    private final OutboundMemoryBudget.Connection connectionMemory;
     private final Runnable disableInput;
     private final Function<ReplySlot, BytesSink> sinkFactory;
     private final ReplyEgressStats replyEgressStats;
@@ -43,7 +43,7 @@ final class ConnectionReplySequencer implements AutoCloseable {
     private Throwable terminationFailure;
     private final CompletableFuture<Void> shutdownDrained = new CompletableFuture<>();
 
-    ConnectionReplySequencer(Channel channel, OutboundConnectionMemory connectionMemory, Runnable disableInput) {
+    ConnectionReplySequencer(Channel channel, OutboundMemoryBudget.Connection connectionMemory, Runnable disableInput) {
         this(channel, connectionMemory, disableInput, slot -> {
             throw new IllegalStateException("reply slot has no configured sink");
         });
@@ -51,7 +51,7 @@ final class ConnectionReplySequencer implements AutoCloseable {
 
     ConnectionReplySequencer(
             Channel channel,
-            OutboundConnectionMemory connectionMemory,
+            OutboundMemoryBudget.Connection connectionMemory,
             Runnable disableInput,
             Function<ReplySlot, BytesSink> sinkFactory
     ) {
@@ -60,7 +60,7 @@ final class ConnectionReplySequencer implements AutoCloseable {
 
     ConnectionReplySequencer(
             Channel channel,
-            OutboundConnectionMemory connectionMemory,
+            OutboundMemoryBudget.Connection connectionMemory,
             Runnable disableInput,
             Function<ReplySlot, BytesSink> sinkFactory,
             ReplyEgressStats replyEgressStats
@@ -76,7 +76,7 @@ final class ConnectionReplySequencer implements AutoCloseable {
         });
     }
 
-    Optional<ReplySlot> register(OutboundMemoryLease lease) {
+    Optional<ReplySlot> register(OutboundMemoryBudget.Lease lease) {
         Objects.requireNonNull(lease, "lease");
         ReplySlot slot;
         synchronized (lock) {

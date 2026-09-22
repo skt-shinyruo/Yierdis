@@ -10,7 +10,7 @@ public class ReplyShutdownTest {
     public void idleRegisteredChildDrainsThroughSequencerBeforeItsOutboundAccountCloses() {
         ChildChannelRegistry registry = new ChildChannelRegistry();
         OutboundMemoryBudget budget = new OutboundMemoryBudget(4_096L);
-        OutboundConnectionMemory connectionMemory = budget.openConnection(4_096L);
+        OutboundMemoryBudget.Connection connectionMemory = budget.openConnection(4_096L);
         EmbeddedChannel child = new EmbeddedChannel();
         Assert.assertTrue(registry.register(child));
         ConnectionReplySequencer sequencer = new ConnectionReplySequencer(child, connectionMemory, () -> { });
