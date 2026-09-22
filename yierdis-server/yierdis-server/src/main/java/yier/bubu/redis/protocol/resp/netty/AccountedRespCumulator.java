@@ -1,5 +1,7 @@
 package yier.bubu.redis.protocol.resp.netty;
 
+import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
+
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.CompositeByteBuf;
@@ -79,7 +81,7 @@ final class AccountedRespCumulator implements AutoCloseable {
             if (remaining < component.length) {
                 break;
             }
-            releasable = InboundMemoryBudget.saturatedAdd(releasable, component.lease.reservedBytes());
+            releasable = addSaturating(releasable, component.lease.reservedBytes());
             remaining -= component.length;
         }
         return releasable;
@@ -121,7 +123,7 @@ final class AccountedRespCumulator implements AutoCloseable {
         long newCharge = InboundBufferLease.chargeForCapacity(targetCapacity);
         long oldCharge = 0L;
         for (Component component : components) {
-            oldCharge = InboundMemoryBudget.saturatedAdd(oldCharge, component.lease.reservedBytes());
+            oldCharge = addSaturating(oldCharge, component.lease.reservedBytes());
         }
         PendingConsolidation candidate = new PendingConsolidation(newCharge);
         pendingConsolidation = candidate;

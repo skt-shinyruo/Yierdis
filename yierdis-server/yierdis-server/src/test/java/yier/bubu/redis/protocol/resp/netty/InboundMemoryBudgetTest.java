@@ -325,8 +325,6 @@ public class InboundMemoryBudgetTest {
         budget.adjustRetainedInputCapacity(-3);
         budget.adjustConsolidation(-4);
 
-        Assert.assertEquals(Long.MAX_VALUE, InboundMemoryBudget.saturatedAdd(Long.MAX_VALUE, 1));
-        Assert.assertEquals(Long.MAX_VALUE, InboundMemoryBudget.saturatedAdd(-1, 1));
         budget.close();
         budget.close();
         Assert.assertTrue(budget.stats().closed());

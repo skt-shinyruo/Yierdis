@@ -1,5 +1,7 @@
 package yier.bubu.redis.protocol.resp;
 
+import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
+
 import java.util.function.BiFunction;
 
 import java.util.List;
@@ -54,7 +56,7 @@ public final class RespReplySizer implements BiFunction<Integer, ReplyShape, Rep
             case MAP -> mapHeaderBytes(elements.size(), version);
         };
         for (ReplyShape element : elements) {
-            encoded = saturatedAdd(encoded, encodedBytes(element, version));
+            encoded = addSaturating(encoded, encodedBytes(element, version));
         }
         return encoded;
     }
@@ -63,14 +65,14 @@ public final class RespReplySizer implements BiFunction<Integer, ReplyShape, Rep
         PayloadAccumulator payloads = new PayloadAccumulator(sequence.elementCount(), version);
         sequence.payloadLengths().accept(payloads::accept);
         payloads.verifyComplete("sequence");
-        return saturatedAdd(aggregateHeaderBytes('*', sequence.elementCount()), payloads.encodedBytes());
+        return addSaturating(aggregateHeaderBytes('*', sequence.elementCount()), payloads.encodedBytes());
     }
 
     private static long byteSetBytes(ReplyShape.ByteSet set, RespProtocolVersion version) {
         PayloadAccumulator payloads = new PayloadAccumulator(set.elementCount(), version);
         set.payloadLengths().accept(payloads::accept);
         payloads.verifyComplete("set");
-        return saturatedAdd(aggregateHeaderBytes(version.setPrefix(), set.elementCount()), payloads.encodedBytes());
+        return addSaturating(aggregateHeaderBytes(version.setPrefix(), set.elementCount()), payloads.encodedBytes());
     }
 
     private static long byteMapBytes(ReplyShape.ByteMap map, RespProtocolVersion version) {
@@ -79,7 +81,7 @@ public final class RespReplySizer implements BiFunction<Integer, ReplyShape, Rep
         map.payloadLengths().accept(payloads::accept);
         payloads.verifyComplete("map");
         long header = aggregateHeaderBytes(version.mapPrefix(), version.mapHeaderCount(map.pairCount()));
-        return saturatedAdd(header, payloads.encodedBytes());
+        return addSaturating(header, payloads.encodedBytes());
     }
 
     private static long mapHeaderBytes(int elementCount, RespProtocolVersion version) {
@@ -90,11 +92,11 @@ public final class RespReplySizer implements BiFunction<Integer, ReplyShape, Rep
     }
 
     private static long lineBytes(long payloadLength) {
-        return saturatedAdd(payloadLength, 3L);
+        return addSaturating(payloadLength, 3L);
     }
 
     private static long framedBytes(long payloadLength) {
-        return saturatedAdd(saturatedAdd(decimalDigits(payloadLength), 3L), saturatedAdd(payloadLength, 2L));
+        return addSaturating(addSaturating(decimalDigits(payloadLength), 3L), addSaturating(payloadLength, 2L));
     }
 
     private static long bulkBytes(int payloadLength) {
@@ -105,15 +107,11 @@ public final class RespReplySizer implements BiFunction<Integer, ReplyShape, Rep
         if (count < 0L) {
             throw new IllegalArgumentException("aggregate count must be non-negative");
         }
-        return saturatedAdd(decimalDigits(count), 3L);
+        return addSaturating(decimalDigits(count), 3L);
     }
 
     private static int decimalDigits(long value) {
         return Long.toString(value).length();
-    }
-
-    private static long saturatedAdd(long left, long right) {
-        return left > Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
     }
 
     private static final class PayloadAccumulator {
@@ -136,7 +134,7 @@ public final class RespReplySizer implements BiFunction<Integer, ReplyShape, Rep
             if (actualCount > expectedCount) {
                 throw new IllegalArgumentException("semantic payload callback emitted too many values");
             }
-            encodedBytes = saturatedAdd(encodedBytes,
+            encodedBytes = addSaturating(encodedBytes,
                     payloadLength == -1 ? version.nullValueEncoding().length : bulkBytes(payloadLength));
         }
 

@@ -37,10 +37,15 @@ public record MemoryUsageSnapshot(
         );
     }
 
+    /**
+     * 全仓库 main 源唯一的饱和加法。调用点都处于字节数/计数器等非负域：任一操作数为负或求和溢出时
+     * 一律收敛到 {@link Long#MAX_VALUE}，绝不回绕成较小值——负数视为上游账目漂移，按已饱和保守处理。
+     */
     public static long addSaturating(long left, long right) {
-        requireNonNegative(left, "left");
-        requireNonNegative(right, "right");
-        return Long.MAX_VALUE - left < right ? Long.MAX_VALUE : left + right;
+        if (left < 0L || right < 0L || left > Long.MAX_VALUE - right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 
     private static void requireNonNegative(long value, String name) {

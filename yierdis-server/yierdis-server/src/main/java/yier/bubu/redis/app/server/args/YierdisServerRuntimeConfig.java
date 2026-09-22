@@ -1,5 +1,7 @@
 package yier.bubu.redis.app.server.args;
 
+import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
+
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.resp.RespProtocolLimits;
@@ -145,8 +147,8 @@ public record YierdisServerRuntimeConfig(
         if (replyPerConnectionCapacityBytes > replyGlobalCapacityBytes) {
             throw new IllegalArgumentException("replyPerConnectionCapacityBytes must be <= replyGlobalCapacityBytes");
         }
-        long minimumReplyCharge = saturatedAdd(
-                saturatedAdd(replyControlReservationBytes, replyChunkPayloadBytes),
+        long minimumReplyCharge = addSaturating(
+                addSaturating(replyControlReservationBytes, replyChunkPayloadBytes),
                 REPLY_FIXED_OVERHEAD_BYTES
         );
         if (minimumReplyCharge > replyMaxTotalBytes) {
@@ -184,13 +186,6 @@ public record YierdisServerRuntimeConfig(
         if (value < minimum || value > maximum) {
             throw new IllegalArgumentException(name + " must be in range " + minimum + ".." + maximum);
         }
-    }
-
-    private static long saturatedAdd(long left, long right) {
-        if (left < 0L || right < 0L || left > Long.MAX_VALUE - right) {
-            return Long.MAX_VALUE;
-        }
-        return left + right;
     }
 
     public static YierdisInstanceConfig.MaxmemoryScope parseMaxmemoryScope(String rawValue) {

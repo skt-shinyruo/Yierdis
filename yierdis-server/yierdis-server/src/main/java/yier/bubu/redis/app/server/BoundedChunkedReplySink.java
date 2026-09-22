@@ -1,5 +1,7 @@
 package yier.bubu.redis.app.server;
 
+import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
+
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import yier.bubu.redis.execution.api.ReplyCapacityUnavailableException;
@@ -183,7 +185,7 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
             return;
         }
         int payloadCapacity = nextChunkPayloadCapacity(remainingWriteBytes);
-        long convertedCredit = saturatedAdd(payloadCapacity, CHUNK_COMPONENT_OVERHEAD_BYTES);
+        long convertedCredit = addSaturating(payloadCapacity, CHUNK_COMPONENT_OVERHEAD_BYTES);
         if (!slot.lease().convertToAllocated(convertedCredit)) {
             slot.fail();
             throw new IllegalStateException("reply reservation was not converted before ByteBuf allocation");
@@ -192,7 +194,7 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
         ByteBuf buffer = null;
         try {
             buffer = allocator.allocate(payloadCapacity, payloadCapacity);
-            long actualCharge = saturatedAdd(buffer.capacity(), CHUNK_COMPONENT_OVERHEAD_BYTES);
+            long actualCharge = addSaturating(buffer.capacity(), CHUNK_COMPONENT_OVERHEAD_BYTES);
             if (actualCharge > convertedCredit) {
                 buffer.release();
                 buffer = null;
@@ -263,8 +265,8 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
             return maxTotalBytes;
         }
         long chunks = chunkCount(requestedPlan.encodedUpperBoundBytes());
-        long target = saturatedAdd(controlReservationBytes, requestedPlan.totalUpperBoundBytes());
-        return saturatedAdd(target, saturatedMultiply(chunks, CHUNK_COMPONENT_OVERHEAD_BYTES));
+        long target = addSaturating(controlReservationBytes, requestedPlan.totalUpperBoundBytes());
+        return addSaturating(target, saturatedMultiply(chunks, CHUNK_COMPONENT_OVERHEAD_BYTES));
     }
 
     private long chunkCount(long encodedBytes) {
@@ -283,18 +285,18 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
             maximumNestedPendingEncodedBytes = 0L;
             return;
         }
-        long encodedCharge = saturatedAdd(
+        long encodedCharge = addSaturating(
                 requestedPlan.encodedUpperBoundBytes(),
                 saturatedMultiply(
                         chunkCount(requestedPlan.encodedUpperBoundBytes()),
                         CHUNK_COMPONENT_OVERHEAD_BYTES
                 )
         );
-        long nestedCharge = saturatedAdd(encodedCharge, requestedPlan.retainedSourceBytes());
+        long nestedCharge = addSaturating(encodedCharge, requestedPlan.retainedSourceBytes());
         if (!fitsMaximumCharge(nestedCharge)) {
             throw tooLarge("nested reply exceeds its maximum reservation");
         }
-        maximumRetainedSourceBytes = saturatedAdd(maximumRetainedSourceBytes, requestedPlan.retainedSourceBytes());
+        maximumRetainedSourceBytes = addSaturating(maximumRetainedSourceBytes, requestedPlan.retainedSourceBytes());
         // 后续多次小 write 共享按整个 nested plan 分配的 chunk，实际 overhead 才不会超过这里的预检模型。
         maximumNestedPendingEncodedBytes = requestedPlan.encodedUpperBoundBytes();
     }
@@ -304,7 +306,7 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
         if (current != null && currentWritable > 0) {
             remainingBytes = Math.max(0L, remainingBytes - currentWritable);
         }
-        long chunkCharge = saturatedAdd(
+        long chunkCharge = addSaturating(
                 remainingBytes,
                 saturatedMultiply(chunkCount(remainingBytes), CHUNK_COMPONENT_OVERHEAD_BYTES)
         );
@@ -312,8 +314,8 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
     }
 
     private boolean fitsMaximumCharge(long additionalCharge) {
-        long currentCharge = saturatedAdd(slot.lease().allocatedBytes(), maximumRetainedSourceBytes);
-        long projectedCharge = saturatedAdd(currentCharge, additionalCharge);
+        long currentCharge = addSaturating(slot.lease().allocatedBytes(), maximumRetainedSourceBytes);
+        long projectedCharge = addSaturating(currentCharge, additionalCharge);
         return projectedCharge <= maxTotalBytes - controlReservationBytes;
     }
 
@@ -321,13 +323,6 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
         if (finished || slot.state().cleanupOwned()) {
             throw new IllegalStateException("reply sink is closed");
         }
-    }
-
-    private static long saturatedAdd(long left, long right) {
-        if (left < 0L || right < 0L || left > Long.MAX_VALUE - right) {
-            return Long.MAX_VALUE;
-        }
-        return left + right;
     }
 
     private static long saturatedMultiply(long left, long right) {

@@ -22,6 +22,14 @@ public class MemoryUsageSnapshotTest {
         Assert.assertEquals(Long.MAX_VALUE, total.effectiveBytesForMaxmemory());
     }
 
+    @Test
+    public void addSaturatingSaturatesOnOverflowAndNegativeInput() {
+        Assert.assertEquals(7L, MemoryUsageSnapshot.addSaturating(3L, 4L));
+        Assert.assertEquals(Long.MAX_VALUE, MemoryUsageSnapshot.addSaturating(Long.MAX_VALUE, 1L));
+        Assert.assertEquals(Long.MAX_VALUE, MemoryUsageSnapshot.addSaturating(-1L, 1L));
+        Assert.assertEquals(Long.MAX_VALUE, MemoryUsageSnapshot.addSaturating(1L, -1L));
+    }
+
     @Test(expected = IllegalArgumentException.class)
     public void negativeComponentsAreRejected() {
         new MemoryUsageSnapshot(-1, 0, 0, 0, 0);

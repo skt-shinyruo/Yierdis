@@ -1,5 +1,7 @@
 package yier.bubu.redis.protocol.resp.netty;
 
+import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
+
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -387,7 +389,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             return false;
         }
         ArrayProgress array = pending.array();
-        array.reservedBytes = InboundMemoryBudget.saturatedAdd(
+        array.reservedBytes = addSaturating(
                 array.reservedBytes,
                 pending.admission().bytes
         );
@@ -426,7 +428,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             return false;
         }
         ArrayProgress array = pending.array();
-        array.reservedBytes = InboundMemoryBudget.saturatedAdd(
+        array.reservedBytes = addSaturating(
                 array.reservedBytes,
                 pending.admission().bytes
         );
@@ -580,7 +582,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         if (!consumeAdmission(pending.admission())) {
             return false;
         }
-        pending.reservedBytes = InboundMemoryBudget.saturatedAdd(
+        pending.reservedBytes = addSaturating(
                 pending.reservedBytes,
                 pending.admission().bytes
         );
@@ -781,22 +783,22 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     }
 
     private static long inlineInspectionCharge(int lineLength) {
-        long lineArrays = InboundMemoryBudget.saturatedAdd(
+        long lineArrays = addSaturating(
                 HeapRequestFootprint.argumentBytes(lineLength),
                 HeapRequestFootprint.argumentBytes(lineLength)
         );
-        return InboundMemoryBudget.saturatedAdd(lineArrays, INLINE_DECODED_OBJECT_BYTES);
+        return addSaturating(lineArrays, INLINE_DECODED_OBJECT_BYTES);
     }
 
     private static long inlineAdmissionCharge(int lineLength, int retainedBytes) {
         // retainedBytes 与 argv 物化后的 HeapRequestFootprint 估算相等，准入只需额外覆盖 parser 的瞬态分配。
-        long parserTransient = InboundMemoryBudget.saturatedAdd(
+        long parserTransient = addSaturating(
                 HeapRequestFootprint.argumentBytes(lineLength),
                 HeapRequestFootprint.argumentBytes(lineLength)
         );
-        parserTransient = InboundMemoryBudget.saturatedAdd(parserTransient, INLINE_DECODED_OBJECT_BYTES);
+        parserTransient = addSaturating(parserTransient, INLINE_DECODED_OBJECT_BYTES);
         parserTransient = Math.max(parserTransient, INLINE_PARSER_TRANSIENT_FLOOR_BYTES);
-        return InboundMemoryBudget.saturatedAdd(Math.max(0, retainedBytes), parserTransient);
+        return addSaturating(Math.max(0, retainedBytes), parserTransient);
     }
 
     private static final class ByteBufLineView implements BytesView {

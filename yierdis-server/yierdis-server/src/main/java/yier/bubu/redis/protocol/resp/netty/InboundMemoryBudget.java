@@ -1,5 +1,7 @@
 package yier.bubu.redis.protocol.resp.netty;
 
+import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
+
 import java.util.ArrayDeque;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
@@ -215,14 +217,14 @@ public final class InboundMemoryBudget implements AutoCloseable {
             }
             if (!fitsConnection(account, bytes, inputCapacityReleasedAfterCopy)
                     || bytes > capacityBytes) {
-                rejectedConnections = saturatedAdd(rejectedConnections, 1L);
+                rejectedConnections = addSaturating(rejectedConnections, 1L);
                 return ReservationResult.REQUEST_LIMIT;
             }
             // transfer 在复制结束前仍持有该连接的全部现有额度；若它与目标的峰值超过全局容量，
             // 其他连接释放再多也无法唤醒当前连接，因此必须直接失败而不能入队。
             if (inputCapacityReleasedAfterCopy > 0L
-                    && saturatedAdd(account.reservedBytes(), bytes) > capacityBytes) {
-                rejectedConnections = saturatedAdd(rejectedConnections, 1L);
+                    && addSaturating(account.reservedBytes(), bytes) > capacityBytes) {
+                rejectedConnections = addSaturating(rejectedConnections, 1L);
                 return ReservationResult.REQUEST_LIMIT;
             }
             if (waitersByConnection.containsKey(connection)) {
@@ -314,7 +316,7 @@ public final class InboundMemoryBudget implements AutoCloseable {
 
     private void reserveLocked(ConnectionMemoryAccount account, long bytes) {
         account.addReserved(bytes);
-        reservedBytes = saturatedAdd(reservedBytes, bytes);
+        reservedBytes = addSaturating(reservedBytes, bytes);
         peakReservedBytes = Math.max(peakReservedBytes, reservedBytes);
         if (highWatermarkBytes > 0L && reservedBytes >= highWatermarkBytes) {
             backpressured = true;
@@ -323,11 +325,11 @@ public final class InboundMemoryBudget implements AutoCloseable {
 
     private boolean fitsConnection(ConnectionMemoryAccount account, long bytes, long releasedAfterCopy) {
         long retainedAfterCopy = account.reservedBytes() - releasedAfterCopy;
-        return saturatedAdd(retainedAfterCopy, bytes) <= account.hardLimitBytes();
+        return addSaturating(retainedAfterCopy, bytes) <= account.hardLimitBytes();
     }
 
     private boolean fitsGlobal(long bytes) {
-        return saturatedAdd(reservedBytes, bytes) <= capacityBytes;
+        return addSaturating(reservedBytes, bytes) <= capacityBytes;
     }
 
     private void removeWaiterLocked(InboundConnectionMemory connection) {
@@ -349,12 +351,12 @@ public final class InboundMemoryBudget implements AutoCloseable {
         }
         long quotient = capacityBytes / 4L;
         long remainder = capacityBytes % 4L;
-        return saturatedAdd(quotient * 3L, (remainder * 3L + 3L) / 4L);
+        return addSaturating(quotient * 3L, (remainder * 3L + 3L) / 4L);
     }
 
     private static long adjustCounter(long current, long delta, String name) {
         if (delta >= 0L) {
-            return saturatedAdd(current, delta);
+            return addSaturating(current, delta);
         }
         if (delta == Long.MIN_VALUE) {
             throw new IllegalStateException(name + " counter underflow");
@@ -364,13 +366,6 @@ public final class InboundMemoryBudget implements AutoCloseable {
             throw new IllegalStateException(name + " counter underflow");
         }
         return current - amount;
-    }
-
-    static long saturatedAdd(long left, long right) {
-        if (left < 0L || right < 0L || left > Long.MAX_VALUE - right) {
-            return Long.MAX_VALUE;
-        }
-        return left + right;
     }
 
     private record Waiter(

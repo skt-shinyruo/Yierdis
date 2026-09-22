@@ -4,6 +4,8 @@ import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.api.DbHealthSnapshot;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
+import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
+
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 
 import java.util.ArrayList;
@@ -72,8 +74,8 @@ public final class YierdisInstanceObservability {
 
         MemoryUsageSnapshot physicalUsage = MemoryUsageSnapshot.ZERO;
         long reserved = 0;
-        int keyCount = 0;
-        int expireCount = 0;
+        long keyCount = 0L;
+        long expireCount = 0L;
         boolean keysStoredOffHeap = false;
         long nativeDefragLastScannedObjects = 0;
         long nativeDefragLastMovedObjects = 0;
@@ -89,7 +91,7 @@ public final class YierdisInstanceObservability {
         long nativeDefragReclaimedPages = 0;
         long nativeLiveObjects = 0;
         long nativeLiveRegions = 0;
-        int pendingHashTableCount = 0;
+        long pendingHashTableCount = 0L;
         String lastHashTableMaintenanceStopReason = "COMPLETE";
         boolean sharedNativeRuntime = instance.config().maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.GLOBAL;
 
@@ -110,39 +112,39 @@ public final class YierdisInstanceObservability {
                 physicalUsage = physicalUsage.plus(dbUsage);
             }
             reserved = addSaturating(reserved, Math.max(0L, s.reservedBytes()));
-            keyCount = addSaturating(keyCount, s.keyCount());
-            expireCount = addSaturating(expireCount, s.expireCount());
+            keyCount = addSaturating(keyCount, Math.max(0L, s.keyCount()));
+            expireCount = addSaturating(expireCount, Math.max(0L, s.expireCount()));
             keysStoredOffHeap |= s.keysStoredOffHeap();
-            nativeDefragLastScannedObjects = addSaturating(nativeDefragLastScannedObjects, s.nativeDefragLastScannedObjects());
-            nativeDefragLastMovedObjects = addSaturating(nativeDefragLastMovedObjects, s.nativeDefragLastMovedObjects());
-            nativeDefragLastMovedBytes = addSaturating(nativeDefragLastMovedBytes, s.nativeDefragLastMovedBytes());
-            nativeDefragLastSkippedPinnedObjects = addSaturating(nativeDefragLastSkippedPinnedObjects, s.nativeDefragLastSkippedPinnedObjects());
-            nativeDefragLastSkippedBudgetObjects = addSaturating(nativeDefragLastSkippedBudgetObjects, s.nativeDefragLastSkippedBudgetObjects());
-            nativeDefragLastFailedMoves = addSaturating(nativeDefragLastFailedMoves, s.nativeDefragLastFailedMoves());
-            nativeDefragMovedBytes = addSaturating(nativeDefragMovedBytes, s.nativeDefragMovedBytes());
-            nativeDefragSkippedPinnedObjects = addSaturating(nativeDefragSkippedPinnedObjects, s.nativeDefragSkippedPinnedObjects());
-            nativeDefragQuarantinedObjects = addSaturating(nativeDefragQuarantinedObjects, s.nativeDefragQuarantinedObjects());
-            nativeDefragQuarantineBytes = addSaturating(nativeDefragQuarantineBytes, s.nativeDefragQuarantineBytes());
-            nativeStaleHandleDetections = addSaturating(nativeStaleHandleDetections, s.nativeStaleHandleDetections());
-            nativeDefragReclaimedPages = addSaturating(nativeDefragReclaimedPages, s.nativeDefragReclaimedPages());
-            nativeLiveObjects = addSaturating(nativeLiveObjects, s.nativeLiveObjects());
+            nativeDefragLastScannedObjects = addSaturating(nativeDefragLastScannedObjects, Math.max(0L, s.nativeDefragLastScannedObjects()));
+            nativeDefragLastMovedObjects = addSaturating(nativeDefragLastMovedObjects, Math.max(0L, s.nativeDefragLastMovedObjects()));
+            nativeDefragLastMovedBytes = addSaturating(nativeDefragLastMovedBytes, Math.max(0L, s.nativeDefragLastMovedBytes()));
+            nativeDefragLastSkippedPinnedObjects = addSaturating(nativeDefragLastSkippedPinnedObjects, Math.max(0L, s.nativeDefragLastSkippedPinnedObjects()));
+            nativeDefragLastSkippedBudgetObjects = addSaturating(nativeDefragLastSkippedBudgetObjects, Math.max(0L, s.nativeDefragLastSkippedBudgetObjects()));
+            nativeDefragLastFailedMoves = addSaturating(nativeDefragLastFailedMoves, Math.max(0L, s.nativeDefragLastFailedMoves()));
+            nativeDefragMovedBytes = addSaturating(nativeDefragMovedBytes, Math.max(0L, s.nativeDefragMovedBytes()));
+            nativeDefragSkippedPinnedObjects = addSaturating(nativeDefragSkippedPinnedObjects, Math.max(0L, s.nativeDefragSkippedPinnedObjects()));
+            nativeDefragQuarantinedObjects = addSaturating(nativeDefragQuarantinedObjects, Math.max(0L, s.nativeDefragQuarantinedObjects()));
+            nativeDefragQuarantineBytes = addSaturating(nativeDefragQuarantineBytes, Math.max(0L, s.nativeDefragQuarantineBytes()));
+            nativeStaleHandleDetections = addSaturating(nativeStaleHandleDetections, Math.max(0L, s.nativeStaleHandleDetections()));
+            nativeDefragReclaimedPages = addSaturating(nativeDefragReclaimedPages, Math.max(0L, s.nativeDefragReclaimedPages()));
+            nativeLiveObjects = addSaturating(nativeLiveObjects, Math.max(0L, s.nativeLiveObjects()));
             if (sharedNativeRuntime) {
                 nativeLiveRegions = Math.max(nativeLiveRegions, Math.max(0L, s.nativeLiveRegions()));
             } else {
-                nativeLiveRegions = addSaturating(nativeLiveRegions, s.nativeLiveRegions());
+                nativeLiveRegions = addSaturating(nativeLiveRegions, Math.max(0L, s.nativeLiveRegions()));
             }
-            pendingHashTableCount = addSaturating(pendingHashTableCount, s.pendingHashTableCount());
+            pendingHashTableCount = addSaturating(pendingHashTableCount, Math.max(0L, s.pendingHashTableCount()));
             if (!"COMPLETE".equals(s.lastHashTableMaintenanceStopReason())) {
                 lastHashTableMaintenanceStopReason = s.lastHashTableMaintenanceStopReason();
             }
         }
 
-        long offHeap = MemoryUsageSnapshot.addSaturating(
+        long offHeap = addSaturating(
                 physicalUsage.nativeMetadataCommittedBytes(),
                 physicalUsage.nativeDataCommittedBytes()
         );
         long totalEstimatedBytes = physicalUsage.effectiveBytesForMaxmemory();
-        long effectiveUsedBytesForMaxmemory = MemoryUsageSnapshot.addSaturating(totalEstimatedBytes, reserved);
+        long effectiveUsedBytesForMaxmemory = addSaturating(totalEstimatedBytes, reserved);
 
         return new YierdisMemoryStats(
                 instance.config().maxmemoryBytes(),
@@ -153,8 +155,8 @@ public final class YierdisInstanceObservability {
                 effectiveUsedBytesForMaxmemory,
                 true,
                 keysStoredOffHeap,
-                keyCount,
-                expireCount,
+                (int) Math.min(Integer.MAX_VALUE, keyCount),
+                (int) Math.min(Integer.MAX_VALUE, expireCount),
                 totalEstimatedBytes,
                 nativeDefragLastScannedObjects,
                 nativeDefragLastMovedObjects,
@@ -172,7 +174,7 @@ public final class YierdisInstanceObservability {
                 physicalUsage.nativeDataCommittedBytes(),
                 physicalUsage.nativeDataLiveBytes(),
                 physicalUsage.nativeReclaimableBytes(),
-                pendingHashTableCount,
+                (int) Math.min(Integer.MAX_VALUE, pendingHashTableCount),
                 lastHashTableMaintenanceStopReason,
                 nativeLiveObjects,
                 nativeLiveRegions
@@ -194,25 +196,5 @@ public final class YierdisInstanceObservability {
 
     private static YierdisMemoryStats emptyStats(long maxmemoryBytes, boolean offHeapIncludedInMaxmemory) {
         return YierdisMemoryStats.empty(maxmemoryBytes, offHeapIncludedInMaxmemory);
-    }
-
-    private static long addSaturating(long left, long right) {
-        if (right <= 0) {
-            return left;
-        }
-        if (left >= Long.MAX_VALUE - right) {
-            return Long.MAX_VALUE;
-        }
-        return left + right;
-    }
-
-    private static int addSaturating(int left, int right) {
-        if (right <= 0) {
-            return left;
-        }
-        if (left >= Integer.MAX_VALUE - right) {
-            return Integer.MAX_VALUE;
-        }
-        return left + right;
     }
 }

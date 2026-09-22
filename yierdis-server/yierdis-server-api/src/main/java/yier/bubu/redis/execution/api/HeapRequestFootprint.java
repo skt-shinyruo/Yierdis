@@ -1,5 +1,7 @@
 package yier.bubu.redis.execution.api;
 
+import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
+
 import java.util.Objects;
 
 /**
@@ -22,10 +24,10 @@ public final class HeapRequestFootprint {
     /** 整棵 argv 对象图的估算字节数；long 域饱和，供准入计费使用。 */
     public static long estimateBytes(byte[][] argv) {
         Objects.requireNonNull(argv, "argv");
-        long total = saturatedAdd(OUTER_ARGV_BYTES + REQUEST_FIXED_BYTES, (long) argv.length * REFERENCE_BYTES);
+        long total = addSaturating(OUTER_ARGV_BYTES + REQUEST_FIXED_BYTES, (long) argv.length * REFERENCE_BYTES);
         for (byte[] arg : argv) {
             if (arg != null) {
-                total = saturatedAdd(total, ARRAY_HEADER_BYTES + align8(arg.length));
+                total = addSaturating(total, ARRAY_HEADER_BYTES + align8(arg.length));
             }
         }
         return total;
@@ -44,12 +46,12 @@ public final class HeapRequestFootprint {
 
     /** 外层 argv 数组头与全部引用槽位的开销；long 域饱和，供准入计费使用。 */
     public static long outerArgvBytes(int argc) {
-        return saturatedAdd(OUTER_ARGV_BYTES, saturatedMultiply(Math.max(0, argc), REFERENCE_BYTES));
+        return addSaturating(OUTER_ARGV_BYTES, saturatedMultiply(Math.max(0, argc), REFERENCE_BYTES));
     }
 
     /** 单个非空参数的数组头与 8 对齐 payload；long 域饱和，供准入计费使用。 */
     public static long argumentBytes(int argLength) {
-        return saturatedAdd(ARRAY_HEADER_BYTES, align8(Math.max(0, argLength)));
+        return addSaturating(ARRAY_HEADER_BYTES, align8(Math.max(0, argLength)));
     }
 
     /** 流式解析在拿到 argc 时的起始 retained bytes：请求对象 + 外层数组头 + 全部引用槽位。 */
@@ -82,9 +84,5 @@ public final class HeapRequestFootprint {
             return 0L;
         }
         return left > Long.MAX_VALUE / right ? Long.MAX_VALUE : left * right;
-    }
-
-    private static long saturatedAdd(long left, long right) {
-        return left >= Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
     }
 }

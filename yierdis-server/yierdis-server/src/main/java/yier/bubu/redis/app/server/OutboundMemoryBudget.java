@@ -1,5 +1,7 @@
 package yier.bubu.redis.app.server;
 
+import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
+
 import java.util.ArrayDeque;
 import java.util.IdentityHashMap;
 import java.util.Map;
@@ -93,7 +95,7 @@ public final class OutboundMemoryBudget implements AutoCloseable {
             }
 
             if (!fitsSingle(bytes, singleReplyLimitBytes) || !fitsConnection(connection, bytes) || !fitsGlobal(bytes)) {
-                capacityRejectedReservations = saturatedAdd(capacityRejectedReservations, 1L);
+                capacityRejectedReservations = addSaturating(capacityRejectedReservations, 1L);
                 return Optional.empty();
             }
             if (waiter != null) {
@@ -126,7 +128,7 @@ public final class OutboundMemoryBudget implements AutoCloseable {
             }
             requireAttached(connection);
             if (!fitsSingle(bytes, singleReplyLimitBytes) || bytes > connection.capacityBytes() || bytes > capacityBytes) {
-                capacityRejectedReservations = saturatedAdd(capacityRejectedReservations, 1L);
+                capacityRejectedReservations = addSaturating(capacityRejectedReservations, 1L);
                 return false;
             }
 
@@ -204,7 +206,7 @@ public final class OutboundMemoryBudget implements AutoCloseable {
                 if (!waiter.granted || waiters.peekFirst() != waiter
                         || waiter.lease != lease
                         || waiter.bytes != bytes || waiter.singleReplyLimitBytes != singleReplyLimitBytes) {
-                    capacityRejectedReservations = saturatedAdd(capacityRejectedReservations, 1L);
+                    capacityRejectedReservations = addSaturating(capacityRejectedReservations, 1L);
                     return false;
                 }
             } else if (hasGrantedWaiterLocked()) {
@@ -213,7 +215,7 @@ public final class OutboundMemoryBudget implements AutoCloseable {
             if (!fitsWithin(lease.reservedBytes(), bytes, singleReplyLimitBytes)
                     || !fitsConnection(connection, bytes)
                     || !fitsGlobal(bytes)) {
-                capacityRejectedReservations = saturatedAdd(capacityRejectedReservations, 1L);
+                capacityRejectedReservations = addSaturating(capacityRejectedReservations, 1L);
                 return false;
             }
             if (waiter != null) {
@@ -250,7 +252,7 @@ public final class OutboundMemoryBudget implements AutoCloseable {
             if (!fitsWithin(lease.reservedBytes(), bytes, singleReplyLimitBytes)
                     || !fitsWithin(lease.reservedBytes(), bytes, connection.capacityBytes())
                     || !fitsWithin(lease.reservedBytes(), bytes, capacityBytes)) {
-                capacityRejectedReservations = saturatedAdd(capacityRejectedReservations, 1L);
+                capacityRejectedReservations = addSaturating(capacityRejectedReservations, 1L);
                 return false;
             }
 
@@ -495,13 +497,6 @@ public final class OutboundMemoryBudget implements AutoCloseable {
         if (singleReplyLimitBytes <= 0L) {
             throw new IllegalArgumentException("singleReplyLimitBytes must be > 0");
         }
-    }
-
-    private static long saturatedAdd(long left, long right) {
-        if (left < 0L || right < 0L || left > Long.MAX_VALUE - right) {
-            return Long.MAX_VALUE;
-        }
-        return left + right;
     }
 
     private static void invokeCallback(Runnable callback) {

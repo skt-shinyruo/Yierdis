@@ -1,5 +1,7 @@
 package yier.bubu.redis.protocol.resp.netty;
 
+import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
+
 import io.netty.buffer.ByteBuf;
 
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -33,7 +35,7 @@ final class InboundBufferLease implements AutoCloseable {
     }
 
     static long chargeForCapacity(int capacity) {
-        return InboundMemoryBudget.saturatedAdd(Math.max(0, capacity), COMPONENT_OVERHEAD_BYTES);
+        return addSaturating(Math.max(0, capacity), COMPONENT_OVERHEAD_BYTES);
     }
 
     static long chargeForRetainedBuffer(ByteBuf buffer) {

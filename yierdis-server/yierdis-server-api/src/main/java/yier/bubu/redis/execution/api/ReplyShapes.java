@@ -1,5 +1,7 @@
 package yier.bubu.redis.execution.api;
 
+import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
+
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Objects;
@@ -93,16 +95,12 @@ public final class ReplyShapes {
             throw new IllegalArgumentException(kind + " requires field/value pairs");
         }
 
+        // 子形状可能分别持有独立来源；聚合预留必须保守，溢出时不能回绕成较小额度。
         long retained = 0L;
         for (ReplyShape element : copied) {
-            retained = saturatedAdd(retained, element.retainedSourceBytes());
+            retained = addSaturating(retained, element.retainedSourceBytes());
         }
         return new ReplyShape.Aggregate(kind, copied, retained);
-    }
-
-    // 子形状可能分别持有独立来源；聚合预留必须保守，溢出时不能回绕成较小额度。
-    private static long saturatedAdd(long left, long right) {
-        return left > Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
     }
 
     private static int asciiLength(String value) {

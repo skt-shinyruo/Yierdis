@@ -1,5 +1,7 @@
 package yier.bubu.redis.app.server;
 
+import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
+
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFutureListener;
@@ -28,11 +30,7 @@ final class ChildChannelRegistry {
             long rejectedMaxClientsConnections
     ) {
         long rejectedConnections() {
-            return saturatedAdd(rejectedClosingConnections, rejectedMaxClientsConnections);
-        }
-
-        private static long saturatedAdd(long left, long right) {
-            return left > Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
+            return addSaturating(rejectedClosingConnections, rejectedMaxClientsConnections);
         }
     }
 

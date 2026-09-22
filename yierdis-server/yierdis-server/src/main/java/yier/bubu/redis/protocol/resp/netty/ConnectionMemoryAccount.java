@@ -1,5 +1,7 @@
 package yier.bubu.redis.protocol.resp.netty;
 
+import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
+
 /**
  * 不持有 Netty 对象的连接内存计费身份，可在最后一个请求视图关闭时继续归还额度。
  */
@@ -28,7 +30,7 @@ final class ConnectionMemoryAccount {
     }
 
     void addReserved(long bytes) {
-        reservedBytes = InboundMemoryBudget.saturatedAdd(reservedBytes, bytes);
+        reservedBytes = addSaturating(reservedBytes, bytes);
     }
 
     void releaseReserved(long bytes) {

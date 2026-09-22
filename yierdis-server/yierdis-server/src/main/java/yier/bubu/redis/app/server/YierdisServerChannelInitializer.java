@@ -1,5 +1,7 @@
 package yier.bubu.redis.app.server;
 
+import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
+
 import java.util.function.BiFunction;
 
 // Netty server 连接初始化器：显式装配 decode→handle 的 pipeline，并在连接建立时绑定连接态（协议会话与执行器调度状态）。
@@ -190,16 +192,12 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
 
     static long perConnectionHardLimit(YierdisServerRuntimeConfig config) {
         Objects.requireNonNull(config, "config");
-        long total = saturatedAdd(Math.max(0L, config.protocolMaxCommandBytes()), 48L);
-        return saturatedAdd(total, saturatedMultiply(Math.max(0L, config.protocolMaxArgs()), 32L));
+        long total = addSaturating(Math.max(0L, config.protocolMaxCommandBytes()), 48L);
+        return addSaturating(total, saturatedMultiply(Math.max(0L, config.protocolMaxArgs()), 32L));
     }
 
     private static int receiveBufferCapacity(YierdisServerRuntimeConfig config) {
         return Math.max(1, Math.min(8 * 1024, config.protocolMaxCommandBytes()));
-    }
-
-    private static long saturatedAdd(long left, long right) {
-        return left > Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
     }
 
     private static long saturatedMultiply(long left, long right) {

@@ -1,5 +1,7 @@
 package yier.bubu.redis.execution.api;
 
+import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
+
 /**
  * 回复编码和保留来源在写入前必须取得的上界额度。
  *
@@ -30,13 +32,6 @@ public record ReplyPlan(
     }
 
     public long totalUpperBoundBytes() {
-        return saturatedAdd(encodedUpperBoundBytes, retainedSourceBytes);
-    }
-
-    static long saturatedAdd(long left, long right) {
-        if (left < 0L || right < 0L || left > Long.MAX_VALUE - right) {
-            return Long.MAX_VALUE;
-        }
-        return left + right;
+        return addSaturating(encodedUpperBoundBytes, retainedSourceBytes);
     }
 }
