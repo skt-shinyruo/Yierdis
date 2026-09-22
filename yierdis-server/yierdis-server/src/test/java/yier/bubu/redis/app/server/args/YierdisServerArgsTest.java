@@ -158,36 +158,36 @@ public class YierdisServerArgsTest {
 
     @Test
     public void replyCapacityArgsRejectInvalidIndividualAndRelativeLimits() {
-        assertInvalidReplyConfig("--replyGlobalCapacityBytes", "0");
-        assertInvalidReplyConfig("--replyGlobalCapacityBytes", "-1");
-        assertInvalidReplyConfig("--replyPerConnectionCapacityBytes", "0");
-        assertInvalidReplyConfig("--replyPerConnectionCapacityBytes", "-1");
-        assertInvalidReplyConfig("--replyMaxTotalBytes", "0");
-        assertInvalidReplyConfig("--replyMaxTotalBytes", "-1");
-        assertInvalidReplyConfig("--replyChunkPayloadBytes", "0");
-        assertInvalidReplyConfig("--replyChunkPayloadBytes", "-1");
-        assertInvalidReplyConfig("--replyControlReservationBytes", "0");
-        assertInvalidReplyConfig("--replyControlReservationBytes", "-1");
-        assertInvalidReplyConfig(
+        assertInvalidArgs("--replyGlobalCapacityBytes", "0");
+        assertInvalidArgs("--replyGlobalCapacityBytes", "-1");
+        assertInvalidArgs("--replyPerConnectionCapacityBytes", "0");
+        assertInvalidArgs("--replyPerConnectionCapacityBytes", "-1");
+        assertInvalidArgs("--replyMaxTotalBytes", "0");
+        assertInvalidArgs("--replyMaxTotalBytes", "-1");
+        assertInvalidArgs("--replyChunkPayloadBytes", "0");
+        assertInvalidArgs("--replyChunkPayloadBytes", "-1");
+        assertInvalidArgs("--replyControlReservationBytes", "0");
+        assertInvalidArgs("--replyControlReservationBytes", "-1");
+        assertInvalidArgs(
                 "--replyControlReservationBytes",
                 Integer.toString(YierdisServerRuntimeConfig.REPLY_FIXED_OVERHEAD_BYTES)
         );
-        assertInvalidReplyConfig("--replyControlReservationBytes", "1538");
-        assertInvalidReplyConfig("--replyDrainTimeoutMillis", "0");
-        assertInvalidReplyConfig("--replyDrainTimeoutMillis", "-1");
-        assertInvalidReplyConfig(
+        assertInvalidArgs("--replyControlReservationBytes", "1538");
+        assertInvalidArgs("--replyDrainTimeoutMillis", "0");
+        assertInvalidArgs("--replyDrainTimeoutMillis", "-1");
+        assertInvalidArgs(
                 "--replyControlReservationBytes", "4097",
                 "--replyMaxTotalBytes", "4096"
         );
-        assertInvalidReplyConfig(
+        assertInvalidArgs(
                 "--replyMaxTotalBytes", "4097",
                 "--replyPerConnectionCapacityBytes", "4096"
         );
-        assertInvalidReplyConfig(
+        assertInvalidArgs(
                 "--replyPerConnectionCapacityBytes", "8193",
                 "--replyGlobalCapacityBytes", "8192"
         );
-        assertInvalidReplyConfig(
+        assertInvalidArgs(
                 "--replyChunkPayloadBytes", "65536",
                 "--replyControlReservationBytes", "4096",
                 "--replyMaxTotalBytes", Integer.toString(
@@ -218,6 +218,24 @@ public class YierdisServerArgsTest {
     public void bytesLowWithoutBytesHighIsRejected() {
         YierdisServerArgs args = parse("--backpressureBytesHigh", "0", "--backpressureBytesLow", "1");
         assertThrows(IllegalArgumentException.class, args::normalizeAndValidate);
+    }
+
+    @Test
+    public void executorLimitArgsRejectInvalidValues() {
+        assertInvalidArgs("--executorQueueCapacity", "0");
+        assertInvalidArgs("--executorQueueCapacity", "-1");
+        assertInvalidArgs("--executorQueueMaxBytes", "-1");
+        assertInvalidArgs("--backpressureHigh", "0");
+        assertInvalidArgs("--backpressureHigh", "-1");
+        assertInvalidArgs("--backpressureLow", "-1");
+        assertInvalidArgs("--backpressureHigh", "10", "--backpressureLow", "11");
+        assertInvalidArgs("--backpressureBytesHigh", "-1");
+        assertInvalidArgs("--backpressureBytesLow", "-1");
+        assertInvalidArgs("--backpressureBytesHigh", "10", "--backpressureBytesLow", "11");
+        assertInvalidArgs("--executorMaxDrain", "0");
+        assertInvalidArgs("--executorMaxDrain", "-1");
+        assertInvalidArgs("--executorDrainMillis", "0");
+        assertInvalidArgs("--executorDrainMillis", "-1");
     }
 
     @Test
@@ -326,7 +344,7 @@ public class YierdisServerArgsTest {
         return args;
     }
 
-    private static void assertInvalidReplyConfig(String... argv) {
+    private static void assertInvalidArgs(String... argv) {
         YierdisServerArgs args = parse(argv);
         assertThrows(IllegalArgumentException.class, args::normalizeAndValidate);
     }

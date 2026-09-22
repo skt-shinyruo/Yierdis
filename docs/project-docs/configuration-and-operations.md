@@ -15,9 +15,9 @@ argv
   -> YierdisServerBootstrap
 ```
 
-`YierdisServerArgs` 用 picocli 声明 server 参数、默认值和 usage。`normalizeAndValidate()` 只处理 CLI 归一化和派生语义，例如 `--noCleanup` 会把 `cleanupIntervalMillis` 归零，字符串枚举会归一化成稳定 argv 值。网络、协议、reply、内存和 maintenance 约束由 `YierdisServerRuntimeConfig` 的构造器统一校验；executor 队列与背压约束由 `CommandExecutorConfig` 校验。`normalizeAndValidate()` 通过构造这两个领域配置触发校验，避免 CLI、bootstrap 和 embedded 路径各维护一套规则。
+`YierdisServerArgs` 用 picocli 声明 server 参数、默认值和 usage。`normalizeAndValidate()` 只处理 CLI 归一化和派生语义，例如 `--noCleanup` 会把 `cleanupIntervalMillis` 归零，字符串枚举会归一化成稳定 argv 值；三个枚举（executorSchedulingPolicy、maxmemoryScope、maxmemoryPolicy）在这里解析一次并缓存枚举实例，不再经过字符串 round-trip。网络、协议、reply、内存、maintenance 以及 executor 队列与背压约束全部由 `YierdisServerRuntimeConfig` 的构造器统一校验（启动参数的信任边界只有这一处）；`CommandExecutorConfig` 只承载已校验的值，不再重复校验。
 
-`toRuntimeConfig()` 把已归一化参数转成 `YierdisServerRuntimeConfig` record。这个 record 是 `yierdis-server` 内部后续组装的稳定配置对象，字段已经是 enum、number 和 boolean，不再携带原始 CLI 字符串；`executorConfig()` 直接生成 executor 领域配置。
+`toRuntimeConfig()` 把已归一化参数转成 `YierdisServerRuntimeConfig` record：首次调用会触发 `normalizeAndValidate()` 并缓存结果，后续调用返回同一实例。这个 record 是 `yierdis-server` 内部后续组装的稳定配置对象，字段已经是 enum、number 和 boolean，不再携带原始 CLI 字符串；`executorConfig()` 直接生成 executor 领域配置。
 
 `ServerConfig.fromArgs(...)` 是 CLI 到组合根的边界：解析失败或校验失败时打印 usage，并抛 `YierdisCliException.usageError(...)`；`--help` 打印 usage 并返回 `null`。`YierdisServerBootstrap.start(String... args)` 收到 `null` 会视为没有可启动配置。
 

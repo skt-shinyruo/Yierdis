@@ -2,7 +2,9 @@ package yier.bubu.redis.app.server.args;
 
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
+import yier.bubu.redis.execution.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.resp.RespProtocolLimits;
+import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
 @Command(
@@ -288,25 +290,44 @@ public final class YierdisServerArgs {
     )
     public int keysMaxResults = Integer.MAX_VALUE;
 
+    private SchedulingPolicy parsedExecutorSchedulingPolicy;
+    private YierdisInstanceConfig.MaxmemoryScope parsedMaxmemoryScope;
+    private MaxmemoryPolicy parsedMaxmemoryPolicy;
+    private YierdisServerRuntimeConfig cachedRuntimeConfig;
+
     public void normalizeAndValidate() {
+        if (cachedRuntimeConfig != null) {
+            return;
+        }
         if (noCleanup) {
             cleanupIntervalMillis = 0;
         }
         if (bind != null) {
             bind = bind.trim();
         }
-        executorSchedulingPolicy = normalizeExecutorSchedulingPolicy(executorSchedulingPolicy);
-        maxmemoryScope = normalizeMaxmemoryScope(maxmemoryScope);
-        maxmemoryPolicy = normalizeMaxmemoryPolicy(maxmemoryPolicy);
-        toRuntimeConfig().executorConfig();
+        parsedExecutorSchedulingPolicy = parseExecutorSchedulingPolicy(executorSchedulingPolicy);
+        executorSchedulingPolicy = parsedExecutorSchedulingPolicy.name().toLowerCase(java.util.Locale.ROOT);
+        parsedMaxmemoryScope = YierdisServerRuntimeConfig.parseMaxmemoryScope(maxmemoryScope);
+        maxmemoryScope = parsedMaxmemoryScope == YierdisInstanceConfig.MaxmemoryScope.PER_DB ? "per-db" : "global";
+        parsedMaxmemoryPolicy = MaxmemoryPolicy.parse(maxmemoryPolicy);
+        maxmemoryPolicy = parsedMaxmemoryPolicy.redisName();
+        cachedRuntimeConfig = buildRuntimeConfig();
     }
 
     /**
      * Convert normalized CLI args into the canonical runtime config.
      * <p>
-     * Callers should invoke {@link #normalizeAndValidate()} first so the config reflects stable argv values.
+     * The first call runs {@link #normalizeAndValidate()}, which parses each enum once and builds
+     * the validated record; the cached instance is returned on subsequent calls.
      */
     public YierdisServerRuntimeConfig toRuntimeConfig() {
+        if (cachedRuntimeConfig == null) {
+            normalizeAndValidate();
+        }
+        return cachedRuntimeConfig;
+    }
+
+    private YierdisServerRuntimeConfig buildRuntimeConfig() {
         return new YierdisServerRuntimeConfig(
                 bind,
                 port,
@@ -316,7 +337,7 @@ public final class YierdisServerArgs {
                 ioThreads,
                 executorQueueCapacity,
                 executorQueueMaxBytes,
-                parseExecutorSchedulingPolicy(executorSchedulingPolicy),
+                parsedExecutorSchedulingPolicy,
                 backpressureHighWatermark,
                 backpressureLowWatermark,
                 backpressureBytesHighWatermark,
@@ -339,8 +360,8 @@ public final class YierdisServerArgs {
                 replyControlReservationBytes,
                 replyDrainTimeoutMillis,
                 maxmemoryBytes,
-                YierdisServerRuntimeConfig.parseMaxmemoryScope(maxmemoryScope),
-                MaxmemoryPolicy.parse(maxmemoryPolicy),
+                parsedMaxmemoryScope,
+                parsedMaxmemoryPolicy,
                 maxmemorySamples,
                 evictionTimeLimitMillis,
                 expireCleanupTimeLimitMillis,
@@ -355,33 +376,17 @@ public final class YierdisServerArgs {
         );
     }
 
-    private static String normalizeExecutorSchedulingPolicy(String rawValue) {
-        return parseExecutorSchedulingPolicy(rawValue).name().toLowerCase(java.util.Locale.ROOT);
-    }
-
-    private static yier.bubu.redis.execution.executor.SchedulingPolicy parseExecutorSchedulingPolicy(
-            String rawValue
-    ) {
+    private static SchedulingPolicy parseExecutorSchedulingPolicy(String rawValue) {
         if (rawValue == null || rawValue.isBlank()) {
             throw new IllegalArgumentException("executorSchedulingPolicy must not be blank");
         }
         try {
-            return yier.bubu.redis.execution.executor.SchedulingPolicy.valueOf(
+            return SchedulingPolicy.valueOf(
                     rawValue.trim().toUpperCase(java.util.Locale.ROOT)
             );
         } catch (IllegalArgumentException ignored) {
             throw new IllegalArgumentException("unsupported executorSchedulingPolicy: " + rawValue);
         }
-    }
-
-    private static String normalizeMaxmemoryScope(String rawValue) {
-        return YierdisServerRuntimeConfig.parseMaxmemoryScope(rawValue) == yier.bubu.redis.runtime.api.YierdisInstanceConfig.MaxmemoryScope.PER_DB
-                ? "per-db"
-                : "global";
-    }
-
-    private static String normalizeMaxmemoryPolicy(String rawValue) {
-        return MaxmemoryPolicy.parse(rawValue).redisName();
     }
 
     private static long deriveProtocolGlobalInFlightBytes(long executorQueueMaxBytes, long configuredBytes) {
