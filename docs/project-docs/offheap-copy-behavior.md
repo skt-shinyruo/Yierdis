@@ -4,7 +4,7 @@
 
 Yierdis 的 native memory 主要降低稳态 heap 占用、改善 GC 压力并让部分 read/write-back 可以流式处理；只要接口边界要求 `byte[]`、`List<byte[]>`、`String`、snapshot 或长期 ownership，copy 仍然会发生。
 
-相关背景见 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md) 和 [`native-memory-runtime.md`](./native-memory-runtime.md)。
+相关背景见 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)、[`native-memory-runtime.md`](./native-memory-runtime.md) 和 [`copy-cost-and-kernel-boundary.md`](./copy-cost-and-kernel-boundary.md)：前者说明 bytes 抽象，中者说明 native 生命周期，后者说明这些 copy 的成本口径以及内核切换真正发生在哪里。
 
 ## 判定规则：什么时候复制，什么时候不复制
 
