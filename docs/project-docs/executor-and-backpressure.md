@@ -1,6 +1,6 @@
 # Executor 与背压
 
-本文解释命令为什么不直接在 I/O 线程里执行，以及 executor 如何用队列、预算、调度和 Netty 读写控制保护系统。
+命令为什么不直接在 I/O 线程里执行，以及 executor 如何用队列、预算、调度和 Netty 读写控制保护系统，是下面几节要回答的问题。
 
 Yierdis 把“收包”和“执行命令”分开：Netty I/O 线程只解析并提交请求，`CommandExecutor` 在 owner executor 线程里串行执行 DB 访问；队列容量、queued bytes、连接 pending、全局 backlog 水位、Netty output writability 和 `autoRead` 一起形成背压。
 
@@ -9,7 +9,7 @@ Yierdis 把“收包”和“执行命令”分开：Netty I/O 线程只解析�
 执行器链路的核心对象是：
 
 - `CommandExecutor`：总装配层，持有 budget、task queue、submitter、drain loop、execution support 和 backpressure controller。
-- `CommandExecutorSubmitter`：提交入口，负责 fail-fast reject、预算 reserve、连接 pending 统计和调度 drain。
+- `CommandExecutorSubmitter`：提交入口，承担 fail-fast reject、预算 reserve、连接 pending 统计和调度 drain。
 - `ExecutorBacklogBudget`：全局 backlog 预算，限制 queue capacity 和 queued bytes，并给全局背压提供高低水位。
 - `ExecutorTaskQueue`：调度队列，支持 `GLOBAL` 和 `FAIR`。
 - `CommandExecutorDrainLoop`：cooperative drain loop，真正 poll task 并执行命令。
@@ -56,7 +56,7 @@ queue slot 或 bytes budget 暂时不足会返回 `Unavailable`，不是终态�
 
 这里的 retained bytes 是请求的 heap footprint 估算（见 glossary 的 retained bytes 条目），包含请求对象、argv 数组与槽位、每个参数的数组头和对齐 payload；因此高 `argc` 小参数命令比纯 payload 求和更早触及 bytes cap。
 
-admission 时在同一个临界区检查 task 与 byte 上限，两项都满足才一起增加计数，因此不存在只取得其中一项再回滚的中间状态。尚未 publish 的 admission 可以显式释放，publish 失败会回收 task 或关闭连接。命令执行完成后，`CommandExecutorExecutionSupport` 在同一把锁下归还两项预算并减少连接 pending 状态；满足当前 task/byte 条件的 capacity waiter 会在锁内摘下、锁外回调。
+admission 时在同一个临界区检查 task 与 byte 上限，两项都满足才一起增加计数，不存在只取得其中一项再回滚的中间状态。尚未 publish 的 admission 可以显式释放，publish 失败会回收 task 或关闭连接。命令执行完成后，`CommandExecutorExecutionSupport` 在同一把锁下归还两项预算并减少连接 pending 状态；满足当前 task/byte 条件的 capacity waiter 会在锁内摘下、锁外回调。
 
 全局背压水位由 budget 根据硬上限推导：
 
@@ -73,7 +73,7 @@ admission 时在同一个临界区检查 task 与 byte 上限，两项都满足�
 
 `GLOBAL` 策略在队列锁内使用单个 `ArrayDeque`，所有连接共享 FIFO backlog。reply capacity 阻塞的头部单独保留，恢复或 stale reprepare 时仍先于后续任务执行。
 
-`FAIR` 策略由同一个 `ExecutorTaskQueue` 用 identity-keyed 私有 state map 保存每个连接的 FIFO、阻塞头和 `scheduled` flag，再用 `activeKeys` 做 round-robin。空 state 会在不再 active 或 blocked 后删除，`ExecutionConnectionContext` 不暴露队列内部状态。生产 key 是 `NettyExecutionConnection`。
+`FAIR` 策略在同一个 `ExecutorTaskQueue` 内用 identity-keyed 私有 state map 保存每个连接的 FIFO、阻塞头和 `scheduled` flag，再用 `activeKeys` 做 round-robin。空 state 会在不再 active 或 blocked 后删除，`ExecutionConnectionContext` 不暴露队列内部状态。生产 key 是 `NettyExecutionConnection`。
 
 `FAIR` 的目标不是让命令并发执行，而是在多连接竞争时避免某个连接长期霸占 drain loop。
 
@@ -89,20 +89,20 @@ admission 时在同一个临界区检查 task 与 byte 上限，两项都满足�
 单个 task 执行的大致顺序是：
 
 1. 检查连接是否 active / closing。
-2. 通过 `CommandDispatcher.prepare(session, request)` 准备 `PreparedCommand`，并根据 reservation shape 生成 reply plan。
+2. 调用 `CommandDispatcher.prepare(session, request)` 准备 `PreparedCommand`，并根据 reservation shape 生成 reply plan。
 3. 尝试预留 reply capacity；暂时不足时保留 prepared state 并等待容量回调。
 4. 调用 `validateBeforeExecute()`；stale 时关闭并重新 prepare。
 5. 把同一个 `CommandSession` 交给 `PreparedCommand.execute(...)`，并取得 `CommandResult`。
 6. 执行成功后创建 `RedisReplyWriter`，由 `RedisReplyRenderer` 渲染 `CommandResult.reply()`；`closeAfterReply` 为真时先把连接标为 closing，再把 reply 标为 ready。
 7. 终态 finally 中释放 prepared command、request、backlog budget 和 connection pending 状态。
 
-executor 不直接 write 或 flush transport。命令把 reply slot 标记为 READY 后，`ConnectionReplySequencer` 在连接 event loop 上按接收顺序写出连续 READY 的槽位，并为这一轮写出统一 flush；该过程不依赖 executor drain tick。
+executor 不直接 write 或 flush transport。命令把 reply slot 标记为 READY 后，`ConnectionReplySequencer` 在连接 event loop 上按接收顺序写出连续 READY 的槽位，并在这一轮写出后统一 flush；该过程不依赖 executor drain tick。
 
 ## 执行支持和回包写出
 
-`CommandExecutorExecutionSupport` 是 executor 与命令准备、语义结果和 I/O adapter 的连接层。生产环境直接把 `CommandDispatcher::prepare` 作为 `BiFunction<CommandSession, ExecutionRequest, PreparedCommand>` 注入 executor。它负责：
+`CommandExecutorExecutionSupport` 是 executor 与命令准备、语义结果和 I/O adapter 的连接层。生产环境直接把 `CommandDispatcher::prepare` 作为 `BiFunction<CommandSession, ExecutionRequest, PreparedCommand>` 注入 executor。职责包括：
 
-- 通过 reply slot 的 sink 写入语义结果；通过 I/O adapter 注册连接关闭监听，并在结果未知等终止路径关闭 transport。
+- 把语义结果写进 reply slot 的 sink；通过 I/O adapter 注册连接关闭监听，并在结果未知等终止路径关闭 transport。
 - 从 `ExecutionConnection` 获取 `EngineSession`。
 - 调用 `CommandDispatcher.prepare(session, request)`，并按 `PreparedCommand.reservationShape()` 规划/预留容量。
 - 容量成功后校验 `PreparedCommand`，再使用当前 `CommandSession` 执行，得到一个 `CommandResult`。
@@ -113,7 +113,7 @@ executor 不直接 write 或 flush transport。命令把 reply slot 标记为 RE
 
 `NettyExecutionConnection` 把 Netty `Channel`、`EngineSession` 和 `ExecutionConnectionContext` 绑在一起。`EngineSession` 只拥有当前连接的 DB index、协议、事务、客户端元数据和连接统计；命令查找与执行语义由 dispatcher/prepared command 负责。事务、连接统计和 close-after-reply 都通过这个 connection root 传递，executor core 因此不需要直接依赖 Netty class。
 
-`getOrCreate(...)` 通过 channel attr 保证同一条连接只拿到一个 root；`markClosing()` 会先把 `ExecutionConnectionContext` 置为 closing，再丢弃 `EngineSession` 里的事务状态，所以 `QUIT`、channel close 或 close-after-reply 不会留下继续排队的 snapshot。FAIR 调度也把它当作 per-connection key，而不是直接用 `Channel`。
+`getOrCreate(...)` 用 channel attr 保证同一条连接只拿到一个 root；`markClosing()` 会先把 `ExecutionConnectionContext` 置为 closing，再丢弃 `EngineSession` 里的事务状态，所以 `QUIT`、channel close 或 close-after-reply 不会留下继续排队的 snapshot。FAIR 调度也把它当作 per-connection key，而不是直接用 `Channel`。
 
 ## 背压来源
 
@@ -129,11 +129,9 @@ executor 路径有五类输入暂停来源。
 
 第五类是 Netty output writability。server 配置 `client-output-buffer-limit-bytes` 后，Netty channel 有 `WriteBufferWaterMark`。channel 变为不可写时，`WriteBufferBackpressureHandler` 调用 `CommandExecutor.onTransportUnwritable(...)`，executor 关闭该连接 `autoRead`；持续不可写超过 `client-output-buffer-over-limit-millis` 时，server 经 `NettyExecutionConnection.initiateClose()` 关闭慢客户端（先收敛 closing 语义，再关闭 transport）。channel 恢复可写时，`onTransportWritable(...)` 调回 owner executor，由 execution support 统一判断是否恢复输入。
 
-executor 的队列、字节、连接水位、reply capacity 和 transport 信号都通过 `ExecutorBackpressureController` 协调实际输入开关；controller 直接读取连接上下文中的独立暂停状态，并调用 `ExecutionIoAdapter`，避免恢复一个原因时覆盖另一个仍有效的原因。ingress pending deque 还会通过 `InboundReadCreditHandler` 记录 executor-admission 暂停，直到 pending submission 真正发布完毕。
+executor 的队列、字节、连接水位、reply capacity 和 transport 信号都通过 `ExecutorBackpressureController` 协调实际输入开关；controller 直接读取连接上下文中的独立暂停状态，并调用 `ExecutionIoAdapter`，避免恢复一个原因时覆盖另一个仍有效的原因。ingress pending deque 则由 `InboundReadCreditHandler` 记录 executor-admission 暂停，直到 pending submission 真正发布完毕。
 
 ## `autoRead`、writability 和 close-after-reply
-
-需要明确写出单连接 pending、queued bytes、channel writability 和 flush/close 之间的关系，不要只停留在“有背压”这一层。
 
 提交阶段先发生的是 backlog 和连接统计：
 
@@ -162,7 +160,7 @@ executor 的队列、字节、连接水位、reply capacity 和 transport 信号
 - `pendingBytes <= backpressureBytesLowWatermark`（启用 bytes 水位时）
 - 全局 backlog 已回落，且 transport 当前可写
 
-这也是为什么“reply 已经写完”和“连接可以重新收包”不是一回事：前者只说明当前输出缓冲已经进入 flush/close 路径，后者还要同时满足本地 backlog、全局 backlog 和 Netty writability 三层条件。
+可见“reply 已经写完”与“连接可以重新收包”并不等价：前者只说明当前输出缓冲已经进入 flush/close 路径，后者还要同时满足本地 backlog、全局 backlog 和 Netty writability 三层条件。
 
 ## global recovery
 
@@ -175,13 +173,13 @@ executor 的队列、字节、连接水位、reply capacity 和 transport 信号
 5. 检查 transport 是否 writable。
 6. 条件全部满足才 clear executor-disabled flag 并 enable `autoRead`。
 
-因此 global recovery 是“全局压力恢复 + 连接本地压力恢复 + Netty 可写”三者共同决定。
+因此 global recovery 由三者共同决定：全局压力恢复、连接本地压力恢复和 Netty 可写。
 
 ## maintenance task
 
 `CommandExecutor.executeMaintenance(...)` 把 maintenance task 投递到同一个 owner executor。这样 expired cleanup、maxmemory enforcement 和 runtime maintenance 不会绕过 DB owner-thread 约束。
 
-server 侧的 task 直接调用 `YierdisInstanceRuntimeAccess.maintenanceTick()`。bootstrap 决定什么时候调度 tick，runtime 决定 tick 做什么，DB 仍只在 owner thread 上被访问。
+server 侧的 task 直接调用 `YierdisInstanceRuntimeAccess.maintenanceTick()`。bootstrap 决定什么时候调度 tick，runtime 决定 tick 做什么，DB 访问仍只发生在 owner thread 上。
 
 ## 统计和观测
 
@@ -194,7 +192,7 @@ executor 热路径用 `LongAdder` 和 connection context 记录观测值：
 - drain budget：`drainLimitedByMaxCommands`、`drainLimitedByTimeBudget`
 - connection stats：pending、pendingBytes、closing、inputDisabledByExecutor、commandsEnqueued、commandsRejected
 
-这些数据进入 `CommandExecutor.StatsSnapshot` 和 `ExecutionConnectionContext.statsSnapshot()` 返回的 `ConnectionStatsView`，再被 `STATS` / `INFO yierdis` 等观测命令使用。
+这些数据进入 `CommandExecutor.StatsSnapshot` 和 `ExecutionConnectionContext.statsSnapshot()` 返回的 `ConnectionStatsView`，供 `STATS` / `INFO yierdis` 等观测命令使用。
 
 ## Bounded Reply Egress
 

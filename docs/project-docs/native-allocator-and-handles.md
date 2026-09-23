@@ -1,12 +1,12 @@
 # Stable Memory Backend 与 Handles
 
-本文解释 stable handle、object table、page allocation、pin/epoch/quarantine、realloc 和 active defrag。FFM runtime/region ownership 见 [`native-memory-runtime.md`](./native-memory-runtime.md)。
+这份文档覆盖 stable handle、object table、page allocation、pin/epoch/quarantine、realloc 和 active defrag；FFM runtime/region ownership 见 [`native-memory-runtime.md`](./native-memory-runtime.md)。
 
 ## 为什么需要 stable handle
 
 DB 不能把 native physical address 当作长期引用。realloc、defrag、page reuse 或 release 都会让旧 location 失效。
 
-生产实现 `YierdisFfmStableMemoryBackend` 通过 object table 把稳定 identity 与当前物理 block 分开：
+生产实现 `YierdisFfmStableMemoryBackend` 用 object table 把稳定 identity 与当前物理 block 分开：
 
 ```text
 DB graph
@@ -22,7 +22,7 @@ YierdisNativePageAllocator
   owns FFM-backed pages and spans
 ```
 
-调用方只在有界操作内 resolve handle，使用短生命周期 `NativeObjectView`，随后 close。physical page、offset、capacity 和 segment 都是 backend 私有状态。
+调用方只在有界操作内 resolve handle，用完短生命周期的 `NativeObjectView` 就 close。physical page、offset、capacity 和 segment 都是 backend 私有状态。
 
 ## 公共 handle 与私有 localRaw
 
@@ -51,11 +51,11 @@ DB/API 调用方不得复制这套 codec，也不得把 `localRaw` 当作完整 
 
 ## Object table
 
-`YierdisNativeObjectTable` 是 `localRaw` 到当前 location metadata 的权威表。每个 FFM segment 含 4,096 个 36-byte slots；slot 保存 page offset、logical size、page id、packed state、allocation/free epoch 和 pin count。capacity 从 page/span descriptor 派生，不在 slot 中重复维护。
+`YierdisNativeObjectTable` 是 `localRaw` 到当前 location metadata 的权威表。每个 FFM segment 含 4,096 个 36-byte slots；slot 里保存 page offset、logical size、page id、packed state、allocation/free epoch 和 pin count。capacity 从 page/span descriptor 派生，不在 slot 中重复维护。
 
-table 使用一个按实际长度增长的 segment array。分配先扫描现有 segments 的可复用 slot，再在需要时追加 segment。generation 在 slot 复用时递增；12-bit generation 用尽的 slot 被永久 retired，避免 wrap 后旧 handle 命中新对象。
+table 用一个按实际长度增长的 segment array。分配先扫描现有 segments 的可复用 slot，不够再追加 segment。generation 在 slot 复用时递增；12-bit generation 用尽的 slot 被永久 retired，避免 wrap 后旧 handle 命中新对象。
 
-主要状态转换包括 allocated、pinned、moving、freed-quarantined、free 和 corrupt。object table 负责：
+主要状态转换包括 allocated、pinned、moving、freed-quarantined、free 和 corrupt，object table 承担：
 
 - 校验 allocator/domain/kind/slot/generation；
 - resolve 当前 page location；
@@ -65,7 +65,7 @@ table 使用一个按实际长度增长的 segment array。分配先扫描现有
 
 ## Pages、spans 与 registry
 
-`YierdisNativePageAllocator` 用 `NavigableMap<Integer, PageAllocation> pagesById`（`TreeMap`）按 page id 保存 `SmallPage` 或 `SpanAllocation`，不再维护第二套 native page directory。
+`YierdisNativePageAllocator` 用 `NavigableMap<Integer, PageAllocation> pagesById`（`TreeMap`）按 page id 保存 `SmallPage` 或 `SpanAllocation`，不再另外维护一套 native page directory。
 
 page 大小为 64 KiB。请求不超过 32,768 bytes 时进入单一 size-class small page；档位为：
 
@@ -81,11 +81,11 @@ page 大小为 64 KiB。请求不超过 32,768 bytes 时进入单一 size-class 
 - `MEDIUM_SPAN`：不超过 1 MiB；
 - `LARGE_SPAN`：超过 1 MiB。
 
-block 对外只暴露 backend 所需的 capacity、page identity/class 和 byte access。requested size、page count、size class 等 test-only 镜像不保留在 block 中；真实信息由 registry descriptor 和 object table 决定。
+block 对外只暴露 backend 所需的 capacity、page identity/class 和 byte access。requested size、page count、size class 等 test-only 镜像不留在 block 中；真实信息由 registry descriptor 和 object table 决定。
 
 ## StableMemoryBackend API
 
-`YierdisFfmStableMemoryBackend` 是生产 `StableMemoryBackend` 实现，负责：
+`YierdisFfmStableMemoryBackend` 是生产 `StableMemoryBackend` 实现，承担以下职责：
 
 - owner binding 与 shutdown；
 - `allocate` / `reallocate` / `free`；
@@ -116,7 +116,7 @@ pin 保护当前 object，epoch 保护一个批量观察窗口：
 
 - live view 或显式 `pin(...)` 增加 object pin count；
 - active epoch 记录可能仍观察旧 location 的范围；
-- free 一个仍 pinned 的 object 时，slot/block 进入 quarantine；
+- free 一个仍被 pinned 的 object 时，slot/block 进入 quarantine；
 - move 发布后的旧 block 在所有相关 active epochs 结束前进入 retired list。
 
 最后一个 pin 或 epoch 关闭时，backend 尝试回收 eligible quarantine/retired blocks。stable handle 仍能表示逻辑 identity，但 freed/quarantined handle 不能作为新的普通 resolve 入口。
@@ -136,7 +136,7 @@ scope 的 `growth()` 保留从进入以来的峰值，包括 transient growth。
 
 ## Active defrag
 
-active defrag 选择未 pinned 的 live object，分配 target、复制 bytes，再发布新 location。handle、kind、logical size 和 DB graph identity不变。
+active defrag 选择未 pinned 的 live object，分配 target、复制 bytes，再发布新 location。handle、kind、logical size 和 DB graph identity 不变。
 
 ```text
 beginMove(handle)
@@ -155,9 +155,9 @@ DB graph 保存完整 paired handles：
 - `ENTRY_RECORD` 为 72 bytes；key/value handle 各 16 bytes，其后是 hash、type、encoding、flags、deadline、version 和 LRU/LFU。
 - collection root record 为 16 bytes，保存 root 自己的完整 handle identity。
 - `EntryRecord.version` 是递增 mutation version，用于 prepared/stale candidate 校验，不是 accounting estimate。
-- key、entry、string、collection root/node/payload 使用各自 `NativeObjectKind`。
+- key、entry、string、collection root/node/payload 各有自己的 `NativeObjectKind`。
 
-Java adapter/topology 可以位于 heap，但必须单独计量，并由唯一 owner 释放。ZSet borrowed member index 等结构只借用 canonical member handle，不能重复 free payload。realloc/defrag traversal 只移动 backend-owned native objects，不改变 adapter 对 stable handles 的引用。
+Java adapter/topology 可以放在 heap，但必须单独计量，并由唯一 owner 释放。ZSet borrowed member index 等结构只借用 canonical member handle，不能重复 free payload。realloc/defrag traversal 只移动 backend-owned native objects，不改变 adapter 对 stable handles 的引用。
 
 ## Mutation 与 accounting
 
@@ -173,4 +173,4 @@ Java adapter/topology 可以位于 heap，但必须单独计量，并由唯一 o
 - realloc/defrag counters；
 - object-kind counts。
 
-runtime/allocator usage 是 DB maxmemory snapshot 的组成部分，不替代 ingress 或 outbound reply 的独立容量账户。详细生产排查边界见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
+runtime/allocator usage 是 DB maxmemory snapshot 的组成部分，不替代 ingress 或 outbound reply 的独立容量账户。生产排查的详细边界见 [`production-hardening-operations.md`](./production-hardening-operations.md)。

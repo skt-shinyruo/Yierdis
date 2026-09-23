@@ -1,6 +1,6 @@
 # 事务与重放
 
-本文只解释 `MULTI/EXEC/DISCARD`：连接 session 状态、入队 preflight、retained request、重放、semantic streamed reply owner、abort 和清理。
+范围限于 `MULTI/EXEC/DISCARD`：连接 session 状态、入队 preflight、retained request、重放、semantic streamed reply owner、abort 和清理。
 
 普通执行的 canonical command path 是：
 
@@ -28,7 +28,7 @@ transaction state 保存：
 - `queuedBytes`：所有 queued request 的 retained bytes，即各自 heap footprint 估算之和；
 - `maxQueuedCommands` 与 `maxQueuedBytes`：连接级队列上限。
 
-`EngineSession` 不拥有 `CommandDispatcher`、DB、executor 或 renderer。它只承载跨请求持续存在的连接状态；命令重放仍由 dispatcher 与 executor 完成。
+`EngineSession` 不拥有 `CommandDispatcher`、DB、executor 或 renderer，只承载跨请求持续存在的连接状态；命令重放仍由 dispatcher 与 executor 完成。
 
 ## 为什么保存 retained `ExecutionRequest`
 
@@ -88,7 +88,7 @@ queue 条数或字节超限由 `TransactionState.tryEnqueue(...)` 返回 `ERR Tr
 
 `PreparedExec` 对任意 queue size 都使用同一套策略：外层 prepare 不创建 child；空 queue 保留精确空 array reservation，非空 queue 使用 maximum reservation。reservation shape 只描述外层容量边界，不选择 child preparation 流程。
 
-执行时先 drain retained requests，再按队列顺序调用 `CommandDispatcher.prepareExecReplay(session, request)`。每个 child 都在当前索引循环 prepare/validate；若返回 `STALE`，先关闭该 child 再重新 prepare。当前 child 执行完成后才准备下一个，因此前一个 child 的 session 或 DB side effect 对后一个 child 的准备和执行可见。
+执行时先 drain retained requests，再按队列顺序调用 `CommandDispatcher.prepareExecReplay(session, request)`。每个 child 都在自己的索引处循环 prepare/validate；返回 `STALE` 时先关闭该 child 再重新 prepare。当前 child 执行完成后才准备下一个，因此前一个 child 的 session 或 DB side effect 对后一个 child 的准备和执行可见。
 
 ## replay 主链
 
@@ -116,11 +116,11 @@ queue 条数或字节超限由 `TransactionState.tryEnqueue(...)` 返回 `ERR Tr
 
 ## streamed child reply 的所有权
 
-child 准备函数可能从 DB 取得 `ByteValue`、`ByteSequenceSource`、`ByteMapSource` 或 `CollectionScanWindow`。这类 source 由 child `PreparedCommand` 通过 `PreparedCommands.owned(...)` 持有；其 semantic `RedisReply` 的 emitter 在 source 存活期间有效。
+child 准备函数可能从 DB 取得 `ByteValue`、`ByteSequenceSource`、`ByteMapSource` 或 `CollectionScanWindow`。child `PreparedCommand` 用 `PreparedCommands.owned(...)` 持有这类 source；其 semantic `RedisReply` 的 emitter 在 source 存活期间有效。
 
 `PreparedExec` 持有所有 child prepared commands，并在 execute 后继续存活。executor 先渲染外层 aggregate；renderer 递归访问 child reply 并同步调用 source emitter。只有渲染成功或 task 进入 terminal cleanup 后，外层 `close()` 才按 queue index 逆序执行：同一索引先关闭 child owner，再关闭 drained request。
 
-因此 native pin 不会在 aggregate render 前释放，也不会被转交给 Netty event loop。`TransactionCommandTest.execKeepsStreamedChildAliveUntilTheAggregateIsRendered` 保护这一所有权边界。
+因此 native pin 不会在 aggregate render 前释放，也不会转交给 Netty event loop。`TransactionCommandTest.execKeepsStreamedChildAliveUntilTheAggregateIsRendered` 保护这一所有权边界。
 
 ## `QUIT` 在 transaction 中的传播
 
@@ -138,9 +138,9 @@ renderer 先输出完整的 `EXEC` array，executor 再根据外层 result flag 
 - `EXEC` without `MULTI`：`ERR EXEC without MULTI`；
 - aborted `EXEC`：discard 后返回 `EXECABORT Transaction discarded because of previous errors.`。
 
-若 child execution 尚未开始，prepare/ownership failure 可以作为普通 executor failure 清理。若任何 child 已开始执行后发生异常，前面 mutation 是否可见已无法由客户端确认，`PreparedExec` 将 failure 提升为 `ResultUnknownException`；executor 会 mark result unknown、取消 reply 并关闭 transport，不伪造 transaction error array。
+若 child execution 尚未开始，prepare/ownership failure 可以作为普通 executor failure 清理。若异常发生在任何 child 开始执行之后，前面 mutation 是否可见已无法由客户端确认，`PreparedExec` 将 failure 提升为 `ResultUnknownException`；executor 会 mark result unknown、取消 reply 并关闭 transport，不伪造 transaction error array。
 
-外层关闭会尽力回收所有 child 与 drained request，后一个 close failure 作为 suppressed failure 保留，不能中断其余 ownership cleanup。
+外层关闭会尽力回收所有 child 与 drained request，后续的 close failure 作为 suppressed failure 保留，不能中断其余 ownership cleanup。
 
 ## queue limits
 
@@ -156,7 +156,7 @@ renderer 先输出完整的 `EXEC` array，executor 再根据外层 result flag 
 3. 调用 `request.retain()` 取得 queue owner；
 4. 用 retained view 的 `retainedBytes()` 再做真实检查；
 5. 成功后加入 queue 并累加 `queuedBytes`；
-6. count 或 estimated-bytes 在 retain 前失败时直接标记 aborted；真实 retained-bytes 检查失败时先关闭临时 retained view，再返回统一的 queue-full error。
+6. count 或 estimated-bytes 在 retain 前失败时直接标记 aborted；真实 retained-bytes 检查失败时先关闭临时 retained view，再返回同一个 queue-full error。
 
 上限从 server config 传入每个 `EngineSession`，不是 CLI 或 command module 自己维护的第二套限制。
 

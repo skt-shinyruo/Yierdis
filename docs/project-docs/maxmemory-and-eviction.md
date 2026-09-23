@@ -1,13 +1,13 @@
 # Maxmemory 与淘汰
 
-本文解释 ledger reservation、per-DB / global scope、eviction policy 和 OOM 路径。核心原则是：先证明本次写入有空间，再让 mutation 执行；cleanup 和 eviction 只负责把 usage 拉回目标线，不替代 mutation commit。
+ledger reservation、per-DB / global scope、eviction policy 和 OOM 路径，都围绕同一条原则展开：先证明本次写入有空间，再让 mutation 执行；cleanup 和 eviction 只把 usage 拉回目标线，不替代 mutation commit。
 
 ## `usedBytes`、`reservedBytes` 和 effective usage
 
 `YierdisDbMemoryLedger` 维护两份数字：
 
 - `usedBytes`：按已提交 mutation 的 `actualDeltaBytes` 增减的逻辑账本，不是 allocator/JVM 的实时物理占用。
-- `reservedBytes`：预算已通过、但 mutation 还没 commit/rollback 的窗口。
+- `reservedBytes`：预算已通过，但 mutation 还没 commit/rollback 的那段窗口。
 
 `YierdisDbMemoryReporter.memoryStats()` 暴露的相关字段是：
 
@@ -24,7 +24,7 @@ usedBytesForMaxmemory
   + nativeDataCommittedBytes
 ```
 
-entry 中的 TTL 字段和 collection topology 已进入 owned snapshot，不能再按带 TTL 的 key 数量重复加一遍。`nativeDataLiveBytes` 和 `nativeReclaimableBytes` 是诊断维度，不从 committed footprint 中扣除。`MEMORY STATS` 的 `used_bytes_for_maxmemory` 就是这份物理快照；`effective_used_bytes_for_maxmemory` 再加 ledger `reservedBytes`，用于展示已批准但尚未 settle 的预算窗口。
+entry 中的 TTL 字段和 collection topology 已进入 owned snapshot，不能再按带 TTL 的 key 数量重复加一遍。`nativeDataLiveBytes` 和 `nativeReclaimableBytes` 是诊断维度，不从 committed footprint 中扣除。`MEMORY STATS` 的 `used_bytes_for_maxmemory` 就是这份物理快照；`effective_used_bytes_for_maxmemory` 在此之上再加 ledger `reservedBytes`。
 
 ## `YierdisDbMutationExecutor` 为什么先 reserve 再 prepare
 
@@ -45,21 +45,21 @@ estimate upper bound
      -> optional native page trim
 ```
 
-这样做的原因是 DB mutation 经常需要“先分配、后知道实际变化量”：
+之所以要这样，是因为 DB mutation 经常需要“先分配、后知道实际变化量”：
 
 - 新 key 可能新增 key bytes、entry record 和 value payload；
 - TTL deadline 更新会产生 mutation-scope bookkeeping，但没有独立的 TTL allocation；
 - collection 或 string 可能触发编码升级；
 - 覆盖写可能最终是 shrink、no-op 或负 delta。
 
-`upperBoundBytes()` 解决“能不能先让这次写动起来”，prepare 后实测的 native growth 加 staged heap topology 用来收窄 reservation，`actualDeltaBytes()` 解决“最后到底长了多少/缩了多少”。提交后的固定顺序是 allocation promote、ledger settle、release superseded，最后才根据提示尝试 trim。
+`upperBoundBytes()` 解决“能不能先让这次写动起来”，prepare 后实测的 native growth 加 staged heap topology 用来收窄 reservation，`actualDeltaBytes()` 给出“最后到底长了多少/缩了多少”。提交后的顺序固定为 allocation promote、ledger settle、release superseded，最后才看提示尝试 trim。
 
 `MutationExecutorReservationTest` 覆盖了两个关键点：
 
 - 预算不过关时，`prepare()` 根本不会执行；
 - commit 前 prepare/校验失败时，prepared resources、allocation scope 和 ledger reservation 都会 abort/rollback，不会污染下一次写入。
 
-`prepared.commit()` 开始之后不再存在“确认未生效”的安全回滚前提。此后的异常会触发 post-commit settle：executor best-effort promote allocation、settle ledger、release superseded resources；DB 进入 degraded，调用方收到 result-unknown，而不是把异常简单映射成一次确定未执行的 OOM。只有 commit 开始前的 capacity rejection 才能安全返回 Redis 风格 OOM。
+`prepared.commit()` 开始之后，就再没有“确认未生效”这种安全回滚前提。此后的异常触发 post-commit settle：executor best-effort promote allocation、settle ledger、release superseded resources；DB 转入 degraded，调用方收到 result-unknown，而不是把异常简单映射成一次确定未执行的 OOM。只有 commit 开始前的 capacity rejection 才能安全返回 Redis 风格 OOM。
 
 degraded 不是终态：`RuntimeDbEngine.reconcileAccounting()` 在 owner thread 上重算物理用量、把 ledger 漂移修正入账并清除 degraded，尝试与结果记入 `DbHealthSnapshot.lastReconciliation`。恢复只能显式触发，maintenance tick 不会自动对账。
 
@@ -94,14 +94,14 @@ governor 的主线是：
 4. `noeviction` 在 trim/resnapshot 后仍超限时，只允许不增长的维护路径继续。
 5. 需要淘汰时，跨 participant 挑 victim；每次释放后继续 trim 并汇总新 snapshots，直到全局 usage 压回目标线，或在时间/尝试预算内停止。
 
-这里有两个跨 DB 约束：
+有以下两个跨 DB 约束：
 
 - participant 是每个 DB 暴露出来的 `YierdisDbMaxmemorySupport`，governor 只能通过 SPI 观察和驱动，不直接越过 DB API。
 - governor 只相加每个 DB 独占的 `MemoryUsageSnapshot`。各 backend runtime 的 counter 不进入全局 enforcement，它只用于对应 backend 的 region lifecycle 和 native leak 诊断。
 
 maintenance 时的顺序由 `YierdisInstanceRuntimeAccess.maintenanceTick()` 固定：
 
-- 每个 DB 先跑 `runMaintenance()`：回收 detached entry，在时间预算内排空 expires 索引，推进 rehash，然后 `enforceMaxmemory()`（`ledger.enforceLocalMaintenance()`）。global scope 下每个 DB 的本地 `maxmemoryBytes` 仍是整份全局预算，所以这一步也会执行。
+- 每个 DB 先跑 `runMaintenance()`：回收 detached entry，在时间预算内排空 expires 索引，推进 rehash，然后 `enforceMaxmemory()`（`ledger.enforceLocalMaintenance()`）。global scope 下每个 DB 的本地 `maxmemoryBytes` 仍是整份全局预算，这一步照常执行。
 - `defrag` 打开时，每个 DB 在 `runMaintenance()` 之后再跑 `defragMaintenance()`。
 - DB 循环结束后调用 `enforceGlobalMaxmemoryMaintenance()`。只有 global scope 创建了 governor 时它才会 `enforceMaintenance()`；per-db scope 下这次调用是空操作。
 
@@ -122,7 +122,7 @@ maintenance 时的顺序由 `YierdisInstanceRuntimeAccess.maintenanceTick()` 固
 
 所以“淘汰”和“过期”都会删除 key，但触发原因和测试入口不同。
 
-`PreparedDbMutation.shouldTrimNativePagesAfterCommit()` 和 snapshot 的 `nativeReclaimableBytes` 都只是回收候选提示，不表示相应字节已经离开 committed footprint。`trimMemory(...)` 返回的 `MemoryReclaimResult` 记录本次检查、实际回收和停止原因；admission 仍要在 trim 后重新采样 owned snapshot，不能直接用 reclaimable estimate 或一次 trim hint 推导“已经低于 maxmemory”。
+`PreparedDbMutation.shouldTrimNativePagesAfterCommit()` 和 snapshot 的 `nativeReclaimableBytes` 都只是回收候选提示，不代表相应字节已经离开 committed footprint。`trimMemory(...)` 返回的 `MemoryReclaimResult` 记录本次检查了什么、实际回收了多少、为什么停下；admission 仍要在 trim 后重新采样 owned snapshot，不能拿 reclaimable estimate 或一次 trim hint 就推断“已经低于 maxmemory”。
 
 ## 仍然无法写入时的错误路径
 
@@ -139,9 +139,9 @@ maintenance 时的顺序由 `YierdisInstanceRuntimeAccess.maintenanceTick()` 固
 - commit 开始前不能把半成品 mutation 留在 DB 内部，reservation 必须 rollback；
 - commit 开始后的失败必须走 post-commit settle/result-unknown，不能宣称 mutation 一定未发生。
 
-主动过期和 random/LRU eviction candidates 都使用 directory 中的 native-backed key handles。删除前复制稳定 key bytes 只服务于本次 reclamation plan，不表示 DB 内部仍有 heap keyspace。
+主动过期和 random/LRU eviction candidates 用的都是 directory 中的 native-backed key handles。删除前复制稳定 key bytes 只服务于本次 reclamation plan，不代表 DB 内部还留着 heap keyspace。
 
-`prepareWrite(0)` 是 maintenance-only enforcement 的关键特例：在 `noeviction` 下它不会因为“当前已经超限”而阻止不增长的维护操作。
+`prepareWrite(0)` 是 maintenance-only enforcement 的关键特例：`noeviction` 下它不会因为“当前已经超限”而挡掉不增长的维护操作。
 
 ## 相关测试
 

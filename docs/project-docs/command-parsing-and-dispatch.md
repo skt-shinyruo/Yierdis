@@ -1,6 +1,6 @@
 # 命令解析与分发
 
-本文解释 Yierdis 如何从 transport-neutral 的 `ExecutionRequest` 完成查表、参数解析、事务 preflight、命令准备、执行和语义结果渲染。
+Yierdis 从 transport-neutral 的 `ExecutionRequest` 出发，依次完成查表、参数解析、事务 preflight、命令准备、执行和语义结果渲染。
 
 ## 入口和边界
 
@@ -22,12 +22,12 @@ RESP bytes
 
 这段链路的责任划分是：
 
-- `NettyExecutionRequestIngress` 只负责 reply slot 对齐、admission 和提交所有权；
-- `CommandExecutor` 负责 owner-thread 调度、reply capacity、prepared validation、执行、渲染和关闭保护；
-- `CommandDispatcher` 负责命令查表、统一前置校验、事务分支和预期 command error；
+- `NettyExecutionRequestIngress` 只处理 reply slot 对齐、admission 和提交所有权；
+- `CommandExecutor` 承担 owner-thread 调度、reply capacity、prepared validation、执行、渲染和关闭保护；
+- `CommandDispatcher` 拥有命令查表、统一前置校验、事务分支和预期 command error；
 - `CommandHandler.parse(CommandArgs)` 只解释 argv，返回 `Function<CommandSession, PreparedCommand>`，不读取 session、DB 或 server provider；
 - dispatcher 对返回的函数调用 `apply(session)`，此时才能读取连接态、访问 DB、准备 mutation 或获取 streamed reply source；
-- `PreparedCommand.execute(session)` 在预留成功后完成可见动作并返回 `CommandResult`；
+- `PreparedCommand.execute(session)` 在预留成功后执行可见动作并返回 `CommandResult`；
 - `RedisReplyRenderer` 是语义 `RedisReply` 到 RESP-facing `RedisReplyWriter` 的唯一普通命令出口。
 
 command package 不依赖 `RedisReplyWriter`。命令通过 `RedisReply` 描述标量、聚合或延迟 payload；writer 只是 renderer 的协议端口。
@@ -36,7 +36,7 @@ command package 不依赖 `RedisReplyWriter`。命令通过 `RedisReply` 描述�
 
 `CommandRegistries.dispatcher(...)` 创建 registry 与 dispatcher，先注册 `MULTI/EXEC/DISCARD`，再注册注入的 `CommandModule`，最后 seal registry。生产 composition root 传入 `DefaultCommandModules` 和 `ServerCommandModule`。
 
-`CommandRegistry` 保存命令名到 `CommandSpec` 的单一映射。注册阶段拒绝重复名称；seal 后查表只读，继续注册会失败。dispatcher 从 `argv[0]` 生成精确的 upper-case ASCII 名称并做主路径 lookup；`COMMAND` 等 metadata 查询使用 registry 提供的规范化查询 API。
+`CommandRegistry` 维护命令名到 `CommandSpec` 的一对一映射。注册阶段拒绝重复名称；seal 后查表只读，继续注册会失败。dispatcher 从 `argv[0]` 生成精确的 upper-case ASCII 名称并做主路径 lookup；`COMMAND` 等 metadata 查询使用 registry 提供的规范化查询 API。
 
 每个 `CommandSpec` 只有两部分：
 
@@ -58,15 +58,15 @@ dispatcher 的实际顺序是：
 7. 普通执行调用 `spec.handler().parse(args)` 得到准备函数；
 8. 调用 `prepareFunction.apply(session)` 得到 `PreparedCommand`。
 
-dispatcher 在返回 `PreparedCommand` 时结束。随后 `CommandExecutorExecutionSupport.execute` 按 reservation shape 完成 `reserve -> validate -> execute(session)`，再用 `RedisReplyRenderer` 渲染 `CommandResult`。
+dispatcher 在返回 `PreparedCommand` 时结束。随后 `CommandExecutorExecutionSupport.execute` 按 reservation shape 走 `reserve -> validate -> execute(session)`，再用 `RedisReplyRenderer` 渲染 `CommandResult`。
 
-`CommandParseException` 被转换成语义 error reply；prepare 阶段抛出的 `WrongTypeException` 与 `YierdisCommandException` 也会变成 command error。其他未预期异常继续交给 executor 的 terminal failure 路径，不能被误报为确定的业务失败。
+`CommandParseException` 会转换成语义 error reply；prepare 阶段抛出的 `WrongTypeException` 与 `YierdisCommandException` 也会变成 command error。其他未预期异常继续交给 executor 的 terminal failure 路径，不能被误报为确定的业务失败。
 
-空命令、unknown command、illegal null 和 parse error 在 transaction active 时都使用 aborting prepared action：只有该错误回复获得容量并进入执行后，transaction 才被标记 aborted。这保持了所有 session mutation 都发生在预留之后。
+空命令、unknown command、illegal null 和 parse error 在 transaction active 时都使用 aborting prepared action：只有该错误回复获得容量并进入执行后，才把 transaction 标记为 aborted。这样所有 session mutation 都发生在预留之后。
 
 ## 参数解析集中在 `CommandArgs`
 
-`CommandArgs` 是 argv、ASCII 和整数解析的统一 helper：
+`CommandArgs` 是 argv、ASCII 和整数解析的共用 helper：
 
 - `argc()`、`isNull(...)`、`length(...)` 暴露请求形状；
 - `slice(...)` 提供不复制的 `BytesSlice`；
@@ -75,7 +75,7 @@ dispatcher 在返回 `PreparedCommand` 时结束。随后 `CommandExecutorExecut
 - `longAt(...)`、`nonNegativeLongAt(...)`、`positiveLongAt(...)`、`intClampedAt(...)` 集中整数规则；
 - `request()` 只在需要 retain 原请求或构造延迟参数 reply 时使用。
 
-`CommandArity` 在 handler 前表达 exact、min、range、one-of 和 pair-tail 规则。命令自身更细的 option、subcommand、score 或 cursor 语法由 handler 解析，并通过 `CommandParseException(replyMessage)` 返回准确的 Redis 风格错误。
+`CommandArity` 在 handler 前表达 exact、min、range、one-of 和 pair-tail 规则。命令自身更细的 option、subcommand、score 或 cursor 语法由 handler 解析，出错时用 `CommandParseException(replyMessage)` 返回准确的 Redis 风格错误。
 
 常见错误文案包括：
 
@@ -107,7 +107,7 @@ execute(CommandSession)
 
 只读命令可以在 prepare 时取得 DB source，并由 `PreparedCommand` 持有到渲染完成。需要 optimistic preview 的写命令可以准备 `PreparedMutation`，将 `isCurrent()` 接到 `validateBeforeExecute()`，把真正的 commit 留到 execute。无需状态预读的写命令也可以返回带上界 shape 的 action，在 execute 时直接调用 DB capability。
 
-executor 将当前 `CommandSession` 直接传给 `PreparedCommand.execute(...)`。command API 不提供 writer，command implementation 因而无法绕过 `CommandResult` 直接写协议输出。
+executor 将当前 `CommandSession` 直接传给 `PreparedCommand.execute(...)`。command API 不提供 writer，command implementation 也就无法绕过 `CommandResult` 直接写协议输出。
 
 ## reply reservation 与统一渲染
 
@@ -128,9 +128,9 @@ executor 将当前 `CommandSession` 直接传给 `PreparedCommand.execute(...)`�
 
 unknown command 文案只在名称长度不超过 64 且全部为安全 printable ASCII 时回显原名；否则返回不带原始内容的 `ERR unknown command`。这避免把控制字符或转义字符带入错误流。
 
-RESP decoder 会忠实保留 array 中的 null bulk string。dispatcher 统一执行命令级合法性判断：二参数 `PING` / `ECHO` 可以返回 null reply，其余位置出现 null 时返回 `ERR Protocol error: null bulk string`。frame 本身非法的 protocol error 仍由 decoder/ingress 处理，不进入 dispatcher。
+RESP decoder 会忠实保留 array 中的 null bulk string。命令级合法性判断都放在 dispatcher 里：二参数 `PING` / `ECHO` 可以返回 null reply，其余位置出现 null 时返回 `ERR Protocol error: null bulk string`。frame 本身非法的 protocol error 仍由 decoder/ingress 处理，不进入 dispatcher。
 
-执行期的 expected DB error 由命令 action 转成 `CommandResult.controlError(...)`。它使用预留的顶层 control capacity 替换尚未写出的结果；在 `EXEC` 数组中会降为普通 child error。执行路径若在可能产生可见 side effect 后失败，必须用 `ResultUnknownException` 标记；executor 识别该标记后关闭连接。renderer 已开始写出后失败也会进入结果未知的 terminal close，不能补发确定的业务错误。
+执行期的 expected DB error 由命令 action 转成 `CommandResult.controlError(...)`。它用预留的顶层 control capacity 替换尚未写出的结果；在 `EXEC` 数组中会降为普通 child error。执行路径若在可能产生可见 side effect 后失败，必须用 `ResultUnknownException` 标记；executor 识别该标记后关闭连接。renderer 已开始写出后失败也会进入结果未知的 terminal close，不能补发确定的业务错误。
 
 ## 事务排队 preflight
 
@@ -142,7 +142,7 @@ transaction active 时，dispatcher 仍先完成命令名检查、registry looku
 
 queueable preflight 成功后，dispatcher 返回 `ReplyShapes.errorUpperBound()` 的 prepared action。空队列的 `EXEC` 使用 `ReplyShapes.array(List.of())`，非空队列使用 `ReplyShapes.maximum()`。executor 先预留回复容量，再执行 `TransactionState.tryEnqueue(request)`：成功返回 `QUEUED`，条数或字节限制失败则返回 `ERR Transaction queue is full` 并标记 aborted。
 
-因此排队阶段的 owner 分工很清楚：
+排队阶段的 owner 分工很清楚：
 
 - dispatcher 拥有查表、arity、policy 与 handler parse；
 - `TransactionState` 拥有 retained request 和 queue limits；

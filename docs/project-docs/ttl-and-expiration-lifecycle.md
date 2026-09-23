@@ -1,6 +1,6 @@
 # TTL 与过期生命周期
 
-本文解释 TTL 命令、惰性过期和主动过期清理。TTL 的权威状态只有一份：`EntryRecord.expireAtMillis`；在此之上有一个按过期时间排序的派生 expires 索引，主动清理只消费索引中已到期的候选，不再扫描 keyspace。
+TTL 命令、惰性过期和主动清理合起来构成过期生命周期。TTL 的权威状态只有一份：`EntryRecord.expireAtMillis`；在此之上有一个按过期时间排序的派生 expires 索引，主动清理只消费索引中已到期的候选，不再扫描 keyspace。
 
 ## TTL 状态
 
@@ -12,7 +12,7 @@
 
 `YierdisDbKeyLifecycle.expireCount()` 是随 entry 发布、替换和释放同步更新的精确派生计数，用于 `MEMORY STATS`、instance observability 和 flush outcome。它不是第二份 key-to-deadline 状态，也不参与查找。
 
-`ExpiresIndex` 是第二份派生状态：owner 线程独占的堆内优先队列，按 `(expireAtMillis, 插入序号)` 排序。它只在 deadline 实际变化的 entry 转移（insert、替换）时登记新项；touch、`KEEPTTL` 等 `expireAtMillis` 不变的替换复用既有索引项。TTL 被移除、改值或 key 被删除重建时旧项不主动清除——索引允许 stale 项，消费方必须惰性校验。索引是纯堆内存派生 bookkeeping，不计入 ledger 逐 mutation 账，也不计入物理 committed footprint；deadline-only mutation 不改变物理记账的结论因此保持不变。
+`ExpiresIndex` 是第二份派生状态：owner 线程独占的堆内优先队列，按 `(expireAtMillis, 插入序号)` 排序。只有 deadline 实际变化的 entry 转移（insert、替换）才会登记新项；touch、`KEEPTTL` 等 `expireAtMillis` 不变的替换复用既有索引项。TTL 被移除、改值或 key 被删除重建时旧项不主动清除——索引允许 stale 项，消费方必须惰性校验。索引是纯堆内存派生 bookkeeping，不计入 ledger 逐 mutation 账，也不计入 physical committed footprint；deadline-only mutation 不改变物理记账结论。
 
 ## TTL 命令写路径
 
@@ -91,7 +91,7 @@ Netty worker timer
         per-db scope: no-op
 ```
 
-真正的 DB cleanup 只在 owner thread 上执行。expires 索引让"是否还有到期候选"成为 O(1) 判断，因此维护节拍会在时间预算内循环调用单次 cleanup，直到没有到期候选或预算耗尽；短 TTL churn 在节拍之间不会无限积压。
+真正的 DB cleanup 只在 owner thread 上执行。expires 索引把"是否还有到期候选"变成 O(1) 判断，维护节拍于是在时间预算内反复调用单次 cleanup，直到没有到期候选或预算耗尽；短 TTL churn 在节拍之间不会无限积压。
 
 写 admission（local 与 global 两种 maxmemory 模式）不内联触发 expires 索引清理：预算判定只看 owned physical snapshot、trim 和 eviction。过期 key 的回收时机是维护节拍、读路径惰性过期，以及 eviction candidate selection——`allkeys-lru`/`allkeys-random` 抽样或扫描到过期 key 时把它作为最优候选，在淘汰路径上先走 expiration reclamation，而不是跳过；因此「只剩过期条目」的 keyspace 不会再把写入卡进 OOM。`noeviction` 不选 victim，过期占用只能等维护节拍或读路径惰性过期，admission 仍按 OOM 拒绝增长写入。
 

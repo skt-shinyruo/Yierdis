@@ -1,6 +1,6 @@
 # Off-Heap Copy 边界
 
-本文解释 heap、`ByteBuf`、FFM native memory 之间什么时候发生 copy，什么时候只是 view 或 handle。结论不是“用了 off-heap 就零拷贝”，而是：当前写回路径通过有界复制避免完整结果 materialization，并不提供生产零拷贝能力。
+下面按边界梳理 heap、`ByteBuf`、FFM native memory 之间哪里发生 copy，哪里只是 view 或 handle。结论不是“用了 off-heap 就零拷贝”，而是：当前写回路径通过有界复制避免完整结果 materialization，并不提供生产零拷贝能力。
 
 Yierdis 的 native memory 主要降低稳态 heap 占用、改善 GC 压力并让部分 read/write-back 可以流式处理；只要接口边界要求 `byte[]`、`List<byte[]>`、`String`、snapshot 或长期 ownership，copy 仍然会发生。
 
@@ -33,13 +33,13 @@ collection 写入也类似：root record 和 payload internals 都是 allocator-
 
 当前 string `GET` 路径通过 `StringRoot.retainedValue` 得到已 pin 的 `NativeBytesSlice`，再包装成 `RedisReply`，由中央 renderer 写入协议端口。pin 保持到 `CommandExecutorExecutionSupport` 同步渲染后的 `closePrepared`，`writeTo` 只使用这份已有 pin。调用方不能把这个 slice 留到 prepared command 关闭之后。
 
-命令 `GET`、`HGET`、pop 和 `SET ... GET` 使用 retained native-backed view/slice；`SCAN` 则保留 cursor、目录元数据和 epoch，在输出阶段重放目录并生成 native-backed key slice。它们都不要求先把完整结果 materialize 到 heap。
+命令 `GET`、`HGET`、pop 和 `SET ... GET` 使用 retained native-backed view/slice；`SCAN` 则保留 cursor、目录元数据和 epoch，在输出阶段重放目录并生成 native-backed key slice。这些路径都不要求先把完整结果 materialize 到 heap。
 
-keyspace 也是同理：key bytes 持久化为 `KEY_BYTES` native object，但只要外部接口要 `byte[]`，就会通过 allocator resolve view 读取并复制出来。
+keyspace 也一样：key bytes 持久化为 `KEY_BYTES` native object，但只要外部接口要 `byte[]`，就会通过 allocator resolve view 读取并复制出来。
 
 ## Off-heap -> bounded streaming output
 
-有界流式写出的意义是避免完整结果 heap materialization，但它要求上下游接口都表达“我可以按 slice 或 sink 工作”。
+有界流式写出避免完整结果 heap materialization，前提是上下游接口都能表达“我可以按 slice 或 sink 工作”。
 
 典型形状：
 
@@ -53,7 +53,7 @@ NativeBytesSlice
 
 `RespReplyWriter.bulkString(BytesSlice)` 会先写 RESP header，再让 slice 同步写入 sink，最后写 CRLF。`NativeBytesSlice` 当前使用可复用的 8 KiB heap scratch 分块读取 native bytes；`BoundedChunkedReplySink` 在 allocator 调用前把预留额度转换为 allocated credit，再写入固定上限的 `ByteBuf` chunk。
 
-`LRANGE`、`HGETALL`、`SMEMBERS`、`ZRANGE*` 不走这条 live native 写出路径。它们在 prepare 时用 `copiedFrom` 把选中元素拷进独立 source，renderer 再把快照写入 `ByteValueSink`。
+`LRANGE`、`HGETALL`、`SMEMBERS`、`ZRANGE*` 不走这条 live native 写出路径。这类命令在 prepare 时用 `copiedFrom` 把选中元素拷进独立 source，renderer 再把快照写入 `ByteValueSink`。
 
 这条路径避免完整 heap 结果，但当前仍执行有界复制：
 
@@ -87,7 +87,7 @@ view / handle 不是 copy：
 
 误读一：off-heap 等于零拷贝。
 
-实际是当前生产写回明确经过 bounded heap scratch 和 bounded reply chunk。很多边界有意复制，以获得稳定 ownership 或避免泄漏 native view。
+实际上，当前生产写回明确经过 bounded heap scratch 和 bounded reply chunk。很多边界有意复制，用来换取稳定 ownership 或避免泄漏 native view。
 
 误读二：`BytesView` lookup 已经避免 heap key。
 

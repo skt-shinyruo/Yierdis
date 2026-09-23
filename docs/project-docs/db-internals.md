@@ -1,12 +1,12 @@
 # DB 内部结构
 
-本文解释单个 `YierdisDb` 如何组织 key、entry、value、TTL、mutation、maxmemory 和生命周期。它不是一张并发 `Map<byte[], Object>`，而是一个受 owner thread 约束的状态 owner。
+单个 `YierdisDb` 不是一张并发 `Map<byte[], Object>`，而是一个受 owner thread 约束的状态 owner，掌管 key、entry、value、TTL、mutation、maxmemory 和生命周期。
 
 设计意图、层间契约、与 Redis C 实现的对照以及已知取舍见 [`db-design-analysis.md`](./db-design-analysis.md)；运行期行为缺口与可疑观察见 [`db-behavior-gaps.md`](./db-behavior-gaps.md)。
 
 ## 组合边界
 
-command 层只依赖 `DbEngine`。它直接暴露合并读写后的 `StringOps`、`HashOps`、`ListOps`、`SetOps`、`ZSetOps`、`HllOps`、`KeyspaceOps` 和 `TtlOps`，以及 memory/lifecycle 方法。runtime 使用 `YierdisDbEngineFactory` 创建 `YierdisDb`。
+command 层只依赖 `DbEngine`，后者直接暴露合并读写后的 `StringOps`、`HashOps`、`ListOps`、`SetOps`、`ZSetOps`、`HllOps`、`KeyspaceOps` 和 `TtlOps`，以及 memory/lifecycle 方法。runtime 使用 `YierdisDbEngineFactory` 创建 `YierdisDb`。
 
 ```text
 YierdisInstance
@@ -17,7 +17,7 @@ YierdisInstance
         -> YierdisDb
 ```
 
-`DbEngineConfig` 是 DB 配置的唯一输入。`YierdisDb` 在私有构造器内直接组装 ledger、mutation executor、DB kernel、memory context、maintenance 和公开 capability；`YierdisDbStorage` 只记录 maintenance registry 与 key lifecycle。storage 创建一开始就接管 backend，构造失败与正常 shutdown 都沿 key lifecycle 的同一 ownership 路径清理，原始失败保持为 primary，清理失败附加为 suppressed。`YierdisDbRuntimeState` 保存 `dbIndex`、线程守卫、`lruEnabled`、`NativeDefragOptions`、maxmemory 协调器、`MaxmemoryParticipant` 和本地 LRU clock。`defragMaintenance` 把 options 交给调用方，不在这里保存 defrag 报告，也不持有 storage backend。
+`DbEngineConfig` 是 DB 配置的唯一输入。`YierdisDb` 在私有构造器内直接组装 ledger、mutation executor、DB kernel、memory context、maintenance 和公开 capability；`YierdisDbStorage` 只记录 maintenance registry 与 key lifecycle。storage 一创建就接管 backend，构造失败与正常 shutdown 都沿 key lifecycle 的同一 ownership 路径清理，原始失败保持为 primary，清理失败附加为 suppressed。`YierdisDbRuntimeState` 保存 `dbIndex`、线程守卫、`lruEnabled`、`NativeDefragOptions`、maxmemory 协调器、`MaxmemoryParticipant` 和本地 LRU clock。`defragMaintenance` 把 options 交给调用方，不在这里保存 defrag 报告，也不持有 storage backend。
 
 global/per-db maxmemory 只改变预算协调方式。每个 DB 都有独立的 stable-memory backend/runtime、keyspace、entry table、roots 和 ledger。
 
@@ -40,11 +40,11 @@ Type roots
   ValueHandle -> string/list/hash/set/zset payload
 ```
 
-`NativeKeyDirectory` 保存 allocator-backed `KEY_BYTES`，并把 key 映射到 `EntryHandle`。它负责 lookup、insert/remove、random candidate、cursor scan 和 table maintenance，不理解 value 类型，也不释放 payload。按 entry 删除（`removeEntry`）用 entry record 持有的 key handle 与 dict hash 反向探测槽位，O(probe) 定位，不做全表扫描；位置在删除时现查，rehash 两表状态下也不会指向 stale slot。
+`NativeKeyDirectory` 保存 allocator-backed `KEY_BYTES`，把 key 映射到 `EntryHandle`，并实现 lookup、insert/remove、random candidate、cursor scan 和 table maintenance。它不理解 value 类型，也不释放 payload。按 entry 删除（`removeEntry`）用 entry record 持有的 key handle 与 dict hash 反向探测槽位，O(probe) 定位，不做全表扫描；位置在删除时现查，rehash 两表状态下也不会指向 stale slot。
 
-目录的槽位数组（slot state、hash、key/entry handle 引用）在 heap，只有 key 字节本体是 allocator-backed；因此 `NativeKeyDirectory.nativeBytes()` 恒为 `0L`，"keyspace 在 native" 指的是 key 字节而非 hash slot。
+目录的槽位数组（slot state、hash、key/entry handle 引用）在 heap，只有 key 字节本体是 allocator-backed；所以 `NativeKeyDirectory.nativeBytes()` 恒为 `0L`，"keyspace 在 native" 指的是 key 字节而非 hash slot。
 
-`OpenAddressingTopology` 统一表达 slot state、linear probing、tombstone 复用和 active/old 增量 rehash，不持有 key/value 数组、native handle 或任何 payload ownership。`NativeByteMap` 与 `NativeKeyDirectory` 均把生产 topology 委托给该核心，只保留 payload arrays 与 ownership/lifecycle logic。
+`OpenAddressingTopology` 集中表达 slot state、linear probing、tombstone 复用和 active/old 增量 rehash，不持有 key/value 数组、native handle 或任何 payload ownership。`NativeByteMap` 与 `NativeKeyDirectory` 都把生产 topology 委托给该核心，只保留 payload arrays 与 ownership/lifecycle logic。
 
 `EntryTable` 把每个 `EntryRecord` 编码进 72-byte `ENTRY_RECORD`。key/value handle 各占 16 bytes，显式保存 `allocatorId` 与 `localRaw`；其余字段保存 key hash、type、encoding、flags、TTL、version 和 LRU/LFU clock。
 
@@ -58,14 +58,13 @@ adapter 内部并非全部 off-heap：`SET_INTSET` 是 heap 的 `short[]`/`int[]
 
 ## Key lifecycle
 
-`YierdisDbKeyLifecycle` 统一拥有 directory、entry table、type roots 和派生状态。主要职责是：
+directory、entry table、type roots 和派生状态的所有权都归 `YierdisDbKeyLifecycle`。主要职责是：
 
 - 解析 `KeyHandle` / `EntryHandle` / `EntryRecord`；
 - 为新 key staged insert 分配 key 与 entry；
 - 发布、替换和释放 entry；
 - 按 value type 释放 payload/root；
-- 更新 TTL 派生计数和等待物理删除计数；
-- 更新 LRU/LFU clock；
+- 更新 TTL 派生计数、等待物理删除计数和 LRU/LFU clock；
 - 提供 bounded key-directory scan。
 
 新 key 只能通过 opaque `StagedEntry` token 预留 entry 与 native key。abort 或未发布时关闭 token 会幂等释放两者；发布后 token 被消费，prepared mutation 只调用 lifecycle 的 publish/replace/delete 语义，不再持有 directory staging 类型。
@@ -76,15 +75,15 @@ ops 不直接组合 directory 与 entry table，也不能从 lifecycle 取出 ba
 
 ## Runtime kernel 与 facade
 
-`YierdisDbKernel` 是 package-private 深模块。普通读取由 concrete ops 在 owner 检查后直接执行，mutation 通过 `execute(MutationPlan)` 进入统一 executor。concrete ops、memory context、key lifecycle、entry mutation、TTL driver、active-expiration driver、memory reporter 和 maxmemory participant 都保持 package-private，handle、entry record、backend 与 ledger 不进入公开 DB interface。
+`YierdisDbKernel` 是 package-private 深模块。普通读取由 concrete ops 在 owner 检查后直接执行，mutation 通过 `execute(MutationPlan)` 进入同一个 executor。concrete ops、memory context、key lifecycle、entry mutation、TTL driver、active-expiration driver、memory reporter 和 maxmemory participant 都保持 package-private，handle、entry record、backend 与 ledger 不进入公开 DB interface。
 
 `YierdisDbMutationExecutor.MutationPlan` 直接声明 upper bound、`AdmissionMode` 和无参 `prepare()`，并返回 `PreparedDbMutation`。family 通过 kernel 的 unchanged/insert/replace/delete/upsert/callback/batch 方法构造 prepared mutation；批量组合由 `PreparedBatchMutation` 提交、释放或中止子 mutation。`YierdisDbMemoryContext` 继续封装 allocation 估算、epoch、native slice、allocator stats 和 page trim，但不是可见扩展点。
 
-`ListValue.PreparedMutation` 按操作变体分为 unchanged、packed replacement、packed-to-quicklist、quicklist push 和 quicklist pop。每个变体只保存自己拥有的 replacement、node 或 superseded 资源，并分别实现 source 校验、提交、superseded 释放和放弃清理；公共生命周期只负责状态保护与变体调度，避免通过 nullable 资源组合推断操作类型。
+`ListValue.PreparedMutation` 按操作变体分为 unchanged、packed replacement、packed-to-quicklist、quicklist push 和 quicklist pop。每个变体只保存自己拥有的 replacement、node 或 superseded 资源，并分别实现 source 校验、提交、superseded 释放和放弃清理；公共生命周期只做状态保护与变体调度，避免通过 nullable 资源组合推断操作类型。
 
 `NativeByteMap.PreparedMutation` 把每个 source 显式记录为 active、old 或 absent，并为 present source 单独保存非负 slot index；inspect、validate、commit 和 abort cleanup 共用该位置模型，不再用整数符号区分 table。
 
-`CommandSupport.commandDb(session)` 直接返回路由选中的 `DbEngine`；命令通过 typed ops 或 `memoryUsage(...)`、`memoryStats()`、`objectEncoding(...)`、`flushDb()` 直接调用。prepared set/pop 使用无参数 `commit()`；lazy expiry、active expiry 和 eviction 也进入同一个 mutation executor。
+`CommandSupport.commandDb(session)` 直接返回路由选中的 `DbEngine`；命令通过 typed ops 或 `memoryUsage(...)`、`memoryStats()`、`objectEncoding(...)`、`flushDb()` 调用。prepared set/pop 使用无参数 `commit()`；lazy expiry、active expiry 和 eviction 也进入同一个 mutation executor。
 
 ## 读路径
 
@@ -102,7 +101,7 @@ DbEngine.strings()/hashes()/lists()/sets()/zsets()/hll()/keyspace()/ttl()
 
 `liveEntryRecord(...)` 比较 `expireAtMillis`。live record 正常返回；过期 record 触发 `reclaimExpired(...)` 并对调用方隐藏。reclamation 是完整 mutation，会删除 graph 并结算 ledger。只有成功取得 live record 的 LRU 路径才 touch clock。
 
-普通查询从参数检查、live-entry 解析到结果视图构造都在同一个 owner 检查后的调用内完成。prepared mutation 会跨越一次调用的生命周期，因此在创建、状态检查与提交入口使用 `YierdisDbKernel.checkOwner()`；scan/result view 则按各自契约持有 epoch 或结果资源。实际变更仍只能通过 `MutationPlan` 进入 executor。
+普通查询的参数检查、live-entry 解析和结果视图构造都在同一次调用里完成，且位于 owner 检查之后。prepared mutation 会跨越一次调用的生命周期，所以在创建、状态检查与提交入口使用 `YierdisDbKernel.checkOwner()`；scan/result view 则按各自契约持有 epoch 或结果资源。实际变更仍只能通过 `MutationPlan` 进入 executor。
 
 需要拥有结果的 API 会复制 bytes；callback-scoped streaming 可以使用短生命周期 native view。`SCAN` 的 `KeyWindow` 先在 bounded epoch 内 discovery，再按同一 cursor/window 同步 replay 到 sink；window close 后 epoch 才释放，不能让 slice 或 view 逃逸。
 
@@ -125,9 +124,9 @@ estimate upper bound
      -> optional page trim
 ```
 
-prepare 完成可能失败的 native allocation、replacement topology 和 source validation。family 通过 kernel 工厂产生 `PreparedEntryMutation` 或其他 `PreparedDbMutation`，用 unchanged/insert/replace/delete/upsert/callback/batch 表达转换，并按 value representation 附加 abort、before-publish 或 superseded-release hook。
+可能失败的 native allocation、replacement topology 和 source validation 都发生在 prepare。family 通过 kernel 工厂产生 `PreparedEntryMutation` 或其他 `PreparedDbMutation`，用 unchanged/insert/replace/delete/upsert/callback/batch 表达转换，并按 value representation 附加 abort、before-publish 或 superseded-release hook。
 
-失败边界以 `prepared.commit()` 开始为界：
+失败以 `prepared.commit()` 开始为界：
 
 - commit 前失败会 abort prepared resources 与 allocation scope，并 rollback ledger reservation；旧 graph 保持可见。
 - commit 后失败不再宣称 mutation 未发生。executor best-effort promote/settle/release，标记 DB degraded，并以 result-unknown 结束请求。
@@ -136,7 +135,7 @@ upper bound 覆盖新 key/entry/root、native payload、allocator metadata、all
 
 ## TTL 与主动清理
 
-TTL 命令由 `YierdisTtlOps` 通过 prepared entry replacement/delete 实现。设置 deadline 复用原 entry handle；`PERSIST` 把 deadline 改为 `-1`；已经到期的输入直接准备删除。
+`YierdisTtlOps` 用 prepared entry replacement/delete 实现 TTL 命令。设置 deadline 复用原 entry handle；`PERSIST` 把 deadline 改为 `-1`；已经到期的输入直接准备删除。
 
 `YierdisDbExpirationSupport.cleanupExpired(...)` 只消费 `ExpiresIndex` 队首，不扫描 keyspace slot。单次最多回收 20 个过期 key，并受时间预算限制。每个候选先按 key identity 和真实 `expireAtMillis` 做惰性校验，再走 `YierdisDbKernel.reclaimExpired(...)`。
 
@@ -149,7 +148,7 @@ TTL 命令由 `YierdisTtlOps` 通过 prepared entry replacement/delete 实现。
 - `usedBytes`：按 committed mutation `actualDeltaBytes` 更新的逻辑账本；
 - `reservedBytes`：admission 已通过但尚未 settle 的预算窗口。
 
-enforcement 使用当前 DB 独占 `MemoryUsageSnapshot`：
+enforcement 使用本 DB 独占的 `MemoryUsageSnapshot`：
 
 ```text
 heap estimated
@@ -157,17 +156,17 @@ heap estimated
   + native data committed
 ```
 
-写 admission 不内联跑 expires 索引清理。per-db scope 的本地 enforce 按 `maxmemoryBytes - estimatedExtraBytes` trim/resample/evict。global scope 把跨 DB 预算交给 `YierdisGlobalMaxmemoryGovernor`，由它汇总 snapshots 和挑选 victim。维护节拍里，每个 DB 的 `runMaintenance()` 仍会先排空到期 key，再做本地 enforce；global governor 的 maintenance 在 DB 循环之后。各 DB backend runtime counter 只用于 lifecycle 诊断，不作为第二套 global usage source。
+写 admission 不内联跑 expires 索引清理。per-db scope 的本地 enforce 按 `maxmemoryBytes - estimatedExtraBytes` trim/resample/evict。global scope 把跨 DB 预算交给 `YierdisGlobalMaxmemoryGovernor`，由后者汇总 snapshots、挑选 victim。维护节拍里，每个 DB 的 `runMaintenance()` 仍会先排空到期 key，再做本地 enforce；global governor 的 maintenance 在 DB 循环之后。各 DB backend runtime counter 只用于 lifecycle 诊断，不作为第二套 global usage source。
 
 `noeviction` 不选 victim；`allkeys-random` 随机取候选；`allkeys-lru` 比较 `EntryRecord.lruOrLfu()`。candidate selection 不跳过过期 key（抽到或扫描到即作为最优候选），过期候选先走 expiration reclamation，真正 victim 通过 `YierdisDbKernel.evict(...)` 删除。
 
-ledger 逻辑账本与 admission 的物理重算是两套账。静默的 `ledger.usedBytes` 与物理用量漂移不会自动触发 invariant failure。degraded 来自 `YierdisDbHealth.recordInvariantFailure(...)` 和 commit 开始后的失败，写入被 `MISCONF DB is in a degraded state; writes are disabled` 拒绝。`RuntimeDbEngine.reconcileAccounting()` 是唯一的显式恢复入口：在 owner thread 上重算物理用量、用 `realignUsage` 把逻辑账本对齐到物理值、清除 degraded 并恢复写入；每次尝试与结果（成功/失败/修正量）记入 `DbHealthSnapshot.lastReconciliation`。快照的失败字段只描述当前未恢复的 episode，对账成功后随之关闭，下一场事故重新入账。恢复不会自动发生，持续性记账 bug 仍以事故形式暴露。
+ledger 逻辑账本与 admission 的物理重算是两套账。`ledger.usedBytes` 与物理用量之间的漂移是静默的，不会自动触发 invariant failure。degraded 来自 `YierdisDbHealth.recordInvariantFailure(...)` 和 commit 开始后的失败，写入被 `MISCONF DB is in a degraded state; writes are disabled` 拒绝。`RuntimeDbEngine.reconcileAccounting()` 是唯一的显式恢复入口：在 owner thread 上重算物理用量、用 `realignUsage` 把逻辑账本对齐到物理值、清除 degraded 并恢复写入；每次尝试与结果（成功/失败/修正量）记入 `DbHealthSnapshot.lastReconciliation`。快照的失败字段只描述当前未恢复的 episode，对账成功后随之关闭，下一场事故重新入账。恢复不会自动发生，持续性记账 bug 仍以事故形式暴露。
 
 更完整的 admission、OOM 和 result-unknown 边界见 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)。
 
 ## Memory 与 introspection
 
-`YierdisDb` 直接读取 entry encoding，`YierdisDbMemoryReporter` 直接聚合 key lifecycle、ledger 和 native allocator 状态。`MEMORY USAGE` / `MEMORY STATS` 是 explainable estimate，不是 JVM instrumentation object graph。
+`YierdisDb` 直接读取 entry encoding，`YierdisDbMemoryReporter` 则聚合 key lifecycle、ledger 和 native allocator 状态。`MEMORY USAGE` / `MEMORY STATS` 是 explainable estimate，不是 JVM instrumentation object graph。
 
 主要口径包括：
 

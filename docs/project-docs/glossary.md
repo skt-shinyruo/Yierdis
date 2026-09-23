@@ -1,6 +1,6 @@
 # 术语表
 
-本文解释 Yierdis 文档和源码里反复出现的术语。每个术语都尽量指向最相关的专题文档。
+收录 Yierdis 文档和源码里反复出现的术语，每个术语都尽量指向最相关的专题文档。
 
 ## Request / Reply Path
 
@@ -22,7 +22,7 @@
 
 ### `RedisReplyRenderer`
 
-执行器中唯一把 `RedisReply` 展开为 RESP-facing 写操作的组件。它递归渲染 aggregate，并消费 bulk、byte sequence、byte map 的语义流式 emitter。
+执行器中唯一把 `RedisReply` 展开为 RESP-facing 写操作的组件。递归渲染 aggregate，并消费 bulk、byte sequence、byte map 的语义流式 emitter。
 
 ### `RedisReplyWriter`
 
@@ -30,7 +30,7 @@
 
 ### `RespReplyWriter`
 
-`RedisReplyWriter` 的 RESP 实现，负责把语义回包编码成 RESP2 或基础 RESP3 bytes。详见 [`protocol-reference.md`](./protocol-reference.md)。
+`RedisReplyWriter` 的 RESP 实现，把语义回包编码成 RESP2 或基础 RESP3 bytes。详见 [`protocol-reference.md`](./protocol-reference.md)。
 
 ## Command Layer
 
@@ -60,9 +60,9 @@ CommandExecutor
 
 ### `CommandDispatcher`
 
-执行请求到命令契约的统一入口。它检查命令名、null、arity 和事务策略，调用 `CommandSpec.handler().parse(CommandArgs)`，再对返回的函数调用 `apply(session)` 得到 `PreparedCommand`。
+执行请求进入命令契约的统一入口。它检查命令名、null、arity 和事务策略，调用 `CommandSpec.handler().parse(CommandArgs)`，再对返回的函数调用 `apply(session)` 得到 `PreparedCommand`。
 
-事务 active 时，queueable 命令只运行 handler parse 做 preflight，不提前 prepare；容量预留成功后事务队列 retain 原 `ExecutionRequest`。`EXEC` replay 通过同一 dispatcher 准备子 `PreparedCommand`，并负责关闭子命令和 retained requests。
+事务 active 时，queueable 命令只运行 handler parse 做 preflight，不提前 prepare；容量预留成功后事务队列 retain 原 `ExecutionRequest`。`EXEC` replay 通过同一 dispatcher 准备子 `PreparedCommand`，并关闭子命令和 retained requests。
 
 ### `Function<CommandSession, PreparedCommand>`
 
@@ -84,7 +84,7 @@ handler 解析成功后返回的准备函数。它在 `apply(CommandSession)` �
 
 ### `DbEngine`
 
-DB 的能力聚合接口，直接提供 `strings()`、`hashes()`、`lists()`、`sets()`、`zsets()`、`hll()`、`keyspace()`、`ttl()`、`memoryUsage(...)`、`memoryStats()`、`objectEncoding(...)` 和 `flushDb()`。主动过期清理由 runtime maintenance 调度。command 层依赖它，而不是依赖 `YierdisDb` internal。详见 [`db-internals.md`](./db-internals.md)。
+DB 的能力聚合接口，直接提供 `strings()`、`hashes()`、`lists()`、`sets()`、`zsets()`、`hll()`、`keyspace()`、`ttl()`、`memoryUsage(...)`、`memoryStats()`、`objectEncoding(...)` 和 `flushDb()`。主动过期清理交给 runtime maintenance 调度。command 层依赖它，而不是依赖 `YierdisDb` internal。详见 [`db-internals.md`](./db-internals.md)。
 
 ### `YierdisDb`
 
@@ -92,7 +92,7 @@ DB 的能力聚合接口，直接提供 `strings()`、`hashes()`、`lists()`、`
 
 ### `YierdisInstance`
 
-runtime 中的多 DB 容器，负责 DB 生命周期、owner thread 绑定、resources 和 close 顺序。详见 [`request-execution-flow.md`](./request-execution-flow.md)。
+runtime 中的多 DB 容器，掌管 DB 生命周期、owner thread 绑定、resources 和 close 顺序。详见 [`request-execution-flow.md`](./request-execution-flow.md)。
 
 ### owner thread
 
@@ -114,13 +114,13 @@ DB 内 key 到 entry handle/record 的索引。生产实现是 `YierdisDbStorage
 
 ### maxmemory
 
-运行时内存上限和驱逐策略的统称。写路径会在 mutation 前估算、预留、必要时驱逐，失败时要 rollback，避免半写入。
+运行时内存上限和驱逐策略的统称。写路径会在 mutation 前估算、预留、必要时驱逐，失败则 rollback，避免半写入。
 
 ### retained bytes
 
 对象当前持有、仍需计入生命周期或 maxmemory 的字节数。它不一定等同于本次写入的参数大小，因为 native spare capacity、root metadata 和 heap topology 都可能参与计算。
 
-请求侧的 `ExecutionRequest.retainedBytes()` 是 heap request footprint 估算，统一由 `HeapRequestFootprint` 定义：请求对象、外层 argv 数组与引用槽位、每个非空参数的数组头和按 8 对齐的 payload 都计入，而不是只按参数 payload 长度求和。RESP array path、inline path 和 `ByteArrayExecutionRequest` 各工厂方法共用这一口径，executor queued bytes、连接 pending bytes 和事务 queue bytes 直接消费该值。
+请求侧的 `ExecutionRequest.retainedBytes()` 是 heap request footprint 估算，口径由 `HeapRequestFootprint` 定义：请求对象、外层 argv 数组与引用槽位、每个非空参数的数组头和按 8 对齐的 payload 都计入，而不是只按参数 payload 长度求和。RESP array path、inline path 和 `ByteArrayExecutionRequest` 各工厂方法共用这一口径，executor queued bytes、连接 pending bytes 和事务 queue bytes 直接消费该值。
 
 ## Data Model
 
@@ -144,7 +144,7 @@ root 是 entry record 指向的 family root，例如 `StringRoot`、`ListRoot`�
 
 ### backpressure
 
-当 executor backlog、连接队列或输出缓冲超过预算时，系统暂停或限制继续接收请求的机制。目的是保护 owner thread 和内存预算。详见 [`executor-and-backpressure.md`](./executor-and-backpressure.md)。
+当 executor backlog、连接队列或输出缓冲超过预算时，系统暂停或限制继续接收请求的机制。用来保护 owner thread 和内存预算。详见 [`executor-and-backpressure.md`](./executor-and-backpressure.md)。
 
 ### backlog budget
 
@@ -162,7 +162,7 @@ executor 在多连接之间选择任务的策略，目前文档中常见的是 `
 
 ### `BytesView`
 
-带长度的随机访问只读接口，要求 `length()`、`getByte(index)` 和 `getBytes(...)`。接口注释要求实现视为短生命周期对象，不得被存入 DB。
+带长度的随机访问只读接口，要求 `length()`、`getByte(index)` 和 `getBytes(...)`。接口注释要求实现视为短生命周期对象，不得存入 DB。
 
 ### `BytesSlice`
 
@@ -188,7 +188,7 @@ DB entry 的稳定句柄包装。它只要求内部 `NativeHandle` 非 null，�
 
 ### `ValueHandle`
 
-DB value/root 的稳定句柄包装，包含 null sentinel 约定。它常用于 entry record 指向具体 value/root。
+DB value/root 的稳定句柄包装，包含 null sentinel 约定。entry record 常用它指向具体 value/root。
 
 ### `NativeHandle`
 
@@ -196,7 +196,7 @@ stable-memory backend 的 `(allocatorId, localRaw)` paired identity。`localRaw`
 
 ### object table
 
-native allocator 中记录对象 metadata、generation、pin 状态和 quarantine 状态的表。它负责 stale handle 和 wrong kind/domain 检查。
+native allocator 中记录对象 metadata、generation、pin 状态和 quarantine 状态的表。承担 stale handle 和 wrong kind/domain 检查。
 
 ### stable memory backend
 

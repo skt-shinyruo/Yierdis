@@ -1,6 +1,6 @@
 # 配置与运行
 
-本文解释启动参数如何进入运行时配置，以及本地运行、观测、调参和关闭时应该看哪些入口。
+这篇文档沿着启动参数进入运行时配置的路径展开，并标出本地运行、观测、调参和关闭时要看的入口。
 
 ## 配置流向
 
@@ -15,7 +15,7 @@ argv
   -> YierdisServerBootstrap
 ```
 
-`YierdisServerArgs` 用 picocli 声明 server 参数、默认值和 usage。`normalizeAndValidate()` 只处理 CLI 归一化和派生语义，例如 `--noCleanup` 会把 `cleanupIntervalMillis` 归零，字符串枚举会归一化成稳定 argv 值；三个枚举（executorSchedulingPolicy、maxmemoryScope、maxmemoryPolicy）在这里解析一次并缓存枚举实例，不再经过字符串 round-trip。网络、协议、reply、内存、maintenance 以及 executor 队列与背压约束全部由 `YierdisServerRuntimeConfig` 的构造器统一校验（启动参数的信任边界只有这一处）；`CommandExecutorConfig` 只承载已校验的值，不再重复校验。
+`YierdisServerArgs` 用 picocli 声明 server 参数、默认值和 usage。`normalizeAndValidate()` 只处理 CLI 归一化和派生语义，例如 `--noCleanup` 会把 `cleanupIntervalMillis` 归零，字符串枚举会归一化成稳定 argv 值；三个枚举（executorSchedulingPolicy、maxmemoryScope、maxmemoryPolicy）在这里解析一次并缓存枚举实例，不再经过字符串 round-trip。网络、协议、reply、内存、maintenance 以及 executor 队列与背压约束，全都在 `YierdisServerRuntimeConfig` 构造器里校验（启动参数的信任边界只有这一处）；`CommandExecutorConfig` 只承载已校验的值，不再重复校验。
 
 `toRuntimeConfig()` 把已归一化参数转成 `YierdisServerRuntimeConfig` record：首次调用会触发 `normalizeAndValidate()` 并缓存结果，后续调用返回同一实例。这个 record 是 `yierdis-server` 内部后续组装的稳定配置对象，字段已经是 enum、number 和 boolean，不再携带原始 CLI 字符串；`executorConfig()` 直接生成 executor 领域配置。
 
@@ -34,9 +34,9 @@ argv
 9. 创建 boss/worker Netty group，并由 `YierdisServerChannelInitializer` 装配连接 pipeline。
 10. `bind(port)`。
 
-`YierdisInstance` 在这个过程中不是“随手可用的 DB 容器”。`YierdisInstance.create(config)` 直接组装固定的 FFM DB backend；`runtimeAccess().bindToCurrentThread()` 要先把当前线程标成 owner thread，后续 DB access 才会被允许；`close()` 负责按拥有关系关闭 runtime、allocator 和 DB resources。bootstrap 失败时会 best-effort 清掉已经创建的对象，避免留下半初始化实例。
+`YierdisInstance` 在这个过程中不是“随手可用的 DB 容器”。`YierdisInstance.create(config)` 直接组装固定的 FFM DB backend；`runtimeAccess().bindToCurrentThread()` 要先把当前线程标成 owner thread，后续 DB access 才会被允许；`close()` 按拥有关系关闭 runtime、allocator 和 DB resources。bootstrap 失败时会 best-effort 清掉已经创建的对象，避免留下半初始化实例。
 
-注意：benchmark 不持有 server 参数或生命周期模型，只连接由操作者单独管理的 Yierdis。client idle/output-buffer 等 server-only 参数必须在启动目标 Yierdis 时直接配置。
+benchmark 不持有 server 参数或生命周期模型，只连接由操作者单独管理的 Yierdis；client idle/output-buffer 等 server-only 参数必须在启动目标 Yierdis 时直接配置。
 
 源码入口：
 
@@ -47,13 +47,13 @@ argv
 
 ## 网络和实例规模
 
-`--bind` 决定监听地址，默认 `127.0.0.1`；`--port` 决定 Netty bind 端口，默认 `6378`；`--maxClients` 限制同时接受的客户端连接数，默认 `1024`；`--databases` 决定 `SELECT 0..N-1` 的逻辑 DB 数，默认 `16`，校验范围是 `1..1024`；`--ioThreads` 决定 Netty worker 线程数，默认 `1`。
+`--bind` 决定监听地址，默认 `127.0.0.1`；`--port` 指定 Netty bind 端口，默认 `6378`；`--maxClients` 限制同时接受的客户端连接数，默认 `1024`；`--databases` 指定 `SELECT 0..N-1` 的逻辑 DB 数，默认 `16`，校验范围是 `1..1024`；`--ioThreads` 指定 Netty worker 线程数，默认 `1`。
 
 生产启动必须显式传入 `--maxmemoryBytes`，即使值为 `0`（禁用 maxmemory enforcement）。这是有意的安全护栏，避免把“忘记配置容量上限”和“明确选择无限制”混为一谈。
 
-这里最容易误解的是 `ioThreads`。它们是 Netty worker，负责 socket I/O、pipeline decode/encode 事件和定时器触发，不是 DB mutation 并行度。DB 读写和 maintenance 里的 DB 访问都通过 `CommandExecutor` 的 owner thread 进入；`YierdisInstance` 也要求 DB 访问先绑定到 owner thread，跨线程访问会 fail-fast。
+这里最容易误解的是 `ioThreads`。它们是 Netty worker，处理 socket I/O、pipeline decode/encode 事件和定时器触发，不是 DB mutation 并行度。DB 读写和 maintenance 里的 DB 访问都通过 `CommandExecutor` 的 owner thread 进入；`YierdisInstance` 也要求 DB 访问先绑定到 owner thread，跨线程访问会 fail-fast。
 
-当前的单 owner 是有意保留的执行模型，不是把 `CommandExecutor` 线程数调大就能消除的临时限制。它让 keyspace、TTL、stable backend、mutation ledger 和连接会话在同一条命令序列中推进，DB state 不需要在每个结构内部再实现并发写入协议。
+当前的单 owner 是有意保留的执行模型，不是把 `CommandExecutor` 线程数调大就能消除的临时限制。单 owner 让 keyspace、TTL、stable backend、mutation ledger 和连接会话在同一条命令序列中推进，DB state 不需要在每个结构内部再实现并发写入协议。
 
 真正的 shard-per-core 必须作为一套完整执行架构实现：每个 shard 拥有独立 DB、allocator 和 runtime；提交前按命令 key 规划路由；同一连接仍保持顺序执行，并正确携带 `SELECT`、RESP 协商和 `MULTI/EXEC` 状态；跨 key 命令还需要明确单 shard 限制或跨 shard 协调协议。global maxmemory、maintenance 和 shutdown 也必须覆盖全部 shard。在这些契约同时落地前，增加 DB owner 数会破坏现有语义，因此当前配置不提供伪并行的 storage-shard 开关。
 
@@ -76,7 +76,7 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar STATS
 
 `--protocolMaxBulkBytes`、`--protocolMaxArgs`、`--protocolMaxLineBytes` 和 `--protocolMaxCommandBytes` 会直接传给 `RespRequestDecoder`。它们分别约束 bulk body、参数个数、header/inline 行长度，以及单条命令的 heap footprint 估算字节数（`HeapRequestFootprint` 口径，含请求对象、argv 槽位和每个参数的数组头与对齐 payload，不是纯 payload 求和）。暴露在不可信网络里时，优先收紧这四个入口上限，再考虑更深层的内存调参。
 
-解析失败会走 RESP protocol error 路径：`RespRequestDecoder` 负责 RESP 解析、入口限制和 ingress admission，出错时把 `RespProtocolError` 放进已注册 reply slot；`NettyExecutionRequestIngress` 统一回协议错误并关闭连接，避免请求和回包错位。这个路径不会进入 command executor。
+解析失败会走 RESP protocol error 路径：`RespRequestDecoder` 做 RESP 解析、入口限制和 ingress admission，出错时把 `RespProtocolError` 放进已注册 reply slot；协议错误由 `NettyExecutionRequestIngress` 统一回复并关闭连接，避免请求和回包错位。这个路径不会进入 command executor。
 
 ## executor 和 backpressure
 
@@ -109,7 +109,7 @@ ERR request exceeds executor queue byte limit
 
 传给 `EngineSession` 的 `DefaultTransactionState`。默认值分别是 `1024` 和 `67108864`；`0` 表示对应限制禁用。
 
-在 `MULTI` 状态下，命令入队会通过 `ExecutionRequest.retain()` 取得事务自己的所有权并累计 retained bytes（`HeapRequestFootprint` 口径的 heap footprint 估算）；网络请求共享不可变 argv 和 request-memory lease。超过命令数或 bytes 上限时，事务被标记为 aborted，入队返回 `ERR Transaction queue is full`；后续 `EXEC` 会返回 Redis 风格 `EXECABORT Transaction discarded because of previous errors.` 并丢弃队列。这是为了防止大事务或大参数在连接状态里无界驻留。
+在 `MULTI` 状态下，命令入队会用 `ExecutionRequest.retain()` 取得事务自己的所有权并累计 retained bytes（`HeapRequestFootprint` 口径的 heap footprint 估算）；网络请求共享不可变 argv 和 request-memory lease。超过命令数或 bytes 上限时，事务被标记为 aborted，入队返回 `ERR Transaction queue is full`；后续 `EXEC` 会返回 Redis 风格 `EXECABORT Transaction discarded because of previous errors.` 并丢弃队列。这是为了防止大事务或大参数在连接状态里无界驻留。
 
 推荐看 `TransactionQueueLimitTest` 和 `EngineSession`。
 
@@ -128,7 +128,7 @@ bootstrap 使用 Netty worker event loop 做定时器，但定时器只提交 `e
 
 `nativeDefragEnabled` 只是给 `YierdisDb.defragMaintenance()` 提供预算闸门；更细的移动、pin、quarantine 和 object table 语义看 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 
-`KEYS` 的时间和结果数预算由 bootstrap 转成 `SlowCommandLimits`，再通过 `DefaultCommandModules.create(...)` 注入命令模块。大 keyspace 运行时优先使用 `SCAN`，把 `KEYS` 当成受限诊断工具。
+`KEYS` 的时间和结果数预算由 bootstrap 转成 `SlowCommandLimits`，再由 `DefaultCommandModules.create(...)` 注入命令模块。大 keyspace 运行时优先使用 `SCAN`，把 `KEYS` 当成受限诊断工具。
 
 连接空闲超时 `--client-idle-timeout-millis` 默认 `0`，表示不因空闲主动断开；不可信或资源紧张的部署可以显式设置正值。
 
@@ -168,15 +168,15 @@ maxmemory 参数：
 `YierdisServerChannelInitializer` 在连接初始化时：
 
 1. 当 output buffer limit 大于 `0` 时设置 Yierdis 自定义的 Netty `WriteBufferWaterMark`，low 为 high 的一半；为 `0` 时不覆盖 channel 原有 watermark。
-2. 始终安装 `WriteBufferBackpressureHandler`。channel 不可写时调用 `executor.onTransportUnwritable(...)`，executor 关闭该连接 `autoRead`；恢复可写时通过 owner executor 调用 `recoverInputIfPossible(...)`。
+2. 始终安装 `WriteBufferBackpressureHandler`。channel 不可写时调用 `executor.onTransportUnwritable(...)`，executor 关闭该连接 `autoRead`；恢复可写时由 owner executor 调用 `recoverInputIfPossible(...)`。
 3. 如果 channel 持续不可写超过 grace，则经 `NettyExecutionConnection.initiateClose()` 统一关闭：先标记 closing、回收事务状态，再关闭 transport；output buffer limit 为 `0` 时 handler 的 grace 为 `0`，不会调度这类慢客户端宽限关闭。
-4. 当 idle timeout 大于 `0` 时安装 `IdleStateHandler` 和 `CloseOnReadIdleHandler`，读空闲超时后同样经 `initiateClose()` 统一关闭连接。
+4. 当 idle timeout 大于 `0` 时安装 `IdleStateHandler` 和 `CloseOnReadIdleHandler`，读空闲超时后同样经 `initiateClose()` 关闭连接。
 
 这层保护处理的是慢读客户端和闲置连接，和 executor queue/backpressure 互补：前者看 Netty outbound buffer 和读空闲，后者看入站请求积压。即使关闭 Yierdis 自定义 output-buffer limit，Netty channel 仍然有自身的 writability 状态；如果 channel 按当前 watermark 变为不可写，transport backpressure 仍会暂停 `autoRead`。
 
 ## 可观测命令
 
-`INFO` 返回 Redis 风格文本块，支持 `server`、`clients`、`memory`、`stats`、`keyspace` 等 section。它适合人工排查和与 Redis 经验对照。memory section 会包含 `maxmemory`、`maxmemory_policy`、`yierdis_maxmemory_scope`、ledger、offheap 和 native defrag 摘要；stats section 会包含 executor queue 摘要。
+`INFO` 返回 Redis 风格文本块，支持 `server`、`clients`、`memory`、`stats`、`keyspace` 等 section。这份输出适合人工排查和与 Redis 经验对照。memory section 会包含 `maxmemory`、`maxmemory_policy`、`yierdis_maxmemory_scope`、ledger、offheap 和 native defrag 摘要；stats section 会包含 executor queue 摘要。
 
 `INFO yierdis` 返回结构化 map，更适合脚本和测试。它暴露 `server`、`version`、`port`、`io_threads`、`executor_policy`、`executor_queue_capacity`、`executor_queue_max_bytes`、`backpressure_high`、`backpressure_low`、`backpressure_bytes_high`、`backpressure_bytes_low`、`executor_max_drain`、`executor_drain_millis`、`started_millis`、`uptime_millis`。
 
@@ -236,7 +236,7 @@ java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar
 
 `YierdisServerBootstrap.start(config)` 使用 `ok` 标记，启动任一步失败都会调用 `close()` 做清理。
 
-关闭是 best-effort，顺序大致是：server channel、child input、cleanup future、executor graceful shutdown、child reply drain、ingress/outbound budget、instance runtime access、command group、boss group、worker group。runtime access 的关闭会通过 `executor.executeOwnerTask(runtimeAccess::close)` 回到 owner thread，避免在错误线程释放已绑定 DB runtime。
+关闭是 best-effort，顺序大致是：server channel、child input、cleanup future、executor graceful shutdown、child reply drain、ingress/outbound budget、instance runtime access、command group、boss group、worker group。runtime access 的关闭会经 `executor.executeOwnerTask(runtimeAccess::close)` 回到 owner thread，避免在错误线程释放已绑定 DB runtime。
 
 脚本层关闭逻辑也要按真实进程处理：只有 `scripts/smoke.sh` 拥有它启动的临时 server，并用 trap 清理；connect-only benchmark 不拥有也不停止目标 Yierdis。
 

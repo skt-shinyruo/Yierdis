@@ -1,14 +1,14 @@
 # 代码库文档地图
 
-本文是 Yierdis 的内部代码库文档地图。根部 `README.md` 负责项目定位、环境、构建和启动。
+Yierdis 的内部代码库文档地图如下。根部 `README.md` 覆盖项目定位、环境、构建和启动。
 
 ## 文档分层
 
 - 入口导读: [`readme.md`](./readme.md), [`project-overview.md`](./project-overview.md)。记录项目定位、能力边界和模块入口。
-- 系统主线: [`request-execution-flow.md`](./request-execution-flow.md), [`module-architecture.md`](./module-architecture.md)。负责串起请求执行链和 Maven 模块边界。
-- 专题手册: [`protocol-reference.md`](./protocol-reference.md), [`commands-and-data-model.md`](./commands-and-data-model.md), [`db-internals.md`](./db-internals.md), [`db-design-analysis.md`](./db-design-analysis.md), [`db-behavior-gaps.md`](./db-behavior-gaps.md), [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md), [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md), [`executor-and-backpressure.md`](./executor-and-backpressure.md), [`proxy-logic.md`](./proxy-logic.md), [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md), [`configuration-and-operations.md`](./configuration-and-operations.md), [`client-and-bench-internals.md`](./client-and-bench-internals.md), [`ffm-primer.md`](./ffm-primer.md), [`native-memory-runtime.md`](./native-memory-runtime.md), [`native-allocator-and-handles.md`](./native-allocator-and-handles.md), [`offheap-copy-behavior.md`](./offheap-copy-behavior.md)。负责按协议、命令、DB、TTL/maxmemory、执行器、代理、bytes、配置、客户端和 native memory 等主题提供深入说明。
-- 开发导航: [`development-navigation.md`](./development-navigation.md), [`testing-and-debugging.md`](./testing-and-debugging.md)。负责把常见改动类型、排障路径和验证范围连接起来。
-- 参考资料: [`glossary.md`](./glossary.md)。负责集中解释高频术语；源码入口和测试范围分别维护在开发导航与测试手册中。
+- 系统主线: [`request-execution-flow.md`](./request-execution-flow.md), [`module-architecture.md`](./module-architecture.md)。串起请求执行链和 Maven 模块边界。
+- 专题手册: [`protocol-reference.md`](./protocol-reference.md), [`commands-and-data-model.md`](./commands-and-data-model.md), [`db-internals.md`](./db-internals.md), [`db-design-analysis.md`](./db-design-analysis.md), [`db-behavior-gaps.md`](./db-behavior-gaps.md), [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md), [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md), [`executor-and-backpressure.md`](./executor-and-backpressure.md), [`proxy-logic.md`](./proxy-logic.md), [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md), [`configuration-and-operations.md`](./configuration-and-operations.md), [`client-and-bench-internals.md`](./client-and-bench-internals.md), [`ffm-primer.md`](./ffm-primer.md), [`native-memory-runtime.md`](./native-memory-runtime.md), [`native-allocator-and-handles.md`](./native-allocator-and-handles.md), [`offheap-copy-behavior.md`](./offheap-copy-behavior.md)。按协议、命令、DB、TTL/maxmemory、执行器、代理、bytes、配置、客户端和 native memory 等主题提供深入说明。
+- 开发导航: [`development-navigation.md`](./development-navigation.md), [`testing-and-debugging.md`](./testing-and-debugging.md)。把常见改动类型、排障路径和验证范围连在一起。
+- 参考资料: [`glossary.md`](./glossary.md) 集中解释高频术语；源码入口和测试范围分别维护在开发导航与测试手册中。
 
 ## Production Hardening
 
@@ -28,4 +28,4 @@ CommandExecutor
   -> CommandResult -> RedisReplyRenderer
 ```
 
-事务 queueable 命令在 parse 阶段做 preflight，`EXEC` replay 负责子 `PreparedCommand` 和 retained request 的所有权；语义流式 source 由对应 `PreparedCommand` 持有，renderer 同步消费结果后再由 executor 关闭，`QUIT` 通过 `CommandResult` 表达 reply 后关闭。`EngineSession` 只拥有连接 session 状态；普通 command handler 不直接使用 `RedisReplyWriter`，语义结果由 renderer 写出，executor/ingress 控制路径可以直接写协议错误与终止回复。
+事务 queueable 命令在 parse 阶段做 preflight，`EXEC` replay 接管子 `PreparedCommand` 和 retained request 的所有权；语义流式 source 由对应 `PreparedCommand` 持有，renderer 同步消费结果后再由 executor 关闭，`QUIT` 通过 `CommandResult` 表达 reply 后关闭。`EngineSession` 只拥有连接 session 状态；普通 command handler 不直接使用 `RedisReplyWriter`，语义结果由 renderer 写出，executor/ingress 控制路径可以直接写协议错误与终止回复。

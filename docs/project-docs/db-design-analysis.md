@@ -1,14 +1,12 @@
 # DB 设计分析
 
-本文从源码出发分析 Yierdis 的 DB 层**为什么这样设计**：分层意图、层与层之间的契约、与 Redis C 实现的对照、刻意偏离，以及设计与取舍中值得质疑的地方。
+Yierdis 的 DB 层**为什么这样设计**，要从分层意图、层与层之间的契约、与 Redis C 实现的对照、刻意偏离，以及设计与取舍中值得质疑的地方说起。
 
 与其它文档的分工：
 
 - [`db-internals.md`](./db-internals.md)：DB 内部结构的**机制与组合参考**（对象是什么、谁调用谁）。
 - [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)、[`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)、[`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)：各专题的完整机制。
 - [`db-behavior-gaps.md`](./db-behavior-gaps.md)：运行期行为缺口、可疑观察项与运维注意事项。
-
-本文是**设计分析**：为什么切这一层、契约是什么、代价与偏离在哪里。
 
 ## 一句话概括
 
@@ -44,7 +42,7 @@ YierdisInstance (server/runtime, 多 DB + 可选全局 governor)
 
 - `NativeHandle(long allocatorId, long localRaw)`；只有两段都为 `0` 才是 `NULL`。`allocatorId` 由 `StableMemoryBackendIds` 进程内单调发放、永不复用。
 - FFM 私有的 `localRaw` 编码：`domain[63:60] | kind[59:56] | slotId[55:16] | generation[15:4] | flags[3:0]`。
-- **realloc / defrag 不改变句柄身份**（只改 slot 内 location）；free 让 generation+1 使旧句柄 stale；12-bit generation 耗尽后 slot **永久 retire**，不再回 free stack，杜绝 ABA。
+- **realloc / defrag 不改变句柄身份**（只改 slot 内 location）；free 使 generation+1，旧句柄随之 stale；12-bit generation 耗尽后 slot **永久 retire**，不再回 free stack，杜绝 ABA。
 
 **分配**
 
@@ -77,7 +75,7 @@ YierdisInstance (server/runtime, 多 DB + 可选全局 governor)
 - 因此是**双份账**：payload 字节（key、field、member、listpack 块、quicklist node 记录）在 native；结构对象与哈希拓扑数组在 heap，两套都要估。
 - 4 个 handle domain：`STORAGE_OBJECT`、`ENTRY_OBJECT`、`KEY_BYTES`、`TYPE_ROOT`。
 
-> 容易误读的一点：`NativeKeyDirectory` **只把 key 字节存成 allocator-backed `KEY_BYTES`**；它的槽位数组（`byte[] states`、`int[] hashes`、`NativeHandle[] keyHandles`、`NativeHandle[] entryHandles`）在 heap，因此 `NativeKeyDirectory.nativeBytes()` 恒为 `0L`。"keyspace 在 native" 指的是 key 字节，不是 hash slot。
+> 容易误读的一点：`NativeKeyDirectory` **只把 key 字节存成 allocator-backed `KEY_BYTES`**；槽位数组（`byte[] states`、`int[] hashes`、`NativeHandle[] keyHandles`、`NativeHandle[] entryHandles`）在 heap，所以 `NativeKeyDirectory.nativeBytes()` 恒为 `0L`。"keyspace 在 native" 指的是 key 字节，不是 hash slot。
 
 ## L2 keyspace 索引：开放寻址 + 共享拓扑
 
@@ -88,7 +86,7 @@ YierdisInstance (server/runtime, 多 DB + 可选全局 governor)
 - **线性探测**；插入复用第一个 tombstone；remove 只置墓碑。
 - **双表增量 rehash**：写路径每次顺带推进 `WRITE_REHASH_BUDGET = 2` 个 slot；维护节拍另有 64 slot 预算。若 rehash 期间插入会顶穿合并占用，目录 API 会**同步坍缩**成一张装得下全部存活 entry 的 standalone 表，显式防止 "no insertion slot"。
 - 哈希是 **SipHash24，种子来自 `SecureRandom`**（`HashSeed`），每个 `YierdisDbEngineFactory` 一份。
-- 删除有两条路：按 key 字节探测；或**按 entry 持有的 key 句柄 + dict hash 反查槽位**（`removeEntry`，O(probe)）。位置在删除时现查，因此双表状态下也不会指向 stale slot。
+- 删除有两条路：按 key 字节探测；或**按 entry 持有的 key 句柄 + dict hash 反查槽位**（`removeEntry`，O(probe)）。位置在删除时现查，所以双表状态下也不会指向 stale slot。
 - **SCAN 游标**（`ScanCursorV2`）：`position[31:0] | phase[33:32] | generation[62:34]`（29 位 generation）。generation 不匹配或 phase 非法时从 active 表重启（允许重复，绝不因客户端乱填 cursor 抛错）。
 
 ## L3 key 生命周期与 staging
@@ -117,7 +115,7 @@ admissionMode == RECLAMATION ? ledger.beginReclamation() : ledger.reserve(upperB
   -> prepared.releaseSuperseded() -> 可选 trimEmptyPages
 ```
 
-**失败边界就是这套设计的哲学支点**：
+**失败边界是整套设计的支点**：
 
 - **commit 前失败**：abort prepared → abort allocation scope → rollback ledger，旧 graph 保持可见；`NativeMemoryException`/`IllegalStateException` 还额外标记 **degraded**。
 - **commit 后失败**：**不再宣称"没发生"**，best-effort promote/settle/release，标记 degraded，抛 `PostCommitMutationException`（result-unknown）。
@@ -184,7 +182,7 @@ admissionMode == RECLAMATION ? ledger.beginReclamation() : ledger.reserve(upperB
 - Netty I/O 线程**只提交**；真正的 DB 执行在 `SerialOwnerExecutor` 单线程上，维护命令也投到同一个 owner executor。
 - **SCAN / KEYS 一致性靠 epoch + discovery/replay**：`KeyWindow` 在 epoch 内记录 cursor、目录 generation/capacity、glob、过期时间，`emitTo` 时按同一物理范围重放，必须得到相同 count、无多余匹配、结束游标一致，否则抛 `IllegalStateException`。
 - **degraded 不自动恢复**：写入被 `MISCONF DB is in a degraded state; writes are disabled` 拒绝；`reconcileAccounting()` 是唯一显式恢复入口，刻意绕过 mutation executor（degraded 会拒写），把逻辑账本对齐到物理重算值，成功才清除 degraded。持续性记账 bug 会反复以事故暴露，而不是被静默抹平。
-- 注意其运行期副作用：`requireWritable` 在读取 `AdmissionMode` **之前**执行，因此 degraded 时连 reclamation 类 mutation 也被拒——**过期回收、`DEL`、`FLUSHDB`、读路径惰性回收都会失败**。详见 [`db-behavior-gaps.md`](./db-behavior-gaps.md)。
+- 其运行期副作用是：`requireWritable` 在读取 `AdmissionMode` **之前**执行，因此 degraded 时连 reclamation 类 mutation 也被拒——**过期回收、`DEL`、`FLUSHDB`、读路径惰性回收都会失败**。详见 [`db-behavior-gaps.md`](./db-behavior-gaps.md)。
 
 ## L9 维护与自省
 
@@ -234,11 +232,11 @@ reclaimDetachedEntries(≤64)
 
 ## 可疑与冗余实现观察
 
-以下是从源码读出的、不影响正确性但值得清理或确认的点：
+以下各点均读自源码，不影响正确性，但值得清理或确认：
 
 - `YierdisNativePageAllocator.stats()`：`freePages` 复用 `emptySmallPages`；`mediumFreeBytes`/`largeFreeBytes` 恒 0；`liveMediumSpanPages`/`liveLargeSpanPages` 实际计的是**页数**而非 span 描述符数。
 - defrag 的 `skippedBudgetObjects` 只在 byte 预算停止时自增，object/time 预算停止时为 0。
-- `state == STATE_CORRUPT` 定义但本层从未写入或匹配；handle 的 4-bit `flags` 会被 `readMeta` 解出、并由 `localHandleFor` 原样回填，但**所有写入路径都传 0**，也没有任何校验，实际恒为 0。
+- `state == STATE_CORRUPT` 定义但本层从未写入或匹配；handle 的 4-bit `flags` 由 `readMeta` 解出、经 `localHandleFor` 原样回填，但**所有写入路径都传 0**，也没有任何校验，实际恒为 0。
 - `NativeAllocatorStats.defragReclaimedPages` 在 `moveLiveObject` 里按 `retiredBytes / PAGE_BYTES` 记账，统计的是**退役 block 覆盖的页数**，不是后端真正回收的页数（真实回收发生在 quarantine/epoch 允许之后）。
 - `ZSkipList.P = 0.25` 声明但未使用；`levelFor` 用 `mix64(scoreBits ^ memberHash) & 0x3` 决定层数——概率等价于 P，但**层数由 (score, member) 确定性推导**，使 prepared insert/delete 无需携带随机状态。
 - `NativeReallocPolicy` 只有 `PRESERVE_PREFIX`，实现未按 policy 分支（行为上仍保留 prefix）。
@@ -252,7 +250,7 @@ reclaimDetachedEntries(≤64)
 
 ## 验证状态
 
-本文不是单纯转述，但也不是每一行都经过同一强度的核对。为便于后续维护，明确来源：
+本文主要基于源码，但并非每一行都经过同等强度的核对。为便于后续维护，这里明确来源：
 
 **已逐条回源核对（本次审计）**
 
@@ -262,7 +260,7 @@ reclaimDetachedEntries(≤64)
 
 **仍只做了抽查或依赖既有专题文档/子代理审计**
 
-以下文件的**完整方法级细节**未由本人逐行重读（此前读取中段曾被工具截断），相关结论来自既有专题文档与并行审计，引用时应保留怀疑：
+以下文件的**完整方法级细节**没有逐行重读（此前读取中段曾被工具截断），相关结论来自既有专题文档与并行审计，引用时应保留怀疑：
 
 - `YierdisDbKeyLifecycle` 中段（`reconcileDerivedEntryState`、publish/replace/delete、detach 与 `expireCount` 维护）；
 - `YierdisDbMutationExecutor` 中段（`postCommitFailure`、`requireReclamationInvariants`、`requireLedgerDeltaInvariant`、`reserveNormalPlan` 重试循环）；

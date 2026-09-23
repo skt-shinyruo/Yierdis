@@ -1,12 +1,12 @@
 # Netty 适配边界与有界写回
 
-本文说明 Netty 被限制在哪些模块，以及请求和回复在 Netty 对象、稳定 heap 请求、
-中立 bytes contract 与有界 `ByteBuf` chunk 之间如何转换。
+Netty 只出现在少数几个模块里。请求和回复在 Netty 对象、稳定 heap 请求、中立 bytes contract
+与有界 `ByteBuf` chunk 之间转换。
 
 ## 模块边界
 
-- `yierdis-server` 负责入站 decoder、连接 handler 和 Netty pipeline 适配。
-- `yierdis-networking-resp` 通过 `BytesSink` 编码 RESP，不依赖 `ByteBuf`。
+- `yierdis-server` 包含入站 decoder、连接 handler 和 Netty pipeline 适配。
+- `yierdis-networking-resp` 用 `BytesSink` 编码 RESP，不依赖 `ByteBuf`。
 - command、storage 和 native value 通过 `BytesView` / `BytesSlice` 工作，不导入 Netty。
 - `yierdis-server` 同时组装 reply reservation、chunk allocation、顺序写回和 channel lifecycle。
 
@@ -26,7 +26,7 @@ ByteBuf fragments
 边界，不是零拷贝路径。
 
 `RespRequestDecoder` 用单一封闭 phase 保存当前 array、bulk、inline、request credit 或 handoff
-恢复所需的数据；异步 admission 被消费后才进入下一 phase。decoder 自己的 pending phase 会先于
+恢复所需的数据；异步 admission 消费完成后才进入下一 phase。decoder 自己的 pending phase 会先于
 `AccountedRespCumulator` 的 consolidation admission 恢复，因此同一连接不会同时登记两种等待。
 
 ## 回复路径
@@ -55,13 +55,13 @@ outbound lease。
 
 `RespReplyWriter.bulkString(BytesSlice)` 先写 bulk header，再同步调用 `slice.writeTo(out)`，最后
 写 CRLF。native slice 当前通过可复用的 8 KiB heap scratch 分块读取，再写入有界 reply chunk。
-它避免完整结果 materialization，但不承诺零拷贝。
+该路径避免完整结果 materialization，但不承诺零拷贝。
 
 ## 生命周期和背压
 
 - request lease 覆盖请求排队和执行生命周期。
 - reply plan 在生成受控回复字节前申请容量。
-- streaming source owner 由 `PreparedCommand` 保留到同步 renderer 返回；它不会转移给 writer 或 `ReplySlot`。
+- streaming source owner 由 `PreparedCommand` 保留到同步 renderer 返回；这个 owner 不会转移给 writer 或 `ReplySlot`。
 - `ReplySlot` 持有编码后的 chunk 和 outbound lease，直到写回或终止清理完成。
 - `BytesView` / `BytesSlice` 不得代替这些 retained owner 跨队列保存。
 

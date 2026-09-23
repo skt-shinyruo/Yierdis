@@ -1,10 +1,10 @@
 # 协议参考
 
-本文解释 Yierdis 当前公开 TCP 协议的实现边界：RESP 请求如何进入系统、回包如何编码、协议错误如何处理，以及哪些 Redis 协议能力还只是基础兼容。
+Yierdis 当前公开的 TCP 协议有明确的实现边界：RESP 请求如何进入系统、回包如何编码、协议错误如何处理，以及哪些 Redis 协议能力还只是基础兼容。下面按这条线展开。
 
 ## 协议定位
 
-Yierdis 的公开网络入口是 Redis RESP 风格的 TCP 协议。协议层负责把线上字节解析成 argv，再交给命令层；命令层返回 `CommandResult` 和其中的语义 `RedisReply`，不直接编码 RESP。两层之间的边界是 `ExecutionRequest`、`CommandResult` 和 `RedisReply`，不是 RESP 字节或 writer 调用。
+Yierdis 的公开网络入口是 Redis RESP 风格的 TCP 协议。协议层把线上字节解析成 argv，再交给命令层；命令层返回 `CommandResult` 和其中的语义 `RedisReply`，不直接编码 RESP。两层之间的边界是 `ExecutionRequest`、`CommandResult` 和 `RedisReply`，不是 RESP 字节，也不是 writer 调用。
 
 请求进入系统的主路径是：
 
@@ -16,7 +16,7 @@ Netty ByteBuf
   -> CommandDispatcher.prepare(session, request)
 ```
 
-`RespRequestDecoder` 只处理 RESP / inline 字节、协议上限、ingress admission 和协议错误；它把结果封闭为 `RespDecodedMessage.Request` 或 `RespProtocolError`。reply admission 注册槽位后，execution ingress 才从 request 变体中取得传输无关的 `ExecutionRequest`。因此同一个命令实现不需要知道请求来自 RESP array 还是 inline command，也不需要自己拼 RESP 回包。
+`RespRequestDecoder` 只处理 RESP / inline 字节、协议上限、ingress admission 和协议错误，把结果封闭为 `RespDecodedMessage.Request` 或 `RespProtocolError`。reply admission 注册槽位后，execution ingress 才从 request 变体里取出传输无关的 `ExecutionRequest`。因此同一个命令实现不用关心请求来自 RESP array 还是 inline command，也不用自己拼 RESP 回包。
 
 ## RESP2 请求
 
@@ -57,7 +57,7 @@ inline command 不是二进制安全入口。需要传递任意 bytes、空 byte
 
 ## HELLO 2 / HELLO 3
 
-`HELLO` 用来协商当前连接的回包版本。支持的基础形式是：
+`HELLO` 用来协商当前连接的回包版本。支持的基础形式：
 
 ```text
 HELLO
@@ -67,11 +67,11 @@ HELLO 2 SETNAME <name>
 HELLO 3 SETNAME <name>
 ```
 
-`HELLO 2` 把连接设置为 RESP2 回包；`HELLO 3` 把连接切到基础 RESP3 reply encoding。切换成功后，作为连接 session owner 的 `EngineSession` 会记录当前版本。回复使用的协议版本在 prepare/容量预留时刻读取一次并被捕获进 `ReplyPlan`，命令执行返回语义 `RedisReply` 后，executor 按这份捕获值创建 `RespReplyWriter`，再由中央 renderer 编码成相应 RESP 形态；HELLO 自身在 prepare 时声明协商后的目标版本，因此协商回复的容量预留与写出都按协商后版本计算。
+`HELLO 2` 把连接设为 RESP2 回包；`HELLO 3` 把连接切到基础 RESP3 reply encoding。切换成功后，作为连接 session owner 的 `EngineSession` 会记录当前版本。回复使用的协议版本在 prepare/容量预留时刻读取一次并捕获进 `ReplyPlan`，命令执行返回语义 `RedisReply` 后，executor 按这份捕获值创建 `RespReplyWriter`，再由中央 renderer 编码成相应 RESP 形态；HELLO 自身在 prepare 时声明协商后的目标版本，所以协商回复的容量预留与写出都按协商后版本计算。
 
-`HELLO` 返回 5 个字段：`server`、`version`、`proto`、`mode`、`role`。在 RESP2 下这个 reply 是 flat array；在 RESP3 下是 map。例如 `HELLO 3` 成功后，响应包含 `proto: 3`，并且后续 map、set、null 语义会使用 RESP3 基础编码。
+`HELLO` 返回 5 个字段：`server`、`version`、`proto`、`mode`、`role`。在 RESP2 下这个 reply 是 flat array，在 RESP3 下是 map。例如 `HELLO 3` 成功后，响应包含 `proto: 3`，并且后续 map、set、null 语义会使用 RESP3 基础编码。
 
-需要注意：
+这里有几条限制：
 
 - 请求不支持的版本，例如 `HELLO 4`，会返回 `-NOPROTO unsupported protocol version`；
 - `HELLO ... AUTH ...` 固定返回 no-password-configured 错误，因为项目没有认证配置面；
@@ -80,7 +80,7 @@ HELLO 3 SETNAME <name>
 
 ## RedisReply 到 RESP 回包
 
-`RedisReply` 是命令结果的语义模型，根接口的 default `shape()` 用 sealed hierarchy 上的穷尽 switch 集中完成 `ReplyShape` 投影；各 variant 不声明自己的 `shape()`。`ReplyShapes` 只负责 shape 构造与规范化，`RedisReplyRenderer` 则是唯一的命令结果遍历点。命令实现只构造 `SimpleString`、`IntegerValue`、`BulkString`、`Aggregate`、`NullValue`、`Error` 等变体；renderer 再调用 `RedisReplyWriter`。因此 `RedisReplyWriter` 只作为 renderer 面向 RESP encoder 的端口，不是命令 API。ingress admission 或协议错误属于命令管线之外的控制回复，仍由网络边界直接编码。
+`RedisReply` 是命令结果的语义模型。根接口的 default `shape()` 用 sealed hierarchy 上的穷尽 switch 集中完成 `ReplyShape` 投影，各 variant 不声明自己的 `shape()`。`ReplyShapes` 只管 shape 构造与规范化，`RedisReplyRenderer` 则是唯一的命令结果遍历点。命令实现只构造 `SimpleString`、`IntegerValue`、`BulkString`、`Aggregate`、`NullValue`、`Error` 等变体，renderer 再调用 `RedisReplyWriter`。所以 `RedisReplyWriter` 只是 renderer 面向 RESP encoder 的端口，不是命令 API。ingress admission 或协议错误属于命令管线之外的控制回复，仍由网络边界直接编码。
 
 RESP2 下的典型映射是：
 
@@ -111,7 +111,7 @@ RESP3 下，已有专属形态的语义会换成 RESP3 编码：
 
 ## 协议错误和断连
 
-malformed RESP 没有可靠的重同步点。Yierdis 的策略是：尽量返回 RESP error reply，然后关闭当前连接。实现上，`RespRequestDecoder` 产出 `RespProtocolError` 变体，reply admission 把它与已注册槽位一起放入 `RegisteredRespMessage`；`NettyExecutionRequestIngress` 使用对应 `ReplySlot` 和当前 session 的 RESP 版本写入 control error，并把该 slot 标记为 terminal；sequencer flush 后断开连接。例外是 FIFO 保护：若仍有更早的容量延迟提交占着未发布 slot，ingress 不会把它们的回复伪造成 `ERR busy`，而是取消这些 slot 并直接拆除连接（fail-closed），避免更晚的终端错误与更早的命令错位。
+malformed RESP 没有可靠的重同步点。Yierdis 的做法是：尽量返回 RESP error reply，然后关闭当前连接。实现上，`RespRequestDecoder` 产出 `RespProtocolError` 变体，reply admission 把它与已注册槽位一起放入 `RegisteredRespMessage`；`NettyExecutionRequestIngress` 使用对应 `ReplySlot` 和当前 session 的 RESP 版本写入 control error，并把该 slot 标记为 terminal；sequencer flush 后断开连接。FIFO 保护是例外：若仍有更早的容量延迟提交占着未发布 slot，ingress 不会把它们的回复伪造成 `ERR busy`，而是取消这些 slot 并直接拆除连接（fail-closed），避免更晚的终端错误与更早的命令错位。
 
 常见协议错误包括：
 
@@ -123,7 +123,7 @@ malformed RESP 没有可靠的重同步点。Yierdis 的策略是：尽量返回
 - inline command 行太长或格式非法；
 - inline 参数数量超过上限。
 
-这个策略会让坏请求后面的残留 bytes 不再被解释成下一条请求，避免请求和响应错配。
+这个做法让坏请求后面的残留 bytes 不再被解释成下一条请求，避免请求和响应错配。
 
 ## 协议上限
 
@@ -136,19 +136,19 @@ malformed RESP 没有可靠的重同步点。Yierdis 的策略是：尽量返回
 | inline/header 行长度 | 1 MiB | `--protocolMaxLineBytes` |
 | 单条请求累计字节数 | 64 MiB | `--protocolMaxCommandBytes` |
 
-这组参数会在 server 启动时传给 `YierdisServerChannelInitializer`，再进入 `RespRequestDecoder`。超过上限属于协议错误，会返回 error 并关闭连接。
+这组参数在 server 启动时传给 `YierdisServerChannelInitializer`，再进入 `RespRequestDecoder`。超过上限属于协议错误，会返回 error 并关闭连接。
 
 ## 和 Redis 兼容性的边界
 
 Yierdis 支持 Redis 风格 RESP 入口和一组基础握手命令，但不声明自己是 Redis 的 drop-in replacement，也不声明完整 Redis client ecosystem compatibility。
 
-可以依赖的边界是：
+可以依赖的边界：
 
 - RESP2 是默认请求和回包兼容目标；
 - `HELLO 3` 可以切换到基础 RESP3 回包编码；
 - `CLIENT SETINFO` 校验 arity 与 `LIB-NAME`/`LIB-VER` 属性名，`CLIENT SETNAME`/`CLIENT GETNAME` 维护连接名，`AUTH` 固定返回 no-password-configured 错误；
-- 达到 `--maxClients` 上限时，新连接先收到 `-ERR max number of clients reached` 再被关闭；
-- malformed RESP 会返回协议错误并关闭连接；
+- 达到 `--maxClients` 上限时，新连接先收到 `-ERR max number of clients reached`，随后被关闭；
+- malformed RESP 返回协议错误并关闭连接；
 - 命令语义以当前已实现命令为准。
 
 不应从协议兼容推出完整 Redis 命令集、ACL、复制、集群、Pub/Sub、Lua、模块系统或完整 RESP3 客户端生态能力已经实现。

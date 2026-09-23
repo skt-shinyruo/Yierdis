@@ -1,10 +1,10 @@
 # 代理逻辑
 
-本文记录 command session、DB routing 和 server observability 之间仍存在的委托边界。
+command session、DB routing 和 server observability 之间还剩三条委托边界，专题文档没有展开。
 
 ## 先看结论
 
-已经有专题充分解释的代理层，不在本文重复展开：
+已经有专题充分解释的代理层，不再重复展开：
 
 | 代理逻辑 | 继续阅读 |
 | --- | --- |
@@ -14,7 +14,7 @@
 | DB typed native handle wrapper | [`native-memory-runtime.md`](./native-memory-runtime.md), [`native-allocator-and-handles.md`](./native-allocator-and-handles.md) |
 | FFM runtime wrapper | [`native-memory-runtime.md`](./native-memory-runtime.md) |
 
-本文补齐的是三条文档里较少展开的代理链：
+这三条代理链是：
 
 1. command session capabilities
 2. 多 DB routing
@@ -22,7 +22,7 @@
 
 ## Command Session Contract
 
-executor 和 dispatcher 之间直接使用 `CommandSession`。这个接口聚合命令所需的连接能力，避免命令层接收一个弱 marker session 后再做运行时收窄。生产环境把 `CommandDispatcher::prepare` 注入 executor 的窄准备端口，不再存在独立 command engine 对象。
+executor 和 dispatcher 之间直接使用 `CommandSession`。这个接口聚合命令所需的连接能力，命令层不必先接收一个弱 marker session 再做运行时收窄。生产环境把 `CommandDispatcher::prepare` 注入 executor 的窄准备端口，已经没有独立的 command engine 对象。
 
 ```text
 CommandExecutorExecutionSupport
@@ -65,12 +65,12 @@ every command
 
 `CommandSupport.commandDb(session)` 直接返回 `DbEngine`。命令通过 `strings()`、`hashes()`、`lists()`、`sets()`、`zsets()`、`hll()`、`keyspace()` 和 `ttl()` 调用合并后的 typed ops，memory 与 flush 则是 `DbEngine` 的直接方法。
 
-生产路径里的 router 由 `YierdisServerBootstrap.dbRouter(instance)` 创建。embedded 和测试路径也可以注入自己的 router，因此命令模块可以保持 transport-neutral，不需要知道 DB 数组来自 Netty server、embedded runtime 还是 test fixture。
+生产路径里的 router 由 `YierdisServerBootstrap.dbRouter(instance)` 创建。embedded 和测试路径也可以注入自己的 router，命令模块因此能保持 transport-neutral，不需要知道 DB 数组来自 Netty server、embedded runtime 还是 test fixture。
 
-需要注意两点：
+有两个容易忽略的地方：
 
-- `SELECT` 负责参数校验，DB index 越界时返回错误。
-- router 是每次命令执行时解析当前 session 状态，不是命令模块初始化时固定 DB。
+- `SELECT` 自己做参数校验，DB index 越界时返回错误。
+- router 在每次命令执行时解析当前 session 状态，命令模块初始化时并不固定 DB。
 
 源码入口：
 
@@ -81,7 +81,7 @@ every command
 
 ## Server Observability Provider
 
-`INFO`、`STATS` 和部分 `MEMORY STATS` 口径需要 server runtime、executor 和当前连接统计。但默认命令模块不能直接依赖 Netty 或 `yierdis-server`，因此这里用 `ServerInfoProvider` 做观测代理。
+`INFO`、`STATS` 和部分 `MEMORY STATS` 口径需要 server runtime、executor 和当前连接统计。但默认命令模块不能直接依赖 Netty 或 `yierdis-server`，所以这里用 `ServerInfoProvider` 做观测代理。
 
 ```text
 ServerCommandModule.INFO / STATS
@@ -97,9 +97,9 @@ MEMORY STATS
   -> null ? current DB memory stats : instance/global memory stats
 ```
 
-`ServerInfoProvider` 位于 `yierdis-command` 的 API 包，生产实现 `NettyServerInfoProvider` 位于 `yierdis-server`。这个方向很重要：command 层可以请求观测摘要，但不能反向 import Netty channel、server bootstrap 或 executor implementation details。
+`ServerInfoProvider` 位于 `yierdis-command` 的 API 包，生产实现 `NettyServerInfoProvider` 位于 `yierdis-server`。依赖方向是单向的：command 层可以请求观测摘要，但不能反向 import Netty channel、server bootstrap 或 executor implementation details。
 
-每次 `INFO`、结构化 `INFO`、`STATS` 或 health 请求都会先创建一份请求级 `ServerStatsSnapshot`。executor、ingress、egress、child channels、runtime health 和 uptime 在该回复中只采样一次，所有 writer 共享同一份公共事实；memory 与 keyspace 聚合仍按 section 按需执行，避免轻量 health 请求扫描全部 DB。
+每次 `INFO`、结构化 `INFO`、`STATS` 或 health 请求都会先创建一份请求级 `ServerStatsSnapshot`。executor、ingress、egress、child channels、runtime health 和 uptime 在该回复中只采样一次，所有 writer 共享同一份采样结果；memory 与 keyspace 聚合仍按 section 按需执行，避免轻量 health 请求扫描全部 DB。
 
 源码入口：
 

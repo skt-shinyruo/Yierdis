@@ -1,6 +1,6 @@
 # DB 行为缺口与审计发现
 
-本文记录一次对 `yierdis-db`（含 server 侧装配）的源码审计结果：**运行期行为缺口、观测口径偏差、健壮性边界和可疑实现**。设计意图与层间契约见 [`db-design-analysis.md`](./db-design-analysis.md)；机制参考见 [`db-internals.md`](./db-internals.md)。
+对 `yierdis-db`（含 server 侧装配）的源码审计发现如下：**运行期行为缺口、观测口径偏差、健壮性边界和可疑实现**。设计意图与层间契约见 [`db-design-analysis.md`](./db-design-analysis.md)；机制参考见 [`db-internals.md`](./db-internals.md)。
 
 状态图例：
 
@@ -25,7 +25,7 @@
 - `DEL`、`PERSIST`、`FLUSHDB`；
 - **读路径的惰性过期**——degraded 时读到一个已过期 key 会抛 `YierdisCommandException("MISCONF ...")`，而不是返回 nil。
 
-维护侧同理：`YierdisDbDataMaintenance.runMaintenance` 在第 3 步 `requireWritable()` 之后才排空过期、推进 rehash、执行 maxmemory enforcement，因此 degraded 时除 detached-entry 回收外的整个 tick 被跳过。
+维护侧同理：`YierdisDbDataMaintenance.runMaintenance` 在第 3 步 `requireWritable()` 之后才排空过期、推进 rehash、执行 maxmemory enforcement，因此 degraded 时只有 detached-entry 回收照常进行，tick 的其余部分全部跳过。
 
 **恢复入口**
 
@@ -43,7 +43,7 @@ stock server 部署进入 degraded 后，没有任何协议/命令入口可以�
 
 **现象**
 
-`YierdisDbKeyLifecycle` 的派生计数在 publish/replace/release 中维护；一旦下溢抛 `IllegalStateException("derived expire count underflow")`。这些调用发生在 `prepared.commit()` **内部**，因此会被 `YierdisDbMutationExecutor.postCommitFailure` 捕获 → `recordInvariantFailure` → DB degraded + result-unknown。
+`YierdisDbKeyLifecycle` 的派生计数在 publish/replace/release 中维护；一旦下溢就抛 `IllegalStateException("derived expire count underflow")`。这些调用发生在 `prepared.commit()` **内部**，因此会被 `YierdisDbMutationExecutor.postCommitFailure` 捕获 → `recordInvariantFailure` → DB degraded + result-unknown。
 
 **影响**
 
@@ -77,7 +77,7 @@ stock server 部署进入 degraded 后，没有任何协议/命令入口可以�
 
 ### B1. `ledger_used_bytes` 名不符实（已文档化）
 
-`MEMORY STATS` 的 `ledger_used_bytes` 与 `INFO memory` 的 `yierdis_ledger_used_bytes` 都绑定到 `heapDataBytesEstimate`（组件保留堆估算），**不是** `YierdisDbMemoryLedger.usedBytes()`。`usedBytes()` 全仓只被 `prepareFlushDb` 与 `reconcileAccounting` 使用，不出现在任何对外字段中。
+`MEMORY STATS` 的 `ledger_used_bytes` 与 `INFO memory` 的 `yierdis_ledger_used_bytes` 都绑定到 `heapDataBytesEstimate`（组件保留堆估算），**不是** `YierdisDbMemoryLedger.usedBytes()`。`usedBytes()` 全仓只有 `prepareFlushDb` 与 `reconcileAccounting` 会用到，不出现在任何对外字段中。
 
 **状态**：已文档化（[`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)、[`db-internals.md`](./db-internals.md)）。**建议**：命名改为 `heap_estimate_bytes`，或补一个真正的 ledger 逻辑账字段。
 
@@ -92,7 +92,7 @@ stock server 部署进入 degraded 后，没有任何协议/命令入口可以�
 
 ### B3. `INFO` 的 per-db 额度用整除，与实际分配可能差 1 字节
 
-`NettyServerInfoProvider` 输出 `yierdis_maxmemory_per_db_bytes = maxmemoryBytes / databases`（整数除法）；而 `YierdisInstance.create` 在 `PER_DB` scope 下把余数分给前几个 DB（每个 +1）。被分配到余数的 DB 实际额度会比 INFO 字段多 1 字节。纯观测偏差。
+`NettyServerInfoProvider` 输出 `yierdis_maxmemory_per_db_bytes = maxmemoryBytes / databases`（整数除法）；而 `YierdisInstance.create` 在 `PER_DB` scope 下把余数分给前几个 DB（每个 +1）。分到余数的 DB，实际额度比 INFO 字段多 1 字节。纯观测偏差。
 
 **状态**：未文档化。
 
@@ -116,7 +116,7 @@ stock server 部署进入 degraded 后，没有任何协议/命令入口可以�
 
 ## D. Native allocator 实现观察
 
-来自 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md) 对应源码的复核（本次已逐条回源）。均不影响已文档化的不变量，但命名与实际语义有偏差或存在冗余：
+以下观察来自 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md) 对应源码的复核（本次已逐条回源），都不影响已文档化的不变量，只是命名与实际语义有偏差，或者存在冗余：
 
 | 观察 | 位置 | 说明 |
 |---|---|---|

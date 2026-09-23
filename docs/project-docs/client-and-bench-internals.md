@@ -1,10 +1,10 @@
 # 客户端与基准测试内部
 
-本文解释项目内置 CLI、Netty client、RESP benchmark、进程内 storage benchmark 和 smoke/bench 脚本如何工作。
+下面介绍项目内置 CLI、Netty client、RESP benchmark、进程内 storage benchmark 和 smoke/bench 脚本的工作方式。
 
-`yierdis-cli` 和默认的 benchmark 根命令都通过真实 TCP、真实 RESP frame 和 `yierdis-networking-resp` 的 client codec 工作，因此更接近外部使用者视角。显式 `storage` 子命令是例外：它直接创建 `RuntimeDbEngine`，只测 DB SET hot path 和存储 footprint。
+`yierdis-cli` 和默认的 benchmark 根命令都走真实 TCP、真实 RESP frame 和 `yierdis-networking-resp` 的 client codec，更接近外部使用者视角。显式 `storage` 子命令是例外：它直接创建 `RuntimeDbEngine`，只测 DB SET hot path 和存储 footprint。
 
-CLI 负责人工交互和轻量验证；RESP benchmark 负责固定 built-in workload 下的吞吐、延迟和最小 reply-shape 校验。比较网络结果时必须保证 `requests`、`clients`、`pipeline`、`data-size`、`keyspace`、keepalive、认证和 DB selection 等输入等价，并记录运行环境。默认 benchmark 只连接已经运行的 Yierdis；官方 Redis 结果由操作者在独立 Redis 环境中单独运行 `redis-benchmark` 获得。项目不会启动或运行 Redis，也没有组合两边执行的 harness。
+CLI 用于人工交互和轻量验证；RESP benchmark 在固定 built-in workload 下测量吞吐、延迟，并做最小 reply-shape 校验。比较网络结果时必须保证 `requests`、`clients`、`pipeline`、`data-size`、`keyspace`、keepalive、认证和 DB selection 等输入等价，并记录运行环境。默认 benchmark 只连接已经运行的 Yierdis；官方 Redis 结果由操作者在独立 Redis 环境中单独运行 `redis-benchmark` 获得。项目不会启动或运行 Redis，也没有组合两边执行的 harness。
 
 ## 它们更适合验证什么
 
@@ -38,7 +38,7 @@ REPL 模式：
 java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 ```
 
-没有位置参数时进入 `yierdis> ` 提示符。空行跳过，输入 `quit` 或 `exit` 时 best-effort 发送 `QUIT` 后退出。每一行通过 `InlineCommandParser.splitUtf8(...)` 转成 argv，再走同一个 `YierdisClient.execute(...)` 路径。`--hex` 只影响非 UTF-8 bulk string 的展示；协议内容不变。
+没有位置参数时进入 `yierdis> ` 提示符。空行跳过，输入 `quit` 或 `exit` 时 best-effort 发送 `QUIT` 后退出。每一行经 `InlineCommandParser.splitUtf8(...)` 转成 argv，再走同一个 `YierdisClient.execute(...)` 路径。`--hex` 只影响非 UTF-8 bulk string 的展示；协议内容不变。
 
 源码入口：
 
@@ -51,14 +51,14 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 
 它支持：
 
-- space / tab 空白分隔。
-- 单引号，单引号内只特殊处理 `\\'`。
+- 按 space / tab 空白分隔。
+- 单引号，引号内只特殊处理 `\\'`。
 - 双引号。
 - 双引号内反斜杠转义：`\n`、`\r`、`\t`、`\b`、`\a` 和默认保留字符。
 - 双引号内 `\xHH` 十六进制字节。
 - `maxArgs` 上限，超出时报 `Protocol error: array length too large`。
 
-`parseResult(...)` 返回具名的 `Parsed` 结果，其中保存已验证的输入快照、参数数量和 retained bytes；调用方完成限制与内存准入后，再通过一次性的 `takeArgs()` 物化 argv。`parse(...)`、`parseUnlimited(...)` 和 `splitUtf8(...)` 保留为 CLI 与普通调用方的便利入口。服务端 decoder 使用 `parseResult(...)`，因此语法、参数数量和 retained bytes 都来自同一套 parser 规则，同时避免在限制检查前分配完整请求载荷。
+`parseResult(...)` 返回具名的 `Parsed` 结果，其中保存已验证的输入快照、参数数量和 retained bytes；调用方完成限制与内存准入后，再通过一次性的 `takeArgs()` 物化 argv。`parse(...)`、`parseUnlimited(...)` 和 `splitUtf8(...)` 保留为 CLI 与普通调用方的便利入口。服务端 decoder 用 `parseResult(...)`，让语法、参数数量和 retained bytes 都出自同一套 parser 规则，同时避免在限制检查前分配完整请求载荷。
 
 CLI 和 server 共用同一套 inline 语法，但边界不同：CLI 侧更偏人手输入和单机验证，服务端侧更偏协议适配和错误关闭。两边都不把 inline 解析当成 RESP array 的替代品，只是为了给手工调试、`redis-cli` 风格输入和基础兼容留一条可控路径。
 
@@ -71,7 +71,7 @@ SET raw "\x00\x01"
 
 ## YierdisClient
 
-`YierdisClient` 是 blocking socket client，故意保持简单的一问一答模型：
+`YierdisClient` 是 blocking socket client，有意保持简单的一问一答模型：
 
 - `connect(host, port)` 创建 `Socket`，启用 `TCP_NODELAY`，连接超时固定 `5000` ms。
 - `execute(List<byte[]> args, timeoutMillis)` 要求 timeout 大于 `0`。
@@ -79,7 +79,7 @@ SET raw "\x00\x01"
 - 每次请求前设置 socket read timeout。
 - 用 `RespClientCodec.writeCommand(...)` 写 RESP request，flush 后用 `RespClientCodec.readReply(...)` 读一个 reply。
 
-它不做 pipelining。原因是 CLI 需要清晰的请求/回包 pairing，而不是最大吞吐。
+它不做 pipelining：CLI 需要清晰的请求/回包 pairing，而不是最大吞吐。
 
 超时或解析失败会关闭连接。这是有意设计：RESP reply 是 FIFO，如果一个请求超时但连接保留，迟到 reply 可能被下一条请求读到，造成 desync。关闭连接比尝试“跳过未知 reply”更可靠。
 
@@ -106,7 +106,7 @@ SET raw "\x00\x01"
 - array 递归读取子 reply。
 - 返回 `RespReply` record，包含 `kind`、`text`、`bytes`、`integer` 和 `values`，并对 bytes/list 做防御性复制。
 
-这个 codec 是 client-side 工具路径的事实标准：CLI 用它做单请求通信；RESP benchmark 只用它编码 workload，并在 `database != 0` 时编码一条 `SELECT`。`NioBenchmarkClient` 通过 `IncrementalRespReplyDecoder` 增量读取和校验 reply。storage benchmark 不经过 codec。
+这个 codec 是 client-side 工具路径的事实标准：CLI 用它做单请求通信；RESP benchmark 只用它编码 workload，并在 `database != 0` 时编码一条 `SELECT`。`NioBenchmarkClient` 用 `IncrementalRespReplyDecoder` 增量读取和校验 reply。storage benchmark 不经过 codec。
 
 ## yierdis-benchmark
 
@@ -173,7 +173,7 @@ measurement 以 selector run 的起止边界计算 elapsed time 和 completed-re
 
 ## Command templates 和 reply validation
 
-`RedisBenchmarkCommandTemplate` 声明每个 built-in case 的 wire shape。`PING_INLINE` 使用 raw `PING\r\n`；其余 case 通过 `RespClientCodec.encodeCommand(...)` 生成 RESP array。payload 由 `BenchmarkPayload` 按官方确定性 data generator 每个 catalog pass 生成一次，并由需要 data 的 case 复用。
+`RedisBenchmarkCommandTemplate` 声明每个 built-in case 的 wire shape。`PING_INLINE` 使用 raw `PING\r\n`；其余 case 用 `RespClientCodec.encodeCommand(...)` 生成 RESP array。payload 由 `BenchmarkPayload` 按官方确定性 data generator 每个 catalog pass 生成一次，并由需要 data 的 case 复用。
 
 省略 keyspace 时，`__rand_int__` 保持 literal，因此每次使用固定 key/member；启用 keyspace 时，每个 placeholder 在每条 concrete command 中独立展开为 12 位十进制数。ZADD score 也按同一开关决定固定 `0` 或独立随机值。pipeline frame 预先展开，运行时只原地更新这些固定宽度 digits。
 

@@ -1,6 +1,6 @@
 # 模块架构
 
-本文说明 Yierdis 当前九个 Maven leaf module 的职责和依赖方向。目录用于表达领域归属，只有根 `pom.xml` 和九个 leaf POM 参与 reactor。
+Yierdis 当前有九个 Maven leaf module，下面给出各自的职责和依赖方向。目录只用于表达领域归属；参与 reactor 的是根 `pom.xml` 和九个 leaf POM。
 
 ## 依赖方向
 
@@ -43,7 +43,7 @@ flowchart LR
   tests -. test .-> resp
 ```
 
-根 `yierdis-parent` 统一版本、Java 25 编译器和插件配置。`yierdis-common`、`yierdis-networking-resp`、`yierdis-server`、`yierdis-command` 和 `yierdis-db` 的上层目录没有中间 POM。
+根 `yierdis-parent` 集中管理版本、Java 25 编译器和插件配置。`yierdis-common`、`yierdis-networking-resp`、`yierdis-server`、`yierdis-command` 和 `yierdis-db` 的上层目录没有中间 POM。
 
 ## 九个模块
 
@@ -53,7 +53,7 @@ flowchart LR
 
 ### `yierdis-networking-resp`
 
-保存 RESP wire model、客户端 codec、inline parser 和 `RespReplyWriter`。它依赖中立 bytes 类型与 server execution API，不包含 Netty pipeline 或 DB 语义。
+保存 RESP wire model、客户端 codec、inline parser 和 `RespReplyWriter`。依赖中立 bytes 类型与 server execution API，不包含 Netty pipeline 或 DB 语义。
 
 ### `yierdis-server-api`
 

@@ -1,6 +1,6 @@
 # 测试与排障
 
-本文说明 Yierdis 测试如何分层，以及不同改动和故障应该先跑哪些测试、先看哪一层。
+Yierdis 的测试按层组织；改动和故障该先跑哪些测试、先看哪一层，取决于它落在哪一层。
 
 所有 Maven/Java 命令都使用 JDK 25。非交互 shell 中使用这个前缀：
 
@@ -38,7 +38,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server -am -Dtest=RespProtocolIntegrationTest,RespProtocolErrorIntegrationTest,RespHandshakeIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-排障顺序：`RespRequestDecoder` 看线上 bytes 是否在 admission 后正确转成 `ByteArrayExecutionRequest` 并移交 argv 与 lease，`InboundMemoryBudget` 看 lease 是否在最后一个消费者释放，`RespReplyWriter` 看 reply 语义是否被正确编码。
+排障顺序：先看 `RespRequestDecoder` 是否把 admission 后的线上 bytes 正确转成 `ByteArrayExecutionRequest`，并移交 argv 与 lease；再看 `InboundMemoryBudget` 的 lease 是否在最后一个消费者处释放；最后由 `RespReplyWriter` 确认 reply 语义编码是否正确。
 
 ## 改命令时
 
@@ -48,7 +48,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests -am -Dtest=StringCommandTest,BitmapCommandTest,CommandErrorTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-新增命令或新增 option/subcommand 时，优先补最窄的命令家族测试和错误测试；server-only 命令还要补
+新增命令或 option/subcommand 时，优先补最窄的命令家族测试和错误测试；server-only 命令还要补
 `yierdis-server` 组装或协议集成测试。
 
 最终命令流固定为：
@@ -63,10 +63,10 @@ CommandExecutor
   -> CommandResult -> RedisReplyRenderer
 ```
 
-新增注册名还要补 parse-isolation fixture。默认命令由 `CommandParseIsolationTest` 保证 fixture 名称集合与
-`DefaultCommandModules` 的全部注册完全相等，并用会抛异常的 router/provider 证明 parse 不访问服务；
-`ServerCommandParseIsolationTest` 对 `HELLO`、`INFO`、`STATS` 做同样检查。排障顺序：先看
-`CommandRegistry` 是否注册，再看 `CommandSpec.syntax()` 的 arity/key metadata，然后区分 handler parse、
+新增注册名还要补 parse-isolation fixture。`CommandParseIsolationTest` 保证默认命令的 fixture 名称集合与
+`DefaultCommandModules` 的全部注册完全相等，并用会抛异常的 router/provider 确认 parse 不访问服务；
+`ServerCommandParseIsolationTest` 对 `HELLO`、`INFO`、`STATS` 做同样检查。排障顺序：先查
+`CommandRegistry` 有没有注册，再核对 `CommandSpec.syntax()` 的 arity/key metadata，最后区分 handler parse、
 准备函数的 `apply(session)` 和 `PreparedCommand.execute(session)` 三个阶段。
 
 ## 改 DB 或数据结构时
@@ -176,11 +176,11 @@ storage bench 先跑：
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=YierdisBenchEntrypointTest,StorageBenchmarkConfigTest,ProcessRssReaderTest,StorageBenchmarkRendererTest,StorageBenchmarkRunnerTest,StorageBenchScriptContractTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-这组测试保护 1M 默认/10M 上限、固定宽度 key、RSS unavailable、29 列 CSV、rehash 稳定 snapshot、empty baseline/loaded accounting、真实小规模 DB 生命周期和专用脚本契约。排障顺序：`StorageBenchmarkOptions` -> `StorageBenchmarkConfig` -> `StorageBenchmarkRunner` -> `StorageMemorySnapshot` -> `StorageBenchmarkResult` -> `StorageBenchmarkRenderer`。
+这组测试覆盖 1M 默认/10M 上限、固定宽度 key、RSS unavailable、29 列 CSV、rehash 稳定 snapshot、empty baseline/loaded accounting、真实小规模 DB 生命周期和专用脚本契约。排障顺序：`StorageBenchmarkOptions` -> `StorageBenchmarkConfig` -> `StorageBenchmarkRunner` -> `StorageMemorySnapshot` -> `StorageBenchmarkResult` -> `StorageBenchmarkRenderer`。
 
 ## 改架构护栏时
 
-当改动可能触碰协议边界、command/internal 边界或 runtime 访问约束时，优先补护栏测试：
+改动可能触碰协议边界、command/internal 边界或 runtime 访问约束时，优先补护栏测试：
 
 - `CommandParseIsolationTest` / `ServerCommandParseIsolationTest`：检查全部生产注册都有 parse-only fixture，parse 不访问 DB router 或 provider。
 - `YierdisDbArchitectureGuardTest`：检查 DB 保持单一公开 factory，并且实现类型不公开；必要时连同 `DbEngineReadWriteBoundaryTest` 一起跑。
@@ -215,4 +215,4 @@ executor/server 改动：executor 单元测试 + server main 集成测试 + 相�
 
 ## Production Hardening Gates
 
-有界 ingress、maxmemory、ordered reply 和 shutdown 改动都要运行与影响面相符的 focused tests，并用 JDK 25 运行架构守卫。性能证据由操作者分别管理的 Yierdis benchmark 与官方 Redis benchmark 原始结果组成，两边必须使用等价 workload 设置；项目 benchmark 不计算阈值或 artifact ratio，任何通过/失败判定都属于外部 policy。完整的 reply matrix、smoke、deterministic soak、最终 ownership counter 和候选证据要求见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
+有界 ingress、maxmemory、ordered reply 和 shutdown 改动都要跑与影响面相符的 focused tests，并用 JDK 25 运行架构守卫。性能证据由操作者分别管理的 Yierdis benchmark 与官方 Redis benchmark 原始结果组成，两边必须使用等价 workload 设置；项目 benchmark 不计算阈值或 artifact ratio，任何通过/失败判定都属于外部 policy。完整的 reply matrix、smoke、deterministic soak、最终 ownership counter 和候选证据要求见 [`production-hardening-operations.md`](./production-hardening-operations.md)。

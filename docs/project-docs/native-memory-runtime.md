@@ -1,6 +1,6 @@
 # Native Memory 运行时
 
-本文解释 Yierdis 如何把 JDK 25 FFM 接入 DB：backend、runtime、region、stable handle、maxmemory 和必须 materialize 到 heap 的边界。
+Yierdis 把 JDK 25 FFM 接入 DB，涉及 backend、runtime、region、stable handle、maxmemory，以及必须 materialize 到 heap 的边界。
 
 ## 当前结构
 
@@ -18,7 +18,7 @@ DB graph 保存 `NativeHandle` 或 typed wrapper，不保存 `MemorySegment`、p
 
 ## 启动和所有权
 
-`YierdisInstance.create(...)` 使用 `YierdisFfmStableMemoryBackend::new` 创建内部 `YierdisDbEngineFactory`。每次 `YierdisDbEngineFactory.create(...)` 都为对应 DB 创建一个独立 backend；backend 构造自己的 `YierdisFfmMemoryRuntime`，并在 close 时负责关闭它。
+`YierdisInstance.create(...)` 使用 `YierdisFfmStableMemoryBackend::new` 创建内部 `YierdisDbEngineFactory`。每次 `YierdisDbEngineFactory.create(...)` 都为对应 DB 创建一个独立 backend；backend 构造自己的 `YierdisFfmMemoryRuntime`，close 时再关闭它。
 
 ```text
 YierdisInstance
@@ -42,7 +42,7 @@ global/per-db maxmemory scope 只改变预算协调方式，不改变 FFM 所有
 
 `YierdisFfmRegion` 保存 runtime、arena、segment 和 size。byte/int/long/bulk access 先检查 region lifecycle 和完整范围，再通过 `ValueLayout` 或 `MemorySegment.copy(...)` 执行。region close 会关闭 arena，并回报 runtime 扣减 accounting。
 
-runtime close 不替调用方释放仍然存活的 regions；它先标记 closed，再检查 counter。残留 region 会报告 lifecycle leak。backend close 会 best-effort 清理 page/object-table/runtime，并聚合 lifecycle failure。
+runtime close 不替调用方释放仍然存活的 regions：先标记 closed，再检查 counter。残留 region 会报告 lifecycle leak。backend close 会 best-effort 清理 page/object-table/runtime，并聚合 lifecycle failure。
 
 ## Stable handle 与物理块
 
@@ -59,7 +59,7 @@ YierdisNativePageAllocator
   owns FFM blocks allocated from runtime regions
 ```
 
-因此 realloc 和 active defrag 可以分配新 block、复制内容并发布新 location，同时保持 handle 不变。复制在 publication 前失败时，新 block 被关闭，旧 location 继续有效。publication 后，旧 block 按 epoch 状态立即释放或进入 retired list。
+因此 realloc 和 active defrag 可以分配新 block、复制内容并发布新 location，同时保持 handle 不变。复制在 publication 前失败，就关闭新 block，旧 location 继续有效。publication 后，旧 block 按 epoch 状态立即释放或进入 retired list。
 
 `NativeObjectView` 提供 byte/bulk/copy/comparison/typed access。FFM view 在委托接口默认实现前仍会完整检查 lifecycle、writability 和范围，所以无效的 multi-byte/copy 写入不会留下部分修改，read-only/closed 异常优先级也保持稳定。block-to-block realloc/defrag 使用一次直接 native copy。
 
@@ -80,11 +80,11 @@ FFM-backed storage 主要包括：
 - string、list、hash、set、zset 的 root、node 和 payload objects；
 - object table 与 page allocator 的 native metadata。
 
-`EntryHandle`、`ValueHandle` 和 `KeyHandle` 是 stable-handle wrapper，不是 physical address，也不能被当作长期有效的 segment view。`YierdisDbKeyLifecycle` 统一发布、替换和释放 directory entry、entry record、value root 与 derived accounting。
+`EntryHandle`、`ValueHandle` 和 `KeyHandle` 是 stable-handle wrapper，不是 physical address，也不能被当作长期有效的 segment view。`YierdisDbKeyLifecycle` 发布、替换和释放 directory entry、entry record、value root 与 derived accounting。
 
 ## Maxmemory 与 memory stats
 
-写路径由 `YierdisDbMutationExecutor` reserve upper bound，并用 allocation scope 实测 prepare peak。commit 后依次 promote、settle logical ledger、release superseded resources，再按提示尝试 trim。
+写路径由 `YierdisDbMutationExecutor` reserve upper bound，再用 allocation scope 实测 prepare peak。commit 后依次 promote、settle logical ledger、release superseded resources，再按提示尝试 trim。
 
 enforcement snapshot 固定为：
 
@@ -106,7 +106,7 @@ native memory 不等于所有路径零复制。当前仍会 materialize 到 heap
 - 排序、聚合或协议组装需要脱离 native view 生命周期时复制；
 - `LRANGE`、`HGETALL`、`SMEMBERS`、`ZRANGE*` 在 prepare 时把选中元素拷进独立 source。
 
-`SCAN`、命令 `GET`/`HGET` 和 pop 会持有 pin/epoch/handle，通过 native-backed `BytesSlice` 或等价的 retained view 有界写出；它们不会先 materialize 整批 payload。`GET` 在 `StringRoot.retainedValue` 时 pin，`CommandExecutorExecutionSupport` 同步渲染结束后于 `finally` 调用 `closePrepared`，由 `ByteValue` 的 close hook `unpin`。调用方不能让 callback-scoped view 逃逸。详细边界见
+`SCAN`、命令 `GET`/`HGET` 和 pop 会持有 pin/epoch/handle，通过 native-backed `BytesSlice` 或等价的 retained view 有界写出；这些路径不会先 materialize 整批 payload。`GET` 在 `StringRoot.retainedValue` 时 pin，`CommandExecutorExecutionSupport` 同步渲染结束后于 `finally` 调用 `closePrepared`，由 `ByteValue` 的 close hook `unpin`。调用方不能让 callback-scoped view 逃逸。详细边界见
 [`offheap-copy-behavior.md`](./offheap-copy-behavior.md) 和 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)。
 
 ## Operations Cross-Check

@@ -1,14 +1,14 @@
 # Bytes 抽象与有界流式路径
 
-本文解释 Yierdis 为什么有一套独立于 Netty 和 DB 的 bytes 抽象，以及这些抽象如何减少无意义复制。
+Yierdis 的 bytes 抽象独立于 Netty 和 DB，目的是减少无意义复制。
 
-Yierdis 的 bytes 抽象不是为了把 `byte[]` 包一层对象，而是为了让 protocol、execution、DB、native value 和 Netty write-back 共享一套 Netty-free contract；能流式写出时不强制完整结果 materialization，必须 materialize 时又把复制边界写清楚。
+这套抽象并不只是把 `byte[]` 包一层对象：protocol、execution、DB、native value 和 Netty write-back 由此共享一套 Netty-free contract；能流式写出时不强制完整结果 materialization，必须 materialize 时则把复制边界写清楚。
 
 ## 为什么不是直接传 byte[]
 
 直接传 `byte[]` 有两个问题。
 
-第一，所有上层都会默认“我拥有这段数组”。这会让协议 decode、transaction replay、DB lookup、DB persistence 和 tests 混在同一种形状里，最后只能靠防御性 copy 保安全。
+第一，所有上层都会默认“我拥有这段数组”，于是协议 decode、transaction replay、DB lookup、DB persistence 和 tests 混进同一种形状，最后只能靠防御性 copy 保安全。
 
 第二，`byte[]` 表达不了 native source 的随机读取和流式写出能力。即使下游可以按 slice 或按 sink 分块处理，上游也已经把数据收缩成完整 heap array。
 
@@ -21,19 +21,19 @@ Yierdis 选择中立 bytes 层：
 
 ## 核心接口
 
-`BytesView` 是带长度的随机访问只读接口，要求 `length()`、`getByte(index)` 和 `getBytes(index, dst, dstOff, len)`。它主要用于 key 等请求级 lookup 输入。接口注释要求实现视为短生命周期对象，不得被存入 DB。
+`BytesView` 是带长度的随机访问只读接口，要求 `length()`、`getByte(index)` 和 `getBytes(index, dst, dstOff, len)`。它主要用于 key 等请求级 lookup 输入。接口注释要求把实现视为短生命周期对象，不得被存入 DB。
 
 `BytesSlice` 继承 `BytesView`，再增加 `writeTo(BytesSink out)`。它既能被随机读取，也能把自己流式写给 sink，是 string value、bulk reply 和 off-heap slice 的关键形状。
 
-`BytesSink` 是最小写接口，只承诺 `writeBytes(byte[], off, len)`。实现必须在方法返回前消费指定范围，且不得保留或修改传入数组；协议编码器、reply writer 和测试 sink 都可以依赖它。
+`BytesSink` 是最小的写接口，只承诺 `writeBytes(byte[], off, len)`。实现必须在方法返回前消费指定范围，且不得保留或修改传入数组；协议编码器、reply writer 和测试 sink 都可以依赖它。
 
 ## `ByteArrayExecutionRequest` 的构造路径
 
-网络生产路径由 `RespRequestDecoder` 调用 `ByteArrayExecutionRequest.takeOwnership(...)`，把已经 materialize 的 heap `byte[][]` argv 和脱离 Netty 对象的 request-memory lease 一并移交给请求。`retain()` 共享不可变 argv，只增加 lease 引用；请求跨过 decoder 生命周期后仍保有稳定 argv 与 admission 元数据，也不会在协议边界做第二次逐参数复制。
+网络生产路径中，`RespRequestDecoder` 调用 `ByteArrayExecutionRequest.takeOwnership(...)`，把已 materialize 的 heap `byte[][]` argv 和脱离 Netty 对象的 request-memory lease 一并移交给请求。`retain()` 共享不可变 argv，只增加 lease 引用；请求跨过 decoder 生命周期后仍保有稳定 argv 与 admission 元数据，也不会在协议边界做第二次逐参数复制。
 
 `copyOf(...)` 为 heap 输入创建独立 snapshot，`fromUtf8(...)` 用于测试、CLI 和固定文本输入。retained bytes 一律由 `HeapRequestFootprint` 按 heap footprint 估算（请求对象 + 外层 argv 与槽位 + 每参数数组头与对齐 payload）并做饱和计数，不会因为 `int` 回绕变成负数。
 
-`wrapReadOnly(...)` 只适合调用方已经拥有 argv、并且能持续遵守只读约定的场景；它同样内部按 `HeapRequestFootprint` 估算 retained bytes，调用方不再显式传值。`readOnlyByteArray(...)` 是 heap-backed immutable request 的快速读路径，不等于把内部数组的所有权暴露给外部。`fromUtf8(...)` 只是测试、CLI 和固定输入构造的便利函数。
+`wrapReadOnly(...)` 只适合调用方已经拥有 argv、并且能持续遵守只读约定的场景；它同样内部按 `HeapRequestFootprint` 估算 retained bytes，调用方不再显式传值。`readOnlyByteArray(...)` 是 heap-backed immutable request 的快速读路径，不等于把内部数组的所有权暴露给外部。
 
 ## `BytesView` 与 `BytesSlice` 的 ownership
 
@@ -42,13 +42,13 @@ Yierdis 选择中立 bytes 层：
 
 ## 协议层如何使用 bytes
 
-RESP decode 后直接得到 `ByteArrayExecutionRequest`。它保存 `byte[][] argv`、`HeapRequestFootprint` 口径的 retained bytes 和 reference-counted request-memory lease；网络层不再经过协议 DTO 或 adapter。decoder 在 bulk/inline 命令完整前就对 argv、payload 和 request 固定开销完成 admission，因此 heap materialization 是有意的 ownership snapshot：请求跨过 Netty decoder 生命周期后，需要稳定 argv 和 admission 计数供 executor 排队、budget 和 transaction 逻辑使用。
+RESP decode 后直接得到 `ByteArrayExecutionRequest`，其中保存 `byte[][] argv`、`HeapRequestFootprint` 口径的 retained bytes 和 reference-counted request-memory lease；网络层不再经过协议 DTO 或 adapter。decoder 在 bulk/inline 命令完整前就对 argv、payload 和 request 固定开销完成 admission，因此 heap materialization 是有意的 ownership snapshot：请求跨过 Netty decoder 生命周期后，需要稳定 argv 和 admission 计数供 executor 排队、budget 和 transaction 逻辑使用。
 
-reply 编码方向相反。`RespReplyWriter.bulkString(BytesSlice)` 先写 RESP bulk header，再同步调用 `BytesSlice.writeTo(out)` 把内容写入 `BytesSink`，最后写 CRLF。生产路径中的 sink 通过 reply reservation 把输出限制在有界 `ByteBuf` chunk 内。
+reply 编码方向相反。`RespReplyWriter.bulkString(BytesSlice)` 先写 RESP bulk header，再同步调用 `BytesSlice.writeTo(out)` 把内容写入 `BytesSink`，最后写 CRLF。生产路径中的 sink 用 reply reservation 把输出限制在有界 `ByteBuf` chunk 内。
 
 ## DB lookup 和写路径如何使用 bytes
 
-DB API 的很多读方法接受 `BytesView`，例如 `StringOps`、`TtlOps`、`KeyspaceOps` 与 `DbEngine` 上的 memory/object-encoding 方法。这让 command/DB contract 保持 Netty-free；当前 lookup 的 ownership copy 边界见下文。
+DB API 的很多读方法接受 `BytesView`，例如 `StringOps`、`TtlOps`、`KeyspaceOps` 与 `DbEngine` 上的 memory/object-encoding 方法。command/DB contract 由此保持 Netty-free；当前 lookup 的 ownership copy 边界见下文。
 
 当前实现里，`YierdisDbKeyLifecycle` 在 `BytesView` 进入 key directory 前会调用 `YierdisDb.toByteArray(keyView)` materialize 一个 heap `byte[]`。这是因为 `NativeKeyDirectory` 的 lookup API 当前是 `byte[]` based，例如 `get(byte[])`、`getKeyHandle(byte[])` 和 `stageInsert(byte[])`。这份 heap copy 是今天的 ownership/lifetime 边界，不应该写成“lookup 已经避免 heap key 生成”。
 
@@ -87,7 +87,7 @@ CommandResult / RedisReply
 - `SCAN` window 保留 cursor、目录 generation/capacity、epoch 和匹配计数；length/emit 阶段重放相同物理 slot 范围，并把匹配 key 包装为 native-backed slice。
 - `ReplyReservationSink` / `BoundedChunkedReplySink` 在分配前取得额度，并把编码结果限制在有界 `ByteBuf` chunk 内。
 
-fallback 也同样重要。以下 heap materialization 是有意的：
+fallback 同样重要，以下 heap materialization 是有意的：
 
 - protocol snapshots：`ByteArrayExecutionRequest` 需要稳定 argv 跨过 decoder 生命周期和 executor queue。
 - DB lifecycle lookup：当前 `YierdisDbKeyLifecycle` 用 `YierdisDb.toByteArray(...)` 把 `BytesView` 转成 heap `byte[]`，再进入 `NativeKeyDirectory`。
@@ -111,4 +111,4 @@ bytes 抽象不是 native allocator。它只描述“如何读一段 bytes”和
 - entry metadata、collection root records 和 collection internal bytes 都是 allocator-backed objects。
 - list/hash/set/zset 的 `LRANGE`、`HGETALL`、`SMEMBERS`、`ZRANGE*` 在 prepare 时经 `ByteSequenceSources.copiedFrom` 或 `ByteMapSources.copiedFrom` 拷成堆快照，renderer 只回放这份快照。
 
-因此 `BytesView` / `BytesSlice` 可以帮助 native 和 heap 路径共享 API，但它们本身不保证数据 off-heap，也不保证零拷贝。它们保证的是短生命周期 view、流式写出和 adapter 边界清晰。
+`BytesView` / `BytesSlice` 让 native 和 heap 路径共用同一套 API，但它们本身不保证数据 off-heap，也不保证零拷贝；真正保证的是短生命周期 view、流式写出和清晰的 adapter 边界。
