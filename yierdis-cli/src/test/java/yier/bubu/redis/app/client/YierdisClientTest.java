@@ -2,7 +2,6 @@ package yier.bubu.redis.app.client;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.app.server.YierdisServerBootstrap;
 import yier.bubu.redis.protocol.resp.RespClientCodec;
 
 import java.io.IOException;
@@ -274,34 +273,6 @@ public class YierdisClientTest {
 
     private static byte[] b(String s) {
         return s.getBytes(StandardCharsets.UTF_8);
-    }
-
-    private static final class TestServer implements AutoCloseable {
-        private final YierdisServerBootstrap server;
-
-        private TestServer(YierdisServerBootstrap server) {
-            this.server = server;
-        }
-
-        static TestServer start() throws Exception {
-            // Bind port=0 for ephemeral port (avoids conflicts on CI/dev machines).
-            YierdisServerBootstrap server = YierdisServerBootstrap.start(
-                    "--port", "0",
-                    "--maxmemoryBytes", "0",
-                    "--ioThreads", "1",
-                    "--noCleanup"
-            );
-            return new TestServer(server);
-        }
-
-        int port() {
-            return server.port();
-        }
-
-        @Override
-        public void close() {
-            server.close();
-        }
     }
 
 }

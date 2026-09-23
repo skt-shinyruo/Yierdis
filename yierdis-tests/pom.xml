@@ -23,6 +23,12 @@
         </dependency>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-cli</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-common</artifactId>
             <scope>test</scope>
         </dependency>

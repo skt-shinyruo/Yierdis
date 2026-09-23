@@ -1,9 +1,10 @@
-package yier.bubu.redis.app.client;
+package yier.bubu.redis.integration.runtime;
 
 // maxmemory 全局口径回归：验证 global/per-db 行为差异、跨 DB 淘汰，以及 off-heap 统计不双计。
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.app.client.YierdisClient;
 import yier.bubu.redis.app.server.YierdisServerBootstrap;
 import yier.bubu.redis.protocol.resp.RespClientCodec;
 
@@ -14,6 +15,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import static yier.bubu.redis.testutil.TestBytes.b;
+
 public class MaxmemoryScopeTest {
     private static final String PROBE_MAXMEMORY_BYTES = "100000000";
     private static final int EVICTION_VALUE_BYTES = 64 * 1024;
@@ -21,13 +24,13 @@ public class MaxmemoryScopeTest {
     @Test
     public void globalScopeEvictsAcrossDbsUsingLru() throws Exception {
         byte[] value = bytesOfLen(EVICTION_VALUE_BYTES, (byte) 'x');
-        try (TestServer server = TestServer.startWithArgs(
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(ServerArgs.of(
                 "--databases", "2",
                 "--maxmemoryBytes", Long.toString(globalBudgetThatFitsTwoKeysButNotThree(value)),
                 "--maxmemoryScope", "global",
                 "--maxmemoryPolicy", "allkeys-lru",
                 "--maxmemorySamples", "1000"
-        );
+        ));
              YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
             ok(client, b("SELECT"), b("1"));
             ok(client, b("SET"), b("b"), value);
@@ -54,13 +57,13 @@ public class MaxmemoryScopeTest {
     @Test
     public void perDbScopeEvictsOnlyWithinSelectedDb() throws Exception {
         byte[] value = bytesOfLen(EVICTION_VALUE_BYTES, (byte) 'x');
-        try (TestServer server = TestServer.startWithArgs(
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(ServerArgs.of(
                 "--databases", "2",
                 "--maxmemoryBytes", Long.toString(perDbBudgetThatFitsOneKeyButNotTwo(value)),
                 "--maxmemoryScope", "per-db",
                 "--maxmemoryPolicy", "allkeys-lru",
                 "--maxmemorySamples", "1000"
-        );
+        ));
              YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
             ok(client, b("SELECT"), b("1"));
             ok(client, b("SET"), b("b"), value);
@@ -105,13 +108,13 @@ public class MaxmemoryScopeTest {
     }
 
     private static long probeGlobalUsedBytes(byte[] value, int localKeyCount) throws Exception {
-        try (TestServer server = TestServer.startWithArgs(
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(ServerArgs.of(
                 "--databases", "2",
                 "--maxmemoryBytes", PROBE_MAXMEMORY_BYTES,
                 "--maxmemoryScope", "global",
                 "--maxmemoryPolicy", "allkeys-lru",
                 "--maxmemorySamples", "1000"
-        );
+        ));
              YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
             ok(client, b("SELECT"), b("1"));
             ok(client, b("SET"), b("b"), value);
@@ -127,13 +130,13 @@ public class MaxmemoryScopeTest {
     }
 
     private static long probePerDbDb0UsedBytes(byte[] value, int localKeyCount) throws Exception {
-        try (TestServer server = TestServer.startWithArgs(
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(ServerArgs.of(
                 "--databases", "2",
                 "--maxmemoryBytes", PROBE_MAXMEMORY_BYTES,
                 "--maxmemoryScope", "per-db",
                 "--maxmemoryPolicy", "allkeys-lru",
                 "--maxmemorySamples", "1000"
-        );
+        ));
              YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
             ok(client, b("SELECT"), b("1"));
             ok(client, b("SET"), b("b"), value);
@@ -161,11 +164,11 @@ public class MaxmemoryScopeTest {
 
     @Test
     public void globalMemoryStatsIncludesDefaultFfmNativeMemoryOnce() throws Exception {
-        try (TestServer server = TestServer.startWithArgs(
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(ServerArgs.of(
                 "--databases", "2",
                 "--maxmemoryScope", "global",
                 "--maxmemoryBytes", "0"
-        );
+        ));
              YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
             ok(client, b("SELECT"), b("0"));
             ok(client, b("SET"), b("k"), bytesOfLen(1024, (byte) 'x'));
@@ -236,37 +239,5 @@ public class MaxmemoryScopeTest {
         byte[] out = new byte[Math.max(0, len)];
         Arrays.fill(out, fill);
         return out;
-    }
-
-    private static byte[] b(String s) {
-        return s.getBytes(StandardCharsets.UTF_8);
-    }
-
-    private static final class TestServer implements AutoCloseable {
-        private final YierdisServerBootstrap server;
-
-        private TestServer(YierdisServerBootstrap server) {
-            this.server = server;
-        }
-
-        static TestServer startWithArgs(String... extraArgs) throws Exception {
-            String[] base = new String[]{
-                    "--port", "0",
-                    "--ioThreads", "1",
-                    "--noCleanup"
-            };
-            String[] argv = Arrays.copyOf(base, base.length + extraArgs.length);
-            System.arraycopy(extraArgs, 0, argv, base.length, extraArgs.length);
-            return new TestServer(YierdisServerBootstrap.start(argv));
-        }
-
-        int port() {
-            return server.port();
-        }
-
-        @Override
-        public void close() {
-            server.close();
-        }
     }
 }

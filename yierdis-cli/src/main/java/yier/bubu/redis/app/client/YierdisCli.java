@@ -23,22 +23,12 @@ public final class YierdisCli {
     }
 
     static int run(String[] args) {
-        YierdisCliArgs parsed = new YierdisCliArgs();
-        CommandLine cmd = new CommandLine(parsed);
-        cmd.setStopAtPositional(true);
-        try {
-            cmd.parseArgs(args);
-        } catch (CommandLine.ParameterException e) {
-            System.err.println(e.getMessage());
-            cmd.usage(System.err);
-            return 2;
-        }
+        CommandLine commandLine = new CommandLine(new YierdisCliArgs());
+        commandLine.setStopAtPositional(true);
+        return commandLine.execute(args);
+    }
 
-        if (parsed.help) {
-            cmd.usage(System.out);
-            return 0;
-        }
-
+    static int runClient(YierdisCliArgs parsed) {
         try (YierdisClient client = YierdisClient.connect(parsed.host, parsed.port)) {
             if (!parsed.command.isEmpty()) {
                 List<byte[]> commandArgs = parsed.command.stream()

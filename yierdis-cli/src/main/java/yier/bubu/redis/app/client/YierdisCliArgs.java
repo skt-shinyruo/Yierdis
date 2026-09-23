@@ -6,6 +6,7 @@ import picocli.CommandLine.Parameters;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Callable;
 
 @Command(
         name = "yierdis-cli",
@@ -13,7 +14,7 @@ import java.util.List;
         sortOptions = false,
         usageHelpAutoWidth = true
 )
-final class YierdisCliArgs {
+final class YierdisCliArgs implements Callable<Integer> {
     @Option(names = {"-h", "--help"}, usageHelp = true, description = "Show this help message and exit.")
     boolean help;
 
@@ -35,4 +36,9 @@ final class YierdisCliArgs {
             description = "Execute a single command. If omitted, start interactive REPL."
     )
     List<String> command = new ArrayList<>();
+
+    @Override
+    public Integer call() {
+        return YierdisCli.runClient(this);
+    }
 }
