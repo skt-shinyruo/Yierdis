@@ -2,6 +2,8 @@
 
 本文解释单个 `YierdisDb` 如何组织 key、entry、value、TTL、mutation、maxmemory 和生命周期。它不是一张并发 `Map<byte[], Object>`，而是一个受 owner thread 约束的状态 owner。
 
+设计意图、层间契约、与 Redis C 实现的对照以及已知取舍见 [`db-design-analysis.md`](./db-design-analysis.md)；运行期行为缺口与可疑观察见 [`db-behavior-gaps.md`](./db-behavior-gaps.md)。
+
 ## 组合边界
 
 command 层只依赖 `DbEngine`。它直接暴露合并读写后的 `StringOps`、`HashOps`、`ListOps`、`SetOps`、`ZSetOps`、`HllOps`、`KeyspaceOps` 和 `TtlOps`，以及 memory/lifecycle 方法。runtime 使用 `YierdisDbEngineFactory` 创建 `YierdisDb`。
@@ -40,6 +42,8 @@ Type roots
 
 `NativeKeyDirectory` 保存 allocator-backed `KEY_BYTES`，并把 key 映射到 `EntryHandle`。它负责 lookup、insert/remove、random candidate、cursor scan 和 table maintenance，不理解 value 类型，也不释放 payload。按 entry 删除（`removeEntry`）用 entry record 持有的 key handle 与 dict hash 反向探测槽位，O(probe) 定位，不做全表扫描；位置在删除时现查，rehash 两表状态下也不会指向 stale slot。
 
+目录的槽位数组（slot state、hash、key/entry handle 引用）在 heap，只有 key 字节本体是 allocator-backed；因此 `NativeKeyDirectory.nativeBytes()` 恒为 `0L`，"keyspace 在 native" 指的是 key 字节而非 hash slot。
+
 `OpenAddressingTopology` 统一表达 slot state、linear probing、tombstone 复用和 active/old 增量 rehash，不持有 key/value 数组、native handle 或任何 payload ownership。`NativeByteMap` 与 `NativeKeyDirectory` 均把生产 topology 委托给该核心，只保留 payload arrays 与 ownership/lifecycle logic。
 
 `EntryTable` 把每个 `EntryRecord` 编码进 72-byte `ENTRY_RECORD`。key/value handle 各占 16 bytes，显式保存 `allocatorId` 与 `localRaw`；其余字段保存 key hash、type、encoding、flags、TTL、version 和 LRU/LFU clock。
@@ -49,6 +53,8 @@ Type roots
 `EntryRecord.version` 在语义 mutation（新 record、TTL 或 flags 变化）时递增；纯 access-clock touch 保留原 version。prepared mutation 和 active expiration 用它与 handle、deadline、source state 一起识别 stale candidate；entry accounting 由 `YierdisDbMemoryEstimator` 计算，不存放在 version 字段中。
 
 `ValueHandle` 同样包装完整 `NativeHandle`。string 指向 `STRING_BYTES`；collection 指向对应 root record，再由 root/adapter 持有 packed block、node 或 hash topology。DB graph 只保存 stable identity，realloc/defrag 的 page、offset 和 location 发布属于 memory backend。
+
+adapter 内部并非全部 off-heap：`SET_INTSET` 是 heap 的 `short[]`/`int[]`/`long[]`，ZSET `packed` 的 score 在 heap `double[]`（native listpack 只存 member）。这些 heap 部分由 adapter 的 `heapEstimatedBytes()` 计入 `componentRetainedHeapBytes()`。
 
 ## Key lifecycle
 
