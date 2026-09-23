@@ -19,7 +19,7 @@ Start from a packaged artifact only after the command above identifies JDK 25:
 
 ```bash
 mvn -DskipTests package
-java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 6378
+java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 6378 --maxmemoryBytes 0
 ```
 
 Use `INFO`, `INFO stats`, `STATS`, and `MEMORY STATS` to inspect a running process. Do not infer a limit from JVM heap use alone: request, maxmemory/native, and reply ownership are separate bounded domains.
@@ -44,7 +44,7 @@ The server rejects invalid ordering at startup: control reservation must cover t
 - `reserved` is capacity charged to reply slots for encoded output plus retained-source bytes; the DB source object remains owned by its `PreparedCommand` through synchronous rendering.
 - `allocated` is actual chunk buffer capacity currently materialized from that reservation.
 
-Both gauges are bounded by the same hard admission hierarchy. A DB streamed source is owned by its `PreparedCommand` and is closed after synchronous rendering; its retained-source byte charge remains in the reply-slot lease until terminal slot cleanup. Slot, chunk, write-future, listener, queue, and any resource explicitly transferred to the reply sink remain associated with one reply slot until exactly one terminal cleanup owner releases them. `--clientOutputBufferLimitBytes` and its grace interval remain slow-client policy controls; they are not replacements for the hard reply admission limits above.
+Both gauges are bounded by the same hard admission hierarchy. A DB streamed source is owned by its `PreparedCommand` and is closed after synchronous rendering; its retained-source byte charge remains in the reply-slot lease until terminal slot cleanup. Slot, chunk, write-future, listener, queue, and any resource explicitly transferred to the reply sink remain associated with one reply slot until exactly one terminal cleanup owner releases them. `--client-output-buffer-limit-bytes` and `--client-output-buffer-over-limit-millis` remain slow-client policy controls; they are not replacements for the hard reply admission limits above.
 
 Ingress has its own global bound. `--protocolGlobalInFlightBytes` limits admitted parsed request ownership. A positive value is used exactly; `0` derives a bounded value from `--executorQueueMaxBytes` and is not an unlimited mode. The protocol parser also enforces `--protocolMaxBulkBytes`, `--protocolMaxArgs`, `--protocolMaxLineBytes`, and `--protocolMaxCommandBytes` before a request reaches the executor.
 
@@ -87,7 +87,7 @@ Operators should distinguish a result-unknown close from a capacity reject by ch
 
 During normal steady state, peaks may remain non-zero while current reserved/allocated bytes return to zero. After a test fixture or successful graceful shutdown, active slots, chunks, sources, child channels, and inbound reservation must converge to zero. A non-zero current gauge after clients disconnect is a leak signal; capture `INFO stats`, `MEMORY STATS`, process logs, the exact workload seed, and the candidate artifact checksum before restarting.
 
-The soak workload uses one warmup cycle followed by three measured fill/cleanup cycles. At each completed cycle, live native objects and FFM regions must return to the warm baseline, and committed native bytes must remain below the metadata high-water mark plus the configured one-warm-page-per-size-class bound. The main client keeps one fixed inbound read credit while it remains connected; that standing credit is its cycle baseline, while retained input, consolidation, reply slots, sources, chunks, and outbound reservations must drain. RSS remains supplementary telemetry because JVM heap residency can grow independently of live ownership; native counters and ownership gauges are the required leak assertions.
+The soak workload runs four fill/cleanup cycles (`ProductionHardeningSoakTest.SOAK_CYCLE_COUNT = 4`). The first completed cycle records the warm baseline; each later cycle must return live native objects and FFM regions to that baseline, and committed native bytes must remain below the metadata high-water mark plus the configured one-warm-page-per-size-class bound. The main client keeps one fixed inbound read credit while it remains connected; that standing credit is its cycle baseline, while retained input, consolidation, reply slots, sources, chunks, and outbound reservations must drain. RSS remains supplementary telemetry because JVM heap residency can grow independently of live ownership; native counters and ownership gauges are the required leak assertions.
 
 ## Graceful Shutdown
 

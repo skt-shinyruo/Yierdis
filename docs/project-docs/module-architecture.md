@@ -34,6 +34,7 @@ flowchart LR
   benchmark --> resp
 
   tests -. test .-> benchmark
+  tests -. test .-> cli
   tests -. test .-> common
   tests -. test .-> serverApi
   tests -. test .-> server

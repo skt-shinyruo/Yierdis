@@ -137,7 +137,7 @@ executor 的队列、字节、连接水位、reply capacity 和 transport 信号
 
 提交阶段先发生的是 backlog 和连接统计：
 
-- `taskQueue.offer(...)` 成功后，`ExecutionConnectionContext.recordCommandEnqueued(...)` 增加 `pending` 和 `pendingBytes`
+- publish 时先调用 `ExecutionConnectionContext.recordCommandEnqueued(...)` 增加 `pending` 和 `pendingBytes`，再向 `taskQueue.offer(...)` 投递 task
 - 达到连接 high watermark、全局 backlog high watermark 或 queued bytes 上限附近时，executor 会关闭该连接 `autoRead`
 - 这一步只阻止继续收包，不会取消已经入队的命令
 
@@ -168,7 +168,7 @@ executor 的队列、字节、连接水位、reply capacity 和 transport 信号
 
 `ExecutorBackpressureController` 记录哪些连接是被 executor 关闭输入的。全局 backlog 恢复到低水位后，它不会无条件打开所有连接，而是做 best-effort recovery：
 
-1. 遍历 `keysWithAutoReadDisabled`。
+1. 遍历 `connectionsWithAutoReadDisabled`。
 2. 跳过 inactive 或 closing 连接。
 3. 检查该连接自身 pending count 是否低于 low watermark。
 4. 检查 pending bytes 是否低于 bytes low watermark。
@@ -187,7 +187,7 @@ server 侧的 task 直接调用 `YierdisInstanceRuntimeAccess.maintenanceTick()`
 
 executor 热路径用 `LongAdder` 和 connection context 记录观测值：
 
-- submit accepted/rejected：`submitAccepted`、`submitRejectedQueueFull`、`submitRejectedBytesBudget`、`submitRejectedNotRunning`、`submitRejectedOfferFailed`
+- submit accepted/rejected：`submitAccepted`、`submitRejectedQueueFull`、`submitRejectedBytesBudget`、`submitRejectedNotRunning`、`submitRejectedOfferFailed`、`submitRejectedClosing`
 - 执行结果：`commandsExecuted`、`commandsSkippedClosing`、`closeAfterReply`
 - backlog：`queuedTasks`、`queuedBytes`
 - 背压：`channelsAutoReadDisabled`、`backpressureEnter`、`backpressureExit`

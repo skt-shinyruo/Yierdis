@@ -124,13 +124,13 @@ TTL 语义是“访问时惰性删除 + 轻量后台清理”。相关参数：
 - `--keysMaxResults`：`KEYS` 最大返回条数，默认 `Integer.MAX_VALUE`；`0` 禁用 `KEYS`。
 - `--nativeDefragEnabled` 及 `--nativeDefragMaxMoveBytes`、`--nativeDefragMaxObjects`、`--nativeDefragTimeLimitMillis`：maintenance tick 里可选 native allocator defrag 预算。
 
-bootstrap 使用 Netty worker event loop 做定时器，但定时器只提交 `executor.executeMaintenance(...)`。真正的 DB cleanup、global maxmemory maintenance 和 native defrag 都在 DB owner thread 上执行。`cleanupPending` 会 coalesce 尚未完成的 cleanup，避免高压下堆积追赶式 maintenance 任务。
+bootstrap 使用 Netty worker event loop 做定时器，但定时器只提交 `executor.executeMaintenance(...)`。真正的 DB cleanup、global maxmemory maintenance 和 native defrag 都在 DB owner thread 上执行。`maintenancePending` 会 coalesce 尚未完成的 maintenance，避免高压下堆积追赶式 maintenance 任务。
 
 `nativeDefragEnabled` 只是给 `YierdisDb.defragMaintenance()` 提供预算闸门；更细的移动、pin、quarantine 和 object table 语义看 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 
 `KEYS` 的时间和结果数预算由 bootstrap 转成 `SlowCommandLimits`，再通过 `DefaultCommandModules.create(...)` 注入命令模块。大 keyspace 运行时优先使用 `SCAN`，把 `KEYS` 当成受限诊断工具。
 
-连接空闲超时 `--clientIdleTimeoutMillis` 默认 `0`，表示不因空闲主动断开；不可信或资源紧张的部署可以显式设置正值。
+连接空闲超时 `--client-idle-timeout-millis` 默认 `0`，表示不因空闲主动断开；不可信或资源紧张的部署可以显式设置正值。
 
 当前 native-memory 路径统一使用 JDK 25 FFM。更细的 runtime、region、arena 和 copy 边界见 [`native-memory-runtime.md`](./native-memory-runtime.md)。
 
@@ -184,7 +184,7 @@ maxmemory 参数：
 
 每次 `INFO`、`INFO yierdis`、`INFO health` 或 `STATS` 执行时，`NettyServerInfoProvider` 都先构造一份请求级 `ServerStatsSnapshot`。executor、ingress、egress、child channels、runtime health 和 uptime 只采集一次，文本与结构化 writer 共享这份快照，避免同一个回复里的字段来自不同采样时刻。`INFO memory` 和 `INFO keyspace` 的 DB 聚合仍按 section 按需读取，不让轻量 health 探针承担全库聚合成本。
 
-`MEMORY STATS` 返回内存估算 map。常用字段包括 `maxmemory_bytes`、`used_bytes_for_maxmemory`、`effective_used_bytes_for_maxmemory`、`ledger_used_bytes`、`ledger_reserved_bytes`、`offheap_used_bytes`、`offheap_included_in_maxmemory`、`key_count` 和 `expire_count`。global scope 下优先读聚合视角；per-db scope 下更贴近当前 DB。
+`MEMORY STATS` 返回内存估算 map。常用字段包括 `maxmemory_bytes`、`used_bytes_for_maxmemory`、`effective_used_bytes_for_maxmemory`、`ledger_used_bytes`、`ledger_reserved_bytes`、`offheap_used_bytes`、`offheap_included_in_maxmemory`、`key_count` 和 `expire_count`。`ledger_used_bytes` 是 heap 估算 `heapDataBytesEstimate`，`ledger_reserved_bytes` 才是 ledger `reservedBytes`。global scope 下优先读聚合视角；per-db scope 下更贴近当前 DB。
 
 `MEMORY USAGE key` 返回某个 key 的估算字节数，用于定位大 key。`OBJECT ENCODING key` 返回内部编码名，例如 string 的 `int` / `embstr` / `raw`，collection 的 `listpack` / `hashtable` / `intset` / `quicklist` / `skiplist` 等，用于理解数据结构升级和存储形态。
 
@@ -242,4 +242,4 @@ java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar
 
 ## Production Hardening Operations
 
-reply global/per-connection/single limits、ingress admission、maxmemory、result-unknown 和 graceful shutdown 共同构成运行时容量边界。精确默认值、启动校验、INFO/STATS 字段、漏账排查和发布命令以 [`production-hardening-operations.md`](./production-hardening-operations.md) 为准；不要只用 `clientOutputBufferLimitBytes` 或 JVM heap 来判断这些硬限制是否生效。
+reply global/per-connection/single limits、ingress admission、maxmemory、result-unknown 和 graceful shutdown 共同构成运行时容量边界。精确默认值、启动校验、INFO/STATS 字段、漏账排查和发布命令以 [`production-hardening-operations.md`](./production-hardening-operations.md) 为准；不要只用 `--client-output-buffer-limit-bytes` 或 JVM heap 来判断这些硬限制是否生效。

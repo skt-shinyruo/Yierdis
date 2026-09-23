@@ -23,7 +23,7 @@
 
 ## Production Hardening
 
-部署、容量调参、事故排查或发布验收前，先读 [`production-hardening-operations.md`](./production-hardening-operations.md)。它统一说明 ingress、maxmemory 和有界回复的容量口径，result-unknown 关闭语义、graceful shutdown、soak 和四命令性能门槛。
+部署、容量调参、事故排查或发布验收前，先读 [`production-hardening-operations.md`](./production-hardening-operations.md)。它统一说明 ingress、maxmemory 和有界回复的容量口径，result-unknown 关闭语义、graceful shutdown、soak，以及四命令 benchmark 的对照口径。通过与否由外部策略决定，文档本身不设性能门槛。
 
 ## 核心命令链路基准
 

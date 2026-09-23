@@ -49,7 +49,7 @@ CommandExecutor
 
 ## 启动和连接状态
 
-`YierdisServer.main(...)` 只做启动参数解析和 `YierdisServerBootstrap.start(...)`。
+`YierdisServer.main(...)` 解析启动参数，调用 `YierdisServerBootstrap.start(...)`，注册 shutdown hook，然后阻塞在 `server.awaitClose()`。
 
 `YierdisServerBootstrap` 是 composition root。它创建 `YierdisInstance`，通过 `CommandRegistries.dispatcher(...)` 注册默认命令、事务命令和 server-only 命令，再把 `dispatcher::prepare` 交给 `CommandExecutor`。之后才创建 Netty groups 和 `ServerBootstrap`。
 

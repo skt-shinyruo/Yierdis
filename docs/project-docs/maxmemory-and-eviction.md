@@ -9,11 +9,11 @@
 - `usedBytes`：按已提交 mutation 的 `actualDeltaBytes` 增减的逻辑账本，不是 allocator/JVM 的实时物理占用。
 - `reservedBytes`：预算已通过、但 mutation 还没 commit/rollback 的窗口。
 
-`YierdisDbMemoryReporter.memoryStats()` 会把它们暴露成：
+`YierdisDbMemoryReporter.memoryStats()` 暴露的相关字段是：
 
-- `ledger_used_bytes`
-- `ledger_reserved_bytes`
-- `effective_used_bytes_for_maxmemory`
+- `ledger_used_bytes`：`heapDataBytesEstimate`，不是 ledger 逻辑 `usedBytes`
+- `ledger_reserved_bytes`：ledger `reservedBytes`
+- `effective_used_bytes_for_maxmemory`：物理 `usedBytesForMaxmemory` 加 `reservedBytes`
 
 enforcement 不把 ledger `usedBytes`、native counter 和 TTL estimate 再拼成一套数字。每个 DB 直接报告 owned `MemoryUsageSnapshot`，物理口径固定为：
 
@@ -101,9 +101,9 @@ governor 的主线是：
 
 maintenance 时的顺序由 `YierdisInstanceRuntimeAccess.maintenanceTick()` 固定：
 
-- 每个 DB 都先在时间预算内排空到期过期 key（`runMaintenance` 内的 expires 索引 drain），再 `defragMaintenance()`；
-- per-DB scope 在每个 DB 内分别 enforce；
-- global scope 则在 DB 循环结束后，统一跑一次实例级 maxmemory maintenance。
+- 每个 DB 先跑 `runMaintenance()`：回收 detached entry，在时间预算内排空 expires 索引，推进 rehash，然后 `enforceMaxmemory()`（`ledger.enforceLocalMaintenance()`）。global scope 下每个 DB 的本地 `maxmemoryBytes` 仍是整份全局预算，所以这一步也会执行。
+- `defrag` 打开时，每个 DB 在 `runMaintenance()` 之后再跑 `defragMaintenance()`。
+- DB 循环结束后调用 `enforceGlobalMaxmemoryMaintenance()`。只有 global scope 创建了 governor 时它才会 `enforceMaintenance()`；per-db scope 下这次调用是空操作。
 
 `GlobalMaxmemoryLruAcrossDbsTest` 覆盖了一个核心语义：DB1 的写入可以在 global scope 下淘汰 DB0 里真正的全局 LRU key。
 

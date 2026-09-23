@@ -222,7 +222,7 @@ warmup 使用独立 DB，完成后 shutdown；正式测量再创建并绑定一�
 
 footprint 使用 DB 自己的物理内存核算：`accounted = heap estimated + native metadata committed + native data committed`。`accounted delta` 是 loaded 减 empty baseline，`accounted delta bytes/key` 再除以实际 key 数。`native data live` 是逻辑存活 payload；`native reclaimable` 是 allocator 识别出的回收候选/提示量，不代表页面已经 trim，也不能从 `accounted` footprint 中扣除。`live object count` 用于观察 native object topology，而不是字节量。
 
-进程 RSS 从 Linux `/proc/self/status` best-effort 读取，会受 warmup 残留、GC、JVM heap committed、JIT、native arena 和 OS residency 影响。`rss_delta` 不是 DB footprint delta，也不参与 accounted delta 或 bytes/key；不可用时 human/quiet 输出 `unavailable`，CSV 的 `rss_bytes` 和 `rss_delta_bytes` 留空。CSV 总计 21 列，其中 `pending_hash_table_count` 在成功的稳定 snapshot 中必须为 0；字段顺序以 `StorageBenchmarkRenderer` 为准。
+进程 RSS 从 Linux `/proc/self/status` best-effort 读取，会受 warmup 残留、GC、JVM heap committed、JIT、native arena 和 OS residency 影响。`rss_delta` 不是 DB footprint delta，也不参与 accounted delta 或 bytes/key；不可用时 human/quiet 输出 `unavailable`，CSV 的 `rss_bytes` 和 `rss_delta_bytes` 留空。CSV 总计 29 列，其中 `pending_hash_table_count` 在成功的稳定 snapshot 中必须为 0；字段顺序以 `StorageBenchmarkRenderer` 为准。
 
 ## smoke.sh、bench.sh 和 storage-bench.sh
 

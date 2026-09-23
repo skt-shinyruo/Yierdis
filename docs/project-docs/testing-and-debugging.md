@@ -159,7 +159,13 @@ map source 必须在 renderer 消费完成后、`PreparedCommand` 关闭前仍�
 CLI 先跑：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-cli -am -Dtest=YierdisClientTest,MaxmemoryScopeTest,TransactionQueueLimitTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-cli -am -Dtest=YierdisClientTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+`MaxmemoryScopeTest` 和 `TransactionQueueLimitTest` 在 `yierdis-tests`：
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests -am -Dtest=MaxmemoryScopeTest,TransactionQueueLimitTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 RESP bench 先跑：
@@ -168,7 +174,7 @@ RESP bench 先跑：
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=RedisBenchmarkCatalogTest,RedisBenchmarkCommandTemplateTest,NioBenchmarkRunnerTest,BenchmarkOutputRendererTest,RedisBenchmarkCommandTest,BenchScriptContractTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-这些 focused tests 分别保护 canonical catalog/selection、wire template/random placeholder、单 `Selector` scheduling、human/quiet/CSV、CLI validation/exit code 和 connect-only shell contract。排障顺序：`RedisBenchmarkOptions` -> `BenchmarkConfig` -> `RedisBenchmarkCatalog` -> `RedisBenchmarkCommandTemplate` -> `NioBenchmarkRunner` / incremental reply decoder -> `BenchmarkLatencyRecorder` -> `BenchmarkOutputRenderer` -> `BenchScriptContractTest`。详细入口看 [`client-and-bench-internals.md`](./client-and-bench-internals.md)。
+这些 focused tests 分别保护 canonical catalog/selection、wire template/random placeholder、单 `Selector` scheduling、human/quiet/CSV、CLI validation/exit code 和 connect-only shell contract。排障顺序：`RedisBenchmarkOptions` -> `BenchmarkConfig` -> `RedisBenchmarkCatalog` -> `RedisBenchmarkCommandTemplate` -> `NioBenchmarkRunner` / incremental reply decoder -> `LatencyRecorder` -> `BenchmarkOutputRenderer` -> `BenchScriptContractTest`。详细入口看 [`client-and-bench-internals.md`](./client-and-bench-internals.md)。
 
 storage bench 先跑：
 
@@ -176,7 +182,7 @@ storage bench 先跑：
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=YierdisBenchEntrypointTest,StorageBenchmarkConfigTest,ProcessRssReaderTest,StorageBenchmarkRendererTest,StorageBenchmarkRunnerTest,StorageBenchScriptContractTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-这组测试保护 1M 默认/10M 上限、固定宽度 key、RSS unavailable、21 列 CSV、rehash 稳定 snapshot、empty baseline/loaded accounting、真实小规模 DB 生命周期和专用脚本契约。排障顺序：`StorageBenchmarkOptions` -> `StorageBenchmarkConfig` -> `StorageBenchmarkRunner` -> `StorageMemorySnapshot` -> `StorageBenchmarkResult` -> `StorageBenchmarkRenderer`。
+这组测试保护 1M 默认/10M 上限、固定宽度 key、RSS unavailable、29 列 CSV、rehash 稳定 snapshot、empty baseline/loaded accounting、真实小规模 DB 生命周期和专用脚本契约。排障顺序：`StorageBenchmarkOptions` -> `StorageBenchmarkConfig` -> `StorageBenchmarkRunner` -> `StorageMemorySnapshot` -> `StorageBenchmarkResult` -> `StorageBenchmarkRenderer`。
 
 ## 改架构护栏时
 

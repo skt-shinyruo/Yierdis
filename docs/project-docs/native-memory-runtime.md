@@ -103,11 +103,10 @@ native memory 不等于所有路径零复制。当前仍会 materialize 到 heap
 - RESP decode 把 argv materialize 成 heap `byte[]`；
 - key lookup 把 `BytesView` 转为 owned key bytes；
 - snapshot、`RANDOMKEY`、introspection 和显式返回 `byte[]` / `List<byte[]>` 的 API；
-- 排序、聚合或协议组装需要脱离 native view 生命周期时复制。
+- 排序、聚合或协议组装需要脱离 native view 生命周期时复制；
+- `LRANGE`、`HGETALL`、`SMEMBERS`、`ZRANGE*` 在 prepare 时把选中元素拷进独立 source。
 
-`SCAN`、命令 `GET`/`HGET`、pop 和 collection streaming 路径会持有 pin/epoch/handle，
-通过 native-backed `BytesSlice` 或等价的 retained view 有界写出；它们不会先 materialize
-整批 payload。调用方不能让 callback-scoped view 逃逸。详细边界见
+`SCAN`、命令 `GET`/`HGET` 和 pop 会持有 pin/epoch/handle，通过 native-backed `BytesSlice` 或等价的 retained view 有界写出；它们不会先 materialize 整批 payload。`GET` 的 pin 保持到 reply `close`。调用方不能让 callback-scoped view 逃逸。详细边界见
 [`offheap-copy-behavior.md`](./offheap-copy-behavior.md) 和 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)。
 
 ## Operations Cross-Check

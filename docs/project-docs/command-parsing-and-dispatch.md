@@ -56,9 +56,9 @@ dispatcher 的实际顺序是：
 5. 创建 `CommandArgs`，先调用 `spec.syntax().arity().validate(...)`；
 6. 若 transaction active，根据 `TransactionPolicy` 选择禁止、排队或 transaction-control 分支；
 7. 普通执行调用 `spec.handler().parse(args)` 得到准备函数；
-8. 调用 `prepareFunction.apply(session)` 得到 `PreparedCommand`；
-9. executor 根据其 reservation shape 完成 `reserve -> validate -> execute(session)`；
-10. execute 返回 `CommandResult`，executor 用 `RedisReplyRenderer` 统一渲染。
+8. 调用 `prepareFunction.apply(session)` 得到 `PreparedCommand`。
+
+dispatcher 在返回 `PreparedCommand` 时结束。随后 `CommandExecutorExecutionSupport.execute` 按 reservation shape 完成 `reserve -> validate -> execute(session)`，再用 `RedisReplyRenderer` 渲染 `CommandResult`。
 
 `CommandParseException` 被转换成语义 error reply；prepare 阶段抛出的 `WrongTypeException` 与 `YierdisCommandException` 也会变成 command error。其他未预期异常继续交给 executor 的 terminal failure 路径，不能被误报为确定的业务失败。
 
@@ -140,7 +140,7 @@ transaction active 时，dispatcher 仍先完成命令名检查、registry looku
 - `DISALLOWED_IN_MULTI`：准备 error action，并在执行时标记 transaction aborted；
 - `QUEUEABLE`：调用同一个 `handler.parse(CommandArgs)` 做完整参数 preflight，但不应用其返回的准备函数。
 
-queueable preflight 成功后，dispatcher 返回一个 maximum-shape prepared action。executor 先预留回复容量，再执行 `TransactionState.tryEnqueue(request)`：成功返回 `QUEUED`，条数或字节限制失败则返回 `ERR Transaction queue is full` 并标记 aborted。
+queueable preflight 成功后，dispatcher 返回 `ReplyShapes.errorUpperBound()` 的 prepared action。`EXEC` 才使用 `ReplyShapes.maximum()`。executor 先预留回复容量，再执行 `TransactionState.tryEnqueue(request)`：成功返回 `QUEUED`，条数或字节限制失败则返回 `ERR Transaction queue is full` 并标记 aborted。
 
 因此排队阶段的 owner 分工很清楚：
 

@@ -52,13 +52,13 @@ reply 编码方向相反。`RespReplyWriter.bulkString(BytesSlice)` 先写 RESP 
 
 DB API 的很多读方法接受 `BytesView`，例如 `StringOps`、`TtlOps`、`KeyspaceOps` 与 `DbEngine` 上的 memory/object-encoding 方法。这让 command/DB contract 保持 Netty-free；当前 lookup 的 ownership copy 边界见下文。
 
-当前实现里，`YierdisDbKeyLifecycle` 在 `BytesView` 进入 key directory 前会调用 `YierdisDb.toByteArray(keyView)` materialize 一个 heap `byte[]`。这是因为 `NativeKeyDirectory` 的 lookup API 当前是 `byte[]` based，例如 `get(byte[])`、`getKeyHandle(byte[])` 和 `compute(byte[], ...)`。这份 heap copy 是今天的 ownership/lifetime 边界，不应该写成“lookup 已经避免 heap key 生成”。
+当前实现里，`YierdisDbKeyLifecycle` 在 `BytesView` 进入 key directory 前会调用 `YierdisDb.toByteArray(keyView)` materialize 一个 heap `byte[]`。这是因为 `NativeKeyDirectory` 的 lookup API 当前是 `byte[]` based，例如 `get(byte[])`、`getKeyHandle(byte[])` 和 `stageInsert(byte[])`。这份 heap copy 是今天的 ownership/lifetime 边界，不应该写成“lookup 已经避免 heap key 生成”。
 
 新 key 持久化会把 key bytes 存成 allocator-backed `KEY_BYTES`。`SCAN` discovery 只保留 cursor、目录元数据和 epoch，输出时重放同一段目录并把 key 暴露为 native-backed slice；snapshot、`RANDOMKEY`、显式 `byte[]` 和 introspection API 才会为了独立 ownership 或诊断生成 heap copy。这些复制点和 lifecycle 边界 copy 一样，都是有意的 lifetime/ownership 边界。
 
 写路径中，`StringOps.set(...)`、`append(...)` 和 HLL 内部逻辑接收 `BytesSlice`。这让 command 层把 value 作为 slice 交给 DB，由 `StringRoot` 或对应 type root 写入 allocator-backed `STRING_BYTES` 或 collection native payload handles。slice 的重点是延后复制决策，而不是承诺零拷贝持久化。
 
-集合读路径大量使用 `BulkStringSink`。这个 storage API 中的协议无关输出端口支持 `bulkString(byte[])`、`bulkString(byte[], off, len)`、`bulkString(BytesSlice)`、`bulkStringLongAscii(long)` 和 null bulk；`LRANGE`、`HGETALL`、`SMEMBERS`、`ZRANGE` 等可以逐项 emit 到 sink，避免先组装完整 `List<byte[]>` 再交给协议层。
+集合内部遍历使用协议无关的 `ByteValueSink`。它支持 `value(byte[])`、`value(byte[], off, len)`、`value(BytesSlice)`、`longAscii(long)` 和 `nullValue()`。`LRANGE`、`HGETALL`、`SMEMBERS`、`ZRANGE*` 在 prepare 时通过 `ByteSequenceSources.copiedFrom` / `ByteMapSources.copiedFrom` 把选中元素拷进独立 source；renderer 之后只回放这份快照，不会在写协议时再遍历 live native 结构。
 
 ## 语义回复和 Netty 写回
 
@@ -77,7 +77,7 @@ CommandResult / RedisReply
   -> channel.write(...)
 ```
 
-`RedisReply` 的 payload emitter 和 `BulkStringSink.bulkString(BytesSlice)` 是关键入口。heap `byte[]` 仍然可用，但不是唯一形状；native string、collection range 和 computed ASCII number 都可以在中央 renderer 调用期间流式写出。reply reservation、source ownership、Netty ownership 和顺序写回的细节见 [`netty-adapter-design.md`](./netty-adapter-design.md)。
+`RedisReply` 的 payload emitter 和 `ByteValueSink.value(BytesSlice)` 是关键入口。heap `byte[]` 仍然可用，但不是唯一形状。`GET` / `HGET` / pop 可以在中央 renderer 调用期间通过已 pin 的 native slice 写出；collection range 回放的是 prepare 时拷好的快照。reply reservation、source ownership、Netty ownership 和顺序写回的细节见 [`netty-adapter-design.md`](./netty-adapter-design.md)。
 
 ## 流式路径和 materialization fallback
 
@@ -85,10 +85,9 @@ CommandResult / RedisReply
 
 - API 边界使用 `BytesView`，让 command/DB contract 不依赖 Netty；当前 DB lifecycle lookup 仍会 materialize heap `byte[]`。
 - `BytesSlice.writeTo(BytesSink)` 可以流式写出 value，避免 whole-result materialization，但具体实现仍可能使用有界 heap scratch copy。
-- `NativeBytesSlice` 在同步写出期间 pin allocator handle，写完后 unpin，避免为了 `LRANGE`、`HGETALL`、`SMEMBERS`、`ZRANGE` 这类流式读先 materialize `List<byte[]>`。
+- `GET` 的 `NativeBytesSlice` 在 `StringRoot.retainedValue` 取出时 pin，reply `close` 才 unpin；`writeTo` 使用这份已有 pin，不会在写出期间单独 pin/unpin。
 - `SCAN` window 保留 cursor、目录 generation/capacity、epoch 和匹配计数；length/emit 阶段重放相同物理 slot 范围，并把匹配 key 包装为 native-backed slice。
 - `ReplyReservationSink` / `BoundedChunkedReplySink` 在分配前取得额度，并把编码结果限制在有界 `ByteBuf` chunk 内。
-- `BulkStringSink` 让 collection range 边遍历边输出。
 
 fallback 也同样重要。以下 heap materialization 是有意的：
 
@@ -96,6 +95,7 @@ fallback 也同样重要。以下 heap materialization 是有意的：
 - DB lifecycle lookup：当前 `YierdisDbKeyLifecycle` 用 `YierdisDb.toByteArray(...)` 把 `BytesView` 转成 heap `byte[]`，再进入 `NativeKeyDirectory`。
 - transaction replay：事务队列通过 `ExecutionRequest.retain()` 取得独立所有权；生产网络实现共享不可变 argv 和 reference-counted request-memory lease，默认接口实现才使用 heap copy。
 - explicit materialization：snapshot、`RANDOMKEY`、显式 `byte[]` API 和 `MEMORY` / object 类 introspection 需要构造独立返回值或诊断对象，不能把 native view 泄漏给调用方。
+- collection range：`LRANGE`、`HGETALL`、`SMEMBERS`、`ZRANGE*` 在 prepare 时拷成独立 source，renderer 只回放快照。
 - tests：测试经常用 heap arrays 和 recording sinks 断言内容，这是可读性和确定性的取舍。
 - ownership-returning DB APIs：要求 owned `byte[]` 或集合快照的显式 API 会复制；命令 `GET`、`HGET`、pop 和 `SET ... GET` 则持有 retained native-backed view/slice，直到同步 reply rendering 完成后释放。
 - unavoidable fallback paths：JSON/base64/escape、短生命周期输入持久化、需要排序/聚合或独立所有权的结果，都可能必须复制。

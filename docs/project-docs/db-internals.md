@@ -15,7 +15,7 @@ YierdisInstance
         -> YierdisDb
 ```
 
-`DbEngineConfig` 是 DB 配置的唯一输入。`YierdisDb` 在私有构造器内直接组装 ledger、mutation executor、DB kernel、memory context、maintenance 和公开 capability；`YierdisDbStorage` 只记录 maintenance registry 与 key lifecycle。storage 创建一开始就接管 backend，构造失败与正常 shutdown 都沿 key lifecycle 的同一 ownership 路径清理，原始失败保持为 primary，清理失败附加为 suppressed。`YierdisDbRuntimeState` 只保存线程、maxmemory 协调器、LRU clock 和 defrag 报告状态，不持有 storage backend。
+`DbEngineConfig` 是 DB 配置的唯一输入。`YierdisDb` 在私有构造器内直接组装 ledger、mutation executor、DB kernel、memory context、maintenance 和公开 capability；`YierdisDbStorage` 只记录 maintenance registry 与 key lifecycle。storage 创建一开始就接管 backend，构造失败与正常 shutdown 都沿 key lifecycle 的同一 ownership 路径清理，原始失败保持为 primary，清理失败附加为 suppressed。`YierdisDbRuntimeState` 只保存线程守卫、maxmemory 协调器、LRU clock 和 `NativeDefragOptions`，不保存 defrag 报告，也不持有 storage backend。
 
 global/per-db maxmemory 只改变预算协调方式。每个 DB 都有独立的 stable-memory backend/runtime、keyspace、entry table、roots 和 ledger。
 
@@ -132,7 +132,7 @@ upper bound 覆盖新 key/entry/root、native payload、allocator metadata、all
 
 TTL 命令由 `YierdisTtlOps` 通过 prepared entry replacement/delete 实现。设置 deadline 复用原 entry handle；`PERSIST` 把 deadline 改为 `-1`；已经到期的输入直接准备删除。
 
-`YierdisDbExpirationSupport` 持久化 cursor 与完整 table generation，通过 key lifecycle 的 bounded scan 与 directory-state 语义读取 topology。单次最多检查 320 个 physical slots、收集 20 个候选，并受时间预算限制。扫描 callback 只发现候选；返回后按 key identity、record version 和 deadline 重新验证再删除。
+`YierdisDbExpirationSupport.cleanupExpired(...)` 只消费 `ExpiresIndex` 队首，不扫描 keyspace slot。单次最多回收 20 个过期 key，并受时间预算限制。每个候选先按 key identity 和真实 `expireAtMillis` 做惰性校验，再走 `YierdisDbKernel.reclaimExpired(...)`。
 
 详细的 retry、rehash dedup 和 commit failure 语义见 [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)。
 
@@ -151,7 +151,7 @@ heap estimated
   + native data committed
 ```
 
-per-db scope 先 cleanup expired，再按 `maxmemoryBytes - estimatedExtraBytes` trim/resample/evict。global scope 把相同 participant 操作交给 `YierdisGlobalMaxmemoryGovernor`，由它跨 DB 汇总 snapshots 和挑选 victim。各 DB backend runtime counter 只用于 lifecycle 诊断，不作为第二套 global usage source。
+写 admission 不内联跑 expires 索引清理。per-db scope 的本地 enforce 按 `maxmemoryBytes - estimatedExtraBytes` trim/resample/evict。global scope 把跨 DB 预算交给 `YierdisGlobalMaxmemoryGovernor`，由它汇总 snapshots 和挑选 victim。维护节拍里，每个 DB 的 `runMaintenance()` 仍会先排空到期 key，再做本地 enforce；global governor 的 maintenance 在 DB 循环之后。各 DB backend runtime counter 只用于 lifecycle 诊断，不作为第二套 global usage source。
 
 `noeviction` 不选 victim；`allkeys-random` 随机取候选；`allkeys-lru` 比较 `EntryRecord.lruOrLfu()`。candidate selection 不跳过过期 key（抽到或扫描到即作为最优候选），过期候选先走 expiration reclamation，真正 victim 通过 `YierdisDbKernel.evict(...)` 删除。
 
@@ -166,7 +166,7 @@ ledger 逻辑账本与 admission 的物理重算是两套账，估算漂移触�
 主要口径包括：
 
 - owned physical snapshot 与 backend allocator stats；
-- ledger logical used/reserved；
+- `ledger_used_bytes` 是 `heapDataBytesEstimate`，不是 ledger 逻辑 `usedBytes`；`ledger_reserved_bytes` 才是 ledger `reservedBytes`；
 - type root estimates；
 - key count 和 derived expire count；
 - `usedBytesForMaxmemory = heap + native metadata committed + native data committed`；

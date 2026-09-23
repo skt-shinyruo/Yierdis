@@ -31,7 +31,7 @@ collection 写入也类似：root record 和 payload internals 都是 allocator-
 - `MEMORY` / `OBJECT` 类命令需要构造诊断输出。
 - 返回 `List<byte[]>` 的 collection read API，例如非流式聚合结果。
 
-当前 string `GET` 路径可以通过 `BytesSlice` / `BulkStringSink` 包装成流式 `RedisReply`，再由中央 renderer 写入协议端口。native slice 只在同步 `writeTo` 期间 pin allocator handle；它不是可被长期持有的 allocator view。
+当前 string `GET` 路径通过 `StringRoot.retainedValue` 得到已 pin 的 `NativeBytesSlice`，再包装成 `RedisReply`，由中央 renderer 写入协议端口。pin 保持到 reply `close`，`writeTo` 只使用这份已有 pin。调用方不能把这个 slice 留到 reply 关闭之后。
 
 命令 `GET`、`HGET`、pop 和 `SET ... GET` 使用 retained native-backed view/slice；`SCAN` 则保留 cursor、目录元数据和 epoch，在输出阶段重放目录并生成 native-backed key slice。它们都不要求先把完整结果 materialize 到 heap。
 
@@ -53,11 +53,11 @@ NativeBytesSlice
 
 `RespReplyWriter.bulkString(BytesSlice)` 会先写 RESP header，再让 slice 同步写入 sink，最后写 CRLF。`NativeBytesSlice` 当前使用可复用的 8 KiB heap scratch 分块读取 native bytes；`BoundedChunkedReplySink` 在 allocator 调用前把预留额度转换为 allocated credit，再写入固定上限的 `ByteBuf` chunk。
 
-collection read path 的 `BulkStringSink` 也服务这个目标。`LRANGE`、`HGETALL`、`SMEMBERS`、`ZRANGE` 这类命令可以边遍历边 emit bulk string，而不是必须先构造完整 `List<byte[]>`。
+`LRANGE`、`HGETALL`、`SMEMBERS`、`ZRANGE*` 不走这条 live native 写出路径。它们在 prepare 时用 `copiedFrom` 把选中元素拷进独立 source，renderer 再把快照写入 `ByteValueSink`。
 
 这条路径避免完整 heap 结果，但当前仍执行有界复制：
 
-- source slice 可能来自 request heap bytes，或来自同步 pin/unpin 的 native handle view。
+- source slice 可能来自 request heap bytes，或来自已经 pin 到 reply `close` 的 native handle view。`GET` 的 `writeTo` 使用这份已有 pin。
 - native slice 先复制到有界 heap scratch，sink 再把数组范围同步复制到 reply chunk。
 - 某些格式转换、排序、聚合、escape 或 base64 边界仍需要中间 buffer。
 

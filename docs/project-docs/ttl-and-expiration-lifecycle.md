@@ -79,9 +79,16 @@ flushDb / flushDbAsync 在 commit 时清空整个索引并重置 `expireCount`�
 Netty worker timer
   -> CommandExecutor.executeMaintenance(...)
   -> YierdisInstanceRuntimeAccess.maintenanceTick()
-     -> every DB: drainExpiredWithinBudget() -> defragMaintenance()
-     -> per-db scope: enforceMaxmemoryMaintenance()
-     -> global scope: instance-level governor maintenance
+     -> every DB: runMaintenance()
+          reclaimDetachedEntries()
+          -> drainExpiredWithinBudget()
+          -> rehashMaintenance(...)
+          -> enforceMaxmemory()
+             ledger.enforceLocalMaintenance()
+        if defrag enabled: defragMaintenance()
+     -> enforceGlobalMaxmemoryMaintenance()
+        governor present: enforceMaintenance()
+        per-db scope: no-op
 ```
 
 真正的 DB cleanup 只在 owner thread 上执行。expires 索引让"是否还有到期候选"成为 O(1) 判断，因此维护节拍会在时间预算内循环调用单次 cleanup，直到没有到期候选或预算耗尽；短 TTL churn 在节拍之间不会无限积压。

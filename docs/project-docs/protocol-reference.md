@@ -36,9 +36,9 @@ RESP2 array/multibulk 是默认请求格式，也是 Redis 客户端通常发送
 
 - multibulk header 必须是 `*<argc>\r\n`；
 - `argc` 必须是非负整数，并且不能超过协议参数上限；
-- 每个参数必须是 `$<len>\r\n<body>\r\n`；
-- bulk length 必须是非负整数，并且不能超过 bulk 上限；
-- bulk body 后必须紧跟 `\r\n`。
+- 非 null 参数是 `$<len>\r\n<body>\r\n`；`$-1\r\n` 是 null bulk，没有 body；
+- bulk length 可以是 `-1` 或非负整数，不能小于 `-1`，也不能超过 bulk 上限；
+- 非 null bulk 的 body 后必须紧跟 `\r\n`。
 
 连接刚建立时，回包版本也默认是 RESP2。也就是说，不执行 `HELLO` 的普通 Redis 客户端会收到 RESP2 编码的 simple string、integer、bulk string、array 和 error。
 
