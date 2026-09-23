@@ -106,7 +106,7 @@ runtime 周期任务入口，用于驱动过期清理、defrag 等后台维护�
 
 ### keyspace
 
-DB 内 key 到 entry handle/record 的索引结构。heap 路径和 FFM 路径分别有不同实现，但对上层暴露同一类查找、scan、删除语义。
+DB 内 key 到 entry handle/record 的索引。生产实现是 `YierdisDbStorage` 创建的 `NativeKeyDirectory`。
 
 ### TTL deadline
 
@@ -162,11 +162,11 @@ executor 在多连接之间选择任务的策略，目前文档中常见的是 `
 
 ### `BytesView`
 
-只读 bytes 视图，可以来自 heap byte[] 或 off-heap/native memory。它避免在读路径上过早 materialize。
+带长度的随机访问只读接口，要求 `length()`、`getByte(index)` 和 `getBytes(...)`。接口注释要求实现视为短生命周期对象，不得被存入 DB。
 
 ### `BytesSlice`
 
-带 offset/length 的 bytes 片段，常用于写路径把参数或 native slice 传给 DB。
+继承 `BytesView`，增加 `writeTo(BytesSink)`。`NativeBytesSlice` 用 offset 和 length 描述 native handle 上的一段；接口本身没有 offset。
 
 ### `BytesSink`
 
@@ -180,11 +180,11 @@ executor 在多连接之间选择任务的策略，目前文档中常见的是 `
 
 ### FFM
 
-JDK 25 `java.lang.foreign` API。Yierdis 的 native-memory runtime、blob store、keyspace、allocator 都建立在这个基础上。入门看 [`ffm-primer.md`](./ffm-primer.md)。
+JDK 25 `java.lang.foreign` API。Yierdis 的 region 分配、`YierdisFfmRegion` 读写和 entry record layout 见 [`ffm-primer.md`](./ffm-primer.md)。
 
 ### `EntryHandle`
 
-DB entry 的稳定句柄包装。它保留完整 `NativeHandle`，并约束 `ENTRY_RECORD` 语义，避免误用其他 object kind。
+DB entry 的稳定句柄包装。它只要求内部 `NativeHandle` 非 null，不检查 `NativeObjectKind`。`ENTRY_RECORD` 由 `EntryTable` 分配和读写时使用。
 
 ### `ValueHandle`
 

@@ -21,9 +21,7 @@ Yierdis 选择中立 bytes 层：
 
 ## 核心接口
 
-`BytesSource` 是最小随机访问只读接口，只要求 `getByte(index)` 和 `getBytes(index, dst, dstOff, len)`。它不转移底层数据所有权，也不承诺线程安全、连续内存布局或对象生命周期。
-
-`BytesView` 在 `BytesSource` 上增加 `length()`，主要用于 key 等请求级 lookup 输入。接口注释明确要求它是短生命周期对象，不应被直接存入 DB。
+`BytesView` 是带长度的随机访问只读接口，要求 `length()`、`getByte(index)` 和 `getBytes(index, dst, dstOff, len)`。它主要用于 key 等请求级 lookup 输入。接口注释要求实现视为短生命周期对象，不得被存入 DB。
 
 `BytesSlice` 继承 `BytesView`，再增加 `writeTo(BytesSink out)`。它既能被随机读取，也能把自己流式写给 sink，是 string value、bulk reply 和 off-heap slice 的关键形状。
 
@@ -85,7 +83,7 @@ CommandResult / RedisReply
 
 - API 边界使用 `BytesView`，让 command/DB contract 不依赖 Netty；当前 DB lifecycle lookup 仍会 materialize heap `byte[]`。
 - `BytesSlice.writeTo(BytesSink)` 可以流式写出 value，避免 whole-result materialization，但具体实现仍可能使用有界 heap scratch copy。
-- `GET` 的 `NativeBytesSlice` 在 `StringRoot.retainedValue` 取出时 pin，reply `close` 才 unpin；`writeTo` 使用这份已有 pin，不会在写出期间单独 pin/unpin。
+- `GET` 的 `NativeBytesSlice` 在 `StringRoot.retainedValue` 取出时 pin，`CommandExecutorExecutionSupport` 同步渲染结束后 `closePrepared` 才 unpin；`writeTo` 使用这份已有 pin，不会在写出期间单独 pin/unpin。
 - `SCAN` window 保留 cursor、目录 generation/capacity、epoch 和匹配计数；length/emit 阶段重放相同物理 slot 范围，并把匹配 key 包装为 native-backed slice。
 - `ReplyReservationSink` / `BoundedChunkedReplySink` 在分配前取得额度，并把编码结果限制在有界 `ByteBuf` chunk 内。
 
@@ -111,6 +109,6 @@ bytes 抽象不是 native allocator。它只描述“如何读一段 bytes”和
 - `NativeKeyDirectory` 持久化 key bytes 为 allocator-backed `KEY_BYTES`。
 - `StringRoot` 持久化 string payload 为 allocator-backed `STRING_BYTES`。
 - entry metadata、collection root records 和 collection internal bytes 都是 allocator-backed objects。
-- list/hash/set/zset 的 streaming reply path 使用 native-backed `BytesSlice` value；当前实现可通过有界 heap scratch 和 reply chunk 完成写出，不需要完整结果 materialization。
+- list/hash/set/zset 的 `LRANGE`、`HGETALL`、`SMEMBERS`、`ZRANGE*` 在 prepare 时经 `ByteSequenceSources.copiedFrom` 或 `ByteMapSources.copiedFrom` 拷成堆快照，renderer 只回放这份快照。
 
 因此 `BytesView` / `BytesSlice` 可以帮助 native 和 heap 路径共享 API，但它们本身不保证数据 off-heap，也不保证零拷贝。它们保证的是短生命周期 view、流式写出和 adapter 边界清晰。

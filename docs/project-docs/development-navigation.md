@@ -213,7 +213,6 @@ prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都�
 
 继续追：
 
-- JDK FFM 基础看 [`ffm-primer.md`](./ffm-primer.md)。
 - 当前生产 native-memory 路线看 [`native-memory-runtime.md`](./native-memory-runtime.md)。
 - handle、object table、pin、quarantine、active defrag 看 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 

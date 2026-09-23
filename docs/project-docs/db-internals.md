@@ -15,7 +15,7 @@ YierdisInstance
         -> YierdisDb
 ```
 
-`DbEngineConfig` 是 DB 配置的唯一输入。`YierdisDb` 在私有构造器内直接组装 ledger、mutation executor、DB kernel、memory context、maintenance 和公开 capability；`YierdisDbStorage` 只记录 maintenance registry 与 key lifecycle。storage 创建一开始就接管 backend，构造失败与正常 shutdown 都沿 key lifecycle 的同一 ownership 路径清理，原始失败保持为 primary，清理失败附加为 suppressed。`YierdisDbRuntimeState` 只保存线程守卫、maxmemory 协调器、LRU clock 和 `NativeDefragOptions`，不保存 defrag 报告，也不持有 storage backend。
+`DbEngineConfig` 是 DB 配置的唯一输入。`YierdisDb` 在私有构造器内直接组装 ledger、mutation executor、DB kernel、memory context、maintenance 和公开 capability；`YierdisDbStorage` 只记录 maintenance registry 与 key lifecycle。storage 创建一开始就接管 backend，构造失败与正常 shutdown 都沿 key lifecycle 的同一 ownership 路径清理，原始失败保持为 primary，清理失败附加为 suppressed。`YierdisDbRuntimeState` 保存 `dbIndex`、线程守卫、`lruEnabled`、`NativeDefragOptions`、maxmemory 协调器、`MaxmemoryParticipant` 和本地 LRU clock。`defragMaintenance` 把 options 交给调用方，不在这里保存 defrag 报告，也不持有 storage backend。
 
 global/per-db maxmemory 只改变预算协调方式。每个 DB 都有独立的 stable-memory backend/runtime、keyspace、entry table、roots 和 ledger。
 
@@ -109,7 +109,7 @@ estimate upper bound
   -> YierdisDbKernel.execute(MutationPlan)
      -> YierdisDbMutationExecutor.execute(plan)
      -> ledger.reserve(upperBound)
-     -> NativeAllocationScope.begin()
+     -> stableMemoryBackend.beginAllocationScope()
      -> plan.prepare()
      -> ledger.reconcile(measured peak)
      -> prepared.commit()
@@ -155,7 +155,7 @@ heap estimated
 
 `noeviction` 不选 victim；`allkeys-random` 随机取候选；`allkeys-lru` 比较 `EntryRecord.lruOrLfu()`。candidate selection 不跳过过期 key（抽到或扫描到即作为最优候选），过期候选先走 expiration reclamation，真正 victim 通过 `YierdisDbKernel.evict(...)` 删除。
 
-ledger 逻辑账本与 admission 的物理重算是两套账，估算漂移触发 invariant failure 后 DB 进入 degraded、拒绝写入（MISCONF）。`RuntimeDbEngine.reconcileAccounting()` 是唯一的显式恢复入口：在 owner thread 上重算物理用量、用 `realignUsage` 把逻辑账本对齐到物理值、清除 degraded 并恢复写入；每次尝试与结果（成功/失败/修正量）记入 `DbHealthSnapshot.lastReconciliation`。快照的失败字段只描述当前未恢复的 episode，对账成功后随之关闭，下一场事故重新入账。恢复不会自动发生，持续性记账 bug 仍以事故形式暴露。
+ledger 逻辑账本与 admission 的物理重算是两套账。静默的 `ledger.usedBytes` 与物理用量漂移不会自动触发 invariant failure。degraded 来自 `YierdisDbHealth.recordInvariantFailure(...)` 和 commit 开始后的失败，写入被 `MISCONF DB is in a degraded state; writes are disabled` 拒绝。`RuntimeDbEngine.reconcileAccounting()` 是唯一的显式恢复入口：在 owner thread 上重算物理用量、用 `realignUsage` 把逻辑账本对齐到物理值、清除 degraded 并恢复写入；每次尝试与结果（成功/失败/修正量）记入 `DbHealthSnapshot.lastReconciliation`。快照的失败字段只描述当前未恢复的 episode，对账成功后随之关闭，下一场事故重新入账。恢复不会自动发生，持续性记账 bug 仍以事故形式暴露。
 
 更完整的 admission、OOM 和 result-unknown 边界见 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)。
 

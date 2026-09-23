@@ -50,9 +50,9 @@ command package 不依赖 `RedisReplyWriter`。命令通过 `RedisReply` 描述�
 dispatcher 的实际顺序是：
 
 1. 拒绝零参数、null command name 或空 command name，准备 `ERR empty command`；
-2. 把 `argv[0]` 严格转换为 upper-case ASCII；非 ASCII 名称按 unknown command 处理；
-3. 检查 null bulk argument；当前只有二参数 `PING` 和 `ECHO` 的 message 可以为 null；
-4. 用 upper-case name 从 `CommandRegistry` 取得 `CommandSpec`；
+2. `exactUpperAsciiName` 把 `argv[0]` 转成 upper-case ASCII；遇到非 ASCII 字节时返回 `null`；
+3. `hasIllegalNullArgument` 检查 null bulk argument。只有名称已经是 `PING` 或 `ECHO` 且 argc 为 2 时，message 可以为 null。非 ASCII 名称不是这两个命令，此时非法 null 先返回 `ERR Protocol error: null bulk string`，不会先报 unknown command；
+4. 用 upper-case name 从 `CommandRegistry` 取得 `CommandSpec`；`null` 名称按 unknown command 处理；
 5. 创建 `CommandArgs`，先调用 `spec.syntax().arity().validate(...)`；
 6. 若 transaction active，根据 `TransactionPolicy` 选择禁止、排队或 transaction-control 分支；
 7. 普通执行调用 `spec.handler().parse(args)` 得到准备函数；
@@ -82,13 +82,13 @@ dispatcher 在返回 `PreparedCommand` 时结束。随后 `CommandExecutorExecut
 - `ERR wrong number of arguments for '<cmd>' command`；
 - `ERR syntax error`；
 - `ERR value is not an integer or out of range`；
-- `ERR increment or decrement would overflow`（INCR/DECR 溢出）；
 - `ERR value is out of range, must be positive`（LPOP/RPOP 负 count）；
 - `ERR bit offset is not an integer or out of range`（SETBIT/GETBIT 非法 offset）；
-- `WRONGTYPE Key is not a valid HyperLogLog string value.`（普通 string 走 PF*）；
 - 命令家族定义的专用 parse error。
 
-parse 阶段不得调用 session、DB router、server info provider 或 slow-command governor。`CommandParseIsolationTest` 用所有默认命令的 fixture 集合验证这一点，`ServerCommandParseIsolationTest` 覆盖 `HELLO/INFO/STATS`，事务控制命令也有独立 parse-isolation 覆盖。
+`ERR increment or decrement would overflow` 在 `YierdisStringOps` 执行期抛出。`WRONGTYPE Key is not a valid HyperLogLog string value.` 来自 `YierdisHyperLogLog`，不是 handler parse。
+
+parse 阶段不得调用 session、DB router、server info provider 或 slow-command governor。`CommandParseIsolationTest` 用 `DefaultCommandModules` 的默认命令验证这一点，`ServerCommandParseIsolationTest` 覆盖 `HELLO`、`INFO`、`STATS`。
 
 ## parse、prepare 和 execute 为什么分开
 
@@ -140,7 +140,7 @@ transaction active 时，dispatcher 仍先完成命令名检查、registry looku
 - `DISALLOWED_IN_MULTI`：准备 error action，并在执行时标记 transaction aborted；
 - `QUEUEABLE`：调用同一个 `handler.parse(CommandArgs)` 做完整参数 preflight，但不应用其返回的准备函数。
 
-queueable preflight 成功后，dispatcher 返回 `ReplyShapes.errorUpperBound()` 的 prepared action。`EXEC` 才使用 `ReplyShapes.maximum()`。executor 先预留回复容量，再执行 `TransactionState.tryEnqueue(request)`：成功返回 `QUEUED`，条数或字节限制失败则返回 `ERR Transaction queue is full` 并标记 aborted。
+queueable preflight 成功后，dispatcher 返回 `ReplyShapes.errorUpperBound()` 的 prepared action。空队列的 `EXEC` 使用 `ReplyShapes.array(List.of())`，非空队列使用 `ReplyShapes.maximum()`。executor 先预留回复容量，再执行 `TransactionState.tryEnqueue(request)`：成功返回 `QUEUED`，条数或字节限制失败则返回 `ERR Transaction queue is full` 并标记 aborted。
 
 因此排队阶段的 owner 分工很清楚：
 
@@ -169,7 +169,7 @@ reply capacity 成功后，executor 把当前 `CommandSession` 直接传给 `Pre
 
 - `CommandDispatcherTest`：查表、arity、parse/prepare 顺序、事务 preflight、replay、result 与 owner 清理；
 - `CommandRegistryTest`：注册、seal、重复命令和 metadata lookup；
-- `CommandParseIsolationTest`、`ServerCommandParseIsolationTest`：所有生产 handler 的 parse isolation；
+- `CommandParseIsolationTest`、`ServerCommandParseIsolationTest`：分别覆盖 `DefaultCommandModules` 和 `HELLO`/`INFO`/`STATS`。`CommandRegistries.dispatcher` 还会注册 `TransactionCommands`，这两份测试不加载 `MULTI`/`EXEC`/`DISCARD`；
 - `ReplyPreflightCommandTest`：reply shape、容量拒绝、state-dependent reply 和 semantic source；
 - `RedisReplyRendererTest`：所有语义 reply variant 到 writer 的集中映射；
 - `CommandExecutorTest`：reserve、validate、execute、render、close-after-reply 和 terminal cleanup。

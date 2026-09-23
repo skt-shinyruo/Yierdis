@@ -68,9 +68,7 @@ There are two materially different failures:
 1. A preflight rejection before mutation or visible reply output is deterministic. It may produce the normal capacity/command failure and the mutation is not committed.
 2. A failure after a mutation may have committed, after reply bytes may have become visible, or after a write outcome is ambiguous is result-unknown. Examples include a post-commit mutation failure, write failure, source/chunk mismatch, and disconnect during output.
 
-For a result-unknown failure the server cancels the reply slot and closes the connection without a replacement reply. It must not fabricate `-ERR internal error`, because that would claim a result that may contradict a visible mutation or partial reply. A client must reconnect, re-read state where the command semantics allow it, and use an application-level idempotency strategy for mutations that cannot be safely retried.
-
-Operators should distinguish a result-unknown close from a capacity reject by checking `yierdis_result_unknown_closes`, `yierdis_outbound_write_failures`, `yierdis_outbound_failed_slots`, and the client connection lifecycle. The counter is diagnostic, not a durable command journal.
+For a result-unknown failure the server cancels the reply slot and closes the connection without a replacement reply. It must not fabricate `-ERR internal error`, because that would claim a result that may contradict a visible mutation or partial reply.
 
 ## Observability And Leak Triage
 
@@ -130,39 +128,20 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
   ./scripts/smoke.sh
 ```
 
-The bounded soak harness records its seed, argv, environment, server artifact SHA-256 value, peaks, samples, cycle baselines, RSS observations, and final counters under `target/production-hardening-soak`. The soak wrapper does not require a benchmark artifact. Separately managed performance evidence records its own Yierdis and Redis target identities and raw outputs. Use a short deterministic duration while developing and the required ten-minute duration for acceptance:
+`scripts/production-hardening-soak.sh` defaults to 600 seconds. Without `--skip-package` it packages `yierdis-server/yierdis-server` and `yierdis-tests`, then writes commit, duration, seed, JDK, Maven, `uname`, the server jar path, and its SHA-256 to `target/production-hardening-soak/<timestamp>-seed-<seed>/environment.txt`. `--skip-package` uses the existing server jar and fails when that jar is missing. `SKIP_BUILD=1` applies to `scripts/smoke.sh` and `scripts/bench.sh`.
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
   ./scripts/production-hardening-soak.sh --duration-seconds 600 --seed 20260710
 ```
 
-For final acceptance, package the candidate exactly once. Record the resulting SHA-256 values, then keep those artifacts frozen through smoke, soak, and the Yierdis performance run. `SKIP_BUILD=1` prevents smoke and benchmark scripts from rebuilding; `--skip-package` makes the soak wrapper fail if the already-packaged server artifact is unavailable instead of silently producing a new candidate.
-
-```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-  mvn -pl yierdis-server/yierdis-server,yierdis-cli,yierdis-benchmark -am -DskipTests package
-sha256sum yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar
-sha256sum yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-  SKIP_BUILD=1 ./scripts/smoke.sh
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-  ./scripts/production-hardening-soak.sh --skip-package --duration-seconds 600 --seed 20260710
-```
-
-Performance evidence consists of two operator-managed executions: the project benchmark connects to a separately started Yierdis candidate, and official `redis-benchmark` connects to a separately managed Redis target. The request count, clients, payload size, pipeline depth, keyspace mode, keepalive, authentication, and database selection must be equivalent. This project never starts or runs Redis and does not define a combined harness; the operator owns Redis configuration, process lifecycle, artifact identity, and result files.
+`scripts/bench.sh` connects to an already started Yierdis process. It does not start Redis and has no AUTH, username, or password. The benchmark sends `SELECT` only when `database != 0`.
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
   SKIP_BUILD=1 FORMAT=csv HOST=127.0.0.1 PORT=16378 \
   REQUESTS=100000 CLIENTS=50 DATA_SIZE=3 PIPELINE=1 \
   ./scripts/bench.sh > target/yierdis-benchmark.csv
-redis-benchmark -h 127.0.0.1 -p 6379 \
-  -n 100000 -c 50 -d 3 -P 1 --csv > redis-benchmark.csv
 ```
 
-Compare corresponding canonical titles and only the first eight shared Redis-style CSV fields: `test`, `rps`, `avg_latency_ms`, `min_latency_ms`, `p50_latency_ms`, `p95_latency_ms`, `p99_latency_ms`, and `max_latency_ms`. Yierdis adds `status` and `reason`; its SPOP, ZPOPMIN, MSET, and XADD rows are currently `UNSUPPORTED` and retain empty numeric metrics. The benchmark computes neither release thresholds nor artifact ratios. Any pass/fail rule or cross-target calculation belongs to external operator policy and must preserve the raw results used for that decision.
-
-## Current Acceptance Record Requirements
-
-This repository is not accepted merely because this guide exists. For a new candidate, record the candidate commit; Yierdis server and benchmark checksums; JDK/OS/CPU; exact functional, smoke, soak, and benchmark commands; focused/full-suite totals; soak seed and peak/final counters; the separately managed Redis artifact and configuration identity; equivalent workload values; raw Yierdis and Redis result paths; and any external operator decision. All Yierdis evidence must come from the same frozen candidate artifact; a rerun after rebuilding is a new candidate. Redis evidence remains an independently managed run and must never be presented as project-orchestrated output.
+CSV comparison uses the canonical title and the first eight shared fields: `test`, `rps`, `avg_latency_ms`, `min_latency_ms`, `p50_latency_ms`, `p95_latency_ms`, `p99_latency_ms`, and `max_latency_ms`. Yierdis also writes `status` and `reason`. `SPOP`, `ZPOPMIN`, `MSET`, and `XADD` are currently `UNSUPPORTED` and leave the numeric columns empty. The benchmark does not compute release thresholds or artifact ratios.

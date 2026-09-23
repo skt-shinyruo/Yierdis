@@ -43,7 +43,7 @@ flowchart LR
   tests -. test .-> resp
 ```
 
-根 `yierdis-parent` 统一版本、Java 25 编译器和插件配置。`yierdis-common`、`yierdis-networking`、`yierdis-server`、`yierdis-command` 和 `yierdis-db` 的上层目录没有中间 POM。
+根 `yierdis-parent` 统一版本、Java 25 编译器和插件配置。`yierdis-common`、`yierdis-networking-resp`、`yierdis-server`、`yierdis-command` 和 `yierdis-db` 的上层目录没有中间 POM。
 
 ## 九个模块
 

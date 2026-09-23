@@ -31,7 +31,7 @@ collection 写入也类似：root record 和 payload internals 都是 allocator-
 - `MEMORY` / `OBJECT` 类命令需要构造诊断输出。
 - 返回 `List<byte[]>` 的 collection read API，例如非流式聚合结果。
 
-当前 string `GET` 路径通过 `StringRoot.retainedValue` 得到已 pin 的 `NativeBytesSlice`，再包装成 `RedisReply`，由中央 renderer 写入协议端口。pin 保持到 reply `close`，`writeTo` 只使用这份已有 pin。调用方不能把这个 slice 留到 reply 关闭之后。
+当前 string `GET` 路径通过 `StringRoot.retainedValue` 得到已 pin 的 `NativeBytesSlice`，再包装成 `RedisReply`，由中央 renderer 写入协议端口。pin 保持到 `CommandExecutorExecutionSupport` 同步渲染后的 `closePrepared`，`writeTo` 只使用这份已有 pin。调用方不能把这个 slice 留到 prepared command 关闭之后。
 
 命令 `GET`、`HGET`、pop 和 `SET ... GET` 使用 retained native-backed view/slice；`SCAN` 则保留 cursor、目录元数据和 epoch，在输出阶段重放目录并生成 native-backed key slice。它们都不要求先把完整结果 materialize 到 heap。
 
@@ -57,7 +57,7 @@ NativeBytesSlice
 
 这条路径避免完整 heap 结果，但当前仍执行有界复制：
 
-- source slice 可能来自 request heap bytes，或来自已经 pin 到 reply `close` 的 native handle view。`GET` 的 `writeTo` 使用这份已有 pin。
+- source slice 可能来自 request heap bytes，或来自已经 pin 到 `closePrepared` 的 native handle view。`GET` 的 `writeTo` 使用这份已有 pin。
 - native slice 先复制到有界 heap scratch，sink 再把数组范围同步复制到 reply chunk。
 - 某些格式转换、排序、聚合、escape 或 base64 边界仍需要中间 buffer。
 

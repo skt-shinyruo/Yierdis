@@ -83,8 +83,6 @@ SET raw "\x00\x01"
 
 超时或解析失败会关闭连接。这是有意设计：RESP reply 是 FIFO，如果一个请求超时但连接保留，迟到 reply 可能被下一条请求读到，造成 desync。关闭连接比尝试“跳过未知 reply”更可靠。
 
-`executeUtf8(...)` 只是把 `List<String>` 转成 UTF-8 bytes 后复用 `execute(...)`。
-
 源码入口：
 
 - `yierdis-cli/src/main/java/yier/bubu/redis/app/client/YierdisClient.java`
@@ -108,7 +106,7 @@ SET raw "\x00\x01"
 - array 递归读取子 reply。
 - 返回 `RespReply` record，包含 `kind`、`text`、`bytes`、`integer` 和 `values`，并对 bytes/list 做防御性复制。
 
-这个 codec 是 client-side 工具路径的事实标准：CLI 用它做单请求通信；RESP benchmark 只用它编码 workload、AUTH 和 SELECT frame，`NioBenchmarkClient` 通过 `IncrementalRespReplyDecoder` 增量读取和校验 reply。storage benchmark 不经过 codec。
+这个 codec 是 client-side 工具路径的事实标准：CLI 用它做单请求通信；RESP benchmark 只用它编码 workload，并在 `database != 0` 时编码一条 `SELECT`。`NioBenchmarkClient` 通过 `IncrementalRespReplyDecoder` 增量读取和校验 reply。storage benchmark 不经过 codec。
 
 ## yierdis-benchmark
 
@@ -135,7 +133,7 @@ RedisBenchmarkOptions
 - `--requests 100000`、`--clients 50`、`--data-size 3`、`--pipeline 1`。
 - 可选 `--keyspace`。省略时请求保留 literal `__rand_int__`，显式 `0` 则把每个 placeholder 展开成 `000000000000`。
 - `--keep-alive true`、可选逗号分隔的 `--tests`、`--precision 3`、可选 `--seed`。
-- `--format human|quiet|csv`，以及可选 `--username`、`--password`、`--database`。
+- `--format human|quiet|csv`，以及可选 `--database`，默认 `0`。
 
 `BenchmarkConfig` 归一化 host 和 selector，并在发送测量请求前验证端口、request/client/payload/pipeline 范围、keyspace、histogram precision、format 和 DB。`RedisBenchmarkCatalog.select()` 按 selector 做去重后的 canonical-order selection；空 selection 返回完整 catalog，`ping` 同时选择两个 PING case，任一 LRANGE selector 都会先选择 measured LPUSH setup row。
 
@@ -167,7 +165,7 @@ RedisBenchmarkOptions
 
 因此当前默认 Yierdis 结果是 17 个 `SUCCESS` 和 4 个 `UNSUPPORTED` row；真实连接或协议故障会把受影响的 supported row 改为 `FAILED`，LRANGE setup 失败还会使依赖 row 成为 `SKIPPED`。`RedisBenchmark` 不会给这些非成功状态构造性能数字。
 
-`NioBenchmarkRunner` 为一个 case 打开一个 `Selector`，把配置数量的 non-blocking `SocketChannel` 注册到同一个 event loop。它预编译 pipeline frame，只在需要时改写随机 placeholder，处理 partial connect/write/read，并用 incremental RESP decoder 验证每个 reply 的最小 shape。keepalive 关闭时每个 pipeline 后重连；认证和 DB selection 会作为每个新连接第一次 measured write 的 prefix，其 replies 不进入 request 或 histogram count。
+`NioBenchmarkRunner` 为一个 case 打开一个 `Selector`，把配置数量的 non-blocking `SocketChannel` 注册到同一个 event loop。它预编译 pipeline frame，只在需要时改写随机 placeholder，处理 partial connect/write/read，并用 incremental RESP decoder 验证每个 reply 的最小 shape。keepalive 关闭时每个 pipeline 后重连。`database != 0` 时，每个新连接的第一次 measured write 带一条 `SELECT` prefix，这条 reply 不进入 request 或 histogram count。
 
 measurement 以 selector run 的起止边界计算 elapsed time 和 completed-reply throughput。每个 pipeline 以第一次可读时间作为该 batch replies 的 latency；histogram 只保留配置的前 `requests` 个 samples，而 throughput 使用 stop boundary 已完成的 replies。`LatencyRecorder`（micros 刻度）用 HdrHistogram 生成 mean、min、p50、p95、p99 和 max，最大记录延迟 clamp 到 3 秒。
 
@@ -239,7 +237,7 @@ footprint 使用 DB 自己的物理内存核算：`accounted = heap estimated + 
 - 除非 `SKIP_BUILD=1`，只构建 `yierdis-benchmark` 及其 Maven 依赖，然后定位 shaded benchmark jar。
 - 必传默认值来自 `HOST`、`PORT`、`REQUESTS`、`CLIENTS`、`DATA_SIZE`、`PIPELINE` 和 `FORMAT`。
 - 非空 `KEYSPACE` 才会成为 CLI argument，因此省略和显式零保持不同。
-- 非空 `TESTS`、`KEEP_ALIVE`、`PRECISION`、`SEED`、`BENCH_USERNAME`、`PASSWORD`、`DATABASE` 才会追加；`KEEP_ALIVE=false` 会编码为单个 `--keep-alive=false` argument。`BENCH_USERNAME` 是 portable ACL username knob，并优先于仅为非保留环境保留的 `USERNAME` compatibility fallback；zsh 中不要使用 `USERNAME=value` 调用脚本。
+- 非空 `TESTS`、`KEEP_ALIVE`、`PRECISION`、`SEED`、`DATABASE` 才会追加；`KEEP_ALIVE=false` 会编码为单个 `--keep-alive=false` argument。
 - `BENCH_JVM_OPTS` 只控制 benchmark JVM。
 - 脚本不查找、启动、轮询或停止任何 server artifact；目标 Yierdis 的生命周期始终由操作者管理。
 

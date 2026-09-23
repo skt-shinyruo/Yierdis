@@ -90,7 +90,7 @@ executor 参数分两类：全局队列预算和单连接背压。
 - `--backpressureHigh` / `--backpressureLow`：单连接 pending 命令高低水位，默认 `256/128`。
 - `--backpressureBytesHigh` / `--backpressureBytesLow`：单连接 pending bytes 高低水位，默认 `16777216/8388608`；high 为 `0` 时 bytes 背压禁用，low 也必须为 `0`。
 
-以上 bytes 类配置都按 `HeapRequestFootprint` 的 heap footprint 估算口径计量（请求对象 + argv 槽位 + 每参数数组头与对齐 payload），不是纯 payload 求和。统一口径后默认值保持不变：结构性开销按每参数至少 24 字节计入，而默认 `--executorQueueCapacity 1024` 通常先于 64 MiB 的 bytes cap 生效，背压水位与事务队列默认值的保护数量级不变。主要承载高 `argc` 小参数命令的部署应按新口径重新标定这些值。
+以上 bytes 类配置都按 `HeapRequestFootprint` 的 heap footprint 估算口径计量（请求对象 + argv 槽位 + 每参数数组头与对齐 payload），不是纯 payload 求和。每个非空参数是 `ARRAY_HEADER_BYTES`（16）加上按 8 对齐的 payload；空 `byte[]` 只计 16。
 
 `YierdisServerRuntimeConfig.executorConfig()` 把已经校验的 runtime 字段映射成 `CommandExecutorConfig`。`CommandExecutor` 只有一个 owner executor，启动时调用 `runtimeAccess.bindToCurrentThread`，之后通过 `tryAcquire(...)` 和 `ExecutorAdmission.publish(...)` 接收 Netty pipeline 交来的请求。queue slot 或 bytes budget 暂时不足时，ingress 会暂停输入并等待容量，而不是立即生成 busy reply；单个请求本身超过 bytes hard limit 时返回：
 

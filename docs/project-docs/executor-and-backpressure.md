@@ -43,7 +43,7 @@ RespRequestDecoder
 6. publish 时先在 `ExecutionConnectionContext.recordCommandEnqueued(...)` 增加 pending 和 pendingBytes，再向 `ExecutorTaskQueue.offer(...)` 投递 task。
 7. 再次评估连接和全局背压，调度 drain loop。
 
-queue slot 或 bytes budget 暂时不足会返回 `Unavailable`，不是终态拒绝。ingress 保留 submission、暂停输入，并通过 `onAdmissionAvailable(...)` 注册一次性容量回调后重试。只有 `request_too_large` 会在当前 reply slot 返回明确错误；not-running、connection-closing 或 publish invariant failure 会清理所有权并结束连接，避免打乱已注册 reply slot 的顺序。
+queue slot 或 bytes budget 暂时不足会返回 `Unavailable`，不是终态拒绝。ingress 保留 submission、暂停输入，并通过 `onAdmissionAvailable(...)` 注册一次性容量回调后重试。只有 `SubmitRejectReason.REQUEST_TOO_LARGE` 会在当前 reply slot 写出 `ERR request exceeds executor queue byte limit`；not-running、connection-closing 或 publish invariant failure 会清理所有权并结束连接，避免打乱已注册 reply slot 的顺序。
 
 ## backlog budget
 
@@ -119,9 +119,9 @@ executor 不直接 write 或 flush transport。命令把 reply slot 标记为 RE
 
 executor 路径有五类输入暂停来源。
 
-第一类是 queue capacity。`queuedTasks >= queueCapacity` 时提交失败为 `queue_full`，并关闭当前连接 `autoRead`。
+第一类是 queue capacity。`queuedTasks >= queueCapacity` 时 `ExecutorBacklogBudget.tryReserve` 返回 `BlockReason.QUEUE_SLOTS`，提交结果是 `Unavailable`，并关闭当前连接 `autoRead`。对应计数是 `submit_rejected_queue_full_total`。
 
-第二类是 queued bytes。`queueMaxBytes > 0` 且 reserve 后会超过上限时，提交失败为 `bytes_budget`，并关闭当前连接 `autoRead`。
+第二类是 queued bytes。`queueMaxBytes > 0` 且 reserve 后会超过上限时，返回 `BlockReason.QUEUE_BYTES`，提交结果同样是 `Unavailable`，并关闭当前连接 `autoRead`。对应计数是 `submit_rejected_bytes_budget_total`。
 
 第三类是 per-connection pending 状态。`ExecutionConnectionContext.pending()` 达到 `backpressureHighWatermark`，或 `pendingBytes()` 达到 `backpressureBytesHighWatermark`，该连接会被 executor 关闭 `autoRead`；恢复需要 pending 回落到 `backpressureLowWatermark`，pending bytes 回落到 `backpressureBytesLowWatermark`。
 
@@ -194,7 +194,7 @@ executor 热路径用 `LongAdder` 和 connection context 记录观测值：
 - drain budget：`drainLimitedByMaxCommands`、`drainLimitedByTimeBudget`
 - connection stats：pending、pendingBytes、closing、inputDisabledByExecutor、commandsEnqueued、commandsRejected
 
-这些数据进入 `CommandExecutor.StatsSnapshot`、`ExecutionConnectionContext.ConnectionStatsSnapshot`，再被 `STATS` / `INFO yierdis` 等观测命令使用。
+这些数据进入 `CommandExecutor.StatsSnapshot` 和 `ExecutionConnectionContext.statsSnapshot()` 返回的 `ConnectionStatsView`，再被 `STATS` / `INFO yierdis` 等观测命令使用。
 
 ## Bounded Reply Egress
 

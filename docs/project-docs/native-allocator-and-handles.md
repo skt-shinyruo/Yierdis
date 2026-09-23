@@ -65,7 +65,7 @@ table 使用一个按实际长度增长的 segment array。分配先扫描现有
 
 ## Pages、spans 与 registry
 
-`YierdisNativePageAllocator` 使用一个直接按 page id 索引的 `Object[]` registry。slot 保存 `SmallPage` 或 `SpanAllocation`，不再维护第二套 native page directory。
+`YierdisNativePageAllocator` 用 `NavigableMap<Integer, PageAllocation> pagesById`（`TreeMap`）按 page id 保存 `SmallPage` 或 `SpanAllocation`，不再维护第二套 native page directory。
 
 page 大小为 64 KiB。请求不超过 32,768 bytes 时进入单一 size-class small page；档位为：
 

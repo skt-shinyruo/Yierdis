@@ -35,7 +35,7 @@ estimate upper bound
   -> YierdisDbKernel.execute(MutationPlan)
   -> YierdisDbMutationExecutor.execute(plan)
      -> ledger.reserve(upperBound)
-     -> NativeAllocationScope.begin()
+     -> stableMemoryBackend.beginAllocationScope()
      -> plan.prepare()
      -> ledger.reconcile(preparedPeak)
      -> prepared.commit()

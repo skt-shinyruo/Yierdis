@@ -95,7 +95,7 @@ CommandExecutor
 - `YierdisInstance` 决定逻辑 DB 数量和 maxmemory scope；每个 DB backend 拥有自己的 FFM runtime。
 - `YierdisDb` 是单个 DB 的状态 owner 和统一入口。
 - keyspace 把 key 映射到 entry，`EntryRecord.expireAtMillis` 保存唯一 TTL deadline。
-- string、list、hash、set、zset、HLL、bitmap 相关 ops 分别处理数据族语义和内部编码。
+- string、list、hash、set、zset、HLL 分别由 `StringOps`、`ListOps`、`HashOps`、`SetOps`、`ZSetOps`、`HllOps` 处理。bitmap 的 `setBit`、`getBit`、`bitcount` 在 `StringOps` 上。
 - memory API/FFM 层提供 stable native handle，避免 DB 层直接保存可移动的 physical address。
 - maxmemory 和 approximate eviction 通过账本、协调器和策略把内存预算反馈到写路径。
 
