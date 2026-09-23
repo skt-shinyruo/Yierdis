@@ -1,4 +1,4 @@
-package yier.bubu.redis.execution.api;
+package yier.bubu.redis.common.memory;
 
 import org.junit.Assert;
 import org.junit.Test;

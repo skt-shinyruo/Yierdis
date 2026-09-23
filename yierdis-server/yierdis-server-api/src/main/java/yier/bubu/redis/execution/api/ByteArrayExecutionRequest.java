@@ -1,5 +1,7 @@
 package yier.bubu.redis.execution.api;
 
+import yier.bubu.redis.common.memory.HeapRequestFootprint;
+
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Objects;

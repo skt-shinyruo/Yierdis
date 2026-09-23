@@ -1,4 +1,4 @@
-package yier.bubu.redis.execution.api;
+package yier.bubu.redis.common.memory;
 
 import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
 
@@ -7,7 +7,7 @@ import java.util.Objects;
 /**
  * heap-backed request snapshot 的 retained bytes 统一估算口径。
  * <p>
- * executor queued bytes、连接 pending bytes 与事务 queue bytes 都消费 {@link ExecutionRequest#retainedBytes()}，
+ * executor queued bytes、连接 pending bytes 与事务 queue bytes 都消费 {@code ExecutionRequest#retainedBytes()}，
  * 因此 RESP array path、inline path 与 {@code ByteArrayExecutionRequest} 各工厂方法必须共享这里的估算逻辑，
  * 而不是各自按 payload 长度求和。估算覆盖：请求对象本身、外层 {@code byte[][]} 与其引用槽位、
  * 每个非空 {@code byte[]} 的数组头与按 8 对齐的 payload。
@@ -33,7 +33,7 @@ public final class HeapRequestFootprint {
         return total;
     }
 
-    /** {@link ExecutionRequest#retainedBytes()} 口径的 int 域饱和估算。 */
+    /** {@code ExecutionRequest#retainedBytes()} 口径的 int 域饱和估算。 */
     public static int estimateRetainedBytes(byte[][] argv) {
         long estimate = estimateBytes(argv);
         return estimate >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) estimate;

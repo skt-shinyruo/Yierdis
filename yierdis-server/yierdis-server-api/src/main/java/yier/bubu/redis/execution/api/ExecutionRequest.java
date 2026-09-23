@@ -1,5 +1,7 @@
 package yier.bubu.redis.execution.api;
 
+import yier.bubu.redis.common.memory.HeapRequestFootprint;
+
 /**
  * Primary protocol-agnostic request contract for command execution.
  * <p>

@@ -1,7 +1,7 @@
 package yier.bubu.redis.protocol.resp;
 
 import yier.bubu.redis.bytes.BytesView;
-import yier.bubu.redis.execution.api.HeapRequestFootprint;
+import yier.bubu.redis.common.memory.HeapRequestFootprint;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
