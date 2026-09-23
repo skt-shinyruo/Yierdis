@@ -1,40 +1,51 @@
 # Domain Docs
 
-This repository uses a multi-context domain documentation layout.
+How the engineering skills should consume this repo's domain documentation when exploring the codebase.
 
-## Before exploring
+## Before exploring, read these
 
-- Read `CONTEXT-MAP.md` at the repository root.
-- Follow it to each `CONTEXT.md` relevant to the work.
-- Read relevant system-wide decisions under `docs/adr/`.
-- Read context-specific decisions under `<context-root>/docs/adr/`.
+- **`CONTEXT.md`** at the repo root, or
+- **`CONTEXT-MAP.md`** at the repo root if it exists: it points at one `CONTEXT.md` per context. Read each one relevant to the topic.
+- **`docs/adr/`**: read ADRs that touch the area you're about to work in. In multi-context repos, also check `src/<context>/docs/adr/` for context-scoped decisions.
 
-If a file does not exist, proceed silently. Do not create it preemptively.
-`/domain-modeling`, `/grill-with-docs`, and
-`/improve-codebase-architecture` create domain docs lazily when decisions
-or terminology are resolved.
+If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
 
-## Layout
+## File structure
 
-```text
+Single-context repo (most repos):
+
+```
 /
-|-- CONTEXT-MAP.md
-|-- docs/adr/
-`-- <context-root>/
-    |-- CONTEXT.md
-    `-- docs/adr/
+├── CONTEXT.md
+├── docs/adr/
+│   ├── 0001-event-sourced-orders.md
+│   └── 0002-postgres-for-write-model.md
+└── src/
 ```
 
-A context root may be a Maven module group such as `yierdis-command/`,
-`yierdis-db/`, or `yierdis-networking/`. `CONTEXT-MAP.md` is authoritative;
-do not assume every Maven module needs an independent context.
+Multi-context repo (presence of `CONTEXT-MAP.md` at the root):
 
-## Vocabulary
+```
+/
+├── CONTEXT-MAP.md
+├── docs/adr/                          ← system-wide decisions
+└── src/
+    ├── ordering/
+    │   ├── CONTEXT.md
+    │   └── docs/adr/                  ← context-specific decisions
+    └── billing/
+        ├── CONTEXT.md
+        └── docs/adr/
+```
 
-Use terms exactly as defined by the relevant `CONTEXT.md`. If a needed concept
-is absent, reconsider the term or record the gap for `/domain-modeling`.
+## Use the glossary's vocabulary
 
-## ADR conflicts
+When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `CONTEXT.md`. Don't drift to synonyms the glossary explicitly avoids.
 
-Explicitly flag output that contradicts an existing ADR rather than silently
-overriding the decision.
+If the concept you need isn't in the glossary yet, that's a signal: either you're inventing language the project doesn't use (reconsider) or there's a real gap (note it for `/domain-modeling`).
+
+## Flag ADR conflicts
+
+If your output contradicts an existing ADR, surface it explicitly rather than silently overriding:
+
+> _Contradicts ADR-0007 (event-sourced orders), but worth reopening because…_

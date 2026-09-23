@@ -10,4 +10,4 @@ Triage uses the five default canonical label names. See `docs/agents/triage-labe
 
 ### Domain docs
 
-This repository uses a multi-context layout. See `docs/agents/domain.md`.
+This repository uses a single-context layout. See `docs/agents/domain.md`.
