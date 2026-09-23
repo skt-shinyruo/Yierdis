@@ -123,7 +123,7 @@ FORMAT=csv ./scripts/bench.sh
 TESTS=ping,set,get REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
 ```
 
-`KEYSPACE` 未设置时保留固定 key 模式；`KEYSPACE=0` 是显式随机 keyspace 配置，不能与省略混为一谈。还可设置 `KEEP_ALIVE`、`PRECISION`、`SEED`、`BENCH_USERNAME`、`PASSWORD`、`DATABASE` 和 `BENCH_JVM_OPTS`。`BENCH_USERNAME` 是 portable ACL username knob；`USERNAME` 仅保留为非保留环境中的兼容 fallback，不要在 zsh 中使用 `USERNAME=value` 调用脚本。`SKIP_BUILD=1` 只跳过 benchmark module 的构建，不改变 connect-only 行为。
+`KEYSPACE` 未设置时保留固定 key 模式；`KEYSPACE=0` 是显式随机 keyspace 配置，不能与省略混为一谈。其余可选变量 `TESTS`、`KEEP_ALIVE`、`PRECISION`、`SEED`、`DATABASE` 只有非空时才追加成对应参数（`KEEP_ALIVE=false` 编码为 `--keep-alive=false`），`BENCH_JVM_OPTS` 只作用于 benchmark JVM。脚本和 benchmark 都没有 AUTH、用户名或密码开关。`SKIP_BUILD=1` 只跳过 benchmark module 的构建，不改变 connect-only 行为。
 
 3. 由操作者在独立的 Redis 环境中单独运行官方 `redis-benchmark`，使用等价 workload 值。例如 Redis 监听 `6379` 时：
 

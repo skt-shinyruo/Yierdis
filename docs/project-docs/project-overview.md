@@ -1,27 +1,44 @@
 # 项目总览
 
-下面从代码和运行时边界回答四个问题：Yierdis 当前是什么、有哪些模块、一次请求会经过哪些层、读源码先打开哪些文件。
+本文从代码和运行时边界回答五个问题：Yierdis 现在是什么、它不是 `Map` 也不是完整 Redis、有哪些模块、一次请求经过哪些层、读源码先打开哪些文件。
 
 ## 当前定位
 
 Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 KV server。它对外暴露 Redis RESP TCP 协议，RESP2 是默认 wire target，`HELLO 3` 可以协商基础 RESP3 replies；对内把网络、协议、执行、命令、DB、memory runtime 和启动装配拆成独立模块。
 
-读源码时最重要的定位是：它是刻意限定在单机内存边界内的 Redis 风格系统实现，而不是 Redis drop-in replacement。代码的重点也不在“兼容所有 Redis 行为”，而在展示一次请求如何穿过 RESP/Netty、执行器、命令分发、DB 能力接口和 native-memory-backed 数据结构。
+读源码时最该记住的定位是：它刻意限定在单机内存边界内，是 Redis 风格系统实现，并不充当 Redis drop-in replacement。代码重点落在展示一次请求如何穿过 RESP/Netty、执行器、命令分发、DB 能力接口和 native-memory-backed 数据结构，而非兼容所有 Redis 行为。
 
-把它当成普通 `Map` 服务同样不够。`Map` 只能解释 key/value 存取，解释不了 RESP wire format、连接级 session、事务 replay、TTL 和 maxmemory 的写路径约束、语义回复及其资源所有权、owner thread、backpressure、native handle lifetime 和 introspection。读代码时应该把它看成一个边界清楚的系统样本：网络、协议、执行、命令、DB、memory runtime 和启动组装各有自己的职责。
+## 为什么不能当成 `Map`
+
+把它当成普通 `Map` 服务不够，是因为 `Map` 只覆盖“按 key 存取 value”这一件事。下面这些关注点各自有独立的代码归属，任何一条都不是 `map.get/put` 能表达的；顺着这张表读源码，就是把“为什么不是 Map”逐条拆开。
+
+| 关注点 | `Map` 解释不了的差异 | 代码归属 |
+| --- | --- | --- |
+| wire format | 请求/回复是 RESP frame，不是对象调用 | `RespRequestDecoder`、`RespReplyWriter`（`yierdis-networking-resp`） |
+| 连接级 session | DB 选择、client name、RESP 版本、事务队列按连接隔离 | `EngineSession` |
+| 事务 replay | 排队保存的是 retained request，`EXEC` 时重新 prepare | `TransactionState`、`PreparedExec` |
+| TTL | 每个 key 带唯一 `expireAtMillis` deadline，过期清理独立于存取 | `EntryRecord.expireAtMillis`、`YierdisDbKeyLifecycle` |
+| maxmemory 写路径约束 | 写之前要按预算预留、记账、可能驱逐 | `YierdisDbMutationExecutor`、memory ledger |
+| 语义回复与资源所有权 | 回复不只是字节，可能持有 streaming source / native pin | `RedisReply`、`PreparedCommand` |
+| owner thread | DB 只被单一执行线程访问，跨线程访问 fail-fast | `CommandExecutor`、`SerialOwnerExecutor` |
+| backpressure | 队列、字节预算、连接 pending 联合限流 | `ExecutorBacklogBudget`、`ExecutorBackpressureController` |
+| native handle lifetime | 保存的是 stable handle，不是可移动的 physical address | `memory.foreign` 的 stable handle |
+| introspection | `INFO`/`STATS`/`COMMAND` 暴露运行时视图 | `ServerCommandModule`、`NettyServerInfoProvider` |
+
+读代码时应把它看成边界清楚的系统样本：网络、协议、执行、命令、DB、memory runtime 和启动组装各有自己的职责。
 
 ## 能力边界
 
 当前已经覆盖的能力包括 Redis 风格数据族、TTL、maxmemory、approximate eviction、minimal transactions、backpressure、observability 和 native-memory-backed paths。
 
-当前没有覆盖的能力包括 AOF/RDB、replication/cluster、Lua、ACL/TLS、PubSub 和 full Redis ecosystem compatibility。看到客户端兼容、协议协商或 Redis 风格命令时，都要把它理解为“当前子集”，不构成完整 Redis 兼容承诺。
+当前没有覆盖的能力包括 AOF/RDB、replication/cluster、Lua、ACL/TLS、PubSub 和 full Redis ecosystem compatibility。遇到客户端兼容、协议协商或 Redis 风格命令，都应理解为“当前子集”，不构成完整 Redis 兼容承诺。
 
 ## 技术栈和运行时特征
 
 技术栈主线很短：
 
-- Java 25：语言版本和 `java.lang.foreign` FFM API 的运行前提。
-- Netty：TCP server、channel pipeline、I/O 线程和 write-back。
+- Java 25：语言版本和 `java.lang.foreign` FFM API 的运行前提；`pom.xml` 里 `maven.compiler.release` 设为 25。
+- Netty 4.1.109.Final：TCP server、channel pipeline、I/O 线程和 write-back。
 - RESP：请求解码、reply 编码和 RESP2/基础 RESP3 wire model。
 - Maven multi-module：九个 leaf module 隔离 common、RESP、server API、server、command、DB、CLI、benchmark 和 tests。
 
@@ -36,8 +53,8 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 
 读源码前先建立三条心智模型：
 
-- 请求是一段链路，而不是一次“方法调用”：从 RESP bytes 到 `ExecutionRequest`、`CommandExecutor`、`CommandDispatcher`、command handler、DB、`CommandResult`、`RedisReplyRenderer`，再回到 RESP bytes。
-- DB 的生命周期边界由 keyspace、带 TTL deadline 的 entry metadata、value roots、memory ledger 和 native handles 共同维护，而不是一张大表。
+- 请求是一段链路，并非一次“方法调用”：从 RESP bytes 到 `ExecutionRequest`、`CommandExecutor`、`CommandDispatcher`、command handler、DB、`CommandResult`、`RedisReplyRenderer`，再回到 RESP bytes。
+- DB 的生命周期边界由 keyspace、带 TTL deadline 的 entry metadata、value roots、memory ledger 和 native handles 共同维护，而非单张大表。
 - native memory 是当前默认数据路径的一部分，不是旁路优化；它也不等于零拷贝，copy 边界要按接口 ownership 和 lifetime 判断。
 
 ## 模块总览
@@ -56,6 +73,33 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 
 更完整的模块依赖方向看 [`module-architecture.md`](./module-architecture.md)。
 
+## 跑起来的最短路径
+
+构建和启动命令都以本仓库的 `README.md` 与 `scripts/smoke.sh` 为准，不是示意。要求 JDK 25 + Maven 3.x。
+
+只构建 server 和 CLI 并打出可执行 fat jar：
+
+```bash
+mvn -q -pl yierdis-server/yierdis-server,yierdis-cli -am -DskipTests package
+```
+
+启动 server（`--maxmemoryBytes` 必须显式给出，`0` 表示承认不限制内存）：
+
+```bash
+java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 6378 --maxmemoryBytes 0
+```
+
+用 `redis-cli` 或项目自带 CLI 验证：
+
+```bash
+redis-cli -p 6378 PING
+java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar --port 6378 SET a 1
+```
+
+如果只想跑一次端到端冒烟（自动构建、后台起 server、PING/SET/GET、退出），用 `./scripts/smoke.sh`；它默认端口是 `16379`，`SKIP_BUILD=1` 可跳过构建。
+
+启动参数入口是 `YierdisServerArgs`（picocli 定义），`ServerConfig.fromArgs(...)` 负责解析与校验，`YierdisServerBootstrap.start(...)` 完成组装。默认端口 `6378`、`--databases 16`、`--ioThreads 1`、`--maxmemoryBytes 0`。
+
 ## 请求主链概览
 
 一次 RESP 请求进入执行器后，命令主链固定为：
@@ -73,9 +117,9 @@ CommandExecutor
 主链外侧是 `Netty inbound bytes -> RespRequestDecoder -> ByteArrayExecutionRequest`，渲染后则经 `RedisReplyWriter / RespReplyWriter -> Netty write-back` 回到客户端。这些边界的含义是：
 
 - `RespRequestDecoder` 在分配前执行 ingress admission，并直接构造执行请求。
-- `ByteArrayExecutionRequest` 是网络主链和 heap 输入共用的实现；decoder 用 `takeOwnership(...)` 移交不可变 argv 与 memory lease，`retain()` 共享 argv 并增加 lease 引用，`copyOf(...)` 才创建独立快照。
+- `ByteArrayExecutionRequest` 是网络主链和 heap 输入共用的实现。decoder 用 `takeOwnership(...)` 移交不可变 argv 与 memory lease，`retain()` 共享 argv 并增加 lease 引用，`copyOf(...)` 才创建独立快照。
 - `ExecutionRequest` 是 server/command 层之间的统一请求契约。
-- `CommandExecutor` 把请求从 I/O 线程切到执行线程，并施加队列和背压约束。
+- `CommandExecutor` 把请求从 I/O 线程切到执行线程，施加队列与背压约束。
 - `CommandDispatcher` 完成命令名、null、arity 和事务策略检查；普通命令依次解析 `CommandArgs` 并按 `CommandSession` 准备为 `PreparedCommand`。
 - 事务中的 queueable 命令只调用 handler 解析做 preflight，不提前执行 session/DB 准备；排队动作在回复预留成功后保留请求。`EXEC` 通过 dispatcher replay 重新准备子命令，同时关闭子 `PreparedCommand` 和 retained request。
 - 执行器按 `PreparedCommand.reservationShape()` 预留容量，校验仍有效后直接传入 `CommandSession` 执行。准备和执行阶段通过 DB API 完成真实读写。
@@ -103,21 +147,23 @@ DB 内部读 [`db-internals.md`](./db-internals.md)，FFM runtime 和 native-mem
 
 ## 最先打开的源码文件
 
-第一次读源码可以先打开这些入口，建立从启动到请求再到 DB 的最短路径：
+第一次读源码先打开这 12 个入口，建立从启动到请求再到 DB 的最短路径。每个文件一句话职责：
 
-- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/YierdisServer.java`
-- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
-- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java`
-- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java`
-- `yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ByteArrayExecutionRequest.java`
-- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java`
-- `yierdis-command/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java`
-- `yierdis-command/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java`
-- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java`
-- `yierdis-command/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java`
-- `yierdis-db/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
-- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`
+| 文件 | 职责 |
+| --- | --- |
+| `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/YierdisServer.java` | `main`：解析参数、注册 shutdown hook、阻塞在 `awaitClose()`。 |
+| `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java` | composition root：建 `YierdisInstance`、建 dispatcher/executor、装 Netty groups 并按序关闭。 |
+| `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java` | 每连接 pipeline 装配与连接态绑定。 |
+| `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java` | RESP array/inline 解码，分配前做 ingress admission。 |
+| `yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ByteArrayExecutionRequest.java` | heap-backed 不可变 `ExecutionRequest` 实现与 argv/lease ownership。 |
+| `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java` | 提交准入、owner-thread 队列、drain、优雅关闭。 |
+| `yierdis-command/src/main/java/yier/bubu/redis/command/kernel/CommandDispatcher.java` | 命令名归一、查表、arity、事务策略、parse 与 prepare。 |
+| `yierdis-command/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java` | 命令名到 `CommandSpec` 的映射，注册后 seal。 |
+| `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java` | 每连接 session 状态 owner（DB index、client name、RESP 版本、事务队列）。 |
+| `yierdis-command/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java` | string/bitmap 命令注册与 SET/GET 等 handler 实现。 |
+| `yierdis-db/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java` | 单个 DB 的状态 owner 和统一入口。 |
+| `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java` | 可嵌入、Netty-free 的 instance API：装配多 DB、路由与资源生命周期。 |
 
 ## 接下来读什么
 
-读模块边界和依赖方向看 [`module-architecture.md`](./module-architecture.md)；跟一次请求看 [`request-execution-flow.md`](./request-execution-flow.md)；深入 DB 读 [`db-internals.md`](./db-internals.md)；理解 native-memory runtime 读 [`native-memory-runtime.md`](./native-memory-runtime.md)。
+读模块边界和依赖方向看 [`module-architecture.md`](./module-architecture.md)；跟一次请求看 [`request-execution-flow.md`](./request-execution-flow.md)；看 Netty 适配与有界写回看 [`netty-adapter-design.md`](./netty-adapter-design.md)；深入 DB 读 [`db-internals.md`](./db-internals.md)；理解 native-memory runtime 读 [`native-memory-runtime.md`](./native-memory-runtime.md)。
