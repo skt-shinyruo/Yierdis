@@ -2,6 +2,8 @@ package yier.bubu.redis.execution.executor;
 
 import java.util.function.BiFunction;
 
+import lombok.extern.slf4j.Slf4j;
+
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.common.command.ResultUnknownException;
 import yier.bubu.redis.execution.api.CommandSession;
@@ -16,11 +18,14 @@ import yier.bubu.redis.execution.api.ReplyReservationResult;
 import yier.bubu.redis.execution.api.ReplyShape;
 import yier.bubu.redis.execution.api.ValidationResult;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BooleanSupplier;
 
+@Slf4j
 final class CommandExecutorExecutionSupport {
+
     private final BiFunction<CommandSession, ExecutionRequest, PreparedCommand> commandProcessor;
     private final BiFunction<Integer, ReplyShape, ReplyPlan> replySizer;
     private final BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory;
@@ -143,7 +148,8 @@ final class CommandExecutorExecutionSupport {
                 closeResultUnknown(connection, task.reply, failure);
                 return ExecutionAttempt.CONNECTION_CLOSED;
             }
-            handleReplyExecutionFailure(connection, context, task.reply);
+            // 命令失败时客户端只会看到 "ERR internal error"，不记录的话 handler 的 bug 对运维完全不可见。
+            handleReplyExecutionFailure(connection, context, task.reply, argvOf(task.request), failure);
         } finally {
             if (terminal) {
                 task.cancelCapacityRegistration();
@@ -233,8 +239,15 @@ final class CommandExecutorExecutionSupport {
     private void handleReplyExecutionFailure(
             ExecutionConnection connection,
             ExecutionConnectionContext context,
-            ExecutionReply reply
+            ExecutionReply reply,
+            String commandLine,
+            Throwable failure
     ) {
+        // 走到这里说明命令在产出结果前就失败了：客户端只会收到 "ERR internal error"，
+        // 这条带堆栈的日志是运维能拿到的唯一线索。完整 argv（含参数与 value）原样进日志，
+        // 不截断、不做换行消毒。
+        log.error("command {} failed before producing a result", commandLine, failure);
+
         try {
             if (connection.markClosing()) {
                 backpressureController.disableAutoRead(connection);
@@ -258,6 +271,31 @@ final class CommandExecutorExecutionSupport {
         } catch (Throwable ignored) {
             cancelReply(reply);
             closeTransport(connection);
+        }
+    }
+
+    /**
+     * 尽力取出完整 argv 拼成一行，只用于日志。
+     * <p>
+     * argv 是客户端发来的原始字节：不截断、不做换行消毒、含全部参数与 value，原样解码进日志。
+     * 任何取值失败都退化成占位符：记录失败原因的过程绝不能反过来把原始失败盖掉。
+     */
+    private static String argvOf(ExecutionRequest request) {
+        try {
+            if (request == null || request.argc() < 1) {
+                return "<unknown>";
+            }
+            StringBuilder argv = new StringBuilder();
+            for (int i = 0; i < request.argc(); i++) {
+                if (i > 0) {
+                    argv.append(' ');
+                }
+                byte[] arg = request.isNull(i) ? null : request.readOnlyByteArray(i);
+                argv.append(arg == null || arg.length == 0 ? "<null>" : new String(arg, StandardCharsets.UTF_8));
+            }
+            return argv.toString();
+        } catch (Throwable argvExtractionFailure) {
+            return "<unknown>";
         }
     }
 

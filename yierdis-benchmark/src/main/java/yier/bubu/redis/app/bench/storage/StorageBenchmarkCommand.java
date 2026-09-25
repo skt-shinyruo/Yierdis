@@ -1,32 +1,14 @@
 package yier.bubu.redis.app.bench.storage;
 
-import picocli.CommandLine.Command;
-import picocli.CommandLine.Mixin;
-import picocli.CommandLine.Model.CommandSpec;
-import picocli.CommandLine.Spec;
 import yier.bubu.redis.app.bench.BenchCommands;
 
 import java.io.PrintWriter;
 import java.util.Objects;
-import java.util.concurrent.Callable;
 import java.util.function.Function;
 
-@Command(
-        name = "storage",
-        description = "Measure in-process SET throughput and storage footprint.",
-        mixinStandardHelpOptions = true,
-        sortOptions = false,
-        usageHelpAutoWidth = true
-)
-public final class StorageBenchmarkCommand implements Callable<Integer> {
+public final class StorageBenchmarkCommand {
     private final Function<StorageBenchmarkConfig, StorageBenchmarkResult> runner;
     private final StorageBenchmarkRenderer renderer;
-
-    @Mixin
-    private StorageBenchmarkOptions options = new StorageBenchmarkOptions();
-
-    @Spec
-    private CommandSpec spec;
 
     public StorageBenchmarkCommand() {
         this(new StorageBenchmarkRunner()::run, new StorageBenchmarkRenderer());
@@ -40,22 +22,28 @@ public final class StorageBenchmarkCommand implements Callable<Integer> {
         this.renderer = Objects.requireNonNull(renderer, "renderer");
     }
 
-    @Override
-    public Integer call() {
-        StorageBenchmarkConfig config = BenchCommands.parseConfig(spec, options::toConfig);
-
-        StorageBenchmarkResult result;
+    /**
+     * 解析并执行。返回退出码：0 = 成功；1 = 执行失败；2 = 用法错误（只打一行原因，不打 usage）。
+     */
+    public int run(String[] argv, PrintWriter out, PrintWriter err) {
+        StorageBenchmarkConfig config;
         try {
-            result = runner.apply(config);
+            config = StorageBenchmarkOptions.parse(argv).toConfig();
+        } catch (IllegalArgumentException failure) {
+            err.println(failure.getMessage());
+            err.flush();
+            return BenchCommands.USAGE_ERROR;
+        }
+
+        try {
+            StorageBenchmarkResult result = runner.apply(config);
+            BenchCommands.writeOutput(out, renderer.render(config, result));
+            return 0;
         } catch (RuntimeException failure) {
-            PrintWriter err = spec.commandLine().getErr();
             err.println("storage benchmark failed: " + conciseMessage(failure));
             err.flush();
             return 1;
         }
-
-        BenchCommands.writeOutput(spec, renderer.render(config, result));
-        return 0;
     }
 
     private static String conciseMessage(RuntimeException failure) {

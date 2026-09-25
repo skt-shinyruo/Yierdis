@@ -8,7 +8,7 @@ public final class YierdisCliException extends IllegalArgumentException {
         super(message, cause);
     }
 
-    public static YierdisCliException usageError(String message, Throwable cause) {
+    public static YierdisCliException invalidArguments(String message, Throwable cause) {
         return new YierdisCliException(message, cause);
     }
 }

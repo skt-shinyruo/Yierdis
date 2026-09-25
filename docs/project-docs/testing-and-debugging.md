@@ -212,7 +212,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 1. 固定环境：用 JDK 25 起 server（`java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 6378 --maxmemoryBytes 0`），或用最小 fixture 直接建 DB。
 2. 记录输入：命令序列、并发与 pipeline、`--maxmemoryBytes`/reply 上限等非默认配置。
 3. 先在**隔离层**复现：能不用网络就不用（`yierdis-db` direct ops），能不用 DB 就不用（kernel/单元）。隔离层复现成功说明问题在底层。
-4. 采集证据：`INFO stats`、`INFO memory`、`MEMORY STATS`、进程日志、复现命令序列。
+4. 采集证据：`INFO stats`、`INFO memory`、`MEMORY STATS`、复现命令序列。
 5. 修复后回到最窄测试，再逐步上移到集成层，确认没有把问题推到另一端。
 
 ## 常见故障入口
@@ -243,4 +243,4 @@ executor/server 改动：executor 单元测试 + server main 集成测试 + 相�
 
 ## Production Hardening Gates
 
-有界 ingress、maxmemory、ordered reply 和 shutdown 的改动都要跑与影响面相符的 focused tests，并用 JDK 25 运行架构守卫。性能证据由操作者分别管理的 Yierdis benchmark 与官方 Redis benchmark 原始结果组成，两边必须使用等价 workload 设置。项目 benchmark 不计算阈值或 artifact ratio，通过/失败判定一律属于外部 policy。完整的 reply matrix、smoke、deterministic soak、最终 ownership counter 和候选证据要求见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
+有界 ingress、maxmemory、ordered reply 和 shutdown 的改动都要跑与影响面相符的 focused tests，并用 JDK 25 运行架构守卫。性能证据由操作者分别管理的 Yierdis benchmark 与官方 Redis benchmark 原始结果组成，两边必须使用等价 workload 设置。项目 benchmark 不计算阈值或 artifact ratio，通过/失败判定一律属于外部 policy。完整的 reply matrix、最终 ownership counter 和候选证据要求见 [`production-hardening-operations.md`](./production-hardening-operations.md)。

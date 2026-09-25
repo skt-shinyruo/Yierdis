@@ -15,16 +15,17 @@ import java.nio.charset.StandardCharsets;
 
 public class YierdisCliTest {
     @Test
-    public void helpAndInvalidArgumentsReturnWithoutConnecting() {
+    public void invalidArgumentsReturnWithoutConnecting() {
         CliResult help = runWithIo("", "--help");
-        Assert.assertEquals(0, help.status());
-        Assert.assertTrue(help.out().contains("Usage: yierdis-cli"));
-        Assert.assertTrue(help.err().isEmpty());
+        Assert.assertEquals(2, help.status());
+        Assert.assertTrue(help.out().isEmpty());
+        Assert.assertTrue(help.err().contains("--help"));
+        Assert.assertFalse("no usage dump", help.err().contains("Usage"));
 
         CliResult invalid = runWithIo("", "--port", "not-a-number");
         Assert.assertEquals(2, invalid.status());
         Assert.assertTrue(invalid.err().contains("--port"));
-        Assert.assertTrue(invalid.err().contains("Usage: yierdis-cli"));
+        Assert.assertFalse("no usage dump", invalid.err().contains("Usage"));
     }
 
     @Test

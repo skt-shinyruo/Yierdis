@@ -1,6 +1,6 @@
 # 客户端与基准测试内部
 
-本文覆盖项目内置 CLI、阻塞式 RESP client、RESP benchmark、进程内 storage benchmark，以及 smoke/bench/storage-bench 三个外壳脚本的工作方式。目标读者是要读这批源码、并需要按文档复现一次测量或排障的工程师。
+本文覆盖项目内置 CLI、阻塞式 RESP client、RESP benchmark、进程内 storage benchmark，以及 bench/storage-bench 两个外壳脚本的工作方式。目标读者是要读这批源码、并需要按文档复现一次测量或排障的工程师。
 
 先分清两条互不相同的边界：
 
@@ -12,26 +12,24 @@ CLI 面向人工交互和轻量验证；RESP benchmark 在固定 built-in worklo
 ## 它们更适合验证什么
 
 - CLI：快速确认协议、回包形态和单命令行为。
-- smoke：确认 server 能启动、基础命令能用、CLI/RESP 主链是通的。
 - RESP benchmark：观察高并发请求、pipeline 和 backpressure 行为下的吞吐与延迟；它不是 correctness oracle。
 - storage benchmark：隔离观察单 owner DB SET 的吞吐、延迟和 heap/native footprint，不代表端到端吞吐。
 
-比较两次结果时，必须先把输入对齐，再谈数字。对齐的输入是：`requests`、`clients`、`pipeline`、`data-size`、`keyspace`（省略 ≠ `0`）、keepalive、`database`。同时记录运行环境。项目自身不提供 AUTH/用户名/密码开关（见“三个外壳脚本”一节），所以“认证”不构成一个可对齐的输入维度。
+比较两次结果时，必须先把输入对齐，再谈数字。对齐的输入是：`requests`、`clients`、`pipeline`、`data-size`、`keyspace`（省略 ≠ `0`）、keepalive、`database`。同时记录运行环境。项目自身不提供 AUTH/用户名/密码开关（见“两个外壳脚本”一节），所以“认证”不构成一个可对齐的输入维度。
 
 ## yierdis-cli
 
-入口是 `YierdisCli.main(...)`，参数模型是 picocli 命令 `YierdisCliArgs`。参数与默认值如下：
+入口是 `YierdisCli.main(...)`，参数模型是 `YierdisCliArgs`（手写解析，第一个位置参数起即为命令单词）。参数与默认值如下：
 
 | 选项 | 默认值 | 说明 |
 | --- | --- | --- |
-| `-h` / `--help` | — | 打印用法并退出。 |
 | `--host <host>` | `127.0.0.1` | 目标 host。 |
 | `--port <port>` | `6378` | 目标端口。 |
 | `--timeoutMillis <ms>` | `5000` | 单条命令超时（毫秒）。 |
 | `--hex` | 关闭 | 仅当 bulk string 不是合法 UTF-8 时，把它按十六进制打印。 |
-| 位置参数 `COMMAND [ARG...]` | 空 | `arity = 0..*`；省略则进入 REPL。 |
+| 位置参数 `COMMAND [ARG...]` | 空 | 0 个或多个；省略则进入 REPL。 |
 
-`YierdisCli.run(...)` 里 `commandLine.setStopAtPositional(true)`，所以第一个位置参数之后的内容不再被当作选项解析。这意味着 `yierdis-cli GET --hex` 会把 `--hex` 当成 GET 的一个参数，而不是 CLI 选项——把选项放在命令之前。
+`YierdisCliArgs.parse(...)` 只解析第一个位置参数之前的选项，其后的内容不再被当作选项。这意味着 `yierdis-cli GET --hex` 会把 `--hex` 当成 GET 的一个参数，而不是 CLI 选项——把选项放在命令之前。
 
 单次命令模式：
 
@@ -155,9 +153,9 @@ CLI 和 server 共用 inline 语法，但边界不同：CLI 侧偏人手输入�
 
 ## yierdis-benchmark
 
-`YierdisBench.main(...)` 是薄 launcher：`commandLine()` 用 `RedisBenchmarkCommand` 作根命令，注册 `StorageBenchmarkCommand` 子命令，并开启 `setCaseInsensitiveEnumValuesAllowed(true)`。根命令因此走真实 RESP 路径，`storage` 子命令走进程内 DB 路径。两者都不是 JMH microbenchmark。
+`YierdisBench.main(...)` 是薄 launcher：`execute(...)` 按第一个位置参数路由——`storage` 进 `StorageBenchmarkCommand`（进程内 DB 路径），其余全部进 `RedisBenchmarkCommand`（真实 RESP 路径）。两者都不是 JMH microbenchmark。
 
-`BenchCommands.parseConfig(...)` 把配置构造中的 `IllegalArgumentException` 统一转成 picocli 的 `ParameterException`（usage error），所以非法参数会以用法错误退出，而不是栈。launcher 在退出码非 0 时 `System.exit`。
+配置与选项解析抛出的 `IllegalArgumentException`（未知选项、类型错误、配置越界）由 command 统一按用法错误处理：只打一行原因、退出码 2，不打 usage。launcher 在退出码非 0 时 `System.exit`。
 
 ### RESP benchmark
 
@@ -351,20 +349,9 @@ CSV 总计 **29 列**，顺序以 `StorageBenchmarkRenderer.CSV_HEADER` 为准�
 
 前 21 列是 SET phase 的量；`ttl_churn_*`（第 22–25 列）与 `del_*`（第 26–29 列）分别对应阶段二、阶段三。storage CSV 与 RESP CSV 是两套不同 header，不要混用或按列位置硬对齐。
 
-## smoke.sh、bench.sh 和 storage-bench.sh
+## bench.sh 和 storage-bench.sh
 
-三个脚本职责边界不同：只有 `smoke.sh` 拥有并负责停掉 server，另外两个只跑 benchmark。
-
-### scripts/smoke.sh
-
-最小端到端健康检查：
-
-- 默认构建 `yierdis-server` 与 `yierdis-cli`（`MVN_ARGS` 可覆盖，默认 `-q -pl yierdis-server/yierdis-server,yierdis-cli -am -DskipTests package`）；`SKIP_BUILD=1` 跳过构建。
-- `HOST` 默认 `127.0.0.1`，`PORT` 默认 `16379`，日志写 `SERVER_LOG`（默认 `.tmp-smoke-server.log`），`READY_TIMEOUT_SEC` 默认 `30`。
-- 启动 server：`java -jar <server_jar> --port <PORT> --maxmemoryBytes=0`，后台运行，并用 `trap cleanup EXIT` 保证退出时 kill server。
-- `wait_ready` 轮询：本机有 `redis-cli` 就用它 `PING`，否则回退到 Java CLI `PING`。
-- 就绪后跑 `redis-cli`（或 Java CLI）`PING`/`SET smoke:key smoke:value`/`GET smoke:key`，并校验返回值。
-- `ALLOCATOR_SMOKE=1` 额外跑 allocator-sensitive 路径（`APPEND`/`LPUSH`/`HSET`/`SADD`/`ZADD`/`DEL`）；该路径需要 `redis-cli`，不可用时跳过。
+两个脚本都只跑 benchmark：它们**不**查找、启动、轮询或停止任何 server artifact，目标 Yierdis 的生命周期始终由操作者管理。
 
 ### scripts/bench.sh
 
@@ -374,7 +361,6 @@ CSV 总计 **29 列**，顺序以 `StorageBenchmarkRenderer.CSV_HEADER` 为准�
 - 必传参数来自 `HOST`/`PORT`/`REQUESTS`/`CLIENTS`/`DATA_SIZE`/`PIPELINE`/`FORMAT`，默认值与 CLI 一致（`127.0.0.1`/`16378`/`100000`/`50`/`3`/`1`/`human`）。
 - 只有非空的 `KEYSPACE`/`TESTS`/`KEEP_ALIVE`/`PRECISION`/`SEED`/`DATABASE` 才追加成参数；因此“省略 KEYSPACE”和“显式 `KEYSPACE=0`”不同。`KEEP_ALIVE=false` 会编码为单个 `--keep-alive=false`。
 - `BENCH_JVM_OPTS` 只控制 benchmark JVM。
-- 脚本**不**查找、启动、轮询或停止任何 server artifact；目标 Yierdis 的生命周期始终由操作者管理。
 - 脚本**不支持** AUTH/用户名/密码（没有 `--username`/`--password` 或相关环境变量）；`RedisBenchmarkOptions` 里同样没有对应选项。这与 `production-hardening-operations.md` 的“无 AUTH”声明一致。
 
 ### scripts/storage-bench.sh
@@ -388,7 +374,6 @@ CSV 总计 **29 列**，顺序以 `StorageBenchmarkRenderer.CSV_HEADER` 为准�
 典型命令：
 
 ```bash
-./scripts/smoke.sh
 ./scripts/bench.sh
 FORMAT=csv KEYSPACE=0 KEEP_ALIVE=false ./scripts/bench.sh
 REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 SEED=12345 ./scripts/bench.sh

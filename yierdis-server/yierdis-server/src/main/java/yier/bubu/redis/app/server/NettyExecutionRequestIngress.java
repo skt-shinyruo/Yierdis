@@ -2,6 +2,8 @@ package yier.bubu.redis.app.server;
 
 import java.util.function.BiFunction;
 
+import lombok.extern.slf4j.Slf4j;
+
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.handler.codec.DecoderException;
@@ -18,8 +20,8 @@ import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.Objects;
 
+@Slf4j
 public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAdapter {
-    private static final System.Logger LOG = System.getLogger(NettyExecutionRequestIngress.class.getName());
 
     private final CommandExecutor executor;
     private final BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory;
@@ -115,12 +117,17 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
         }
 
         Throwable root = unwrapDecoderException(cause);
-        String logMessage = safeLogMessage(root);
         String remote = String.valueOf(ctx.channel().remoteAddress());
 
         NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
         if (root instanceof IOException) {
-            LOG.log(System.Logger.Level.DEBUG, "Transport closed from {0}: {1}", remote, logMessage);
+            // 传输层关闭通常是客户端正常断开，堆栈没有价值；这里只留一行原因，因此不把 Throwable 传给日志。
+            // 换行必须抹掉：message 由对端可影响，留着它就能在日志里伪造出额外一行；再截断，防对端灌入超长行。
+            String reason = String.valueOf(root).replace('\r', ' ').replace('\n', ' ');
+            if (reason.length() > 256) {
+                reason = reason.substring(0, 256);
+            }
+            log.debug("Transport closed from {}: {}", remote, reason);
             cancelCapacityWait();
             clearPendingSubmissions();
             if (connection != null && connection.markClosing()) {
@@ -130,7 +137,7 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
             return;
         }
 
-        LOG.log(System.Logger.Level.ERROR, "Internal error from " + remote + ": " + logMessage, root);
+        log.error("Internal error from {}", remote, root);
         if (connection == null || connection.replyGate() == null) {
             cancelCapacityWait();
             clearPendingSubmissions();
@@ -371,22 +378,6 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
             return cause.getCause();
         }
         return cause;
-    }
-
-    private static String safeLogMessage(Throwable cause) {
-        if (cause == null) {
-            return "internal error";
-        }
-        String msg = cause.getMessage();
-        if (msg == null || msg.isBlank()) {
-            msg = cause.getClass().getSimpleName();
-        }
-        // Prevent response splitting via CRLF injection.
-        msg = msg.replace('\r', ' ').replace('\n', ' ');
-        if (msg.length() > 256) {
-            msg = msg.substring(0, 256);
-        }
-        return msg;
     }
 
     private record PendingSubmission(ExecutionRequest request, ReplySlot slot) {

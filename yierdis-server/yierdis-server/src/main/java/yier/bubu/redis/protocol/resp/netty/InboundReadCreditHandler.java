@@ -59,8 +59,12 @@ public final class InboundReadCreditHandler extends ChannelInboundHandlerAdapter
     @Override
     public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
         context = ctx;
-        ctx.channel().config().setRecvByteBufAllocator(new FixedRecvByteBufAllocator(receiveBufferCapacity));
-        ctx.channel().config().setMaxMessagesPerRead(1);
+        // 每次 read 只取一条消息：额度按单条消息结算，多读会绕过 ingress 记账。
+        // ChannelConfig.setMaxMessagesPerRead 已废弃（4.1 起，javadoc 指向下面这种写法），改在 allocator 上设置；
+        // 两版本实现逐字相同，都是转发到 ((MaxMessagesRecvByteBufAllocator) allocator).maxMessagesPerRead(n)。
+        FixedRecvByteBufAllocator recvByteBufAllocator = new FixedRecvByteBufAllocator(receiveBufferCapacity);
+        recvByteBufAllocator.maxMessagesPerRead(1);
+        ctx.channel().config().setRecvByteBufAllocator(recvByteBufAllocator);
         ctx.channel().config().setAutoRead(false);
         scheduleReadIfAllowed();
         super.handlerAdded(ctx);

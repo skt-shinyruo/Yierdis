@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  集成测试专用配置（Logback 的查找顺序是 logback-test.xml 优先于 logback.xml）。
+
+  与生产配置的差别只有三处：
+  1. 文件是 test.log（和 server.log 同一个目录），保留期与总量上限更短——测试日志不值得多占空间；
+  2. 控制台过滤到 WARN 以上，避免 INFO 噪音淹没 surefire 的断言失败信息；
+  3. 装了 statusListener：这些模块会真的在进程内启动服务，配置期错误必须看得见。
+
+  落点规则与生产完全一致：-Dyierdis.log.root > YIERDIS_LOG_ROOT > ${java.io.tmpdir}/log/yierdis。
+  跑完全量测试后，项目目录里不会出现 logs/——日志都在 tmp 下。
+-->
+<configuration>
+
+    <property name="LOG_DIR" value="${yierdis.log.root:-${YIERDIS_LOG_ROOT:-${java.io.tmpdir}/log/yierdis}}"/>
+
+    <statusListener class="yier.bubu.redis.logging.StatusErrorsToStderr"/>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <target>System.err</target>
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>WARN</level>
+        </filter>
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_DIR}/test.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/archive/test.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>10MB</maxFileSize>
+            <maxHistory>7</maxHistory>
+            <totalSizeCap>64MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </root>
+
+</configuration>

@@ -2,7 +2,6 @@ package yier.bubu.redis.app.bench.storage;
 
 import org.junit.Assert;
 import org.junit.Test;
-import picocli.CommandLine;
 import yier.bubu.redis.app.bench.redis.BenchmarkFormat;
 
 import java.nio.charset.StandardCharsets;
@@ -10,8 +9,7 @@ import java.nio.charset.StandardCharsets;
 public class StorageBenchmarkConfigTest {
     @Test
     public void defaultsDescribeTheMillionKeyAcceptanceWorkload() {
-        StorageBenchmarkOptions options = new StorageBenchmarkOptions();
-        new CommandLine(options).parseArgs();
+        StorageBenchmarkOptions options = StorageBenchmarkOptions.parse();
 
         StorageBenchmarkConfig config = options.toConfig();
 
@@ -25,8 +23,7 @@ public class StorageBenchmarkConfigTest {
 
     @Test
     public void acceptsTenMillionKeysAndExplicitOutputSettings() {
-        StorageBenchmarkOptions options = new StorageBenchmarkOptions();
-        new CommandLine(options).parseArgs(
+        StorageBenchmarkOptions options = StorageBenchmarkOptions.parse(
                 "--keys", "10000000",
                 "--key-size", "8",
                 "--value-size", "0",

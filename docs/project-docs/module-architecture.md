@@ -4,7 +4,7 @@ Yierdis 当前有九个 Maven leaf module。目录只用于表达领域归属；
 
 ## 依赖方向
 
-箭头表示左侧模块直接依赖右侧模块：实线是 production scope，虚线是 test scope；第三方依赖（Netty、picocli、HdrHistogram、JUnit）未画出。
+箭头表示左侧模块直接依赖右侧模块：实线是 production scope，虚线是 test scope；第三方依赖（Netty、HdrHistogram、SLF4J/Logback、JUnit）未画出。
 
 ```mermaid
 flowchart LR
@@ -48,7 +48,7 @@ flowchart LR
 
 - `yierdis-networking-resp` 依赖 `yierdis-server-api`：`RespReplyWriter` 实现的是 `server-api` 里的 `RedisReplyWriter`，并使用 `ReplyReservationSink` 与 `ReplyShapes`。所以 RESP 编码不依赖 server 或 Netty。
 - `yierdis-server` 同时依赖 `server-api`、`db`、`command`、`networking-resp` 四个内部模块，它是唯一把四方拼起来的模块。
-- `yierdis-cli` 的 production 依赖只有 `yierdis-networking-resp`（加第三方 picocli）；它对 `yierdis-server` 的依赖是 **test scope**，用于集成测试，不进入发布产物。
+- `yierdis-cli` 的 production 依赖只有 `yierdis-networking-resp`；它对 `yierdis-server` 的依赖是 **test scope**，用于集成测试，不进入发布产物。
 - `yierdis-tests` 对其它八个模块的依赖 **全部是 test scope**，它不提供 production API。
 
 根 `yierdis-parent` 集中管理版本、Java 25 编译器和插件配置。`yierdis-common`、`yierdis-networking-resp`、`yierdis-server`、`yierdis-command` 和 `yierdis-db` 的上层目录没有中间 POM（`yierdis-server` 的 `<relativePath>` 是 `../../pom.xml`）；`yierdis-server-api` 和 `yierdis-server` 以 `yierdis-server/` 为公共目录，但各自是独立 leaf module，没有中间聚合 POM。
@@ -60,11 +60,11 @@ flowchart LR
 | `yierdis-common` | 无 | 无 | 无 |
 | `yierdis-networking-resp` | `common`, `server-api` | 无 | 无 |
 | `yierdis-server-api` | `common` | 无 | 无 |
-| `yierdis-server` | `server-api`, `db`, `command`, `networking-resp` | 无 | `netty-handler`, `picocli` |
+| `yierdis-server` | `server-api`, `db`, `command`, `networking-resp` | 无 | `netty-handler`, `slf4j-api`, `logback-classic` |
 | `yierdis-command` | `server-api`, `db`, `common` | 无 | 无 |
 | `yierdis-db` | `common` | 无 | 无 |
-| `yierdis-cli` | `networking-resp` | `server` | `picocli` |
-| `yierdis-benchmark` | `db`, `networking-resp` | 无 | `picocli`, `HdrHistogram` |
+| `yierdis-cli` | `networking-resp` | `server` | 无 |
+| `yierdis-benchmark` | `db`, `networking-resp` | 无 | `HdrHistogram` |
 | `yierdis-tests` | 无 | `benchmark`, `cli`, `common`, `server-api`, `server`, `command`, `db`, `networking-resp` | `junit`（parent 继承，test scope） |
 
 ## 九个模块

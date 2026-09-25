@@ -62,7 +62,7 @@ public static byte[] copyOf(byte[] original, int newLength) {
 
 ## 内核切换真正在哪
 
-- **网络 I/O。** 传输层是 `NioEventLoopGroup`（`YierdisServerBootstrap`），Linux 上底层是 epoll：`epoll_wait`/`read`/`write` 才是真正的用户态到内核态切换。decoder 里把 ByteBuf 内容读进 heap 数组的 `in.readBytes(bulk.buffer(), ...)`（`RespRequestDecoder`）只是一次用户态搬运；ByteBuf 即使是 pooled direct，读它也只是 `Unsafe.copyMemory` 一类的用户态拷贝，不额外进内核。唯一的例外是 mmap 文件页尚未驻留时的首次触碰缺页。
+- **网络 I/O。** 传输层是 `MultiThreadIoEventLoopGroup`（`YierdisServerBootstrap`），Linux 上底层是 epoll：`epoll_wait`/`read`/`write` 才是真正的用户态到内核态切换。decoder 里把 ByteBuf 内容读进 heap 数组的 `in.readBytes(bulk.buffer(), ...)`（`RespRequestDecoder`）只是一次用户态搬运；ByteBuf 即使是 pooled direct，读它也只是用户态拷贝（Netty 4.2 在 JDK 25+ 上默认不走 `sun.misc.Unsafe`：pooled direct buffer 经 `ByteBuffer` 访问、堆内 buffer 走数组；`MemorySegment` 只出现在 direct buffer 的分配/释放路径，与读写无关）。无论哪种实现都不额外进内核。唯一的例外是 mmap 文件页尚未驻留时的首次触碰缺页。
 - **native region 分配。** `YierdisFfmMemoryRuntime.allocateRegion(...)` 的 `Arena.ofShared()` 加 `arena.allocate(bytes)` 底层是匿名内存的 `malloc`/`mmap`，这是货真价实的系统调用；但它按 region/页发生，不是每次读写，更不是每次 `SET`。
 - **写回与持久化。** reply chunk 最终经 socket 写出，以及任何文件 I/O，都会进内核。
 

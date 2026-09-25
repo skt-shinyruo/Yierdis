@@ -2,13 +2,16 @@ package yier.bubu.redis.app.server;
 
 import java.util.function.BiFunction;
 
+import lombok.extern.slf4j.Slf4j;
+
 // Server bootstrap：负责装配 Netty pipeline、DB/off-heap/执行器并管理生命周期，便于测试与工具复用启动/关停逻辑。
 
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.MultiThreadIoEventLoopGroup;
+import io.netty.channel.nio.NioIoHandler;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutorGroup;
@@ -52,8 +55,8 @@ import java.util.function.UnaryOperator;
  * <p>
  * This allows tests/tools to start/stop the server without duplicating Netty/DB setup logic.
  */
+@Slf4j
 public final class YierdisServerBootstrap implements AutoCloseable {
-    private static final System.Logger LOG = System.getLogger(YierdisServerBootstrap.class.getName());
     private static final long DEFERRED_RECLAMATION_INTERVAL_MILLIS = 1_000L;
 
     enum LifecycleState {
@@ -98,11 +101,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
     }
 
     public static YierdisServerBootstrap start(String... args) throws Exception {
-        YierdisServerRuntimeConfig config = ServerConfig.fromArgs(args);
-        if (config == null) {
-            throw new IllegalArgumentException("No server config (help requested or invalid args)");
-        }
-        return start(config);
+        return start(ServerConfig.fromArgs(args));
     }
 
     static YierdisServerBootstrap start(YierdisServerRuntimeConfig config) throws Exception {
@@ -113,11 +112,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             UnaryOperator<BiFunction<CommandSession, ExecutionRequest, PreparedCommand>> commandEngineDecorator,
             String... args
     ) throws Exception {
-        YierdisServerRuntimeConfig config = ServerConfig.fromArgs(args);
-        if (config == null) {
-            throw new IllegalArgumentException("No server config (help requested or invalid args)");
-        }
-        return start(config, commandEngineDecorator);
+        return start(ServerConfig.fromArgs(args), commandEngineDecorator);
     }
 
     private static YierdisServerBootstrap start(
@@ -157,7 +152,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
     }
 
     private void startInternal() throws Exception {
-        LOG.log(System.Logger.Level.INFO, "native memory backend: foreign (JDK 25 FFM)");
+        log.info("native memory backend: foreign (JDK 25 FFM)");
         int databases = Math.max(1, runtimeConfig.databases());
         YierdisInstanceConfig.MaxmemoryScope scope = runtimeConfig.maxmemoryScope();
         YierdisInstanceConfig.Builder instanceConfig = YierdisInstanceConfig.builder()
@@ -220,8 +215,8 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         );
         infoProvider.bindExecutor(executor);
 
-        bossGroup = new NioEventLoopGroup(1);
-        workerGroup = new NioEventLoopGroup(runtimeConfig.ioThreads());
+        bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
+        workerGroup = new MultiThreadIoEventLoopGroup(runtimeConfig.ioThreads(), NioIoHandler.newFactory());
 
         // 命令执行器线程是 DB 的唯一访问者（保持单线程命令语义）。
         executor.start();
@@ -245,8 +240,13 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             exForTask.executeMaintenance(() -> {
                 try {
                     scheduledMaintenance.run();
-                } catch (Exception e) {
-                    LOG.log(System.Logger.Level.DEBUG, "Maintenance error", e);
+                } catch (Error maintenanceError) {
+                    // Error（OutOfMemoryError、StackOverflowError 等）逃出 owner thread 时，DB 不变量可能
+                    // 已经被破坏。这里只记录，不自动关闭进程：单次 maintenance Error 也可能是可恢复的
+                    // （例如一次分配失败），是否终止服务应由运维判断，而不是日志系统代劳。
+                    log.error("maintenance tick failed with an Error", maintenanceError);
+                } catch (Exception failure) {
+                    log.warn("maintenance tick failed", failure);
                 } finally {
                     maintenancePending.set(false);
                 }
@@ -288,6 +288,9 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             attempt = closeAttempt;
         }
         if (performClose) {
+            // 只有真正执行关闭的那一次调用会走到这里（closeAttempt 保证幂等），
+            // 因此这条记录不会被重复写入；它的作用是把「干净停止」和「进程崩溃」区分开。
+            log.info("yierdis stopping");
             try {
                 closeInternal();
                 synchronized (lifecycleLock) {

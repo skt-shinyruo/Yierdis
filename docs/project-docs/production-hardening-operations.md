@@ -6,7 +6,7 @@ Read this together with [`configuration-and-operations.md`](./configuration-and-
 
 ## Runtime Baseline
 
-All build, test, smoke, soak, package, and benchmark commands use JDK 25. Set the toolchain explicitly in automation and incident reproduction:
+All build, test, package, and benchmark commands use JDK 25. Set the toolchain explicitly in automation and incident reproduction:
 
 ```bash
 export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
@@ -75,7 +75,7 @@ There are two materially different failures:
 1. A preflight rejection before mutation or visible reply output is deterministic. It may produce the normal capacity/command failure and the mutation is not committed.
 2. A failure is result-unknown when it occurs after a mutation may have committed, after reply bytes may have become visible, or after a write outcome becomes ambiguous. Examples include a post-commit mutation failure, write failure, source/chunk mismatch, and disconnect during output.
 
-For a result-unknown failure the server cancels the reply slot and closes the connection without a replacement reply. It must not fabricate `-ERR internal error`, because that would claim a result that may contradict a visible mutation or partial reply. Each such close increments `yierdis_result_unknown_closes`. The semantics are pinned by `ReplyResultUnknownTest` and `MaxmemoryDoubleReplyRegressionTest`; run them together with the focused reply matrix below.
+For a result-unknown failure the server cancels the reply slot and closes the connection without a replacement reply. It must not fabricate `-ERR internal error`, because that would claim a result that may contradict a visible mutation or partial reply. Each such close increments `yierdis_result_unknown_closes`. Executor-level handling is pinned by `CommandExecutorTest` (mock IO) and the close counter by `ConnectionReplySequencerTest`; the wire-level close path currently has no integration test after `ReplyResultUnknownTest` was retired. Run the focused reply matrix below.
 
 ## Observability And Leak Triage
 
@@ -90,20 +90,7 @@ For a result-unknown failure the server cancels the reply slot and closes the co
 | Shutdown | `yierdis_reply_shutdown_timeouts`, `yierdis_inbound_closed`, and final ownership gauges |
 | Maxmemory/native | `INFO memory` fields including `yierdis_maxmemory_used_bytes`, `yierdis_maxmemory_effective_used_bytes`, `yierdis_ledger_used_bytes`, `yierdis_ledger_reserved_bytes`, `yierdis_offheap_used_bytes`, `yierdis_native_metadata_committed_bytes`, `yierdis_native_data_committed_bytes`, `yierdis_native_data_live_bytes`, `yierdis_native_live_objects`, `yierdis_native_live_regions`, plus native defrag summaries |
 
-During normal steady state, peaks may remain non-zero while current reserved/allocated bytes return to zero. After a test fixture or successful graceful shutdown, active slots, chunks, sources, child channels, and inbound reservation must converge to zero. A non-zero current gauge after clients disconnect is a leak signal. Capture `INFO stats`, `INFO memory`, `MEMORY STATS`, process logs, the exact workload seed, and the candidate artifact checksum before restarting.
-
-## Deterministic Soak
-
-The soak workload runs four fill/cleanup cycles (`ProductionHardeningSoakTest.SOAK_CYCLE_COUNT = 4`). The first completed cycle records the warm baseline. Each later cycle must return live native objects and FFM regions to that baseline, and committed native bytes must remain below the metadata high-water mark plus the warm-page bound (`WARM_PAGE_BOUND_BYTES = 23 × 64 KiB`).
-
-The main client keeps one fixed inbound read credit while it remains connected; that standing credit is its cycle baseline. Retained input, consolidation, reply slots, sources, chunks, and outbound reservations must all drain. RSS remains supplementary telemetry because JVM heap residency can grow independently of live ownership; native counters and ownership gauges are the required leak assertions.
-
-Run the soak through its script so packaging, the environment record, and the seed are produced consistently:
-
-```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-  ./scripts/production-hardening-soak.sh --duration-seconds 600 --seed 20260710
-```
+During normal steady state, peaks may remain non-zero while current reserved/allocated bytes return to zero. After a test fixture or successful graceful shutdown, active slots, chunks, sources, child channels, and inbound reservation must converge to zero. A non-zero current gauge after clients disconnect is a leak signal. Capture `INFO stats`, `INFO memory`, `MEMORY STATS`, process logs, the exact workload seed, and the candidate artifact checksum before restarting. Leak evidence rests on the native counters and ownership gauges; RSS is supplementary because JVM heap residency can grow independently of live ownership.
 
 ## Graceful Shutdown
 
@@ -120,12 +107,12 @@ A timeout is not a successful close. `yierdis_reply_shutdown_timeouts`, live chi
 
 ## Verification Commands
 
-Use the same JDK 25 environment for every gate. The focused reply matrix is the fastest signal for receive-order, capacity, result-unknown, and shutdown ownership:
+Use the same JDK 25 environment for every gate. The focused reply matrix is the fastest signal for receive-order, capacity, and result-unknown ownership:
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
   mvn -pl yierdis-tests -am \
-  -Dtest=OrderedReplyIntegrationTest,OutboundReplyPressureTest,ReplyResultUnknownTest \
+  -Dtest=OrderedReplyIntegrationTest,MaxmemoryDoubleReplyRegressionTest \
   -Dsurefire.failIfNoSpecifiedTests=false \
   -Dsurefire.rerunFailingTestsCount=3 test
 ```
@@ -139,19 +126,15 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
   -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-Smoke runs the packaged server through the supported command surface:
+Booting the packaged artifact is a manual step: start the jar, then exercise the supported command surface with the bundled CLI or `redis-cli`.
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-  ./scripts/smoke.sh
+  java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 16379 --maxmemoryBytes 0
+redis-cli -p 16379 PING
 ```
 
-`scripts/production-hardening-soak.sh` defaults to 600 seconds. Without `--skip-package` it packages `yierdis-server/yierdis-server` and `yierdis-tests`, then writes commit, duration, seed, JDK, Maven, `uname`, the server jar path, and its SHA-256 to `target/production-hardening-soak/<timestamp>-seed-<seed>/environment.txt`. `--skip-package` uses the existing server jar and fails when that jar is missing. `SKIP_BUILD=1` applies to `scripts/smoke.sh` and `scripts/bench.sh`.
-
-```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-  ./scripts/production-hardening-soak.sh --duration-seconds 600 --seed 20260710
-```
+`SKIP_BUILD=1` applies to `scripts/bench.sh`.
 
 `scripts/bench.sh` connects to an already started Yierdis process. It does not start Redis and has no AUTH, username, or password. The benchmark sends `SELECT` only when `database != 0`.
 

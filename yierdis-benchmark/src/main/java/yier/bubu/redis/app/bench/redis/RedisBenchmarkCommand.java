@@ -1,32 +1,14 @@
 package yier.bubu.redis.app.bench.redis;
 
-import picocli.CommandLine.Command;
-import picocli.CommandLine.Mixin;
-import picocli.CommandLine.Model.CommandSpec;
-import picocli.CommandLine.ParameterException;
-import picocli.CommandLine.Spec;
 import yier.bubu.redis.app.bench.BenchCommands;
 
+import java.io.PrintWriter;
 import java.util.Objects;
-import java.util.concurrent.Callable;
 import java.util.function.Function;
 
-@Command(
-        name = "yierdis-benchmark",
-        description = "Connect-only Redis-compatible benchmark for Yierdis.",
-        mixinStandardHelpOptions = true,
-        sortOptions = false,
-        usageHelpAutoWidth = true
-)
-public final class RedisBenchmarkCommand implements Callable<Integer> {
+public final class RedisBenchmarkCommand {
     private final Function<BenchmarkConfig, BenchmarkRunResult> runner;
     private final BenchmarkOutputRenderer renderer;
-
-    @Mixin
-    private RedisBenchmarkOptions options = new RedisBenchmarkOptions();
-
-    @Spec
-    private CommandSpec spec;
 
     public RedisBenchmarkCommand() {
         this(new RedisBenchmark()::run, new BenchmarkOutputRenderer());
@@ -40,18 +22,40 @@ public final class RedisBenchmarkCommand implements Callable<Integer> {
         this.renderer = Objects.requireNonNull(renderer, "renderer");
     }
 
-    @Override
-    public Integer call() {
-        BenchmarkConfig config = BenchCommands.parseConfig(spec, () -> options.toConfig(System::nanoTime));
+    /**
+     * 解析并执行。返回退出码：0 = 成功；1 = 执行失败；2 = 用法错误（只打一行原因，不打 usage）。
+     * {@link Error} 不降级：直接向外抛。
+     */
+    public int run(String[] argv, PrintWriter out, PrintWriter err) {
+        BenchmarkConfig config;
+        try {
+            config = RedisBenchmarkOptions.parse(argv).toConfig(System::nanoTime);
+        } catch (IllegalArgumentException failure) {
+            err.println(failure.getMessage());
+            err.flush();
+            return BenchCommands.USAGE_ERROR;
+        }
 
         BenchmarkRunResult result;
         try {
             result = runner.apply(config);
         } catch (RedisBenchmarkCatalog.SelectionException failure) {
-            throw new ParameterException(spec.commandLine(), failure.getMessage(), failure);
+            err.println(failure.getMessage());
+            err.flush();
+            return BenchCommands.USAGE_ERROR;
+        } catch (IllegalArgumentException failure) {
+            err.println(failure.getMessage());
+            err.flush();
+            return 1;
         }
 
-        BenchCommands.writeOutput(spec, renderer.render(config, result));
+        try {
+            BenchCommands.writeOutput(out, renderer.render(config, result));
+        } catch (RuntimeException failure) {
+            err.println(failure.getMessage());
+            err.flush();
+            return 1;
+        }
         return result.exitCode();
     }
 }

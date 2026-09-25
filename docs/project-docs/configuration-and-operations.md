@@ -8,14 +8,14 @@
 
 ```text
 argv
-  -> YierdisServerArgs (picocli)
+  -> YierdisServerArgs.parse(...)   // 手写解析，无 picocli
   -> normalizeAndValidate()
   -> YierdisServerRuntimeConfig   // 唯一信任边界，构造器集中校验
-  -> ServerConfig.fromArgs(...)   // CLI 边界，失败打 usage
+  -> ServerConfig.fromArgs(...)   // CLI 边界，失败只打一行错误
   -> YierdisServerBootstrap.startInternal()
 ```
 
-`YierdisServerArgs` 用 picocli 声明每个 `@Option`：默认值写在 `defaultValue` 和字段初值里（两处需要一致），usage 文案也来自这里。字段的默认值、范围校验分散在两个阶段，理解分工很重要：
+`YierdisServerArgs` 用公开字段承载每个选项：默认值就是字段初值，`parse(String...)` 手写解析，`--name value` 与 `--name=value` 两种形态都收。字段的默认值、范围校验分散在两个阶段，理解分工很重要：
 
 - `normalizeAndValidate()` 只做 CLI 归一化和派生：`--noCleanup` 把 `cleanupIntervalMillis` 归零；`bind` 去掉首尾空白；三个枚举（`executorSchedulingPolicy`、`maxmemoryScope`、`maxmemoryPolicy`）在这里解析一次并缓存实例，再把 argv 里的字符串改写成稳定值，不再走字符串 round-trip。归一化后 `maxmemoryScope` 只会是 `global` 或 `per-db`，`maxmemoryPolicy` 只会是它的 `redisName()`。
 - `YierdisServerRuntimeConfig` 的紧凑构造器是真正的校验点：网络、协议、reply、内存、maintenance、executor 队列与背压约束都在这里检查，越界直接抛 `IllegalArgumentException`。这是启动参数唯一的校验边界；下游的 `CommandExecutorConfig` 只承载已经校验过的值，不再重复校验（见该 record 的注释）。
@@ -26,11 +26,12 @@ argv
 
 `ServerConfig.fromArgs(String...)` 是 CLI 到组合根的边界，顺序如下：
 
-1. `cmd.parseArgs(args)` 解析失败（如未知选项、类型错误）抛 `ParameterException`，打印错误和 usage，包成 `YierdisCliException.usageError(...)`。
-2. 除非带 `--help`，必须显式匹配到 `--maxmemoryBytes` 选项，否则抛 `ParameterException("--maxmemoryBytes must be specified explicitly (use 0 to acknowledge unlimited memory)")`。这是唯一的“必须显式传”参数。
-3. `--help` 只打 usage 并返回 `null`；`YierdisServerBootstrap.start(String...)` 收到 `null` 会视为“没有可启动配置”。
-4. `normalizeAndValidate()` 抛 `IllegalArgumentException`（校验失败）同样打印 usage 并包成 `usageError`。
-5. 成功则返回 `toRuntimeConfig()`。
+1. `YierdisServerArgs.parse(args)` 解析失败（如未知选项、类型错误）抛 `IllegalArgumentException`，把原因打一行到 stderr，包成 `YierdisCliException.invalidArguments(...)`（调用方据此 `exit(2)`）。
+2. 必须显式给出 `--maxmemoryBytes` 选项（`wasSpecified(...)` 检查），否则抛 `IllegalArgumentException("--maxmemoryBytes must be specified explicitly (use 0 to acknowledge unlimited memory)")`。这是唯一的“必须显式传”参数。
+3. `normalizeAndValidate()` 抛 `IllegalArgumentException`（校验失败）同样打一行原因并包成 `invalidArguments`。
+4. 成功则返回 `toRuntimeConfig()`。
+
+这个 jar **不提供** `--help`，也没有任何 usage 输出：它只有"启动服务"一个用途，选项清单的默认值与约束就是下面那张总览表。
 
 源码入口：
 
@@ -43,16 +44,15 @@ argv
 
 真正启动发生在 `YierdisServerBootstrap.startInternal()`，顺序如下：
 
-1. 打一行日志 `native memory backend: foreign (JDK 25 FFM)`，后续是 JDK 25 编译目标和直接 FFM imports 提供的 native-memory 运行前提。
-2. 把 `YierdisServerRuntimeConfig` 映射成 `YierdisInstanceConfig`：databases、maxmemory、defrag 等。
-3. `YierdisInstance.create(config)` 组装唯一的 FFM DB backend，并取得 runtime access、maintenance 入口和 observability。
-4. 创建 `NettyServerInfoProvider`，绑定 lifecycle state 和 instance observability，再绑定 inbound/outbound budget、child registry、reply egress stats 和 executor。
-5. 由 bootstrap 调用 `CommandRegistries.dispatcher(...)` 注册默认命令模块和 server-only 模块（`ServerCommandModule`）。
-6. 创建单线程 `DefaultEventExecutorGroup(1)` 与 `CommandExecutor`；owner executor 是 `NettySerialOwnerExecutor`，背后就是 `commandGroup.next()`。
-7. `executor.start()` 在 owner thread 上执行 `bindToCurrentThread`，把该线程标成 DB owner。
-8. 按需在 Netty worker event loop 上调度 maintenance tick（见下文 TTL 与 maintenance），但 DB 逻辑仍通过 `executeMaintenance(...)` 回到 owner thread。
-9. 创建 boss/worker Netty group，并由 `YierdisServerChannelInitializer` 装配连接 pipeline。
-10. `bind(bind, port).sync()`，成功后 `lifecycleState = RUNNING`。
+1. 把 `YierdisServerRuntimeConfig` 映射成 `YierdisInstanceConfig`：databases、maxmemory、defrag 等。
+2. `YierdisInstance.create(config)` 组装唯一的 FFM DB backend，并取得 runtime access、maintenance 入口和 observability。
+3. 创建 `NettyServerInfoProvider`，绑定 lifecycle state 和 instance observability，再绑定 inbound/outbound budget、child registry、reply egress stats 和 executor。
+4. 由 bootstrap 调用 `CommandRegistries.dispatcher(...)` 注册默认命令模块和 server-only 模块（`ServerCommandModule`）。
+5. 创建单线程 `DefaultEventExecutorGroup(1)` 与 `CommandExecutor`；owner executor 是 `NettySerialOwnerExecutor`，背后就是 `commandGroup.next()`。
+6. `executor.start()` 在 owner thread 上执行 `bindToCurrentThread`，把该线程标成 DB owner。
+7. 按需在 Netty worker event loop 上调度 maintenance tick（见下文 TTL 与 maintenance），但 DB 逻辑仍通过 `executeMaintenance(...)` 回到 owner thread。
+8. 创建 boss/worker Netty group，并由 `YierdisServerChannelInitializer` 装配连接 pipeline。
+9. `bind(bind, port).sync()`，成功后 `lifecycleState = RUNNING`。
 
 `YierdisInstance` 不是“随手可用的 DB 容器”：`runtimeAccess().bindToCurrentThread()` 先把当前线程标成 owner，后续 DB access 才被允许；跨线程访问会 fail-fast。bootstrap 用 `ok` 标记包住整段启动，任一步失败都会 `close()`，避免留下半初始化实例。
 
@@ -60,7 +60,7 @@ benchmark 不持有 server 参数或生命周期模型，只连接由操作者�
 
 ## 配置项总览
 
-下面按域列出全部启动选项。`默认` 一列来自 `YierdisServerArgs` 的 `@Option(defaultValue=...)`；`范围/约束` 一列来自 `YierdisServerRuntimeConfig` 构造器或 `normalizeAndValidate()`；`生效阶段` 说明它在启动流程的哪一步被消费。“必须显式指定”的项已单独标注。
+下面按域列出全部启动选项。`默认` 一列来自 `YierdisServerArgs` 的字段初值；`范围/约束` 一列来自 `YierdisServerRuntimeConfig` 构造器或 `normalizeAndValidate()`；`生效阶段` 说明它在启动流程的哪一步被消费。“必须显式指定”的项已单独标注。
 
 ### 网络与实例规模
 
@@ -70,7 +70,7 @@ benchmark 不持有 server 参数或生命周期模型，只连接由操作者�
 | `--port` | `6378` | `0..65535`（0 由内核分配） | `bind(...)` |
 | `--maxClients` | `1024` | `> 0` | `ChildChannelRegistry` 准入 |
 | `--databases` | `16` | `1..1024` | 创建 `YierdisInstance` 的 DB 数组 |
-| `--ioThreads` | `1` | `> 0` | Netty worker `NioEventLoopGroup` |
+| `--ioThreads` | `1` | `> 0` | Netty worker `MultiThreadIoEventLoopGroup` |
 | `--maxmemoryBytes` | `0` | `>= 0`，**必须命令行显式出现** | `YierdisInstanceConfig` 预算 |
 
 ### 协议入口限制
@@ -168,7 +168,7 @@ mvn -q -DskipTests package
 java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 6378 --maxmemoryBytes 0
 ```
 
-注意这里必须带上 `--maxmemoryBytes`。省略它会直接启动失败并打印 usage，这是有意的安全护栏：把“忘记配置容量上限”和“明确选择无限制”区分开。
+注意这里必须带上 `--maxmemoryBytes`。省略它会在 stderr 打一行原因并以退出码 2 结束，这是有意的安全护栏：把“忘记配置容量上限”和“明确选择无限制”区分开。
 
 启动后可以用 `redis-cli` 或项目 CLI：
 
@@ -329,8 +329,8 @@ java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar
 
 启动失败常见位置：
 
-- 参数解析失败：picocli 抛 `ParameterException`，`ServerConfig.fromArgs(...)` 打 usage。
-- 缺少 `--maxmemoryBytes`：同样是 `ParameterException`，提示必须显式指定。
+- 参数解析失败：`YierdisServerArgs.parse(...)` 抛 `IllegalArgumentException`，`ServerConfig.fromArgs(...)` 只在 stderr 打一行错误（不打印 usage，退出码 2）。
+- 缺少 `--maxmemoryBytes`：同样打一行错误，提示必须显式指定。
 - 参数校验失败：`normalizeAndValidate()` / `YierdisServerRuntimeConfig` 抛 `IllegalArgumentException`，例如端口越界、watermark 非法、output buffer grace 为 `0`、reply 容量顺序不满足。
 - JDK 不满足要求：启动前使用 JDK 25 编译/运行环境；直接 FFM imports 会在不兼容环境中失败。
 - 端口绑定失败：Netty `bind(...)` 报错。
@@ -340,7 +340,7 @@ java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar
 
 关闭是 best-effort，`closeInternal()` 顺序大致是：server channel → child input（`beginShutdown` + `markClosing`）→ cleanup future → executor graceful shutdown → child reply drain（受 `--replyDrainTimeoutMillis` 限制，超时则 force-close）→ inbound/outbound budget → instance runtime access → command group → boss group → worker group。runtime access 的关闭会经 `executor.executeOwnerTask(runtimeAccess::close)` 回到 owner thread，避免在错误线程释放已绑定 DB runtime。某一步失败会记进聚合的 failure 并继续关闭后续资源，最后一起抛出。
 
-脚本层关闭逻辑也要按真实进程处理：只有 `scripts/smoke.sh` 拥有它启动的临时 server，并用 `trap cleanup EXIT` 清理；connect-only benchmark 不拥有也不停止目标 Yierdis。
+脚本层关闭逻辑也要按真实进程处理：谁启动 server，谁负责用 `trap … EXIT` 把它停掉；connect-only benchmark 不拥有也不停止目标 Yierdis。
 
 ## Production Hardening Operations
 

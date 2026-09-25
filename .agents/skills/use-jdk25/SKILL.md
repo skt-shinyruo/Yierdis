@@ -1,6 +1,6 @@
 ---
 name: use-jdk25
-description: Use when working in the Yierdis repository and a command must run Maven, Java, javac, tests, packaging, scripts, smoke checks, or benchmarks with the local JDK 25 installation.
+description: Use when working in the Yierdis repository and a command must run Maven, Java, javac, tests, packaging, scripts, or benchmarks with the local JDK 25 installation.
 ---
 
 # Use JDK 25
@@ -21,4 +21,4 @@ For Codex tool calls, scripts, or any non-interactive shell, prefer the explicit
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn test
 ```
 
-Use the same prefix for `mvn`, `java`, `javac`, `./scripts/smoke.sh`, and `./scripts/bench.sh`.
+Use the same prefix for `mvn`, `java`, `javac`, and `./scripts/bench.sh`.

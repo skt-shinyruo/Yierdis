@@ -1,6 +1,6 @@
 package yier.bubu.redis.app.bench.redis;
 
-import picocli.CommandLine.Option;
+import yier.bubu.redis.app.bench.BenchArgv;
 
 import java.util.Arrays;
 import java.util.Locale;
@@ -10,44 +10,87 @@ import java.util.function.LongSupplier;
 import java.util.stream.Collectors;
 
 public final class RedisBenchmarkOptions {
-    @Option(names = "--host", defaultValue = "127.0.0.1", description = "Target host to connect.")
+    /** 全部受支持的长选项名（供入口测试固定清单）。 */
+    public static final Set<String> OPTION_NAMES = Set.of(
+            "--host",
+            "--port",
+            "--requests",
+            "--clients",
+            "--data-size",
+            "--pipeline",
+            "--keyspace",
+            "--keep-alive",
+            "--tests",
+            "--precision",
+            "--seed",
+            "--format",
+            "--database"
+    );
+
     String host = "127.0.0.1";
-
-    @Option(names = "--port", defaultValue = "16378", description = "Target port to connect.")
     int port = 16378;
-
-    @Option(names = "--requests", defaultValue = "100000", description = "Measured requests per benchmark case.")
     int requests = 100_000;
-
-    @Option(names = "--clients", defaultValue = "50", description = "Concurrent benchmark clients.")
     int clients = 50;
-
-    @Option(names = "--data-size", defaultValue = "3", description = "Payload size in bytes.")
     int dataSize = 3;
-
-    @Option(names = "--pipeline", defaultValue = "1", description = "Requests sent per pipeline.")
     int pipeline = 1;
-
-    @Option(names = "--keyspace", description = "Optional random keyspace size.")
     Long keyspace;
-
-    @Option(names = "--keep-alive", defaultValue = "true", description = "Reuse connections between pipelines.")
     boolean keepAlive = true;
-
-    @Option(names = "--tests", description = "Comma-separated official benchmark test names.")
     String tests;
-
-    @Option(names = "--precision", defaultValue = "3", description = "HdrHistogram significant digits.")
     int precision = 3;
-
-    @Option(names = "--seed", description = "Optional deterministic random seed.")
     Long seed;
-
-    @Option(names = "--format", defaultValue = "human", description = "Output format: human, quiet, or csv.")
     String format = "human";
-
-    @Option(names = "--database", defaultValue = "0", description = "Logical database to select.")
     int database;
+
+    /** 手写 argv 解析（无 picocli）：支持 "--name value" 与 "--name=value"，未知名称一律报错。 */
+    public static RedisBenchmarkOptions parse(String... argv) {
+        RedisBenchmarkOptions options = new RedisBenchmarkOptions();
+        for (int i = 0; i < argv.length; i++) {
+            String name = argv[i];
+            String value = null;
+            if (name.startsWith("--")) {
+                int eq = name.indexOf('=');
+                if (eq >= 0) {
+                    value = name.substring(eq + 1);
+                    name = name.substring(0, eq);
+                }
+            }
+            if (!OPTION_NAMES.contains(name)) {
+                throw BenchArgv.unknown(name, i);
+            }
+            if (name.equals("--keep-alive") && value == null) {
+                // flag 形态等价于 --keep-alive=true。
+                options.keepAlive = true;
+                continue;
+            }
+            if (value == null) {
+                if (++i >= argv.length) {
+                    throw new IllegalArgumentException("Missing required parameter for option '" + name + "'");
+                }
+                value = argv[i];
+            }
+            assign(options, name, value);
+        }
+        return options;
+    }
+
+    private static void assign(RedisBenchmarkOptions options, String name, String raw) {
+        switch (name) {
+            case "--host" -> options.host = raw;
+            case "--port" -> options.port = BenchArgv.intValue(name, raw);
+            case "--requests" -> options.requests = BenchArgv.intValue(name, raw);
+            case "--clients" -> options.clients = BenchArgv.intValue(name, raw);
+            case "--data-size" -> options.dataSize = BenchArgv.intValue(name, raw);
+            case "--pipeline" -> options.pipeline = BenchArgv.intValue(name, raw);
+            case "--keyspace" -> options.keyspace = BenchArgv.longValue(name, raw);
+            case "--keep-alive" -> options.keepAlive = BenchArgv.booleanValue(name, raw);
+            case "--tests" -> options.tests = raw;
+            case "--precision" -> options.precision = BenchArgv.intValue(name, raw);
+            case "--seed" -> options.seed = BenchArgv.longValue(name, raw);
+            case "--format" -> options.format = raw;
+            case "--database" -> options.database = BenchArgv.intValue(name, raw);
+            default -> throw new IllegalArgumentException("Unknown option: '" + name + "'");
+        }
+    }
 
     BenchmarkConfig toConfig(LongSupplier seedSupplier) {
         long resolvedSeed = seed == null ? requireSeed(seedSupplier) : seed;

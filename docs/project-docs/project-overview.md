@@ -38,7 +38,7 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 技术栈主线很短：
 
 - Java 25：语言版本和 `java.lang.foreign` FFM API 的运行前提；`pom.xml` 里 `maven.compiler.release` 设为 25。
-- Netty 4.1.109.Final：TCP server、channel pipeline、I/O 线程和 write-back。
+- Netty 4.2.18.Final：TCP server、channel pipeline、I/O 线程和 write-back。
 - RESP：请求解码、reply 编码和 RESP2/基础 RESP3 wire model。
 - Maven multi-module：九个 leaf module 隔离 common、RESP、server API、server、command、DB、CLI、benchmark 和 tests。
 
@@ -75,7 +75,7 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 
 ## 跑起来的最短路径
 
-构建和启动命令都以本仓库的 `README.md` 与 `scripts/smoke.sh` 为准，不是示意。要求 JDK 25 + Maven 3.x。
+构建和启动命令都以本仓库的 `README.md` 为准，不是示意。要求 JDK 25 + Maven 3.x。
 
 只构建 server 和 CLI 并打出可执行 fat jar：
 
@@ -96,9 +96,7 @@ redis-cli -p 6378 PING
 java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar --port 6378 SET a 1
 ```
 
-如果只想跑一次端到端冒烟（自动构建、后台起 server、PING/SET/GET、退出），用 `./scripts/smoke.sh`；它默认端口是 `16379`，`SKIP_BUILD=1` 可跳过构建。
-
-启动参数入口是 `YierdisServerArgs`（picocli 定义），`ServerConfig.fromArgs(...)` 负责解析与校验，`YierdisServerBootstrap.start(...)` 完成组装。默认端口 `6378`、`--databases 16`、`--ioThreads 1`、`--maxmemoryBytes 0`。
+启动参数入口是 `YierdisServerArgs`（手写解析），`ServerConfig.fromArgs(...)` 负责解析与校验，`YierdisServerBootstrap.start(...)` 完成组装。默认端口 `6378`、`--databases 16`、`--ioThreads 1`、`--maxmemoryBytes 0`。
 
 ## 请求主链概览
 

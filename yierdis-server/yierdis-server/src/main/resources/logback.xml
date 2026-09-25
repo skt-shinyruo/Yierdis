@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Yierdis 日志配置（全项目唯一来源）。用法见 docs/project-docs/logging.md。
+
+  三条硬约束，改之前先读：
+  1. 控制台 appender 必须写 stderr。stdout 是数据通道（CLI 的回复走它），日志写进 stdout 就会污染下游解析。
+  2. 不要用 AsyncAppender。本项目只在启动/关闭/错误路径上记日志，异步换来的只有"退出时队列里的日志来不及落盘"。
+  3. pattern 里不要写 %ex / %throwable。Logback 在 pattern 不含 throwable 转换词时会自动把堆栈追加到末尾，
+     手工加会打印两遍。
+-->
+<configuration>
+
+    <!-- 落点：-Dyierdis.log.root > 环境变量 YIERDIS_LOG_ROOT > ${java.io.tmpdir}/log/yierdis。
+         前两者都必须是非空绝对路径；写坏了文件 appender 就打不开，日志只剩 stderr 那一份（stderr 上会有一条
+         [logback] ERROR）。${java.io.tmpdir} 受 -Djava.io.tmpdir 影响；/tmp 会在重启或系统清理时被清空，
+         要留下证据就挂载它，或用上面两个旋钮指到别处。 -->
+    <property name="LOG_DIR" value="${yierdis.log.root:-${YIERDIS_LOG_ROOT:-${java.io.tmpdir}/log/yierdis}}"/>
+
+    <!-- 配置期错误（目录不可写、appender 起不来）默认只在 Logback 内部静默记录。挂上这个监听器后它们以
+         [logback] ERROR 打到 stderr；它同时让 Logback 跳过"没有监听器就把整份 status 全量 dump 到 stdout"的行为。 -->
+    <statusListener class="yier.bubu.redis.logging.StatusErrorsToStderr"/>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <target>System.err</target>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- 单文件 10MB 封顶，保留 7 天，归档总量上限 64MB——最后这条是防止日志把 /tmp 撑满的兜底。 -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_DIR}/server.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/archive/server.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>10MB</maxFileSize>
+            <maxHistory>7</maxHistory>
+            <totalSizeCap>64MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- 默认 INFO。要看 yier.bubu.redis 的 DEBUG 明细就放开下面这行，不用改代码。 -->
+    <!-- <logger name="yier.bubu.redis" level="DEBUG"/> -->
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </root>
+
+</configuration>

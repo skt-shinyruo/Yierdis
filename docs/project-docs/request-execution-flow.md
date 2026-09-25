@@ -8,8 +8,8 @@
 
 | 线程 | 由谁创建 | 在这条链上做什么 |
 | --- | --- | --- |
-| boss event loop | `NioEventLoopGroup(1)` | accept 新连接。 |
-| worker event loop | `NioEventLoopGroup(ioThreads)`（默认 1） | 收包、解码、ingress 提交、reply 写回与 flush、关闭 transport。 |
+| boss event loop | `MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory())` | accept 新连接。 |
+| worker event loop | `MultiThreadIoEventLoopGroup(ioThreads, NioIoHandler.newFactory())`（默认 1） | 收包、解码、ingress 提交、reply 写回与 flush、关闭 transport。 |
 | command owner thread | `DefaultEventExecutorGroup(1).next()`，经 `NettySerialOwnerExecutor` 暴露 | prepare、预留、校验、执行、渲染 DB 访问，是 DB 的唯一访问线程。 |
 | 维护调度线程 | `workerGroup.next()` 上的 `scheduleWithFixedDelay` | 触发 maintenance tick，实际动作仍回到 owner thread。 |
 
@@ -70,7 +70,7 @@ CommandExecutor
 
 ## 启动和连接状态
 
-`YierdisServer.main(...)` 解析启动参数，调用 `YierdisServerBootstrap.start(...)`，注册 shutdown hook，然后阻塞在 `server.awaitClose()`。`ServerConfig.fromArgs(...)` 要求 `--maxmemoryBytes` 显式给出，否则报 usage error。
+`YierdisServer.main(...)` 解析启动参数，调用 `YierdisServerBootstrap.start(...)`，注册 shutdown hook，然后阻塞在 `server.awaitClose()`。`ServerConfig.fromArgs(...)` 要求 `--maxmemoryBytes` 显式给出，否则在 stderr 打一行原因并以 `exit(2)` 退出。
 
 `YierdisServerBootstrap` 是 composition root，装配顺序是：先建 `YierdisInstance`，再用 `CommandRegistries.dispatcher(...)` 注册命令，然后把 `dispatcher::prepare` 交给 `CommandExecutor`，最后才创建 Netty groups 和 `ServerBootstrap`。`CommandRegistries.dispatcher(...)` 内部先注册 `TransactionCommands`（`MULTI`/`DISCARD`/`EXEC`），再注册传入的 `DefaultCommandModules.create(...)` 模块和 `ServerCommandModule`，最后 `registry.seal()`。
 
@@ -88,8 +88,8 @@ executor = new CommandExecutor(runtimeAccess::bindToCurrentThread,
                                RespReplyWriter::new,           // replyWriterFactory
                                new NettyExecutionIoAdapter(),
                                executorConfig)
-bossGroup = new NioEventLoopGroup(1)
-workerGroup = new NioEventLoopGroup(ioThreads)
+bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory())
+workerGroup = new MultiThreadIoEventLoopGroup(ioThreads, NioIoHandler.newFactory())
 executor.start()                                              // 绑定 owner thread
 ```
 

@@ -59,7 +59,7 @@ C 侧是“一条计数 + 一个比率”（`zmalloc` 全局计数得 `used_memo
 | 自身记账 | `LongAdder` 按 owner 分段计数，区分 committed（已占页）/ live（逻辑存活）/ reclaimable（回收候选），比 C 的单一口径更细 |
 | 对账 | accounted（堆估计 + native committed）vs `/proc/self/status` 的 RSS；gap 持续增长 = 碎片或泄漏警报 |
 | 暴露 | JMX MBean / Micrometer；兼容 Redis 运维习惯就再包一层 `INFO memory` 语义输出 |
-| JVM 兜底 | NMT（只到堆外总量）、GC 日志、`-XX:MaxDirectMemorySize` 硬顶 |
+| JVM 兜底 | NMT（只到堆外总量）、`-XX:MaxDirectMemorySize` 硬顶 |
 
 关键纪律：**堆外压力 JVM 不会替你感知**——不触发 GC、不传回信号。监控必须反过来驱动策略：分配速率上涨 → 提前启动淘汰、收紧 ingress 背压，而不是等 OOM。
 

@@ -45,7 +45,7 @@ stock server 部署进入 degraded 后，没有任何协议/命令入口能把�
 
 **测试覆盖**
 
-- `YierdisDbHealthTest`、`YierdisDbReconcileAccountingTest`（覆盖清除 degraded、恢复写入、owner 线程约束、failed reconciliation、physical read error 等场景）、`MutationExecutorReservationTest`、`ReplyResultUnknownTest`（`yierdis-tests` 集成层）覆盖了 degraded 机制与恢复语义。
+- `YierdisDbHealthTest`、`YierdisDbReconcileAccountingTest`（覆盖清除 degraded、恢复写入、owner 线程约束、failed reconciliation、physical read error 等场景）、`MutationExecutorReservationTest` 覆盖了 degraded 机制与恢复语义。
 - "stock server 没有触发路径"这一事实本身**不可能有测试**——缺的就是那条路径。
 
 **状态**：未文档化（恢复语义已文档化，缺的是"没有 server 触发路径"这一事实）。

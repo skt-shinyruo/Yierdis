@@ -86,7 +86,7 @@ Java 额外要做：codec 抽象层（Redisson 的 `Codec` 组合模式）、sch
 | 异步错误 | 回调 err 参数 | 经 `CompletableFuture` 传播，不消费会静默丢失 |
 | 超时 | 应用侧自管 | 超时 ≠ 失败（请求可能已执行，重试要求幂等）；超时后必须关连接防 desync |
 
-Java 额外要做：连接级超时与命令级超时分层；重连退避与风暴抑制；Sentinel/Cluster failover（拓扑刷新、`MOVED`/`ASK` 重定向）；`close()` 幂等；`InterruptedException` 传播策略；AUTH 等敏感参数的日志脱敏。
+Java 额外要做：连接级超时与命令级超时分层；重连退避与风暴抑制；Sentinel/Cluster failover（拓扑刷新、`MOVED`/`ASK` 重定向）；`close()` 幂等；`InterruptedException` 传播策略。
 
 ## 九、关键技术点清单
 

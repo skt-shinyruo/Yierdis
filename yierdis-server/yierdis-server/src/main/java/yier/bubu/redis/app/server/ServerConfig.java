@@ -1,44 +1,32 @@
 package yier.bubu.redis.app.server;
 
-import picocli.CommandLine;
 import yier.bubu.redis.app.server.args.YierdisCliException;
 import yier.bubu.redis.app.server.args.YierdisServerArgs;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 
+/**
+ * 把 argv 解析成运行配置。
+ * <p>
+ * 失败路径只把原因打一行到 stderr（退出码由调用方给），**不打印 usage**：这个 jar 只有一个用途，就是启动服务，
+ * 没有交互式用法可看；全部选项的默认值与约束在 {@code docs/project-docs/configuration-and-operations.md}。
+ */
 final class ServerConfig {
     private ServerConfig() {
     }
 
     static YierdisServerRuntimeConfig fromArgs(String[] args) {
-        YierdisServerArgs parsed = new YierdisServerArgs();
-        CommandLine cmd = new CommandLine(parsed);
         try {
-            CommandLine.ParseResult parseResult = cmd.parseArgs(args);
-            if (!parsed.help && !parseResult.hasMatchedOption("--maxmemoryBytes")) {
-                throw new CommandLine.ParameterException(
-                        cmd,
+            YierdisServerArgs parsed = YierdisServerArgs.parse(args);
+            if (!parsed.wasSpecified("--maxmemoryBytes")) {
+                throw new IllegalArgumentException(
                         "--maxmemoryBytes must be specified explicitly (use 0 to acknowledge unlimited memory)"
                 );
             }
-        } catch (CommandLine.ParameterException e) {
-            System.err.println(e.getMessage());
-            cmd.usage(System.err);
-            throw YierdisCliException.usageError(e.getMessage(), e);
-        }
-
-        if (parsed.help) {
-            cmd.usage(System.out);
-            return null;
-        }
-
-        try {
             parsed.normalizeAndValidate();
+            return parsed.toRuntimeConfig();
         } catch (IllegalArgumentException e) {
             System.err.println(e.getMessage());
-            cmd.usage(System.err);
-            throw YierdisCliException.usageError(e.getMessage(), e);
+            throw YierdisCliException.invalidArguments(e.getMessage(), e);
         }
-
-        return parsed.toRuntimeConfig();
     }
 }

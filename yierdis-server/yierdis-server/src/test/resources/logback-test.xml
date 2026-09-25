@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  单测专用配置。Logback 的查找顺序是 logback-test.xml 优先于 logback.xml，所以 mvn test 期间用的是这份。
+
+  两个目的：
+  1. 不写文件——该模块的单测不该在磁盘上留东西（集成测试模块的日志写到 ${java.io.tmpdir}/log/yierdis/test.log，
+     那是另一份配置：yierdis-tests 与 yierdis-cli 各自的 src/test/resources/logback-test.xml）；
+  2. 只留 stderr 控制台且默认 WARN，避免 INFO 噪音淹没断言失败信息。
+
+  生产配置 logback.xml 不在这里、也不在单测里校验：打包后用 java -jar 起一次就能看见它是否生效。
+  这里也刻意不装 statusListener：本模块单测不解析生产配置，没有需要曝光的配置期错误。
+-->
+<configuration>
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <target>System.err</target>
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <root level="WARN">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>

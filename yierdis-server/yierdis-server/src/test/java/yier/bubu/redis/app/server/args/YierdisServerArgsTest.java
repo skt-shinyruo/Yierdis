@@ -2,7 +2,6 @@ package yier.bubu.redis.app.server.args;
 
 import org.junit.Assert;
 import org.junit.Test;
-import picocli.CommandLine;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
@@ -13,13 +12,6 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class YierdisServerArgsTest {
-    @Test
-    public void helpParses() {
-        YierdisServerArgs args = new YierdisServerArgs();
-        new CommandLine(args).parseArgs("--help");
-        Assert.assertTrue(args.help);
-    }
-
     @Test
     public void normalizeLowercasesSchedulingAndPolicy() {
         YierdisServerArgs args = parse("--executorSchedulingPolicy", "GLOBAL", "--maxmemoryPolicy", "ALLKEYS-LRU");
@@ -240,10 +232,9 @@ public class YierdisServerArgsTest {
 
     @Test
     public void deletedOffheapFlagsAreRejectedAtParseTime() {
-        YierdisServerArgs args = new YierdisServerArgs();
-        assertThrows(CommandLine.ParameterException.class, () -> new CommandLine(args).parseArgs("--offheapBackend", "foreign"));
-        assertThrows(CommandLine.ParameterException.class, () -> new CommandLine(args).parseArgs("--offheapMaxBytes", "1"));
-        assertThrows(CommandLine.ParameterException.class, () -> new CommandLine(args).parseArgs("--offheapKeysEnabled"));
+        assertThrows(IllegalArgumentException.class, () -> YierdisServerArgs.parse("--offheapBackend", "foreign"));
+        assertThrows(IllegalArgumentException.class, () -> YierdisServerArgs.parse("--offheapMaxBytes", "1"));
+        assertThrows(IllegalArgumentException.class, () -> YierdisServerArgs.parse("--offheapKeysEnabled"));
     }
 
     @Test
@@ -339,9 +330,7 @@ public class YierdisServerArgsTest {
     }
 
     private static YierdisServerArgs parse(String... argv) {
-        YierdisServerArgs args = new YierdisServerArgs();
-        new CommandLine(args).parseArgs(argv);
-        return args;
+        return YierdisServerArgs.parse(argv);
     }
 
     private static void assertInvalidArgs(String... argv) {

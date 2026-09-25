@@ -2,17 +2,13 @@ package yier.bubu.redis.app.bench.redis;
 
 import org.junit.Assert;
 import org.junit.Test;
-import picocli.CommandLine;
 
-import java.util.Arrays;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 public class RedisBenchmarkOptionsTest {
     @Test
     public void defaultsMatchOfficialWorkloadAndYierdisEndpoint() {
-        RedisBenchmarkOptions options = new RedisBenchmarkOptions();
-        new CommandLine(options).parseArgs();
+        RedisBenchmarkOptions options = RedisBenchmarkOptions.parse();
 
         BenchmarkConfig config = options.toConfig(() -> 123L);
         Assert.assertEquals("127.0.0.1", config.host());
@@ -32,8 +28,9 @@ public class RedisBenchmarkOptionsTest {
 
     @Test
     public void explicitZeroKeyspaceIsDifferentFromOmittedKeyspace() {
-        RedisBenchmarkOptions options = new RedisBenchmarkOptions();
-        new CommandLine(options).parseArgs("--keyspace", "0", "--tests", "SET,get", "--format", "csv");
+        RedisBenchmarkOptions options = RedisBenchmarkOptions.parse(
+                "--keyspace", "0", "--tests", "SET,get", "--format", "csv"
+        );
 
         BenchmarkConfig config = options.toConfig(() -> 999L);
         Assert.assertEquals(0L, config.keyspace().orElseThrow());
@@ -43,8 +40,7 @@ public class RedisBenchmarkOptionsTest {
 
     @Test
     public void everyExplicitOptionConvertsToConfigAndSuppliedSeedWins() {
-        RedisBenchmarkOptions options = new RedisBenchmarkOptions();
-        new CommandLine(options).parseArgs(
+        RedisBenchmarkOptions options = RedisBenchmarkOptions.parse(
                 "--host", " benchmark.example ",
                 "--port", "6380",
                 "--requests", "321",
@@ -81,12 +77,6 @@ public class RedisBenchmarkOptionsTest {
 
     @Test
     public void exposesOnlyApprovedLongOptionNames() {
-        CommandLine commandLine = new CommandLine(new RedisBenchmarkOptions());
-
-        Set<String> optionNames = commandLine.getCommandSpec().options().stream()
-                .flatMap(option -> Arrays.stream(option.names()))
-                .collect(Collectors.toSet());
-
         Assert.assertEquals(Set.of(
                 "--host",
                 "--port",
@@ -101,7 +91,7 @@ public class RedisBenchmarkOptionsTest {
                 "--seed",
                 "--format",
                 "--database"
-        ), optionNames);
+        ), RedisBenchmarkOptions.OPTION_NAMES);
     }
 
     @Test
@@ -116,8 +106,7 @@ public class RedisBenchmarkOptionsTest {
 
     @Test
     public void invalidConvertedValuesAreRejectedBeforeExecution() {
-        RedisBenchmarkOptions invalidFormat = new RedisBenchmarkOptions();
-        new CommandLine(invalidFormat).parseArgs("--format", "json");
+        RedisBenchmarkOptions invalidFormat = RedisBenchmarkOptions.parse("--format", "json");
         Assert.assertThrows(IllegalArgumentException.class, () -> invalidFormat.toConfig(() -> 1L));
     }
 }

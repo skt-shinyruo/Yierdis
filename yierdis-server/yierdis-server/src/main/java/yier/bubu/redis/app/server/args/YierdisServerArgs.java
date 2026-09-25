@@ -1,18 +1,13 @@
 package yier.bubu.redis.app.server.args;
 
-import picocli.CommandLine.Command;
-import picocli.CommandLine.Option;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
-@Command(
-        name = "yierdis",
-        description = "A simplified Redis RESP server (teaching-oriented).",
-        sortOptions = false,
-        usageHelpAutoWidth = true
-)
+import java.util.LinkedHashSet;
+import java.util.Set;
+
 public final class YierdisServerArgs {
     private static final int DEFAULT_PROTOCOL_MAX_BULK_BYTES = RespProtocolLimits.DEFAULT_MAX_BULK_BYTES;
     private static final int DEFAULT_PROTOCOL_MAX_ARGS = RespProtocolLimits.DEFAULT_MAX_ARGS;
@@ -32,268 +27,249 @@ public final class YierdisServerArgs {
     private static final long DEFAULT_REPLY_CONTROL_RESERVATION_BYTES = 4L * 1024L;
     private static final long DEFAULT_REPLY_DRAIN_TIMEOUT_MILLIS = 5_000L;
 
-    @Option(names = {"-h", "--help"}, usageHelp = true, description = "Show this help message and exit.")
-    public boolean help;
-
-    @Option(names = "--bind", defaultValue = "127.0.0.1", description = "TCP host or address to bind.")
     public String bind = "127.0.0.1";
 
-    @Option(names = "--port", defaultValue = "6378", description = "TCP port to bind.")
     public int port = 6378;
 
-    @Option(names = "--maxClients", defaultValue = "1024", description = "Maximum accepted client connections.")
     public int maxClients = 1024;
 
-    @Option(
-            names = "--databases",
-            defaultValue = "16",
-            description = "Number of logical databases (SELECT 0..N-1)."
-    )
     public int databases = 16;
 
-    @Option(
-            names = "--cleanupIntervalMillis",
-            defaultValue = "1000",
-            description = "Expiration cleanup interval in milliseconds (0 disables cleanup)."
-    )
     public long cleanupIntervalMillis = 1000;
 
-    @Option(names = "--noCleanup", description = "Disable periodic expiration cleanup.")
     public boolean noCleanup;
 
-    @Option(names = "--ioThreads", defaultValue = "1", description = "Netty I/O threads.")
     public int ioThreads = 1;
 
-    @Option(
-            names = "--executorQueueCapacity",
-            defaultValue = "1024",
-            description = "Command executor queue capacity."
-    )
     public int executorQueueCapacity = 1024;
 
-    @Option(
-            names = "--executorQueueMaxBytes",
-            defaultValue = "" + DEFAULT_EXECUTOR_QUEUE_MAX_BYTES,
-            description = "Command executor queue max bytes (0 disables)."
-    )
     public long executorQueueMaxBytes = DEFAULT_EXECUTOR_QUEUE_MAX_BYTES;
 
-    @Option(
-            names = "--executorSchedulingPolicy",
-            defaultValue = "fair",
-            description = "Executor scheduling policy: global|fair."
-    )
     public String executorSchedulingPolicy = "fair";
 
-    @Option(names = "--backpressureHigh", defaultValue = "256", description = "Backpressure high watermark.")
     public int backpressureHighWatermark = 256;
 
-    @Option(names = "--backpressureLow", defaultValue = "128", description = "Backpressure low watermark.")
     public int backpressureLowWatermark = 128;
 
-    @Option(
-            names = "--backpressureBytesHigh",
-            defaultValue = "" + DEFAULT_BACKPRESSURE_BYTES_HIGH,
-            description = "Backpressure bytes high watermark (0 disables)."
-    )
     public long backpressureBytesHighWatermark = DEFAULT_BACKPRESSURE_BYTES_HIGH;
 
-    @Option(
-            names = "--backpressureBytesLow",
-            defaultValue = "" + DEFAULT_BACKPRESSURE_BYTES_LOW,
-            description = "Backpressure bytes low watermark (0 disables)."
-    )
     public long backpressureBytesLowWatermark = DEFAULT_BACKPRESSURE_BYTES_LOW;
 
-    @Option(names = "--executorMaxDrain", defaultValue = "512", description = "Max commands drained per executor tick.")
     public int executorMaxDrainCommands = 512;
 
-    @Option(names = "--executorDrainMillis", defaultValue = "2", description = "Executor drain time budget in milliseconds.")
     public long executorDrainTimeLimitMillis = 2;
 
-    @Option(
-            names = "--transactionQueueMaxCommands",
-            defaultValue = "" + DEFAULT_TRANSACTION_QUEUE_MAX_COMMANDS,
-            description = "Transaction queue max commands for MULTI (0 disables)."
-    )
     public int transactionQueueMaxCommands = DEFAULT_TRANSACTION_QUEUE_MAX_COMMANDS;
 
-    @Option(
-            names = "--transactionQueueMaxBytes",
-            defaultValue = "" + DEFAULT_TRANSACTION_QUEUE_MAX_BYTES,
-            description = "Transaction queue max bytes for MULTI (0 disables)."
-    )
     public long transactionQueueMaxBytes = DEFAULT_TRANSACTION_QUEUE_MAX_BYTES;
 
-    @Option(
-            names = "--protocolMaxBulkBytes",
-            defaultValue = "" + DEFAULT_PROTOCOL_MAX_BULK_BYTES,
-            description = "Protocol max request payload bytes."
-    )
     public int protocolMaxBulkBytes = DEFAULT_PROTOCOL_MAX_BULK_BYTES;
 
-    @Option(
-            names = "--protocolMaxArgs",
-            defaultValue = "" + DEFAULT_PROTOCOL_MAX_ARGS,
-            description = "Protocol max args per command."
-    )
     public int protocolMaxArgs = DEFAULT_PROTOCOL_MAX_ARGS;
 
-    @Option(
-            names = "--protocolMaxLineBytes",
-            defaultValue = "" + DEFAULT_PROTOCOL_MAX_LINE_BYTES,
-            description = "Protocol max header bytes."
-    )
     public int protocolMaxLineBytes = DEFAULT_PROTOCOL_MAX_LINE_BYTES;
 
-    @Option(
-            names = "--protocolMaxCommandBytes",
-            defaultValue = "" + DEFAULT_PROTOCOL_MAX_COMMAND_BYTES,
-            description = "Protocol max cumulative bytes per command."
-    )
     public int protocolMaxCommandBytes = DEFAULT_PROTOCOL_MAX_COMMAND_BYTES;
 
-    @Option(
-            names = "--protocolGlobalInFlightBytes",
-            defaultValue = "0",
-            description = "Global RESP ingress in-flight memory limit (0 derives from executor queue bytes)."
-    )
     public long protocolGlobalInFlightBytes;
 
-    @Option(
-            names = "--client-idle-timeout-millis",
-            defaultValue = "0",
-            description = "Close clients idle for this many milliseconds (0 disables)."
-    )
     public long clientIdleTimeoutMillis = 0;
 
-    @Option(
-            names = "--client-output-buffer-limit-bytes",
-            defaultValue = "67108864",
-            description = "Close slow clients above this outbound buffer size (0 disables)."
-    )
     public long clientOutputBufferLimitBytes = 67108864;
 
-    @Option(
-            names = "--client-output-buffer-over-limit-millis",
-            defaultValue = "10000",
-            description = "Slow-client grace period above output buffer limit in milliseconds."
-    )
     public long clientOutputBufferOverLimitMillis = 10000;
 
-    @Option(
-            names = "--replyGlobalCapacityBytes",
-            defaultValue = "" + DEFAULT_REPLY_GLOBAL_CAPACITY_BYTES,
-            description = "Hard global RESP reply capacity in bytes."
-    )
     public long replyGlobalCapacityBytes = DEFAULT_REPLY_GLOBAL_CAPACITY_BYTES;
 
-    @Option(
-            names = "--replyPerConnectionCapacityBytes",
-            defaultValue = "" + DEFAULT_REPLY_PER_CONNECTION_CAPACITY_BYTES,
-            description = "Hard per-connection RESP reply capacity in bytes."
-    )
     public long replyPerConnectionCapacityBytes = DEFAULT_REPLY_PER_CONNECTION_CAPACITY_BYTES;
 
-    @Option(
-            names = "--replyMaxTotalBytes",
-            defaultValue = "" + DEFAULT_REPLY_MAX_TOTAL_BYTES,
-            description = "Hard total charge for one top-level RESP reply in bytes."
-    )
     public long replyMaxTotalBytes = DEFAULT_REPLY_MAX_TOTAL_BYTES;
 
-    @Option(
-            names = "--replyChunkPayloadBytes",
-            defaultValue = "" + DEFAULT_REPLY_CHUNK_PAYLOAD_BYTES,
-            description = "Fixed RESP reply chunk payload capacity in bytes."
-    )
     public int replyChunkPayloadBytes = DEFAULT_REPLY_CHUNK_PAYLOAD_BYTES;
 
-    @Option(
-            names = "--replyControlReservationBytes",
-            defaultValue = "" + DEFAULT_REPLY_CONTROL_RESERVATION_BYTES,
-            description = "Per-request RESP reply control reservation in bytes."
-    )
     public long replyControlReservationBytes = DEFAULT_REPLY_CONTROL_RESERVATION_BYTES;
 
-    @Option(
-            names = "--replyDrainTimeoutMillis",
-            defaultValue = "" + DEFAULT_REPLY_DRAIN_TIMEOUT_MILLIS,
-            description = "Graceful RESP reply drain timeout in milliseconds."
-    )
     public long replyDrainTimeoutMillis = DEFAULT_REPLY_DRAIN_TIMEOUT_MILLIS;
 
-    @Option(names = "--maxmemoryBytes", defaultValue = "0", description = "Maxmemory in bytes (0 disables eviction).")
     public long maxmemoryBytes = 0;
 
-    @Option(
-            names = "--maxmemoryScope",
-            defaultValue = "global",
-            description = "Maxmemory scope: global|per-db."
-    )
     public String maxmemoryScope = "global";
 
-    @Option(names = "--maxmemoryPolicy", defaultValue = "noeviction", description = "Maxmemory policy string.")
     public String maxmemoryPolicy = "noeviction";
 
-    @Option(names = "--maxmemorySamples", defaultValue = "5", description = "Maxmemory samples (policy dependent).")
     public int maxmemorySamples = 5;
 
-    @Option(names = "--evictionTimeLimitMillis", defaultValue = "5", description = "Eviction time budget per tick in milliseconds.")
     public long evictionTimeLimitMillis = 5;
 
-    @Option(names = "--expireCleanupTimeLimitMillis", defaultValue = "5", description = "Expire cleanup time budget per tick in milliseconds.")
     public long expireCleanupTimeLimitMillis = 5;
 
-    @Option(names = "--nativeDefragEnabled", description = "Enable DB native allocator defrag during maintenance ticks.")
     public boolean nativeDefragEnabled;
 
-    @Option(
-            names = "--nativeDefragMaxMoveBytes",
-            defaultValue = "65536",
-            description = "Native defrag max bytes to move per maintenance tick."
-    )
     public long nativeDefragMaxMoveBytes = 64L * 1024L;
 
-    @Option(
-            names = "--nativeDefragMaxObjects",
-            defaultValue = "64",
-            description = "Native defrag max objects to inspect per maintenance tick."
-    )
     public long nativeDefragMaxObjects = 64L;
 
-    @Option(
-            names = "--nativeDefragTimeLimitMillis",
-            defaultValue = "1",
-            description = "Native defrag time budget per maintenance tick in milliseconds."
-    )
     public long nativeDefragTimeLimitMillis = 1L;
 
-    @Option(
-            names = "--nativeSlotCapacity",
-            defaultValue = "0",
-            description = "Override DB shared native object slot capacity (0 keeps default)."
-    )
     public int nativeSlotCapacity;
 
-    @Option(
-            names = "--keysTimeBudgetMillis",
-            defaultValue = "0",
-            description = "KEYS time budget in milliseconds (0 disables; use SCAN for large datasets)."
-    )
     public long keysTimeBudgetMillis = 0;
 
-    @Option(
-            names = "--keysMaxResults",
-            defaultValue = "" + Integer.MAX_VALUE,
-            description = "KEYS max results (0 disables KEYS; default unlimited)."
-    )
     public int keysMaxResults = Integer.MAX_VALUE;
+
+    private final Set<String> specifiedOptions = new LinkedHashSet<>();
 
     private SchedulingPolicy parsedExecutorSchedulingPolicy;
     private YierdisInstanceConfig.MaxmemoryScope parsedMaxmemoryScope;
     private MaxmemoryPolicy parsedMaxmemoryPolicy;
     private YierdisServerRuntimeConfig cachedRuntimeConfig;
+
+    /**
+     * 手写 argv 解析（无 picocli）：只认识 assign(...) 里列出的 --选项与两个 flag，其余一律报错。
+     * 支持 "--name value" 与 "--name=value" 两种写法；未知选项与位置参数都是错误。
+     */
+    public static YierdisServerArgs parse(String... argv) {
+        YierdisServerArgs args = new YierdisServerArgs();
+        for (int i = 0; i < argv.length; i++) {
+            String name = argv[i];
+            String value = null;
+            if (name.startsWith("--")) {
+                int eq = name.indexOf('=');
+                if (eq >= 0) {
+                    value = name.substring(eq + 1);
+                    name = name.substring(0, eq);
+                }
+            }
+            switch (name) {
+                case "--noCleanup":
+                    rejectInlineValue(name, value);
+                    args.noCleanup = true;
+                    break;
+                case "--nativeDefragEnabled":
+                    rejectInlineValue(name, value);
+                    args.nativeDefragEnabled = true;
+                    break;
+                default: {
+                    if (!isValueOption(name)) {
+                        throw unknown(name, i);
+                    }
+                    if (value == null) {
+                        if (++i >= argv.length) {
+                            throw new IllegalArgumentException("Missing required parameter for option '" + name + "'");
+                        }
+                        value = argv[i];
+                    }
+                    assign(args, name, value);
+                }
+            }
+            args.specifiedOptions.add(name);
+        }
+        return args;
+    }
+
+    /** 解析时是否显式给了某个选项（用于强制要求 --maxmemoryBytes 的检查）。 */
+    public boolean wasSpecified(String name) {
+        return specifiedOptions.contains(name);
+    }
+
+    private static boolean isValueOption(String name) {
+        return switch (name) {
+            case "--bind", "--port", "--maxClients", "--databases", "--cleanupIntervalMillis",
+                 "--ioThreads", "--executorQueueCapacity", "--executorQueueMaxBytes",
+                 "--executorSchedulingPolicy", "--backpressureHigh", "--backpressureLow",
+                 "--backpressureBytesHigh", "--backpressureBytesLow", "--executorMaxDrain",
+                 "--executorDrainMillis", "--transactionQueueMaxCommands", "--transactionQueueMaxBytes",
+                 "--protocolMaxBulkBytes", "--protocolMaxArgs", "--protocolMaxLineBytes",
+                 "--protocolMaxCommandBytes", "--protocolGlobalInFlightBytes",
+                 "--client-idle-timeout-millis", "--client-output-buffer-limit-bytes",
+                 "--client-output-buffer-over-limit-millis",
+                 "--replyGlobalCapacityBytes", "--replyPerConnectionCapacityBytes", "--replyMaxTotalBytes",
+                 "--replyChunkPayloadBytes", "--replyControlReservationBytes", "--replyDrainTimeoutMillis",
+                 "--maxmemoryBytes", "--maxmemoryScope", "--maxmemoryPolicy", "--maxmemorySamples",
+                 "--evictionTimeLimitMillis", "--expireCleanupTimeLimitMillis",
+                 "--nativeDefragMaxMoveBytes", "--nativeDefragMaxObjects", "--nativeDefragTimeLimitMillis",
+                 "--nativeSlotCapacity", "--keysTimeBudgetMillis", "--keysMaxResults" -> true;
+            default -> false;
+        };
+    }
+
+    private static void assign(YierdisServerArgs args, String name, String raw) {
+        switch (name) {
+            case "--bind" -> args.bind = raw;
+            case "--port" -> args.port = intValue(name, raw);
+            case "--maxClients" -> args.maxClients = intValue(name, raw);
+            case "--databases" -> args.databases = intValue(name, raw);
+            case "--cleanupIntervalMillis" -> args.cleanupIntervalMillis = longValue(name, raw);
+            case "--ioThreads" -> args.ioThreads = intValue(name, raw);
+            case "--executorQueueCapacity" -> args.executorQueueCapacity = intValue(name, raw);
+            case "--executorQueueMaxBytes" -> args.executorQueueMaxBytes = longValue(name, raw);
+            case "--executorSchedulingPolicy" -> args.executorSchedulingPolicy = raw;
+            case "--backpressureHigh" -> args.backpressureHighWatermark = intValue(name, raw);
+            case "--backpressureLow" -> args.backpressureLowWatermark = intValue(name, raw);
+            case "--backpressureBytesHigh" -> args.backpressureBytesHighWatermark = longValue(name, raw);
+            case "--backpressureBytesLow" -> args.backpressureBytesLowWatermark = longValue(name, raw);
+            case "--executorMaxDrain" -> args.executorMaxDrainCommands = intValue(name, raw);
+            case "--executorDrainMillis" -> args.executorDrainTimeLimitMillis = longValue(name, raw);
+            case "--transactionQueueMaxCommands" -> args.transactionQueueMaxCommands = intValue(name, raw);
+            case "--transactionQueueMaxBytes" -> args.transactionQueueMaxBytes = longValue(name, raw);
+            case "--protocolMaxBulkBytes" -> args.protocolMaxBulkBytes = intValue(name, raw);
+            case "--protocolMaxArgs" -> args.protocolMaxArgs = intValue(name, raw);
+            case "--protocolMaxLineBytes" -> args.protocolMaxLineBytes = intValue(name, raw);
+            case "--protocolMaxCommandBytes" -> args.protocolMaxCommandBytes = intValue(name, raw);
+            case "--protocolGlobalInFlightBytes" -> args.protocolGlobalInFlightBytes = longValue(name, raw);
+            case "--client-idle-timeout-millis" -> args.clientIdleTimeoutMillis = longValue(name, raw);
+            case "--client-output-buffer-limit-bytes" -> args.clientOutputBufferLimitBytes = longValue(name, raw);
+            case "--client-output-buffer-over-limit-millis" -> args.clientOutputBufferOverLimitMillis = longValue(name, raw);
+            case "--replyGlobalCapacityBytes" -> args.replyGlobalCapacityBytes = longValue(name, raw);
+            case "--replyPerConnectionCapacityBytes" -> args.replyPerConnectionCapacityBytes = longValue(name, raw);
+            case "--replyMaxTotalBytes" -> args.replyMaxTotalBytes = longValue(name, raw);
+            case "--replyChunkPayloadBytes" -> args.replyChunkPayloadBytes = intValue(name, raw);
+            case "--replyControlReservationBytes" -> args.replyControlReservationBytes = longValue(name, raw);
+            case "--replyDrainTimeoutMillis" -> args.replyDrainTimeoutMillis = longValue(name, raw);
+            case "--maxmemoryBytes" -> args.maxmemoryBytes = longValue(name, raw);
+            case "--maxmemoryScope" -> args.maxmemoryScope = raw;
+            case "--maxmemoryPolicy" -> args.maxmemoryPolicy = raw;
+            case "--maxmemorySamples" -> args.maxmemorySamples = intValue(name, raw);
+            case "--evictionTimeLimitMillis" -> args.evictionTimeLimitMillis = longValue(name, raw);
+            case "--expireCleanupTimeLimitMillis" -> args.expireCleanupTimeLimitMillis = longValue(name, raw);
+            case "--nativeDefragMaxMoveBytes" -> args.nativeDefragMaxMoveBytes = longValue(name, raw);
+            case "--nativeDefragMaxObjects" -> args.nativeDefragMaxObjects = longValue(name, raw);
+            case "--nativeDefragTimeLimitMillis" -> args.nativeDefragTimeLimitMillis = longValue(name, raw);
+            case "--nativeSlotCapacity" -> args.nativeSlotCapacity = intValue(name, raw);
+            case "--keysTimeBudgetMillis" -> args.keysTimeBudgetMillis = longValue(name, raw);
+            case "--keysMaxResults" -> args.keysMaxResults = intValue(name, raw);
+            default -> throw new IllegalArgumentException("Unknown option: '" + name + "'");
+        }
+    }
+
+    private static void rejectInlineValue(String name, String inlineValue) {
+        if (inlineValue != null) {
+            throw new IllegalArgumentException("option '" + name + "' does not take a value");
+        }
+    }
+
+    private static IllegalArgumentException unknown(String name, int index) {
+        if (name.startsWith("--")) {
+            return new IllegalArgumentException("Unknown option: '" + name + "'");
+        }
+        return new IllegalArgumentException("Unmatched argument at index " + index + ": '" + name + "'");
+    }
+
+    private static int intValue(String name, String raw) {
+        try {
+            return Integer.parseInt(raw.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid value for option '" + name + "': '" + raw + "' is not an int");
+        }
+    }
+
+    private static long longValue(String name, String raw) {
+        try {
+            return Long.parseLong(raw.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid value for option '" + name + "': '" + raw + "' is not a long");
+        }
+    }
 
     public void normalizeAndValidate() {
         if (cachedRuntimeConfig != null) {

@@ -3,7 +3,6 @@ package yier.bubu.redis.app.bench.redis;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.bench.LatencyRecorder;
-import picocli.CommandLine;
 
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -28,9 +27,9 @@ public class RedisBenchmarkCommandTest {
                     BenchmarkCaseResult.unsupported(CaseSelection.caseById("spop"), "missing")
             ));
         };
-        CommandCapture capture = commandLine(new RedisBenchmarkCommand(fake, renderer));
+        Capture capture = capture(new RedisBenchmarkCommand(fake, renderer));
 
-        int exitCode = capture.commandLine.execute("--tests", "spop", "--format", "quiet");
+        int exitCode = capture.execute("--tests", "spop", "--format", "quiet");
 
         Assert.assertEquals(0, exitCode);
         Assert.assertEquals(1, calls.get());
@@ -47,9 +46,9 @@ public class RedisBenchmarkCommandTest {
                     BenchmarkCaseResult.failed(CaseSelection.caseById("set"), 7, "disconnect")
             ));
         };
-        CommandCapture capture = commandLine(new RedisBenchmarkCommand(fake, renderer));
+        Capture capture = capture(new RedisBenchmarkCommand(fake, renderer));
 
-        int exitCode = capture.commandLine.execute("--tests", "set", "--format", "quiet");
+        int exitCode = capture.execute("--tests", "set", "--format", "quiet");
 
         Assert.assertEquals(1, exitCode);
         Assert.assertEquals(1, calls.get());
@@ -66,13 +65,14 @@ public class RedisBenchmarkCommandTest {
                     BenchmarkCaseResult.success(CaseSelection.caseById("set"), statistics())
             ));
         };
-        CommandLine commandLine = new CommandLine(new RedisBenchmarkCommand(fake, renderer));
         PrintWriter failingOut = failingPrintWriter();
         StringWriter err = new StringWriter();
-        commandLine.setOut(failingOut);
-        commandLine.setErr(new PrintWriter(err));
 
-        int exitCode = commandLine.execute("--tests", "set", "--format", "quiet");
+        int exitCode = new RedisBenchmarkCommand(fake, renderer).run(
+                new String[]{"--tests", "set", "--format", "quiet"},
+                failingOut,
+                new PrintWriter(err)
+        );
 
         Assert.assertEquals(1, exitCode);
         Assert.assertEquals(1, calls.get());
@@ -87,9 +87,9 @@ public class RedisBenchmarkCommandTest {
                 new RedisBenchmark()::run,
                 renderer
         );
-        CommandCapture capture = commandLine(command);
+        Capture capture = capture(command);
 
-        int exitCode = capture.commandLine.execute(
+        int exitCode = capture.execute(
                 "--host", "127.0.0.1",
                 "--port", "1",
                 "--tests", "no_such_test",
@@ -121,9 +121,9 @@ public class RedisBenchmarkCommandTest {
         RedisBenchmarkCommand command = new RedisBenchmarkCommand(config -> {
             throw new IllegalArgumentException("internal facade defect");
         }, renderer);
-        CommandCapture capture = commandLine(command);
+        Capture capture = capture(command);
 
-        int exitCode = capture.commandLine.execute("--tests", "set");
+        int exitCode = capture.execute("--tests", "set");
 
         Assert.assertEquals(1, exitCode);
         Assert.assertEquals("", capture.out.toString());
@@ -137,9 +137,9 @@ public class RedisBenchmarkCommandTest {
         RedisBenchmark benchmark = new RedisBenchmark(catalog, (testCase, config, payload, random) -> {
             throw new IllegalArgumentException("executor defect");
         });
-        CommandCapture capture = commandLine(new RedisBenchmarkCommand(benchmark::run, renderer));
+        Capture capture = capture(new RedisBenchmarkCommand(benchmark::run, renderer));
 
-        int exitCode = capture.commandLine.execute("--tests", "set", "--format", "quiet");
+        int exitCode = capture.execute("--tests", "set", "--format", "quiet");
 
         Assert.assertEquals(1, exitCode);
         Assert.assertEquals("SET: FAILED after 0 replies (executor defect)\n", capture.out.toString());
@@ -155,9 +155,9 @@ public class RedisBenchmarkCommandTest {
                     BenchmarkCaseResult.unsupported(CaseSelection.caseById("spop"), "missing")
             ));
         };
-        CommandCapture capture = commandLine(new RedisBenchmarkCommand(fake, renderer));
+        Capture capture = capture(new RedisBenchmarkCommand(fake, renderer));
 
-        int exitCode = capture.commandLine.execute(
+        int exitCode = capture.execute(
                 "--host", " benchmark.example ",
                 "--port", "6380",
                 "--requests", "321",
@@ -199,11 +199,11 @@ public class RedisBenchmarkCommandTest {
         RedisBenchmarkCommand command = new RedisBenchmarkCommand(config -> {
             throw failure;
         }, renderer);
-        CommandCapture capture = commandLine(command);
+        Capture capture = capture(command);
 
         AssertionError thrown = Assert.assertThrows(
                 AssertionError.class,
-                () -> capture.commandLine.execute("--tests", "set")
+                () -> capture.execute("--tests", "set")
         );
 
         Assert.assertSame(failure, thrown);
@@ -232,20 +232,15 @@ public class RedisBenchmarkCommandTest {
             String expectedError,
             String... arguments
     ) {
-        CommandCapture capture = commandLine(new RedisBenchmarkCommand(fake, renderer));
+        Capture capture = capture(new RedisBenchmarkCommand(fake, renderer));
 
-        Assert.assertEquals(2, capture.commandLine.execute(arguments));
+        Assert.assertEquals(2, capture.execute(arguments));
         Assert.assertEquals("", capture.out.toString());
         Assert.assertTrue(capture.err.toString(), capture.err.toString().contains(expectedError));
     }
 
-    private static CommandCapture commandLine(RedisBenchmarkCommand command) {
-        CommandLine commandLine = new CommandLine(command);
-        StringWriter out = new StringWriter();
-        StringWriter err = new StringWriter();
-        commandLine.setOut(new PrintWriter(out));
-        commandLine.setErr(new PrintWriter(err));
-        return new CommandCapture(commandLine, out, err);
+    private static Capture capture(RedisBenchmarkCommand command) {
+        return new Capture(command, new StringWriter(), new StringWriter());
     }
 
     private static PrintWriter failingPrintWriter() {
@@ -279,6 +274,9 @@ public class RedisBenchmarkCommandTest {
         return new BenchmarkStatistics(2, 5, 6, 2, 2, latency);
     }
 
-    private record CommandCapture(CommandLine commandLine, StringWriter out, StringWriter err) {
+    private record Capture(RedisBenchmarkCommand command, StringWriter out, StringWriter err) {
+        int execute(String... argv) {
+            return command.run(argv, new PrintWriter(out), new PrintWriter(err));
+        }
     }
 }

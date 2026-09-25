@@ -2,7 +2,6 @@ package yier.bubu.redis.app.client;
 
 // CLI：提供简易的交互与单次执行，使用 Redis RESP 协议。
 
-import picocli.CommandLine;
 import yier.bubu.redis.protocol.resp.InlineCommandParser;
 import yier.bubu.redis.protocol.resp.RespClientCodec;
 import yier.bubu.redis.protocol.resp.RespProtocolLimits;
@@ -23,9 +22,15 @@ public final class YierdisCli {
     }
 
     static int run(String[] args) {
-        CommandLine commandLine = new CommandLine(new YierdisCliArgs());
-        commandLine.setStopAtPositional(true);
-        return commandLine.execute(args);
+        YierdisCliArgs parsed;
+        try {
+            parsed = YierdisCliArgs.parse(args);
+        } catch (IllegalArgumentException failure) {
+            // 参数错误只打一行原因，不打印 usage：选项清单在 docs/project-docs/client-and-bench-internals.md。
+            System.err.println(failure.getMessage());
+            return 2; // usage error
+        }
+        return runClient(parsed);
     }
 
     static int runClient(YierdisCliArgs parsed) {

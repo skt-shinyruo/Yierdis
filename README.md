@@ -96,7 +96,7 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 - `--timeoutMillis <ms>`
 - `--hex`
 
-## Benchmark 和 Smoke
+## Benchmark
 
 `yierdis-benchmark` 提供两条刻意分离的测量路径：默认命令通过 TCP/RESP 压测已经运行的 Yierdis；显式 `storage` 子命令在进程内直接测量 DB SET 和存储 footprint，不需要启动 server。两类吞吐覆盖的边界不同，不能直接横向比较。
 
@@ -157,13 +157,5 @@ STORAGE_KEYS=10000000 FORMAT=csv ./scripts/storage-bench.sh
 `STORAGE_KEYS` 最大为 10,000,000；还可设置 `STORAGE_KEY_SIZE`、`STORAGE_VALUE_SIZE`、`STORAGE_WARMUP_OPERATIONS`、`STORAGE_PRECISION`、`FORMAT`、`BENCH_JVM_OPTS` 和 `SKIP_BUILD`。
 
 主 footprint 口径是 `heap estimate + native metadata committed + native data committed`。SET 计时结束后会先完成未决的增量 rehash，再抓取稳定 snapshot；`bytes/key` 使用该 accounted footprint 减去空 DB baseline 后再除以 key 数，不使用 RSS。Linux RSS 来自 `/proc/self/status`，仅是 best-effort 辅助观测；不可用时 human 输出显示 `unavailable`，CSV 对应列留空。
-
-### Smoke
-
-快速 smoke：
-
-```bash
-./scripts/smoke.sh
-```
 
 完整 CLI/benchmark 内部说明见 [`docs/project-docs/client-and-bench-internals.md`](docs/project-docs/client-and-bench-internals.md)。

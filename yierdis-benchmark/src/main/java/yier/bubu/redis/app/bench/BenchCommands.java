@@ -1,26 +1,15 @@
 package yier.bubu.redis.app.bench;
 
-import picocli.CommandLine.Model.CommandSpec;
-import picocli.CommandLine.ParameterException;
-
 import java.io.PrintWriter;
-import java.util.function.Supplier;
 
 public final class BenchCommands {
+    /** 参数错误（usage error）的退出码：只打一行原因到 err，不打 usage。 */
+    public static final int USAGE_ERROR = 2;
+
     private BenchCommands() {
     }
 
-    /** 配置解析是信任边界：非法值统一转成 picocli usage error。 */
-    public static <C> C parseConfig(CommandSpec spec, Supplier<C> parse) {
-        try {
-            return parse.get();
-        } catch (IllegalArgumentException failure) {
-            throw new ParameterException(spec.commandLine(), failure.getMessage(), failure);
-        }
-    }
-
-    public static void writeOutput(CommandSpec spec, String rendered) {
-        PrintWriter out = spec.commandLine().getOut();
+    public static void writeOutput(PrintWriter out, String rendered) {
         out.print(rendered);
         out.flush();
         if (out.checkError()) {

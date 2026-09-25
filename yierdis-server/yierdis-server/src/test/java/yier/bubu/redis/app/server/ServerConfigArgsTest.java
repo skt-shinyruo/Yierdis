@@ -17,9 +17,14 @@ import java.util.Map;
 
 public class ServerConfigArgsTest {
     @Test
-    public void helpPrintsUsageAndReturnsNull() {
-        String out = captureStdout(() -> Assert.assertNull(ServerConfig.fromArgs(new String[]{"--help"})));
-        Assert.assertTrue("stdout should include usage", out.contains("Usage: yierdis"));
+    public void helpFlagIsRejectedWithoutPrintingUsage() {
+        String err = captureStderr(() -> assertThrows(
+                YierdisCliException.class,
+                () -> ServerConfig.fromArgs(new String[]{"--help"})
+        ));
+
+        Assert.assertTrue("stderr should name the rejected flag", err.contains("--help"));
+        Assert.assertFalse("server jar prints no usage", err.contains("Usage"));
     }
 
     @Test
@@ -50,15 +55,15 @@ public class ServerConfigArgsTest {
     }
 
     @Test
-    public void parseErrorsPrintUsageAndThrowCliException() {
+    public void parseErrorsReportTheReasonWithoutUsage() {
         String err = captureStderr(() -> {
             assertThrows(YierdisCliException.class, () -> ServerConfig.fromArgs(new String[]{
                     "--port", "not-a-number"
             }));
         });
 
-        Assert.assertTrue("stderr should include usage", err.contains("Usage: yierdis"));
         Assert.assertTrue("stderr should include flag name", err.contains("--port"));
+        Assert.assertFalse("server jar prints no usage", err.contains("Usage"));
     }
 
     @Test
@@ -145,15 +150,15 @@ public class ServerConfigArgsTest {
     }
 
     @Test
-    public void validateErrorsPrintUsageToStderr() {
+    public void validateErrorsReportTheReasonWithoutUsage() {
         String err = captureStderr(() -> {
             assertThrows(YierdisCliException.class, () -> ServerConfig.fromArgs(new String[]{
                     "--offheapBackend", "foreign"
             }));
         });
 
-        Assert.assertTrue("stderr should include usage", err.contains("Usage: yierdis"));
         Assert.assertTrue("stderr should include flag name", err.contains("--offheapBackend") || err.contains("offheapBackend"));
+        Assert.assertFalse("server jar prints no usage", err.contains("Usage"));
     }
 
     private static <T extends Throwable> T assertThrows(Class<T> expected, Runnable r) {
@@ -180,20 +185,6 @@ public class ServerConfigArgsTest {
             }
         }
         return values;
-    }
-
-    private static String captureStdout(Runnable r) {
-        PrintStream prev = System.out;
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        PrintStream ps = new PrintStream(baos, true, StandardCharsets.UTF_8);
-        System.setOut(ps);
-        try {
-            r.run();
-        } finally {
-            System.setOut(prev);
-            ps.flush();
-        }
-        return baos.toString(StandardCharsets.UTF_8);
     }
 
     private static String captureStderr(Runnable r) {
