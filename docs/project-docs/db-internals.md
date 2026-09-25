@@ -2,7 +2,7 @@
 
 单个 `YierdisDb` 并非一张并发 `Map<byte[], Object>`；它受 owner thread 约束，是掌管 key、entry、value、TTL、mutation、maxmemory 与生命周期的状态 owner。
 
-设计意图、层间契约、与 Redis C 实现的对照以及已知取舍见 [`db-design-analysis.md`](./db-design-analysis.md)；运行期行为缺口与可疑观察见 [`db-behavior-gaps.md`](./db-behavior-gaps.md)。
+设计意图、层间契约、与 Redis C 实现的对照以及已知取舍见 [`db-design-analysis.md`](./db-design-analysis.md)；degraded 运维处置见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
 
 本文按"这一层是什么 → 谁调用谁 → 改的时候不能破什么"三段式组织：§1–§5 是结构与所有权，§6–§7 是读/写两条完整调用序列，§8–§11 是各子系统的接入点，§12 是改动前的自检清单。
 
@@ -111,7 +111,7 @@ directory、entry table、type roots 和派生状态的所有权都归 `YierdisD
 
 ops 不直接组合 directory 与 entry table，也不能从 lifecycle 取出 backend、table、directory 或 roots。各 family root 只在 DB 组合时注入对应 family ops。删除必须让 directory entry、entry record、value/root 和 key allocation 一起收敛；替换则必须在 source identity 仍匹配时才发布。需要验证 raw graph 的底层测试把反射夹具留在 `src/test`，生产代码不提供 inspection view。
 
-`EntryRecord.expireAtMillis` 是唯一 TTL deadline。`expireCount` 只是随 entry publish/replace/release 更新的派生计数，不是独立索引；`reconcileDerivedEntryState` 里一旦发现下溢就抛 `IllegalStateException("derived expire count underflow")`——注意这个异常发生在 commit 阶段，会被升级成 degraded（见 [`db-behavior-gaps.md`](./db-behavior-gaps.md) 的 A2）。
+`EntryRecord.expireAtMillis` 是唯一 TTL deadline。`expireCount` 只是随 entry publish/replace/release 更新的派生计数，不是独立索引；`reconcileDerivedEntryState` 里一旦发现下溢就抛 `IllegalStateException("derived expire count underflow")`——注意这个异常发生在 commit 阶段，会被升级成 degraded（运维处置见 [`production-hardening-operations.md`](./production-hardening-operations.md)）。
 
 `ExpiresIndex` 是 owner 线程独占的 `PriorityQueue`，按 `(expireAtMillis, sequence)` 排序，无同步、允许 stale 项、不计任何内存账。lifecycle 只在 deadline 真的变化且 keyHandle 非 null 时才 `add`。
 

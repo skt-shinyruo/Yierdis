@@ -6,7 +6,7 @@ Yierdis 的 DB 层**为什么这样设计**，要从分层意图、层间契约�
 
 - [`db-internals.md`](./db-internals.md)：DB 内部结构的**机制与组合参考**（对象是什么、谁调用谁、改哪里要动什么）。
 - [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)、[`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)、[`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)：各专题的完整机制。
-- [`db-behavior-gaps.md`](./db-behavior-gaps.md)：运行期行为缺口、可疑观察项与运维注意事项。
+- [`production-hardening-operations.md`](./production-hardening-operations.md)：运维手册（degraded 恢复等）。
 
 本文的写法是：**每条设计选择都给出"为什么不选另一条路"以及这条路的代价**。只给结论不给不选它的理由，等于没论证。
 
@@ -95,7 +95,7 @@ object table 槽位存当前 pageId / pageOffset / size / capacity(=descriptor �
 代价：
 
 - 系统多出一个"结果未知"状态，命令层必须能表达它；
-- degraded 是重状态：写入被 `MISCONF DB is in a degraded state; writes are disabled` 拒绝，**连回收类 mutation 一起拒**（`requireWritable` 在读取 `AdmissionMode` 之前执行），且唯一恢复入口 `reconcileAccounting()` 刻意绕过 executor，在 stock server 上还没有触发路径（见 [`db-behavior-gaps.md`](./db-behavior-gaps.md) A1）。
+- degraded 是重状态：写入被 `MISCONF DB is in a degraded state; writes are disabled` 拒绝，**连回收类 mutation 一起拒**（`requireWritable` 在读取 `AdmissionMode` 之前执行），且唯一恢复入口 `reconcileAccounting()` 刻意绕过 executor（运维恢复路径见 [`production-hardening-operations.md`](./production-hardening-operations.md)）。
 
 不这样选的后果：commit 后失败若对外报"没发生"，客户端会重试，而重试建立在错误前提上（比如 `INCR` 会被执行两次）；内部若假装回滚，账本会与物理实际不符，且这个偏差会被静默带入后续 admission。
 
@@ -276,7 +276,7 @@ admissionMode == RECLAMATION ? ledger.beginReclamation() : ledger.reserve(upperB
 - Netty I/O 线程**只提交**；真正的 DB 执行在 `SerialOwnerExecutor` 单线程上，维护命令也投到同一个 owner executor。
 - **SCAN / KEYS 一致性靠 epoch + discovery/replay**：`KeyWindow` 在 epoch 内记录 cursor、目录 generation/capacity、glob、过期时间，`emitTo` 时按同一物理范围重放，必须得到相同 count、无多余匹配、结束游标一致，否则抛 `IllegalStateException`。
 - **degraded 不自动恢复**：写入被 `MISCONF DB is in a degraded state; writes are disabled` 拒绝；`reconcileAccounting()` 是唯一显式恢复入口，刻意绕过 mutation executor（degraded 会拒写），把逻辑账本对齐到物理重算值，成功才清除 degraded。持续性记账 bug 会反复以事故暴露，不会被静默抹平。
-- 其运行期副作用是：`requireWritable` 在读取 `AdmissionMode` **之前**执行，因此 degraded 时连 reclamation 类 mutation 也被拒——**过期回收、`DEL`、`FLUSHDB`、读路径惰性回收都会失败**。详见 [`db-behavior-gaps.md`](./db-behavior-gaps.md)。
+- 其运行期副作用是：`requireWritable` 在读取 `AdmissionMode` **之前**执行，因此 degraded 时连 reclamation 类 mutation 也被拒——**过期回收、`DEL`、`FLUSHDB`、读路径惰性回收都会失败**。运维恢复路径见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
 
 **为什么 owner 可以是 Netty I/O 线程之外的一个线程**：FFM 的 `Arena.ofShared()` 允许 region 跨线程关闭，但**这不解除 DB 的 thread confinement**——把 region 当共享对象来关闭是 runtime 层的权限，不是 graph 的权限。二者的边界见 [`native-memory-runtime.md`](./native-memory-runtime.md)。
 
@@ -348,7 +348,7 @@ checkThread
 - 单 DB 淘汰的 `maxAttempts = Math.max(64, keyCount * 2)` 无 int 溢出保护（global governor 的同类计算有）。
 - `INFO memory` 的 `yierdis_maxmemory_per_db_bytes` 用整数除法，与实际"余数 +1"分配可能差 1 字节。
 
-完整的运行期缺口、影响与状态见 [`db-behavior-gaps.md`](./db-behavior-gaps.md)。
+上述观察项的修复状态以 issue #115 及其子任务（#116–#122）为准；degraded 的运维处置见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
 
 ## 验证状态
 
@@ -369,7 +369,7 @@ checkThread
 - `YierdisTtlOps`、`YierdisKeyspaceOps`、`YierdisStringOps` 的中段方法；
 - `YierdisGlobalMaxmemoryGovernor` 的 victim 挑选细节（`nextLruClock` 与 stalled 计数已核对）。
 
-L6–L9 的**机制框架**由源码确认，但其中精确常量与分支顺序如需用作改动依据，建议先按 [`db-behavior-gaps.md`](./db-behavior-gaps.md) 的方式再回源一次。
+L6–L9 的**机制框架**由源码确认，但其中精确常量与分支顺序如需用作改动依据，建议先逐条回源再动手。
 
 ## 修改导航
 
