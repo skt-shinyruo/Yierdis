@@ -12,10 +12,7 @@ import java.nio.charset.StandardCharsets;
 public class RespProtocolIntegrationTest {
     @Test
     public void serverAcceptsRedisCliStyleResp2Commands() throws Exception {
-        YierdisServerRuntimeConfig config = ServerConfig.fromArgs(new String[]{
-                "--port", "0",
-                "--maxmemoryBytes", "0"
-        });
+        YierdisServerRuntimeConfig config = TestServerConfigs.config();
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(config);
              Socket socket = new Socket("127.0.0.1", server.port())) {
             socket.setSoTimeout(3000);

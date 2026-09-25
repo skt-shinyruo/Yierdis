@@ -6,6 +6,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.client.YierdisClient;
 import yier.bubu.redis.app.server.YierdisServerBootstrap;
+import yier.bubu.redis.integration.TestServerConfig;
 import yier.bubu.redis.protocol.resp.RespClientCodec;
 
 import java.nio.charset.StandardCharsets;
@@ -17,7 +18,7 @@ import static yier.bubu.redis.testutil.TestBytes.b;
 public class TransactionQueueLimitTest {
     @Test
     public void transactionQueueMaxCommandsTriggersExecAbortAndDiscardResets() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(ServerArgs.of(
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfig.config(
                 "--maxmemoryBytes", "0",
                 "--transactionQueueMaxCommands", "1",
                 "--transactionQueueMaxBytes", "0"
@@ -57,7 +58,7 @@ public class TransactionQueueLimitTest {
 
     @Test
     public void transactionQueueMaxBytesTriggersExecAbort() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(ServerArgs.of(
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfig.config(
                 "--maxmemoryBytes", "0",
                 "--transactionQueueMaxCommands", "0",
                 "--transactionQueueMaxBytes", "16"

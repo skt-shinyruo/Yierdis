@@ -70,7 +70,7 @@ CommandExecutor
 
 ## 启动和连接状态
 
-`YierdisServer.main(...)` 解析启动参数，调用 `YierdisServerBootstrap.start(...)`，注册 shutdown hook，然后阻塞在 `server.awaitClose()`。`ServerConfig.fromArgs(...)` 要求 `--maxmemoryBytes` 显式给出，否则在 stderr 打一行原因并以 `exit(2)` 退出。
+`YierdisServer.main(...)` 读取启动配置文件（`--config`，缺省 `./yierdis.conf`），调用 `YierdisServerBootstrap.start(...)`，注册 shutdown hook，然后阻塞在 `server.awaitClose()`。`ServerConfig.fromArgs(...)` 要求文件里 `maxmemoryBytes` 键显式给出，否则在 stderr 打一行原因并以 `exit(2)` 退出。
 
 `YierdisServerBootstrap` 是 composition root，装配顺序是：先建 `YierdisInstance`，再用 `CommandRegistries.dispatcher(...)` 注册命令，然后把 `dispatcher::prepare` 交给 `CommandExecutor`，最后才创建 Netty groups 和 `ServerBootstrap`。`CommandRegistries.dispatcher(...)` 内部先注册 `TransactionCommands`（`MULTI`/`DISCARD`/`EXEC`），再注册传入的 `DefaultCommandModules.create(...)` 模块和 `ServerCommandModule`，最后 `registry.seal()`。
 

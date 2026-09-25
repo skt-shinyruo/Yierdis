@@ -83,10 +83,10 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 mvn -q -pl yierdis-server/yierdis-server,yierdis-cli -am -DskipTests package
 ```
 
-启动 server（`--maxmemoryBytes` 必须显式给出，`0` 表示承认不限制内存）：
+启动 server（`java -jar .../yierdis-server-0.1.0-SNAPSHOT.jar --config /path/to/yierdis.conf`，配置文件中 `maxmemoryBytes` 必须显式给出，`0` 表示承认不限制内存；仓库根目录自带一份含全部配置键的 `yierdis.conf` 模板）：
 
 ```bash
-java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 6378 --maxmemoryBytes 0
+java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar
 ```
 
 用 `redis-cli` 或项目自带 CLI 验证：
@@ -96,7 +96,7 @@ redis-cli -p 6378 PING
 java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar --port 6378 SET a 1
 ```
 
-启动参数入口是 `YierdisServerArgs`（手写解析），`ServerConfig.fromArgs(...)` 负责解析与校验，`YierdisServerBootstrap.start(...)` 完成组装。默认端口 `6378`、`--databases 16`、`--ioThreads 1`、`--maxmemoryBytes 0`。
+启动时 `ServerConfig.fromArgs(...)` 只认 `--config`（缺省读 `./yierdis.conf`），`YierdisServerFileConfig` 应用键值并校验，`YierdisServerBootstrap.start(...)` 完成组装。默认端口 `6378`、`databases=16`、`ioThreads=1`、`maxmemoryBytes=0`。
 
 ## 请求主链概览
 

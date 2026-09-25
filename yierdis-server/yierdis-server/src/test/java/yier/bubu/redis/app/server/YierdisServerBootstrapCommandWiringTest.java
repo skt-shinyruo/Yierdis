@@ -53,10 +53,7 @@ import java.util.Map;
 public class YierdisServerBootstrapCommandWiringTest {
     @Test
     public void bootstrapBindsTransportNeutralExecutorIntoInfoProvider() throws Exception {
-        try (YierdisServerBootstrap bootstrap = YierdisServerBootstrap.start(
-                "--port", "0",
-                "--maxmemoryBytes", "0"
-        )) {
+        try (YierdisServerBootstrap bootstrap = YierdisServerBootstrap.start(TestServerConfigs.config())) {
             NettyServerInfoProvider infoProvider = bootstrap.infoProviderForTests();
             Assert.assertNotNull(infoProvider);
             Assert.assertNotNull(infoProvider.boundExecutorForTests());
@@ -66,11 +63,7 @@ public class YierdisServerBootstrapCommandWiringTest {
 
     @Test
     public void bootstrapWiresServerAndCoreConnectionCommandsTogether() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
-                "--port", "0",
-                "--maxmemoryBytes", "0",
-                "--databases", "2"
-        )) {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config("--databases", "2"))) {
             try (Socket socket = new Socket()) {
                 socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
                 socket.setSoTimeout(2000);
@@ -131,11 +124,7 @@ public class YierdisServerBootstrapCommandWiringTest {
 
     @Test
     public void infoHealthKeepsTenPairsAcrossResp2AndResp3() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
-                "--port", "0",
-                "--maxmemoryBytes", "0",
-                "--databases", "1"
-        ); Socket socket = new Socket("127.0.0.1", server.port())) {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config("--databases", "1")); Socket socket = new Socket("127.0.0.1", server.port())) {
             socket.setSoTimeout(2000);
             OutputStream out = socket.getOutputStream();
             InputStream in = socket.getInputStream();
@@ -212,11 +201,7 @@ public class YierdisServerBootstrapCommandWiringTest {
 
     @Test
     public void bootstrapStillProcessesHelloInfoStatsAndDataCommandsAfterByteBackedDecodePath() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
-                "--port", "0",
-                "--maxmemoryBytes", "0",
-                "--databases", "2"
-        )) {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config("--databases", "2"))) {
             try (Socket socket = new Socket()) {
                 socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
                 socket.setSoTimeout(2000);
@@ -236,10 +221,7 @@ public class YierdisServerBootstrapCommandWiringTest {
 
     @Test
     public void execWrongTypeElementFitsTheBoundedReplyAndKeepsTheConnectionUsable() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
-                "--port", "0",
-                "--maxmemoryBytes", "0"
-        ); Socket socket = new Socket("127.0.0.1", server.port())) {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config()); Socket socket = new Socket("127.0.0.1", server.port())) {
             socket.setSoTimeout(2000);
             OutputStream out = socket.getOutputStream();
             InputStream in = socket.getInputStream();
@@ -261,15 +243,14 @@ public class YierdisServerBootstrapCommandWiringTest {
 
     @Test
     public void observabilityUsesNormalizedRuntimeConfigValues() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
-                "--port", "0",
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config(
                 "--databases", "2",
                 "--ioThreads", "2",
                 "--executorSchedulingPolicy", "GLOBAL",
                 "--maxmemoryBytes", "4096",
                 "--maxmemoryScope", "perdb",
                 "--maxmemoryPolicy", "ALLKEYS-LRU"
-        )) {
+        ))) {
             try (Socket socket = new Socket()) {
                 socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
                 socket.setSoTimeout(2000);
@@ -291,10 +272,7 @@ public class YierdisServerBootstrapCommandWiringTest {
 
     @Test
     public void infoVariantsCoverDefaultKnownAndUnknownSections() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
-                "--port", "0",
-                "--maxmemoryBytes", "0"
-        )) {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config())) {
             try (Socket socket = new Socket()) {
                 socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
                 socket.setSoTimeout(2000);
@@ -322,11 +300,7 @@ public class YierdisServerBootstrapCommandWiringTest {
 
     @Test
     public void structuredInfoAndStatsPreflightBeyondTheControlReservation() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
-                "--port", "0",
-                "--maxmemoryBytes", "0",
-                "--replyControlReservationBytes", "1539"
-        )) {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config("--replyControlReservationBytes", "1539"))) {
             try (Socket socket = new Socket()) {
                 socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
                 socket.setSoTimeout(2000);
@@ -345,11 +319,7 @@ public class YierdisServerBootstrapCommandWiringTest {
 
     @Test
     public void metadataAndSessionRepliesPreflightBeyondTheControlReservation() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
-                "--port", "0",
-                "--maxmemoryBytes", "0",
-                "--replyControlReservationBytes", "1539"
-        )) {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config("--replyControlReservationBytes", "1539"))) {
             try (Socket socket = new Socket()) {
                 socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
                 socket.setSoTimeout(2000);
@@ -372,11 +342,7 @@ public class YierdisServerBootstrapCommandWiringTest {
 
     @Test
     public void uncountedListPopPreflightsThePoppedValueBeforeMutation() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
-                "--port", "0",
-                "--maxmemoryBytes", "0",
-                "--replyControlReservationBytes", "1539"
-        )) {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config("--replyControlReservationBytes", "1539"))) {
             try (Socket socket = new Socket()) {
                 socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
                 socket.setSoTimeout(2000);

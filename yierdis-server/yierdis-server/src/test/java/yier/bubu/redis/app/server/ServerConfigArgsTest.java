@@ -9,11 +9,16 @@ import yier.bubu.redis.execution.executor.SchedulingPolicy;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.PrintStream;
+import java.io.Writer;
 import java.lang.reflect.RecordComponent;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Properties;
 
 public class ServerConfigArgsTest {
     @Test
@@ -28,79 +33,90 @@ public class ServerConfigArgsTest {
     }
 
     @Test
-    public void maxmemoryMustBeSpecifiedExplicitly() {
+    public void missingConfigFileIsRejected() {
         YierdisCliException error = assertThrows(
                 YierdisCliException.class,
-                () -> ServerConfig.fromArgs(new String[]{"--port", "0"})
+                () -> ServerConfig.fromArgs(new String[]{"--config", "/nonexistent/yierdis.conf"})
         );
 
-        Assert.assertTrue(error.getMessage().contains("--maxmemoryBytes must be specified explicitly"));
+        Assert.assertTrue(error.getMessage().contains("configuration file not found"));
     }
 
     @Test
-    public void invalidWatermarkOrderFailsFast() {
-        assertThrows(YierdisCliException.class, () -> ServerConfig.fromArgs(new String[]{
-                "--maxmemoryBytes", "0",
-                "--backpressureHigh", "10",
-                "--backpressureLow", "10"
-        }));
+    public void maxmemoryMustBeSpecifiedExplicitly() throws IOException {
+        YierdisCliException error = assertThrows(
+                YierdisCliException.class,
+                () -> fromConfig("port", "0")
+        );
+
+        Assert.assertTrue(error.getMessage().contains("maxmemoryBytes must be specified explicitly"));
     }
 
     @Test
-    public void invalidMaxmemoryPolicyFailsFast() {
-        assertThrows(YierdisCliException.class, () -> ServerConfig.fromArgs(new String[]{
-                "--maxmemoryBytes", "0",
-                "--maxmemoryPolicy", "random-evict"
-        }));
+    public void invalidWatermarkOrderFailsFast() throws IOException {
+        assertThrows(YierdisCliException.class, () -> fromConfig(
+                "maxmemoryBytes", "0",
+                "backpressureHigh", "10",
+                "backpressureLow", "10"
+        ));
     }
 
     @Test
-    public void parseErrorsReportTheReasonWithoutUsage() {
-        String err = captureStderr(() -> {
-            assertThrows(YierdisCliException.class, () -> ServerConfig.fromArgs(new String[]{
-                    "--port", "not-a-number"
-            }));
-        });
+    public void invalidMaxmemoryPolicyFailsFast() throws IOException {
+        assertThrows(YierdisCliException.class, () -> fromConfig(
+                "maxmemoryBytes", "0",
+                "maxmemoryPolicy", "random-evict"
+        ));
+    }
 
-        Assert.assertTrue("stderr should include flag name", err.contains("--port"));
+    @Test
+    public void parseErrorsReportTheReasonWithoutUsage() throws IOException {
+        String path = writeConfig("port", "not-a-number");
+        String err = captureStderr(() -> assertThrows(
+                YierdisCliException.class,
+                () -> ServerConfig.fromArgs(new String[]{"--config", path})
+        ));
+
+        Assert.assertTrue("stderr should include key name", err.contains("port"));
+        Assert.assertTrue("stderr should include the offending value", err.contains("not-a-number"));
         Assert.assertFalse("server jar prints no usage", err.contains("Usage"));
     }
 
     @Test
-    public void normalizedArgsExposeSharedRuntimeConfig() {
-        YierdisServerRuntimeConfig config = ServerConfig.fromArgs(new String[]{
-                "--port", "6380",
-                "--databases", "32",
-                "--noCleanup",
-                "--ioThreads", "4",
-                "--executorQueueCapacity", "2048",
-                "--executorQueueMaxBytes", "4096",
-                "--executorSchedulingPolicy", "GLOBAL",
-                "--backpressureHigh", "512",
-                "--backpressureLow", "64",
-                "--backpressureBytesHigh", "8192",
-                "--backpressureBytesLow", "2048",
-                "--executorMaxDrain", "256",
-                "--executorDrainMillis", "7",
-                "--transactionQueueMaxCommands", "128",
-                "--transactionQueueMaxBytes", "16384",
-                "--protocolMaxBulkBytes", "32768",
-                "--protocolMaxArgs", "128",
-                "--protocolMaxLineBytes", "4096",
-                "--protocolMaxCommandBytes", "65536",
-                "--maxmemoryBytes", "1048576",
-                "--maxmemoryScope", "perdb",
-                "--maxmemoryPolicy", "ALLKEYS-RANDOM",
-                "--maxmemorySamples", "9",
-                "--evictionTimeLimitMillis", "11",
-                "--expireCleanupTimeLimitMillis", "13",
-                "--nativeDefragEnabled",
-                "--nativeDefragMaxMoveBytes", "1024",
-                "--nativeDefragMaxObjects", "7",
-                "--nativeDefragTimeLimitMillis", "3",
-                "--keysTimeBudgetMillis", "17",
-                "--keysMaxResults", "23"
-        });
+    public void normalizedArgsExposeSharedRuntimeConfig() throws IOException {
+        YierdisServerRuntimeConfig config = fromConfig(
+                "port", "6380",
+                "databases", "32",
+                "noCleanup",
+                "ioThreads", "4",
+                "executorQueueCapacity", "2048",
+                "executorQueueMaxBytes", "4096",
+                "executorSchedulingPolicy", "GLOBAL",
+                "backpressureHigh", "512",
+                "backpressureLow", "64",
+                "backpressureBytesHigh", "8192",
+                "backpressureBytesLow", "2048",
+                "executorMaxDrain", "256",
+                "executorDrainMillis", "7",
+                "transactionQueueMaxCommands", "128",
+                "transactionQueueMaxBytes", "16384",
+                "protocolMaxBulkBytes", "32768",
+                "protocolMaxArgs", "128",
+                "protocolMaxLineBytes", "4096",
+                "protocolMaxCommandBytes", "65536",
+                "maxmemoryBytes", "1048576",
+                "maxmemoryScope", "perdb",
+                "maxmemoryPolicy", "ALLKEYS-RANDOM",
+                "maxmemorySamples", "9",
+                "evictionTimeLimitMillis", "11",
+                "expireCleanupTimeLimitMillis", "13",
+                "nativeDefragEnabled",
+                "nativeDefragMaxMoveBytes", "1024",
+                "nativeDefragMaxObjects", "7",
+                "nativeDefragTimeLimitMillis", "3",
+                "keysTimeBudgetMillis", "17",
+                "keysMaxResults", "23"
+        );
 
         Map<String, Object> runtimeConfig = recordValues(config);
         Assert.assertEquals(6380, runtimeConfig.get("port"));
@@ -140,38 +156,64 @@ public class ServerConfigArgsTest {
     }
 
     @Test
-    public void maxmemoryPolicyUnderscoreInputNormalizesToCoreEnum() {
-        YierdisServerRuntimeConfig config = ServerConfig.fromArgs(new String[]{
-                "--maxmemoryBytes", "0",
-                "--maxmemoryPolicy", "ALLKEYS_RANDOM"
-        });
+    public void maxmemoryPolicyUnderscoreInputNormalizesToCoreEnum() throws IOException {
+        YierdisServerRuntimeConfig config = fromConfig(
+                "maxmemoryBytes", "0",
+                "maxmemoryPolicy", "ALLKEYS_RANDOM"
+        );
 
         Assert.assertEquals(MaxmemoryPolicy.ALLKEYS_RANDOM, config.maxmemoryPolicy());
     }
 
     @Test
-    public void validateErrorsReportTheReasonWithoutUsage() {
-        String err = captureStderr(() -> {
-            assertThrows(YierdisCliException.class, () -> ServerConfig.fromArgs(new String[]{
-                    "--offheapBackend", "foreign"
-            }));
-        });
+    public void unknownKeysReportTheReasonWithoutUsage() throws IOException {
+        String path = writeConfig("offheapBackend", "foreign");
+        String err = captureStderr(() -> assertThrows(
+                YierdisCliException.class,
+                () -> ServerConfig.fromArgs(new String[]{"--config", path})
+        ));
 
-        Assert.assertTrue("stderr should include flag name", err.contains("--offheapBackend") || err.contains("offheapBackend"));
+        Assert.assertTrue("stderr should include key name", err.contains("offheapBackend"));
         Assert.assertFalse("server jar prints no usage", err.contains("Usage"));
     }
 
-    private static <T extends Throwable> T assertThrows(Class<T> expected, Runnable r) {
+    private static YierdisServerRuntimeConfig fromConfig(String... kv) throws IOException {
+        return ServerConfig.fromArgs(new String[]{"--config", writeConfig(kv)});
+    }
+
+    private static String writeConfig(String... kv) throws IOException {
+        Properties props = new Properties();
+        for (int i = 0; i < kv.length; i++) {
+            String key = kv[i];
+            if (key.equals("noCleanup") || key.equals("nativeDefragEnabled")) {
+                props.setProperty(key, "true");
+            } else {
+                props.setProperty(key, kv[++i]);
+            }
+        }
+        Path path = Files.createTempFile("yierdis-test", ".conf");
+        path.toFile().deleteOnExit();
+        try (Writer writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
+            props.store(writer, null);
+        }
+        return path.toString();
+    }
+
+    private static <T extends Throwable> T assertThrows(Class<T> expected, ThrowableRunnable r) {
         try {
             r.run();
             Assert.fail("expected exception: " + expected.getSimpleName());
             return null;
         } catch (Throwable t) {
             if (!expected.isInstance(t)) {
-                Assert.fail("expected " + expected.getSimpleName() + ", got: " + t.getClass().getName());
+                throw new AssertionError("expected " + expected.getSimpleName() + ", got: " + t.getClass().getName(), t);
             }
             return expected.cast(t);
         }
+    }
+
+    private interface ThrowableRunnable {
+        void run() throws Exception;
     }
 
     private static Map<String, Object> recordValues(Object record) {
@@ -188,16 +230,14 @@ public class ServerConfigArgsTest {
     }
 
     private static String captureStderr(Runnable r) {
-        PrintStream prev = System.err;
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        PrintStream ps = new PrintStream(baos, true, StandardCharsets.UTF_8);
-        System.setErr(ps);
+        PrintStream previous = System.err;
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
         try {
             r.run();
         } finally {
-            System.setErr(prev);
-            ps.flush();
+            System.setErr(previous);
         }
-        return baos.toString(StandardCharsets.UTF_8);
+        return captured.toString(StandardCharsets.UTF_8);
     }
 }

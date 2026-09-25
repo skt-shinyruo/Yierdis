@@ -10,6 +10,7 @@ import yier.bubu.redis.app.bench.redis.BenchmarkStatistics;
 import yier.bubu.redis.app.bench.redis.BenchmarkStatus;
 import yier.bubu.redis.app.bench.redis.RedisBenchmark;
 import yier.bubu.redis.app.server.YierdisServerBootstrap;
+import yier.bubu.redis.integration.TestServerConfig;
 
 import java.util.List;
 import java.util.OptionalLong;
@@ -18,11 +19,7 @@ import java.util.Set;
 public class RedisBenchmarkRealServerTest {
     @Test(timeout = 60_000L)
     public void allOfficialCasesRunOrReportUnsupportedAgainstRealYierdis() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
-                "--port", "0",
-                "--maxmemoryBytes", "0",
-                "--noCleanup"
-        )) {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfig.config("--noCleanup"))) {
             BenchmarkConfig config = new BenchmarkConfig(
                     "127.0.0.1",
                     server.port(),

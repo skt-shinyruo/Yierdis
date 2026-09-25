@@ -3,6 +3,7 @@ package yier.bubu.redis.integration.command;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.server.YierdisServerBootstrap;
+import yier.bubu.redis.integration.TestServerConfig;
 import yier.bubu.redis.protocol.resp.RespClientCodec;
 import yier.bubu.redis.protocol.resp.RespClientCodec.RespReply;
 import yier.bubu.redis.protocol.resp.RespProtocolLimits;
@@ -19,13 +20,7 @@ import java.util.Arrays;
 public class NativeCapacityOomRecoveryTest {
     @Test
     public void nativeSlotExhaustionLeavesConnectionUsableAfterExactOomReply() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
-                "--port", "0",
-                "--maxmemoryBytes", "0",
-                "--databases", "1",
-                "--noCleanup",
-                "--nativeSlotCapacity", "5"
-        );
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfig.config("--databases", "1", "--noCleanup", "--nativeSlotCapacity", "5"));
              Socket socket = new Socket()) {
             socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
             socket.setSoTimeout(3000);

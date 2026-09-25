@@ -280,7 +280,8 @@ Summary:
 1. 用同一个 JDK 启动一个 Yierdis（见 `production-hardening-operations.md` 的 JDK 25 约定）：
 
    ```bash
-   java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 16378 --maxmemoryBytes 0
+   printf 'port=16378\nmaxmemoryBytes=0\n' > /tmp/yierdis-bench-target.conf
+   java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --config /tmp/yierdis-bench-target.conf
    ```
 
 2. 固定输入并导出 CSV：

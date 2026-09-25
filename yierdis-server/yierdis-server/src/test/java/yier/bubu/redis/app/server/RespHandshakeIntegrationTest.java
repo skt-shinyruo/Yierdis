@@ -167,11 +167,9 @@ public class RespHandshakeIntegrationTest {
 
     @Test
     public void maxClientsRejectionDeliversErrorBeforeClosing() throws Exception {
-        YierdisServerRuntimeConfig config = ServerConfig.fromArgs(new String[]{
-                "--port", "0",
-                "--maxmemoryBytes", "0",
+        YierdisServerRuntimeConfig config = TestServerConfigs.config(
                 "--maxClients", "1"
-        });
+        );
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(config);
              Socket first = new Socket("127.0.0.1", server.port());
              Socket second = new Socket("127.0.0.1", server.port())) {
@@ -199,9 +197,6 @@ public class RespHandshakeIntegrationTest {
     }
 
     private static YierdisServerRuntimeConfig serverConfig() {
-        return ServerConfig.fromArgs(new String[]{
-                "--port", "0",
-                "--maxmemoryBytes", "0"
-        });
+        return TestServerConfigs.config();
     }
 }

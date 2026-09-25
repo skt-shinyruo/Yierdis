@@ -81,7 +81,7 @@ fuzz / 压力形态的回归在 `yierdis-tests`：`RespIngressFuzzTest`、`RespI
 
 - 请求侧 `ByteArrayExecutionRequest` 的 admission lease：`takeOwnership(...)` 移交 argv + lease，`retain()` 共享 argv 并增引用，`copyOf(...)` 才做独立快照。lease 必须在**最后一个消费者**处释放，早放会 use-after-free，晚放会泄漏准入预算。
 - `HELLO 2/3` 或回包类型差异：协议版本是连接级状态，涉及 `CommandSession` 的版本方法、连接 owner `EngineSession` 与 `RespReplyWriter`。回包 wire 版本在 prepare 时就要确定，不能等 execute 才切换（见 `PreparedCommand.replyProtocolVersion()`）。
-- 硬上限（`--protocolMaxBulkBytes` / `--protocolMaxArgs` / `--protocolMaxLineBytes` / `--protocolMaxCommandBytes`）在 parser 内生效，必须在请求到达 executor 之前拒绝，不能靠回包侧兜底。
+- 硬上限（`protocolMaxBulkBytes` / `protocolMaxArgs` / `protocolMaxLineBytes` / `protocolMaxCommandBytes`）在 parser 内生效，必须在请求到达 executor 之前拒绝，不能靠回包侧兜底。
 
 **继续追**：[`protocol-reference.md`](./protocol-reference.md)、[`request-execution-flow.md`](./request-execution-flow.md)、[`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)、[`netty-adapter-design.md`](./netty-adapter-design.md)。
 
@@ -146,7 +146,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 - 排队语义：可排队命令在 `MULTI` 中只做 handler parse preflight；`QUEUED` action 要等回复容量预留完成，才调用 `TransactionState.tryEnqueue(request)`。入队**不**运行 handler 返回的 prepare function，owner 由 transaction state 取得。
 - `EXEC` 由 `TransactionCommands` drain 队列，走同一 dispatcher 的 replay 入口依次 prepare/execute；drain 后的 retained request 和 child `PreparedCommand` 都归 `PreparedExec` 所有，由它关闭。
 - `EngineSession` 只管连接级事务状态，不执行 replay。
-- 队列也有上限（`--transactionQueueMaxCommands` / `--transactionQueueMaxBytes`），新增语义时确认超限路径仍回确定的错误而不是丢弃。
+- 队列也有上限（`transactionQueueMaxCommands` / `transactionQueueMaxBytes`），新增语义时确认超限路径仍回确定的错误而不是丢弃。
 
 **继续追**：[`transaction-and-replay.md`](./transaction-and-replay.md)、[`request-execution-flow.md`](./request-execution-flow.md)。
 
@@ -312,7 +312,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 - execution support 必须按 `prepare -> reserve -> validate -> execute -> render` 排序，并在 renderer 消费完语义流 source 之后再关闭 `PreparedCommand`；提前关闭会让 bulk/sequence/map source 悬空。
 - `QUIT` 等关闭意图来自 `CommandResult.closeAfterReply`，由 executor 标记 reply slot，**不要**从 writer 的隐藏状态推导。
-- 背压涉及队列容量（`--executorQueueCapacity`/`--executorQueueMaxBytes`）与字节水位（`--backpressureBytesHigh`/`--backpressureBytesLow`）两套口径；进入背压后必须能在水位回落后恢复。
+- 背压涉及队列容量（`executorQueueCapacity`/`executorQueueMaxBytes`）与字节水位（`backpressureBytesHigh`/`backpressureBytesLow`）两套口径；进入背压后必须能在水位回落后恢复。
 
 **继续追**：[`executor-and-backpressure.md`](./executor-and-backpressure.md)、[`request-execution-flow.md`](./request-execution-flow.md)、[`configuration-and-operations.md`](./configuration-and-operations.md)。
 

@@ -48,7 +48,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.function.UnaryOperator;
 
 /**
  * Server bootstrap wrapper that encapsulates wiring and lifecycle management.
@@ -68,7 +67,6 @@ public final class YierdisServerBootstrap implements AutoCloseable {
     }
 
     private final YierdisServerRuntimeConfig runtimeConfig;
-    private final UnaryOperator<BiFunction<CommandSession, ExecutionRequest, PreparedCommand>> commandEngineDecorator;
     private final Object lifecycleLock = new Object();
     private volatile LifecycleState lifecycleState = LifecycleState.STARTING;
     private CompletableFuture<Void> closeAttempt;
@@ -89,37 +87,11 @@ public final class YierdisServerBootstrap implements AutoCloseable {
     private EventLoopGroup workerGroup;
 
     private YierdisServerBootstrap(YierdisServerRuntimeConfig config) {
-        this(config, engine -> engine);
-    }
-
-    private YierdisServerBootstrap(
-            YierdisServerRuntimeConfig config,
-            UnaryOperator<BiFunction<CommandSession, ExecutionRequest, PreparedCommand>> commandEngineDecorator
-    ) {
         this.runtimeConfig = Objects.requireNonNull(config, "config");
-        this.commandEngineDecorator = Objects.requireNonNull(commandEngineDecorator, "commandEngineDecorator");
     }
 
-    public static YierdisServerBootstrap start(String... args) throws Exception {
-        return start(ServerConfig.fromArgs(args));
-    }
-
-    static YierdisServerBootstrap start(YierdisServerRuntimeConfig config) throws Exception {
-        return start(config, engine -> engine);
-    }
-
-    static YierdisServerBootstrap startForTests(
-            UnaryOperator<BiFunction<CommandSession, ExecutionRequest, PreparedCommand>> commandEngineDecorator,
-            String... args
-    ) throws Exception {
-        return start(ServerConfig.fromArgs(args), commandEngineDecorator);
-    }
-
-    private static YierdisServerBootstrap start(
-            YierdisServerRuntimeConfig config,
-            UnaryOperator<BiFunction<CommandSession, ExecutionRequest, PreparedCommand>> commandEngineDecorator
-    ) throws Exception {
-        YierdisServerBootstrap server = new YierdisServerBootstrap(config, commandEngineDecorator);
+    public static YierdisServerBootstrap start(YierdisServerRuntimeConfig config) throws Exception {
+        YierdisServerBootstrap server = new YierdisServerBootstrap(config);
         boolean ok = false;
         try {
             server.startInternal();
@@ -196,10 +168,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 DefaultCommandModules.create(dbRouter(instance), infoProvider, slowCommandLimits),
                 new ServerCommandModule(infoProvider)
         );
-        BiFunction<CommandSession, ExecutionRequest, PreparedCommand> executionEngine = Objects.requireNonNull(
-                commandEngineDecorator.apply(dispatcher::prepare),
-                "commandEngineDecorator result"
-        );
+        BiFunction<CommandSession, ExecutionRequest, PreparedCommand> executionEngine = dispatcher::prepare;
         commandGroup = new DefaultEventExecutorGroup(1);
         BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
         CommandExecutorConfig executorConfig = runtimeConfig.executorConfig();

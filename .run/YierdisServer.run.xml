@@ -2,8 +2,7 @@
   <configuration default="false" name="YierdisServer" type="Application" factoryName="Application">
     <option name="MAIN_CLASS_NAME" value="yier.bubu.redis.app.server.YierdisServer" />
     <module name="yierdis-server" />
-    <option name="PROGRAM_PARAMETERS" value="--port 6378 --maxmemoryBytes=0" />
-    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <option name="PROGRAM_PARAMETERS" value="--config $PROJECT_DIR$/yierdis.conf" />
     <method v="2">
       <option name="Make" enabled="true" />
     </method>

@@ -3,6 +3,7 @@ package yier.bubu.redis.integration.protocol;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.server.YierdisServerBootstrap;
+import yier.bubu.redis.integration.TestServerConfig;
 
 import java.net.Socket;
 
@@ -10,11 +11,7 @@ public class OrderedReplyIntegrationTest {
     @Test
     public void pipelinedSmallLargeCommandErrorAndQuitRepliesKeepReceiveOrder() throws Exception {
         String value = RespTcpTestSupport.asciiRepeat('v', 8_192);
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
-                "--port", "0",
-                "--maxmemoryBytes", "0",
-                "--noCleanup"
-        );
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfig.config("--noCleanup"));
              Socket socket = RespTcpTestSupport.connect(server)) {
             RespTcpTestSupport.writeCommand(socket, "SET", "ordered:large", value);
             Assert.assertEquals("+OK\r\n", RespTcpTestSupport.readFrame(socket));
@@ -37,12 +34,7 @@ public class OrderedReplyIntegrationTest {
 
     @Test
     public void permanentlyOversizedRequestsUseTheOrderedErrorPath() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
-                "--port", "0",
-                "--maxmemoryBytes", "0",
-                "--noCleanup",
-                "--executorQueueMaxBytes", "1"
-        );
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfig.config("--noCleanup", "--executorQueueMaxBytes", "1"));
              Socket socket = RespTcpTestSupport.connect(server)) {
             RespTcpTestSupport.writePipeline(
                     socket,

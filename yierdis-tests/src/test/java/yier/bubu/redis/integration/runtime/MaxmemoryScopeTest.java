@@ -6,6 +6,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.client.YierdisClient;
 import yier.bubu.redis.app.server.YierdisServerBootstrap;
+import yier.bubu.redis.integration.TestServerConfig;
 import yier.bubu.redis.protocol.resp.RespClientCodec;
 
 import java.nio.charset.StandardCharsets;
@@ -24,7 +25,7 @@ public class MaxmemoryScopeTest {
     @Test
     public void globalScopeEvictsAcrossDbsUsingLru() throws Exception {
         byte[] value = bytesOfLen(EVICTION_VALUE_BYTES, (byte) 'x');
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(ServerArgs.of(
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfig.config(
                 "--databases", "2",
                 "--maxmemoryBytes", Long.toString(globalBudgetThatFitsTwoKeysButNotThree(value)),
                 "--maxmemoryScope", "global",
@@ -57,7 +58,7 @@ public class MaxmemoryScopeTest {
     @Test
     public void perDbScopeEvictsOnlyWithinSelectedDb() throws Exception {
         byte[] value = bytesOfLen(EVICTION_VALUE_BYTES, (byte) 'x');
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(ServerArgs.of(
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfig.config(
                 "--databases", "2",
                 "--maxmemoryBytes", Long.toString(perDbBudgetThatFitsOneKeyButNotTwo(value)),
                 "--maxmemoryScope", "per-db",
@@ -108,7 +109,7 @@ public class MaxmemoryScopeTest {
     }
 
     private static long probeGlobalUsedBytes(byte[] value, int localKeyCount) throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(ServerArgs.of(
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfig.config(
                 "--databases", "2",
                 "--maxmemoryBytes", PROBE_MAXMEMORY_BYTES,
                 "--maxmemoryScope", "global",
@@ -130,7 +131,7 @@ public class MaxmemoryScopeTest {
     }
 
     private static long probePerDbDb0UsedBytes(byte[] value, int localKeyCount) throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(ServerArgs.of(
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfig.config(
                 "--databases", "2",
                 "--maxmemoryBytes", PROBE_MAXMEMORY_BYTES,
                 "--maxmemoryScope", "per-db",
@@ -164,7 +165,7 @@ public class MaxmemoryScopeTest {
 
     @Test
     public void globalMemoryStatsIncludesDefaultFfmNativeMemoryOnce() throws Exception {
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(ServerArgs.of(
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfig.config(
                 "--databases", "2",
                 "--maxmemoryScope", "global",
                 "--maxmemoryBytes", "0"

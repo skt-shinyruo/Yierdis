@@ -32,8 +32,7 @@ final class TestCommandDispatchers {
             int protocolMaxInlineBytes,
             int protocolMaxCommandBytes
     ) {
-        return ServerConfig.fromArgs(new String[]{
-                "--maxmemoryBytes", "0",
+        return TestServerConfigs.config(
                 "--client-idle-timeout-millis", "300000",
                 "--transactionQueueMaxCommands", Integer.toString(transactionQueueMaxCommands),
                 "--transactionQueueMaxBytes", Long.toString(transactionQueueMaxBytes),
@@ -41,6 +40,6 @@ final class TestCommandDispatchers {
                 "--protocolMaxArgs", Integer.toString(protocolMaxArgs),
                 "--protocolMaxLineBytes", Integer.toString(protocolMaxInlineBytes),
                 "--protocolMaxCommandBytes", Integer.toString(protocolMaxCommandBytes)
-        });
+        );
     }
 }

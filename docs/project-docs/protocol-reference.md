@@ -52,7 +52,7 @@ RESP2 array/multibulk 是默认请求格式，也是 Redis 客户端通常发送
 - bulk length 允许 `-1` 或非负整数，不能小于 `-1`（`ERR Protocol error: invalid bulk length`）；
 - 非 null bulk 的 body 后必须紧跟 `\r\n`（`ERR Protocol error: invalid bulk string terminator`）。
 
-argc 还受两道上限约束：`RespProtocolLimits.DEFAULT_MAX_ARGS` 是 decoder 内建硬上限，超过报 `ERR Protocol error: invalid multibulk length`；`--protocolMaxArgs` 是运营配置上限，超过报 `ERR Protocol error: too many arguments`。bulk length 同理：硬上限是 `RespProtocolLimits.DEFAULT_MAX_BULK_BYTES`，配置上限是 `--protocolMaxBulkBytes`，两者都报 `invalid bulk length`。
+argc 还受两道上限约束：`RespProtocolLimits.DEFAULT_MAX_ARGS` 是 decoder 内建硬上限，超过报 `ERR Protocol error: invalid multibulk length`；`protocolMaxArgs` 是运营配置上限，超过报 `ERR Protocol error: too many arguments`。bulk length 同理：硬上限是 `RespProtocolLimits.DEFAULT_MAX_BULK_BYTES`，配置上限是 `protocolMaxBulkBytes`，两者都报 `invalid bulk length`。
 
 连接刚建立时回包版本默认是 RESP2（`EngineSession` 字段 `respVersion = 2`），因此不执行 `HELLO` 的普通 Redis 客户端会收到 RESP2 编码的 simple string、integer、bulk string、array 和 error。
 
@@ -187,23 +187,23 @@ FIFO 保护是例外：若 ingress 队列里仍有更早提交、但尚未拿到
 - `ERR Protocol error: invalid bulk length`；
 - `ERR Protocol error: invalid bulk string terminator`；
 - `ERR Protocol error: invalid inline command`；
-- `ERR Protocol error: command is too large`（命中 `--protocolMaxCommandBytes`）；
+- `ERR Protocol error: command is too large`（命中 `protocolMaxCommandBytes`）；
 - `ERR request exceeds configured memory limit`（ingress admission 预算不足）。
 
 这个做法让坏请求后面的残留 bytes 不再被解释成下一条请求，避免请求和响应错配。
 
 ## 协议上限
 
-默认上限由 `RespProtocolLimits` 定义，对应的 CLI 参数在 `YierdisServerArgs` 里：
+默认上限由 `RespProtocolLimits` 定义，对应的配置键在 `YierdisServerFileConfig` 里：
 
-| 项目 | 默认值 | 常量 | 服务端参数 |
+| 项目 | 默认值 | 常量 | 配置键 |
 | --- | ---: | --- | --- |
-| bulk string body | 512 MiB | `DEFAULT_MAX_BULK_BYTES` | `--protocolMaxBulkBytes` |
-| 单条请求参数数量 | 1,048,576 | `DEFAULT_MAX_ARGS` | `--protocolMaxArgs` |
-| inline/header 行长度 | 1 MiB | `DEFAULT_MAX_INLINE_BYTES` | `--protocolMaxLineBytes` |
-| 单条请求累计字节数 | 64 MiB | `DEFAULT_MAX_COMMAND_BYTES` | `--protocolMaxCommandBytes` |
+| bulk string body | 512 MiB | `DEFAULT_MAX_BULK_BYTES` | `protocolMaxBulkBytes` |
+| 单条请求参数数量 | 1,048,576 | `DEFAULT_MAX_ARGS` | `protocolMaxArgs` |
+| inline/header 行长度 | 1 MiB | `DEFAULT_MAX_INLINE_BYTES` | `protocolMaxLineBytes` |
+| 单条请求累计字节数 | 64 MiB | `DEFAULT_MAX_COMMAND_BYTES` | `protocolMaxCommandBytes` |
 
-这些参数在 server 启动时传给 `YierdisServerChannelInitializer`，再进入 `RespRequestDecoder` 的 `withIngressAdmission(...)`。`--protocolMaxLineBytes` 约束所有 CRLF 行（multibulk header、bulk length header、以及 inline 行），不只是 inline。除了 ingress 内存预算 `--protocolGlobalInFlightBytes`，还有 executor 与 reply 侧的独立预算见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
+这些参数在 server 启动时传给 `YierdisServerChannelInitializer`，再进入 `RespRequestDecoder` 的 `withIngressAdmission(...)`。`protocolMaxLineBytes` 约束所有 CRLF 行（multibulk header、bulk length header、以及 inline 行），不只是 inline。除了 ingress 内存预算 `protocolGlobalInFlightBytes`，还有 executor 与 reply 侧的独立预算见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
 
 ## 和 Redis 兼容性的边界
 
@@ -214,7 +214,7 @@ Yierdis 支持 Redis 风格 RESP 入口和一组基础握手命令，但不声�
 - RESP2 是默认请求和回包兼容目标；
 - `HELLO 3` 可以切换到基础 RESP3 回包编码；
 - `CLIENT SETINFO` 只接受属性名 `LIB-NAME`/`LIB-VER`（其它属性报 `ERR Unrecognized option '<x>'`），`CLIENT SETNAME`/`CLIENT GETNAME` 维护连接名，`AUTH` 固定返回 no-password-configured 错误；
-- 达到 `--maxClients` 上限时，新连接先收到 `-ERR max number of clients reached\r\n`，随后被关闭；
+- 达到 `maxClients` 上限时，新连接先收到 `-ERR max number of clients reached\r\n`，随后被关闭；
 - malformed RESP 返回协议错误并关闭连接；
 - 命令语义以第「已注册命令清单」一节列出的命令为准。
 
@@ -222,4 +222,4 @@ Yierdis 支持 Redis 风格 RESP 入口和一组基础握手命令，但不声�
 
 ## Bounded Transport Ownership
 
-decoder-side protocol limits and `--protocolGlobalInFlightBytes` bound admitted request ownership. Reply encoding runs on a separate receive-order, bounded chunk path. Protocol errors also get an ordered slot, so they cannot overtake an earlier reply. Output that is oversized or of unknown result closes the transport instead of bypassing that path. The exact reply defaults and operator diagnostics are in [`production-hardening-operations.md`](./production-hardening-operations.md).
+decoder-side protocol limits and `protocolGlobalInFlightBytes` bound admitted request ownership. Reply encoding runs on a separate receive-order, bounded chunk path. Protocol errors also get an ordered slot, so they cannot overtake an earlier reply. Output that is oversized or of unknown result closes the transport instead of bypassing that path. The exact reply defaults and operator diagnostics are in [`production-hardening-operations.md`](./production-hardening-operations.md).

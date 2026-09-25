@@ -4,38 +4,39 @@
 
 ## 配置流向与信任边界
 
-启动参数从命令行到组合根的主路径是：
+启动配置从文件到组合根的主路径是：
 
 ```text
-argv
-  -> YierdisServerArgs.parse(...)   // 手写解析，无 picocli
+yierdis.conf（--config <path> 指定，缺省读取 ./yierdis.conf）
+  -> ServerConfig.fromArgs(...)              // 边界：定位/读取文件，失败只打一行错误
+  -> YierdisServerFileConfig.fromProperties(...)  // 应用键值，未知键报错
   -> normalizeAndValidate()
-  -> YierdisServerRuntimeConfig   // 唯一信任边界，构造器集中校验
-  -> ServerConfig.fromArgs(...)   // CLI 边界，失败只打一行错误
+  -> YierdisServerRuntimeConfig               // 唯一信任边界，构造器集中校验
   -> YierdisServerBootstrap.startInternal()
 ```
 
-`YierdisServerArgs` 用公开字段承载每个选项：默认值就是字段初值，`parse(String...)` 手写解析，`--name value` 与 `--name=value` 两种形态都收。字段的默认值、范围校验分散在两个阶段，理解分工很重要：
+`YierdisServerFileConfig` 用公开字段承载每个配置键：默认值就是字段初值，`fromProperties(...)` 应用文件里出现的键。字段的默认值、范围校验分散在两个阶段，理解分工很重要：
 
-- `normalizeAndValidate()` 只做 CLI 归一化和派生：`--noCleanup` 把 `cleanupIntervalMillis` 归零；`bind` 去掉首尾空白；三个枚举（`executorSchedulingPolicy`、`maxmemoryScope`、`maxmemoryPolicy`）在这里解析一次并缓存实例，再把 argv 里的字符串改写成稳定值，不再走字符串 round-trip。归一化后 `maxmemoryScope` 只会是 `global` 或 `per-db`，`maxmemoryPolicy` 只会是它的 `redisName()`。
-- `YierdisServerRuntimeConfig` 的紧凑构造器是真正的校验点：网络、协议、reply、内存、maintenance、executor 队列与背压约束都在这里检查，越界直接抛 `IllegalArgumentException`。这是启动参数唯一的校验边界；下游的 `CommandExecutorConfig` 只承载已经校验过的值，不再重复校验（见该 record 的注释）。
+- `normalizeAndValidate()` 只做归一化和派生：`noCleanup` 把 `cleanupIntervalMillis` 归零；`bind` 去掉首尾空白；三个枚举（`executorSchedulingPolicy`、`maxmemoryScope`、`maxmemoryPolicy`）在这里解析一次并缓存实例，再把文件里的字符串改写成稳定值，不再走字符串 round-trip。归一化后 `maxmemoryScope` 只会是 `global` 或 `per-db`，`maxmemoryPolicy` 只会是它的 `redisName()`。
+- `YierdisServerRuntimeConfig` 的紧凑构造器是真正的校验点：网络、协议、reply、内存、maintenance、executor 队列与背压约束都在这里检查，越界直接抛 `IllegalArgumentException`。这是启动配置唯一的校验边界；下游的 `CommandExecutorConfig` 只承载已经校验过的值，不再重复校验（见该 record 的注释）。
 
-归一化接受的等价写法：`--maxmemoryScope` 大小写不敏感，并允许 `perdb` / `per_db` / `per-db` 三种拼法（`parseMaxmemoryScope` 内部把 `_` 换成 `-` 再匹配）；`--maxmemoryPolicy` 同样大小写不敏感，`_` 归一成 `-`，只接受 `noeviction`、`allkeys-random`、`allkeys-lru`。
+归一化接受的等价写法：`maxmemoryScope` 大小写不敏感，并允许 `perdb` / `per_db` / `per-db` 三种拼法（`parseMaxmemoryScope` 内部把 `_` 换成 `-` 再匹配）；`maxmemoryPolicy` 同样大小写不敏感，`_` 归一成 `-`，只接受 `noeviction`、`allkeys-random`、`allkeys-lru`。
 
-`toRuntimeConfig()` 把已归一化参数转成 `YierdisServerRuntimeConfig` record：首次调用触发 `normalizeAndValidate()` 并缓存，后续调用返回同一实例。这个 record 字段已经是 enum、number 和 boolean，不再携带原始 CLI 字符串；`executorConfig()` 直接生成 executor 领域配置。
+`toRuntimeConfig()` 把已归一化配置转成 `YierdisServerRuntimeConfig` record：首次调用触发 `normalizeAndValidate()` 并缓存，后续调用返回同一实例。这个 record 字段已经是 enum、number 和 boolean，不再携带原始字符串；`executorConfig()` 直接生成 executor 领域配置。
 
-`ServerConfig.fromArgs(String...)` 是 CLI 到组合根的边界，顺序如下：
+`ServerConfig.fromArgs(String...)` 是启动入口到组合根的边界，顺序如下：
 
-1. `YierdisServerArgs.parse(args)` 解析失败（如未知选项、类型错误）抛 `IllegalArgumentException`，把原因打一行到 stderr，包成 `YierdisCliException.invalidArguments(...)`（调用方据此 `exit(2)`）。
-2. 必须显式给出 `--maxmemoryBytes` 选项（`wasSpecified(...)` 检查），否则抛 `IllegalArgumentException("--maxmemoryBytes must be specified explicitly (use 0 to acknowledge unlimited memory)")`。这是唯一的“必须显式传”参数。
-3. `normalizeAndValidate()` 抛 `IllegalArgumentException`（校验失败）同样打一行原因并包成 `invalidArguments`。
-4. 成功则返回 `toRuntimeConfig()`。
+1. argv 只接受一个 `--config <path>`（或 `--config=<path>`；重复给出或任何其他参数都报错）。未给出时读 `./yierdis.conf`；文件不存在时报"找不到配置文件"。
+2. 文件按 UTF-8 `Properties` 读入，`YierdisServerFileConfig.fromProperties(...)` 应用键值：未知键、类型错误都抛 `IllegalArgumentException`，把原因打一行到 stderr，包成 `YierdisCliException.invalidArguments(...)`（调用方据此 `exit(2)`）。
+3. 必须显式给出 `maxmemoryBytes` 键（`wasSpecified(...)` 检查），否则抛 `IllegalArgumentException("maxmemoryBytes must be specified explicitly in <path> (use 0 to acknowledge unlimited memory)")`。这是唯一的"必须显式传"配置。
+4. `normalizeAndValidate()` 抛 `IllegalArgumentException`（校验失败）同样打一行原因并包成 `invalidArguments`。
+5. 成功则返回 `toRuntimeConfig()`。
 
-这个 jar **不提供** `--help`，也没有任何 usage 输出：它只有"启动服务"一个用途，选项清单的默认值与约束就是下面那张总览表。
+这个 jar **不提供** `help`，也没有任何 usage 输出：它只有"启动服务"一个用途，配置键的默认值与约束就是下面那张总览表。
 
 源码入口：
 
-- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/args/YierdisServerArgs.java`
+- `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/args/YierdisServerFileConfig.java`
 - `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/args/YierdisServerRuntimeConfig.java`
 - `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/ServerConfig.java`
 - `yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
@@ -60,102 +61,102 @@ benchmark 不持有 server 参数或生命周期模型，只连接由操作者�
 
 ## 配置项总览
 
-下面按域列出全部启动选项。`默认` 一列来自 `YierdisServerArgs` 的字段初值；`范围/约束` 一列来自 `YierdisServerRuntimeConfig` 构造器或 `normalizeAndValidate()`；`生效阶段` 说明它在启动流程的哪一步被消费。“必须显式指定”的项已单独标注。
+下面按域列出全部配置键。`默认` 一列来自 `YierdisServerFileConfig` 的字段初值；`范围/约束` 一列来自 `YierdisServerRuntimeConfig` 构造器或 `normalizeAndValidate()`；`生效阶段` 说明它在启动流程的哪一步被消费。"必须显式指定"的项已单独标注。
 
 ### 网络与实例规模
 
-| 选项 | 默认 | 范围/约束 | 生效阶段 |
+| 配置键 | 默认 | 范围/约束 | 生效阶段 |
 | --- | ---: | --- | --- |
-| `--bind` | `127.0.0.1` | trim 后非空 | `bind(...)` 监听地址 |
-| `--port` | `6378` | `0..65535`（0 由内核分配） | `bind(...)` |
-| `--maxClients` | `1024` | `> 0` | `ChildChannelRegistry` 准入 |
-| `--databases` | `16` | `1..1024` | 创建 `YierdisInstance` 的 DB 数组 |
-| `--ioThreads` | `1` | `> 0` | Netty worker `MultiThreadIoEventLoopGroup` |
-| `--maxmemoryBytes` | `0` | `>= 0`，**必须命令行显式出现** | `YierdisInstanceConfig` 预算 |
+| `bind` | `127.0.0.1` | trim 后非空 | `bind(...)` 监听地址 |
+| `port` | `6378` | `0..65535`（0 由内核分配） | `bind(...)` |
+| `maxClients` | `1024` | `> 0` | `ChildChannelRegistry` 准入 |
+| `databases` | `16` | `1..1024` | 创建 `YierdisInstance` 的 DB 数组 |
+| `ioThreads` | `1` | `> 0` | Netty worker `MultiThreadIoEventLoopGroup` |
+| `maxmemoryBytes` | `0` | `>= 0`，**必须在配置文件中显式出现** | `YierdisInstanceConfig` 预算 |
 
 ### 协议入口限制
 
-| 选项 | 默认 | 范围/约束 | 生效阶段 |
+| 配置键 | 默认 | 范围/约束 | 生效阶段 |
 | --- | ---: | --- | --- |
-| `--protocolMaxBulkBytes` | `536870912`（512 MiB） | `1..536870912` | `RespRequestDecoder` bulk body |
-| `--protocolMaxArgs` | `1048576` | `1..1048576` | 单命令参数个数 |
-| `--protocolMaxLineBytes` | `1048576` | `> 0` | header/inline 行长度 |
-| `--protocolMaxCommandBytes` | `67108864`（64 MiB） | `1..536870912` | 单命令 heap footprint 估算 |
-| `--protocolGlobalInFlightBytes` | `0` | `>= 0` | ingress 全局在途预算，见下 |
+| `protocolMaxBulkBytes` | `536870912`（512 MiB） | `1..536870912` | `RespRequestDecoder` bulk body |
+| `protocolMaxArgs` | `1048576` | `1..1048576` | 单命令参数个数 |
+| `protocolMaxLineBytes` | `1048576` | `> 0` | header/inline 行长度 |
+| `protocolMaxCommandBytes` | `67108864`（64 MiB） | `1..536870912` | 单命令 heap footprint 估算 |
+| `protocolGlobalInFlightBytes` | `0` | `>= 0` | ingress 全局在途预算，见下 |
 
-`--protocolGlobalInFlightBytes` 是 `InboundMemoryBudget` 的容量：正值按字面使用；`0` 不是“无限”，而是派生为 `max(134217728, 2 × executorQueueMaxBytes)`。默认 `executorQueueMaxBytes=64 MiB` 时派生结果是 `134217728`（128 MiB），即 `MIN_PROTOCOL_GLOBAL_IN_FLIGHT_BYTES`。想收紧不可信网络的入站内存占用，可以直接写正值。
+`protocolGlobalInFlightBytes` 是 `InboundMemoryBudget` 的容量：正值按字面使用；`0` 不是“无限”，而是派生为 `max(134217728, 2 × executorQueueMaxBytes)`。默认 `executorQueueMaxBytes=64 MiB` 时派生结果是 `134217728`（128 MiB），即 `MIN_PROTOCOL_GLOBAL_IN_FLIGHT_BYTES`。想收紧不可信网络的入站内存占用，可以直接写正值。
 
 ### executor 与背压
 
-| 选项 | 默认 | 范围/约束 | 生效阶段 |
+| 配置键 | 默认 | 范围/约束 | 生效阶段 |
 | --- | ---: | --- | --- |
-| `--executorQueueCapacity` | `1024` | `> 0` | 全局 backlog 任务数硬上限 |
-| `--executorQueueMaxBytes` | `67108864` | `>= 0`；`0` 禁用 bytes 预算 | 全局 backlog retained bytes 硬上限 |
-| `--executorSchedulingPolicy` | `fair` | `global`/`fair`（大小写不敏感） | `ExecutorTaskQueue` 调度 |
-| `--backpressureHigh` | `256` | `> 0` | 单连接 pending 高水位 |
-| `--backpressureLow` | `128` | `>= 0` 且 `< backpressureHigh` | 单连接 pending 低水位 |
-| `--backpressureBytesHigh` | `16777216` | `>= 0`；`0` 禁用 bytes 水位 | 单连接 pending bytes 高水位 |
-| `--backpressureBytesLow` | `8388608` | `>= 0`；high 为 `0` 时必须为 `0`，否则 `< high` | 单连接 pending bytes 低水位 |
-| `--executorMaxDrain` | `512` | `> 0` | 每轮 drain 命令数上限 |
-| `--executorDrainMillis` | `2` | `> 0` | 每轮 drain 时间预算 |
+| `executorQueueCapacity` | `1024` | `> 0` | 全局 backlog 任务数硬上限 |
+| `executorQueueMaxBytes` | `67108864` | `>= 0`；`0` 禁用 bytes 预算 | 全局 backlog retained bytes 硬上限 |
+| `executorSchedulingPolicy` | `fair` | `global`/`fair`（大小写不敏感） | `ExecutorTaskQueue` 调度 |
+| `backpressureHigh` | `256` | `> 0` | 单连接 pending 高水位 |
+| `backpressureLow` | `128` | `>= 0` 且 `< backpressureHigh` | 单连接 pending 低水位 |
+| `backpressureBytesHigh` | `16777216` | `>= 0`；`0` 禁用 bytes 水位 | 单连接 pending bytes 高水位 |
+| `backpressureBytesLow` | `8388608` | `>= 0`；high 为 `0` 时必须为 `0`，否则 `< high` | 单连接 pending bytes 低水位 |
+| `executorMaxDrain` | `512` | `> 0` | 每轮 drain 命令数上限 |
+| `executorDrainMillis` | `2` | `> 0` | 每轮 drain 时间预算 |
 
 以上 bytes 类配置都按 `HeapRequestFootprint` 的 heap footprint 口径计量：请求对象、argv 槽位与每参数数组头和对齐 payload 之和，而非纯 payload 求和。每个非空参数计 `ARRAY_HEADER_BYTES`（16）加上按 8 对齐的 payload；空 `byte[]` 只计 16。机制细节、拒绝形态和中转线程见 [`executor-and-backpressure.md`](./executor-and-backpressure.md)。
 
 ### transaction 队列
 
-| 选项 | 默认 | 范围/约束 | 生效阶段 |
+| 配置键 | 默认 | 范围/约束 | 生效阶段 |
 | --- | ---: | --- | --- |
-| `--transactionQueueMaxCommands` | `1024` | `>= 0`；`0` 禁用 | 连接建立时传给 `EngineSession` |
-| `--transactionQueueMaxBytes` | `67108864` | `>= 0`；`0` 禁用 | 同上 |
+| `transactionQueueMaxCommands` | `1024` | `>= 0`；`0` 禁用 | 连接建立时传给 `EngineSession` |
+| `transactionQueueMaxBytes` | `67108864` | `>= 0`；`0` 禁用 | 同上 |
 
 ### 连接保护与空闲
 
-| 选项 | 默认 | 范围/约束 | 生效阶段 |
+| 配置键 | 默认 | 范围/约束 | 生效阶段 |
 | --- | ---: | --- | --- |
-| `--client-idle-timeout-millis` | `0` | `>= 0`；`0` 不主动断开 | pipeline `IdleStateHandler` |
-| `--client-output-buffer-limit-bytes` | `67108864` | `>= 0`；`0` 不设自定义 watermark | Netty `WriteBufferWaterMark` |
-| `--client-output-buffer-over-limit-millis` | `10000` | `>= 0`；limit 大于 `0` 时必须大于 `0` | 慢客户端宽限关闭 |
+| `client-idle-timeout-millis` | `0` | `>= 0`；`0` 不主动断开 | pipeline `IdleStateHandler` |
+| `client-output-buffer-limit-bytes` | `67108864` | `>= 0`；`0` 不设自定义 watermark | Netty `WriteBufferWaterMark` |
+| `client-output-buffer-over-limit-millis` | `10000` | `>= 0`；limit 大于 `0` 时必须大于 `0` | 慢客户端宽限关闭 |
 
 ### responder reply 准入（硬容量）
 
-| 选项 | 默认 | 范围/约束 | 生效阶段 |
+| 配置键 | 默认 | 范围/约束 | 生效阶段 |
 | --- | ---: | --- | --- |
-| `--replyGlobalCapacityBytes` | `268435456` | `> 0` | 全局 reply 容量 |
-| `--replyPerConnectionCapacityBytes` | `134217728` | `> 0` | 单连接 reply 容量 |
-| `--replyMaxTotalBytes` | `67108864` | `> 0` | 单条顶层 reply 计费上限 |
-| `--replyChunkPayloadBytes` | `65536` | `> 0` | reply chunk payload 容量 |
-| `--replyControlReservationBytes` | `4096` | `> 0` 且 `>= 1539` | 每槽位控制错误预留 |
-| `--replyDrainTimeoutMillis` | `5000` | `> 0` | graceful shutdown 排空上限 |
+| `replyGlobalCapacityBytes` | `268435456` | `> 0` | 全局 reply 容量 |
+| `replyPerConnectionCapacityBytes` | `134217728` | `> 0` | 单连接 reply 容量 |
+| `replyMaxTotalBytes` | `67108864` | `> 0` | 单条顶层 reply 计费上限 |
+| `replyChunkPayloadBytes` | `65536` | `> 0` | reply chunk payload 容量 |
+| `replyControlReservationBytes` | `4096` | `> 0` 且 `>= 1539` | 每槽位控制错误预留 |
+| `replyDrainTimeoutMillis` | `5000` | `> 0` | graceful shutdown 排空上限 |
 
 这些值彼此有顺序约束，启动时会一并校验：`replyControlReservationBytes >= 1024 + 515 = 1539`；`control <= replyMaxTotalBytes`；`replyMaxTotalBytes <= replyPerConnectionCapacityBytes`；`replyPerConnectionCapacityBytes <= replyGlobalCapacityBytes`；并且 `control + chunk + 1024 <= replyMaxTotalBytes`。任何一条不满足都算配置错误，不是运行时背压信号。reply 所有权、result-unknown 与关闭语义以 [`production-hardening-operations.md`](./production-hardening-operations.md) 为准。
 
 ### TTL、maintenance 与 defrag
 
-| 选项 | 默认 | 范围/约束 | 生效阶段 |
+| 配置键 | 默认 | 范围/约束 | 生效阶段 |
 | --- | ---: | --- | --- |
-| `--cleanupIntervalMillis` | `1000` | `>= 0`；`0` 切换为纯 deferred reclamation | maintenance tick 周期 |
-| `--noCleanup` | 关 | flag，归一化为 `cleanupIntervalMillis=0` | 同上 |
-| `--expireCleanupTimeLimitMillis` | `5` | `> 0` | 单次 expire cleanup 时间预算 |
-| `--keysTimeBudgetMillis` | `0` | `>= 0`；`0` 不设时间预算 | `KEYS` 扫描预算 |
-| `--keysMaxResults` | `Integer.MAX_VALUE` | `>= 0`；`0` 禁用 `KEYS` | `KEYS` 最大返回条数 |
-| `--nativeDefragEnabled` | 关 | flag | maintenance tick 里开 defrag |
-| `--nativeDefragMaxMoveBytes` | `65536` | `>= 0` | 每次 tick 最大移动字节 |
-| `--nativeDefragMaxObjects` | `64` | `>= 0` | 每次 tick 最大检查对象数 |
-| `--nativeDefragTimeLimitMillis` | `1` | `>= 0` | defrag 时间预算 |
-| `--nativeSlotCapacity` | `0` | `>= 0`；`0` 保留默认 slot 容量 | native object slot 容量覆盖 |
+| `cleanupIntervalMillis` | `1000` | `>= 0`；`0` 切换为纯 deferred reclamation | maintenance tick 周期 |
+| `noCleanup` | 关 | flag，归一化为 `cleanupIntervalMillis=0` | 同上 |
+| `expireCleanupTimeLimitMillis` | `5` | `> 0` | 单次 expire cleanup 时间预算 |
+| `keysTimeBudgetMillis` | `0` | `>= 0`；`0` 不设时间预算 | `KEYS` 扫描预算 |
+| `keysMaxResults` | `Integer.MAX_VALUE` | `>= 0`；`0` 禁用 `KEYS` | `KEYS` 最大返回条数 |
+| `nativeDefragEnabled` | 关 | flag | maintenance tick 里开 defrag |
+| `nativeDefragMaxMoveBytes` | `65536` | `>= 0` | 每次 tick 最大移动字节 |
+| `nativeDefragMaxObjects` | `64` | `>= 0` | 每次 tick 最大检查对象数 |
+| `nativeDefragTimeLimitMillis` | `1` | `>= 0` | defrag 时间预算 |
+| `nativeSlotCapacity` | `0` | `>= 0`；`0` 保留默认 slot 容量 | native object slot 容量覆盖 |
 
 ### maxmemory 与 eviction
 
-| 选项 | 默认 | 范围/约束 | 生效阶段 |
+| 配置键 | 默认 | 范围/约束 | 生效阶段 |
 | --- | ---: | --- | --- |
-| `--maxmemoryScope` | `global` | `global`/`per-db`（接受 `perdb`/`per_db`） | instance 预算协调范围 |
-| `--maxmemoryPolicy` | `noeviction` | `noeviction`/`allkeys-random`/`allkeys-lru` | eviction 策略 |
-| `--maxmemorySamples` | `5` | `> 0` | 采样数量 |
-| `--evictionTimeLimitMillis` | `5` | `> 0` | 单次 eviction 时间预算 |
+| `maxmemoryScope` | `global` | `global`/`per-db`（接受 `perdb`/`per_db`） | instance 预算协调范围 |
+| `maxmemoryPolicy` | `noeviction` | `noeviction`/`allkeys-random`/`allkeys-lru` | eviction 策略 |
+| `maxmemorySamples` | `5` | `> 0` | 采样数量 |
+| `evictionTimeLimitMillis` | `5` | `> 0` | 单次 eviction 时间预算 |
 
 ## 网络和实例规模
 
-`--ioThreads` 是最容易误解的一项。它们是 Netty worker，只处理 socket I/O、pipeline decode/encode 事件和定时器触发，与 DB mutation 并行度无关。DB 读写和 maintenance 里的 DB 访问都经 `CommandExecutor` 的 owner thread 进入；`YierdisInstance` 同样要求 DB 访问先绑定到 owner thread，跨线程访问会 fail-fast。
+`ioThreads` 是最容易误解的一项。它们是 Netty worker，只处理 socket I/O、pipeline decode/encode 事件和定时器触发，与 DB mutation 并行度无关。DB 读写和 maintenance 里的 DB 访问都经 `CommandExecutor` 的 owner thread 进入；`YierdisInstance` 同样要求 DB 访问先绑定到 owner thread，跨线程访问会 fail-fast。
 
 单 owner 是有意保留的执行模型，并非“调大 `CommandExecutor` 线程数就能消除”的临时限制。`DefaultEventExecutorGroup(1)` 的线程数写死在 bootstrap 里，它让 keyspace、TTL、stable backend、mutation ledger 和连接会话在同一条命令序列中推进，DB state 无需在每个结构内部再实现并发写入协议。
 
@@ -165,10 +166,10 @@ benchmark 不持有 server 参数或生命周期模型，只连接由操作者�
 
 ```bash
 mvn -q -DskipTests package
-java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 6378 --maxmemoryBytes 0
+java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar
 ```
 
-注意这里必须带上 `--maxmemoryBytes`。省略它会在 stderr 打一行原因并以退出码 2 结束，这是有意的安全护栏：把“忘记配置容量上限”和“明确选择无限制”区分开。
+仓库根目录自带一份 `yierdis.conf` 模板：全部配置键都在里面，非必填键以注释形式给出默认值，取消注释即可覆盖。注意配置文件里必须显式带 `maxmemoryBytes` 键（模板中已默认 `=0`）。省略它会在 stderr 打一行原因并以退出码 2 结束，这是有意的安全护栏：把"忘记配置容量上限"和"明确选择无限制"区分开。
 
 启动后可以用 `redis-cli` 或项目 CLI：
 
@@ -180,22 +181,22 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar STATS
 
 ## 协议入口限制
 
-`--protocolMaxBulkBytes`、`--protocolMaxArgs`、`--protocolMaxLineBytes` 和 `--protocolMaxCommandBytes` 会直接传给 `RespRequestDecoder`，分别约束 bulk body、参数个数、header/inline 行长度，以及单条命令的 heap footprint 估算字节数（`HeapRequestFootprint` 口径，含请求对象、argv 槽位和每个参数的数组头与对齐 payload，不等于纯 payload 求和）。`--protocolGlobalInFlightBytes` 则约束 ingress 全局在途内存，见上文。暴露在不可信网络里时，优先收紧这几个入口上限，再考虑更深层的内存调参。
+`protocolMaxBulkBytes`、`protocolMaxArgs`、`protocolMaxLineBytes` 和 `protocolMaxCommandBytes` 会直接传给 `RespRequestDecoder`，分别约束 bulk body、参数个数、header/inline 行长度，以及单条命令的 heap footprint 估算字节数（`HeapRequestFootprint` 口径，含请求对象、argv 槽位和每个参数的数组头与对齐 payload，不等于纯 payload 求和）。`protocolGlobalInFlightBytes` 则约束 ingress 全局在途内存，见上文。暴露在不可信网络里时，优先收紧这几个入口上限，再考虑更深层的内存调参。
 
 解析失败会走 RESP protocol error 路径：`RespRequestDecoder` 做 RESP 解析、入口限制和 ingress admission，出错时把 `RespProtocolError` 放进已注册 reply slot；协议错误由 `NettyExecutionRequestIngress` 统一回复并关闭连接，避免请求和回包错位。这个路径不进入 command executor。
 
 ## executor 和背压
 
-executor 参数分两类：全局队列预算（`--executorQueueCapacity`、`--executorQueueMaxBytes`、`--executorSchedulingPolicy`、`--executorMaxDrain`、`--executorDrainMillis`）和单连接背压（`--backpressureHigh/Low`、`--backpressureBytesHigh/Low`）。默认值见上表。
+executor 参数分两类：全局队列预算（`executorQueueCapacity`、`executorQueueMaxBytes`、`executorSchedulingPolicy`、`executorMaxDrain`、`executorDrainMillis`）和单连接背压（`backpressureHigh/Low`、`backpressureBytesHigh/Low`）。默认值见上表。
 
 `YierdisServerRuntimeConfig.executorConfig()` 把已经校验的 runtime 字段映射成 `CommandExecutorConfig`。`CommandExecutor` 只有一个 owner executor，启动时 `executor.start()` 在 owner 上调用 `bindToCurrentThread`，之后通过 `tryAcquire(...)` 和 `ExecutorAdmission.publish(...)` 接收 Netty pipeline 交来的请求。
 
 可以这样理解“改一个值会怎样”：
 
-- 调大 `--executorQueueCapacity`：全局 backlog 能容纳更多未执行任务，高并发下更少触发 `Unavailable`（输入暂停），但队列积压延迟上限也更高。它同时抬高了全局背压高水位（约为容量的 75%）。
-- 把 `--executorQueueMaxBytes` 设为 `0`：完全关闭 queued bytes 预算，只按任务数限制 backlog；此时任何单请求都不会因为 bytes 超限被拒，也观测不到 `submit_rejected_bytes_budget_total`。
-- 收紧 `--backpressureHigh/Low`：单连接更早停收，`conn_autoread_disabled_by_executor` 更频繁为 `1`，但低水位滞回避免 `autoRead` 抖动。
-- 调大 `--executorMaxDrain` / `--executorDrainMillis`：单轮 drain 处理更多命令再让出，吞吐更平滑但单轮延迟更长。
+- 调大 `executorQueueCapacity`：全局 backlog 能容纳更多未执行任务，高并发下更少触发 `Unavailable`（输入暂停），但队列积压延迟上限也更高。它同时抬高了全局背压高水位（约为容量的 75%）。
+- 把 `executorQueueMaxBytes` 设为 `0`：完全关闭 queued bytes 预算，只按任务数限制 backlog；此时任何单请求都不会因为 bytes 超限被拒，也观测不到 `submit_rejected_bytes_budget_total`。
+- 收紧 `backpressureHigh/Low`：单连接更早停收，`conn_autoread_disabled_by_executor` 更频繁为 `1`，但低水位滞回避免 `autoRead` 抖动。
+- 调大 `executorMaxDrain` / `executorDrainMillis`：单轮 drain 处理更多命令再让出，吞吐更平滑但单轮延迟更长。
 
 queue slot 或 bytes budget 暂时不足时，ingress 暂停输入并等待容量（`onAdmissionAvailable` 注册一次性回调），不会立即生成 busy reply。单个请求本身超过 bytes hard limit 时返回：
 
@@ -211,8 +212,8 @@ ERR request exceeds executor queue byte limit
 
 事务队列是连接级状态，创建连接时 `NettyExecutionConnection.getOrCreate(...)` 会把：
 
-- `--transactionQueueMaxCommands`
-- `--transactionQueueMaxBytes`
+- `transactionQueueMaxCommands`
+- `transactionQueueMaxBytes`
 
 传给 `EngineSession` 的 `DefaultTransactionState`。默认值分别是 `1024` 和 `67108864`；`0` 表示对应限制禁用。
 
@@ -224,16 +225,16 @@ ERR request exceeds executor queue byte limit
 
 TTL 语义是“访问时惰性删除 + 轻量后台清理”。相关参数见上表，这里说清默认行为：
 
-- `--cleanupIntervalMillis` 默认 `1000` ms。它决定 maintenance tick 的周期，也决定 tick 里跑什么。
-- 设为 `0`（或 `--noCleanup`）**不是完全停掉定时器**：bootstrap 会把周期改成固定 `DEFERRED_RECLAMATION_INTERVAL_MILLIS = 1000` ms，并把 tick 内容从 `maintenanceTick` 换成 `deferredReclamationTick`。换句话说，周期性 expire cleanup 被关掉，但延迟回收仍需周期性推进。
+- `cleanupIntervalMillis` 默认 `1000` ms。它决定 maintenance tick 的周期，也决定 tick 里跑什么。
+- 设为 `0`（或 `noCleanup`）**不是完全停掉定时器**：bootstrap 会把周期改成固定 `DEFERRED_RECLAMATION_INTERVAL_MILLIS = 1000` ms，并把 tick 内容从 `maintenanceTick` 换成 `deferredReclamationTick`。换句话说，周期性 expire cleanup 被关掉，但延迟回收仍需周期性推进。
 
 bootstrap 使用 Netty worker event loop 做定时器，但定时器只提交 `executor.executeMaintenance(...)`。真正的 DB cleanup、global maxmemory maintenance 和 native defrag 都在 DB owner thread 上执行。调度侧用一个 `AtomicBoolean maintenancePending` 做 coalesce：上一轮还没结束就跳过本轮，避免高压下堆积追赶式 maintenance 任务。
 
-`--nativeDefragEnabled` 只是给 `YierdisDb.defragMaintenance()` 提供预算闸门；更细的移动、pin、quarantine 和 object table 语义看 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
+`nativeDefragEnabled` 只是给 `YierdisDb.defragMaintenance()` 提供预算闸门；更细的移动、pin、quarantine 和 object table 语义看 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 
-`KEYS` 的时间和结果数预算由 bootstrap 转成 `SlowCommandLimits`，再由 `DefaultCommandModules.create(...)` 注入命令模块。大 keyspace 运行时优先使用 `SCAN`，把 `KEYS` 当成受限诊断工具；`--keysMaxResults=0` 会直接禁用 `KEYS`。
+`KEYS` 的时间和结果数预算由 bootstrap 转成 `SlowCommandLimits`，再由 `DefaultCommandModules.create(...)` 注入命令模块。大 keyspace 运行时优先使用 `SCAN`，把 `KEYS` 当成受限诊断工具；`keysMaxResults=0` 会直接禁用 `KEYS`。
 
-连接空闲超时 `--client-idle-timeout-millis` 默认 `0`，表示不因空闲主动断开；不可信或资源紧张的部署可以显式设置正值。
+连接空闲超时 `client-idle-timeout-millis` 默认 `0`，表示不因空闲主动断开；不可信或资源紧张的部署可以显式设置正值。
 
 当前 native-memory 路径统一使用 JDK 25 FFM。更细的 runtime、region、arena 和 copy 边界见 [`native-memory-runtime.md`](./native-memory-runtime.md)。
 
@@ -256,13 +257,13 @@ TTL 命令写路径、lazy expire、cleanup sample/budget 和 expiration reclama
 
 `YierdisServerChannelInitializer.initChannel(...)` 在连接建立时按顺序做这些事：
 
-1. 连接准入：`childChannelRegistry.admit(ch)`，超过 `--maxClients` 直接不装 pipeline。
-2. 当 `--client-output-buffer-limit-bytes` 大于 `0` 时，把 Netty channel 的 `WriteBufferWaterMark` 设成 `low = max(1, high/2)`、`high = limit`；为 `0` 时不覆盖 channel 原有 watermark。
+1. 连接准入：`childChannelRegistry.admit(ch)`，超过 `maxClients` 直接不装 pipeline。
+2. 当 `client-output-buffer-limit-bytes` 大于 `0` 时，把 Netty channel 的 `WriteBufferWaterMark` 设成 `low = max(1, high/2)`、`high = limit`；为 `0` 时不覆盖 channel 原有 watermark。
 3. 创建 `NettyExecutionConnection`（含 `EngineSession` 和事务队列上限）并绑定 owner task executor；注册 `closeFuture` 回调做 `markClosing`。
 4. 装配 inbound budget、`InboundReadCreditHandler`、`ConnectionReplySequencer`、reply gate 和 `RespRequestDecoder`。
 5. 始终安装 `WriteBufferBackpressureHandler`。channel 不可写时调用 `executor.onTransportUnwritable(...)`，executor 关闭该连接 `autoRead`；恢复可写时由 owner executor 调用 `recoverInputIfPossible(...)`。
-6. 如果 channel 持续不可写超过宽限期，经 `NettyExecutionConnection.initiateClose()` 统一关闭：先标记 closing、回收事务状态，再关闭 transport；`--client-output-buffer-limit-bytes` 为 `0` 时 handler 的 grace 为 `0`，不会调度这类慢客户端宽限关闭。
-7. 当 `--client-idle-timeout-millis` 大于 `0` 时安装 `IdleStateHandler` 和 `CloseOnReadIdleHandler`，读空闲超时后同样经 `initiateClose()` 关闭连接。
+6. 如果 channel 持续不可写超过宽限期，经 `NettyExecutionConnection.initiateClose()` 统一关闭：先标记 closing、回收事务状态，再关闭 transport；`client-output-buffer-limit-bytes` 为 `0` 时 handler 的 grace 为 `0`，不会调度这类慢客户端宽限关闭。
+7. 当 `client-idle-timeout-millis` 大于 `0` 时安装 `IdleStateHandler` 和 `CloseOnReadIdleHandler`，读空闲超时后同样经 `initiateClose()` 关闭连接。
 8. 最后按序追加 `inboundReadCredit`、`inboundByteAccounting`、`respRequestDecoder`、`executionRequestIngress`。
 
 这层保护处理的是慢读客户端和闲置连接，和 executor queue/backpressure 互补：前者看 Netty outbound buffer 和读空闲，后者看入站请求积压。即使关闭 Yierdis 自定义 output-buffer limit，Netty channel 仍然有自身的 writability 状态；如果 channel 按当前 watermark 变为不可写，transport backpressure 仍会暂停 `autoRead`。
@@ -302,46 +303,48 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar OBJECT ENCODING myke
 
 **本地开发**：先按 `README.md` 跑默认 server，再用 CLI 或 `redis-cli` 执行 `PING`、`SET`、`GET`、`INFO yierdis`、`STATS`。需要看数据结构时加 `OBJECT ENCODING`；需要看预算口径时加 `MEMORY STATS` 和 `MEMORY USAGE`。
 
-**弱隔离或不可信客户端**：优先收紧 `--protocolMaxBulkBytes`、`--protocolMaxArgs`、`--protocolMaxLineBytes`、`--protocolMaxCommandBytes` 和 `--protocolGlobalInFlightBytes`，再设置 `--client-idle-timeout-millis`、`--client-output-buffer-limit-bytes` 和 `--client-output-buffer-over-limit-millis`。随后根据 `STATS` 中的 reject 和 backpressure 计数调整 executor queue/backpressure。
+**弱隔离或不可信客户端**：优先收紧 `protocolMaxBulkBytes`、`protocolMaxArgs`、`protocolMaxLineBytes`、`protocolMaxCommandBytes` 和 `protocolGlobalInFlightBytes`，再设置 `client-idle-timeout-millis`、`client-output-buffer-limit-bytes` 和 `client-output-buffer-over-limit-millis`。随后根据 `STATS` 中的 reject 和 backpressure 计数调整 executor queue/backpressure。
 
-**高并发压测**：不要只增加 `--ioThreads`。Netty worker 只扩大 I/O 处理能力，DB mutation 仍经 executor owner thread。更关键的是固定 workload shape，用相同的 `REQUESTS`、`CLIENTS`、`PIPELINE`、`DATA_SIZE` 和 server 参数比较结果：
+**高并发压测**：不要只增加 `ioThreads`。Netty worker 只扩大 I/O 处理能力，DB mutation 仍经 executor owner thread。更关键的是固定 workload shape，用相同的 `REQUESTS`、`CLIENTS`、`PIPELINE`、`DATA_SIZE` 和 server 参数比较结果：
 
 ```bash
 REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
 ```
 
-benchmark 只连已运行的 server，脚本不会替你启动或停止 Yierdis；`scripts/bench.sh` 默认目标是 `127.0.0.1:16378`，而 server 默认监听 `6378`，所以压测要么给 server 传 `--port 16378`，要么给脚本设 `PORT=6378`。
+benchmark 只连已运行的 server，脚本不会替你启动或停止 Yierdis；`scripts/bench.sh` 默认目标是 `127.0.0.1:16378`，而 server 默认监听 `6378`，所以压测要么给 server 传 `port 16378`，要么给脚本设 `PORT=6378`。
 
-**大 keyspace 或慢扫描**：优先用 `SCAN`，并用 `--keysTimeBudgetMillis`、`--keysMaxResults` 控制 `KEYS` 风险。TTL 或 native defrag 压力明显时，检查 `--cleanupIntervalMillis`、`--expireCleanupTimeLimitMillis` 和 native defrag budget；用 `MEMORY STATS` 观察 rehash/reserved，用 `INFO` memory section 观察 native defrag 摘要。
+**大 keyspace 或慢扫描**：优先用 `SCAN`，并用 `keysTimeBudgetMillis`、`keysMaxResults` 控制 `KEYS` 风险。TTL 或 native defrag 压力明显时，检查 `cleanupIntervalMillis`、`expireCleanupTimeLimitMillis` 和 native defrag budget；用 `MEMORY STATS` 观察 rehash/reserved，用 `INFO` memory section 观察 native defrag 摘要。
 
-**maxmemory 调试**：先决定 scope。想模拟实例级 Redis 风格预算，用默认 `--maxmemoryScope global`；想验证每个 DB 独立预算，用 `--maxmemoryScope per-db`。例如：
+**maxmemory 调试**：先决定 scope。想模拟实例级 Redis 风格预算，用默认 `maxmemoryScope global`；想验证每个 DB 独立预算，用 `maxmemoryScope per-db`。例如：
 
 ```bash
-java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar \
-  --port 6378 \
-  --maxmemoryBytes 10485760 \
-  --maxmemoryScope global \
-  --maxmemoryPolicy allkeys-lru \
-  --maxmemorySamples 5
+cat > /tmp/yierdis-maxmemory.conf <<'EOF'
+port=6378
+maxmemoryBytes=10485760
+maxmemoryScope=global
+maxmemoryPolicy=allkeys-lru
+maxmemorySamples=5
+EOF
+java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --config /tmp/yierdis-maxmemory.conf
 ```
 
 ## 启动失败和关闭
 
 启动失败常见位置：
 
-- 参数解析失败：`YierdisServerArgs.parse(...)` 抛 `IllegalArgumentException`，`ServerConfig.fromArgs(...)` 只在 stderr 打一行错误（不打印 usage，退出码 2）。
-- 缺少 `--maxmemoryBytes`：同样打一行错误，提示必须显式指定。
-- 参数校验失败：`normalizeAndValidate()` / `YierdisServerRuntimeConfig` 抛 `IllegalArgumentException`，例如端口越界、watermark 非法、output buffer grace 为 `0`、reply 容量顺序不满足。
+- 配置文件缺失或未知键：`YierdisServerFileConfig.fromProperties(...)` 抛 `IllegalArgumentException`，`ServerConfig.fromArgs(...)` 只在 stderr 打一行错误（不打印 usage，退出码 2）。
+- 缺少 `maxmemoryBytes` 键：同样打一行错误，提示必须显式指定。
+- 配置校验失败：`normalizeAndValidate()` / `YierdisServerRuntimeConfig` 抛 `IllegalArgumentException`，例如端口越界、watermark 非法、output buffer grace 为 `0`、reply 容量顺序不满足。
 - JDK 不满足要求：启动前使用 JDK 25 编译/运行环境；直接 FFM imports 会在不兼容环境中失败。
 - 端口绑定失败：Netty `bind(...)` 报错。
 - DB/native runtime 初始化失败：`YierdisInstance.create(...)` 会 best-effort 关闭已创建 DB 和 factory-owned resources 再抛出启动失败。
 
 `YierdisServerBootstrap.start(config)` 使用 `ok` 标记，启动任一步失败都会调用 `close()` 做清理；`close()` 用 `closeAttempt` 保证幂等，状态从 `CLOSING` 推进到 `CLOSED`，失败则 `FAILED`。
 
-关闭是 best-effort，`closeInternal()` 顺序大致是：server channel → child input（`beginShutdown` + `markClosing`）→ cleanup future → executor graceful shutdown → child reply drain（受 `--replyDrainTimeoutMillis` 限制，超时则 force-close）→ inbound/outbound budget → instance runtime access → command group → boss group → worker group。runtime access 的关闭会经 `executor.executeOwnerTask(runtimeAccess::close)` 回到 owner thread，避免在错误线程释放已绑定 DB runtime。某一步失败会记进聚合的 failure 并继续关闭后续资源，最后一起抛出。
+关闭是 best-effort，`closeInternal()` 顺序大致是：server channel → child input（`beginShutdown` + `markClosing`）→ cleanup future → executor graceful shutdown → child reply drain（受 `replyDrainTimeoutMillis` 限制，超时则 force-close）→ inbound/outbound budget → instance runtime access → command group → boss group → worker group。runtime access 的关闭会经 `executor.executeOwnerTask(runtimeAccess::close)` 回到 owner thread，避免在错误线程释放已绑定 DB runtime。某一步失败会记进聚合的 failure 并继续关闭后续资源，最后一起抛出。
 
 脚本层关闭逻辑也要按真实进程处理：谁启动 server，谁负责用 `trap … EXIT` 把它停掉；connect-only benchmark 不拥有也不停止目标 Yierdis。
 
 ## Production Hardening Operations
 
-reply global/per-connection/single limits、ingress admission、maxmemory、result-unknown 和 graceful shutdown 共同构成运行时容量边界。精确默认值、启动校验、INFO/STATS 字段、漏账排查和发布命令以 [`production-hardening-operations.md`](./production-hardening-operations.md) 为准；不要只用 `--client-output-buffer-limit-bytes` 或 JVM heap 来判断这些硬限制是否生效。
+reply global/per-connection/single limits、ingress admission、maxmemory、result-unknown 和 graceful shutdown 共同构成运行时容量边界。精确默认值、启动校验、INFO/STATS 字段、漏账排查和发布命令以 [`production-hardening-operations.md`](./production-hardening-operations.md) 为准；不要只用 `client-output-buffer-limit-bytes` 或 JVM heap 来判断这些硬限制是否生效。

@@ -6,9 +6,10 @@ import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
 import java.util.LinkedHashSet;
+import java.util.Properties;
 import java.util.Set;
 
-public final class YierdisServerArgs {
+public final class YierdisServerFileConfig {
     private static final int DEFAULT_PROTOCOL_MAX_BULK_BYTES = RespProtocolLimits.DEFAULT_MAX_BULK_BYTES;
     private static final int DEFAULT_PROTOCOL_MAX_ARGS = RespProtocolLimits.DEFAULT_MAX_ARGS;
     private static final int DEFAULT_PROTOCOL_MAX_LINE_BYTES = RespProtocolLimits.DEFAULT_MAX_INLINE_BYTES;
@@ -117,7 +118,7 @@ public final class YierdisServerArgs {
 
     public int keysMaxResults = Integer.MAX_VALUE;
 
-    private final Set<String> specifiedOptions = new LinkedHashSet<>();
+    private final Set<String> specifiedKeys = new LinkedHashSet<>();
 
     private SchedulingPolicy parsedExecutorSchedulingPolicy;
     private YierdisInstanceConfig.MaxmemoryScope parsedMaxmemoryScope;
@@ -125,141 +126,123 @@ public final class YierdisServerArgs {
     private YierdisServerRuntimeConfig cachedRuntimeConfig;
 
     /**
-     * 手写 argv 解析（无 picocli）：只认识 assign(...) 里列出的 --选项与两个 flag，其余一律报错。
-     * 支持 "--name value" 与 "--name=value" 两种写法；未知选项与位置参数都是错误。
+     * 从 Properties 构造配置（启动配置文件的唯一来源）。键名不带 "--" 前缀；
+     * 未知键一律报错（拼错的键静默失效是线上事故的经典来源），缺省键取字段默认值。
+     * 布尔项（noCleanup、nativeDefragEnabled）的值为 "true"/"false"，空值按 true 处理。
      */
-    public static YierdisServerArgs parse(String... argv) {
-        YierdisServerArgs args = new YierdisServerArgs();
-        for (int i = 0; i < argv.length; i++) {
-            String name = argv[i];
-            String value = null;
-            if (name.startsWith("--")) {
-                int eq = name.indexOf('=');
-                if (eq >= 0) {
-                    value = name.substring(eq + 1);
-                    name = name.substring(0, eq);
-                }
-            }
+    public static YierdisServerFileConfig fromProperties(Properties props) {
+        YierdisServerFileConfig config = new YierdisServerFileConfig();
+        for (String name : props.stringPropertyNames()) {
+            String value = props.getProperty(name);
             switch (name) {
-                case "--noCleanup":
-                    rejectInlineValue(name, value);
-                    args.noCleanup = true;
-                    break;
-                case "--nativeDefragEnabled":
-                    rejectInlineValue(name, value);
-                    args.nativeDefragEnabled = true;
-                    break;
-                default: {
-                    if (!isValueOption(name)) {
-                        throw unknown(name, i);
+                case "noCleanup" -> config.noCleanup = booleanValue(name, value);
+                case "nativeDefragEnabled" -> config.nativeDefragEnabled = booleanValue(name, value);
+                default -> {
+                    if (!isValueKey(name)) {
+                        throw new IllegalArgumentException("Unknown configuration key: '" + name + "'");
                     }
-                    if (value == null) {
-                        if (++i >= argv.length) {
-                            throw new IllegalArgumentException("Missing required parameter for option '" + name + "'");
-                        }
-                        value = argv[i];
-                    }
-                    assign(args, name, value);
+                    assign(config, name, value);
                 }
             }
-            args.specifiedOptions.add(name);
+            config.specifiedKeys.add(name);
         }
-        return args;
+        return config;
     }
 
-    /** 解析时是否显式给了某个选项（用于强制要求 --maxmemoryBytes 的检查）。 */
-    public boolean wasSpecified(String name) {
-        return specifiedOptions.contains(name);
+    /** 配置里是否显式给了某个键（用于强制要求 maxmemoryBytes 的检查）。 */
+    public boolean wasSpecified(String key) {
+        return specifiedKeys.contains(key);
     }
 
-    private static boolean isValueOption(String name) {
+    private static boolean isValueKey(String name) {
         return switch (name) {
-            case "--bind", "--port", "--maxClients", "--databases", "--cleanupIntervalMillis",
-                 "--ioThreads", "--executorQueueCapacity", "--executorQueueMaxBytes",
-                 "--executorSchedulingPolicy", "--backpressureHigh", "--backpressureLow",
-                 "--backpressureBytesHigh", "--backpressureBytesLow", "--executorMaxDrain",
-                 "--executorDrainMillis", "--transactionQueueMaxCommands", "--transactionQueueMaxBytes",
-                 "--protocolMaxBulkBytes", "--protocolMaxArgs", "--protocolMaxLineBytes",
-                 "--protocolMaxCommandBytes", "--protocolGlobalInFlightBytes",
-                 "--client-idle-timeout-millis", "--client-output-buffer-limit-bytes",
-                 "--client-output-buffer-over-limit-millis",
-                 "--replyGlobalCapacityBytes", "--replyPerConnectionCapacityBytes", "--replyMaxTotalBytes",
-                 "--replyChunkPayloadBytes", "--replyControlReservationBytes", "--replyDrainTimeoutMillis",
-                 "--maxmemoryBytes", "--maxmemoryScope", "--maxmemoryPolicy", "--maxmemorySamples",
-                 "--evictionTimeLimitMillis", "--expireCleanupTimeLimitMillis",
-                 "--nativeDefragMaxMoveBytes", "--nativeDefragMaxObjects", "--nativeDefragTimeLimitMillis",
-                 "--nativeSlotCapacity", "--keysTimeBudgetMillis", "--keysMaxResults" -> true;
+            case "bind", "port", "maxClients", "databases", "cleanupIntervalMillis",
+                 "ioThreads", "executorQueueCapacity", "executorQueueMaxBytes",
+                 "executorSchedulingPolicy", "backpressureHigh", "backpressureLow",
+                 "backpressureBytesHigh", "backpressureBytesLow", "executorMaxDrain",
+                 "executorDrainMillis", "transactionQueueMaxCommands", "transactionQueueMaxBytes",
+                 "protocolMaxBulkBytes", "protocolMaxArgs", "protocolMaxLineBytes",
+                 "protocolMaxCommandBytes", "protocolGlobalInFlightBytes",
+                 "client-idle-timeout-millis", "client-output-buffer-limit-bytes",
+                 "client-output-buffer-over-limit-millis",
+                 "replyGlobalCapacityBytes", "replyPerConnectionCapacityBytes", "replyMaxTotalBytes",
+                 "replyChunkPayloadBytes", "replyControlReservationBytes", "replyDrainTimeoutMillis",
+                 "maxmemoryBytes", "maxmemoryScope", "maxmemoryPolicy", "maxmemorySamples",
+                 "evictionTimeLimitMillis", "expireCleanupTimeLimitMillis",
+                 "nativeDefragMaxMoveBytes", "nativeDefragMaxObjects", "nativeDefragTimeLimitMillis",
+                 "nativeSlotCapacity", "keysTimeBudgetMillis", "keysMaxResults" -> true;
             default -> false;
         };
     }
 
-    private static void assign(YierdisServerArgs args, String name, String raw) {
+    private static void assign(YierdisServerFileConfig config, String name, String raw) {
         switch (name) {
-            case "--bind" -> args.bind = raw;
-            case "--port" -> args.port = intValue(name, raw);
-            case "--maxClients" -> args.maxClients = intValue(name, raw);
-            case "--databases" -> args.databases = intValue(name, raw);
-            case "--cleanupIntervalMillis" -> args.cleanupIntervalMillis = longValue(name, raw);
-            case "--ioThreads" -> args.ioThreads = intValue(name, raw);
-            case "--executorQueueCapacity" -> args.executorQueueCapacity = intValue(name, raw);
-            case "--executorQueueMaxBytes" -> args.executorQueueMaxBytes = longValue(name, raw);
-            case "--executorSchedulingPolicy" -> args.executorSchedulingPolicy = raw;
-            case "--backpressureHigh" -> args.backpressureHighWatermark = intValue(name, raw);
-            case "--backpressureLow" -> args.backpressureLowWatermark = intValue(name, raw);
-            case "--backpressureBytesHigh" -> args.backpressureBytesHighWatermark = longValue(name, raw);
-            case "--backpressureBytesLow" -> args.backpressureBytesLowWatermark = longValue(name, raw);
-            case "--executorMaxDrain" -> args.executorMaxDrainCommands = intValue(name, raw);
-            case "--executorDrainMillis" -> args.executorDrainTimeLimitMillis = longValue(name, raw);
-            case "--transactionQueueMaxCommands" -> args.transactionQueueMaxCommands = intValue(name, raw);
-            case "--transactionQueueMaxBytes" -> args.transactionQueueMaxBytes = longValue(name, raw);
-            case "--protocolMaxBulkBytes" -> args.protocolMaxBulkBytes = intValue(name, raw);
-            case "--protocolMaxArgs" -> args.protocolMaxArgs = intValue(name, raw);
-            case "--protocolMaxLineBytes" -> args.protocolMaxLineBytes = intValue(name, raw);
-            case "--protocolMaxCommandBytes" -> args.protocolMaxCommandBytes = intValue(name, raw);
-            case "--protocolGlobalInFlightBytes" -> args.protocolGlobalInFlightBytes = longValue(name, raw);
-            case "--client-idle-timeout-millis" -> args.clientIdleTimeoutMillis = longValue(name, raw);
-            case "--client-output-buffer-limit-bytes" -> args.clientOutputBufferLimitBytes = longValue(name, raw);
-            case "--client-output-buffer-over-limit-millis" -> args.clientOutputBufferOverLimitMillis = longValue(name, raw);
-            case "--replyGlobalCapacityBytes" -> args.replyGlobalCapacityBytes = longValue(name, raw);
-            case "--replyPerConnectionCapacityBytes" -> args.replyPerConnectionCapacityBytes = longValue(name, raw);
-            case "--replyMaxTotalBytes" -> args.replyMaxTotalBytes = longValue(name, raw);
-            case "--replyChunkPayloadBytes" -> args.replyChunkPayloadBytes = intValue(name, raw);
-            case "--replyControlReservationBytes" -> args.replyControlReservationBytes = longValue(name, raw);
-            case "--replyDrainTimeoutMillis" -> args.replyDrainTimeoutMillis = longValue(name, raw);
-            case "--maxmemoryBytes" -> args.maxmemoryBytes = longValue(name, raw);
-            case "--maxmemoryScope" -> args.maxmemoryScope = raw;
-            case "--maxmemoryPolicy" -> args.maxmemoryPolicy = raw;
-            case "--maxmemorySamples" -> args.maxmemorySamples = intValue(name, raw);
-            case "--evictionTimeLimitMillis" -> args.evictionTimeLimitMillis = longValue(name, raw);
-            case "--expireCleanupTimeLimitMillis" -> args.expireCleanupTimeLimitMillis = longValue(name, raw);
-            case "--nativeDefragMaxMoveBytes" -> args.nativeDefragMaxMoveBytes = longValue(name, raw);
-            case "--nativeDefragMaxObjects" -> args.nativeDefragMaxObjects = longValue(name, raw);
-            case "--nativeDefragTimeLimitMillis" -> args.nativeDefragTimeLimitMillis = longValue(name, raw);
-            case "--nativeSlotCapacity" -> args.nativeSlotCapacity = intValue(name, raw);
-            case "--keysTimeBudgetMillis" -> args.keysTimeBudgetMillis = longValue(name, raw);
-            case "--keysMaxResults" -> args.keysMaxResults = intValue(name, raw);
-            default -> throw new IllegalArgumentException("Unknown option: '" + name + "'");
+            case "bind" -> config.bind = raw;
+            case "port" -> config.port = intValue(name, raw);
+            case "maxClients" -> config.maxClients = intValue(name, raw);
+            case "databases" -> config.databases = intValue(name, raw);
+            case "cleanupIntervalMillis" -> config.cleanupIntervalMillis = longValue(name, raw);
+            case "ioThreads" -> config.ioThreads = intValue(name, raw);
+            case "executorQueueCapacity" -> config.executorQueueCapacity = intValue(name, raw);
+            case "executorQueueMaxBytes" -> config.executorQueueMaxBytes = longValue(name, raw);
+            case "executorSchedulingPolicy" -> config.executorSchedulingPolicy = raw;
+            case "backpressureHigh" -> config.backpressureHighWatermark = intValue(name, raw);
+            case "backpressureLow" -> config.backpressureLowWatermark = intValue(name, raw);
+            case "backpressureBytesHigh" -> config.backpressureBytesHighWatermark = longValue(name, raw);
+            case "backpressureBytesLow" -> config.backpressureBytesLowWatermark = longValue(name, raw);
+            case "executorMaxDrain" -> config.executorMaxDrainCommands = intValue(name, raw);
+            case "executorDrainMillis" -> config.executorDrainTimeLimitMillis = longValue(name, raw);
+            case "transactionQueueMaxCommands" -> config.transactionQueueMaxCommands = intValue(name, raw);
+            case "transactionQueueMaxBytes" -> config.transactionQueueMaxBytes = longValue(name, raw);
+            case "protocolMaxBulkBytes" -> config.protocolMaxBulkBytes = intValue(name, raw);
+            case "protocolMaxArgs" -> config.protocolMaxArgs = intValue(name, raw);
+            case "protocolMaxLineBytes" -> config.protocolMaxLineBytes = intValue(name, raw);
+            case "protocolMaxCommandBytes" -> config.protocolMaxCommandBytes = intValue(name, raw);
+            case "protocolGlobalInFlightBytes" -> config.protocolGlobalInFlightBytes = longValue(name, raw);
+            case "client-idle-timeout-millis" -> config.clientIdleTimeoutMillis = longValue(name, raw);
+            case "client-output-buffer-limit-bytes" -> config.clientOutputBufferLimitBytes = longValue(name, raw);
+            case "client-output-buffer-over-limit-millis" -> config.clientOutputBufferOverLimitMillis = longValue(name, raw);
+            case "replyGlobalCapacityBytes" -> config.replyGlobalCapacityBytes = longValue(name, raw);
+            case "replyPerConnectionCapacityBytes" -> config.replyPerConnectionCapacityBytes = longValue(name, raw);
+            case "replyMaxTotalBytes" -> config.replyMaxTotalBytes = longValue(name, raw);
+            case "replyChunkPayloadBytes" -> config.replyChunkPayloadBytes = intValue(name, raw);
+            case "replyControlReservationBytes" -> config.replyControlReservationBytes = longValue(name, raw);
+            case "replyDrainTimeoutMillis" -> config.replyDrainTimeoutMillis = longValue(name, raw);
+            case "maxmemoryBytes" -> config.maxmemoryBytes = longValue(name, raw);
+            case "maxmemoryScope" -> config.maxmemoryScope = raw;
+            case "maxmemoryPolicy" -> config.maxmemoryPolicy = raw;
+            case "maxmemorySamples" -> config.maxmemorySamples = intValue(name, raw);
+            case "evictionTimeLimitMillis" -> config.evictionTimeLimitMillis = longValue(name, raw);
+            case "expireCleanupTimeLimitMillis" -> config.expireCleanupTimeLimitMillis = longValue(name, raw);
+            case "nativeDefragMaxMoveBytes" -> config.nativeDefragMaxMoveBytes = longValue(name, raw);
+            case "nativeDefragMaxObjects" -> config.nativeDefragMaxObjects = longValue(name, raw);
+            case "nativeDefragTimeLimitMillis" -> config.nativeDefragTimeLimitMillis = longValue(name, raw);
+            case "nativeSlotCapacity" -> config.nativeSlotCapacity = intValue(name, raw);
+            case "keysTimeBudgetMillis" -> config.keysTimeBudgetMillis = longValue(name, raw);
+            case "keysMaxResults" -> config.keysMaxResults = intValue(name, raw);
+            default -> throw new IllegalArgumentException("Unknown configuration key: '" + name + "'");
         }
     }
 
-    private static void rejectInlineValue(String name, String inlineValue) {
-        if (inlineValue != null) {
-            throw new IllegalArgumentException("option '" + name + "' does not take a value");
+    private static boolean booleanValue(String name, String raw) {
+        if (raw == null || raw.isBlank()) {
+            return true;
         }
-    }
-
-    private static IllegalArgumentException unknown(String name, int index) {
-        if (name.startsWith("--")) {
-            return new IllegalArgumentException("Unknown option: '" + name + "'");
+        String normalized = raw.trim();
+        if (normalized.equalsIgnoreCase("true")) {
+            return true;
         }
-        return new IllegalArgumentException("Unmatched argument at index " + index + ": '" + name + "'");
+        if (normalized.equalsIgnoreCase("false")) {
+            return false;
+        }
+        throw new IllegalArgumentException("Invalid value for key '" + name + "': '" + raw + "' is not a boolean");
     }
 
     private static int intValue(String name, String raw) {
         try {
             return Integer.parseInt(raw.trim());
         } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("Invalid value for option '" + name + "': '" + raw + "' is not an int");
+            throw new IllegalArgumentException("Invalid value for key '" + name + "': '" + raw + "' is not an int");
         }
     }
 
@@ -267,7 +250,7 @@ public final class YierdisServerArgs {
         try {
             return Long.parseLong(raw.trim());
         } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("Invalid value for option '" + name + "': '" + raw + "' is not a long");
+            throw new IllegalArgumentException("Invalid value for key '" + name + "': '" + raw + "' is not a long");
         }
     }
 

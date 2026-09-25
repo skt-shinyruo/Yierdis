@@ -37,8 +37,10 @@ mvn -DskipTests package
 
 ```bash
 mvn -q -DskipTests package
-java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 6378 --maxmemoryBytes 0
+java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar
 ```
+
+仓库根目录自带 `yierdis.conf`（默认读取 `./yierdis.conf`，也可用 `--config <path>` 指定），里面列出了全部配置键与默认值；唯一必填的是 `maxmemoryBytes`（`0` 表示承认不限制内存）。
 
 用 `redis-cli` 验证：
 
@@ -107,7 +109,8 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 1. 先单独启动 Yierdis，benchmark 默认目标端口是 `16378`：
 
 ```bash
-java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 16378
+printf 'port=16378\nmaxmemoryBytes=0\n' > /tmp/yierdis-bench-target.conf
+java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --config /tmp/yierdis-bench-target.conf
 ```
 
 2. 在另一个终端运行 Yierdis benchmark：

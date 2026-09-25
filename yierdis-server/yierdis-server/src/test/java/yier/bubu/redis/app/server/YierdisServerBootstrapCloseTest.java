@@ -28,10 +28,9 @@ import java.util.concurrent.atomic.AtomicReference;
 public class YierdisServerBootstrapCloseTest {
     @Test
     public void undrainedChildStillAllowsBudgetsAndRemainingLifecycleResourcesToClose() throws Exception {
-        YierdisServerBootstrap bootstrap = newBootstrap(ServerConfig.fromArgs(new String[]{
-                "--maxmemoryBytes", "0",
+        YierdisServerBootstrap bootstrap = newBootstrap(TestServerConfigs.config(
                 "--replyDrainTimeoutMillis", "10"
-        }));
+        ));
         ChildChannelRegistry registry = new ChildChannelRegistry();
         InboundMemoryBudget inboundBudget = new InboundMemoryBudget(8_192L);
         OutboundMemoryBudget outboundBudget = new OutboundMemoryBudget(8_192L);
@@ -59,11 +58,7 @@ public class YierdisServerBootstrapCloseTest {
 
     @Test
     public void closeDrainsAcceptedChildrenBeforeClosingTheOutboundBudget() throws Exception {
-        YierdisServerBootstrap bootstrap = YierdisServerBootstrap.start(
-                "--port", "0",
-                "--maxmemoryBytes", "0",
-                "--replyDrainTimeoutMillis", "2000"
-        );
+        YierdisServerBootstrap bootstrap = YierdisServerBootstrap.start(TestServerConfigs.config("--replyDrainTimeoutMillis", "2000"));
         try (Socket child = new Socket()) {
             child.connect(new InetSocketAddress("127.0.0.1", bootstrap.port()), 2_000);
             child.setSoTimeout(2_000);
@@ -87,10 +82,9 @@ public class YierdisServerBootstrapCloseTest {
 
     @Test
     public void replyDrainTimeoutReportsLiveOwnershipThenForceCloseReleasesIt() throws Exception {
-        YierdisServerBootstrap bootstrap = newBootstrap(ServerConfig.fromArgs(new String[]{
-                "--maxmemoryBytes", "0",
+        YierdisServerBootstrap bootstrap = newBootstrap(TestServerConfigs.config(
                 "--replyDrainTimeoutMillis", "25"
-        }));
+        ));
         ChildChannelRegistry registry = new ChildChannelRegistry();
         OutboundMemoryBudget budget = new OutboundMemoryBudget(8_192L);
         ReplyEgressStats egressStats = new ReplyEgressStats();
@@ -159,9 +153,7 @@ public class YierdisServerBootstrapCloseTest {
     @Test
     public void closeAggregatesGroupShutdownFailures() throws Exception {
         List<String> closeOrder = Collections.synchronizedList(new ArrayList<>());
-        YierdisServerBootstrap bootstrap = newBootstrap(ServerConfig.fromArgs(new String[]{
-                "--maxmemoryBytes", "0"
-        }));
+        YierdisServerBootstrap bootstrap = newBootstrap(TestServerConfigs.config());
 
         setField(bootstrap, "commandGroup", failingEventExecutorGroup("command-group", closeOrder));
         setField(bootstrap, "bossGroup", failingEventLoopGroup("boss-group", closeOrder));

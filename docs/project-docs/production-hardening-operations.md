@@ -19,7 +19,8 @@ Start from a packaged artifact only after the command above identifies JDK 25:
 
 ```bash
 mvn -DskipTests package
-java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 6378 --maxmemoryBytes 0
+printf 'port=6378\nmaxmemoryBytes=0\n' > /tmp/yierdis-check.conf
+java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --config /tmp/yierdis-check.conf
 ```
 
 Use `INFO`, `INFO stats`, `STATS`, and `MEMORY STATS` to inspect a running process. Do not infer a limit from JVM heap use alone: request, maxmemory/native, and reply ownership are separate bounded domains.
@@ -30,12 +31,12 @@ The following reply limits are hard capacities validated at startup (`YierdisSer
 
 | Option | Default | Meaning |
 | --- | ---: | --- |
-| `--replyGlobalCapacityBytes` | `268435456` | Total admitted RESP reply capacity across all connections (256 MiB). |
-| `--replyPerConnectionCapacityBytes` | `134217728` | Total admitted RESP reply capacity for one connection (128 MiB). |
-| `--replyMaxTotalBytes` | `67108864` | Maximum charge for one top-level reply, including retained source bytes (64 MiB). |
-| `--replyChunkPayloadBytes` | `65536` | Fixed payload capacity of a reply chunk (64 KiB). |
-| `--replyControlReservationBytes` | `4096` | Per-reply-slot reservation kept available for a bounded control/error reply before any business reply bytes are written. |
-| `--replyDrainTimeoutMillis` | `5000` | Graceful reply-drain deadline during shutdown. |
+| `replyGlobalCapacityBytes` | `268435456` | Total admitted RESP reply capacity across all connections (256 MiB). |
+| `replyPerConnectionCapacityBytes` | `134217728` | Total admitted RESP reply capacity for one connection (128 MiB). |
+| `replyMaxTotalBytes` | `67108864` | Maximum charge for one top-level reply, including retained source bytes (64 MiB). |
+| `replyChunkPayloadBytes` | `65536` | Fixed payload capacity of a reply chunk (64 KiB). |
+| `replyControlReservationBytes` | `4096` | Per-reply-slot reservation kept available for a bounded control/error reply before any business reply bytes are written. |
+| `replyDrainTimeoutMillis` | `5000` | Graceful reply-drain deadline during shutdown. |
 
 The server rejects invalid ordering at startup. Control reservation must cover the fixed reply overhead plus the largest normalized scalar error frame; the constants are `REPLY_FIXED_OVERHEAD_BYTES = 1024` and `REPLY_MAX_CONTROL_ERROR_FRAME_BYTES = 515`, so `MIN_REPLY_CONTROL_RESERVATION_BYTES = 1539`. In addition: control reservation must not exceed one-reply capacity; one-reply capacity must not exceed the per-connection capacity; the per-connection capacity must not exceed the global capacity; and the control allowance plus one chunk plus fixed overhead must fit the one-reply limit. Treat a startup validation failure as a configuration error, not as a runtime backpressure signal.
 
@@ -43,10 +44,10 @@ The server rejects invalid ordering at startup. Control reservation must cover t
 
 Sizing is a two-step math problem; never guess a "safe" number.
 
-1. **Ingress.** `--protocolGlobalInFlightBytes` bounds admitted parsed-request ownership. A positive value is taken literally. `0` is not unlimited: it derives `max(128 MiB, 2 × --executorQueueMaxBytes)` (`YierdisServerArgs.deriveProtocolGlobalInFlightBytes`, floor `MIN_PROTOCOL_GLOBAL_IN_FLIGHT_BYTES = 128 MiB`). The protocol parser also enforces `--protocolMaxBulkBytes`, `--protocolMaxArgs`, `--protocolMaxLineBytes`, and `--protocolMaxCommandBytes` before a request reaches the executor.
-2. **Reply.** One reply is charged at most `--replyMaxTotalBytes`. Because control reservation and one chunk must fit that charge, the effective per-reply budget is roughly `replyMaxTotalBytes - (replyControlReservationBytes + replyChunkPayloadBytes) - fixed overhead`. Sum across concurrent connections stays under `--replyGlobalCapacityBytes`, and one connection stays under `--replyPerConnectionCapacityBytes`.
+1. **Ingress.** `protocolGlobalInFlightBytes` bounds admitted parsed-request ownership. A positive value is taken literally. `0` is not unlimited: it derives `max(128 MiB, 2 × executorQueueMaxBytes)` (`YierdisServerFileConfig.deriveProtocolGlobalInFlightBytes`, floor `MIN_PROTOCOL_GLOBAL_IN_FLIGHT_BYTES = 128 MiB`). The protocol parser also enforces `protocolMaxBulkBytes`, `protocolMaxArgs`, `protocolMaxLineBytes`, and `protocolMaxCommandBytes` before a request reaches the executor.
+2. **Reply.** One reply is charged at most `replyMaxTotalBytes`. Because control reservation and one chunk must fit that charge, the effective per-reply budget is roughly `replyMaxTotalBytes - (replyControlReservationBytes + replyChunkPayloadBytes) - fixed overhead`. Sum across concurrent connections stays under `replyGlobalCapacityBytes`, and one connection stays under `replyPerConnectionCapacityBytes`.
 
-Observe the components rather than reasoning about them: read the capacity fields from `INFO stats` (see the observability table) and cross-check against `MEMORY STATS` for the DB side. `--client-output-buffer-limit-bytes` and `--client-output-buffer-over-limit-millis` remain slow-client policy controls; they do not replace the hard reply admission limits above.
+Observe the components rather than reasoning about them: read the capacity fields from `INFO stats` (see the observability table) and cross-check against `MEMORY STATS` for the DB side. `client-output-buffer-limit-bytes` and `client-output-buffer-over-limit-millis` remain slow-client policy controls; they do not replace the hard reply admission limits above.
 
 ### `OutboundMemoryBudget` tracks two different values
 
@@ -100,7 +101,7 @@ Graceful shutdown is an ownership protocol, not merely a listener close. `Yierdi
 2. Close the child-channel registry to late registration (`ChildChannelRegistry.beginShutdown()`) and mark every accepted child as closing (`NettyExecutionConnection.markClosing`), which disables child input.
 3. Cancel the maintenance/cleanup future.
 4. Ask the executor to shut down gracefully (`CommandExecutor.shutdownGracefully()`), rejecting new work, cancelling non-started or capacity-waiting replies, and draining already-started owners.
-5. Let each connection sequencer flush READY heads in receive order (`ConnectionReplySequencer`) and close after the final ordered reply when required; await up to `--replyDrainTimeoutMillis`. On timeout, force-close remaining children (`ChildChannelRegistry.forceClose()`), record `yierdis_reply_shutdown_timeouts`, preserve diagnostics, and report shutdown failure.
+5. Let each connection sequencer flush READY heads in receive order (`ConnectionReplySequencer`) and close after the final ordered reply when required; await up to `replyDrainTimeoutMillis`. On timeout, force-close remaining children (`ChildChannelRegistry.forceClose()`), record `yierdis_reply_shutdown_timeouts`, preserve diagnostics, and report shutdown failure.
 6. Only after child ownership drains, close the ingress and outbound budgets, the instance runtime resources (DB/native), and finally the Netty command group, boss group, and worker group.
 
 A timeout is not a successful close. `yierdis_reply_shutdown_timeouts`, live children, reserved/allocated bytes, and active slot counts are the first diagnostics; the timeout exception message itself carries `liveChildren`, `reservedBytes`, `allocatedBytes`, `activeConnections`, and `activeSlots`. Retrying shutdown after a timeout must not hide the original failure or claim that active leases were safely drained.
@@ -129,8 +130,9 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 Booting the packaged artifact is a manual step: start the jar, then exercise the supported command surface with the bundled CLI or `redis-cli`.
 
 ```bash
+printf 'port=16379\nmaxmemoryBytes=0\n' > /tmp/yierdis-release-check.conf
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-  java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 16379 --maxmemoryBytes 0
+  java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --config /tmp/yierdis-release-check.conf
 redis-cli -p 16379 PING
 ```
 

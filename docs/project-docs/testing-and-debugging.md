@@ -209,8 +209,8 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 ## 最小复现步骤
 
-1. 固定环境：用 JDK 25 起 server（`java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 6378 --maxmemoryBytes 0`），或用最小 fixture 直接建 DB。
-2. 记录输入：命令序列、并发与 pipeline、`--maxmemoryBytes`/reply 上限等非默认配置。
+1. 固定环境：用 JDK 25 起 server（写一份最小 `yierdis.conf` 后 `java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --config <path>`），或用最小 fixture 直接建 DB。
+2. 记录输入：命令序列、并发与 pipeline、`maxmemoryBytes`/reply 上限等非默认配置。
 3. 先在**隔离层**复现：能不用网络就不用（`yierdis-db` direct ops），能不用 DB 就不用（kernel/单元）。隔离层复现成功说明问题在底层。
 4. 采集证据：`INFO stats`、`INFO memory`、`MEMORY STATS`、复现命令序列。
 5. 修复后回到最窄测试，再逐步上移到集成层，确认没有把问题推到另一端。

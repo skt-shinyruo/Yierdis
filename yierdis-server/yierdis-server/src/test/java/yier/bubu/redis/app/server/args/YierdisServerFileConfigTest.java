@@ -4,6 +4,8 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.resp.RespProtocolLimits;
+
+import java.util.Properties;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 
@@ -11,10 +13,10 @@ import java.lang.reflect.RecordComponent;
 import java.util.HashMap;
 import java.util.Map;
 
-public class YierdisServerArgsTest {
+public class YierdisServerFileConfigTest {
     @Test
     public void normalizeLowercasesSchedulingAndPolicy() {
-        YierdisServerArgs args = parse("--executorSchedulingPolicy", "GLOBAL", "--maxmemoryPolicy", "ALLKEYS-LRU");
+        YierdisServerFileConfig args = parse("--executorSchedulingPolicy", "GLOBAL", "--maxmemoryPolicy", "ALLKEYS-LRU");
         args.normalizeAndValidate();
         Assert.assertEquals("global", args.executorSchedulingPolicy);
         Assert.assertEquals("allkeys-lru", args.maxmemoryPolicy);
@@ -22,7 +24,7 @@ public class YierdisServerArgsTest {
 
     @Test
     public void normalizedArgsConvertToRuntimeConfigWithoutLegacyOffheapFields() {
-        YierdisServerArgs args = parse(
+        YierdisServerFileConfig args = parse(
                 "--port", "6380",
                 "--databases", "32",
                 "--noCleanup",
@@ -106,7 +108,7 @@ public class YierdisServerArgsTest {
 
     @Test
     public void clientTimeoutAndOutputBufferArgsAreParsed() {
-        YierdisServerArgs args = parse(
+        YierdisServerFileConfig args = parse(
                 "--client-idle-timeout-millis", "1000",
                 "--client-output-buffer-limit-bytes", "2048",
                 "--client-output-buffer-over-limit-millis", "3000"
@@ -119,7 +121,7 @@ public class YierdisServerArgsTest {
 
     @Test
     public void replyCapacityArgsUseExactDefaultsAndRuntimeConfig() {
-        YierdisServerArgs defaults = new YierdisServerArgs();
+        YierdisServerFileConfig defaults = parse();
         defaults.normalizeAndValidate();
         YierdisServerRuntimeConfig defaultConfig = defaults.toRuntimeConfig();
         Assert.assertEquals(256L * 1024L * 1024L, defaultConfig.replyGlobalCapacityBytes());
@@ -129,7 +131,7 @@ public class YierdisServerArgsTest {
         Assert.assertEquals(4L * 1024L, defaultConfig.replyControlReservationBytes());
         Assert.assertEquals(5_000L, defaultConfig.replyDrainTimeoutMillis());
 
-        YierdisServerArgs args = parse(
+        YierdisServerFileConfig args = parse(
                 "--replyGlobalCapacityBytes", "8192",
                 "--replyPerConnectionCapacityBytes", "4096",
                 "--replyMaxTotalBytes", "4096",
@@ -190,25 +192,25 @@ public class YierdisServerArgsTest {
 
     @Test
     public void invalidPortIsRejected() {
-        YierdisServerArgs args = parse("--port", "-1");
+        YierdisServerFileConfig args = parse("--port", "-1");
         assertThrows(IllegalArgumentException.class, args::normalizeAndValidate);
     }
 
     @Test
     public void invalidWatermarkOrderIsRejected() {
-        YierdisServerArgs args = parse("--backpressureHigh", "10", "--backpressureLow", "10");
+        YierdisServerFileConfig args = parse("--backpressureHigh", "10", "--backpressureLow", "10");
         assertThrows(IllegalArgumentException.class, args::normalizeAndValidate);
     }
 
     @Test
     public void invalidBytesWatermarkOrderIsRejected() {
-        YierdisServerArgs args = parse("--backpressureBytesHigh", "10", "--backpressureBytesLow", "10");
+        YierdisServerFileConfig args = parse("--backpressureBytesHigh", "10", "--backpressureBytesLow", "10");
         assertThrows(IllegalArgumentException.class, args::normalizeAndValidate);
     }
 
     @Test
     public void bytesLowWithoutBytesHighIsRejected() {
-        YierdisServerArgs args = parse("--backpressureBytesHigh", "0", "--backpressureBytesLow", "1");
+        YierdisServerFileConfig args = parse("--backpressureBytesHigh", "0", "--backpressureBytesLow", "1");
         assertThrows(IllegalArgumentException.class, args::normalizeAndValidate);
     }
 
@@ -232,29 +234,29 @@ public class YierdisServerArgsTest {
 
     @Test
     public void deletedOffheapFlagsAreRejectedAtParseTime() {
-        assertThrows(IllegalArgumentException.class, () -> YierdisServerArgs.parse("--offheapBackend", "foreign"));
-        assertThrows(IllegalArgumentException.class, () -> YierdisServerArgs.parse("--offheapMaxBytes", "1"));
-        assertThrows(IllegalArgumentException.class, () -> YierdisServerArgs.parse("--offheapKeysEnabled"));
+        assertThrows(IllegalArgumentException.class, () -> parse("--offheapBackend", "foreign"));
+        assertThrows(IllegalArgumentException.class, () -> parse("--offheapMaxBytes", "1"));
+        assertThrows(IllegalArgumentException.class, () -> parse("--offheapKeysEnabled", "true"));
     }
 
     @Test
     public void invalidMaxmemoryPolicyIsRejected() {
-        YierdisServerArgs args = parse("--maxmemoryPolicy", "random-evict");
+        YierdisServerFileConfig args = parse("--maxmemoryPolicy", "random-evict");
         assertThrows(IllegalArgumentException.class, args::normalizeAndValidate);
     }
 
     @Test
     public void protocolLimitsRejectValuesAboveDecoderSafeMaximum() {
-        YierdisServerArgs bulkArgs = parse("--protocolMaxBulkBytes", Integer.toString(Integer.MAX_VALUE));
+        YierdisServerFileConfig bulkArgs = parse("--protocolMaxBulkBytes", Integer.toString(Integer.MAX_VALUE));
         assertThrows(IllegalArgumentException.class, bulkArgs::normalizeAndValidate);
 
-        YierdisServerArgs argcArgs = parse("--protocolMaxArgs", Integer.toString(Integer.MAX_VALUE));
+        YierdisServerFileConfig argcArgs = parse("--protocolMaxArgs", Integer.toString(Integer.MAX_VALUE));
         assertThrows(IllegalArgumentException.class, argcArgs::normalizeAndValidate);
     }
 
     @Test
     public void protocolCommandBytesParsesAndExportsToRuntimeConfig() {
-        YierdisServerArgs args = parse("--protocolMaxCommandBytes", "1234");
+        YierdisServerFileConfig args = parse("--protocolMaxCommandBytes", "1234");
 
         args.normalizeAndValidate();
 
@@ -264,7 +266,7 @@ public class YierdisServerArgsTest {
 
     @Test
     public void protocolGlobalInFlightBytesPreservesRawCliValueAndDerivesRuntimeDefault() {
-        YierdisServerArgs explicit = parse(
+        YierdisServerFileConfig explicit = parse(
                 "--executorQueueMaxBytes", "67108864",
                 "--protocolGlobalInFlightBytes", "1048576"
         );
@@ -273,26 +275,26 @@ public class YierdisServerArgsTest {
         Assert.assertEquals(1048576L, explicit.protocolGlobalInFlightBytes);
         Assert.assertEquals(1048576L, explicit.toRuntimeConfig().protocolGlobalInFlightBytes());
 
-        YierdisServerArgs minimum = parse("--executorQueueMaxBytes", "67108864");
+        YierdisServerFileConfig minimum = parse("--executorQueueMaxBytes", "67108864");
         minimum.normalizeAndValidate();
         Assert.assertEquals(0L, minimum.protocolGlobalInFlightBytes);
         Assert.assertEquals(128L * 1024L * 1024L, minimum.toRuntimeConfig().protocolGlobalInFlightBytes());
 
-        YierdisServerArgs doubledQueue = parse("--executorQueueMaxBytes", "83886080");
+        YierdisServerFileConfig doubledQueue = parse("--executorQueueMaxBytes", "83886080");
         doubledQueue.normalizeAndValidate();
         Assert.assertEquals(160L * 1024L * 1024L, doubledQueue.toRuntimeConfig().protocolGlobalInFlightBytes());
 
-        YierdisServerArgs overflow = parse("--executorQueueMaxBytes", Long.toString(Long.MAX_VALUE));
+        YierdisServerFileConfig overflow = parse("--executorQueueMaxBytes", Long.toString(Long.MAX_VALUE));
         overflow.normalizeAndValidate();
         Assert.assertEquals(Long.MAX_VALUE, overflow.toRuntimeConfig().protocolGlobalInFlightBytes());
 
-        YierdisServerArgs negative = parse("--protocolGlobalInFlightBytes", "-1");
+        YierdisServerFileConfig negative = parse("--protocolGlobalInFlightBytes", "-1");
         assertThrows(IllegalArgumentException.class, negative::normalizeAndValidate);
     }
 
     @Test
     public void nativeSlotCapacityParsesAndExportsToRuntimeConfig() {
-        YierdisServerArgs args = parse("--nativeSlotCapacity", "2097152");
+        YierdisServerFileConfig args = parse("--nativeSlotCapacity", "2097152");
 
         args.normalizeAndValidate();
 
@@ -302,17 +304,17 @@ public class YierdisServerArgsTest {
 
     @Test
     public void nativeSlotCapacityAllowsZeroAsDefaultSentinelAndRejectsNegativeValues() {
-        YierdisServerArgs zero = parse("--nativeSlotCapacity", "0");
+        YierdisServerFileConfig zero = parse("--nativeSlotCapacity", "0");
         zero.normalizeAndValidate();
         Assert.assertEquals(0, zero.nativeSlotCapacity);
 
-        YierdisServerArgs negative = parse("--nativeSlotCapacity", "-1");
+        YierdisServerFileConfig negative = parse("--nativeSlotCapacity", "-1");
         assertThrows(IllegalArgumentException.class, negative::normalizeAndValidate);
     }
 
     @Test
     public void normalizeAcceptsCorePolicyUnderscoreAliases() {
-        YierdisServerArgs args = parse("--maxmemoryPolicy", "ALLKEYS_RANDOM");
+        YierdisServerFileConfig args = parse("--maxmemoryPolicy", "ALLKEYS_RANDOM");
 
         args.normalizeAndValidate();
 
@@ -322,19 +324,31 @@ public class YierdisServerArgsTest {
 
     @Test
     public void protocolDefaultsMatchProtocolLimitsSsot() {
-        YierdisServerArgs args = new YierdisServerArgs();
+        YierdisServerFileConfig args = parse();
         Assert.assertEquals(RespProtocolLimits.DEFAULT_MAX_BULK_BYTES, args.protocolMaxBulkBytes);
         Assert.assertEquals(RespProtocolLimits.DEFAULT_MAX_ARGS, args.protocolMaxArgs);
         Assert.assertEquals(RespProtocolLimits.DEFAULT_MAX_INLINE_BYTES, args.protocolMaxLineBytes);
         Assert.assertEquals(RespProtocolLimits.DEFAULT_MAX_COMMAND_BYTES, args.protocolMaxCommandBytes);
     }
 
-    private static YierdisServerArgs parse(String... argv) {
-        return YierdisServerArgs.parse(argv);
+    private static YierdisServerFileConfig parse(String... kv) {
+        Properties props = new Properties();
+        for (int i = 0; i < kv.length; i++) {
+            String key = kv[i];
+            if (key.startsWith("--")) {
+                key = key.substring(2);
+            }
+            if (key.equals("noCleanup") || key.equals("nativeDefragEnabled")) {
+                props.setProperty(key, "true");
+            } else {
+                props.setProperty(key, kv[++i]);
+            }
+        }
+        return YierdisServerFileConfig.fromProperties(props);
     }
 
     private static void assertInvalidArgs(String... argv) {
-        YierdisServerArgs args = parse(argv);
+        YierdisServerFileConfig args = parse(argv);
         assertThrows(IllegalArgumentException.class, args::normalizeAndValidate);
     }
 

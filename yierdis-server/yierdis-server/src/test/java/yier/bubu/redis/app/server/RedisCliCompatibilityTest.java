@@ -17,10 +17,7 @@ public class RedisCliCompatibilityTest {
     public void redisCliCanPingSetGetAndNegotiateResp3() throws Exception {
         Assume.assumeTrue("redis-cli is not available", commandExists("redis-cli"));
 
-        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
-                "--port", "0",
-                "--maxmemoryBytes", "0"
-        )) {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config())) {
             String port = Integer.toString(server.port());
 
             Assert.assertEquals("PONG", run("redis-cli", "-p", port, "PING").stdoutTrimmed());
