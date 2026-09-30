@@ -47,6 +47,25 @@ flowchart LR
   prepared --> db --> result --> renderer --> writer --> io
 ```
 
+## Netty Pipeline 装配顺序与各 Handler 职责
+
+连接建立时，`YierdisServerChannelInitializer.initChannel(SocketChannel)` 是唯一的 Pipeline 装配入口。它先调用 `childChannelRegistry.admit(ch)` 校验连接上限，随后按严格顺序 `addLast(...)` 装配以下 7 个 Handler：
+
+| 顺序 | Handler 名称 | 类型 | 核心职责 |
+|---|---|---|---|
+| 1 | `writeBufferBackpressure` | `WriteBufferBackpressureHandler` | 监听 `channelWritabilityChanged`：不可写时通知 `executor.onTransportUnwritable(connection)` 并启动慢客户端宽限计时；恢复可写时触发 `executor.onTransportWritable` 重新评估读输入。 |
+| 2 | `idleTimeout` | `IdleStateHandler` | （可选，`clientIdleTimeoutMillis > 0` 时启用）仅监听读空闲 `READER_IDLE`。 |
+| 3 | `idleTimeoutCloser` | `CloseOnReadIdleHandler` | 收到 `READER_IDLE` 事件时通过 `NettyExecutionConnection.initiateClose(channel)` 触发优雅关闭。 |
+| 4 | `inboundReadCredit` | `InboundReadCreditHandler` | 管理单连接与全局入站读额度，通过 `pauseIngress` / `resumeIngress` 控制底层 `channel.config().setAutoRead()` 开闭。 |
+| 5 | `inboundByteAccounting` | `InboundByteAccountingHandler` | 将原始 `ByteBuf` 包装为记账对象 `AccountedInboundBuffer`，确保任何字节在分配前都已过账。 |
+| 6 | `respRequestDecoder` | `RespRequestDecoder` | RESP2/3 协议帧解码与分配前 Ingress Admission 校验，产出封闭的 `RespDecodedMessage`。 |
+| 7 | `executionRequestIngress` | `NettyExecutionRequestIngress` | 处理 `RegisteredRespMessage`，完成 Executor 提交准入，将请求放入排队队列或回写协议错误。 |
+
+同一连接上还绑定了三个关键协作组件：
+- **`InboundConnectionMemory`**：入站内存硬上限保护（`perConnectionHardLimit`），接收缓冲区容量为 `min(8 KiB, protocolMaxCommandBytes)`。
+- **`OutboundMemoryBudget.Connection`**：单连接出站回复内存配额控制。
+- **`ConnectionReplySequencer` + `NettyReplyDecodedMessageGate`**：严格按收包顺序维护 Reply 槽位有序性的回复序列器与门禁。
+
 命令执行部分固定走这条链：
 
 ```text
@@ -261,4 +280,28 @@ backlog 预算由 `ExecutorBacklogBudget` 统一记账：`tryReserve(retainedByt
 - **command error**：parse/prepare 错误由 `CommandDispatcher` 表达为普通 `RedisReply.Error`；回复预留后的可预期执行期错误由 `CommandResult.controlError(...)` 表达为顶层 `RedisReply.ControlError`，`EXEC` 会在聚合前将 child control error 转为普通 `Error`。
 - **execute 后结果未知或渲染失败**：`CommandExecutorExecutionSupport` 区分两种情况——已有字节写出时直接 `cancel` + 关 transport；否则用 control reservation 写 `ERR internal error` 并关闭。`ResultUnknownException` 一律走 `closeResultUnknown`（`markResultUnknown` + `cancel` + 关连接），不能伪造一个确定的 command error。
 
-背压同时受单连接 pending、pending bytes、全局 queue slot、queued bytes、reply capacity 和 channel writability 影响。`NettyExecutionIoAdapter` 与 reply gate 负责有序 flush 和 close-after-reply；Netty 侧 `channelWritabilityChanged` 与 `WriteBufferWaterMark` 的表现见 [`netty-adapter-design.md`](./netty-adapter-design.md)。
+## 回复写回路径与有界 Chunk 处理
+
+语义结果产出后，写回客户端不是一次性将完整数据全部拼装到大 Buffer，而是通过有界 Chunk 管道按槽位有序写出：
+
+```text
+CommandResult / RedisReply
+  -> RedisReplyRenderer (消费语义 Source / Emitter)
+  -> RedisReplyWriter (面向协议端口)
+  -> RespReplyWriter (RESP2/3 编码)
+  -> ReplyReservationSink (校验并转换预留信用)
+  -> BoundedChunkedReplySink (切为固定上限 ByteBuf Chunks，默认 64 KiB)
+  -> ConnectionReplySequencer (严格按收包顺序推进槽位)
+  -> Channel.write(...) (I/O 线程刷入 Socket)
+```
+
+- **有界分块**：`BoundedChunkedReplySink` 把预留额度转为实际 allocated credit，每次只创建固定上限的 `ByteBuf` chunk（`replyChunkPayloadBytes`，默认 64 KiB，每个 chunk 带 `CHUNK_COMPONENT_OVERHEAD_BYTES = 1024` 开销）。对于 `NativeBytesSlice`，通过 8 KiB 的 ThreadLocal scratch 分块读出并写进 chunk，彻底避免在堆内整体 materialize 大 payload。
+- **槽位生命周期**：`ReplySlot` 状态严格演进为 `REGISTERED` → `WAITING_CAPACITY` → `PRODUCING` → `READY` → `WRITING` → `CLEANING` → `TERMINATED`。只有进入 `CLEANING` 后等待所有 in-flight chunks 刷新完成，才最终关闭 outbound lease。
+
+## 背压在 Netty 侧的三条独立通道
+
+系统背压在 Netty Transport 侧通过三条独立通道实施联动，任何一条触发都能暂停请求读取：
+
+1. **入站内存与读额度通道**：`InboundReadCreditHandler` 监控 `InboundMemoryBudget` 与单连接 `InboundConnectionMemory`；额度不足时自动调用 `channel.config().setAutoRead(false)` 暂停 I/O 读包，额度释放后恢复。
+2. **Channel 可写性与慢客户端宽限通道**：Netty 写缓冲区水位（`WriteBufferWaterMark`，高水位由 `clientOutputBufferLimitBytes` 决定）。当 Socket 发送缓冲区堆积导致 `channel.isWritable() == false` 时，`WriteBufferBackpressureHandler` 触发 `executor.onTransportUnwritable` 停读并启动倒计时；若在 `clientOutputBufferOverLimitMillis` 宽限期内持续不可写，则强制触发 `initiateClose(...)` 剔除慢客户端。
+3. **出站回复容量配额通道**：`OutboundMemoryBudget`（全局 + 每连接容量）在预留不足时返回 `WAITING`，Executor 标记 `markInputPausedByReply()` 暂停输入，并在回复写出释放容量后通过 `task.reply.onCapacityAvailable` 回到 owner thread 唤醒排队任务。

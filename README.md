@@ -27,11 +27,11 @@ mvn -DskipTests package
 
 推荐第一轮阅读：
 
-1. [`docs/project-docs/readme.md`](docs/project-docs/readme.md)
-2. [`docs/project-docs/project-overview.md`](docs/project-docs/project-overview.md)
-3. [`docs/project-docs/request-execution-flow.md`](docs/project-docs/request-execution-flow.md)
-4. [`docs/project-docs/module-architecture.md`](docs/project-docs/module-architecture.md)
-5. [`docs/project-docs/development-navigation.md`](docs/project-docs/development-navigation.md)
+1. [`docs/project-docs/readme.md`](docs/project-docs/readme.md) — 内部文档地图
+2. [`docs/project-docs/source-reading-guide.md`](docs/project-docs/source-reading-guide.md) — 源码研读指南与 22 个架构思考题
+3. [`docs/project-docs/project-overview.md`](docs/project-docs/project-overview.md) — 项目全貌、模块依赖拓扑与核心入口
+4. [`docs/project-docs/request-execution-flow.md`](docs/project-docs/request-execution-flow.md) — 端到端请求执行时序与 Netty 适配
+5. [`docs/project-docs/development-navigation.md`](docs/project-docs/development-navigation.md) — 源码修改与验证导航
 
 ## 启动
 
@@ -69,10 +69,10 @@ printf '*2\r\n$3\r\nGET\r\n$1\r\na\r\n' | nc 127.0.0.1 6378
 
 | 目标 | 入口 |
 | --- | --- |
+| 源码研读指南与架构思考题 | [`docs/project-docs/source-reading-guide.md`](docs/project-docs/source-reading-guide.md) |
 | 协议边界和 RESP 行为 | [`docs/project-docs/protocol-reference.md`](docs/project-docs/protocol-reference.md) |
 | 命令层和数据模型 | [`docs/project-docs/commands-and-data-model.md`](docs/project-docs/commands-and-data-model.md) |
-| 配置、maxmemory、backpressure 和运行场景 | [`docs/project-docs/configuration-and-operations.md`](docs/project-docs/configuration-and-operations.md) |
-| 生产 hardening 限制、关闭和验收操作 | [`docs/project-docs/production-hardening-operations.md`](docs/project-docs/production-hardening-operations.md) |
+| 配置、运维、容量加固与关闭验收 | [`docs/project-docs/configuration-and-operations.md`](docs/project-docs/configuration-and-operations.md) |
 | native memory 和 off-heap copy 边界 | [`docs/project-docs/native-memory-runtime.md`](docs/project-docs/native-memory-runtime.md) |
 | CLI 和 benchmark 内部实现 | [`docs/project-docs/client-and-bench-internals.md`](docs/project-docs/client-and-bench-internals.md) |
 | 改代码前的源码导航 | [`docs/project-docs/development-navigation.md`](docs/project-docs/development-navigation.md) |

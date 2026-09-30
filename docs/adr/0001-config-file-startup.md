@@ -24,5 +24,5 @@
 ## 影响
 
 - 启动命令从 `java -jar server.jar --port 6378 --maxmemoryBytes 0` 变为先写 `yierdis.conf` 再 `java -jar server.jar`。
-- 所有运行文档（README、configuration-and-operations、production-hardening-operations 等)中的启动示例改为配置文件形态。
+- 所有运行文档（README、configuration-and-operations 等)中的启动示例改为配置文件形态。
 - cli / bench 的 `--host` / `--port` 等参数不受影响（它们是客户端参数，不是 server 配置）。

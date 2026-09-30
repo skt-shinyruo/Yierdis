@@ -32,7 +32,7 @@ Yierdis 的测试按「隔离粒度」分成四类，再按「测什么」分成
 | CLI / bench | 客户端、catalog、NIO runner、storage footprint、脚本与输出契约 | `YierdisClientTest`（cli）、`RedisBenchmarkCatalogTest`、`NioBenchmarkRunnerTest`、`BenchmarkOutputRendererTest`、`StorageBenchmarkRunnerTest`、`BenchScriptContractTest`（benchmark） |
 | architecture guard | command、DB 和 runtime 边界 | `CommandParseIsolationTest`、`ServerCommandParseIsolationTest`、`YierdisDbArchitectureGuardTest`、`DbEngineReadWriteBoundaryTest` |
 
-查找入口：开发路径看 [`development-navigation.md`](./development-navigation.md)，模块职责看 [`module-architecture.md`](./module-architecture.md)。
+查找入口：开发路径看 [`development-navigation.md`](./development-navigation.md)，模块职责看 [`project-overview.md`](./project-overview.md#模块架构与依赖拓扑)。
 
 ## 改协议时
 
@@ -108,7 +108,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests -am -Dtest=TtlLifecycleDirectOpsTest,ActiveExpirationTest,ExpireSemanticsTest,ExpireConditionFlagsTest,TtlConditionDirectOpsTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-排障顺序：`YierdisTtlOps` -> `YierdisDbKeyLifecycle` -> `YierdisDbExpirationSupport` -> reclamation mutation -> `MEMORY STATS` / `INFO memory` 口径。TTL 细节看 [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)。
+排障顺序：`YierdisTtlOps` -> `YierdisDbKeyLifecycle` -> `YierdisDbExpirationSupport` -> reclamation mutation -> `MEMORY STATS` / `INFO memory` 口径。TTL 细节看 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md#一ttl-与过期生命周期)。
 
 ## 改 maxmemory / eviction 时
 
@@ -134,7 +134,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests -am -Dtest=EntryHandleContractTest,ValueHandleContractTest,KeyHandleContractTest,NativeStorageRegressionTest,OffHeapLeakRegressionTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-排障顺序：`NativeHandle` backend identity / private localRaw -> object table generation -> stable backend pin/quarantine/epoch -> DB handle wrappers -> keyspace/root/value release。详细背景看 [`ffm-primer.md`](./ffm-primer.md)、[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)、[`native-memory-runtime.md`](./native-memory-runtime.md)。
+排障顺序：`NativeHandle` backend identity / private localRaw -> object table generation -> stable backend pin/quarantine/epoch -> DB handle wrappers -> keyspace/root/value release。详细背景看 [`native-memory-runtime.md`](./native-memory-runtime.md)、[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 
 ## 改 executor / backpressure 时
 
@@ -205,7 +205,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 **`MEMORY STATS`**（explainable estimate，不是 JVM object graph）：`maxmemory_bytes`、`used_bytes_for_maxmemory`、`effective_used_bytes_for_maxmemory`、`ledger_used_bytes`、`offheap_used_bytes`、`ledger_reserved_bytes`、`offheap_included_in_maxmemory`、`total_estimated_bytes`、`keys_stored_offheap`、`key_count`、`expire_count`。注意 `ledger_used_bytes` 绑定 `heapDataBytesEstimate`，`ledger_reserved_bytes` 才是 ledger `reservedBytes`。
 
-判断泄漏的判据：稳态下 peak 可以非零，但**当前** `outbound_reserved_bytes` / `outbound_allocated_bytes` / `outbound_active_slots` / `outbound_active_chunks` / `outbound_active_sources` / `live_child_channels` 以及 `inbound_reserved_bytes` 在客户端断开后必须收敛到 0。非零就是泄漏信号。对应测试见 `OffHeapLeakRegressionTest`、`NativeStorageRegressionTest`。完整口径与 shutdown 顺序见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
+判断泄漏的判据：稳态下 peak 可以非零，但**当前** `outbound_reserved_bytes` / `outbound_allocated_bytes` / `outbound_active_slots` / `outbound_active_chunks` / `outbound_active_sources` / `live_child_channels` 以及 `inbound_reserved_bytes` 在客户端断开后必须收敛到 0。非零就是泄漏信号。对应测试见 `OffHeapLeakRegressionTest`、`NativeStorageRegressionTest`。完整口径与 shutdown 顺序见 [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作)。
 
 ## 最小复现步骤
 
@@ -243,4 +243,4 @@ executor/server 改动：executor 单元测试 + server main 集成测试 + 相�
 
 ## Production Hardening Gates
 
-有界 ingress、maxmemory、ordered reply 和 shutdown 的改动都要跑与影响面相符的 focused tests，并用 JDK 25 运行架构守卫。性能证据由操作者分别管理的 Yierdis benchmark 与官方 Redis benchmark 原始结果组成，两边必须使用等价 workload 设置。项目 benchmark 不计算阈值或 artifact ratio，通过/失败判定一律属于外部 policy。完整的 reply matrix、最终 ownership counter 和候选证据要求见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
+有界 ingress、maxmemory、ordered reply 和 shutdown 的改动都要跑与影响面相符的 focused tests，并用 JDK 25 运行架构守卫。性能证据由操作者分别管理的 Yierdis benchmark 与官方 Redis benchmark 原始结果组成，两边必须使用等价 workload 设置。项目 benchmark 不计算阈值或 artifact ratio，通过/失败判定一律属于外部 policy。完整的 reply matrix、最终 ownership counter 和候选证据要求见 [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作)。

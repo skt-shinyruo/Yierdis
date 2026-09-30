@@ -5,8 +5,8 @@ Yierdis 的 DB 层**为什么这样设计**，要从分层意图、层间契约�
 与其它文档的分工：
 
 - [`db-internals.md`](./db-internals.md)：DB 内部结构的**机制与组合参考**（对象是什么、谁调用谁、改哪里要动什么）。
-- [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)、[`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)、[`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)：各专题的完整机制。
-- [`production-hardening-operations.md`](./production-hardening-operations.md)：运维手册（degraded 恢复等）。
+- [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)、[`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)（含 TTL 与过期生命周期）：各专题的完整机制。
+- [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作)：运维手册（degraded 恢复等）。
 
 本文的写法是：**每条设计选择都给出"为什么不选另一条路"以及这条路的代价**。只给结论不给不选它的理由，等于没论证。
 
@@ -95,7 +95,7 @@ object table 槽位存当前 pageId / pageOffset / size / capacity(=descriptor �
 代价：
 
 - 系统多出一个"结果未知"状态，命令层必须能表达它；
-- degraded 是重状态：写入被 `MISCONF DB is in a degraded state; writes are disabled` 拒绝，**连回收类 mutation 一起拒**（`requireWritable` 在读取 `AdmissionMode` 之前执行），且唯一恢复入口 `reconcileAccounting()` 刻意绕过 executor（运维恢复路径见 [`production-hardening-operations.md`](./production-hardening-operations.md)）。
+- degraded 是重状态：写入被 `MISCONF DB is in a degraded state; writes are disabled` 拒绝，**连回收类 mutation 一起拒**（`requireWritable` 在读取 `AdmissionMode` 之前执行），且唯一恢复入口 `reconcileAccounting()` 刻意绕过 executor（运维恢复路径见 [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作)）。
 
 不这样选的后果：commit 后失败若对外报"没发生"，客户端会重试，而重试建立在错误前提上（比如 `INCR` 会被执行两次）；内部若假装回滚，账本会与物理实际不符，且这个偏差会被静默带入后续 admission。
 
@@ -181,7 +181,7 @@ object table 槽位存当前 pageId / pageOffset / size / capacity(=descriptor �
 
 - 新 key 必须走 opaque `StagedEntry`：`EntryTable.reserve()` + `NativeKeyDirectory.stageInsert()`；abort/未发布时 `close()` 幂等释放两者；发布后 token 被消费。
 - **`expireCount` 是派生计数**，随 publish/replace/release 对 `expireAtMillis >= 0` 的变化 ±1，不是独立索引；下溢会抛 `IllegalStateException("derived expire count underflow")`。
-- **`ExpiresIndex`** 是 owner 线程独占的 `PriorityQueue`，只在 **deadline 真的变化**时写新项；touch / `KEEPTTL` 复用旧项；改 TTL / `PERSIST` 不主动清旧项，由消费方惰性判 stale。索引规模可超过存活 TTL key 数，且**不计入 ledger，也不计入物理 committed footprint**（见 [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)）。
+- **`ExpiresIndex`** 是 owner 线程独占的 `PriorityQueue`，只在 **deadline 真的变化**时写新项；touch / `KEEPTTL` 复用旧项；改 TTL / `PERSIST` 不主动清旧项，由消费方惰性判 stale。索引规模可超过存活 TTL key 数，且**不计入 ledger，也不计入物理 committed footprint**（见 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md#一ttl-与过期生命周期)）。
 - `version` 只在语义变化（新 record、TTL 或 flags 变化）时递增，**纯 access-clock touch 保留原 version**；`touchRecord` 在 LRU 下会写回新 record，且要求当前 record 与预期一致才落盘。
 
 **为什么用 stage token 而不是"先插目录再补 entry"**：分两步插会让中间态对其他读可见（一个指向不存在 entry 的 key）。token 把"预留 + 发布"做成显式两阶段，abort 时只需关一个对象；代价是每个 family 的新增路径都要处理这个 token 的生命周期。
@@ -254,7 +254,7 @@ admissionMode == RECLAMATION ? ledger.beginReclamation() : ledger.reserve(upperB
 - TTL 命令通过 prepared entry replace/delete 实现：设 deadline 复用原 entry handle，`PERSIST` 改为 `-1`，已过期输入直接准备删除。**条件判定（NX/XX/GT/LT）在删除分支之前求值**，与 Redis `expireGenericCommand` 顺序一致。
 - `TTL` 秒值按 `(剩余毫秒 + 500) / 1000` 四舍五入，与 Redis 对齐。
 
-细节见 [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)。
+细节见 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md#一ttl-与过期生命周期)。
 
 **为什么是优先队列而不是 Redis 的采样 dict**：优先队列给出"按到期时间精确有序"的保证，队首即最早到期者，不需要随机采样撞运气；代价是 stale 项会堆积（改 TTL 时不清旧项），且队列本身不进任何内存账。
 
@@ -276,7 +276,7 @@ admissionMode == RECLAMATION ? ledger.beginReclamation() : ledger.reserve(upperB
 - Netty I/O 线程**只提交**；真正的 DB 执行在 `SerialOwnerExecutor` 单线程上，维护命令也投到同一个 owner executor。
 - **SCAN / KEYS 一致性靠 epoch + discovery/replay**：`KeyWindow` 在 epoch 内记录 cursor、目录 generation/capacity、glob、过期时间，`emitTo` 时按同一物理范围重放，必须得到相同 count、无多余匹配、结束游标一致，否则抛 `IllegalStateException`。
 - **degraded 不自动恢复**：写入被 `MISCONF DB is in a degraded state; writes are disabled` 拒绝；`reconcileAccounting()` 是唯一显式恢复入口，刻意绕过 mutation executor（degraded 会拒写），把逻辑账本对齐到物理重算值，成功才清除 degraded。持续性记账 bug 会反复以事故暴露，不会被静默抹平。
-- 其运行期副作用是：`requireWritable` 在读取 `AdmissionMode` **之前**执行，因此 degraded 时连 reclamation 类 mutation 也被拒——**过期回收、`DEL`、`FLUSHDB`、读路径惰性回收都会失败**。运维恢复路径见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
+- 其运行期副作用是：`requireWritable` 在读取 `AdmissionMode` **之前**执行，因此 degraded 时连 reclamation 类 mutation 也被拒——**过期回收、`DEL`、`FLUSHDB`、读路径惰性回收都会失败**。运维恢复路径见 [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作)。
 
 **为什么 owner 可以是 Netty I/O 线程之外的一个线程**：FFM 的 `Arena.ofShared()` 允许 region 跨线程关闭，但**这不解除 DB 的 thread confinement**——把 region 当共享对象来关闭是 runtime 层的权限，不是 graph 的权限。二者的边界见 [`native-memory-runtime.md`](./native-memory-runtime.md)。
 
@@ -348,7 +348,7 @@ checkThread
 - 单 DB 淘汰的 `maxAttempts = Math.max(64, keyCount * 2)` 无 int 溢出保护（global governor 的同类计算有）。
 - `INFO memory` 的 `yierdis_maxmemory_per_db_bytes` 用整数除法，与实际"余数 +1"分配可能差 1 字节。
 
-上述观察项的修复状态以 issue #115 及其子任务（#116–#122）为准；degraded 的运维处置见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
+上述观察项的修复状态以 issue #115 及其子任务（#116–#122）为准；degraded 的运维处置见 [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作)。
 
 ## 验证状态
 

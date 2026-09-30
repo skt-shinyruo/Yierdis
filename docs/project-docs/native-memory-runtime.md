@@ -1,8 +1,60 @@
 # Native Memory 运行时
 
-Yierdis 把 JDK 25 FFM 接入 DB，涉及 backend、runtime、region、stable handle、maxmemory，以及必须 materialize 到 heap 的边界。本文讲这些对象谁拥有谁、生命周期怎么走、native 计数如何与 maxmemory 耦合。FFM API 本身的角色见 [`ffm-primer.md`](./ffm-primer.md)。
+Yierdis 把 JDK 25 FFM 接入 DB，涉及 backend、runtime、region、stable handle、maxmemory，以及必须 materialize 到 heap 的边界。本文系统阐述**为什么选用堆外存储**、**堆外内存管理与 C Redis (jemalloc) 的对照**，以及**运行时核心对象的拓扑与生命周期**。FFM API 本身的基础语法见本文 §三（Region 与 FFM 原语访问机制），底层分配器与句柄实现见 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 
-## 当前结构
+## 一、为什么选用堆外存储：JVM 约束与工程推导
+
+用 Java 实现类似 Redis 的高性能内存数据库，JVM 在网络 I/O 与 JIT 编译执行上并不拖累吞吐（热路径性能接近 C，NIO/epoll 无瓶颈，虚拟线程亦能简化并发）。真正的问题集中在 JVM 堆内存模型本身：
+
+### 1. 四大致命内存痛点
+
+1. **GC 停顿 → 尾延迟毛刺（最致命）**：
+   Redis 核心指标是亚毫秒级 P99。C 版 Redis 无 GC 停顿（主要停顿仅来自 fork RDB）；而在 JVM 中，即使是 G1，大堆 Full GC 也会带来数百毫秒 STW，常规 Young GC 也有几十毫秒。若将数据全放在堆内，GC 扫描成本随数据量线性膨胀。只有采用 **小堆 + 大堆外** 并结合低延迟收集器（ZGC / Shenandoah），才能保证数据量增加时不扩大 GC 扫描面，将停顿压制在毫秒甚至亚毫秒内。
+2. **对象头开销 → 内存严重膨胀**：
+   每个 Java 对象带有 12~16 字节对象头（取决于压缩指针开启与否）加 8 字节对齐填充。一个普通的 `Entry + String key + byte[] value` 小 KV，堆内实际占用常是裸数据的 3~5 倍。C 版 Redis 使用 listpack、intset 等紧凑编码把内存利用率推到极致，堆内对象模型天然无法与之竞争。
+3. **堆内存不可精确计量 → 淘汰与配额难以实施**：
+   `maxmemory` 与 LRU/LFU 驱逐依赖精确的字节级物理记账。对复杂的堆内对象图做精确记账几乎不可行，且堆内数据越多，GC 扫描代价越沉重。
+4. **大堆惩罚（CompressedOops 失效）**：
+   当堆大小超过 32GB 时，JVM 将丢失指针压缩（CompressedOops），引用指针从 4 字节膨胀到 8 字节，进一步恶化内存放大问题。
+
+### 2. 堆外存储方案与工程对策
+
+针对上述痛点，Yierdis 确立了**“小堆（元数据/协议） + FFM 堆外（数据内核）”**的架构路线：
+
+| 约束与风险 | 核心工程对策 | 对应实现 |
+|---|---|---|
+| **消除 GC 停顿** | 将所有键值记录移入 FFM 堆外；堆内仅留短生命周期对象与协议缓冲区 | 本文 §三, 本文 |
+| **消除对象头开销** | 采用紧凑连续字节布局（如 72 字节紧凑 `ENTRY_RECORD`）与基于页面的 Slab 分配器 | [`native-allocator-and-handles.md`](./native-allocator-and-handles.md) |
+| **精确物理限额** | 堆外物理页自主记账，精确维护 Committed / Live / Reclaimable 字节 | [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md) |
+| **确定析构防泄漏** | 摒弃不确定的 `DirectByteBuffer` Cleaner，基于 FFM `Arena.close()` 与 Stable Handle 显式引用计数 | 本文 |
+
+---
+
+## 二、堆外内存管理职责分层与 C Redis 对照
+
+选定堆外存储后，内存管理各层能力不再由操作系统或成熟库（如 jemalloc）免费提供，需要由 Yierdis 显式自建：
+
+```text
+层级职责        C Redis（jemalloc 生态）               Yierdis 堆外（FFM 生态）
+策略层          maxmemory 淘汰 · TTL 主动过期           自记账 maxmemory · 采样淘汰 · 预算轮询
+生命周期层      robj 引用计数 · lazy free 后台线程       NativeHandle 引用计数 · Arena Scope · 确定析构
+分配器层        jemalloc (size class + arena + tcache)  自建 Slab/SizeClass on Arena（核心分水岭）
+OS/底层         mmap · fork COW · MADV                  fork不可用 · 手动页回收 (madvise) · 内存映射
+```
+
+### 1. 分配与释放的核心设计要点
+- **分配元数据放堆内**：Free list 等轻量元数据存放在堆内 `long[]`，便于保留 `jmap` 与 Heap Dump 的可观测性。
+- **Stable Handle 替代裸物理指针**：上层绝不持有 64 位物理内存地址，统一分发 `NativeHandle`（`id = 索引 + 代次`）。代次机制彻底防止悬垂引用与 Java 版 ABA 问题；同时使得内存重分配（Realloc）和内存碎片整理（Defrag）只用改句柄映射表，无需上层业务图感知。
+- **单 Owner 线程模型消灭竞争**：DB 存储引擎严格绑定单个 Owner 线程运行，天然消除了多线程分配竞争，无需复杂沉重的 Thread Cache (tcache) 层。
+
+### 2. 内存碎片三层防御治理
+1. **变长转 Size Class 化**：将变长字节规整到标准规格档位（Small Page Slab），以可控的内部碎片（~10-15%）杜绝不可控的外部碎片。
+2. **间接句柄支持零停顿搬迁（Active Defrag）**：碎片整理只需在后台复制内存块并更新句柄表中的物理地址映射，上层 Handle 引用完全不变。
+3. **空闲页主动归还 OS**：后台定期扫描全空的小页，通过 `trimEmptyPages` 释放内存，保证系统物理 RSS 真实回落。
+
+---
+
+## 三、当前运行时架构与核心对象
 
 生产路径只公开 `YierdisFfmStableMemoryBackend`（`StableMemoryBackend` 的唯一实现）。内部由这些对象组合：
 
@@ -77,18 +129,41 @@ global / per-db maxmemory scope 只改变预算协调方式，不改变 FFM 所�
 - global scope 由 instance governor 汇总多个 DB participant 的独占 snapshots；
 - global scope 仍保留 per-DB backend/runtime ownership，也不把 runtime counter 叠加进 participant snapshots。
 
-## Region 与访问
+## Region 与 FFM 原语访问机制
 
-`YierdisFfmRegion` 保存 runtime、arena、segment、size。所有访问先 `ensureOpen()`（`closed` 标志 + `arena.scope().isAlive()`），再 `checkRange(offset, length)`，然后访问 segment：
+### 1. FFM 核心原语在 Yierdis 中的角色
 
-- `getByte` / `setByte` 用 `ValueLayout.JAVA_BYTE`；
-- `getInt` / `setInt` 用 `ValueLayout.JAVA_INT_UNALIGNED`；
-- `getLong` / `setLong` 用 `ValueLayout.JAVA_LONG_UNALIGNED`；
-- `getBytes` / `setBytes` / `copyTo` 用 `MemorySegment.copy(...)`。
+FFM（`java.lang.foreign`）在 Yierdis 中仅用于**堆外内存管理**（不调用 C 函数，不使用 `Linker` / `SymbolLookup`），集中在 `YierdisFfmMemoryRuntime` 与 `YierdisFfmRegion` 两个核心类中：
 
-用 `*_UNALIGNED` 是因为 record 布局不保证每个 int/long 落在自然对齐边界上（`ENTRY_RECORD` 里 32 位字段紧跟在 long 之后）。
+| FFM 原语 | 在 Yierdis 中的角色与约束 |
+|---|---|
+| `Arena` | 生命周期作用域。Yierdis 统一采用 `Arena.ofShared()`（因为 Region 可能在启动线程创建、而在 DB Owner 线程或优雅停机线程关闭，跨线程关闭要求 shared scope；单线程约束由项目自身的 `DbThreadGuard` 保证）。分配失败抛 `OOM` 时显式 `arena.close()` 避免堆外泄漏。 |
+| `MemorySegment` | 有界物理内存切片视图。`ensureOpen()`（结合 `arena.scope().isAlive()`）做双重生命周期防护。 |
+| `ValueLayout` | 单个字段读写布局。统一使用 `*_UNALIGNED`（`JAVA_INT_UNALIGNED` / `JAVA_LONG_UNALIGNED`），因为内存记录中的 32 位/64 位字段紧凑排列，不保证落在 8 字节自然对齐边界上。 |
+| `MemorySegment.copy(...)` | 内存块搬运的唯一正规途径：支持 region ↔ heap array、region ↔ region（Allocator 扩容与 Defrag 搬迁）。 |
 
-page allocator 把 region 切成块：`requestedBytes <= YierdisNativeSizeClass.MAX_SMALL_BYTES` 走 small page（`PAGE_BYTES` 一页切成固定 size class 块），否则走 span（`pagesFor(bytes)` 页，`<= MEDIUM_MAX_BYTES = 1 MiB` 记为 `MEDIUM_SPAN`，更大为 `LARGE_SPAN`）。空 small page 可以被 `trimEmptyPages` 回收成一个 `MemoryReclaimResult`。
+### 2. 为什么采用手写固定 Offset 而不是 StructLayout
+
+`EntryTable` 将键元数据紧凑压缩为 72 字节的 `ENTRY_RECORD`（9 个 8 字节槽位）：
+
+```text
+0   key handle allocatorId (8B)
+8   key handle localRaw (8B)
+16  value handle allocatorId (8B)
+24  value handle localRaw (8B)
+32  key hash (4B)
+36  type (4B)
+40  encoding (4B)
+44  flags (4B)
+48  expireAtMillis (8B, 唯一 TTL deadline)
+56  version (8B)
+64  lruOrLfu (8B)
+```
+
+Yierdis 放弃了 FFM 的 `StructLayout` + `VarHandle`，选择直接手写常量 offset 并调用 `getIntLittleEndian` / `getLongLittleEndian`：
+- **收益**：字段固定且极简，直接 offset 计算消除了复杂布局对象的构造与动态校验开销，JIT 极易内联为直接 CPU load/store。
+
+`YierdisFfmRegion` 保存 runtime、arena、segment、size。page allocator 把 region 切成块：`requestedBytes <= YierdisNativeSizeClass.MAX_SMALL_BYTES` 走 small page（`PAGE_BYTES = 64 KiB` 一页切成固定 size class 块），否则走 span（`pagesFor(bytes)` 页，`<= MEDIUM_MAX_BYTES = 1 MiB` 记为 `MEDIUM_SPAN`，更大为 `LARGE_SPAN`）。空 small page 可以被 `trimEmptyPages` 回收成一个 `MemoryReclaimResult`。
 
 ## Stable handle 与物理块
 
@@ -170,4 +245,4 @@ native memory 不等于所有路径零复制。当前仍会 materialize 到 heap
 
 ## Operations Cross-Check
 
-native committed/reserved usage 参与 DB 和 maxmemory 诊断，但不会替代 ingress 或 outbound reply 的独立容量限制。native allocation failure 仍按 mutation 的 commit 前/后边界决定返回 OOM 或 result-unknown；操作流程见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
+native committed/reserved usage 参与 DB 和 maxmemory 诊断，但不会替代 ingress 或 outbound reply 的独立容量限制。native allocation failure 仍按 mutation 的 commit 前/后边界决定返回 OOM 或 result-unknown；操作流程见 [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作)。

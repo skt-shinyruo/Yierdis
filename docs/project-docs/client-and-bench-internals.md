@@ -17,6 +17,39 @@ CLI 面向人工交互和轻量验证；RESP benchmark 在固定 built-in worklo
 
 比较两次结果时，必须先把输入对齐，再谈数字。对齐的输入是：`requests`、`clients`、`pipeline`、`data-size`、`keyspace`（省略 ≠ `0`）、keepalive、`database`。同时记录运行环境。项目自身不提供 AUTH/用户名/密码开关（见“两个外壳脚本”一节），所以“认证”不构成一个可对齐的输入维度。
 
+---
+
+## 选型与设计差异：C 版 (hiredis) vs Java 客户端
+
+在将类 hiredis 的 C 客户端机制迁移或落地到 Java 客户端时，两者的底层环境存在本质差异，需要自建三项核心机制与纪律：
+
+```text
+TCP 字节流 -> 增量解码器(跨半帧状态机) -> 完整 RespReply(校验后交付) -> 请求 FIFO 队列(队首 future 完成)
+   |                                    |
+   半帧留在 buffer                       超时 / 解析失败 -> 直接关连接（跳过迟到的 reply 会造成协议 desync）
+```
+
+### 1. 三件必须自建的核心机制
+1. **增量跨半帧解码器**：TCP `read()` 不保证按帧切分，解析器必须维护跨半包的状态机累积。
+2. **请求与回包 FIFO 配对**：在 Pipeline 或多路复用时，服务端是严格 FIFO 返回，客户端必须按先入先出队列将 Reply 匹配到对应的 Future 上。
+3. **超时即关连接（防止协议 Desync）**：在 RESP 单连接上，超时并不等于服务端未执行。如果客户端仅在应用层抛超时异常而继续复用该 TCP 连接，后续到达的迟到 Reply 会错位匹配到下一个全新的请求上，造成严重的数据错乱（Desync）。因此**一旦超时必须坚决关闭连接**。
+
+### 2. 核心架构与模型对比
+
+| 维度 | C 客户端（hiredis / redis-cli） | Java 客户端选型与实现 |
+|---|---|---|
+| **I/O 模型** | 裸 socket + 手动读写缓冲区；异步挂载 ae/epoll 事件适配器 | 阻塞 Socket（如 Jedis / 本项目 `YierdisClient`）或 NIO 事件驱动（Lettuce / 本项目 `NioBenchmarkClient`） |
+| **回包生命周期** | 动态 malloc 节点树，用户需显式 `freeReplyObject()` 否则泄漏 | 由 GC 接管，但必须保证回包与内部 Buffer 严格脱钩（防御性复制或不可变映射） |
+| **内存与安全纪律** | 易发生内存泄漏与悬垂指针 | 需防范 GC 延迟尖刺；对 Bulk String 声明长度做前置校验防止恶意 OOM |
+| **异常体系** | `NULL` 返回 + `errno` + 忽略 `SIGPIPE` | 分层 Unchecked 异常（连接异常、超时异常、服务执行异常） |
+
+### 3. Yierdis 的具体工程落地
+- **`YierdisClient`**：采用阻塞一问一答模式，严格遵守**“超时即关连接”**的防 Desync 纪律。
+- **`RespClientCodec`**：提供同步编解码，并包含严苛的 Bulk 上限检查（`maxBulkBytes`）。
+- **`NioBenchmarkClient` + `IncrementalRespReplyDecoder`**：提供极速的非阻塞增量解码通道，支撑无网络栈干扰的高并发压力测试。
+
+---
+
 ## yierdis-cli
 
 入口是 `YierdisCli.main(...)`，参数模型是 `YierdisCliArgs`（手写解析，第一个位置参数起即为命令单词）。参数与默认值如下：
@@ -255,7 +288,7 @@ CSV header 恰好是（`BenchmarkOutputRenderer.CSV_HEADER`）：
 "test","rps","avg_latency_ms","min_latency_ms","p50_latency_ms","p95_latency_ms","p99_latency_ms","max_latency_ms","status","reason"
 ```
 
-前八列（`test`、`rps`、`avg_latency_ms`、`min_latency_ms`、`p50_latency_ms`、`p95_latency_ms`、`p99_latency_ms`、`max_latency_ms`）与官方 Redis-style CSV 对齐，是两份独立结果的**共享比较面**；`status` 和 `reason` 是 Yierdis 扩展。这个“前八个字段”的口径与 `production-hardening-operations.md` 一致，比较时必须按 canonical title 配对，且只能落在前八列上。
+前八列（`test`、`rps`、`avg_latency_ms`、`min_latency_ms`、`p50_latency_ms`、`p95_latency_ms`、`p99_latency_ms`、`max_latency_ms`）与官方 Redis-style CSV 对齐，是两份独立结果的**共享比较面**；`status` 和 `reason` 是 Yierdis 扩展。这个“前八个字段”的口径与 [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作) 一致，比较时必须按 canonical title 配对，且只能落在前八列上。
 
 非 `SUCCESS` row 的七个 numeric fields 全部留空，不能读成 `0`。human format 逐 case 打印：
 
@@ -277,7 +310,7 @@ Summary:
 
 ### 如何复现一次对比
 
-1. 用同一个 JDK 启动一个 Yierdis（见 `production-hardening-operations.md` 的 JDK 25 约定）：
+1. 用同一个 JDK 启动一个 Yierdis（见 [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作) 的 JDK 25 约定）：
 
    ```bash
    printf 'port=16378\nmaxmemoryBytes=0\n' > /tmp/yierdis-bench-target.conf
@@ -362,7 +395,7 @@ CSV 总计 **29 列**，顺序以 `StorageBenchmarkRenderer.CSV_HEADER` 为准�
 - 必传参数来自 `HOST`/`PORT`/`REQUESTS`/`CLIENTS`/`DATA_SIZE`/`PIPELINE`/`FORMAT`，默认值与 CLI 一致（`127.0.0.1`/`16378`/`100000`/`50`/`3`/`1`/`human`）。
 - 只有非空的 `KEYSPACE`/`TESTS`/`KEEP_ALIVE`/`PRECISION`/`SEED`/`DATABASE` 才追加成参数；因此“省略 KEYSPACE”和“显式 `KEYSPACE=0`”不同。`KEEP_ALIVE=false` 会编码为单个 `--keep-alive=false`。
 - `BENCH_JVM_OPTS` 只控制 benchmark JVM。
-- 脚本**不支持** AUTH/用户名/密码（没有 `--username`/`--password` 或相关环境变量）；`RedisBenchmarkOptions` 里同样没有对应选项。这与 `production-hardening-operations.md` 的“无 AUTH”声明一致。
+- 脚本**不支持** AUTH/用户名/密码（没有 `--username`/`--password` 或相关环境变量）；`RedisBenchmarkOptions` 里同样没有对应选项。这与 [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作) 的“无 AUTH”声明一致。
 
 ### scripts/storage-bench.sh
 

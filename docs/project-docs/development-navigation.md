@@ -2,7 +2,7 @@
 
 本页按**常见改动类型**回答一个实际问题：要改某类需求时，先打开哪些文件、沿着哪条链继续追、该跑哪些测试、以及这一步最容易踩什么边界。每条改动对应四个小节：**要动的类 → 要跑的测试 → 容易踩的边界 → 继续追的专题文档**。
 
-常备两份配套：测试分层与排障顺序看 [`testing-and-debugging.md`](./testing-and-debugging.md)，模块职责与依赖方向看 [`module-architecture.md`](./module-architecture.md)。
+常备两份配套：测试分层与排障顺序看 [`testing-and-debugging.md`](./testing-and-debugging.md)，模块职责与依赖方向看 [`project-overview.md`](./project-overview.md#模块架构与依赖拓扑)。
 
 ## 工作规则
 
@@ -83,7 +83,7 @@ fuzz / 压力形态的回归在 `yierdis-tests`：`RespIngressFuzzTest`、`RespI
 - `HELLO 2/3` 或回包类型差异：协议版本是连接级状态，涉及 `CommandSession` 的版本方法、连接 owner `EngineSession` 与 `RespReplyWriter`。回包 wire 版本在 prepare 时就要确定，不能等 execute 才切换（见 `PreparedCommand.replyProtocolVersion()`）。
 - 硬上限（`protocolMaxBulkBytes` / `protocolMaxArgs` / `protocolMaxLineBytes` / `protocolMaxCommandBytes`）在 parser 内生效，必须在请求到达 executor 之前拒绝，不能靠回包侧兜底。
 
-**继续追**：[`protocol-reference.md`](./protocol-reference.md)、[`request-execution-flow.md`](./request-execution-flow.md)、[`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)、[`netty-adapter-design.md`](./netty-adapter-design.md)。
+**继续追**：[`protocol-reference.md`](./protocol-reference.md)、[`request-execution-flow.md`](./request-execution-flow.md)、[`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)。
 
 ## 新增或修改命令
 
@@ -244,7 +244,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 - 写路径必须「估算 → 预留 → 必要时驱逐 → commit，失败 rollback」，admission 比较的是**不含 reservation 的物理快照**；别把报告用的 `effective_*` 当成 admission 输入。
 - maxmemory 与 hard reply 上限是两套独立预算：一次成功的删除只降低 DB 使用量，已存在的 reply source 仍占着 outbound 容量直到 slot 终态清理。
 
-**继续追**：[`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)、[`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)、[`db-internals.md`](./db-internals.md)、[`configuration-and-operations.md`](./configuration-and-operations.md)、[`native-memory-runtime.md`](./native-memory-runtime.md)。
+**继续追**：[`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)、[`db-internals.md`](./db-internals.md)、[`configuration-and-operations.md`](./configuration-and-operations.md)、[`native-memory-runtime.md`](./native-memory-runtime.md)。
 
 ## 改 native memory
 
@@ -279,7 +279,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 - 移动对象（realloc / defrag）必须保持完整 handle 稳定；pin 期间 free 会进入 quarantine，解除保护后才能回收。所有 view、scope、epoch、显式 pin 都必须在 backend 关闭前结束。
 - 每次成功 `pin` 必须由同一 owner 配对 `unpin`；漏配对会让 slot 永远无法复用。
 
-**继续追**：[`native-memory-runtime.md`](./native-memory-runtime.md)、[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)、[`ffm-primer.md`](./ffm-primer.md)。
+**继续追**：[`native-memory-runtime.md`](./native-memory-runtime.md)、[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)、[`offheap-copy-behavior.md`](./offheap-copy-behavior.md)。
 
 ## 改 executor / backpressure
 
@@ -343,7 +343,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 - health 路径要轻量：不要在 `serverStatsSnapshot(...)` 里做全实例扫描。
 - `MEMORY STATS` 是 explainable estimate，`ledger_used_bytes` 绑定 `heapDataBytesEstimate`，`ledger_reserved_bytes` 才是 ledger `reservedBytes`——别混用两个口径。
 
-**继续追**：[`configuration-and-operations.md`](./configuration-and-operations.md)、[`db-internals.md`](./db-internals.md)、[`module-architecture.md`](./module-architecture.md)、[`production-hardening-operations.md`](./production-hardening-operations.md)。
+**继续追**：[`configuration-and-operations.md`](./configuration-and-operations.md)、[`db-internals.md`](./db-internals.md)、[`project-overview.md`](./project-overview.md#模块架构与依赖拓扑)。
 
 ## 改 session / DB 路由 / 观测代理起点
 
@@ -369,7 +369,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 - `ServerInfoProvider.memoryStats(...)` 返回 `null` 表示「回退到当前 DB 的 `memoryStats()`」；global scope 才会返回 instance 聚合视角。这是 `MEMORY STATS` 的回退语义，新增观测字段时别破坏它。
 - command 层只依赖 `DbEngine` 与 `ServerInfoProvider`，不得反向依赖 `yierdis-server` 或 `YierdisDb` internal——这类约束由 `CommandParseIsolationTest` 和 `DbEngineReadWriteBoundaryTest` 守着。
 
-**继续追**：[`proxy-logic.md`](./proxy-logic.md)、[`request-execution-flow.md`](./request-execution-flow.md)、[`db-internals.md`](./db-internals.md)。
+**继续追**：[`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)、[`request-execution-flow.md`](./request-execution-flow.md)、[`db-internals.md`](./db-internals.md)。
 
 ## 改 CLI / benchmark
 
@@ -394,11 +394,11 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 - 变更 catalog/title 会破坏 canonical title 对照，必须同步 `client-and-bench-internals.md` 与 `RedisBenchmarkCatalogCoverageGuardTest`。
 - benchmark 只连接已启动的 Yierdis，不启动 Redis，也没有 AUTH 开关。
 
-**继续追**：[`client-and-bench-internals.md`](./client-and-bench-internals.md)、[`production-hardening-operations.md`](./production-hardening-operations.md)。
+**继续追**：[`client-and-bench-internals.md`](./client-and-bench-internals.md)、[`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作)。
 
 ## 推荐最小工作流
 
-1. 在本页和 [`module-architecture.md`](./module-architecture.md) 找到目标类的职责和边界。
+1. 在本页和 [`project-overview.md`](./project-overview.md#模块架构与依赖拓扑) 找到目标类的职责和边界。
 2. 先补或调整最窄测试，再改实现（先见测试红，再改绿）。
 3. 跑目标家族测试，再按需要跑跨模块集成。
 4. 如果改动改变了架构边界、协议语义或 native-memory 当前事实，同步更新对应专题文档。
@@ -407,7 +407,6 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 ## 新人先收藏的文件
 
 - [`project-overview.md`](./project-overview.md)
-- [`module-architecture.md`](./module-architecture.md)
 - [`request-execution-flow.md`](./request-execution-flow.md)
 - [`commands-and-data-model.md`](./commands-and-data-model.md)
 - [`db-internals.md`](./db-internals.md)

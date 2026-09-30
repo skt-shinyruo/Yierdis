@@ -143,7 +143,7 @@ flowchart LR
   4. [`ByteArrayExecutionRequest.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ByteArrayExecutionRequest.java)：请求参数所有权模型（`takeOwnership` / `retain` / `copyOf`）。
   5. [`CommandExecutor.java`](../../yierdis-server/yierdis-server/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java)：核心调度器，观察线程切换点与 Owner 线程绑定的过程。
   6. [`RedisReplyRenderer.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/RedisReplyRenderer.java) & [`RespReplyWriter.java`](../../yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java)：语义结果向具体 RESP 协议（RESP2/RESP3）序列化的过程。
-* **配套专题文档**：[`request-execution-flow.md`](./request-execution-flow.md)、[`netty-adapter-design.md`](./netty-adapter-design.md)、[`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)。
+* **配套专题文档**：[`request-execution-flow.md`](./request-execution-flow.md)、[`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)。
 
 ---
 
@@ -201,7 +201,7 @@ flowchart LR
   2. [`YierdisNativeObjectTable.java`](../../yierdis-db/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativeObjectTable.java)：Stable Handle 与实际物理内存段/偏移量映射的核心数据结构，负责 Handle 生成、解引用与安全回收。
   3. [`YierdisNativePageAllocator.java`](../../yierdis-db/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativePageAllocator.java) & [`YierdisNativeSizeClass.java`](../../yierdis-db/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativeSizeClass.java)：堆外物理页分配器与大小规格分级。
   4. [`YierdisLocalHandleCodec.java`](../../yierdis-db/src/main/java/yier/bubu/redis/memory/foreign/YierdisLocalHandleCodec.java)：句柄结构位运算编解码。
-* **配套专题文档**：[`ffm-primer.md`](./ffm-primer.md)、[`native-memory-runtime.md`](./native-memory-runtime.md)、[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)、[`offheap-copy-behavior.md`](./offheap-copy-behavior.md)、[`copy-cost-and-kernel-boundary.md`](./copy-cost-and-kernel-boundary.md)、[`jvm-constraints-and-offheap-rationale.md`](./jvm-constraints-and-offheap-rationale.md)。
+* **配套专题文档**：[`native-memory-runtime.md`](./native-memory-runtime.md)、[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)、[`offheap-copy-behavior.md`](./offheap-copy-behavior.md)。
 
 ---
 
@@ -221,7 +221,7 @@ flowchart LR
   4. [`YierdisDbExpirationSupport.java`](../../yierdis-db/src/main/java/yier/bubu/redis/storage/memory/YierdisDbExpirationSupport.java)：过期判定与主动抽样清理逻辑。
   5. [`YierdisDbMaxmemorySupport.java`](../../yierdis-db/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMaxmemorySupport.java)：近似 LRU/LFU 驱逐算法与牺牲者抽样池。
   6. [`MemoryLedger.java`](../../yierdis-db/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/MemoryLedger.java)：存储层内存用量账本。
-* **配套专题文档**：[`executor-and-backpressure.md`](./executor-and-backpressure.md)、[`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)、[`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)、[`production-hardening-operations.md`](./production-hardening-operations.md)。
+* **配套专题文档**：[`executor-and-backpressure.md`](./executor-and-backpressure.md)、[`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)、[`configuration-and-operations.md`](./configuration-and-operations.md)。
 
 ---
 
@@ -239,7 +239,7 @@ flowchart LR
   2. [`YierdisBench.java`](../../yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/YierdisBench.java)：压测工具统一入口。
   3. [`NioBenchmarkRunner.java`](../../yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/redis/NioBenchmarkRunner.java)：端到端高并发压测执行器。
   4. [`StorageBenchmarkRunner.java`](../../yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/storage/StorageBenchmarkRunner.java)：进程内单机 DB 极限压测执行器。
-* **配套专题文档**：[`client-and-bench-internals.md`](./client-and-bench-internals.md)、[`client-c-vs-java-design.md`](./client-c-vs-java-design.md)。
+* **配套专题文档**：[`client-and-bench-internals.md`](./client-and-bench-internals.md)。
 
 ---
 
@@ -329,7 +329,7 @@ flowchart LR
 - [ ] **问题 3（任务挂起与再调度）**：如果一个命令在执行完成准备写出时发现回复槽位（Reply Slot）容量耗尽，它是如何被挂起并在容量可用时重新回到 Owner 线程调度执行的？  
   *思考线索*：`ReplySlot.onCapacityAvailable` 回调机制、[`request-execution-flow.md`](./request-execution-flow.md)。
 - [ ] **问题 4（异常边界与 Result-Unknown）**：如果在写操作 `prepared.commit()` 执行之后、写回客户端响应之前进程发生非受控退出，为什么被称为“Result-Unknown”状态？系统在关闭生命周期中如何界定这一边界？  
-  *思考线索*：两阶段提交边界、[`production-hardening-operations.md`](./production-hardening-operations.md)。
+  *思考线索*：两阶段提交边界、[`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作)。
 
 ### 6.2 协议解析与请求生命周期
 - [ ] **问题 5（两阶段执行与预留）**：请求执行链中，为什么必须在 `execute` 执行具体业务之前，先调用 `reserve` 预留回包配额？直接执行后按需写出有什么潜在隐患？  
@@ -365,13 +365,13 @@ flowchart LR
 - [ ] **问题 17（紧凑 Entry 内存布局）**：`EntryTable` 将键元数据紧凑压缩为 72 字节的 `ENTRY_RECORD`。其中 2 个 16 字节的 Handle 和各个 4/8 字节字段分别存放了什么？为什么要精准计算结构体字段偏移常量？  
   *思考线索*：`NativeStorageLayout.ENTRY_RECORD_BYTES`、避免堆内对象头开销、[`db-internals.md`](./db-internals.md)。
 - [ ] **问题 18（跨边界内存拷贝认知）**：从 Socket 读入字节到存入 Native Memory，再到被读取并通过 Socket 发送，整个链路中最少经过了几次数据拷贝？为什么说“堆外内存”绝不等于操作系统的“零拷贝（Zero-Copy）”？  
-  *思考线索*：用户态堆内/堆外拷贝 vs 内核态上下文切换、`BytesSlice` / `BytesSink` 边界、[`offheap-copy-behavior.md`](./offheap-copy-behavior.md)、[`copy-cost-and-kernel-boundary.md`](./copy-cost-and-kernel-boundary.md)。
+  *思考线索*：用户态堆内/堆外拷贝 vs 内核态上下文切换、`BytesSlice` / `BytesSink` 边界、[`offheap-copy-behavior.md`](./offheap-copy-behavior.md)。
 - [ ] **问题 19（Native 分配器与 SizeClass）**：堆外内存为什么不直接对每次分配调用 `Arena.allocate()`，而是设计了 `YierdisNativePageAllocator` 与大小规格类（Size-Class）？  
   *思考线索*：高频小对象分配开销抑制、页级内存对齐与外碎片消除、[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 
 ### 6.6 TTL 淘汰、Maxmemory 驱逐与基准测试
 - [ ] **问题 20（主动淘汰与时间片预算）**：有了读操作时的惰性过期（Lazy Expire），为什么系统还需要 Maintenance 线程驱动的主动淘汰（Active Expire）？主动淘汰是如何利用 `expireCleanupTimeLimitMillis` 预算保证不会卡死 Owner 线程的？  
-  *思考线索*：防冷 Key 堆积造成堆外内存泄漏、时间片配额限制、[`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)。
+  *思考线索*：防冷 Key 堆积造成堆外内存泄漏、时间片配额限制、[`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md#一ttl-与过期生命周期)。
 - [ ] **问题 21（近似 LRU/LFU 抽样算法）**：当内存触碰 `maxmemory` 阈值时，Yierdis 和 Redis 为什么没有采用传统的双向链表（Linked List）来实现严格 LRU，而是采用“随机抽样候选池（Approximate Eviction Pool）”？72 字节的 Entry 中是如何复用 `lruOrLfu` 字段的？  
   *思考线索*：双向链表额外的内存指针开销与锁竞争、抽样池逼近真实 LRU 曲线、[`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)。
 - [ ] **问题 22（网络压测 vs 存储压测的隔离价值）**：在性能基准测试中，为什么 `yierdis-benchmark` 既提供了基于 NIO 的网络 RESP 压测，又提供了独立的 `storage` 进程内压测？这两者分别在消除哪些外界干扰？  
@@ -381,13 +381,11 @@ flowchart LR
 
 ## 7. 仓库技术文档全景索引
 
-为方便在阅读源码过程中随时查阅理论与背景推导，以下列出 `docs/project-docs/` 的全量 31 篇专题分类导航：
+为方便在阅读源码过程中随时查阅理论与背景推导，全量技术文档已收敛为 6 大技术领域（共 21 篇，详见 [`readme.md`](./readme.md) 文档地图）：
 
-- **入口导读**：[`readme.md`](./readme.md)、[`project-overview.md`](./project-overview.md)、[`glossary.md`](./glossary.md)（术语字典）。
-- **系统主线与架构**：[`module-architecture.md`](./module-architecture.md)（模块拓扑）、[`request-execution-flow.md`](./request-execution-flow.md)（请求时序全景）、[`netty-adapter-design.md`](./netty-adapter-design.md)（Netty 管道与适配）、[`proxy-logic.md`](./proxy-logic.md)（进程内存取代理与委托）。
-- **协议与命令**：[`protocol-reference.md`](./protocol-reference.md)（RESP2/3 标准与限制）、[`commands-and-data-model.md`](./commands-and-data-model.md)（数据模型与命令映射）、[`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)（分发核）、[`transaction-and-replay.md`](./transaction-and-replay.md)（事务与重放）。
-- **存储内核与数据结构**：[`db-internals.md`](./db-internals.md)（键空间/哈希表/EntryTable）、[`db-design-analysis.md`](./db-design-analysis.md)（存储引擎深度推导）。
-- **FFM 堆外内存硬核体系**：[`ffm-primer.md`](./ffm-primer.md)（JDK 25 FFM 基础）、[`native-memory-runtime.md`](./native-memory-runtime.md)（堆外运行时概览）、[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)（分配器与 Stable Handle）、[`offheap-copy-behavior.md`](./offheap-copy-behavior.md)（拷贝路径解析）、[`copy-cost-and-kernel-boundary.md`](./copy-cost-and-kernel-boundary.md)（内核与用户态边界剖析）、[`jvm-constraints-and-offheap-rationale.md`](./jvm-constraints-and-offheap-rationale.md)（选型推导）、[`offheap-memory-management-rationale.md`](./offheap-memory-management-rationale.md)（内存管理机制背景）。
-- **流控与资源治理**：[`executor-and-backpressure.md`](./executor-and-backpressure.md)（执行器与背压流控）、[`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)（过期扫描生命周期）、[`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)（驱逐与内存池）、[`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)（字节切片与快速路径）。
-- **客户端与性能测试**：[`client-and-bench-internals.md`](./client-and-bench-internals.md)（Client 与压测内核）、[`client-c-vs-java-design.md`](./client-c-vs-java-design.md)（C 与 Java 客户端对比）。
-- **工程运维与开发排障**：[`configuration-and-operations.md`](./configuration-and-operations.md)（配置参数与运维）、[`production-hardening-operations.md`](./production-hardening-operations.md)（加固与容量口径）、[`development-navigation.md`](./development-navigation.md)（改动指引导航）、[`testing-and-debugging.md`](./testing-and-debugging.md)（测试矩阵与排障指引）。
+- **导读、索引与规范**：[`readme.md`](./readme.md)（文档全景地图）、[`source-reading-guide.md`](./source-reading-guide.md)（本文）、[`project-overview.md`](./project-overview.md)（系统概览、9大模块拓扑与边界）、[`glossary.md`](./glossary.md)（术语字典）。
+- **系统架构主线与请求时序**：[`request-execution-flow.md`](./request-execution-flow.md)（请求端到端全时序、Netty 7大 Handler 装配与有界回复）。
+- **RESP 协议与命令执行核**：[`protocol-reference.md`](./protocol-reference.md)（RESP2/3 标准与限制）、[`commands-and-data-model.md`](./commands-and-data-model.md)（数据模型与命令映射）、[`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)（分发核预检与 Session/Router 进程内委托）、[`transaction-and-replay.md`](./transaction-and-replay.md)（事务排队与重放状态机）。
+- **存储引擎内核与 JDK 25 FFM 堆外内存**：[`db-internals.md`](./db-internals.md)（键空间/哈希表/EntryTable）、[`db-design-analysis.md`](./db-design-analysis.md)（存储引擎深度推导）、[`native-memory-runtime.md`](./native-memory-runtime.md)（堆外运行时全景/JVM约束与选型）、[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)（Slab 分配器与 Stable Handle）、[`offheap-copy-behavior.md`](./offheap-copy-behavior.md)（拷贝路径与内核态边界）。
+- **资源治理、流控与客户端**：[`executor-and-backpressure.md`](./executor-and-backpressure.md)（执行器与背压流控）、[`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)（TTL 过期生命周期、物理限额与驱逐算法）、[`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)（字节切片与快速路径）、[`client-and-bench-internals.md`](./client-and-bench-internals.md)（自研 Client/压测引擎与 C 对照）。
+- **工程运维、加固与开发测试**：[`configuration-and-operations.md`](./configuration-and-operations.md)（配置项字典、运维调优与安全加固）、[`development-navigation.md`](./development-navigation.md)（源码修改引导导航）、[`testing-and-debugging.md`](./testing-and-debugging.md)（测试矩阵与排障指引）、[`docs/adr/`](../adr/)（架构决策记录）。

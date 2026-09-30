@@ -4,7 +4,7 @@
 
 Yierdis 的 native memory 主要降低稳态 heap 占用、改善 GC 压力并让部分 read/write-back 可以流式处理；只要接口边界要求 `byte[]`、`List<byte[]>`、`String`、snapshot 或长期 ownership，copy 仍然会发生。
 
-相关背景见 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)、[`native-memory-runtime.md`](./native-memory-runtime.md) 和 [`copy-cost-and-kernel-boundary.md`](./copy-cost-and-kernel-boundary.md)：前者说明 bytes 抽象，中者说明 native 生命周期，后者说明这些 copy 的成本口径以及内核切换真正发生在哪里。
+相关背景见 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)（字节抽象与快速路径）与 [`native-memory-runtime.md`](./native-memory-runtime.md)（native 生命周期与选型推导）。本文既分析全链路各阶段**在哪里发生 copy / 哪里是 view**，也深入分析**这些 copy 的实际性能成本与真正的内核态切换边界**。
 
 ## 判定规则：什么时候复制，什么时候不复制
 
@@ -92,7 +92,7 @@ NativeBytesSlice
 - native slice 先复制到有界 heap scratch，sink 再把数组范围同步复制到 reply chunk。
 - 某些格式转换、排序、聚合、escape 或 base64 边界仍需要中间 buffer。
 
-reply reservation、chunk ownership 和顺序写回见 [`netty-adapter-design.md`](./netty-adapter-design.md)。
+reply reservation、chunk ownership 和顺序写回见 [`request-execution-flow.md`](./request-execution-flow.md#netty-pipeline-装配顺序与各-handler-职责)。
 
 ## 同侧复制也存在
 
@@ -153,6 +153,59 @@ view / handle 不是 copy：
 
 当前 collection root records、list quicklist metadata records 和 hash/set/zset/list payload internals 都是 allocator-backed native handles。但 RESP decode、`copiedFrom` 聚合快照、返回 `byte[]` 的 API 和诊断输出仍需要 copy。误判后果是把聚合命令也当成流式零拷贝，从而错配 reply plan 的 source 保留量。
 
-误读五：同侧就不会复制。
-
 off-heap 扩容（容量不足时搬家）、`ByteBuf` write-back、active defrag、heap snapshot 和 retry buffer 都可能在同一侧发生 copy。误判后果是以为“同侧操作 O(1)”，忽略 `reallocate` 搬家与 defrag 的带宽成本。
+
+---
+
+## 拷贝成本口径与内核态边界判定
+
+在分析 copy 路径时，常常伴随两个核心疑问：
+1. `Arrays.copyOf(keyBytes, keyBytes.length)`、`bytesOf(value)` 这类堆内拷贝，是否涉及用户态到内核态的切换？
+2. 如果不涉及，整条链路中真正的内核态切换发生在哪里？
+
+结论先行：**这两类调用是同一 JVM 进程用户态内的内存操作（一次内存分配 + 一次 O(n) 内存搬运），绝不发起系统调用（syscall），因而没有内核态切换。**
+
+### 1. 判定“是否进内核”的三要素
+
+判定一次操作是否涉及用户态与内核态切换，只看三件事：
+
+| 判定标准 | 堆内/堆外拷贝调用 | 深度说明 |
+|---|---|---|
+| **是否发起系统调用** | **否** | CPU 未执行 `syscall` / `sysenter` / `int 0x80` 指令，特权级始终在 Ring 3（用户态）。 |
+| **是否触碰未驻留的 mmap 页** | **否（常态）** | 仅首次触碰未映射虚存时触发硬件缺页中断（Page Fault `#PF`）陷入内核填零，非常规系统调用。 |
+| **是否经由 JNI Native 方法** | **否** | `System.arraycopy` 与数组 `clone()` 是 HotSpot JIT 深度识别的 Intrinsic；FFM 的 MemorySegment 访问在 JIT 编译后也是纯粹的用户态 load/store 指令。 |
+
+### 2. 典型拷贝操作的成本构成
+
+以写路径典型的两行预处理为例（`YierdisStringOps.prepareSet(...)`）：
+
+```java
+byte[] preparedKey = Arrays.copyOf(keyBytes, keyBytes.length);
+byte[] preparedValue = bytesOf(value);
+```
+
+- **`Arrays.copyOf(keyBytes, keyBytes.length)`**：
+  在 JDK 21 与 JDK 25 中，等长 `copyOf` 会被直接优化为 `keyBytes.clone()`。其开销是 **1 次 TLAB 指针 bump（分配新对象头与数组空间）+ 1 次 HotSpot intrinsic 向量化内存搬运**。其性能开销落在 **GC 垃圾产出** 上，绝非内核切换。
+- **`bytesOf(BytesSlice)`**：
+  分配 `new byte[length]` 后调用 `BytesView.getBytes(...)`。
+  - 若具体切片（如 `NativeBytesSlice`）覆写了 `getBytes`，走 `MemorySegment.copy`（Intrinsic，接近物理带宽 34~45 GB/s）；
+  - 若未覆写（如默认匿名切片），则退化为默认实现的逐字节接口虚调用（`dst[i] = getByte(i)`），吞吐跌至 12~15 GB/s。这是**虚分派与边界检查开销**，同样与内核态无关。
+
+### 3. 真正的内核态切换发生在哪里？
+
+在整个请求与存储处理链路中，真正的用户态/内核态切换集中在以下三处：
+
+1. **网络传输 I/O（真正的内核切换源头）**：
+   传输层 Netty `IoEventLoop` 在 Linux 上的底层是 Epoll：`epoll_wait`、`read` / `recvfrom`、`write` / `writev` / `sendmsg` 是实打实的系统调用，每次调用触发 CPU 上下文切换。
+2. **Native 内存初始向 OS 申请与归还**：
+   `YierdisFfmMemoryRuntime.allocateRegion` 底层由 `Arena.ofShared()` 触发系统的 `mmap`/`brk`，以及小页定期回收 `trimEmptyPages` 调用的 `madvise(..., MADV_DONTNEED)`。这发生在 Region/Page 粒度，**绝非每次命令执行时发生**。
+3. **Socket 回复刷新与持久化**：
+   Reply Chunk 最终刷新送达 TCP 缓冲区以及将来的 AOF/RDB 落盘。
+
+### 4. 测量证据与成本模型
+
+通过 8000 万次独立循环实测（`strace -c -f java CopyProbe`）：
+- 8000 万次内存拷贝期间，进程内核系统调用次数中，拷贝循环体内为 **0 次**（所有 syscall 仅来自启动阶段 JIT 编译与 GC 线程的 `futex` 及内存提交 `mprotect`）。
+- 成本模型应准确理解为：
+  $$\text{单次拷贝成本} \approx \text{分配次数} \times \text{GC 分配压迫} + \frac{\text{搬运字节数}}{\text{内存带宽}} + \text{逐字节虚分派损耗}$$
+- 优化重点是**复用缓冲区、避免短命 byte[] 分配、并让切片实现批量覆写 `getBytes`**，而非徒劳地去“减少内核切换”。

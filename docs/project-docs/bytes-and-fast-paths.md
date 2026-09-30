@@ -29,7 +29,7 @@ byte getByte(int index);
 default void getBytes(int index, byte[] dst, int dstOff, int len)  // 逐字节循环，检查 null/负长度/越界
 ```
 
-接口注释要求把实现视为短生命周期对象，不得被存入 DB。默认 `getBytes` 会做越界检查后循环调用 `getByte`；native 实现会覆写它做整段读取。这个默认实现的真实成本（逐字节虚调用，100 B 上实测约是 `System.arraycopy` 的 3 倍，而带分配的 `Arrays.copyOf` 才是差一个数量级的那一个）以及“它不进内核”的判定与实测数据见 [`copy-cost-and-kernel-boundary.md`](./copy-cost-and-kernel-boundary.md)。
+接口注释要求把实现视为短生命周期对象，不得被存入 DB。默认 `getBytes` 会做越界检查后循环调用 `getByte`；native 实现会覆写它做整段读取。这个默认实现的真实成本（逐字节虚调用，100 B 上实测约是 `System.arraycopy` 的 3 倍，而带分配的 `Arrays.copyOf` 才是差一个数量级的那一个）以及“它不进内核”的判定与实测数据见 [`offheap-copy-behavior.md`](./offheap-copy-behavior.md#拷贝成本口径与内核态边界判定)。
 
 `BytesSlice extends BytesView`，只多一个方法 `void writeTo(BytesSink out)`：既能随机读取，也能把自己流式写给 sink，是 string value、bulk reply 和 off-heap slice 的关键形状。
 
@@ -170,7 +170,7 @@ CommandResult / RedisReply
   -> channel.write(...)
 ```
 
-`RedisReply` 的 payload emitter 和 `ByteValueSink.value(BytesSlice)` 是关键入口。heap `byte[]` 仍然可用，但不是唯一形状。`GET` / `HGET` / pop 可以在中央 renderer 调用期间通过已 pin 的 native slice 写出；collection range 回放的是 prepare 时拷好的快照。reply reservation、source ownership、Netty ownership 和顺序写回的细节见 [`netty-adapter-design.md`](./netty-adapter-design.md)。
+`RedisReply` 的 payload emitter 和 `ByteValueSink.value(BytesSlice)` 是关键入口。heap `byte[]` 仍然可用，但不是唯一形状。`GET` / `HGET` / pop 可以在中央 renderer 调用期间通过已 pin 的 native slice 写出；collection range 回放的是 prepare 时拷好的快照。reply reservation、source ownership、Netty ownership 和顺序写回的细节见 [`request-execution-flow.md`](./request-execution-flow.md#netty-pipeline-装配顺序与各-handler-职责)。
 
 ## 流式路径和 materialization fallback
 

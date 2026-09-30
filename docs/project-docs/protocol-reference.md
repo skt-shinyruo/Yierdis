@@ -203,7 +203,7 @@ FIFO 保护是例外：若 ingress 队列里仍有更早提交、但尚未拿到
 | inline/header 行长度 | 1 MiB | `DEFAULT_MAX_INLINE_BYTES` | `protocolMaxLineBytes` |
 | 单条请求累计字节数 | 64 MiB | `DEFAULT_MAX_COMMAND_BYTES` | `protocolMaxCommandBytes` |
 
-这些参数在 server 启动时传给 `YierdisServerChannelInitializer`，再进入 `RespRequestDecoder` 的 `withIngressAdmission(...)`。`protocolMaxLineBytes` 约束所有 CRLF 行（multibulk header、bulk length header、以及 inline 行），不只是 inline。除了 ingress 内存预算 `protocolGlobalInFlightBytes`，还有 executor 与 reply 侧的独立预算见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
+这些参数在 server 启动时传给 `YierdisServerChannelInitializer`，再进入 `RespRequestDecoder` 的 `withIngressAdmission(...)`。`protocolMaxLineBytes` 约束所有 CRLF 行（multibulk header、bulk length header、以及 inline 行），不只是 inline。除了 ingress 内存预算 `protocolGlobalInFlightBytes`，还有 executor 与 reply 侧的独立预算见 [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作)。
 
 ## 和 Redis 兼容性的边界
 
@@ -222,4 +222,4 @@ Yierdis 支持 Redis 风格 RESP 入口和一组基础握手命令，但不声�
 
 ## Bounded Transport Ownership
 
-decoder-side protocol limits and `protocolGlobalInFlightBytes` bound admitted request ownership. Reply encoding runs on a separate receive-order, bounded chunk path. Protocol errors also get an ordered slot, so they cannot overtake an earlier reply. Output that is oversized or of unknown result closes the transport instead of bypassing that path. The exact reply defaults and operator diagnostics are in [`production-hardening-operations.md`](./production-hardening-operations.md).
+decoder-side protocol limits and `protocolGlobalInFlightBytes` bound admitted request ownership. Reply encoding runs on a separate receive-order, bounded chunk path. Protocol errors also get an ordered slot, so they cannot overtake an earlier reply. Output that is oversized or of unknown result closes the transport instead of bypassing that path. The exact reply defaults and operator diagnostics are in [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作).

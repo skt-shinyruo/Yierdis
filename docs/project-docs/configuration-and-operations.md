@@ -128,7 +128,7 @@ benchmark 不持有 server 参数或生命周期模型，只连接由操作者�
 | `replyControlReservationBytes` | `4096` | `> 0` 且 `>= 1539` | 每槽位控制错误预留 |
 | `replyDrainTimeoutMillis` | `5000` | `> 0` | graceful shutdown 排空上限 |
 
-这些值彼此有顺序约束，启动时会一并校验：`replyControlReservationBytes >= 1024 + 515 = 1539`；`control <= replyMaxTotalBytes`；`replyMaxTotalBytes <= replyPerConnectionCapacityBytes`；`replyPerConnectionCapacityBytes <= replyGlobalCapacityBytes`；并且 `control + chunk + 1024 <= replyMaxTotalBytes`。任何一条不满足都算配置错误，不是运行时背压信号。reply 所有权、result-unknown 与关闭语义以 [`production-hardening-operations.md`](./production-hardening-operations.md) 为准。
+这些值彼此有顺序约束，启动时会一并校验：`replyControlReservationBytes >= 1024 + 515 = 1539`；`control <= replyMaxTotalBytes`；`replyMaxTotalBytes <= replyPerConnectionCapacityBytes`；`replyPerConnectionCapacityBytes <= replyGlobalCapacityBytes`；并且 `control + chunk + 1024 <= replyMaxTotalBytes`。任何一条不满足都算配置错误，不是运行时背压信号。reply 所有权、result-unknown 与关闭语义见本文 §七（生产环境加固与验收操作）。
 
 ### TTL、maintenance 与 defrag
 
@@ -238,7 +238,7 @@ bootstrap 使用 Netty worker event loop 做定时器，但定时器只提交 `e
 
 当前 native-memory 路径统一使用 JDK 25 FFM。更细的 runtime、region、arena 和 copy 边界见 [`native-memory-runtime.md`](./native-memory-runtime.md)。
 
-TTL 命令写路径、lazy expire、cleanup sample/budget 和 expiration reclamation 见 [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)。这里的配置章节只保留参数和 runtime 调度顺序。
+TTL 命令写路径、lazy expire、cleanup sample/budget 和 expiration reclamation 见 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md#一ttl-与过期生命周期)。这里的配置章节只保留参数和 runtime 调度顺序。
 
 ## maxmemory 和 eviction
 
@@ -345,6 +345,167 @@ java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar
 
 脚本层关闭逻辑也要按真实进程处理：谁启动 server，谁负责用 `trap … EXIT` 把它停掉；connect-only benchmark 不拥有也不停止目标 Yierdis。
 
-## Production Hardening Operations
+## 生产环境加固与验收操作
 
-reply global/per-connection/single limits、ingress admission、maxmemory、result-unknown 和 graceful shutdown 共同构成运行时容量边界。精确默认值、启动校验、INFO/STATS 字段、漏账排查和发布命令以 [`production-hardening-operations.md`](./production-hardening-operations.md) 为准；不要只用 `client-output-buffer-limit-bytes` 或 JVM heap 来判断这些硬限制是否生效。
+本节是单节点生产加固方案（Production Hardening）的运行时契约与运维手册，定义了服务端强约束容量边界、容量估算推导、Result-Unknown 判定条件、优雅停机所有权时序以及发布验收测试规范。
+
+### 运行时基线 (Runtime Baseline)
+
+全仓构建、测试、打包和压测统一使用 JDK 25。在自动化脚本与故障复现时需显式导出环境：
+
+```bash
+export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
+export PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH
+java -version
+mvn -version
+```
+
+验证打包产物时，确保环境处于 JDK 25：
+
+```bash
+mvn -DskipTests package
+printf 'port=6378\nmaxmemoryBytes=0\n' > /tmp/yierdis-check.conf
+java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --config /tmp/yierdis-check.conf
+```
+
+排查运行时实例使用 `INFO`、`INFO stats`、`STATS` 和 `MEMORY STATS`。**切勿仅凭 JVM heap 占用推断系统限制**：请求入站（Ingress）、堆外/Maxmemory 以及回复出站（Outbound Reply）属于三个完全独立的有界所有权域。
+
+### Reply 与 Ingress 准入容量约束
+
+以下 Reply 限制是在启动时进行静态严格校验的硬性容量（`YierdisServerRuntimeConfig.normalizeAndValidate`），任何请求都无法通过直接写或可扩容 Buffer 绕过：
+
+| 配置项 | 默认值 | 含义 |
+| --- | ---: | --- |
+| `replyGlobalCapacityBytes` | `268435456` | 所有连接允许准入的 RESP Reply 内存总硬上限（256 MiB） |
+| `replyPerConnectionCapacityBytes` | `134217728` | 单条连接允许准入的 RESP Reply 内存硬上限（128 MiB） |
+| `replyMaxTotalBytes` | `67108864` | 单个顶级 Reply 允许计费的最大字节数，含持有的底层源数据（64 MiB） |
+| `replyChunkPayloadBytes` | `65536` | 回复分块（Chunk）的固定有效载荷大小（64 KiB） |
+| `replyControlReservationBytes` | `4096` | 每个 Reply Slot 预留的控制/错误回复配额（必须先于业务回复写入） |
+| `replyDrainTimeoutMillis` | `5000` | 优雅停机期间 Reply 排空的等待超时时间 |
+
+启动时会验证容量大小关系的合法性：控制预留必须能够容纳固定 Reply 开销加上最大的标量错误帧。常量定义为 `REPLY_FIXED_OVERHEAD_BYTES = 1024`，`REPLY_MAX_CONTROL_ERROR_FRAME_BYTES = 515`，因此 `MIN_REPLY_CONTROL_RESERVATION_BYTES = 1539`。
+
+校验链要求：
+1. `replyControlReservationBytes` 不得超过单回复容量 `replyMaxTotalBytes`；
+2. 单回复容量 `replyMaxTotalBytes` 不得超过单连接容量 `replyPerConnectionCapacityBytes`；
+3. 单连接容量不得超过全局容量 `replyGlobalCapacityBytes`；
+4. `controlReservation + chunkPayload + fixedOverhead` 必须能装入单回复容量。
+
+若不满足上述条件，启动阶段直接抛出配置异常（fail-fast），绝不作为运行时背压降级。
+
+#### 容量估算推导
+
+容量配比是一个严格的算术问题，不可凭经验猜测：
+1. **Ingress（入站）**：`protocolGlobalInFlightBytes` 限制已解析请求的总在途字节。正值按字面限制；为 `0` 时不是无限制，而是派生为 `max(128 MiB, 2 × executorQueueMaxBytes)`（下限 `MIN_PROTOCOL_GLOBAL_IN_FLIGHT_BYTES = 128 MiB`）。协议解码器在请求抵达 executor 之前还会强校验 `protocolMaxBulkBytes`、`protocolMaxArgs`、`protocolMaxLineBytes` 和 `protocolMaxCommandBytes`。
+2. **Reply（出站）**：单个 Reply 最大计费为 `replyMaxTotalBytes`。由于控制预留和首个分块必须计入配额，实际有效业务回复预算约为 `replyMaxTotalBytes - (replyControlReservationBytes + replyChunkPayloadBytes) - fixedOverhead`。并发连接的总 Reply 内存严格受控于 `replyGlobalCapacityBytes`。
+3. `client-output-buffer-limit-bytes` 与 `client-output-buffer-over-limit-millis` 属于针对慢客户端的策略性保护，绝不替代上述硬性准入容量限制。
+
+#### `OutboundMemoryBudget` 的两套计量
+
+- `reserved`：向 Reply Slot 收取的容量配额（包含编码输出与持有的底层数据源字节）；DB 数据源对象在同步渲染期间由 `PreparedCommand` 持有。
+- `allocated`：当前从该预留中实际物化出来的 Chunk Buffer 物理容量。
+
+两组数值均受统一的硬限制层级约束。DB 流式源在同步渲染完成后关闭，但其计费保留在 Reply Slot 租约中，直到该 Slot 达到终态被清理（`ReplySlot`, `BoundedChunkedReplySink`）。
+
+### 调度策略与预检机制
+
+每个客户端输入都会按接收顺序分配一个 Reply Slot（包括普通命令、BUSY 拒绝、协议错误、内部故障及 `QUIT` 这类 reply-and-close 命令）。后续就绪的回复必须排在先前的 Slot 之后。有界 egress 负责人负责 chunk 分片，命令处理器本身不直接向 socket 写字节。
+
+在执行 mutation 之前，只要回复规模可以安全预估，命令均会预先声明 Reply Plan。如果发生超限预检失败，mutation 根本不会提交，数据库保持原状。聚合回复数据源在 planning 和同步渲染全程由 `PreparedCommand` 持有，禁止复制到无界 detached 列表中。
+
+当 Reply 容量阻塞队列头部时，由 executor 调度策略决定处理行为：
+- `FAIR`：轮转可运行连接，防止某条因自身 Reply 耗尽而等待的连接阻塞其他有可用容量的独立连接；
+- `GLOBAL`：维护全局严格 FIFO 头，后续任务不得跨越阻塞的队头。
+
+无论何种策略均不放宽容量限制。当遇到 `ReplyTooLargeException` 时，表明单个回复无法用当前限制表示，服务端直接关闭该传输通道，绝不虚构替换错误信息。
+
+### Result-Unknown 行为契约
+
+系统严格区分两类故障：
+1. **确定性失败（Deterministic）**：在 mutation 或可见 reply 输出之前触发的预检拒绝。安全返回容量或命令错误，DB 状态未发生变更。
+2. **结果未知失败（Result-Unknown）**：在 mutation 可能已经提交之后、reply 字节已经部分发出之后、或者写回结果产生歧义时发生的故障（例如提交后 mutation 异常、底层 write 失败、source/chunk 长度不匹配、输出中断开连接等）。
+
+对于 Result-Unknown 失败，服务端立即取消该 Reply Slot 并**直接关闭底层连接**，绝不捏造 `-ERR internal error`，因为伪造错误会与客户端可能已观察到的变更产生矛盾。每次此类关闭均递增计数器 `yierdis_result_unknown_closes`。
+
+### 可观测指标与泄漏排查矩阵
+
+`INFO stats` 输出运行指标。文本格式中各字段带有 `yierdis_` 前缀；在 `STATS` 命令的结构化 Map 中则不带该前缀：
+
+| 领域 | 核心排查字段 |
+| --- | --- |
+| Ingress（入站） | `inbound_capacity_bytes`, `inbound_reserved_bytes`, `inbound_peak_reserved_bytes`, `inbound_waiting_connections`, `inbound_backpressured`, `inbound_rejected_connections`, `inbound_closed` |
+| Reply 容量 | `reply_global_capacity_bytes`, `reply_per_connection_capacity_bytes`, `reply_max_total_bytes`, `reply_chunk_payload_bytes`, `reply_control_reservation_bytes`, `reply_drain_timeout_millis`, `outbound_reserved_bytes`, `outbound_allocated_bytes`, `outbound_peak_reserved_bytes`, `outbound_peak_allocated_bytes` |
+| Reply 所有权 | `outbound_active_connections`, `outbound_active_slots`, `outbound_active_chunks`, `outbound_active_sources`, `live_child_channels` |
+| 异常与调度 | `outbound_capacity_rejects`, `outbound_oversized_replies`, `outbound_cancelled_slots`, `outbound_failed_slots`, `outbound_write_failures`, `result_unknown_closes`, `reply_shutdown_timeouts`, `deferred_fair_reply_heads`, `deferred_global_reply_heads` |
+| Shutdown 停机 | `reply_shutdown_timeouts`, `inbound_closed`, 以及最终归零的所有权仪表盘 |
+| 内存与堆外 | `INFO memory` 中的 `yierdis_maxmemory_used_bytes`, `yierdis_maxmemory_effective_used_bytes`, `yierdis_ledger_used_bytes`, `yierdis_ledger_reserved_bytes`, `yierdis_offheap_used_bytes`, `native_metadata_committed_bytes`, `native_data_committed_bytes`, `native_data_live_bytes`, `native_live_objects`, `native_live_regions` 等 |
+
+**泄漏判定标准**：在平稳运行中，峰值（Peak）可以非零，但当前 `reserved`/`allocated` 会归零。在测试夹具执行完毕或成功优雅停机后，`active_slots`、`active_chunks`、`active_sources`、`live_child_channels` 以及入站预留必须全部**严格收敛为 0**。客户端断开后若仪表盘非零即表明存在泄漏。
+
+### 优雅停机所有权时序 (Graceful Shutdown)
+
+优雅停机是一个严格的所有权交接协议，而非简单的关闭监听。`YierdisServerBootstrap.closeInternal` 按照以下绝对顺序执行：
+
+1. 关闭 Server Channel，停止接收任何新的入站连接；
+2. 关闭子通道注册表（`ChildChannelRegistry.beginShutdown()`）并把所有已建连子通道置为 closing（`NettyExecutionConnection.markClosing`），彻底停用子通道输入读取；
+3. 取消维护与清理定时任务（Maintenance / cleanup future）；
+4. 命令执行器优雅退出（`CommandExecutor.shutdownGracefully()`），拒绝新任务、取消未开始或等待容量的回复，排空已经开始执行的任期所有者；
+5. 各连接排序器（`ConnectionReplySequencer`）按接收顺序刷新 READY 队头，受 `replyDrainTimeoutMillis` 硬超时限制。若超时，则强制关闭剩余子通道（`ChildChannelRegistry.forceClose()`），记录 `yierdis_reply_shutdown_timeouts` 并汇报停机失败；
+6. 仅在子通道所有权彻底排空后，依次关闭 Ingress 和 Outbound 内存预算、实例运行时资源（DB 与 Native 堆外），最后按序释放 Netty Command Group、Boss Group 和 Worker Group。
+
+停机超时不视为成功关闭。超时异常信息会明确附带 `liveChildren`, `reservedBytes`, `allocatedBytes`, `activeConnections`, `activeSlots` 等现场上下文。
+
+### 自动化验收校验与基准压测对比
+
+全部测试使用统一的 JDK 25 环境。
+
+#### 核心回复与双重写入回归校验
+
+用于快速验证接收顺序、容量边界与 Result-Unknown 所有权：
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
+  mvn -pl yierdis-tests -am \
+  -Dtest=OrderedReplyIntegrationTest,MaxmemoryDoubleReplyRegressionTest \
+  -Dsurefire.failIfNoSpecifiedTests=false \
+  -Dsurefire.rerunFailingTestsCount=3 test
+```
+
+#### DB 架构守卫测试
+
+在修改公开工厂或接口可见性后执行：
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
+  mvn -pl yierdis-tests -am \
+  -Dtest=YierdisDbArchitectureGuardTest \
+  -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+#### 真实 Jar 启动与验证
+
+```bash
+printf 'port=16379\nmaxmemoryBytes=0\n' > /tmp/yierdis-release-check.conf
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
+  java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --config /tmp/yierdis-release-check.conf
+redis-cli -p 16379 PING
+```
+
+#### 基准性能对比规则
+
+压测脚本 `scripts/bench.sh` 仅连接已启动的 Yierdis 实例（不带认证，仅在 `database != 0` 时发 `SELECT`）：
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
+  SKIP_BUILD=1 FORMAT=csv HOST=127.0.0.1 PORT=16378 \
+  REQUESTS=100000 CLIENTS=50 DATA_SIZE=3 PIPELINE=1 \
+  ./scripts/bench.sh > target/yierdis-benchmark.csv
+```
+
+CSV 输出格式定义为（`BenchmarkOutputRenderer.CSV_HEADER`）：
+
+```text
+"test","rps","avg_latency_ms","min_latency_ms","p50_latency_ms","p95_latency_ms","p99_latency_ms","max_latency_ms","status","reason"
+```
+
+前 8 个字段与 Redis 官方基准 CSV 完全对齐，是跨系统性能对比的标准表头；`status` 与 `reason` 为 Yierdis 专有扩展字段。标准场景包含 17 项 `SUCCESS` 测试以及 4 项目前为 `UNSUPPORTED` 的项目（`SPOP`, `ZPOPMIN`, `MSET (10 keys)`, `XADD`）。对比双方性能时必须使用完全相同的参数（requests, clients, pipeline, data-size, keyspace, keep-alive, database 等）。

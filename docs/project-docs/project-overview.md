@@ -57,21 +57,69 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 - DB 的生命周期边界由 keyspace、带 TTL deadline 的 entry metadata、value roots、memory ledger 和 native handles 共同维护，而非单张大表。
 - native memory 是当前默认数据路径的一部分，不是旁路优化；它也不等于零拷贝，copy 边界要按接口 ownership 和 lifetime 判断。
 
-## 模块总览
+## 模块架构与依赖拓扑
 
-| 模块区域 | 主要职责 |
-| --- | --- |
-| `yierdis-common` | 共享 bytes、memory 和 command 小型值类型与基础契约。 |
-| `yierdis-networking-resp` | RESP wire model、客户端 codec、`RespReplyWriter` 和 inline command parsing。 |
-| `yierdis-server/yierdis-server-api` | `ExecutionRequest`、`PreparedCommand`、`CommandResult`、语义 `RedisReply`、`RedisReplyRenderer` 和渲染端口 `RedisReplyWriter` 等执行层公共契约。 |
-| `yierdis-server/yierdis-server` | 进程入口、embedded runtime、executor、Netty transport、连接状态和最终组装。 |
-| `yierdis-command` | 命令契约、registry/dispatcher、事务和 Redis 风格内建命令。 |
-| `yierdis-db` | storage API、内存 DB、TTL/maxmemory、FFM backend 和 stable native handle。 |
-| `yierdis-cli` | 项目自带 RESP 客户端入口。 |
-| `yierdis-benchmark` | 基准压测入口和请求生成。 |
-| `yierdis-tests` | 跨模块行为和架构测试；DB 级 helper 归属 `yierdis-db/src/test/java`。 |
+Yierdis 当前严格遵循单向依赖与分层隔离原则。参与 Maven reactor 的是根 `pom.xml` 和九个 leaf POM，依赖方向一律以各 leaf `pom.xml` 的 `<dependencies>` 为准：
 
-更完整的模块依赖方向看 [`module-architecture.md`](./module-architecture.md)。
+```mermaid
+flowchart LR
+  common["yierdis-common"]
+  resp["yierdis-networking-resp"]
+  serverApi["yierdis-server-api"]
+  server["yierdis-server"]
+  command["yierdis-command"]
+  db["yierdis-db"]
+  cli["yierdis-cli"]
+  benchmark["yierdis-benchmark"]
+  tests["yierdis-tests"]
+
+  serverApi --> common
+  resp --> common
+  resp --> serverApi
+  db --> common
+  command --> common
+  command --> serverApi
+  command --> db
+  server --> serverApi
+  server --> command
+  server --> db
+  server --> resp
+  cli --> resp
+  benchmark --> db
+  benchmark --> resp
+
+  cli -. test .-> server
+  tests -. test .-> benchmark
+  tests -. test .-> cli
+  tests -. test .-> common
+  tests -. test .-> serverApi
+  tests -. test .-> server
+  tests -. test .-> command
+  tests -. test .-> db
+  tests -. test .-> resp
+```
+
+### 关键依赖护栏（切忌读错）
+
+1. **`yierdis-db` 是纯粹的存储内核**：**绝不依赖** `yierdis-server`、`yierdis-command` 或 `yierdis-networking-resp`，仅依赖底层的 `yierdis-common`。
+2. **`yierdis-command` 保持网络中立**：**绝不依赖 Netty**，仅依赖 `server-api` 的执行契约和 `db` 的 typed ops。
+3. **`yierdis-networking-resp` 依赖 `server-api`**：`RespReplyWriter` 实现 `server-api` 中的 `RedisReplyWriter`，因此 RESP 序列化不依赖任何 Netty 或 Server 宿主。
+4. **`yierdis-server` 是唯一的系统组装根（Composition Root）**：它是唯一同时依赖 `server-api`、`db`、`command` 和 `networking-resp` 的模块。
+5. **测试隔离**：`yierdis-tests` 对其余八个模块的依赖**全为 test scope**；`yierdis-cli` 生产依赖仅有 `networking-resp`，对 `server` 仅在 test scope 用于集成测试。
+
+### 九大模块职责与依赖清单（以 leaf POM 为准）
+
+| 模块 | 主要职责 | 生产内部依赖 | 测试内部依赖 | 第三方生产依赖 |
+|---|---|---|---|---|
+| `yierdis-common` | 跨层复用的基础值类型、bytes/memory/command 基础契约 | 无 | 无 | 无 |
+| `yierdis-networking-resp` | RESP wire model、客户端 codec、inline 解析与 `RespReplyWriter` | `common`, `server-api` | 无 | 无 |
+| `yierdis-server-api` | `ExecutionRequest`、`PreparedCommand`、`CommandResult`、`RedisReply` 等中立契约 | `common` | 无 | 无 |
+| `yierdis-server` | 进程入口、启动装配、executor、Netty transport 适配与连接 Session | `server-api`, `db`, `command`, `networking-resp` | 无 | `netty-handler`, `slf4j`, `logback` |
+| `yierdis-command` | 命令注册表（Registry/Dispatcher）、事务状态机与内建命令集 | `server-api`, `db`, `common` | 无 | 无 |
+| `yierdis-db` | 内存存储引擎、键空间、TTL 淘汰、Maxmemory 记账与 FFM 堆外分配器 | `common` | 无 | 无 |
+| `yierdis-cli` | 自研轻量非阻塞 RESP 交互式终端与命令行客户端 | `networking-resp` | `server` | 无 |
+| `yierdis-benchmark` | 端到端 RESP 网络基准压测与单机存储性能压测引擎 | `db`, `networking-resp` | 无 | `HdrHistogram` |
+| `yierdis-tests` | 跨模块端到端集成、压力回归与架构守卫测试集 | 无 | 其余 8 模块 | `junit` (parent 继承) |
 
 ## 跑起来的最短路径
 
@@ -164,4 +212,4 @@ DB 内部读 [`db-internals.md`](./db-internals.md)，FFM runtime 和 native-mem
 
 ## 接下来读什么
 
-读模块边界和依赖方向看 [`module-architecture.md`](./module-architecture.md)；跟一次请求看 [`request-execution-flow.md`](./request-execution-flow.md)；看 Netty 适配与有界写回看 [`netty-adapter-design.md`](./netty-adapter-design.md)；深入 DB 读 [`db-internals.md`](./db-internals.md)；理解 native-memory runtime 读 [`native-memory-runtime.md`](./native-memory-runtime.md)。
+模块边界和依赖方向见本文 §四（模块依赖图与依赖规则）；跟一次请求及 Netty 适配与有界写回看 [`request-execution-flow.md`](./request-execution-flow.md)；深入 DB 读 [`db-internals.md`](./db-internals.md)；理解 native-memory runtime 读 [`native-memory-runtime.md`](./native-memory-runtime.md)。

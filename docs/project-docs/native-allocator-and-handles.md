@@ -1,6 +1,6 @@
 # Stable Memory Backend 与 Handles
 
-本文覆盖 stable handle、object table、page allocation、pin/epoch/quarantine、realloc 和 active defrag。FFM runtime/region ownership 见 [`native-memory-runtime.md`](./native-memory-runtime.md)；这层对外的最终统计口径见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
+本文覆盖 stable handle、object table、page allocation、pin/epoch/quarantine、realloc 和 active defrag。FFM runtime/region ownership 见 [`native-memory-runtime.md`](./native-memory-runtime.md)；这层对外的最终统计口径见 [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作)。
 
 建议按"对象是什么 → 谁调用谁 → 不这样做会出什么问题"的顺序读：§1–§2 是合同，§3–§4 是对象结构，§5–§9 每一节都对应一类真实的失效场景（use-after-free、地址漂移、回滚不彻底、ABA、搬迁收益为零）。
 

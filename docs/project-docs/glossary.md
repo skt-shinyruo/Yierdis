@@ -260,7 +260,7 @@ executor 在多连接之间选择任务的策略，目前是 `GLOBAL` 和 `FAIR`
 
 ### FFM
 
-JDK 25 `java.lang.foreign` API。Yierdis 的 region 分配、`YierdisFfmRegion` 读写和 entry record layout 见 [`ffm-primer.md`](./ffm-primer.md)。
+JDK 25 `java.lang.foreign` API。Yierdis 的 region 分配、`YierdisFfmRegion` 读写和 entry record layout 见 [`native-memory-runtime.md`](./native-memory-runtime.md#三region-与-ffm-原语访问机制)。
 
 ### stable handle
 

@@ -34,6 +34,33 @@ dispatcher 对 handler 返回的函数调用 `apply(session)`，这时才能读�
 
 command package 不依赖 `RedisReplyWriter`。命令通过 `RedisReply` 描述标量、聚合或延迟 payload；writer 只是 renderer 的协议端口。command implementation 拿到的只有 `CommandSession`，没有 writer，因此绕不开 `CommandResult` 直接写协议输出。
 
+---
+
+## 进程内存取代理与分层委托契约
+
+Yierdis 没有独立的网络代理进程，也不向其他外部实例做网络转发。系统中所谓的“代理逻辑”是指**进程内的能力委托代理（In-Process Delegation Proxy）**——命令模块为了保持 Transport-Neutral（不依赖 Netty 和具体的 Server 实例），通过三个窄契约向运行时借用能力：
+
+```text
+CommandSession capabilities (连接状态)
+  -> YierdisDbRouter.dbFor(session) -> DbEngine (多 DB 路由)
+  -> ServerObservabilityProvider (INFO/STATS 统计)
+```
+
+### 1. 三条核心委托契约
+1. **`CommandSession`（连接能力载体）**：
+   连接建立时创建 `EngineSession` 并传递给执行器。它向命令层暴露窄接口：`dbIndex()` / `setDbIndex(int)`、`clientName()`、`transaction()`、`respVersion()` 等。命令准备与执行共用该 Session。
+2. **`YierdisDbRouter`（DB 路由委托）**：
+   `SELECT <db>` 命令并不切换任何全局 DB 指针，它仅修改当前连接 `CommandSession` 上的 `dbIndex`。当普通命令执行时，通过 `CommandSupport.commandDb(session)` 委托 `YierdisDbRouter.dbFor(session)` 解析出本次操作的目标 `DbEngine`。
+3. **`ServerObservabilityProvider`（运行时观测委托）**：
+   `INFO`、`STATS`、`MEMORY` 等运维命令通过委托接口向 Server 运行时获取聚合统计，命令层无需反向 import Netty Channel 或 Server Bootstrap。
+
+### 2. 代理能力的边界护栏
+- **无跨进程转发**：无集群路由（Cluster Redirect）、分片与故障转移（Failover）。
+- **无命令改写与中间件拦截**：除 `SELECT` 修改 Session 状态、`MULTI` 排队延迟准备外，所有命令不改写、不拆分、不合并。
+- **单 Owner 串行执行**：DB Routing 只决定“本次命令用哪个 DB”，所有 DB 操作依然严格收敛到同一个 Command Owner 线程，不引入任何并发冲突。
+
+---
+
 ## `CommandRegistry` 和 `CommandSpec`
 
 `CommandRegistries.dispatcher(...)` 创建 registry 与 dispatcher，先注册 `MULTI/EXEC/DISCARD`（`new TransactionCommands(dispatcher).register(registry)`），再注册注入的 `CommandModule`，最后 `registry.seal()`。生产 composition root 传入 `DefaultCommandModules` 和 `ServerCommandModule`。
