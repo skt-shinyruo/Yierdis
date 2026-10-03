@@ -61,7 +61,7 @@ Yierdis 的内部代码库文档地图如下。根目录 `README.md` 覆盖项�
 | [`db-internals.md`](./db-internals.md) | DB 内部结构：键空间、开放寻址表、墓碑压缩与两阶段提交 | `NativeKeyDirectory`, `EntryTable` |
 | [`db-design-analysis.md`](./db-design-analysis.md) | 存储引擎深度设计推导：为什么这样设计、代价与取舍 | `YierdisDbKernel`, `MutationPlan` |
 | [`native-memory-runtime.md`](./native-memory-runtime.md) | **堆外内存全景**：JVM 约束推导、C 对照、JDK 25 FFM 原语与 Region 运行时 | `YierdisFfmMemoryRuntime`, `YierdisNativeObjectTable`, `Arena` |
-| [`native-allocator-and-handles.md`](./native-allocator-and-handles.md) | 物理分配器：Slab/Size-Class 分级管理与 Stable Handle 间接寻址 | `YierdisNativePageAllocator`, `StableMemoryHandle` |
+| [`native-allocator-and-handles.md`](./native-allocator-and-handles.md) | 物理分配器：page registry 结构、Slab/Size-Class 分级管理、page id 领取与回收复用、Stable Handle 间接寻址 | `YierdisNativePageAllocator`, `YierdisNativeBlock`, `StableMemoryHandle` |
 | [`offheap-copy-behavior.md`](./offheap-copy-behavior.md) | **拷贝行为与内核边界**：全链路 copy 场景、拷贝成本拆解与系统调用边界判定 | `BytesSlice`, `MemorySegment.copy` |
 
 ### 5. 资源治理、流控与客户端（Governance, Flow Control & Clients）

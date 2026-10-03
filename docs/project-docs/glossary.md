@@ -292,6 +292,20 @@ native allocator 中记录对象 metadata、generation、pin 状态和 quarantin
 
 源码位置：`yierdis-db/.../memory/foreign/YierdisNativeObjectTable.java`（元数据 record `YierdisNativeObjectMeta`，字段 `allocEpoch` / `freeEpoch` / pinCount / generation）。
 
+### page id
+
+`YierdisNativePageAllocator` 内部标识一块堆外物理页（small page 或 span）的 `int`。它只是 `pagesById` 注册表的 key，**本身不携带任何信息、不参与寻址**；真正的地址在 `PageAllocation.region` 里。对象定位是二维的 `(pageId, pageOffset)`——对 small page 是"页句柄 + 页内偏移"，对 span 则是"整个独占区的句柄"且 `pageOffset` 恒为 0。
+
+id 会被回收复用：`claimPageId()` 先从 `reusablePageIds` 取最小可复用值，取不到才递增 `nextPageId`。复用的安全性不来自 id 本身，而来自 object table 的 generation 关卡（§4.5）。
+
+源码位置：`yierdis-db/.../memory/foreign/YierdisNativePageAllocator.java`（`claimPageId()`、`registerPage(...)`、`removePage(...)`）。详见 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
+
+### `PageAllocation` / `SmallPage` / `SpanAllocation`
+
+页注册表 `pagesById` 的 value 类型。抽象基类 `PageAllocation` 持有 `pageId`（反向指针）、`creationSequence`（出生序号，供 scope abort 识别新建页）、`region`（真正的堆外内存）与 `closed` 标志。两个实现分别是切成等长小块的 `SmallPage`（配 `sizeClass` 与 `freeOffsets` 空闲栈）和单块独占的 `SpanAllocation`（配 `pageCount` / `pageClass` / `capacity`）。
+
+源码位置：`yierdis-db/.../memory/foreign/YierdisNativePageAllocator.java`（私有静态嵌套类）。
+
 ### stable memory backend
 
 提供稳定 handle、resolve view、realloc、epoch、pin/quarantine 和 active defrag 的 owner-bound backend。region ownership 是 FFM 实现的内部职责；对象移动时完整 handle 保持稳定。

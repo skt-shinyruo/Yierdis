@@ -2,7 +2,7 @@
 
 本文覆盖 stable handle、object table、page allocation、pin/epoch/quarantine、realloc 和 active defrag。FFM runtime/region ownership 见 [`native-memory-runtime.md`](./native-memory-runtime.md)；这层对外的最终统计口径见 [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作)。
 
-建议按"对象是什么 → 谁调用谁 → 不这样做会出什么问题"的顺序读：§1–§2 是合同，§3–§4 是对象结构，§5–§9 每一节都对应一类真实的失效场景（use-after-free、地址漂移、回滚不彻底、ABA、搬迁收益为零）。
+建议按"对象是什么 → 谁调用谁 → 不这样做会出什么问题"的顺序读：§1–§2 是合同，§3–§4 是对象结构（§4 额外给出 page registry 的结构全景、两条分配路径与 page id 完整生命周期），§5–§9 每一节都对应一类真实的失效场景（use-after-free、地址漂移、回滚不彻底、ABA、搬迁收益为零）。
 
 ## 1. 这一层为什么存在
 
@@ -14,18 +14,14 @@ DB graph 里存的是 key 字节、field、member、listpack 块这类数据，�
 
 生产实现 `YierdisFfmStableMemoryBackend` 因此切成三层，每层只解决一个问题：
 
-```text
-DB graph
-  stores NativeHandle / typed wrappers
+```mermaid
+flowchart TD
+  dbGraph["DB graph<br/>stores NativeHandle / typed wrappers"]
+  backend["YierdisFfmStableMemoryBackend<br/>validates backend identity and resolves localRaw"]
+  objectTable["YierdisNativeObjectTable<br/>maps stable slot/generation to current page location"]
+  pageAllocator["YierdisNativePageAllocator<br/>owns FFM-backed pages and spans"]
 
-YierdisFfmStableMemoryBackend
-  validates backend identity and resolves localRaw
-
-YierdisNativeObjectTable
-  maps stable slot/generation to current page location
-
-YierdisNativePageAllocator
-  owns FFM-backed pages and spans
+  dbGraph --- backend --- objectTable --- pageAllocator
 ```
 
 调用方只在有界操作内 resolve handle，用完即 close 短生命周期的 `NativeObjectView`。physical page、offset、capacity 和 segment 都是 backend 私有状态。
@@ -47,13 +43,13 @@ public record NativeHandle(long allocatorId, long localRaw)
 
 FFM backend 私有的 `YierdisLocalHandleCodec` 才把 `localRaw` 编成 64 bit：
 
-```text
-bits 63..60  domain       4 bits
-bits 59..56  kind         4 bits
-bits 55..16  slotId      40 bits
-bits 15..4   generation  12 bits
-bits 3..0    flags        4 bits
-```
+| 位段 | 字段 | 宽度 |
+|---|---|---|
+| bits 63..60 | `domain` | 4 bits |
+| bits 59..56 | `kind` | 4 bits |
+| bits 55..16 | `slotId` | 40 bits |
+| bits 15..4 | `generation` | 12 bits |
+| bits 3..0 | `flags` | 4 bits |
 
 对应的位移常量是 `DOMAIN_SHIFT = 60`、`KIND_SHIFT = 56`、`SLOT_SHIFT = 16`、`GENERATION_SHIFT = 4`，掩码为 `SLOT_MASK = (1L << 40) - 1L`、`GENERATION_MASK = (1L << 12) - 1L`、`FOUR_BIT_MASK = 0x0fL`。
 
@@ -83,14 +79,14 @@ DB/API 调用方不得复制这套 codec，也不得把 `localRaw` 当作完整 
 
 打包的 32-bit word（`PACKED_METADATA_OFFSET`）按位切分，只用了低 30 位：
 
-```text
-state      [2:0]    STATE_MASK = 0x07
-pageClass  [5:3]    PAGE_CLASS_MASK = 0x07
-flags      [9:6]    FLAGS_MASK = 0x0f
-kind       [13:10]  KIND_MASK = 0x0f
-domain     [17:14]  DOMAIN_MASK = 0x0f
-generation [29:18]  GENERATION_MASK = 0x0fff
-```
+| 字段 | 位段 | 掩码 |
+|---|---|---|
+| `state` | [2:0] | `STATE_MASK = 0x07` |
+| `pageClass` | [5:3] | `PAGE_CLASS_MASK = 0x07` |
+| `flags` | [9:6] | `FLAGS_MASK = 0x0f` |
+| `kind` | [13:10] | `KIND_MASK = 0x0f` |
+| `domain` | [17:14] | `DOMAIN_MASK = 0x0f` |
+| `generation` | [29:18] | `GENERATION_MASK = 0x0fff` |
 
 `pageClass` 与 generation 同时放进槽里而不是只放在 handle 里，是因为读取一个 handle 时 backend 必须能独立判定"这个槽现在是否还属于这个 handle"——如果只信 handle 自带的 generation，就无法发现 object table 已经把它复用掉了。
 
@@ -125,6 +121,89 @@ object table 承担的职责：
 
 `YierdisNativePageAllocator` 用 `NavigableMap<Integer, PageAllocation> pagesById`（`TreeMap`）按 page id 保存 `SmallPage` 或 `SpanAllocation`，另有 `NavigableSet<Integer> reusablePageIds`（`TreeSet`）保存已脱离 registry 待复用的 id。没有第二套 native page directory。
 
+本节按"registry 是什么 → 块怎么切 → id 怎么流转 → 统计口径"的顺序展开。§4.1 回答 page id 到底关联什么，§4.5 回答 id 复用为什么安全。
+
+### 4.1 page id 关联的是什么
+
+**page id 本身不携带任何信息**，它只是 `pagesById` 的 key，且不参与寻址。真正被它关联的是**一块堆外物理区域**：
+
+```mermaid
+flowchart LR
+  pageId["pageId"] -->|"pagesById.get(id)"| pageAllocation["PageAllocation"]
+  pageAllocation --> region["YierdisFfmRegion"]
+  region --> offHeap["off-heap 字节"]
+```
+
+`PageAllocation` 是二者的抽象基类，四个字段各有明确职责：
+
+```java
+private abstract static class PageAllocation {
+    final int pageId;              // 反向指针：free/close 路径据此回查 registry 并校验 owner
+    final long creationSequence;   // 出生序号：allocation scope abort 据此识别"scope 内新建页"
+    final YierdisFfmRegion region; // 真正持有内存的 region
+    boolean closed;                // 关闭后不得再被分配路径或查找命中
+}
+```
+
+两个实现决定了 id 关联的物理形态完全不同：
+
+| 实现 | id 关联的物理范围 | 关键字段 |
+|---|---|---|
+| `SmallPage` | 恰好一个 `PAGE_BYTES` 的 region，内部切成 `blockCount` 个**等长**小块 | `sizeClass`、`int[] freeOffsets`、`freeCount`、`liveBlocks` |
+| `SpanAllocation` | `pageCount` 个连续页的**单一独占** region | `pageCount`、`pageClass`（`MEDIUM_SPAN`/`LARGE_SPAN`）、`capacity` |
+
+结构全景：
+
+```mermaid
+flowchart TD
+  allocator["YierdisNativePageAllocator"]
+  nextPageId["nextPageId = 1<br/>池空时才发新 id"]
+  reusable["reusablePageIds : TreeSet<br/>已回收待复用的 id；pollFirst() 取最小者并移除"]
+  pagesById["pagesById : TreeMap&lt;id, PageAllocation&gt;<br/>★ 唯一的「活页」注册表；get(id) == null 即表示该 id 已死"]
+
+  allocator --- nextPageId
+  allocator --- reusable
+  allocator --- pagesById
+  reusable -->|"registerPage(id, allocation)"| pagesById
+
+  smallPage["SmallPage<br/>pageId / creationSequence / closed<br/>sizeClass / freeOffsets / freeCount / liveBlocks"]
+  span["SpanAllocation<br/>pageId / creationSequence / closed<br/>pageCount / pageClass / capacity"]
+  pagesById --> smallPage
+  pagesById --> span
+
+  region["YierdisFfmRegion<br/>(region 才是真正的堆外内存)"]
+  smallPage -->|region| region
+  span -->|region| region
+  offHeap["off-heap 字节<br/>SmallPage: 64 KB，等长块 × N<br/>Span: pageCount × 64 KB，单块独占"]
+  region --> offHeap
+
+  subgraph blockView["YierdisNativeBlock —— 一次分配的客户端视图"]
+    owner["owner"]
+    allocation["allocation"]
+    blockRegion["region"]
+    fields["regionOffset / capacity / pageId / pageOffset / pageClass"]
+    rw["实际读写路径：region.getByte(regionOffset + index)<br/>★ 定位二元组 (pageId, pageOffset)"]
+    fields --- rw
+  end
+
+  owner -->|"close 时回调 free"| allocator
+  allocation --> smallPage
+  allocation --> span
+  blockRegion -->|"与所属 PageAllocation 共享同一个 region"| region
+```
+
+（`SmallPage` 与 `SpanAllocation` 都 extends 抽象基类 `PageAllocation { pageId, creationSequence, region, closed }`；上图把基类字段展开进两个实现，以便对照阅读。）
+
+**定位是二维的 `(pageId, pageOffset)`**，不是单看 id。`resolveCapacity(pageId, pageOffset, pageClassOrdinal)`（object table 实现 `CapacityResolver` 的唯一方法）就靠这个元组反查容量：进 `SmallPage` 分支时校验 `pageOffset % sizeClass.bytes() == 0` 且不越页；进 `SpanAllocation` 分支时**要求 `pageOffset == 0`**。
+
+> **容易踩的语义陷阱**：`(pageId, pageOffset)` 里的 `pageId` 并不是"第几页"。对 `SmallPage` 它是"页句柄 + 页内偏移"；对 `SpanAllocation` 它是**整个独占区的句柄**，而 offset 恒为 0。
+
+`(pageId, pageOffset, capacity, pageClass)` 这组定位信息被原样存进 object table 槽位（见 §3 的 `PAGE_ID_OFFSET` / `PAGE_OFFSET_OFFSET` 与 packed word 里的 `pageClass`），读回时组装成 `YierdisNativeObjectMeta`；`blockAt(...)` 再用它反查回 `YierdisNativeBlock`。注意 `capacity` 不在槽里——它每次都由 `resolveCapacity` 现算，槽只保存定位信息。
+
+**id 的这套设计之所以能安全复用**：因为 id 不携带信息，把 id 从 registry 摘掉就足以让所有旧引用失效，不需要额外的失效标记。
+
+### 4.2 size class 档位
+
 page 固定 `PAGE_BYTES = 64 * 1024`。请求不超过 `MAX_SMALL_BYTES = B32768.bytes = 32_768` 时按单一 size class 进 small page，共 23 档（`YierdisNativeSizeClass` 的 `B16`…`B32768`）：
 
 ```text
@@ -134,12 +213,12 @@ page 固定 `PAGE_BYTES = 64 * 1024`。请求不超过 `MAX_SMALL_BYTES = B32768
 24576, 32768
 ```
 
-档位是 4/3 与 3/2 交替的几何级数：越小的对象档差越细（16→24 只差 8 B），这是为了让 tiny 对象的内部碎片可控。
+档位是 4/3 与 3/2 交替的几何级数：越小的对象档差越细（16→24 只差 8 B），这是为了让 tiny 对象的内部碎片可控。`forSize(int)` 在热路径遍历 `CACHED_VALUES` 而不是 `enum.values()`——后者每次调用都克隆数组。
 
 **small page 内的 free-offset 栈**（`SmallPage`）：
 
 - `int[] freeOffsets = new int[blockCount]`，`blockCount = PAGE_BYTES / sizeClass.bytes()`；
-- 构造时把每个块偏移一次性压栈（`freeOffsets[freeCount++] = i * sizeClass.bytes()`）；
+- 构造时按 `i` 从 `blockCount - 1` 递减到 0 压栈（`freeOffsets[freeCount++] = i * sizeClass.bytes()`），因此**新页首次分配拿到的 offset 恒为 0**，其后依次递增；
 - 分配 = `freeOffsets[--freeCount]`，释放 = `pushFreeOffset(offset)`，另有 `liveBlocks` 计存活块数。
 
 之所以能这么简单，是因为**同页同档位，所有块等长**——任意空槽都能装下任何请求。代价是内部碎片：一个 17 KB 的值落在 24576 档，每块浪费约 7 KB。替代方案是变长块 + 分裂/合并，那会让 free 变成 O(空闲块数) 且需要处理拼接；本层选择"固定档位"是有意的取舍。
@@ -151,16 +230,200 @@ page 固定 `PAGE_BYTES = 64 * 1024`。请求不超过 `MAX_SMALL_BYTES = B32768
 
 span 没有页内 free slot 概念，`summarizePages()` 里它的 committed 与 used 都等于 `capacity`。
 
-**warm page 保留规则**：一个 small page 被释放到 `liveBlocks == 0` 时不立刻关页，而是 `findWarmPage(sizeClass, page)` 找同档位的另一个空页：
+**物理布局全景**（把 §4.1 的对象结构图落到真实字节上，帮助建立空间直觉）：
+
+```mermaid
+flowchart TD
+  alloc["allocate(bytes)"]
+  alloc -->|"≤ 32 KiB"| smallPageBox
+  alloc -->|"&gt; 32 KiB"| spanBox
+
+  subgraph smallPageBox["SmallPage: pageId=7 —— 一块 64 KiB region"]
+    direction LR
+    b1["##"] --- b2["##"] --- b3["##"] --- b4[".."]
+    b5["##"] --- b6[".."] --- b7["##"] --- b8["##"]
+    b1 ~~~ b5
+    legend["## = 已分配 block，.. = 空闲 block<br/>同档位等长 block，freeOffsets 栈管理空闲位"]
+  end
+
+  subgraph spanBox["SpanAllocation: pageId=9 —— pageCount=3 的连续 region"]
+    direction LR
+    p1["64 KiB<br/>offset = 0"] --- p2["64 KiB<br/>（连续）"] --- p3["64 KiB<br/>（连续）"]
+    spanNote["单一独占 region，无 block 概念，pageOffset 恒为 0"]
+  end
+
+  smallPageBox ~~~ claim
+  spanBox ~~~ claim
+  claim["页 id 7/9 均由 claimPageId() 领取，关闭后经 reusablePageIds 回收复用"]
+```
+
+这张图与 §4.1 的 registry 结构图互补：那张回答"对象怎么引用内存"，这张回答"内存本身长什么样"。small page 的空闲/占用分布会随分配与释放动态变化（图示为某一时刻的快照）；span 的 `pageCount` 个页只是容量记账单位，物理上是**一块整 region、一个 pageId**，不像图中三格那样各自独立注册。
+
+### 4.3 两条分配路径
+
+`allocate(requestedBytes)` 按 `MAX_SMALL_BYTES` 一分为二，两条路径的 id 获取时机和 `pageOffset` 语义都不同：
+
+```mermaid
+flowchart TD
+  entry["allocate(requestedBytes)"]
+  smallPath["allocateSmall()<br/>forSize() → SizeClass<br/>findNonFullPage(sizeClass)"]
+  spanPath["allocateSpan()<br/>pagesFor() → pageCount<br/>claimPageId()"]
+  pop["popFreeOffset()<br/>liveBlocks++"]
+  newPage["newSmallPage"]
+  allocRegion["runtime.allocateRegion(<br/>MEDIUM_SPAN / LARGE_SPAN, cap)"]
+  spanAlloc["SpanAllocation(pageId, region, …)"]
+  register["registerPage()"]
+  ret["返回 YierdisNativeBlock：<br/>small: pageId = page.pageId, pageOffset = offset,<br/>regionOffset = offset, capacity = sizeClass.bytes(),<br/>pageClass = SMALL<br/>span : pageId = span.pageId, pageOffset = 0（恒定）,<br/>regionOffset = 0, capacity = span.capacity,<br/>pageClass = MEDIUM_SPAN / LARGE_SPAN"]
+  fail["releaseFailedAllocation()：<br/>从 registry 摘除（仅当 owner 仍是它）→ close region<br/>→ reusablePageIds.add(pageId) 退还 id → close 异常作为<br/>suppressed 挂在原异常上后重抛"]
+
+  entry -->|"≤ 32768 (B32768)"| smallPath
+  entry -->|"&gt; 32768"| spanPath
+  smallPath -->|"找到了"| pop
+  smallPath -->|"没找到"| newPage
+  spanPath --> allocRegion
+  allocRegion --> spanAlloc
+  spanAlloc -->|"registerPage(pageId, span)"| register
+  newPage --> register
+  pop --> register
+  register --> ret
+  ret -->|"任何一步失败"| fail
+```
+
+两条路径都有两点值得注意：
+
+- **只有 `newSmallPage` / `allocateSpan` 会调 `claimPageId()`**。`findNonFullPage` 命中已有页时不领新 id。
+- `findNonFullPage` / `findWarmPage` 遍历 `pagesById.values()`，而 `TreeMap` 按 key 升序迭代，所以命中的总是**当前 id 最小**的那一页。这让 small page 的填充顺序可预测，也解释了为什么 id 复用取最小值是合理的选择。
+
+### 4.4 warm page 保留规则
+
+一个 small page 被释放到 `liveBlocks == 0` 时不立刻关页，而是 `findWarmPage(sizeClass, page)` 找同档位的另一个空页：
 
 - 没找到 → 保留，作为该档位的 warm page（每档位至多一个）；
 - 找到 → 关掉其中一个。但 `createdInActiveScope(page) && !createdInActiveScope(warmPage)` 时**关新页**，代码注释写明原因是"abort 只回收 scope 新建页，临时 warm page 不能淘汰命令前的基线页"。
 
 这条规则固定了两个不变量：每 size class 至多 1 个 warm empty page（`trimEmptyPages` 回收其余），以及 abort 之前就存在的基线页不会被 scope 内的临时对象挤掉。
 
-**page id 与复用**：`claimPageId()` 先 `reusablePageIds.pollFirst()`，没有才递增 `nextPageId`；`nextPageId` 到 `Integer.MAX_VALUE` 后置 -1，再用尽抛 `NativeCapacityExceededException("native page id space exhausted")`。id 复用本身不承担 ABA 防护——代码注释写得很直白：*"复用集合只接收已脱离 registry 的 ID；旧句柄仍由 object-table generation 判为 stale"*。也就是说，**page id 复用是安全的，前提是 object table 的 generation 机制没有被绕过**。
+`closeSmallPage` 有前置条件：`page.closed` 或 `liveBlocks != 0` 都直接抛 `IllegalStateException("only an empty live small page can be closed")`——它只服务于 §4.5 的回收路径，不能被随手调用。
 
-**统计口径**（`summarizePages()`）：small page 记 `committed += PAGE_BYTES`、`used += liveBlocks * sizeClass.bytes()`、`smallFreeBytes += freeCount * sizeClass.bytes()`；span 记 `committed = used = capacity`，并把 `span.pageCount` 累加进 `liveMediumSpanPages` / `liveLargeSpanPages`。注意这两项是**页数**，span 描述符数在 `liveSpanDescriptors`（见 §10）。
+### 4.5 page id 的领取、回收与复用
+
+#### 领取：`claimPageId()`
+
+```java
+private int claimPageId() {
+    // 复用集合只接收已脱离 registry 的 ID；旧句柄仍由 object-table generation 判为 stale。
+    Integer reusable = reusablePageIds.pollFirst();
+    if (reusable != null) {
+        return reusable;
+    }
+    if (nextPageId <= 0) {
+        throw new NativeCapacityExceededException("native page id space exhausted");
+    }
+    int pageId = nextPageId;
+    nextPageId = pageId == Integer.MAX_VALUE ? -1 : pageId + 1;
+    return pageId;
+}
+```
+
+四个细节：
+
+1. **poll 出来的是 `Integer`（page id 本身），不是队列**。方法名带 `poll`，但接收者是 `TreeSet`；`NavigableSet.pollFirst()` 的语义是"按集合自身排序规则取出第一个元素并删除它"。这里没有 FIFO 队列，只有**取数值最小者**——`TreeSet` 用 `Integer` 的自然序，比较走数值而非字符串。
+2. **判空是必需的**。返回类型是包装类型 `Integer`，空集合时返回 `null` 而非抛异常，所以必须 `if (reusable != null)`；判空失败才走 `nextPageId` 递增分支。
+3. **耗尽信号靠哨兵值**。`nextPageId` 初始为 1，递增到 `Integer.MAX_VALUE` 后置 -1，下次进来 `nextPageId <= 0` 即抛 `NativeCapacityExceededException("native page id space exhausted")`。
+4. **复用是必需的，不是优化**。id 空间上限就是 `int`，没有回收机制的话长期运行必然耗尽。
+
+#### 回收：三处写入 `reusablePageIds`
+
+只有已从 registry 摘除的 id 才会进复用集合：
+
+| 写入点 | 触发场景 |
+|---|---|
+| `removePage(pageId, expected, true)` | `freeSpan` / `closeSmallPage` 正常回收 |
+| `releaseFailedAllocation(pageId, …)` | 分配中途失败，领取的 id 退还未使用状态 |
+| `restoreAllocationScope(checkpoint)` | abort 回滚后整表替换为快照 |
+
+#### 完整生命周期
+
+```mermaid
+flowchart TD
+  claim["claimPageId()"]
+  poll["reusablePageIds.pollFirst()"]
+  exhaust["nextPageId++<br/>（到 MAX_VALUE 置 -1，下次抛 native page id space exhausted）"]
+  register["registerPage(id, alloc)<br/>pagesById.put(id, alloc)<br/>putIfAbsent != null 即抛 &quot;page id is already live&quot;"]
+  serving["服务期：pagesById.get(id) → PageAllocation<br/>← 所有 (pageId, pageOffset) 查表都走这里"]
+  remove["removePage(id, expected, recycleId = true)<br/>1. pagesById.get(id) != expected → &quot;page id owner mismatch&quot;<br/>2. pagesById.remove(id) ★ 从此刻 null<br/>3. reusablePageIds.add(id) 返回 false → &quot;page id is already reusable&quot;"]
+
+  claim -->|"池里有货"| poll
+  claim -->|"池空"| exhaust
+  poll --> register
+  exhaust --> register
+  register --> serving
+  serving -->|"block.close() / freeSmall / freeSpan / trimEmptyPages / scope abort"| remove
+  remove -->|"回到 pollFirst() 等待复用"| poll
+```
+
+`removePage` 的三步顺序不可调换：**先摘表，再入复用集合**。反过来的话，会有一个窗口让 `claimPageId()` 把仍能查到描述符的 id 发出去，两个描述符共用同一 id，随后 `registerPage` 的 `"page id is already live"` 与 `removePage` 的 `"page id owner mismatch"` 会开始随机报错。同理，`releaseFailedAllocation` 也必须先摘表（且只在 owner 仍是它时才摘）才能退还 id。
+
+#### 复用为什么安全：两层职责分离
+
+id 复用本身**不承担** ABA 防护。安全性来自两道互不依赖的关卡：
+
+```mermaid
+flowchart TD
+  handle["旧句柄 (pageId = 7, generation = 3)"]
+  table["YierdisNativeObjectTable"]
+  subgraph checks["三道关"]
+    c1["state == STATE_FREE?"]
+    c2["segment.isRetired(offset)?"]
+    c3["generation != handle.generation"]
+  end
+  stale["stale"]
+  lookup["pagesById.get(7)"]
+  e1["&quot;unknown or closed native page id: 7&quot;"]
+  e2["&quot;native small page location is not live&quot;（pageClass 不符）<br/>或 &quot;native small block location mismatch&quot;（offset 不对齐/越界/capacity 不符）"]
+  e3["&quot;native span location mismatch&quot;（offset ≠ 0 / capacity 不符）"]
+
+  handle --> table
+  table --> checks
+  c1 --> stale
+  c2 --> stale
+  c3 --> stale
+  checks -->|"三道关全在 object table，page id 复用根本轮不到它"| lookup
+  lookup -->|"null（尚未复用）"| e1
+  lookup -->|"已复用为 SmallPage"| e2
+  lookup -->|"已复用为 SpanAllocation"| e3
+```
+
+| 层 | 职责 | 拦什么 |
+|---|---|---|
+| object table 的 `generation` | 句柄新鲜度 | 一切拿旧 handle 走 `resolve` 的路径 |
+| `pagesById` + `blockAt` 校验 | 地址解析有效性 | 绕过 object table 的直接定位请求 |
+
+分层清晰是刻意设计：**generation 管句柄新鲜度，`pagesById` 管地址解析**，两者互不依赖，所以 id 空间可以安全地长期周转。代码注释把这条前提写得很直白：*"复用集合只接收已脱离 registry 的 ID；旧句柄仍由 object-table generation 判为 stale"*——**page id 复用是安全的，前提是 object table 的 generation 机制没有被绕过**（见 §9 不变量 2）。
+
+唯一的理论风险是 generation 耗尽后的槽位 retire（§3），但那是**槽位**维度的上限，与 page id 维度正交。
+
+#### `pollFirst()` 的 API 语义与通用惯用法
+
+`pollFirst()` 不是 `Set` 接口方法，而是来自 `NavigableSet`（`TreeSet` 是其标准实现）——这正是选择 `TreeSet` 而非 `HashSet` 做复用集合的原因：需要"取最小者"的可导航语义。"poll"与"remove"/"first"的边界必须分清：
+
+| 方法 | 集合为空时 | 集合非空时 |
+|---|---|---|
+| `pollFirst()` | 返回 **`null`**（不抛异常） | 移除并返回最小元素 |
+| `removeFirst()` / `pop()` | 抛 `NoSuchElementException` | 移除并返回最小元素 |
+| `first()` / `getFirst()` | 抛 `NoSuchElementException` | 只读取，不移除 |
+
+三个补充点：
+
+1. **复杂度**：`TreeSet` 基于红黑树，`pollFirst()` 是 O(log n)——定位最小元素、删除并重平衡。取最小者恰好是 O(log n) 而非 O(n)，这是有序树相对无序集合在"取极值"场景的结构性优势。
+2. **为什么接收变量是 `Integer` 而非 `int`**：空集合返回 `null`，若用 `int` 接收会在拆箱时抛 `NullPointerException`。`claimPageId()` 用 `Integer reusable` 承接、判空后再隐式拆箱为 `int` 返回，这是"poll 类 API + 包装类型 + 判空"的标准三件套。
+3. **并发形态**：`TreeSet` 非线程安全，本文件没有内置锁（`YierdisNativePageAllocator` 里没有任何 `synchronized`/`Lock`），互斥由调用层保证。若并发场景需要同样的"取最小者"语义，对应物是 `ConcurrentSkipListSet.pollFirst()`——同样以 `null` 表达池空，不抛异常。
+
+这套"先复用后新增"的写法是**资源池 / ID 池分配的通用惯用法**：连接 ID、事务号、槽位编号等"耗尽代价高、需回收周转"的标识都可以套用同一个骨架——`池.poll()` 命中即复用，`null` 才走单调计数器兜底，计数器耗尽抛容量异常；释放侧把彻底脱离活跃结构的 ID `add()` 回池。本实现多出的一层约束是"最小者优先"：它与 `findNonFullPage` 按 `TreeMap` key 升序迭代（§4.3）相互配合，让 small page 的填充与 id 周转都保持紧凑、可预测。
+
+### 4.6 统计口径
+
+（`summarizePages()`）：small page 记 `committed += PAGE_BYTES`、`used += liveBlocks * sizeClass.bytes()`、`smallFreeBytes += freeCount * sizeClass.bytes()`；span 记 `committed = used = capacity`，并把 `span.pageCount` 累加进 `liveMediumSpanPages` / `liveLargeSpanPages`。注意这两项是**页数**，span 描述符数在 `liveSpanDescriptors`（见 §10）。
 
 block（`YierdisNativeBlock`）对外只暴露 backend 所需的 capacity、page identity/class 和 byte access。requested size、page count、size class 等 test-only 镜像不留在 block 中；真实信息由 registry descriptor 和 object table 决定。
 
@@ -283,14 +546,17 @@ nextCreationSequence = checkpoint.creationSequence;
 
 单次搬迁（`moveLiveObject`）的完整序列：
 
-```text
-beginMove(handle)
-  -> pageAllocator.moveSource(meta)      // 拿旧 block
-  -> pageAllocator.allocate(...)         // 分配 target
-  -> previous.copyTo(target, size)       // 复制 logical bytes
-  -> objectTable.publishMoved(...)       // 发布新 location（此后不可回滚）
-  -> reserveMovedBlock(previous, targetCapacity, nextEpoch())
-  -> retire 旧 block（或立即 close）
+```mermaid
+flowchart TD
+  s1["beginMove(handle)"]
+  s2["pageAllocator.moveSource(meta)<br/>// 拿旧 block"]
+  s3["pageAllocator.allocate(...)<br/>// 分配 target"]
+  s4["previous.copyTo(target, size)<br/>// 复制 logical bytes"]
+  s5["objectTable.publishMoved(...)<br/>// 发布新 location（此后不可回滚）"]
+  s6["reserveMovedBlock(previous, targetCapacity, nextEpoch())"]
+  s7["retire 旧 block（或立即 close）"]
+
+  s1 --> s2 --> s3 --> s4 --> s5 --> s6 --> s7
 ```
 
 handle、kind、logical size 和 DB graph identity 全程不变——**defrag 的安全性正建立在"file 身份与物理位置彻底分离"之上**：搬迁只改 object table 里的 pageId/pageOffset/capacity，DB graph 里的 `NativeHandle` 一个字节都没动。
