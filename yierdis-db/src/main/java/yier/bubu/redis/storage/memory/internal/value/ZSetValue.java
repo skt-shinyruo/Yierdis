@@ -2,6 +2,7 @@ package yier.bubu.redis.storage.memory.internal.value;
 
 import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
 
+import yier.bubu.redis.bytes.String2d;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
@@ -21,7 +22,6 @@ import yier.bubu.redis.storage.memory.internal.keyspace.YierdisGlobMatcher;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Locale;
 import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
@@ -1086,29 +1086,14 @@ public final class ZSetValue implements YierdisValue {
     }
 
     private static double parseScore(byte[] s) {
-        String text = new String(s, StandardCharsets.US_ASCII);
-        double v;
+        double parsed;
         try {
-            v = Double.parseDouble(text);
-        } catch (NumberFormatException e) {
-            v = parseInfinitySpelling(text);
-        }
-        if (Double.isNaN(v)) {
+            parsed = String2d.parse(s);
+        } catch (NumberFormatException failure) {
             throw new YierdisCommandException("ERR value is not a valid float");
         }
-        return v == 0.0d ? 0.0d : v;
-    }
-
-    private static double parseInfinitySpelling(String text) {
-        // strtod 接受任意大小写、可选符号的 inf/infinity，而 Double.parseDouble 只认精确拼写的 "Infinity"，
-        // Redis 的 ZADD 分数以前者为准，这里补上它不认的拼写。
-        String lowered = text.toLowerCase(Locale.ROOT);
-        boolean negative = lowered.startsWith("-");
-        String body = (lowered.startsWith("+") || negative) ? lowered.substring(1) : lowered;
-        if (body.equals("inf") || body.equals("infinity")) {
-            return negative ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
-        }
-        throw new YierdisCommandException("ERR value is not a valid float");
+        // 负零与正零比较相等。写入前折成正零，保存下去的分数不带符号位。
+        return parsed == 0.0d ? 0.0d : parsed;
     }
 
     private static boolean scoresEqual(double left, double right) {
