@@ -548,7 +548,12 @@ final class YierdisStringOps implements StringOps {
         if (s < 0) {
             s = 0;
         }
-        if (ed < 0 || s >= len) {
+        // Redis bitops.c 在负索引换算之后把仍小于 0 的 end 钳到 0，因此会统计第一个字节。
+        // start 大于这个 end 时仍走下面的空区间，start 侧钳位不变。
+        if (ed < 0) {
+            ed = 0;
+        }
+        if (s >= len) {
             return 0L;
         }
         if (ed >= len) {
