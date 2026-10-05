@@ -193,10 +193,7 @@ public final class StringCommands {
         if (value != 0L && value != 1L) {
             throw new CommandParseException(INVALID_BIT);
         }
-        // Redis getBitOffsetFromArgument 对越界 offset 也复用同一条 offset 文案，而不是 string 过大错误。
-        if (offset / 8L >= MAX_STRING_BYTES) {
-            throw new CommandParseException(INVALID_BIT_OFFSET);
-        }
+        rejectBitOffsetBeyondMaxString(offset);
         SetBitArgs parsed = new SetBitArgs(args.bytes(1), offset, (int) value);
         return session -> CommandSupport.preparedAction(ReplyShapes.integerUpperBound(), execution -> {
             int previous = support.commandDb(execution).strings()
@@ -206,7 +203,9 @@ public final class StringCommands {
     }
 
     private Function<CommandSession, PreparedCommand> getbit(CommandArgs args) {
-        GetBitArgs parsed = new GetBitArgs(args.bytes(1), bitOffsetAt(args, 2));
+        long offset = bitOffsetAt(args, 2);
+        rejectBitOffsetBeyondMaxString(offset);
+        GetBitArgs parsed = new GetBitArgs(args.bytes(1), offset);
         BytesSlice key = args.slice(1);
         return session -> PreparedCommands.ready(RedisReplies.integer(
                 support.commandDb(session).strings().getBit(key, parsed.offset())));
@@ -224,6 +223,15 @@ public final class StringCommands {
             throw new CommandParseException(INVALID_BIT_OFFSET);
         }
         return offset;
+    }
+
+    // Redis getBitOffsetFromArgument 对越界 offset 复用 offset 文案，而不是 string 过大错误。
+    // SETBIT 与 GETBIT 在解析期共用这条 512 MiB 上限。直接调用存储层 getBit 时，
+    // 字节下标尚未超过 Integer.MAX_VALUE 的超长读偏移仍返回 0；setBit 则另以字符串长度错误拒绝。
+    private static void rejectBitOffsetBeyondMaxString(long offset) {
+        if (offset / 8L >= MAX_STRING_BYTES) {
+            throw new CommandParseException(INVALID_BIT_OFFSET);
+        }
     }
 
     private Function<CommandSession, PreparedCommand> bitcount(CommandArgs args) {

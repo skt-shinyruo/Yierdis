@@ -71,6 +71,26 @@ public class BitmapCommandTest {
     }
 
     @Test
+    public void bitcountClampsNegativeEndPastTheStringToTheFirstByte() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("b");
+                // \xff\x00\xff 各位计数是 8、0、8。end 换算后仍小于 0 时 Redis 钳到字节 0，统计该字节而不是空区间。
+                client.execute(Arrays.asList(b("SET"), key, new byte[]{(byte) 0xff, 0x00, (byte) 0xff}));
+
+                Assert.assertEquals(8, ((ReplyInteger) client.execute(cmd("BITCOUNT", "b", "0", "-4"))).value());
+                Assert.assertEquals(8, ((ReplyInteger) client.execute(cmd("BITCOUNT", "b", "-3", "-4"))).value());
+                Assert.assertEquals(8, ((ReplyInteger) client.execute(cmd("BITCOUNT", "b", "-10", "-8"))).value());
+                Assert.assertEquals(8, ((ReplyInteger) client.execute(cmd("BITCOUNT", "b", "-5", "-3"))).value());
+                Assert.assertEquals(8, ((ReplyInteger) client.execute(cmd("BITCOUNT", "b", "0", "-3"))).value());
+                Assert.assertEquals(0, ((ReplyInteger) client.execute(cmd("BITCOUNT", "b", "1", "-3"))).value());
+            }
+        });
+    }
+
+    @Test
     public void setbitZeroFillsGrownBytesWithinCapacity() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
@@ -121,6 +141,21 @@ public class BitmapCommandTest {
                 assertError("bit offset is not an integer or out of range", client.execute(cmd("GETBIT", "k", "-1")));
                 assertError("bit offset is not an integer or out of range", client.execute(cmd("GETBIT", "k", "nope")));
                 assertError("not an integer or out of range", client.execute(cmd("BITCOUNT", "k", "from", "2")));
+            }
+        });
+    }
+
+    @Test
+    public void getbitRejectsOffsetAtMaxStringByteBoundary() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                // 4294967295 / 8 仍小于 MAX_STRING_BYTES（512 MiB）；再大 1 位就与 SETBIT 一样被拒绝。
+                Assert.assertEquals(0, ((ReplyInteger) client.execute(cmd("GETBIT", "k", "4294967295"))).value());
+                assertError(
+                        "bit offset is not an integer or out of range",
+                        client.execute(cmd("GETBIT", "k", "4294967296")));
             }
         });
     }
