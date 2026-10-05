@@ -1,0 +1,2 @@
+# main 的分支保护要求 Code Owner 审查。全仓库只有这个账号的批准能满足合并条件。
+* @skt-shinyruo
