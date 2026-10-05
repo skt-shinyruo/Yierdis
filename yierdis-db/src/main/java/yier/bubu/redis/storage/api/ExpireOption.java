@@ -3,7 +3,6 @@ package yier.bubu.redis.storage.api;
 // ExpireOption：SET 的过期选项（EX/PX/EXAT/PXAT/KEEPTTL），作为 command-facing 的稳定类型。
 
 import java.util.Objects;
-import java.util.concurrent.TimeUnit;
 
 public final class ExpireOption {
     private enum Kind {
@@ -49,38 +48,46 @@ public final class ExpireOption {
     public long toExpireAtMillis(long nowMillis) {
         return switch (kind) {
             case KEEP_TTL -> throw new IllegalStateException("KEEP_TTL has no expireAtMillis");
-            case EX -> safeExpireRelativeMillis(nowMillis, value, TimeUnit.SECONDS);
-            case PX -> safeExpireRelativeMillis(nowMillis, value, TimeUnit.MILLISECONDS);
-            case EXAT -> safeExpireAbsoluteMillis(value, TimeUnit.SECONDS);
-            case PXAT -> safeExpireAbsoluteMillis(value, TimeUnit.MILLISECONDS);
+            case EX -> relativeFromSeconds(nowMillis, value);
+            case PX -> relativeFromMillis(nowMillis, value);
+            case EXAT -> secondsToMillis(value);
+            // PXAT 的参数已经是绝对毫秒。Long.MAX_VALUE 在 long 范围内，不是溢出。
+            case PXAT -> value;
         };
     }
 
-    private static long safeExpireRelativeMillis(long nowMillis, long duration, TimeUnit unit) {
-        if (duration <= 0) {
+    // duration <= 0 保持“立即过期”：存储层直接用 px(0)/ex(0)，SET 命令则在解析期另报 invalid expire time。
+    // 正数路径对齐 Redis getExpireMillisecondsOrReply：秒换算或 now+delta 放不下时报 'set'，不再钳到 Long.MAX_VALUE。
+    private static long relativeFromSeconds(long nowMillis, long seconds) {
+        if (seconds <= 0L) {
             return nowMillis;
         }
-        long deltaMillis;
-        try {
-            deltaMillis = Math.multiplyExact(duration, unit == TimeUnit.SECONDS ? 1000L : 1L);
-        } catch (ArithmeticException e) {
-            return Long.MAX_VALUE;
-        }
-        try {
-            return Math.addExact(nowMillis, deltaMillis);
-        } catch (ArithmeticException e) {
-            return Long.MAX_VALUE;
-        }
+        return addBase(nowMillis, secondsToMillis(seconds));
     }
 
-    private static long safeExpireAbsoluteMillis(long value, TimeUnit unit) {
-        if (unit == TimeUnit.MILLISECONDS) {
-            return value;
+    private static long relativeFromMillis(long nowMillis, long milliseconds) {
+        if (milliseconds <= 0L) {
+            return nowMillis;
         }
-        try {
-            return Math.multiplyExact(value, 1000L);
-        } catch (ArithmeticException e) {
-            return Long.MAX_VALUE;
+        return addBase(nowMillis, milliseconds);
+    }
+
+    // nowMillis >= 0 时，Long.MAX_VALUE - nowMillis 不会回绕。命令路径传入的是当前墙钟，这里不拒绝负的 now。
+    private static long addBase(long nowMillis, long deltaMillis) {
+        if (deltaMillis > Long.MAX_VALUE - nowMillis) {
+            throw invalidSetExpire();
         }
+        return nowMillis + deltaMillis;
+    }
+
+    private static long secondsToMillis(long seconds) {
+        if (seconds > Long.MAX_VALUE / 1000L || seconds < Long.MIN_VALUE / 1000L) {
+            throw invalidSetExpire();
+        }
+        return seconds * 1000L;
+    }
+
+    private static YierdisCommandException invalidSetExpire() {
+        return new YierdisCommandException("ERR invalid expire time in 'set' command");
     }
 }

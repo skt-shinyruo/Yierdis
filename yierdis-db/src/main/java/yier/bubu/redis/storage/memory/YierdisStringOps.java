@@ -72,9 +72,11 @@ final class YierdisStringOps implements StringOps {
         kernel.checkOwner();
         Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
-        kernel.reclaimExpiredBeforeMutation(keyBytes, now);
         boolean keepTtl = expireOption != null && expireOption.isKeepTtl();
+        // 溢出要在惰性删除之前失败。否则 SET EX/PX/EXAT 报错时会先删掉已过期键；
+        // Redis 在 getExpireMillisecondsOrReply 失败时不改键。
         Long expireAtMillis = (expireOption == null || keepTtl) ? null : expireOption.toExpireAtMillis(now);
+        kernel.reclaimExpiredBeforeMutation(keyBytes, now);
         int newValueLength = valueLength(value);
         long upperBound = YierdisDbMemoryEstimator.estimateStringWriteUpperBound(
                 keyBytes == null ? 0 : keyBytes.length,

@@ -10,6 +10,7 @@ import yier.bubu.redis.storage.api.ExpireCondition;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.TtlOps;
 import yier.bubu.redis.storage.api.WriteResult;
+import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.key.AllocatorKeyHandle;
@@ -32,6 +33,9 @@ final class YierdisTtlOps implements TtlOps {
     @Override
     public WriteResult<Boolean> expire(BytesView keyView, long seconds, ExpireCondition condition) {
         kernel.checkOwner();
+        // Redis expireGenericCommand 在查键之前拒绝秒换算和 now+delta 溢出。
+        // 缺失键、已过期键因此仍回报错，而不是 :0；也不能把 deadline 钳到 Long.MAX_VALUE。
+        long expireAtMillis = relativeExpireAtMillis(System.currentTimeMillis(), seconds, "expire");
         AllocatorKeyHandle handle = keyLifecycle.keyHandle(keyView);
         if (handle == null) {
             return WriteResult.unchanged(Boolean.FALSE);
@@ -40,7 +44,6 @@ final class YierdisTtlOps implements TtlOps {
         if (record == null) {
             return WriteResult.unchanged(Boolean.FALSE);
         }
-        long expireAtMillis = safeExpireAtMillis(System.currentTimeMillis(), seconds);
         // Redis 在 checkAlreadyExpired 删除分支之前判定条件：条件不满足时键与旧 TTL 都保留。
         if (!condition.allows(record.expireAtMillis(), expireAtMillis)) {
             return WriteResult.unchanged(Boolean.FALSE);
@@ -54,6 +57,8 @@ final class YierdisTtlOps implements TtlOps {
     @Override
     public WriteResult<Boolean> pexpire(BytesView keyView, long milliseconds, ExpireCondition condition) {
         kernel.checkOwner();
+        // PEXPIRE 没有秒换算，只在查键前拒绝 now+delta 溢出。绝对毫秒时间戳不走这条路径。
+        long expireAtMillis = addExpireBase(System.currentTimeMillis(), milliseconds, "pexpire");
         AllocatorKeyHandle handle = keyLifecycle.keyHandle(keyView);
         if (handle == null) {
             return WriteResult.unchanged(Boolean.FALSE);
@@ -63,7 +68,6 @@ final class YierdisTtlOps implements TtlOps {
             return WriteResult.unchanged(Boolean.FALSE);
         }
 
-        long expireAtMillis = safeAddMillis(System.currentTimeMillis(), milliseconds);
         if (!condition.allows(record.expireAtMillis(), expireAtMillis)) {
             return WriteResult.unchanged(Boolean.FALSE);
         }
@@ -75,18 +79,14 @@ final class YierdisTtlOps implements TtlOps {
 
     @Override
     public WriteResult<Boolean> expireAtSeconds(BytesView keyView, long unixSeconds, ExpireCondition condition) {
-        long expireAtMillis;
-        try {
-            expireAtMillis = Math.multiplyExact(unixSeconds, 1000L);
-        } catch (ArithmeticException e) {
-            expireAtMillis = Long.MAX_VALUE;
-        }
-        return expireAtMillis(keyView, expireAtMillis, condition);
+        // basetime 为 0，只检查秒×1000。溢出必须报 'expireat'，不能先钳位再交给 expireAtMillis。
+        return expireAtMillis(keyView, secondsToMillis(unixSeconds, "expireat"), condition);
     }
 
     @Override
     public WriteResult<Boolean> expireAtMillis(BytesView keyView, long unixMillis, ExpireCondition condition) {
         kernel.checkOwner();
+        // PEXPIREAT 的参数已是绝对毫秒。long 能表示的值，包括 Long.MAX_VALUE，都不再做溢出判断。
         AllocatorKeyHandle handle = keyLifecycle.keyHandle(keyView);
         if (handle == null) {
             return WriteResult.unchanged(Boolean.FALSE);
@@ -278,26 +278,31 @@ final class YierdisTtlOps implements TtlOps {
         return record;
     }
 
-    private static long safeExpireAtMillis(long nowMillis, long seconds) {
-        long deltaMillis;
-        try {
-            deltaMillis = Math.multiplyExact(seconds, 1000L);
-        } catch (ArithmeticException e) {
-            return Long.MAX_VALUE;
-        }
-        try {
-            return Math.addExact(nowMillis, deltaMillis);
-        } catch (ArithmeticException e) {
-            return Long.MAX_VALUE;
-        }
+    // 秒范围对齐 Redis 的 [Long.MIN_VALUE/1000, Long.MAX_VALUE/1000]，然后再做 when > Long.MAX_VALUE - now。
+    // nowMillis 由命令路径传入 System.currentTimeMillis()。减法不回绕、负 delta 不落到 Long.MIN_VALUE 以下，
+    // 都以 nowMillis >= 0 为前提；这个方法本身不拒绝负的 now。
+    private static long relativeExpireAtMillis(long nowMillis, long seconds, String command) {
+        return addExpireBase(nowMillis, secondsToMillis(seconds, command), command);
     }
 
-    private static long safeAddMillis(long nowMillis, long deltaMillis) {
-        try {
-            return Math.addExact(nowMillis, deltaMillis);
-        } catch (ArithmeticException e) {
-            return Long.MAX_VALUE;
+    // 向零截断下，能安全乘 1000 的秒范围是 [Long.MIN_VALUE/1000, Long.MAX_VALUE/1000]。
+    private static long secondsToMillis(long seconds, String command) {
+        if (seconds > Long.MAX_VALUE / 1000L || seconds < Long.MIN_VALUE / 1000L) {
+            throw invalidExpireTime(command);
         }
+        return seconds * 1000L;
+    }
+
+    // 比较式对应 Redis 的 when > LLONG_MAX - basetime。nowMillis >= 0 时减法不会回绕。
+    private static long addExpireBase(long nowMillis, long deltaMillis, String command) {
+        if (deltaMillis > Long.MAX_VALUE - nowMillis) {
+            throw invalidExpireTime(command);
+        }
+        return nowMillis + deltaMillis;
+    }
+
+    private static YierdisCommandException invalidExpireTime(String command) {
+        return new YierdisCommandException("ERR invalid expire time in '" + command + "' command");
     }
 
 }
