@@ -661,8 +661,8 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
     }
 
     private void reclaimEligibleFreedObjects() {
-        for (int slotId = objectTable.firstOccupiedSlot(); slotId != 0;
-             slotId = objectTable.nextOccupiedSlot(slotId)) {
+        // 快照后再释放：release 会把槽从集合里摘掉，不能边遍历边改同一份存储。
+        for (int slotId : objectTable.copyQuarantinedSlotIds()) {
             YierdisNativeObjectMeta meta = objectTable.occupiedMeta(slotId);
             if (meta == null || meta.state() != YierdisNativeObjectTable.STATE_FREED_QUARANTINED) {
                 continue;
@@ -691,35 +691,18 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
     }
 
     private long pinnedObjects() {
-        long count = 0L;
-        for (int slotId = objectTable.firstOccupiedSlot(); slotId != 0;
-             slotId = objectTable.nextOccupiedSlot(slotId)) {
-            YierdisNativeObjectMeta meta = objectTable.occupiedMeta(slotId);
-            if (meta.pinCount() > 0) {
-                count++;
-            }
-        }
-        return count;
+        return objectTable.pinnedSlotCount();
     }
 
     private long quarantinedObjects() {
-        long count = 0L;
-        for (int slotId = objectTable.firstOccupiedSlot(); slotId != 0;
-             slotId = objectTable.nextOccupiedSlot(slotId)) {
-            YierdisNativeObjectMeta meta = objectTable.occupiedMeta(slotId);
-            if (meta.state() == YierdisNativeObjectTable.STATE_FREED_QUARANTINED) {
-                count++;
-            }
-        }
-        return count;
+        return objectTable.quarantinedSlotCount();
     }
 
     private long quarantineBytes() {
         long bytes = retainedMovedBlockBytes();
-        for (int slotId = objectTable.firstOccupiedSlot(); slotId != 0;
-             slotId = objectTable.nextOccupiedSlot(slotId)) {
+        for (int slotId : objectTable.copyQuarantinedSlotIds()) {
             YierdisNativeObjectMeta meta = objectTable.occupiedMeta(slotId);
-            if (meta.state() == YierdisNativeObjectTable.STATE_FREED_QUARANTINED) {
+            if (meta != null && meta.state() == YierdisNativeObjectTable.STATE_FREED_QUARANTINED) {
                 bytes += meta.capacity();
             }
         }

@@ -54,6 +54,8 @@ final class YierdisNativeObjectTable implements AutoCloseable {
     private final CapacityResolver capacityResolver;
 
     private YierdisNativeObjectSegment[] segments = new YierdisNativeObjectSegment[0];
+    private final YierdisNativeSlotSet pinnedSlots = new YierdisNativeSlotSet();
+    private final YierdisNativeSlotSet quarantinedSlots = new YierdisNativeSlotSet();
     private long liveSlots;
     private long freeSlots;
     private long retiredSlots;
@@ -119,6 +121,7 @@ final class YierdisNativeObjectTable implements AutoCloseable {
                 replaceGeneration(packedFields, generation)
         );
         transitionState(slot, STATE_ALLOCATED);
+        slot.segment.markOccupied(slot.offset);
         liveSlots++;
         freeSlots--;
         peakLiveSlots = Math.max(peakLiveSlots, liveSlots);
@@ -175,6 +178,8 @@ final class YierdisNativeObjectTable implements AutoCloseable {
         if (forceQuarantine || pinCount > 0) {
             slot.segment.writeLong(slot.offset, FREE_EPOCH_OFFSET, freeEpoch);
             transitionState(slot, STATE_FREED_QUARANTINED);
+            // 槽仍被占用，但回收只看这个集合。pin 或 epoch 没放开之前不能把槽还回 free stack。
+            quarantinedSlots.add(slot.slotId);
             return;
         }
         releaseSlot(slot, freeEpoch);
@@ -190,6 +195,9 @@ final class YierdisNativeObjectTable implements AutoCloseable {
         int pinCount = slot.segment.readInt(slot.offset, PIN_COUNT_OFFSET);
         slot.segment.writeInt(slot.offset, PIN_COUNT_OFFSET, pinCount + 1);
         transitionState(slot, STATE_PINNED);
+        if (pinCount == 0) {
+            pinnedSlots.add(slot.slotId);
+        }
     }
 
     void unpin(long localRaw) {
@@ -209,6 +217,9 @@ final class YierdisNativeObjectTable implements AutoCloseable {
         }
         pinCount--;
         slot.segment.writeInt(slot.offset, PIN_COUNT_OFFSET, pinCount);
+        if (pinCount == 0) {
+            pinnedSlots.remove(slot.slotId);
+        }
         int state = state(slot);
         if (pinCount == 0 && state == STATE_FREED_QUARANTINED && releaseQuarantinedOnZero) {
             releaseSlot(slot, slot.segment.readLong(slot.offset, FREE_EPOCH_OFFSET));
@@ -345,10 +356,12 @@ final class YierdisNativeObjectTable implements AutoCloseable {
 
     long heapEstimatedBytes() {
         long bytes = baseHeapBytes();
-        return MemoryUsageSnapshot.addSaturating(
+        bytes = MemoryUsageSnapshot.addSaturating(
                 bytes,
                 (long) segments.length * objectSegmentHeapBytes()
         );
+        bytes = MemoryUsageSnapshot.addSaturating(bytes, pinnedSlots.heapEstimatedBytes());
+        return MemoryUsageSnapshot.addSaturating(bytes, quarantinedSlots.heapEstimatedBytes());
     }
 
     long estimateAdditionalHeapBytes(int requestedObjects) {
@@ -437,19 +450,41 @@ final class YierdisNativeObjectTable implements AutoCloseable {
     int nextOccupiedSlot(int afterSlotId) {
         ensureOpen();
         int last = materializedSlotUpperBound(maxSlots, segments.length);
+        // afterSlotId + 1 在 Integer.MAX_VALUE 上会回绕，所以上界检查必须先做。
         if (afterSlotId >= last) {
             return 0;
         }
         int first = Math.max(1, afterSlotId + 1);
-        for (long candidate = first; candidate <= last; candidate++) {
-            int slotId = (int) candidate;
-            SegmentSlot slot = slotRef(slotId);
-            int state = state(slot);
-            if (state != STATE_FREE && !slot.segment.isRetired(slot.offset)) {
-                return slotId;
+        int segmentIndex = (first - 1) >>> 12;
+        int offset = (first - 1) & 0x0fff;
+        for (; segmentIndex < segments.length; segmentIndex++) {
+            YierdisNativeObjectSegment segment = segments[segmentIndex];
+            if (offset >= segment.validSlots() || segment.occupiedCount() == 0) {
+                offset = 0;
+                continue;
             }
+            int found = segment.nextOccupiedOffset(offset);
+            if (found >= 0) {
+                return slotId(segmentIndex, found);
+            }
+            offset = 0;
         }
         return 0;
+    }
+
+    int pinnedSlotCount() {
+        ensureOpen();
+        return pinnedSlots.size();
+    }
+
+    int quarantinedSlotCount() {
+        ensureOpen();
+        return quarantinedSlots.size();
+    }
+
+    int[] copyQuarantinedSlotIds() {
+        ensureOpen();
+        return quarantinedSlots.copy();
     }
 
     YierdisNativeObjectMeta occupiedMeta(int slotId) {
@@ -546,6 +581,7 @@ final class YierdisNativeObjectTable implements AutoCloseable {
     }
 
     private void releaseSlot(SegmentSlot slot, long freeEpoch) {
+        boolean quarantined = state(slot) == STATE_FREED_QUARANTINED;
         int generation = generation(slot);
         slot.segment.writeInt(slot.offset, PAGE_OFFSET_OFFSET, 0);
         slot.segment.writeInt(slot.offset, SIZE_OFFSET, 0);
@@ -559,6 +595,10 @@ final class YierdisNativeObjectTable implements AutoCloseable {
                 packMetadata(generation, 0, 0, 0, 0, STATE_FREE)
         );
         liveSlots--;
+        slot.segment.clearOccupied(slot.offset);
+        if (quarantined) {
+            quarantinedSlots.remove(slot.slotId);
+        }
         if (generation >= MAX_GENERATION) {
             slot.segment.retire(slot.offset);
             retiredSlots++;
@@ -722,9 +762,11 @@ final class YierdisNativeObjectTable implements AutoCloseable {
     }
 
     private static long objectSegmentHeapBytes() {
-        return 160L
+        long bitmapBytes = 16L + (long) (YierdisNativeObjectSegment.SLOTS_PER_SEGMENT / Long.SIZE) * Long.BYTES;
+        return 168L
                 + 16L + (long) YierdisNativeObjectSegment.SLOTS_PER_SEGMENT * Integer.BYTES
-                + 16L + (long) (YierdisNativeObjectSegment.SLOTS_PER_SEGMENT / Long.SIZE) * Long.BYTES;
+                + bitmapBytes
+                + bitmapBytes;
     }
 
     private SegmentSlot slotRef(int slotId) {

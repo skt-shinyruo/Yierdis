@@ -1,6 +1,7 @@
 package yier.bubu.redis.memory.foreign;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
@@ -28,6 +29,10 @@ final class YierdisNativePageAllocator
     private final YierdisFfmMemoryRuntime runtime;
     private final NavigableMap<Integer, PageAllocation> pagesById = new TreeMap<>();
     private final NavigableSet<Integer> reusablePageIds = new TreeSet<>();
+    // 按 size class 只索引还有空闲块的页，以及已经空掉的页。分配和 warm-page 淘汰不再扫整个 registry。
+    private final NavigableMap<Integer, SmallPage>[] reusableSmallPages = newPageIndexes();
+    private final NavigableMap<Integer, SmallPage>[] emptySmallPages = newPageIndexes();
+    private final long[] reusableSmallBlocks = new long[YierdisNativeSizeClass.count()];
 
     private boolean closed;
     private int nextPageId = 1;
@@ -135,6 +140,7 @@ final class YierdisNativePageAllocator
         Objects.requireNonNull(requestedBytes, "requestedBytes");
         long[] availableBlocks = availableSmallBlocks();
         int additionalEntries = 0;
+        int reusableIndexEntries = 0;
         long heapBytes = 0L;
         long dataBytes = 0L;
         for (int requested : requestedBytes) {
@@ -151,6 +157,9 @@ final class YierdisNativePageAllocator
                 int blockCount = PAGE_BYTES / sizeClass.bytes();
                 availableBlocks[index] = blockCount - 1L;
                 additionalEntries++;
+                // 小页至少两块。拿走第一块后该页仍在非满页索引中，堆估算要算上这一项。
+                // 估算不回头撤销。真正分配时若后续请求把该页用满，索引会摘掉它；多算的 64 字节只让预留偏大。
+                reusableIndexEntries++;
                 dataBytes = MemoryUsageSnapshot.addSaturating(dataBytes, PAGE_BYTES);
                 heapBytes = MemoryUsageSnapshot.addSaturating(
                         heapBytes,
@@ -168,7 +177,7 @@ final class YierdisNativePageAllocator
         }
         heapBytes = MemoryUsageSnapshot.addSaturating(
                 heapBytes,
-                saturatingMultiply(additionalEntries, PAGE_ID_ENTRY_HEAP_BYTES)
+                saturatingMultiply((long) additionalEntries + reusableIndexEntries, PAGE_ID_ENTRY_HEAP_BYTES)
         );
         return new PageGrowth(heapBytes, dataBytes);
     }
@@ -257,6 +266,7 @@ final class YierdisNativePageAllocator
             failure = closeRegion(allocation.region, failure);
         }
         reusablePageIds.clear();
+        clearSmallPageIndexes();
         if (activeAllocationScope != null) {
             activeAllocationScope.releaseReferences();
             activeAllocationScope = null;
@@ -347,6 +357,13 @@ final class YierdisNativePageAllocator
         }
         int offset = page.popFreeOffset();
         page.liveBlocks++;
+        reusableSmallBlocks[sizeClass.ordinal()]--;
+        if (page.freeCount == 0) {
+            unindexReusable(page);
+        }
+        if (page.liveBlocks == 1) {
+            unindexEmpty(page);
+        }
         return new YierdisNativeBlock(
                 this,
                 page,
@@ -400,13 +417,26 @@ final class YierdisNativePageAllocator
         int pageId = claimPageId();
         YierdisFfmRegion region = null;
         SmallPage page = null;
+        boolean reusableIndexed = false;
+        boolean emptyIndexed = false;
         try {
             region = runtime.allocateRegion("native-small-page", PAGE_BYTES);
             page = new SmallPage(pageId, nextCreationSequence, sizeClass, region);
             registerPage(pageId, page);
             nextCreationSequence++;
+            indexReusable(page);
+            reusableIndexed = true;
+            indexEmpty(page);
+            emptyIndexed = true;
+            reusableSmallBlocks[sizeClass.ordinal()] += page.freeCount;
             return page;
         } catch (RuntimeException | Error failure) {
+            if (reusableIndexed) {
+                reusableSmallPages[sizeClass.ordinal()].remove(page.pageId);
+            }
+            if (emptyIndexed) {
+                emptySmallPages[sizeClass.ordinal()].remove(page.pageId);
+            }
             releaseFailedAllocation(pageId, page, region, failure);
             throw failure;
         }
@@ -420,11 +450,17 @@ final class YierdisNativePageAllocator
             throw new IllegalStateException("native page allocator state mismatch");
         }
         page.liveBlocks--;
+        boolean wasFull = page.freeCount == 0;
         page.pushFreeOffset(block.pageOffset());
+        reusableSmallBlocks[page.sizeClass.ordinal()]++;
+        if (wasFull) {
+            indexReusable(page);
+        }
         if (page.liveBlocks != 0) {
             return;
         }
 
+        indexEmpty(page);
         SmallPage warmPage = findWarmPage(page.sizeClass, page);
         if (warmPage == null) {
             return;
@@ -502,45 +538,34 @@ final class YierdisNativePageAllocator
     }
 
     private SmallPage findNonFullPage(YierdisNativeSizeClass sizeClass) {
-        for (PageAllocation allocation : pagesById.values()) {
-            if (allocation instanceof SmallPage page
-                    && !page.closed
-                    && page.sizeClass == sizeClass
-                    && page.freeCount > 0) {
-                return page;
-            }
-        }
-        return null;
+        Map.Entry<Integer, SmallPage> entry = reusableSmallPages[sizeClass.ordinal()].firstEntry();
+        return entry == null ? null : entry.getValue();
     }
 
     private SmallPage findWarmPage(YierdisNativeSizeClass sizeClass, SmallPage excluded) {
-        for (PageAllocation allocation : pagesById.values()) {
-            if (allocation instanceof SmallPage page
-                    && page != excluded
-                    && !page.closed
-                    && page.sizeClass == sizeClass
-                    && page.liveBlocks == 0) {
-                return page;
-            }
+        NavigableMap<Integer, SmallPage> emptyPages = emptySmallPages[sizeClass.ordinal()];
+        Map.Entry<Integer, SmallPage> first = emptyPages.firstEntry();
+        if (first == null) {
+            return null;
         }
-        return null;
+        if (first.getValue() != excluded) {
+            return first.getValue();
+        }
+        Map.Entry<Integer, SmallPage> next = emptyPages.higherEntry(first.getKey());
+        return next == null ? null : next.getValue();
     }
 
     private long[] availableSmallBlocks() {
-        long[] available = new long[YierdisNativeSizeClass.count()];
-        for (PageAllocation allocation : pagesById.values()) {
-            if (allocation instanceof SmallPage page && !page.closed) {
-                int index = page.sizeClass.ordinal();
-                available[index] = MemoryUsageSnapshot.addSaturating(available[index], page.freeCount);
-            }
-        }
-        return available;
+        return reusableSmallBlocks.clone();
     }
 
     private void closeSmallPage(SmallPage page) {
         if (page.closed || page.liveBlocks != 0) {
             throw new IllegalStateException("only an empty live small page can be closed");
         }
+        reusableSmallBlocks[page.sizeClass.ordinal()] -= page.freeCount;
+        unindexReusable(page);
+        unindexEmpty(page);
         removePage(page.pageId, page, true);
         page.closed = true;
         page.region.close();
@@ -654,10 +679,64 @@ final class YierdisNativePageAllocator
 
     private long pageRegistryHeapEstimatedBytes() {
         long entryCount = (long) pagesById.size() + reusablePageIds.size();
+        long indexedPages = 0L;
+        for (NavigableMap<Integer, SmallPage> pages : reusableSmallPages) {
+            indexedPages += pages.size();
+        }
+        for (NavigableMap<Integer, SmallPage> pages : emptySmallPages) {
+            indexedPages += pages.size();
+        }
         return MemoryUsageSnapshot.addSaturating(
-                PAGE_REGISTRY_BASE_HEAP_BYTES,
-                saturatingMultiply(entryCount, PAGE_ID_ENTRY_HEAP_BYTES)
+                PAGE_REGISTRY_BASE_HEAP_BYTES + smallPageIndexBaseBytes(),
+                saturatingMultiply(entryCount + indexedPages, PAGE_ID_ENTRY_HEAP_BYTES)
         );
+    }
+
+    private static long smallPageIndexBaseBytes() {
+        return saturatingMultiply(YierdisNativeSizeClass.count() * 2L, 64L);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static NavigableMap<Integer, SmallPage>[] newPageIndexes() {
+        NavigableMap<Integer, SmallPage>[] indexes = new NavigableMap[YierdisNativeSizeClass.count()];
+        for (int i = 0; i < indexes.length; i++) {
+            indexes[i] = new TreeMap<>();
+        }
+        return indexes;
+    }
+
+    private void indexReusable(SmallPage page) {
+        if (reusableSmallPages[page.sizeClass.ordinal()].putIfAbsent(page.pageId, page) != null) {
+            throw new IllegalStateException("small page is already reusable: " + page.pageId);
+        }
+    }
+
+    private void unindexReusable(SmallPage page) {
+        if (reusableSmallPages[page.sizeClass.ordinal()].remove(page.pageId) == null) {
+            throw new IllegalStateException("small page is not reusable: " + page.pageId);
+        }
+    }
+
+    private void indexEmpty(SmallPage page) {
+        if (emptySmallPages[page.sizeClass.ordinal()].putIfAbsent(page.pageId, page) != null) {
+            throw new IllegalStateException("small page is already empty: " + page.pageId);
+        }
+    }
+
+    private void unindexEmpty(SmallPage page) {
+        if (emptySmallPages[page.sizeClass.ordinal()].remove(page.pageId) == null) {
+            throw new IllegalStateException("small page is not empty: " + page.pageId);
+        }
+    }
+
+    private void clearSmallPageIndexes() {
+        for (NavigableMap<Integer, SmallPage> pages : reusableSmallPages) {
+            pages.clear();
+        }
+        for (NavigableMap<Integer, SmallPage> pages : emptySmallPages) {
+            pages.clear();
+        }
+        Arrays.fill(reusableSmallBlocks, 0L);
     }
 
     private boolean createdInActiveScope(SmallPage page) {

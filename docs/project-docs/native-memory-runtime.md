@@ -195,7 +195,7 @@ YierdisNativePageAllocator
 
 - **pin / view**：`resolve` 会 pin 住对象，view 持有该 pin 直到 `close()`；`resolvePinned` 接受一个已存在的 pin（只读）。作用：防止仍被观察的 object 过早释放。
 - **epoch（`NativeEpochScope`）**：`beginEpoch()` 记录一个 epoch；当某个 scope 可能看到过旧位置时，退役 block 不能立即释放。`canReclaim(retiredEpoch)` 只在没有任何仍活动的 scope 的 epoch ≤ retiredEpoch 时才允许回收——更晚启动的 scope 不可能引用退役前的位置，所以不阻塞回收。
-- **quarantine**：已逻辑 free 但 `pinCount > 0` 的对象进入 `STATE_FREED_QUARANTINED`，等最后一个 pin 释放（`unpinLocal`）或 scope 关闭时由 `reclaimEligibleQuarantine()` 真正释放。
+- **quarantine**：已逻辑 free 但 `pinCount > 0` 或仍有 epoch 挡住复用的对象进入 `STATE_FREED_QUARANTINED`，并记入 quarantine 槽位集合。`reclaimEligibleFreedObjects()` 只遍历这个集合，仍要等 `pinCount == 0` 且 `canReclaim(freeEpoch)` 才真正释放。最后一个 pin 释放（`unpinLocal`）或 scope 关闭时都会触发这次回收。
 - **allocation scope（`NativeAllocationScope`）**：`beginAllocationScope()` 记录 baseline 与 table/page checkpoint；prepare 阶段新分配的 handle 被 `track`；commit 后 `promote()` 提交并清空；abort 时反向 `freeLocal` 每个 handle 并 `restoreAllocationScope` 回收 scope 内新建的空 page。它同时记录 `growth()`（heap / nativeMetadata / nativeData 的峰值增量），供执行器两阶段预算收窄 reservation。
 
 epoch 与 defrag 的关系：defrag 移动对象后，旧 block 进入 retired list，随后 `nextEpoch()` 标记；只有所有相关 epoch scope 关闭后 `reclaimEligibleMovedBlocks` 才真正 close 旧 block 并从 `reservedBytes` 扣减。

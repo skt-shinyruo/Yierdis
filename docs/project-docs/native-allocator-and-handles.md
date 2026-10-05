@@ -105,7 +105,7 @@ DB/API 调用方不得复制这套 codec，也不得把 `localRaw` 当作完整 
 
 - 为什么必须 retire：12 位 generation 会回绕，回绕后的旧 handle 会恰好命中复用该槽的新对象，这就是 ABA。retire 是把"无法再安全复用"这件事变成物理事实。
 - 代价：单个槽位寿命约 4095 次复用（generation 从 1 递增到 0x0fff）。达到这个量级需要长期高频 churn，正常压测很难触发，但一旦触发，object table 会持续向新 segment 增长，只能靠进程重启回收。
-- 段内的实现：`YierdisNativeObjectSegment` 用 `int[] freeStack = new int[SLOTS_PER_SEGMENT]` 保存空闲偏移，`freeCount` 计栈深，`long[] retiredBitmap = new long[RETIRED_WORDS]`（`4096 / Long.SIZE = 64` 个字）标记 retired 槽。`releaseOffset(offset)` 对 retired 槽直接抛 `IllegalStateException("retired slot cannot be released")`，栈满抛 `"segment free stack overflow"`。
+- 段内的实现：`YierdisNativeObjectSegment` 用 `int[] freeStack = new int[SLOTS_PER_SEGMENT]` 保存空闲偏移，`freeCount` 计栈深，`long[] retiredBitmap` 标记 retired 槽，`long[] occupiedBitmap` 标记仍占用的槽。`nextOccupiedSlot` 按 word 在 occupied bitmap 上找下一个占用偏移，并跳过 `occupiedCount == 0` 的段，因此空闲洞不再被逐槽访问；返回值仍是更大的 slot id。`releaseOffset(offset)` 对 retired 槽直接抛 `IllegalStateException("retired slot cannot be released")`，栈满抛 `"segment free stack overflow"`。
 
 **slot 分配策略**：分配时先扫现有 segments 的 free stack，不够再追加 segment；table 用一个按实际长度增长的 segment array 承载。`AUTOMATIC_MAX_SLOTS = Integer.MAX_VALUE` 是默认上限。
 
@@ -292,7 +292,7 @@ flowchart TD
 两条路径都有两点值得注意：
 
 - **只有 `newSmallPage` / `allocateSpan` 会调 `claimPageId()`**。`findNonFullPage` 命中已有页时不领新 id。
-- `findNonFullPage` / `findWarmPage` 遍历 `pagesById.values()`，而 `TreeMap` 按 key 升序迭代，所以命中的总是**当前 id 最小**的那一页。这让 small page 的填充顺序可预测，也解释了为什么 id 复用取最小值是合理的选择。
+- `findNonFullPage` / `findWarmPage` 只查该 size class 的 `TreeMap`（非满页、空页各一份），不再遍历整个 `pagesById`。`findNonFullPage` 用 `firstEntry` 取 page id 最小的非满页。`findWarmPage` 也从最小空页开始；若那一页就是调用方要排除的页，则取 `higherEntry`。填充顺序因此仍可预测，也和 page id 复用取最小值相配合。
 
 ### 4.4 warm page 保留规则
 
@@ -419,7 +419,7 @@ flowchart TD
 2. **为什么接收变量是 `Integer` 而非 `int`**：空集合返回 `null`，若用 `int` 接收会在拆箱时抛 `NullPointerException`。`claimPageId()` 用 `Integer reusable` 承接、判空后再隐式拆箱为 `int` 返回，这是"poll 类 API + 包装类型 + 判空"的标准三件套。
 3. **并发形态**：`TreeSet` 非线程安全，本文件没有内置锁（`YierdisNativePageAllocator` 里没有任何 `synchronized`/`Lock`），互斥由调用层保证。若并发场景需要同样的"取最小者"语义，对应物是 `ConcurrentSkipListSet.pollFirst()`——同样以 `null` 表达池空，不抛异常。
 
-这套"先复用后新增"的写法是**资源池 / ID 池分配的通用惯用法**：连接 ID、事务号、槽位编号等"耗尽代价高、需回收周转"的标识都可以套用同一个骨架——`池.poll()` 命中即复用，`null` 才走单调计数器兜底，计数器耗尽抛容量异常；释放侧把彻底脱离活跃结构的 ID `add()` 回池。本实现多出的一层约束是"最小者优先"：它与 `findNonFullPage` 按 `TreeMap` key 升序迭代（§4.3）相互配合，让 small page 的填充与 id 周转都保持紧凑、可预测。
+这套"先复用后新增"的写法是**资源池 / ID 池分配的通用惯用法**：连接 ID、事务号、槽位编号等"耗尽代价高、需回收周转"的标识都可以套用同一个骨架——`池.poll()` 命中即复用，`null` 才走单调计数器兜底，计数器耗尽抛容量异常；释放侧把彻底脱离活跃结构的 ID `add()` 回池。本实现多出的一层约束是"最小者优先"：它与 `findNonFullPage` 在 size class 索引上取最小 page id（§4.3）相互配合，让 small page 的填充与 id 周转都保持紧凑、可预测。
 
 ### 4.6 统计口径
 
@@ -471,7 +471,7 @@ private boolean canReclaim(long retiredEpoch) {
 - 写成 `scope.epoch >= retiredEpoch`（方向反了）→ 仍在读旧位置的 view 被回收 → use-after-free；
 - 写成"任何 active scope 都阻塞"→ 一个长生命周期 epoch 会让所有回收永久卡住，`reservedBytes` 单调上涨，表现为"对象都删了内存不降"。
 
-回收触发点：`reclaimEligibleQuarantine()` 内部依次 `reclaimEligibleFreedObjects()`（按 `meta.freeEpoch()` 判）与 `reclaimEligibleMovedBlocks()`；`defragCycle` 结束时也会调一次。最后一个 pin/epoch 关闭时同样会尝试回收。stable handle 仍能表示逻辑 identity，但 freed/quarantined handle 不能作为新的普通 resolve 入口。
+回收触发点：`reclaimEligibleQuarantine()` 内部依次 `reclaimEligibleFreedObjects()`（只遍历 quarantine 槽位集合，仍按 `pinCount == 0` 和 `meta.freeEpoch()` 判）与 `reclaimEligibleMovedBlocks()`；`defragCycle` 结束时也会调一次。最后一个 pin/epoch 关闭时同样会尝试回收。stable handle 仍能表示逻辑 identity，但 freed/quarantined handle 不能作为新的普通 resolve 入口。pin 与 quarantine 各有一份槽位集合，成员数就是遍历成本。
 
 ## 6. Allocation scope：mutation 回滚的物理基础
 
@@ -535,7 +535,7 @@ nextCreationSequence = checkpoint.creationSequence;
 
 ## 8. Active defrag
 
-`defragCycle(NativeDefragOptions options)` 从 `objectTable.firstOccupiedSlot()` 起沿 `nextOccupiedSlot` 遍历：
+`defragCycle(NativeDefragOptions options)` 从 `objectTable.firstOccupiedSlot()` 起沿 `nextOccupiedSlot` 遍历。游标读段内 occupied bitmap，跳过空闲洞，顺序仍是 slot id 升序：
 
 - 跳过 `STATE_FREED_QUARANTINED`；
 - 跳过既非 `STATE_ALLOCATED` 也非 `STATE_PINNED` 的槽（`STATE_MOVING` 因此不会被二次搬迁）；

@@ -8,8 +8,11 @@ final class YierdisNativeObjectSegment implements AutoCloseable {
     private final int validSlots;
     private final int[] freeStack = new int[SLOTS_PER_SEGMENT];
     private final long[] retiredBitmap = new long[RETIRED_WORDS];
+    // 已占用槽的位图。nextOccupiedSlot 按 word 跳过空闲洞，不再逐槽扫到历史峰值。
+    private final long[] occupiedBitmap = new long[RETIRED_WORDS];
 
     private int freeCount;
+    private int occupiedCount;
     private boolean closed;
 
     YierdisNativeObjectSegment(
@@ -73,6 +76,64 @@ final class YierdisNativeObjectSegment implements AutoCloseable {
 
     boolean hasFreeSlot() {
         return freeCount > 0;
+    }
+
+    int occupiedCount() {
+        return occupiedCount;
+    }
+
+    void markOccupied(int offset) {
+        ensureValidOffset(offset);
+        int word = offset >>> 6;
+        long bit = 1L << (offset & 63);
+        if ((occupiedBitmap[word] & bit) != 0L) {
+            throw new IllegalStateException("slot is already occupied: " + offset);
+        }
+        occupiedBitmap[word] |= bit;
+        occupiedCount++;
+    }
+
+    void clearOccupied(int offset) {
+        ensureValidOffset(offset);
+        int word = offset >>> 6;
+        long bit = 1L << (offset & 63);
+        if ((occupiedBitmap[word] & bit) == 0L) {
+            throw new IllegalStateException("slot is not occupied: " + offset);
+        }
+        occupiedBitmap[word] &= ~bit;
+        occupiedCount--;
+    }
+
+    /**
+     * 返回 {@code startOffset} 起（含）的下一个已占用偏移；本段没有则返回 -1。
+     */
+    int nextOccupiedOffset(int startOffset) {
+        ensureOpen();
+        if (startOffset < 0) {
+            throw new IllegalArgumentException("startOffset must be >= 0");
+        }
+        if (occupiedCount == 0 || startOffset >= validSlots) {
+            return -1;
+        }
+        int word = startOffset >>> 6;
+        long firstWord = occupiedBitmap[word] & (~0L << (startOffset & 63));
+        if (firstWord != 0L) {
+            int found = (word << 6) + Long.numberOfTrailingZeros(firstWord);
+            if (found < validSlots) {
+                return found;
+            }
+        }
+        for (int nextWord = word + 1; nextWord < RETIRED_WORDS; nextWord++) {
+            long bits = occupiedBitmap[nextWord];
+            if (bits == 0L) {
+                continue;
+            }
+            int found = (nextWord << 6) + Long.numberOfTrailingZeros(bits);
+            if (found < validSlots) {
+                return found;
+            }
+        }
+        return -1;
     }
 
     long readLong(int offset, int fieldOffset) {
