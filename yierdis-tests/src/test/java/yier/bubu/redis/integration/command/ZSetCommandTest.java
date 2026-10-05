@@ -44,6 +44,146 @@ public class ZSetCommandTest {
     }
 
     @Test
+    public void zaddRejectsScoresWithSurroundingWhitespace() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("z");
+
+                assertError(
+                        client.execute(Arrays.asList(b("ZADD"), key, b(" 1"), b("m"))),
+                        "ERR value is not a valid float");
+                assertError(
+                        client.execute(Arrays.asList(b("ZADD"), key, b("1 "), b("m"))),
+                        "ERR value is not a valid float");
+                assertError(
+                        client.execute(Arrays.asList(b("ZADD"), key, b("\t1"), b("m"))),
+                        "ERR value is not a valid float");
+                assertError(
+                        client.execute(Arrays.asList(b("ZADD"), key, b("1\n"), b("m"))),
+                        "ERR value is not a valid float");
+
+                ReplyInteger exists = (ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key));
+                Assert.assertEquals(0L, exists.value());
+            }
+        });
+    }
+
+    @Test
+    public void zaddRejectsDecimalScoresThatOverflowToInfinity() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("z");
+
+                assertError(
+                        client.execute(Arrays.asList(b("ZADD"), key, b("1e309"), b("m"))),
+                        "ERR value is not a valid float");
+                assertError(
+                        client.execute(Arrays.asList(b("ZADD"), key, b("-1e309"), b("m"))),
+                        "ERR value is not a valid float");
+
+                ReplyInteger exists = (ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key));
+                Assert.assertEquals(0L, exists.value());
+            }
+        });
+    }
+
+    @Test
+    public void zaddRejectsDecimalScoresThatUnderflowToZero() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("z");
+
+                assertError(
+                        client.execute(Arrays.asList(b("ZADD"), key, b("1e-400"), b("m"))),
+                        "ERR value is not a valid float");
+                assertError(
+                        client.execute(Arrays.asList(b("ZADD"), key, b("-1e-400"), b("m"))),
+                        "ERR value is not a valid float");
+                assertError(
+                        client.execute(Arrays.asList(b("ZADD"), key, b("1e-324"), b("m"))),
+                        "ERR value is not a valid float");
+
+                ReplyInteger exists = (ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key));
+                Assert.assertEquals(0L, exists.value());
+            }
+        });
+    }
+
+    @Test
+    public void zaddKeepsLegalScoresIncludingSignedZeroAndSubnormals() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("z");
+
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("1e2"), b("sci")))).value());
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("-0"), b("negzero")))).value());
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("0e-400"), b("exactzero")))).value());
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("1.5"), b("decimal")))).value());
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("1e-323"), b("subnormal")))).value());
+
+                ReplyArray range = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGE"), key, b("0"), b("-1"), b("WITHSCORES")));
+                Assert.assertEquals(
+                        List.of(
+                                "exactzero", "0",
+                                "negzero", "0",
+                                "subnormal", "9.9E-324",
+                                "decimal", "1.5",
+                                "sci", "100"),
+                        bulkStrings(range));
+            }
+        });
+    }
+
+    @Test
+    public void rangeByScoreStillAcceptsWhitespaceAndUnderflowLiterals() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("z");
+                Assert.assertEquals(2L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("0"), b("zero"), b("1"), b("one")))).value());
+
+                ReplyArray fromUnderflowLiteral = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGEBYSCORE"), key, b("1e-400"), b("+inf")));
+                Assert.assertEquals(List.of("zero", "one"), bulkStrings(fromUnderflowLiteral));
+
+                ReplyArray fromSpacedMin = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGEBYSCORE"), key, b(" 1"), b("+inf")));
+                Assert.assertEquals(List.of("one"), bulkStrings(fromSpacedMin));
+
+                ReplyArray exclusive = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGEBYSCORE"), key, b("(0"), b("+inf")));
+                Assert.assertEquals(List.of("one"), bulkStrings(exclusive));
+
+                assertError(
+                        client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("1e309"), b("+inf"))),
+                        "ERR min or max is not a float");
+                assertError(
+                        client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("infinity"), b("+inf"))),
+                        "ERR min or max is not a float");
+                ReplyArray reversed = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZREVRANGEBYSCORE"), key, b("+inf"), b("1e-400")));
+                Assert.assertEquals(List.of("one", "zero"), bulkStrings(reversed));
+            }
+        });
+    }
+
+    @Test
     public void zaddAcceptsInfiniteScoresAndFormatsThemLikeRedis() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
