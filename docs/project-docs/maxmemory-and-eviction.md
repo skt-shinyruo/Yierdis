@@ -33,7 +33,7 @@ TTL 命令、惰性过期和主动清理共同构成过期生命周期。权威�
 | 命令 | 方法 |
 |---|---|
 | `EXPIRE` / `PEXPIRE` | `expire(BytesView, seconds, condition)` / `pexpire(BytesView, milliseconds, condition)` |
-| `EXPIREAT` | `expireAtSeconds(BytesView, unixSeconds, condition)`（`Math.multiplyExact(sec, 1000)` 溢出 → `Long.MAX_VALUE`） |
+| `EXPIREAT` | `expireAtSeconds(BytesView, unixSeconds, condition)`（秒×1000 溢出抛 `ERR invalid expire time in 'expireat' command`） |
 | `PEXPIREAT` | `expireAtMillis(BytesView, unixMillis, condition)` |
 | `PERSIST` | `persist(BytesView)` |
 | `TTL` / `PTTL` | `ttlSeconds(BytesView)` / `ttlMillis(BytesView)` |
@@ -71,7 +71,7 @@ command
 - `PERSIST` 使用 reclamation admission：upper bound `0`、不得产生正增长。只有当前确有 TTL（`expireAtMillis >= 0`）才提交，否则返回 unchanged。
 - 即时过期不会写入一个"过期 deadline"，而是准备删除当前 entry。
 - 条件标志 NX/XX/GT/LT 在删除分支**之前**判定，入口是 `ExpireCondition.allows(currentExpireAtMillis, newExpireAtMillis)`：无 TTL 的键按无限 TTL 参与比较（GT 必然失败、LT 必然成功），NX 与 XX/GT/LT 互斥、GT 与 LT 互斥在构造时即拒绝。条件不满足返回 unchanged，键与旧 TTL 都保留。
-- 相对或绝对时间计算溢出时 deadline 饱和到 `Long.MAX_VALUE`（`YierdisTtlOps.safeExpireAtMillis` / `safeAddMillis`，以及 `ExpireOption.safeExpire*`）。
+- 需要秒×1000 或与当前时间相加的路径，溢出时抛 `YierdisCommandException`（`ERR invalid expire time in '<command>' command`），并且发生在查键之前。`PEXPIREAT` 与 `SET PXAT` 的绝对毫秒值不再做这层判断，`Long.MAX_VALUE` 是合法 deadline。
 
 #### 提交前竞态与提交失败语义
 
