@@ -2,7 +2,7 @@
 
 单个 `YierdisDb` 并非一张并发 `Map<byte[], Object>`；它受 owner thread 约束，是掌管 key、entry、value、TTL、mutation、maxmemory 与生命周期的状态 owner。
 
-设计意图、层间契约、与 Redis C 实现的对照以及已知取舍见 [`db-design-analysis.md`](./db-design-analysis.md)；degraded 运维处置见 [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作)。
+设计意图、层间契约、与 Redis C 实现的对照以及已知取舍见 [`db-design-analysis.md`](./db-design-analysis.md)；degraded 运维处置见 [`configuration-and-operations.md`](./configuration-and-operations.md#degraded-恢复)。
 
 本文按"这一层是什么 → 谁调用谁 → 改的时候不能破什么"三段式组织：§1–§5 是结构与所有权，§6–§7 是读/写两条完整调用序列，§8–§11 是各子系统的接入点，§12 是改动前的自检清单。
 
@@ -111,7 +111,7 @@ directory、entry table、type roots 和派生状态的所有权都归 `YierdisD
 
 ops 不直接组合 directory 与 entry table，也不能从 lifecycle 取出 backend、table、directory 或 roots。各 family root 只在 DB 组合时注入对应 family ops。删除必须让 directory entry、entry record、value/root 和 key allocation 一起收敛；替换则必须在 source identity 仍匹配时才发布。需要验证 raw graph 的底层测试把反射夹具留在 `src/test`，生产代码不提供 inspection view。
 
-`EntryRecord.expireAtMillis` 是唯一 TTL deadline。`expireCount` 只是随 entry publish/replace/release 更新的派生计数，不是独立索引；`reconcileDerivedEntryState` 里一旦发现下溢就抛 `IllegalStateException("derived expire count underflow")`——注意这个异常发生在 commit 阶段，会被升级成 degraded（运维处置见 [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作)）。
+`EntryRecord.expireAtMillis` 是唯一 TTL deadline。`expireCount` 只是随 entry publish/replace/release 更新的派生计数，不是独立索引；`reconcileDerivedEntryState` 里一旦发现下溢就抛 `IllegalStateException("derived expire count underflow")`。这个异常发生在 `prepared.commit()` 已经开始之后，升级为 degraded + result-unknown。下溢保持 fail-stop：钳成 0 再继续写会在错账上接着跑。恢复走 `YDRECONCILE`（运维处置见 [`configuration-and-operations.md`](./configuration-and-operations.md#degraded-恢复)）。
 
 `ExpiresIndex` 是 owner 线程独占的 `PriorityQueue`，按 `(expireAtMillis, sequence)` 排序，无同步、允许 stale 项、不计任何内存账。lifecycle 只在 deadline 真的变化且 keyHandle 非 null 时才 `add`。
 
@@ -142,7 +142,8 @@ DbEngine.strings()/hashes()/lists()/sets()/zsets()/hll()/keyspace()/ttl()
        -> entryTable.read(entryHandle)
        -> expireAtMillis 判定
             live      -> 直接返回
-            expired   -> reclaimExpired(...)  // 完整 mutation：删 graph + 结算 ledger
+            expired   -> degraded: 返回 null，不调用 reclaimExpired
+                        writable: reclaimExpired(...)  // 完整 mutation：删 graph + 结算 ledger
        -> 返回 live EntryRecord
   -> type/encoding check                    // 类型不符 -> 按命令语义返回空/错误
   -> EntryRecord.valueHandle()
@@ -154,7 +155,7 @@ DbEngine.strings()/hashes()/lists()/sets()/zsets()/hll()/keyspace()/ttl()
 
 要点：
 
-- `liveEntryRecord(...)` 比较 `expireAtMillis`。live record 正常返回；过期 record 触发 `reclaimExpired(...)` 并对调用方隐藏。reclamation 是完整 mutation，会删除 graph 并结算 ledger。
+- `liveEntryRecord(...)` 比较 `expireAtMillis`。live record 正常返回。过期 record 在可写时触发 `reclaimExpired(...)` 并对调用方隐藏；reclamation 是完整 mutation，会删除 graph 并结算 ledger。DB 已 degraded 时同一入口直接返回 null：读命令得到 nil，物理记录留在原地。`requireWritable` 仍先于 `admissionMode`，所以这条读路径不能在 degraded 下调用 `reclaimExpired`。
 - 只有成功取得 live record 的 LRU 路径才 touch clock。
 - 普通查询的参数检查、live-entry 解析和结果视图构造都在同一次调用里完成，且位于 owner 检查之后。
 - prepared mutation 会跨越一次调用的生命周期，所以在创建、状态检查与提交入口使用 `YierdisDbKernel.checkOwner()`；scan/result view 则按各自契约持有 epoch 或结果资源。实际变更仍只能通过 `MutationPlan` 进入 executor。
@@ -229,13 +230,15 @@ heap estimated
   + native data committed
 ```
 
-写 admission 不内联跑 expires 索引清理。per-db scope 的本地 enforce 按 `maxmemoryBytes - estimatedExtraBytes` trim/resample/evict。global scope 把跨 DB 预算交给 `YierdisGlobalMaxmemoryGovernor`，由后者汇总 snapshots、挑选 victim，并提供全局单调 LRU clock。维护节拍里，每个 DB 的 `runMaintenance()` 仍会先排空到期 key，再做本地 enforce；global governor 的 maintenance 在 DB 循环之后。各 DB backend runtime counter 只用于 lifecycle 诊断，不作为第二套 global usage source。
+写 admission 不内联跑 expires 索引清理。per-db scope 的本地 enforce 按 `maxmemoryBytes - estimatedExtraBytes` trim/resample/evict。global scope 把跨 DB 预算交给 `YierdisGlobalMaxmemoryGovernor`，由后者汇总 snapshots、挑选 victim，并提供全局单调 LRU clock。单库淘汰和 governor 共用 `MaxmemoryEvictionAttempts.maxAttempts`：下限 64；`keyCount <= Integer.MAX_VALUE / 2` 时取 `max(64, keyCount * 2)`；更大则在乘法前取 `Integer.MAX_VALUE`，避免回绕成负数后再被下限收成 64。维护节拍里，每个 DB 的 `runMaintenance()` 在可写时仍会先排空到期 key，再做本地 enforce；degraded 时 `requireWritable` 会在 detached 回收之后停下，本拍的过期排空和本地 enforce 不会跑。global governor 的 maintenance 在 DB 循环之后，同一拍里前面的 DB 若因 degraded 抛出，后面的 governor 调用也不会执行。各 DB backend runtime counter 只用于 lifecycle 诊断，不作为第二套 global usage source。
 
 `noeviction` 不选 victim；`allkeys-random` 随机取候选；`allkeys-lru` 比较 `EntryRecord.lruOrLfu()`。candidate selection 不跳过过期 key（抽到或扫描到即作为最优候选，过期候选以 `lruClock = 0` 上报，live key 的访问时钟恒 ≥ 1），过期候选先走 expiration reclamation，真正 victim 通过 `YierdisDbKernel.evict(...)` 删除。
 
-ledger 逻辑账本与 admission 的物理重算是两套账。`ledger.usedBytes` 与物理用量之间的漂移是静默的，不会自动触发 invariant failure。degraded 来自 `YierdisDbHealth.recordInvariantFailure(...)`（只保留首个失败）和 commit 开始后的失败，写入被 `MISCONF_DEGRADED = "MISCONF DB is in a degraded state; writes are disabled"` 拒绝。
+ledger 逻辑账本与 admission 的物理重算是两套账。`ledger.usedBytes` 与物理用量之间的漂移是静默的，不会自动触发 invariant failure。degraded 来自 `YierdisDbHealth.recordInvariantFailure(...)`（只保留首个失败）和 commit 开始后的失败，写入被 `MISCONF_DEGRADED = "MISCONF DB is in a degraded state; writes are disabled"` 拒绝。`DEL`、`FLUSHDB` 和 `RECLAMATION` 仍走这条门控。
 
-`RuntimeDbEngine.reconcileAccounting()` 是唯一的显式恢复入口：在 owner thread 上重算物理用量、用 `realignUsage` 把逻辑账本对齐到物理值、清除 degraded 并恢复写入；每次尝试与结果（成功/失败/修正量）记入 `DbHealthSnapshot.lastReconciliation`（`recordReconciliation` 成功时才清 degraded）。快照的失败字段只描述当前未恢复的 episode，对账成功后随之关闭，下一场事故重新入账。恢复不会自动发生，持续性记账 bug 仍以事故形式暴露。
+stock server 的恢复命令是 `YDRECONCILE`（`AdminCommands`，无参数，当前 `SELECT` 的库）。它把 `DbEngine` 收窄成 `RuntimeDbEngine` 后调用 `reconcileAccounting()`。这条路径绕过 mutation executor，在 owner thread 上重算物理用量，成功时用 `realignUsage` 把逻辑账本对齐到物理值并清除 degraded，协议回复 `+OK`。物理重算抛 `RuntimeException` 时回复 `-ERR reconciliation failed`，账本和 degraded 都保持。`Error` 不折成这句回复。每次尝试与结果记入 `DbHealthSnapshot.lastReconciliation`（`recordReconciliation` 成功时才清 degraded）。快照的失败字段只描述当前未恢复的 episode，对账成功后随之关闭，下一场事故重新入账。
+
+维护节拍不会自动对账。`runMaintenance` 先 `reclaimDetachedEntries`，再 `requireWritable`；degraded 时过期排空、rehash 和本库 maxmemory enforce 不会跑，异常还会中断同一次 tick 的后续 DB。持续性记账 bug 仍以事故形式暴露。步骤和回复见 [`configuration-and-operations.md`](./configuration-and-operations.md#degraded-恢复)。
 
 更完整的 admission、OOM 和 result-unknown 边界见 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)。
 
@@ -246,13 +249,13 @@ ledger 逻辑账本与 admission 的物理重算是两套账。`ledger.usedBytes
 主要口径包括：
 
 - owned physical snapshot 与 backend allocator stats；
-- `ledger_used_bytes` 是 `heapDataBytesEstimate`，不是 ledger 逻辑 `usedBytes`；`ledger_reserved_bytes` 才是 ledger `reservedBytes`。这条绑定在 `KeyCommands` 里就是 `memoryStat("ledger_used_bytes", YierdisMemoryStats::heapDataBytesEstimate)`；
+- `heap_estimate_bytes` 绑定 `heapDataBytesEstimate`；`ledger_used_bytes` 绑定 ledger 逻辑 `usedBytes()`。`KeyCommands` 里是 `memoryStat("heap_estimate_bytes", YierdisMemoryStats::heapDataBytesEstimate)` 和 `memoryStat("ledger_used_bytes", YierdisMemoryStats::ledgerUsedBytes)`。`ledger_reserved_bytes` 是 ledger `reservedBytes`；
 - type root estimates 与 `componentRetainedHeapBytes`；
 - key count 和 derived expire count；
 - `usedBytesForMaxmemory = heap + native metadata committed + native data committed`；
 - `effectiveUsedBytesForMaxmemory = usedBytesForMaxmemory + reservedBytes`。
 
-server 侧的 `used_memory` 是 `heapDataBytesEstimate + offHeapUsedBytes`；`yierdis_ledger_used_bytes` 同样绑到 `heapDataBytesEstimate`；`yierdis_maxmemory_per_db_bytes = maxmemoryBytes / max(1, databases)`（整数除法，与实际"余数 +1"的分配可能差 1 字节）。
+server 侧的 `used_memory` 是 `heapDataBytesEstimate + offHeapUsedBytes`。`INFO memory` 的 `yierdis_heap_estimate_bytes` 绑堆估算，`yierdis_ledger_used_bytes` 绑各库 `ledgerUsedBytes()` 之和。`yierdis_ledger_effective_used_bytes` 是堆估算加 `reservedBytes`。`maxmemoryScope=per-db` 且 `maxmemoryBytes > 0` 时按库输出 `yierdis_db<N>_maxmemory_bytes`，值是 `YierdisInstance.create` 已经分好的额度（整数商，余数按创建顺序每库 +1），`NettyServerInfoProvider` 不再自己除。`global` scope 不输出这些行。
 
 native reclaimable bytes 只是候选量，不能预先从 committed footprint 扣除。显式 introspection 需要返回 owned bytes/result object 时会 materialize heap copy。
 

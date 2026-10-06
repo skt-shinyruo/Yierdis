@@ -341,7 +341,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 - INFO text 的 `# Stats` 段给字段统一加 `yierdis_` 前缀；`STATS` 的 map 渲染面用未加前缀的字段名。同名统计不要在两处各写一份取值逻辑。
 - health 路径要轻量：不要在 `serverStatsSnapshot(...)` 里做全实例扫描。
-- `MEMORY STATS` 是 explainable estimate，`ledger_used_bytes` 绑定 `heapDataBytesEstimate`，`ledger_reserved_bytes` 才是 ledger `reservedBytes`——别混用两个口径。
+- `MEMORY STATS` 是 explainable estimate。`heap_estimate_bytes` 绑定 `heapDataBytesEstimate`，`ledger_used_bytes` 绑定 ledger `usedBytes()`，`ledger_reserved_bytes` 是 ledger `reservedBytes`。
 
 **继续追**：[`configuration-and-operations.md`](./configuration-and-operations.md)、[`db-internals.md`](./db-internals.md)、[`project-overview.md`](./project-overview.md#模块架构与依赖拓扑)。
 

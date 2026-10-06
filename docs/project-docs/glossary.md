@@ -346,7 +346,7 @@ id 会被回收复用：`claimPageId()` 先从 `reusablePageIds` 取最小可复
 
 ### `YierdisMemoryStats`
 
-DB 级内存摘要的只读视图，是 `MEMORY STATS` 与 `INFO memory` 的数据源。区分 heap 估算与 ledger 预留：`ledger_used_bytes` 绑定 `heapDataBytesEstimate`，`ledger_reserved_bytes` 绑 ledger `reservedBytes`。
+DB 级内存摘要的只读视图，是 `MEMORY STATS` 与 `INFO memory` 的数据源。`heap_estimate_bytes` 绑定 `heapDataBytesEstimate`，`ledger_used_bytes` 绑定 ledger 逻辑 `usedBytes()`，`ledger_reserved_bytes` 绑 ledger `reservedBytes`。
 
 源码位置：`yierdis-db/.../storage/api/YierdisMemoryStats.java`，由 `YierdisDbMemoryReporter.memoryStats()` 产出。
 

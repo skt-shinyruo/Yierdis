@@ -136,11 +136,12 @@ RESP3 下，已有专属形态的语义会换成 RESP3 编码（RESP2/RESP3 差�
 
 ## 已注册命令清单
 
-清单以 `CommandRegistries.dispatcher(...)` 的实际注册为准。生产组装传入两个模块：`DefaultCommandModules.create(...)`（含 connection/key/string/hll/list/hash/set/zset 八组）与 `ServerCommandModule`；另外 `CommandRegistries.dispatcher` 会先注册事务控制命令。合计 66 个命令名：
+清单以 `CommandRegistries.dispatcher(...)` 的实际注册为准。生产组装传入两个模块：`DefaultCommandModules.create(...)`（含 connection/admin/key/string/hll/list/hash/set/zset 九组）与 `ServerCommandModule`；另外 `CommandRegistries.dispatcher` 会先注册事务控制命令。合计 67 个命令名：
 
 | 模块 | 命令 |
 | --- | --- |
 | `CoreConnectionCommands` | `PING` `ECHO` `COMMAND` `SELECT` `QUIT` `CLIENT` `AUTH` `FLUSHDB` |
+| `AdminCommands` | `YDRECONCILE` |
 | `KeyCommands` | `TYPE` `MEMORY` `OBJECT` `KEYS` `SCAN` `DEL` `EXISTS` `EXPIRE` `PEXPIRE` `EXPIREAT` `PEXPIREAT` `PERSIST` `TTL` `PTTL` |
 | `StringCommands` | `SET` `GET` `STRLEN` `APPEND` `SETBIT` `GETBIT` `BITCOUNT` `INCR` `DECR` |
 | `HllCommands` | `PFADD` `PFCOUNT` `PFMERGE` |

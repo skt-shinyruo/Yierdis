@@ -276,7 +276,7 @@ TTL 命令写路径、lazy expire、cleanup sample/budget 和 expiration reclama
 
 - `# Server`：`redis_version`、`tcp_port`、`uptime_in_seconds`、`uptime_in_milliseconds`。
 - `# Health`：`lifecycle_state`、`ready`、`writable`、`databases`、`degraded_databases`、`connected_clients`、`total_connections_received`、`rejected_connections`、`max_clients`，出故障时再加 `first_failure_type` / `first_failure_message`。
-- `# Memory`：`used_memory`、`used_memory_dataset`、`maxmemory`、`maxmemory_policy`、`yierdis_maxmemory_scope`、`yierdis_ledger_used_bytes`、`yierdis_ledger_reserved_bytes`、`yierdis_maxmemory_used_bytes`、`yierdis_maxmemory_effective_used_bytes`、`yierdis_offheap_included_in_maxmemory`、`yierdis_offheap_used_bytes`、native metadata/data committed 摘要、`yierdis_native_live_objects`、`yierdis_native_live_regions` 等。per-db scope 且 maxmemory 大于 0 时额外输出 `yierdis_maxmemory_per_db_bytes`。
+- `# Memory`：`used_memory`、`used_memory_dataset`、`maxmemory`、`maxmemory_policy`、`yierdis_maxmemory_scope`、`yierdis_heap_estimate_bytes`（堆估算 `heapDataBytesEstimate`）、`yierdis_ledger_used_bytes`（各库 ledger `usedBytes()` 之和）、`yierdis_ledger_reserved_bytes`、`yierdis_ledger_effective_used_bytes`（堆估算加 `reservedBytes`）、`yierdis_maxmemory_used_bytes`、`yierdis_maxmemory_effective_used_bytes`、`yierdis_offheap_included_in_maxmemory`、`yierdis_offheap_used_bytes`、native metadata/data committed 摘要、`yierdis_native_live_objects`、`yierdis_native_live_regions` 等。`maxmemoryScope=per-db` 且 `maxmemoryBytes > 0` 时，在 scope 行之后按库输出 `yierdis_db<N>_maxmemory_bytes`，值是 `YierdisInstance.create` 分给该库的额度：整数商，余数按 DB 创建顺序每库 +1。`global` scope 不输出这些行。
 - `# Stats`：`total_commands_processed`、`rejected_connections`、`total_connections_received`、`instantaneous_ops_per_sec`，以及带 `yierdis_` 前缀的 queue/inbound/reply/outbound/egress/deferred 组字段。
 
 `INFO yierdis` 返回结构化 map（bulk string 键值对，更适合脚本和测试）。它的 server 组字段是：`server`、`version`、`port`、`io_threads`、`executor_policy`、`executor_queue_capacity`、`executor_queue_max_bytes`、`backpressure_high`、`backpressure_low`、`backpressure_bytes_high`、`backpressure_bytes_low`、`executor_max_drain`、`executor_drain_millis`、`started_millis`、`uptime_millis`。除 server 组外，结构化输出还包含 deferred、inbound、reply capacity、outbound、egress、live channel、health、databases、max_clients 等组。
@@ -285,7 +285,7 @@ TTL 命令写路径、lazy expire、cleanup sample/budget 和 expiration reclama
 
 每次 `INFO`、`INFO yierdis`、`INFO health` 或 `STATS` 执行时，`NettyServerInfoProvider` 都先构造一份请求级 `ServerStatsSnapshot`。executor、ingress、egress、child channels、runtime health 和 uptime 只采样一次，文本与结构化 writer 共享这份快照，避免同一个回复里的字段来自不同采样时刻。`INFO memory` 和 `INFO keyspace` 的 DB 聚合仍按 section 按需读取，不让轻量 health 探针承担全库聚合成本。
 
-`MEMORY STATS` 返回内存估算 map，字段（按声明顺序）为：`maxmemory_bytes`、`used_bytes_for_maxmemory`、`effective_used_bytes_for_maxmemory`、`ledger_used_bytes`、`offheap_used_bytes`、`ledger_reserved_bytes`、`offheap_included_in_maxmemory`、`total_estimated_bytes`、`keys_stored_offheap`、`key_count`、`expire_count`。`ledger_used_bytes` 是 heap 估算 `heapDataBytesEstimate`，`ledger_reserved_bytes` 才是 ledger `reservedBytes`。
+`MEMORY STATS` 返回内存估算 map，字段（按声明顺序）为：`maxmemory_bytes`、`used_bytes_for_maxmemory`、`effective_used_bytes_for_maxmemory`、`heap_estimate_bytes`、`ledger_used_bytes`、`offheap_used_bytes`、`ledger_reserved_bytes`、`offheap_included_in_maxmemory`、`total_estimated_bytes`、`keys_stored_offheap`、`key_count`、`expire_count`。`heap_estimate_bytes` 是堆估算 `heapDataBytesEstimate`。`ledger_used_bytes` 是逻辑账本 `usedBytes()`，也就是准入水位。`ledger_reserved_bytes` 是 ledger `reservedBytes`。
 
 `MEMORY USAGE key` 返回某个 key 的估算字节数，用于定位大 key。`OBJECT ENCODING key` 返回内部编码名，例如 string 的 `int` / `embstr` / `raw`，collection 的 `listpack` / `hashtable` / `intset` / `quicklist` / `skiplist` 等，用于理解数据结构升级和存储形态。
 
@@ -327,6 +327,8 @@ benchmark 只连已运行的 server，脚本不会替你启动或停止 Yierdis�
 
 **大 keyspace 或慢扫描**：优先用 `SCAN`，并用 `keysTimeBudgetMillis`、`keysMaxResults` 控制 `KEYS` 风险。TTL 或 native defrag 压力明显时，检查 `cleanupIntervalMillis`、`expireCleanupTimeLimitMillis` 和 native defrag budget；用 `MEMORY STATS` 观察 rehash/reserved，用 `INFO` memory section 观察 native defrag 摘要。
 
+**DB degraded**：写命令收到 `MISCONF DB is in a degraded state; writes are disabled`，或 `INFO health` 里 `degraded_databases` 大于 0 时，按 [Degraded 恢复](#degraded-恢复) 处理。恢复命令是当前库上的 `YDRECONCILE`。维护节拍不会自己对账。
+
 **maxmemory 调试**：先决定 scope。想模拟实例级 Redis 风格预算，用默认 `maxmemoryScope global`；想验证每个 DB 独立预算，用 `maxmemoryScope per-db`。例如：
 
 ```bash
@@ -359,7 +361,61 @@ java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar
 
 ## 生产环境加固与验收操作
 
-本节是单节点生产加固方案（Production Hardening）的运行时契约与运维手册，定义了服务端强约束容量边界、容量估算推导、Result-Unknown 判定条件、优雅停机所有权时序以及发布验收测试规范。
+本节是单节点生产加固方案（Production Hardening）的运行时契约与运维手册，定义了 degraded 恢复、服务端强约束容量边界、容量估算推导、Result-Unknown 判定条件、优雅停机所有权时序以及发布验收测试规范。DB 进入 degraded 时从下一节开始。
+
+### Degraded 恢复
+
+某个 DB 进入 degraded 之后，进程不会自己把它写回去。stock server 的恢复入口是当前 `SELECT` 选中的库上的 `YDRECONCILE`。内部实现是 `RuntimeDbEngine.reconcileAccounting()`，命令不经过 mutation executor，所以写入门控拦不住它。
+
+#### 触发条件
+
+degraded 由 `YierdisDbHealth.recordInvariantFailure` 置位，一场事故只保留第一次失败：
+
+- **派生计数下溢**。`expireCount` 只是随 entry 发布、替换、释放更新的派生计数。`reconcileDerivedEntryState` 算出的下一个计数小于 0 时抛 `IllegalStateException("derived expire count underflow")`。抛出点在 `prepared.commit()` 已经开始之后。
+- **commit 已经开始之后的其它失败**。executor 做 best-effort promote、settle ledger、release superseded，再由 `postCommitFailure` 标记 degraded。调用方得到 `PostCommitMutationException`（result-unknown）。commit 之后的容量失败同样包成 invariant failure。
+- **commit 之前的不变量失败**。`NativeMemoryException` 和 `IllegalStateException`（`isDegradingInvariantFailure`）也会标记 degraded。容量失败（`MemoryLedgerOutOfMemoryException`、`NativeCapacityExceededException`）在 commit 前只返回 OOM，不进入 degraded。
+- detached entry 回收自己抛出的 `RuntimeException` 或 `Error` 也会 `recordInvariantFailure` 后再抛出。
+- 逻辑账本 `usedBytes()` 和物理快照之间的漂移不会自动 degraded。两边只在这次显式对账里拉齐。
+
+#### 可观测表现
+
+- `INFO` 或 `INFO health`：`degraded_databases` 大于 0 时 `ready` 和 `writable` 为 0，并带上最早一场事故的 `first_failure_type` 与 `first_failure_message`。
+- 写命令，包括 `DEL`、`FLUSHDB` 和回收类 mutation，回复 `MISCONF DB is in a degraded state; writes are disabled`。`requireWritable` 仍在读取 admission mode 之前执行。
+- 未过期的 key 照常读出。已过期的 key 对读命令返回 nil，`EXISTS` 也把它看成不存在。这条读路径不调用 `reclaimExpired`，物理记录和 `keyCount` 都保持原样，直到恢复之后的可写读或维护真正回收。
+- 维护节拍先回收 detached entry，因此 `FLUSHDB ASYNC` 留下的旧目录仍能往下清；接着 `requireWritable` 失败。本拍里的过期排空、rehash 和本库 maxmemory enforce 不会跑。异常会中断同一次 tick 的后续 DB、defrag 和 global governor maintenance，调度侧记一条 `maintenance tick failed`。节拍不调用对账。`cleanupIntervalMillis=0` 时只跑 deferred reclamation，这一路只回收 detached entry，不会因为 degraded 抛出上面的 MISCONF。
+
+#### 恢复步骤与回复
+
+`YDRECONCILE` 没有参数，只作用于当前选中的 DB，仍在 owner 线程上执行。
+
+1. 读 `INFO health`，确认 `degraded_databases` 和 `first_failure_message`。
+2. `SELECT` 到要恢复的库。一次成功只清这一库，其它库保持 degraded。
+3. 发送 `YDRECONCILE`。
+
+回复语义：
+
+- `+OK`：物理用量重算成功，`realignUsage` 把逻辑账本对齐到 `max(0, usedBytesForMaxmemory())`，清除 degraded 和这场事故的 first-failure。这个库可以再写。
+- `-ERR reconciliation failed`：物理重算抛了 `RuntimeException`。账本保持原样，degraded 保持。失败尝试记在 health 的 last reconciliation 里（`physicalUsedBytes = -1`，`driftBytes = 0`）。这不是成功。
+- 引擎没有实现 `RuntimeDbEngine` 时回复 `-ERR reconcileAccounting is not supported`。stock server 的库都实现该接口。
+
+`Error`（例如 `OutOfMemoryError`）不折成 `-ERR reconciliation failed`，继续向外抛。
+
+#### 恢复失败之后
+
+`-ERR reconciliation failed` 之后，同一库上的写命令仍是 MISCONF。可以再次执行 `YDRECONCILE`：失败不会改账本，也不会清除 degraded。维护节拍不会代替这次对账。
+
+反复失败表示物理快照重算本身不可用。`DEL` 和 `FLUSHDB` 同样被拒绝，不能用来把库清掉。协议面没有 `SAVE` / `BGSAVE`，进程内数据没有磁盘副本。在重算能够成功之前，把这个进程当作 fail-stop：等底层故障消失后在同一库上重试 `YDRECONCILE`，或者接受重启会丢掉内存数据集。不要把 `-ERR` 当成已经恢复。
+
+#### 下溢、degraded 与 YDRECONCILE
+
+派生计数下溢保持 fail-stop。计数已经和 entry 对不上时，把下溢钳成 0 再继续写入，会在错账上接着跑；有了协议恢复入口之后，停写的运维代价是一次 `YDRECONCILE`，而不是改代码或重启。本行为不把下溢改成可降级继续服务。
+
+升级链：
+
+1. commit 内 `expireCount` 下溢，抛 `IllegalStateException("derived expire count underflow")`。
+2. commit 已经开始，executor 转入 post-commit settle。DB 标记 degraded，调用方收到 result-unknown（`PostCommitMutationException`）。触发这次下溢的连接被关掉，不返回一个确定的成功或失败。
+3. 新连接上的写命令收到 MISCONF。已过期 key 的读返回 nil，物理记录仍在。
+4. 在该库上执行 `YDRECONCILE`。成功则 `+OK`，写入恢复；失败则 `-ERR reconciliation failed`，停在第 3 步，按上一节人工处理。
 
 ### 运行时基线 (Runtime Baseline)
 
@@ -450,7 +506,7 @@ java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar
 | Reply 所有权 | `outbound_active_connections`, `outbound_active_slots`, `outbound_active_chunks`, `outbound_active_sources`, `live_child_channels` |
 | 异常与调度 | `outbound_capacity_rejects`, `outbound_oversized_replies`, `outbound_cancelled_slots`, `outbound_failed_slots`, `outbound_write_failures`, `result_unknown_closes`, `reply_shutdown_timeouts`, `deferred_fair_reply_heads`, `deferred_global_reply_heads` |
 | Shutdown 停机 | `reply_shutdown_timeouts`, `inbound_closed`, 以及最终归零的所有权仪表盘 |
-| 内存与堆外 | `INFO memory` 中的 `yierdis_maxmemory_used_bytes`, `yierdis_maxmemory_effective_used_bytes`, `yierdis_ledger_used_bytes`, `yierdis_ledger_reserved_bytes`, `yierdis_offheap_used_bytes`, `native_metadata_committed_bytes`, `native_data_committed_bytes`, `native_data_live_bytes`, `native_live_objects`, `native_live_regions` 等 |
+| 内存与堆外 | `INFO memory` 中的 `yierdis_heap_estimate_bytes`, `yierdis_ledger_used_bytes`（ledger `usedBytes`）, `yierdis_ledger_reserved_bytes`, `yierdis_maxmemory_used_bytes`, `yierdis_maxmemory_effective_used_bytes`, `yierdis_offheap_used_bytes`, `native_metadata_committed_bytes`, `native_data_committed_bytes`, `native_data_live_bytes`, `native_live_objects`, `native_live_regions` 等 |
 
 **泄漏判定标准**：在平稳运行中，峰值（Peak）可以非零，但当前 `reserved`/`allocated` 会归零。在测试夹具执行完毕或成功优雅停机后，`active_slots`、`active_chunks`、`active_sources`、`live_child_channels` 以及入站预留必须全部**严格收敛为 0**。客户端断开后若仪表盘非零即表明存在泄漏。
 
