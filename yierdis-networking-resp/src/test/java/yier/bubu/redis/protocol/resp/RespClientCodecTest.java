@@ -101,6 +101,14 @@ public class RespClientCodecTest {
     }
 
     @Test
+    public void malformedHeadersAndOversizedDeclarationsFailAsIoExceptions() throws Exception {
+        assertReadFails("+abcd\r\n", 3, "RESP line exceeds limit");
+        Assert.assertEquals("abc", RespClientCodec.readReply(in("+abc\r\n"), 3).text());
+        assertReadFails("*5\r\n", 4, "invalid RESP array length");
+        assertReadFails("?nope\r\n", 16, "unexpected RESP reply type");
+    }
+
+    @Test
     public void rejectsMalformedAndOverflowingNumbers() {
         assertReadFails(":x\r\n", 1024, "invalid RESP integer");
         assertReadFails(":-\r\n", 1024, "invalid RESP integer");

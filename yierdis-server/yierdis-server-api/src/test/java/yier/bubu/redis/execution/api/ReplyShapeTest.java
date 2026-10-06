@@ -74,4 +74,48 @@ public class ReplyShapeTest {
         Assert.assertEquals(9, error.payloadLength());
     }
 
+    @Test
+    public void blankErrorMessagesNormalizeToANonEmptyErrPrefix() {
+        Assert.assertEquals("ERR error", ReplyShapes.normalizeError(""));
+        Assert.assertEquals("ERR error", ReplyShapes.normalizeError(" \r\n"));
+        Assert.assertEquals("ERR error", ReplyShapes.normalizeError(null));
+        Assert.assertEquals("ERR wrong", ReplyShapes.normalizeError("wrong"));
+    }
+
+    @Test
+    public void errorTruncationKeepsValidSurrogatePairsAndDropsUnpairedSurrogates() {
+        String emoji = "\uD83D\uDE00";
+        String kept = ReplyShapes.normalizeError("a".repeat(504) + emoji);
+        Assert.assertTrue(kept.endsWith(emoji));
+        Assert.assertFalse(hasUnpairedSurrogate(kept));
+
+        String dropped = ReplyShapes.normalizeError("a".repeat(508) + emoji);
+        Assert.assertFalse(dropped.contains(emoji));
+        Assert.assertFalse(dropped.endsWith("\uD83D"));
+        Assert.assertFalse(hasUnpairedSurrogate(dropped));
+
+        Assert.assertEquals("ERR bad", ReplyShapes.normalizeError("bad\uD800"));
+        Assert.assertEquals("ERR error", ReplyShapes.normalizeError("\uD800"));
+    }
+
+    @Test
+    public void mapAggregateRejectsAnOddNumberOfEntries() {
+        List<ReplyShape> odd = List.of(ReplyShapes.integer(1));
+        Assert.assertThrows(IllegalArgumentException.class, () -> ReplyShapes.map(odd));
+        Assert.assertThrows(IllegalArgumentException.class,
+                () -> new ReplyShape.Aggregate(ReplyShape.AggregateKind.MAP, odd, 0L));
+    }
+
+    private static boolean hasUnpairedSurrogate(String value) {
+        int index = 0;
+        while (index < value.length()) {
+            int codePoint = value.codePointAt(index);
+            if (codePoint >= Character.MIN_SURROGATE && codePoint <= Character.MAX_SURROGATE) {
+                return true;
+            }
+            index += Character.charCount(codePoint);
+        }
+        return false;
+    }
+
 }

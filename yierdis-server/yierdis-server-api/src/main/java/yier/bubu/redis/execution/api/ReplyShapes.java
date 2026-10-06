@@ -92,16 +92,19 @@ public final class ReplyShapes {
         return (value == null ? "" : value).getBytes(StandardCharsets.US_ASCII).length;
     }
 
-    private static int utf8Length(String value) {
-        return (value == null ? "" : value).getBytes(StandardCharsets.UTF_8).length;
-    }
-
     public static String normalizeError(String message) {
-        String value = sanitizeSimple(message == null ? "ERR error" : message);
-        if (!hasRedisErrorPrefix(value)) {
+        String value = sanitizeSimple(message);
+        if (value.isBlank()) {
+            value = "ERR error";
+        } else if (!hasRedisErrorPrefix(value)) {
             value = "ERR " + value;
         }
-        return truncateUtf8(value, MAX_NORMALIZED_ERROR_BYTES);
+        value = truncateUtf8(value, MAX_NORMALIZED_ERROR_BYTES);
+        // 截断或丢弃孤立 surrogate 后，不能留下只有前缀和空白的 "ERR "。
+        if (value.isBlank() || (value.startsWith("ERR") && value.length() > 3 && value.substring(3).isBlank())) {
+            return "ERR error";
+        }
+        return value;
     }
 
     public static String sanitizeSimple(String value) {
@@ -126,22 +129,36 @@ public final class ReplyShapes {
         return end > 0 && (end == value.length() || Character.isWhitespace(value.charAt(end)));
     }
 
+    /**
+     * 按 Unicode code point 截断。有效代理对是一个 code point，不会拆成孤立代理项。
+     * 孤立 surrogate 不是合法标量，直接丢弃，避免结果无法编码成规范 UTF-8。
+     */
     private static String truncateUtf8(String value, int maxBytes) {
-        if (utf8Length(value) <= maxBytes) {
-            return value;
-        }
-        int end = 0;
+        StringBuilder kept = new StringBuilder(value.length());
         int used = 0;
-        while (end < value.length()) {
-            int codePoint = value.codePointAt(end);
+        int index = 0;
+        boolean changed = false;
+        while (index < value.length()) {
+            int codePoint = value.codePointAt(index);
+            int charCount = Character.charCount(codePoint);
+            if (codePoint >= Character.MIN_SURROGATE && codePoint <= Character.MAX_SURROGATE) {
+                changed = true;
+                index += charCount;
+                continue;
+            }
             int codePointBytes = utf8Length(codePoint);
             if (used + codePointBytes > maxBytes) {
+                changed = true;
                 break;
             }
+            kept.appendCodePoint(codePoint);
             used += codePointBytes;
-            end += Character.charCount(codePoint);
+            index += charCount;
         }
-        return value.substring(0, end);
+        if (!changed && index == value.length()) {
+            return value;
+        }
+        return kept.toString();
     }
 
     private static int utf8Length(int codePoint) {

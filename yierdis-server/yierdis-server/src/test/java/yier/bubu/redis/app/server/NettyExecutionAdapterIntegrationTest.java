@@ -45,6 +45,40 @@ public class NettyExecutionAdapterIntegrationTest {
     }
 
     @Test
+    public void requestTooLargeReplyUsesTheControlReservationAndKeepsTheLedger() {
+        try (YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build())) {
+            CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);
+            BiFunction<Integer, BytesSink, RedisReplyWriter> replyWriterFactory = RespReplyWriter::new;
+            CommandExecutor executor = new CommandExecutor(
+                    instance.runtimeAccess()::bindToCurrentThread,
+                    dispatcher::prepare,
+                    new NettySerialOwnerExecutor(ImmediateEventExecutor.INSTANCE),
+                    new RespReplySizer(),
+                    replyWriterFactory,
+                    new NettyExecutionIoAdapter(),
+                    new CommandExecutorConfig(16, 16, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+            );
+            executor.start();
+            OrderedReplyTestFixture fixture = OrderedReplyTestFixture.open(executor, replyWriterFactory);
+            try {
+                fixture.write(ByteArrayExecutionRequest.fromUtf8("PING", List.of()));
+                fixture.drain();
+
+                Assert.assertArrayEquals(
+                        ascii("-ERR request exceeds executor queue byte limit\r\n"),
+                        readOutbound(fixture)
+                );
+                Assert.assertTrue(fixture.channel().isOpen());
+                Assert.assertEquals(0L, fixture.outboundStats().reservedBytes());
+                Assert.assertEquals(OrderedReplyTestFixture.CONTROL_BYTES, fixture.outboundStats().peakReservedBytes());
+            } finally {
+                fixture.close();
+                executor.close();
+            }
+        }
+    }
+
+    @Test
     public void registeredRequestSubmitsThroughNettyExecutionConnection() {
         try (YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build())) {
             CommandDispatcher dispatcher = TestCommandDispatchers.forInstance(instance);

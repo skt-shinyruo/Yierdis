@@ -13,6 +13,39 @@ import java.util.Arrays;
 
 public class RespIngressAdmissionTest {
     @Test
+    public void bareByteBufWaitsWhenBudgetIsFullAndDecodesAfterRelease() {
+        InboundMemoryBudget budget = new InboundMemoryBudget(200);
+        InboundConnectionMemory blocker = new InboundConnectionMemory(200, Runnable::run, () -> { });
+        InboundConnectionMemory connection = new InboundConnectionMemory(4_096, Runnable::run, () -> { });
+        Assert.assertEquals(InboundMemoryBudget.ReservationResult.RESERVED, budget.tryReserve(blocker, 160));
+        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                1_024, 16, 1_024, 4_096, budget, connection, RespDecodedMessageGate.PASS_THROUGH,
+                InboundReadControl.NOOP
+        );
+        EmbeddedChannel channel = new EmbeddedChannel(decoder);
+        ExecutionRequest request = null;
+        try {
+            Assert.assertFalse(channel.writeInbound(ascii("*1\r\n$4\r\nPING\r\n")));
+
+            Assert.assertTrue(channel.isActive());
+            Assert.assertNull(channel.readInbound());
+            Assert.assertEquals(1, budget.stats().waitingConnections());
+
+            budget.release(blocker, 160);
+            channel.runPendingTasks();
+
+            request = readExecutionRequest(channel);
+            Assert.assertArrayEquals("PING".getBytes(StandardCharsets.US_ASCII), request.readOnlyByteArray(0));
+            Assert.assertTrue(channel.isActive());
+        } finally {
+            if (request != null) {
+                request.close();
+            }
+            channel.finishAndReleaseAll();
+        }
+    }
+
+    @Test
     public void argvIsRejectedBeforeOuterArrayAllocation() {
         InboundMemoryBudget budget = new InboundMemoryBudget(4_096);
         InboundConnectionMemory connection = new InboundConnectionMemory(80, Runnable::run, () -> { });

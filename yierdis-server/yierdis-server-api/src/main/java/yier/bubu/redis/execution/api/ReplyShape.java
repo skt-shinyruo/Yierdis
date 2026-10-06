@@ -65,6 +65,10 @@ public sealed interface ReplyShape permits
             Objects.requireNonNull(kind, "kind");
             elements = List.copyOf(Objects.requireNonNull(elements, "elements"));
             requireNonNegative(retainedSourceBytes, "retainedSourceBytes");
+            // 直接构造 record 也不能绕过 map 的成对约束；奇数条目没有合法的字段/值划分。
+            if (kind == AggregateKind.MAP && (elements.size() & 1) != 0) {
+                throw new IllegalArgumentException(kind + " requires field/value pairs");
+            }
             for (ReplyShape element : elements) {
                 if (element instanceof Maximum) {
                     throw new IllegalArgumentException("maximum reservation must be top-level");
