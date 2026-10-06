@@ -424,7 +424,8 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
                 // 余数在装配时已经 +1 分给前几个 DB。这里只抄各引擎已生效的额度；再整除时，分到余数的 DB 会和准入差 1 字节。
                 appendPerDbMaxmemory(sb);
             }
-            sb.append("yierdis_ledger_used_bytes:").append(memStats.heapDataBytesEstimate()).append("\r\n");
+            sb.append("yierdis_heap_estimate_bytes:").append(memStats.heapDataBytesEstimate()).append("\r\n");
+            sb.append("yierdis_ledger_used_bytes:").append(memStats.ledgerUsedBytes()).append("\r\n");
             sb.append("yierdis_ledger_reserved_bytes:").append(memStats.reservedBytes()).append("\r\n");
             sb.append("yierdis_ledger_effective_used_bytes:").append(memStats.heapDataBytesEstimate() + memStats.reservedBytes()).append("\r\n");
             sb.append("yierdis_maxmemory_used_bytes:").append(memStats.usedBytesForMaxmemory()).append("\r\n");

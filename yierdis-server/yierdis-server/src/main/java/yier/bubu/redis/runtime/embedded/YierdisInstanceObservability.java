@@ -80,6 +80,7 @@ public final class YierdisInstanceObservability {
         long nativeLiveObjects = 0;
         long nativeLiveRegions = 0;
         long pendingHashTableCount = 0L;
+        long ledgerUsedBytes = 0L;
         String lastHashTableMaintenanceStopReason = "COMPLETE";
         boolean sharedNativeRuntime = instance.config().maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.GLOBAL;
 
@@ -110,6 +111,8 @@ public final class YierdisInstanceObservability {
                 nativeLiveRegions = addSaturating(nativeLiveRegions, Math.max(0L, s.nativeLiveRegions()));
             }
             pendingHashTableCount = addSaturating(pendingHashTableCount, Math.max(0L, s.pendingHashTableCount()));
+            // 逻辑账本按 DB 相加。GLOBAL 共享的是物理 runtime，不是这份 per-DB 准入账。
+            ledgerUsedBytes = addSaturating(ledgerUsedBytes, Math.max(0L, s.ledgerUsedBytes()));
             if (!"COMPLETE".equals(s.lastHashTableMaintenanceStopReason())) {
                 lastHashTableMaintenanceStopReason = s.lastHashTableMaintenanceStopReason();
             }
@@ -140,7 +143,8 @@ public final class YierdisInstanceObservability {
                 (int) Math.min(Integer.MAX_VALUE, pendingHashTableCount),
                 lastHashTableMaintenanceStopReason,
                 nativeLiveObjects,
-                nativeLiveRegions
+                nativeLiveRegions,
+                ledgerUsedBytes
         );
     }
 
