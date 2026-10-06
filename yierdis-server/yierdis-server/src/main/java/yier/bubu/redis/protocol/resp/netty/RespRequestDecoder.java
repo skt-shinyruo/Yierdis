@@ -846,6 +846,11 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
                 return null;
             }
         }
+        // 前导零与 String2ll 对齐：只有单独的 "0" 合法，"01" 和 "-0" 都拒绝。
+        // 这里仍在超过 Integer.MAX_VALUE 时失败；协议硬上限本身也在 int 范围内。
+        if (in.getByte(i) == '0' && (negative || i + 1 < endExclusive)) {
+            return null;
+        }
         long value = 0L;
         for (; i < endExclusive; i++) {
             int ch = in.getByte(i) & 0xFF;

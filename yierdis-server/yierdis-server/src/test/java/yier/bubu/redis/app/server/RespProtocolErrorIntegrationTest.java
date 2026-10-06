@@ -14,6 +14,86 @@ import java.nio.charset.StandardCharsets;
 
 public class RespProtocolErrorIntegrationTest {
     @Test
+    public void multibulkLengthWithLeadingZeroReturnsProtocolErrorAndClosesConnection() throws Exception {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config());
+             Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
+            socket.setSoTimeout(2000);
+
+            OutputStream out = socket.getOutputStream();
+            InputStream in = socket.getInputStream();
+
+            out.write("*01\r\n$4\r\nPING\r\n".getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+
+            RespClientCodec.RespReply error = readReply(in);
+            Assert.assertEquals(RespClientCodec.RespReply.Kind.ERROR, error.kind());
+            Assert.assertEquals("ERR Protocol error: invalid multibulk length", error.text());
+            Assert.assertEquals(-1, in.read());
+        }
+    }
+
+    @Test
+    public void bulkLengthWithLeadingZeroReturnsProtocolErrorAndClosesConnection() throws Exception {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config());
+             Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
+            socket.setSoTimeout(2000);
+
+            OutputStream out = socket.getOutputStream();
+            InputStream in = socket.getInputStream();
+
+            out.write("*1\r\n$04\r\nPING\r\n".getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+
+            RespClientCodec.RespReply error = readReply(in);
+            Assert.assertEquals(RespClientCodec.RespReply.Kind.ERROR, error.kind());
+            Assert.assertEquals("ERR Protocol error: invalid bulk length", error.text());
+            Assert.assertEquals(-1, in.read());
+        }
+    }
+
+    @Test
+    public void negativeZeroMultibulkLengthReturnsProtocolErrorAndClosesConnection() throws Exception {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config());
+             Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
+            socket.setSoTimeout(2000);
+
+            OutputStream out = socket.getOutputStream();
+            InputStream in = socket.getInputStream();
+
+            out.write("*-0\r\n".getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+
+            RespClientCodec.RespReply error = readReply(in);
+            Assert.assertEquals(RespClientCodec.RespReply.Kind.ERROR, error.kind());
+            Assert.assertEquals("ERR Protocol error: invalid multibulk length", error.text());
+            Assert.assertEquals(-1, in.read());
+        }
+    }
+
+    @Test
+    public void negativeMultibulkLengthStillReturnsProtocolErrorAndClosesConnection() throws Exception {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config());
+             Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
+            socket.setSoTimeout(2000);
+
+            OutputStream out = socket.getOutputStream();
+            InputStream in = socket.getInputStream();
+
+            out.write("*-1\r\n".getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+
+            RespClientCodec.RespReply error = readReply(in);
+            Assert.assertEquals(RespClientCodec.RespReply.Kind.ERROR, error.kind());
+            Assert.assertEquals("ERR Protocol error: invalid multibulk length", error.text());
+            Assert.assertEquals(-1, in.read());
+        }
+    }
+
+    @Test
     public void malformedRespReturnsProtocolErrorAndClosesConnection() throws Exception {
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config());
              Socket socket = new Socket()) {

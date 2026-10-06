@@ -47,9 +47,9 @@ RESP2 array/multibulk 是默认请求格式，也是 Redis 客户端通常发送
 
 `RespRequestDecoder` 对 RESP2 array 的约束（括号内是拒绝时实际返回的 error 文本）：
 
-- multibulk header 必须是 `*<argc>\r\n`，`argc` 为非负十进制整数（`ERR Protocol error: invalid multibulk length`）；
+- multibulk header 必须是 `*<argc>\r\n`，`argc` 为非负十进制整数。长度字面量与 `string2ll` 一样拒绝前导零：单独的 `0` 合法，`01` 和 `-0` 非法（`ERR Protocol error: invalid multibulk length`）；
 - 非 null 参数头必须是 `$<len>\r\n<body>\r\n`，以其它类型字节开头时报 `ERR Protocol error: expected '$', got other`；
-- bulk length 允许 `-1` 或非负整数，不能小于 `-1`（`ERR Protocol error: invalid bulk length`）；
+- bulk length 允许 `-1` 或非负整数，同样拒绝前导零，不能小于 `-1`（`ERR Protocol error: invalid bulk length`）；
 - 非 null bulk 的 body 后必须紧跟 `\r\n`（`ERR Protocol error: invalid bulk string terminator`）。
 
 argc 还受两道上限约束：`RespProtocolLimits.DEFAULT_MAX_ARGS` 是 decoder 内建硬上限，超过报 `ERR Protocol error: invalid multibulk length`；`protocolMaxArgs` 是运营配置上限，超过报 `ERR Protocol error: too many arguments`。bulk length 同理：硬上限是 `RespProtocolLimits.DEFAULT_MAX_BULK_BYTES`，配置上限是 `protocolMaxBulkBytes`，两者都报 `invalid bulk length`。
