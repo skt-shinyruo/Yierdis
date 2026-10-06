@@ -23,9 +23,33 @@ public final class Transaction {
     /**
      * 立刻发送。入队成功时返回服务端回复，包括字符串 {@code QUEUED}。
      * 入队期的服务端错误抛出，连接保持事务模式，这条不进入后来的 {@link #exec()} 列表。
+     * 原始 {@code EXEC} 返回 RESP 数组并结束事务；原始 {@code DISCARD} 成功同样结束。嵌套 {@code MULTI} 在写出前拒绝。
      */
     public Object command(String... args) {
-        return queue(Call.raw(args));
+        return command(connection.commandTimeoutMillis(), args);
+    }
+
+    Object command(long timeoutMillis, String[] args) {
+        ensureActive();
+        Call<Object> call = Call.raw(args);
+        if (call.args.length == 1 && Connection.isCommand(call.args[0], "EXEC")) {
+            connection.writeCommand(timeoutMillis, call.args);
+            try {
+                // 原始 EXEC 不应用入队时的类型化转换，仍按 RESP 形状返回；状态只按已执行的结果更新。
+                return connection.readCommandReply(timeoutMillis, queued);
+            } finally {
+                connection.finishTransaction(this);
+            }
+        }
+        Object reply = send(call, timeoutMillis);
+        if ("QUEUED".equals(reply)) {
+            queued.add(call);
+        } else if (call.args.length == 1 && Connection.isCommand(call.args[0], "DISCARD") && "OK".equals(reply)) {
+            connection.finishTransaction(this);
+        } else {
+            connection.noteSuccessfulCommand(call.args);
+        }
+        return reply;
     }
 
     /**
@@ -39,7 +63,6 @@ public final class Transaction {
         try {
             List<Object> results = connection.collectExec(batch);
             connection.finishTransaction(this);
-            connection.noteQueuedResults(batch, results);
             return results;
         } catch (RuntimeException failure) {
             connection.finishTransaction(this);
@@ -64,25 +87,24 @@ public final class Transaction {
 
     void markFinished() {
         finished = true;
+        queued.clear();
     }
 
     private Object queue(Call<?> call) {
-        ensureActive();
-        // 参数编不成 UTF-8 时在写出前抛出。事务模式保持不变，这条也不进入 EXEC 列表。
-        connection.writeCommand(connection.commandTimeoutMillis(), call.args);
-        Object reply;
-        try {
-            reply = connection.readCommandReply(connection.commandTimeoutMillis());
-        } catch (ServerException failure) {
-            // 入队期的 - 回复不是 EXEC 数组里的一项。连接留在事务模式，直到 exec 或 discard。
-            throw failure;
-        }
+        Object reply = send(call, connection.commandTimeoutMillis());
         if (!(reply instanceof String text) || !"QUEUED".equals(text)) {
             String actual = reply == null ? "null" : reply.getClass().getSimpleName();
             throw new DecodeException("reply was " + actual + ", expected QUEUED", null);
         }
         queued.add(call);
         return reply;
+    }
+
+    private Object send(Call<?> call, long timeoutMillis) {
+        ensureActive();
+        // 参数编不成 UTF-8 时在写出前抛出。事务模式保持不变，这条也不进入 EXEC 列表。
+        connection.writeCommand(timeoutMillis, call.args);
+        return connection.readCommandReply(timeoutMillis);
     }
 
     private void ensureActive() {

@@ -3,9 +3,7 @@ package yier.bubu.redis.client;
 import yier.bubu.redis.protocol.resp.RespClientCodec;
 import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PushbackInputStream;
 import java.net.InetSocketAddress;
@@ -18,7 +16,6 @@ import java.nio.charset.CharsetEncoder;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -32,6 +29,7 @@ import java.util.Set;
  * 带 {@code commandTimeoutMillis} 的重载只作用于这一次调用。
  * {@code HELLO} 没有类型化方法。{@link #pipeline()} 和 {@link #multi()} 把这条连接切到管道或事务；
  * {@code EXEC} 和 {@code DISCARD} 在事务对象上。
+ * 原始 {@code MULTI} 同样进入事务模式，之后用这条连接的原始命令入队及结束事务，类型化命令仍在写出前拒绝。
  * <p>
  * 服务端错误和 UTF-8 解码失败都读完当前回复，连接可以继续用。
  * 读超时、读写失败、超过 512 MiB 的 bulk，以及回复中任何深度的 {@code %}、{@code ~}、{@code _} 会关掉连接，并且不自动重试。
@@ -51,6 +49,7 @@ public final class Connection implements AutoCloseable {
     private Mode mode = Mode.NORMAL;
     private Pipeline pipeline;
     private Transaction transaction;
+    private boolean rawTransaction;
     private int database;
     private boolean closed;
 
@@ -118,12 +117,15 @@ public final class Connection implements AutoCloseable {
         if (closed) {
             throw new IllegalStateException("connection is closed");
         }
-        // 管道或事务还开着时，普通命令在写出前拒绝，避免把字节写进尚未配对的回复。
-        if (mode != Mode.NORMAL) {
-            throw new IllegalStateException("connection is not in normal mode");
-        }
         if (commandTimeoutMillis <= 0) {
             throw new IllegalArgumentException("commandTimeoutMillis must be > 0");
+        }
+        if (mode == Mode.TRANSACTION && rawTransaction) {
+            return transaction.command(commandTimeoutMillis, args);
+        }
+        // 对象管道和对象事务使用各自入口；原始 MULTI 只允许上面的原始命令继续沿同一入口发送。
+        if (mode != Mode.NORMAL) {
+            throw new IllegalStateException("connection is not in normal mode");
         }
         writeCommand(commandTimeoutMillis, args);
         Object value = readCommandReply(commandTimeoutMillis);
@@ -190,6 +192,7 @@ public final class Connection implements AutoCloseable {
         mode = Mode.NORMAL;
         pipeline = null;
         transaction = null;
+        rawTransaction = false;
         closeQuietly(socket);
     }
 
@@ -1140,6 +1143,7 @@ public final class Connection implements AutoCloseable {
             return;
         }
         transaction = null;
+        rawTransaction = false;
         if (!closed) {
             mode = Mode.NORMAL;
         }
@@ -1150,6 +1154,10 @@ public final class Connection implements AutoCloseable {
             throw new IllegalStateException("connection is closed");
         }
         validateArgs(args);
+        // 原始入口也不能跨管道进入事务，或向已开启的事务嵌套 MULTI；在写出前拒绝才能保住当前批次。
+        if (isCommand(args[0], "MULTI") && mode != Mode.NORMAL) {
+            throw new IllegalStateException("connection is not in normal mode");
+        }
         List<byte[]> encoded = encodeArgs(args);
         try {
             socket.setSoTimeout(toSocketTimeoutMillis(commandTimeoutMillis));
@@ -1162,9 +1170,15 @@ public final class Connection implements AutoCloseable {
     }
 
     Object readCommandReply(long commandTimeoutMillis) {
+        return readCommandReply(commandTimeoutMillis, List.of());
+    }
+
+    Object readCommandReply(long commandTimeoutMillis, List<Call<?>> queued) {
         try {
             socket.setSoTimeout(toSocketTimeoutMillis(commandTimeoutMillis));
-            return readValue();
+            RespClientCodec.RespReply reply = readRespReply();
+            noteExecResults(queued, reply);
+            return convert(reply, false);
         } catch (SocketTimeoutException e) {
             close();
             throw new CommandTimeoutException("timed out waiting for a reply", e);
@@ -1175,6 +1189,9 @@ public final class Connection implements AutoCloseable {
     }
 
     private <T> T complete(long commandTimeoutMillis, Call<T> call) {
+        if (mode != Mode.NORMAL) {
+            throw new IllegalStateException("connection is not in normal mode");
+        }
         return call.decode(command(commandTimeoutMillis, call.args));
     }
 
@@ -1182,7 +1199,8 @@ public final class Connection implements AutoCloseable {
         writeCommand(commandTimeoutMillis, new String[]{"EXEC"});
         try {
             socket.setSoTimeout(toSocketTimeoutMillis(commandTimeoutMillis));
-            RespClientCodec.RespReply reply = readExecReply();
+            RespClientCodec.RespReply reply = readRespReply();
+            noteExecResults(queued, reply);
             // projectExec 里的嵌套 RESP3 标记也抛 IOException。放在这个 try 里才会关掉连接，而不是把半个 EXEC 列表交出去。
             return projectExec(queued, reply);
         } catch (SocketTimeoutException e) {
@@ -1194,18 +1212,27 @@ public final class Connection implements AutoCloseable {
         }
     }
 
-    void noteQueuedResults(List<Call<?>> queued, List<Object> results) {
+    private void noteExecResults(List<Call<?>> queued, RespClientCodec.RespReply reply) {
+        if (queued.isEmpty() || reply.kind() != RespClientCodec.RespReply.Kind.ARRAY || reply.values() == null) {
+            return;
+        }
+        List<RespClientCodec.RespReply> results = reply.values();
         int count = Math.min(queued.size(), results.size());
         for (int i = 0; i < count; i++) {
-            Object result = results.get(i);
-            if (result instanceof ServerException || result instanceof DecodeException) {
+            RespClientCodec.RespReply result = results.get(i);
+            if (result.kind() != RespClientCodec.RespReply.Kind.SIMPLE_STRING) {
+                continue;
+            }
+            // 在转换整个 EXEC 结果前记录实际成功的 SELECT / QUIT；其他条目的 UTF-8 失败不能漏掉已执行的 DB 变化。
+            byte[] text = result.bytes();
+            if (text == null || text.length != 2 || text[0] != 'O' || text[1] != 'K') {
                 continue;
             }
             noteSuccessfulCommand(queued.get(i).args);
         }
     }
 
-    private RespClientCodec.RespReply readExecReply() throws IOException {
+    private RespClientCodec.RespReply readRespReply() throws IOException {
         int type = in.read();
         if (type < 0) {
             throw new IOException("unexpected EOF before RESP reply");
@@ -1213,19 +1240,17 @@ public final class Connection implements AutoCloseable {
         if (type == '%' || type == '~' || type == '_') {
             throw new IOException("RESP3 reply marker: " + (char) type);
         }
-        if (type == '-') {
-            throw new ServerException(decodeReplyText(readLineBody(in)));
-        }
-        if (type == '+') {
-            String text = decodeReplyText(readLineBody(in));
-            return new RespClientCodec.RespReply(
-                    RespClientCodec.RespReply.Kind.SIMPLE_STRING, text, null, null, null);
-        }
         in.unread(type);
-        return RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+        // 保留所有深度的原始文本，完整帧读完后再解码，避免 UTF-8 失败留下会串入下一条命令的数组元素。
+        RespClientCodec.RespReply reply = RespClientCodec.readReplyWithRawText(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+        if (reply.kind() == RespClientCodec.RespReply.Kind.ERROR) {
+            throw new ServerException(replyText(reply));
+        }
+        return reply;
     }
 
     private List<Object> projectExec(List<Call<?>> queued, RespClientCodec.RespReply reply) throws IOException {
+        requireResp2(reply);
         if (reply.kind() != RespClientCodec.RespReply.Kind.ARRAY || reply.values() == null) {
             throw new DecodeException("reply was " + reply.kind() + ", expected array", null);
         }
@@ -1247,58 +1272,35 @@ public final class Connection implements AutoCloseable {
 
     private static Object projectExecElement(Call<?> call, RespClientCodec.RespReply element) throws IOException {
         if (element.kind() == RespClientCodec.RespReply.Kind.ERROR) {
-            return new ServerException(serverText(element));
+            return new ServerException(replyText(element));
         }
-        // 公开 convert 把嵌套 ERROR 收成字符串。这里保留成 ServerException，EXEC 列表才能把单条错误和成功文本分开。
+        // 原始命令把嵌套 ERROR 收成字符串。类型化 exec() 保留 ServerException，才能区分单条错误和成功文本。
         return call.decode(convert(element, true));
     }
 
-    private Object readValue() throws IOException {
-        int type = in.read();
-        if (type < 0) {
-            throw new IOException("unexpected EOF before RESP reply");
-        }
-        // 顶层 `%`、`~`、`_` 在这里就失败。嵌套的同类标记由 convert 抛 IOException，读回复的地方关掉连接，不重试。
-        if (type == '%' || type == '~' || type == '_') {
-            throw new IOException("RESP3 reply marker: " + (char) type);
-        }
-        if (type == '+' || type == '-') {
-            // codec 读 simple string 时会用替换字符吞掉非法 UTF-8。顶层 `+` / `-` 在帧读完后按 REPORT 解码。
-            String text = decodeReplyText(readLineBody(in));
-            if (type == '-') {
-                throw new ServerException(text);
-            }
-            return text;
-        }
-        // `$` 和 `*` 仍交给 codec，这样 null bulk 和 null array 保持 null，连接继续可用。
-        in.unread(type);
-        return convert(RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES), false);
+    static Object convert(RespClientCodec.RespReply reply, boolean preserveErrors) throws IOException {
+        // 先检查整帧的协议种类；较早元素的 UTF-8 失败不能掩盖后面必须关连接的 RESP3 标记。
+        requireResp2(reply);
+        return convertValue(reply, preserveErrors);
     }
 
-    private static byte[] readLineBody(InputStream in) throws IOException {
-        ByteArrayOutputStream buf = new ByteArrayOutputStream();
-        int previous = -1;
-        while (true) {
-            int current = in.read();
-            if (current < 0) {
-                throw new IOException("unexpected EOF before RESP line terminator");
+    private static void requireResp2(RespClientCodec.RespReply reply) throws IOException {
+        switch (reply.kind()) {
+            case MAP, SET, NULL_TYPE -> throw new IOException("RESP3 reply marker: " + reply.kind());
+            case ARRAY -> {
+                if (reply.values() != null) {
+                    for (RespClientCodec.RespReply element : reply.values()) {
+                        requireResp2(element);
+                    }
+                }
             }
-            if (previous == '\r' && current == '\n') {
-                byte[] raw = buf.toByteArray();
-                return Arrays.copyOf(raw, raw.length - 1);
-            }
-            buf.write(current);
-            // 与 codec 一样，把尚未配对的 CR 算进上限。超限当读失败关掉连接，不在半行上重同步。
-            if (buf.size() > RespProtocolLimits.DEFAULT_MAX_BULK_BYTES + 1) {
-                throw new IOException("RESP line exceeds limit");
-            }
-            previous = current;
+            default -> { }
         }
     }
 
-    private static Object convert(RespClientCodec.RespReply reply, boolean preserveErrors) throws IOException {
+    private static Object convertValue(RespClientCodec.RespReply reply, boolean preserveErrors) throws IOException {
         return switch (reply.kind()) {
-            case SIMPLE_STRING -> reply.text();
+            case SIMPLE_STRING -> replyText(reply);
             case BULK_STRING -> {
                 byte[] bytes = reply.bytes();
                 yield bytes == null ? null : decodeReplyText(bytes);
@@ -1313,10 +1315,10 @@ public final class Connection implements AutoCloseable {
             case NULL -> null;
             case ERROR -> {
                 if (preserveErrors) {
-                    yield new ServerException(serverText(reply));
+                    yield new ServerException(replyText(reply));
                 }
-                // 收成文本只发生在 preserveErrors == false。EXEC 传入 true，单条错误仍是 ServerException。
-                yield reply.text();
+                // 收成文本只发生在 preserveErrors == false。类型化 exec() 传入 true，单条错误仍是 ServerException。
+                yield replyText(reply);
             }
             case ARRAY -> convertAggregate(reply.values(), preserveErrors);
             // 任何深度的 %、~、_ 都和顶层标记一样变成 IOException，不收成列表或 null。
@@ -1331,20 +1333,30 @@ public final class Connection implements AutoCloseable {
         }
         List<Object> converted = new ArrayList<>(values.size());
         for (int i = 0; i < values.size(); i++) {
-            converted.add(convert(values.get(i), preserveErrors));
+            converted.add(convertValue(values.get(i), preserveErrors));
         }
         return converted;
     }
 
-    private static String serverText(RespClientCodec.RespReply reply) {
+    private static String replyText(RespClientCodec.RespReply reply) {
+        byte[] bytes = reply.bytes();
+        if (bytes != null) {
+            return decodeReplyText(bytes);
+        }
         String text = reply.text();
         if (text == null) {
-            throw new DecodeException("error reply has no text", null);
+            throw new DecodeException("text reply has no value", null);
         }
         return text;
     }
 
     void noteSuccessfulCommand(String[] args) {
+        if (isCommand(args[0], "MULTI")) {
+            mode = Mode.TRANSACTION;
+            rawTransaction = true;
+            transaction = new Transaction(this);
+            return;
+        }
         if (isCommand(args[0], "QUIT")) {
             // QUIT 的回复先返回给调用方，本地再关掉。服务端错误在读回复时已经抛出，不会走到这里。
             close();
@@ -1401,8 +1413,8 @@ public final class Connection implements AutoCloseable {
         }
     }
 
-    private static boolean isCommand(String name, String expected) {
-        return name.equalsIgnoreCase(expected);
+    static boolean isCommand(String name, String expected) {
+        return expected.equalsIgnoreCase(name);
     }
 
     private static Integer parseDbIndex(String text) {

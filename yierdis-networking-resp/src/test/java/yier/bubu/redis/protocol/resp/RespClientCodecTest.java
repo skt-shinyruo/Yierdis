@@ -126,8 +126,34 @@ public class RespClientCodecTest {
         assertReadFails(":1x\r\n", 1024, "invalid RESP integer");
         assertReadFails(":1\rx", 1024, "expected RESP CRLF");
         assertReadFails(":999999999999999999999999\r\n", 1024, "invalid RESP integer");
+        assertReadFails(":9223372036854775808\r\n", 1024, "invalid RESP integer");
+        assertReadFails(":-9223372036854775809\r\n", 1024, "invalid RESP integer");
+        assertReadFails(":18446744073709551616\r\n", 1024, "invalid RESP integer");
+        assertReadFails(":-18446744073709551616\r\n", 1024, "invalid RESP integer");
         assertReadFails("$2147483648\r\n", 1024, "invalid RESP bulk string length");
         assertReadFails("*2147483648\r\n", 1024, "invalid RESP array length");
+    }
+
+    @Test
+    public void readsBothLongBoundariesIncludingNestedIntegers() throws Exception {
+        RespClientCodec.RespReply array = RespClientCodec.readReply(
+                in("*4\r\n:9223372036854775807\r\n:-9223372036854775808\r\n:0\r\n:-0001\r\n"), 1024);
+        Assert.assertEquals(Long.valueOf(Long.MAX_VALUE), array.values().get(0).integer());
+        Assert.assertEquals(Long.valueOf(Long.MIN_VALUE), array.values().get(1).integer());
+        Assert.assertEquals(Long.valueOf(0), array.values().get(2).integer());
+        Assert.assertEquals(Long.valueOf(-1), array.values().get(3).integer());
+    }
+
+    @Test
+    public void rawTextIsPreservedAtEveryDepthWithoutChangingTheDefaultReader() throws Exception {
+        byte[] frame = "*2\r\n+ÿ\r\n*1\r\n-ÿ\r\n".getBytes(StandardCharsets.ISO_8859_1);
+        RespClientCodec.RespReply raw = RespClientCodec.readReplyWithRawText(new ByteArrayInputStream(frame), 1024);
+        Assert.assertArrayEquals(new byte[]{(byte) 0xFF}, raw.values().get(0).bytes());
+        Assert.assertArrayEquals(new byte[]{(byte) 0xFF}, raw.values().get(1).values().get(0).bytes());
+        Assert.assertNull(raw.values().get(0).text());
+        RespClientCodec.RespReply usual = RespClientCodec.readReply(new ByteArrayInputStream(frame), 1024);
+        Assert.assertEquals("\uFFFD", usual.values().get(0).text());
+        Assert.assertNull(usual.values().get(0).bytes());
     }
 
     @Test

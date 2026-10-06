@@ -9,6 +9,43 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public class ConnectionPoolTest {
     @Test
+    public void rawMultiIsClosedOnReturnInsteadOfLeakingToTheNextBorrower() throws Exception {
+        try (TestServer server = TestServer.start();
+             ConnectionPool pool = new ConnectionPool(settings(server), 1, 1_000)) {
+            Connection borrowed = pool.borrow();
+            Assert.assertEquals("OK", borrowed.command("MULTI"));
+            Assert.assertEquals("QUEUED", borrowed.command("SET", "k", "uncommitted"));
+            pool.returnConnection(borrowed);
+            assertClosed(borrowed);
+            Connection next = pool.borrow();
+            Assert.assertNotSame(borrowed, next);
+            Assert.assertEquals("PONG", next.ping());
+            Assert.assertNull(next.get("k"));
+            pool.returnConnection(next);
+        }
+    }
+
+    @Test
+    public void rawExecWithSelectCannotReturnAConnectionOnTheWrongDatabase() throws Exception {
+        try (TestServer server = TestServer.start();
+             ConnectionPool pool = new ConnectionPool(settings(server), 1, 1_000)) {
+            Connection borrowed = pool.borrow();
+            borrowed.command("MULTI");
+            borrowed.command("SELECT", "1");
+            borrowed.command("SET", "k", "on-one");
+            Assert.assertEquals(java.util.List.of("OK", "OK"), borrowed.command("EXEC"));
+            Assert.assertEquals(1, borrowed.database());
+            pool.returnConnection(borrowed);
+            assertClosed(borrowed);
+            Connection next = pool.borrow();
+            Assert.assertNotSame(borrowed, next);
+            Assert.assertEquals(0, next.database());
+            Assert.assertNull(next.get("k"));
+            pool.returnConnection(next);
+        }
+    }
+
+    @Test
     public void rejectsNonPositiveMaximumAndNegativeBorrowWaitBeforeConnect() {
         Assert.assertFalse(CommandTimeoutException.class.isAssignableFrom(BorrowException.class));
         Assert.assertFalse(ConnectionException.class.isAssignableFrom(BorrowException.class));

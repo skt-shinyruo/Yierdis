@@ -5,12 +5,83 @@ import org.junit.Test;
 import yier.bubu.redis.protocol.resp.RespClientCodec;
 import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 public class ConnectionTest {
+    @Test
+    public void nestedResp3IsNotMaskedByAnEarlierUtf8Error() throws Exception {
+        for (String marker : List.of("_\r\n", "%0\r\n", "~0\r\n")) {
+            ByteArrayInputStream input = new ByteArrayInputStream(
+                    ("*2\r\n+ÿ\r\n*1\r\n" + marker).getBytes(StandardCharsets.ISO_8859_1));
+            RespClientCodec.RespReply reply = RespClientCodec.readReplyWithRawText(input, 1024);
+            Assert.assertThrows(IOException.class, () -> Connection.convert(reply, false));
+        }
+    }
+
+    @Test
+    public void rawExecRecordsSelectEvenWhenAnotherResultFailsUtf8Decoding() throws Exception {
+        try (TestServer server = TestServer.start();
+             Connection connection = connect(server)) {
+            writeBytes(server.port(), List.of(
+                    "SET".getBytes(StandardCharsets.US_ASCII),
+                    "binary".getBytes(StandardCharsets.US_ASCII),
+                    new byte[]{(byte) 0xFF}));
+            connection.command("MULTI");
+            connection.command("GET", "binary");
+            connection.command("SELECT", "1");
+            Assert.assertThrows(DecodeException.class, () -> connection.command("EXEC"));
+            Assert.assertEquals(1, connection.database());
+            Assert.assertEquals("OK", connection.set("k", "on-one"));
+            try (Connection db0 = connect(server)) {
+                Assert.assertNull(db0.get("k"));
+            }
+            Assert.assertEquals("PONG", connection.ping());
+        }
+    }
+
+    @Test
+    public void longMinimumIsReturnedByRawTypedPipelineAndTransactionCommands() throws Exception {
+        try (TestServer server = TestServer.start();
+             Connection connection = connect(server)) {
+            String aboveMinimum = Long.toString(Long.MIN_VALUE + 1);
+            connection.set("minimum", aboveMinimum);
+            Assert.assertEquals(Long.MIN_VALUE, connection.decr("minimum"));
+            Assert.assertEquals(Long.toString(Long.MIN_VALUE), connection.get("minimum"));
+            connection.set("minimum", aboveMinimum);
+            Assert.assertEquals(Long.valueOf(Long.MIN_VALUE), connection.command("DECR", "minimum"));
+            connection.set("minimum", aboveMinimum);
+            try (Pipeline pipeline = connection.pipeline()) {
+                Assert.assertEquals(Long.valueOf(Long.MIN_VALUE), pipeline.decr("minimum").get());
+            }
+            connection.set("minimum", aboveMinimum);
+            Transaction transaction = connection.multi();
+            transaction.decr("minimum");
+            Assert.assertEquals(List.of(Long.MIN_VALUE), transaction.exec());
+            Assert.assertEquals("PONG", connection.ping());
+        }
+    }
+
+    @Test
+    public void nestedInvalidUtf8IsRejectedAfterTheWholeFrameIsRead() throws Exception {
+        for (String marker : List.of("+", "-")) {
+            for (boolean preserveErrors : List.of(false, true)) {
+                ByteArrayInputStream input = new ByteArrayInputStream(
+                        ("*2\r\n*1\r\n" + marker + "ÿ\r\n+later\r\n+PONG\r\n")
+                                .getBytes(StandardCharsets.ISO_8859_1));
+                RespClientCodec.RespReply reply = RespClientCodec.readReplyWithRawText(input, 1024);
+                Assert.assertThrows(DecodeException.class, () -> Connection.convert(reply, preserveErrors));
+                Assert.assertEquals("PONG", Connection.convert(RespClientCodec.readReplyWithRawText(input, 1024), false));
+            }
+        }
+        ByteArrayInputStream valid = new ByteArrayInputStream("*1\r\n+中文\uFFFD\r\n".getBytes(StandardCharsets.UTF_8));
+        Assert.assertEquals(List.of("中文\uFFFD"), Connection.convert(RespClientCodec.readReplyWithRawText(valid, 1024), false));
+    }
+
     @Test
     public void defaultAddressAndOverriddenHostPortCompleteRawPing() throws Exception {
         try (TestServer server = TestServer.start(ConnectionSettings.DEFAULT_PORT);

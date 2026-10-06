@@ -42,10 +42,6 @@ public final class Reply<T> {
         return read;
     }
 
-    boolean holdsUnread() {
-        return !read;
-    }
-
     void complete(Object raw) {
         value = call.decode(raw);
         read = true;

@@ -24,6 +24,9 @@ final class Call<T> {
     }
 
     static Call<Object> raw(String... args) {
+        if (args == null) {
+            throw new IllegalArgumentException("command is required");
+        }
         return of(reply -> reply, args);
     }
 

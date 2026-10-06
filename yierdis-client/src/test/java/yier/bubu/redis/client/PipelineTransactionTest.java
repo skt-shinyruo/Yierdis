@@ -3,10 +3,113 @@ package yier.bubu.redis.client;
 import org.junit.Assert;
 import org.junit.Test;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.Collection;
 import java.util.List;
 
 public class PipelineTransactionTest {
+    @Test
+    public void repeatedBatchesReleaseReadRepliesWhileSavedHandlesRemainUsable() throws Exception {
+        try (TestServer server = TestServer.start();
+             Connection connection = connect(server);
+             Pipeline pipeline = connection.pipeline()) {
+            Field replies = Pipeline.class.getDeclaredField("replies");
+            replies.setAccessible(true);
+            Reply<String> saved = pipeline.echo("saved");
+            for (int i = 0; i < 100; i++) {
+                Reply<String> current = pipeline.echo(Integer.toString(i));
+                if (i % 2 == 0) {
+                    pipeline.sync();
+                }
+                Assert.assertEquals(Integer.toString(i), current.get());
+                // 直接检查保留数量，避免用 GC 时机或耗时断言掩盖历史回复的线性积累。
+                Assert.assertTrue(((Collection<?>) replies.get(pipeline)).isEmpty());
+            }
+            Assert.assertEquals("saved", saved.get());
+        }
+    }
+
+    @Test
+    public void rawMultiInAPipelineIsRejectedBeforeWrite() throws Exception {
+        try (TestServer server = TestServer.start();
+             Connection connection = connect(server)) {
+            try (Pipeline pipeline = connection.pipeline()) {
+                Reply<String> before = pipeline.set("before", "stored");
+                Assert.assertThrows(IllegalStateException.class, () -> pipeline.command("mUlTi"));
+                Reply<String> after = pipeline.set("after", "stored");
+                Assert.assertEquals("OK", before.get());
+                Assert.assertEquals("OK", after.get());
+            }
+            Assert.assertEquals("stored", connection.get("before"));
+            Assert.assertEquals("stored", connection.get("after"));
+            Assert.assertEquals("PONG", connection.ping());
+        }
+    }
+
+    @Test
+    public void rawConnectionTransactionUsesTheSameModeAndCanFinishNormally() throws Exception {
+        try (TestServer server = TestServer.start();
+             Connection connection = connect(server)) {
+            Assert.assertEquals("OK", connection.command("mUlTi"));
+            Assert.assertThrows(IllegalStateException.class, connection::pipeline);
+            Assert.assertThrows(IllegalStateException.class, connection::multi);
+            Assert.assertThrows(IllegalStateException.class, connection::ping);
+            Assert.assertThrows(IllegalStateException.class, () -> connection.command("MULTI"));
+            Assert.assertThrows(IllegalArgumentException.class, () -> connection.command(0, "SET", "k", "bad"));
+            Assert.assertEquals("QUEUED", connection.command(1_000, "SET", "k", "kept"));
+            Assert.assertEquals(List.of("OK"), connection.command(1_000, "eXeC"));
+            Assert.assertEquals("kept", connection.get("k"));
+            Assert.assertEquals("OK", connection.command("MULTI"));
+            Assert.assertEquals("QUEUED", connection.command("SET", "k", "discarded"));
+            Assert.assertEquals("OK", connection.command("dIsCaRd"));
+            Assert.assertEquals("kept", connection.get("k"));
+        }
+    }
+
+    @Test
+    public void rawExecPreservesRespShapesAndRawDiscardFinishesTheObject() throws Exception {
+        try (TestServer server = TestServer.start();
+             Connection connection = connect(server)) {
+            connection.hset("hash", "field", "value");
+            Transaction executed = connection.multi();
+            executed.hgetall("hash");
+            executed.set("n", "abc");
+            executed.incr("n");
+            Assert.assertThrows(IllegalStateException.class, () -> executed.command("MULTI"));
+            Assert.assertEquals(List.of(List.of("field", "value"), "OK", "ERR value is not an integer or out of range"),
+                    executed.command("EXEC"));
+            Assert.assertThrows(IllegalStateException.class, () -> executed.command("PING"));
+            Assert.assertEquals("PONG", connection.ping());
+
+            Transaction discarded = connection.multi();
+            discarded.set("n", "discarded");
+            Assert.assertEquals("OK", discarded.command("DISCARD"));
+            Assert.assertThrows(IllegalStateException.class, discarded::exec);
+            Assert.assertEquals("abc", connection.get("n"));
+        }
+    }
+
+    @Test
+    public void rawExecAbortEndsTheTransactionAndSuccessfulSelectUpdatesTheDatabase() throws Exception {
+        try (TestServer server = TestServer.start();
+             Connection connection = connect(server)) {
+            Transaction aborted = connection.multi();
+            aborted.set("k", "discarded");
+            Assert.assertThrows(ServerException.class, () -> aborted.command("SET", "only-key"));
+            Assert.assertThrows(ServerException.class, () -> aborted.command("EXEC"));
+            Assert.assertThrows(IllegalStateException.class, aborted::exec);
+            Assert.assertNull(connection.get("k"));
+
+            Assert.assertEquals("OK", connection.command("MULTI"));
+            Assert.assertEquals("QUEUED", connection.command("SELECT", "1"));
+            Assert.assertEquals(0, connection.database());
+            Assert.assertEquals(List.of("OK"), connection.command("EXEC"));
+            Assert.assertEquals(1, connection.database());
+            Assert.assertEquals("PONG", connection.ping());
+        }
+    }
+
     @Test
     public void pipelinedSetsReturnInSendOrderAndAServerErrorStaysOnItsHandle() throws Exception {
         try (TestServer server = TestServer.start();
