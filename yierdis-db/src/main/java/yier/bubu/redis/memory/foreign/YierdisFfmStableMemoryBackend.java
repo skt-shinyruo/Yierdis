@@ -21,7 +21,6 @@ import yier.bubu.redis.memory.api.MemoryOwner;
 import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
-import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
 
@@ -127,14 +126,13 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
         }
     }
 
-    public NativeHandle reallocate(NativeHandle handle, int newSize, NativeReallocPolicy policy) {
+    public NativeHandle reallocate(NativeHandle handle, int newSize) {
         ensureOpen();
         long localRaw = requireOwned(handle);
-        return publicHandle(reallocateLocal(localRaw, newSize, policy));
+        return publicHandle(reallocateLocal(localRaw, newSize));
     }
 
-    private long reallocateLocal(long localRaw, int newSize, NativeReallocPolicy policy) {
-        Objects.requireNonNull(policy, "policy");
+    private long reallocateLocal(long localRaw, int newSize) {
         if (newSize < 0) {
             throw new IllegalArgumentException("newSize must be >= 0");
         }

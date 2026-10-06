@@ -8,7 +8,6 @@ public enum NativeObjectKind {
     HASH_VALUE_BYTES(4, NativeHandleDomain.STORAGE_OBJECT),
     SET_MEMBER_BYTES(5, NativeHandleDomain.STORAGE_OBJECT),
     ZSET_MEMBER_BYTES(6, NativeHandleDomain.STORAGE_OBJECT),
-    SCORE_BYTES(7, NativeHandleDomain.STORAGE_OBJECT),
 
     ENTRY_RECORD(1, NativeHandleDomain.ENTRY_OBJECT),
     KEY_BYTES(1, NativeHandleDomain.KEY_BYTES),

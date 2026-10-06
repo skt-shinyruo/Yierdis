@@ -19,7 +19,7 @@ public interface StableMemoryBackend extends AutoCloseable {
     NativeHandle allocate(NativeObjectKind kind, int size);
 
     /** 调整容量并保持完整句柄身份不变。 */
-    NativeHandle reallocate(NativeHandle handle, int newSize, NativeReallocPolicy policy);
+    NativeHandle reallocate(NativeHandle handle, int newSize);
 
     void free(NativeHandle handle);
 

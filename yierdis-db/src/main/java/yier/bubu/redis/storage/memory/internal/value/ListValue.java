@@ -18,15 +18,14 @@ import java.util.function.Consumer;
 
 public final class ListValue implements YierdisValue {
     private static final int QUICKLIST_NODE_MAX_BYTES = YierdisEncodingThresholds.LIST_MAX_LISTPACK_BYTES;
-    private static final int QUICKLIST_NODE_RECORD_BYTES = 80;
+    private static final int QUICKLIST_NODE_RECORD_BYTES = 64;
     private static final int QUICKLIST_NODE_OWNER_ROOT_OFFSET = 0;
     private static final int QUICKLIST_NODE_PREV_OFFSET = 16;
     private static final int QUICKLIST_NODE_NEXT_OFFSET = 32;
-    private static final int QUICKLIST_NODE_PAYLOAD_REF_OFFSET = 48;
-    private static final int QUICKLIST_NODE_ENTRY_COUNT_OFFSET = 64;
-    private static final int QUICKLIST_NODE_ENCODED_BYTES_OFFSET = 68;
-    private static final int QUICKLIST_NODE_FLAGS_OFFSET = 72;
-    private static final int QUICKLIST_NODE_RESERVED_OFFSET = 76;
+    private static final int QUICKLIST_NODE_ENTRY_COUNT_OFFSET = 48;
+    private static final int QUICKLIST_NODE_ENCODED_BYTES_OFFSET = 52;
+    private static final int QUICKLIST_NODE_FLAGS_OFFSET = 56;
+    private static final int QUICKLIST_NODE_RESERVED_OFFSET = 60;
     private static final long FIXED_HEAP_BYTES = 88L;
     private static final long ARRAY_HEADER_BYTES = 16L;
     private static final long REFERENCE_BYTES = 8L;
@@ -2434,7 +2433,6 @@ public final class ListValue implements YierdisValue {
                 writeHandle(view, QUICKLIST_NODE_OWNER_ROOT_OFFSET, rootHandle);
                 writeHandle(view, QUICKLIST_NODE_PREV_OFFSET, previousHandle);
                 writeHandle(view, QUICKLIST_NODE_NEXT_OFFSET, nextHandle);
-                writeHandle(view, QUICKLIST_NODE_PAYLOAD_REF_OFFSET, NativeHandle.NULL);
                 view.setIntLittleEndian(QUICKLIST_NODE_ENTRY_COUNT_OFFSET, current.size());
                 view.setIntLittleEndian(QUICKLIST_NODE_ENCODED_BYTES_OFFSET, current.encodedBytes());
                 view.setIntLittleEndian(QUICKLIST_NODE_FLAGS_OFFSET, 0);

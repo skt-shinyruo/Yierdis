@@ -17,7 +17,6 @@ final class YierdisNativeObjectTable implements AutoCloseable {
     public static final int STATE_PINNED = 2;
     public static final int STATE_MOVING = 3;
     public static final int STATE_FREED_QUARANTINED = 4;
-    public static final int STATE_CORRUPT = 5;
 
     public static final int META_BYTES = 36;
     private static final long ARRAY_HEADER_BYTES = 16L;
