@@ -119,12 +119,9 @@ final class YierdisNativePageAllocator
                 summary.usedBytes(),
                 summary.committedBytes() - summary.usedBytes(),
                 summary.liveSmallPages(),
-                summary.liveMediumSpanPages(),
-                summary.liveLargeSpanPages(),
+                summary.liveMediumPages(),
+                summary.liveLargePages(),
                 summary.smallFreeBytes(),
-                0L,
-                0L,
-                summary.emptySmallPages(),
                 summary.emptySmallPages(),
                 pagesById.size(),
                 summary.liveSpanDescriptors(),
@@ -625,8 +622,8 @@ final class YierdisNativePageAllocator
         long usedBytes = 0L;
         long smallFreeBytes = 0L;
         long liveSmallPages = 0L;
-        long liveMediumSpanPages = 0L;
-        long liveLargeSpanPages = 0L;
+        long liveMediumPages = 0L;
+        long liveLargePages = 0L;
         long emptySmallPages = 0L;
         long liveSpanDescriptors = 0L;
         long descriptorHeapBytes = 0L;
@@ -653,9 +650,9 @@ final class YierdisNativePageAllocator
                 committedBytes = MemoryUsageSnapshot.addSaturating(committedBytes, span.capacity);
                 usedBytes = MemoryUsageSnapshot.addSaturating(usedBytes, span.capacity);
                 if (span.pageClass == YierdisNativePageClass.MEDIUM_SPAN) {
-                    liveMediumSpanPages += span.pageCount;
+                    liveMediumPages += span.pageCount;
                 } else {
-                    liveLargeSpanPages += span.pageCount;
+                    liveLargePages += span.pageCount;
                 }
                 liveSpanDescriptors++;
                 descriptorHeapBytes = MemoryUsageSnapshot.addSaturating(
@@ -669,8 +666,8 @@ final class YierdisNativePageAllocator
                 usedBytes,
                 smallFreeBytes,
                 liveSmallPages,
-                liveMediumSpanPages,
-                liveLargeSpanPages,
+                liveMediumPages,
+                liveLargePages,
                 emptySmallPages,
                 liveSpanDescriptors,
                 descriptorHeapBytes
@@ -842,8 +839,8 @@ final class YierdisNativePageAllocator
             long usedBytes,
             long smallFreeBytes,
             long liveSmallPages,
-            long liveMediumSpanPages,
-            long liveLargeSpanPages,
+            long liveMediumPages,
+            long liveLargePages,
             long emptySmallPages,
             long liveSpanDescriptors,
             long descriptorHeapBytes

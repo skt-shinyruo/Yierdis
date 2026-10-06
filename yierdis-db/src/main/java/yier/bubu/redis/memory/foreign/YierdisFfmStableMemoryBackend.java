@@ -50,8 +50,9 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
     private long reallocMovedCount;
     private long defragMovedBytes;
     private long defragSkippedPinnedObjects;
-    private long doubleFreeDetections;
-    private long defragReclaimedPages;
+    private long staleHandleFreeDetections;
+    private long defragRetiredBlockPages;
+    private long defragTrimReclaimedPages;
     private AllocatorAllocationScope activeAllocationScope;
 
     public YierdisFfmStableMemoryBackend(String name, int maxSlots, MemoryOwner owner) {
@@ -349,12 +350,15 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
                     && meta.state() != YierdisNativeObjectTable.STATE_PINNED) {
                 continue;
             }
+            // 对象、时间、字节预算都停在尚未搬迁的当前对象上，三者都计入 skippedBudgetObjects。
             if (scannedObjects >= options.maxObjects()) {
                 stoppedByObjectBudget = true;
+                skippedBudgetObjects++;
                 break;
             }
             if (System.nanoTime() - startedNanos >= options.timeBudgetNanos()) {
                 stoppedByTimeBudget = true;
+                skippedBudgetObjects++;
                 break;
             }
             scannedObjects++;
@@ -404,8 +408,8 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
                 pageStats.freeBytes(),
                 reservedBytes - logicalUsedBytes,
                 pageStats.liveSmallPages(),
-                pageStats.liveMediumSpanPages(),
-                pageStats.liveLargeSpanPages(),
+                pageStats.liveMediumPages(),
+                pageStats.liveLargePages(),
                 liveObjects,
                 pinnedObjects(),
                 quarantinedObjects(),
@@ -417,12 +421,11 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
                 // 退役块仍计在 page used 里，不在 freeBytes 中。再减一次会把页内空洞压低。
                 pageStats.freeBytes(),
                 pageStats.smallFreeBytes(),
-                pageStats.mediumFreeBytes(),
-                pageStats.largeFreeBytes(),
-                pageStats.freePages(),
+                pageStats.emptySmallPages(),
                 quarantineBytes(),
-                doubleFreeDetections,
-                defragReclaimedPages,
+                staleHandleFreeDetections,
+                defragRetiredBlockPages,
+                defragTrimReclaimedPages,
                 tableStats.metadataCommittedBytes(),
                 tableStats.activeSegments(),
                 tableStats.freeSlots(),
@@ -465,8 +468,9 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
     public MemoryReclaimResult trimEmptyPages(MemoryPressureBudget budget) {
         ensureOpen();
         MemoryReclaimResult result = pageAllocator.trimEmptyPages(budget);
-        defragReclaimedPages = MemoryUsageSnapshot.addSaturating(
-                defragReclaimedPages,
+        // 与搬迁路径的 defragRetiredBlockPages 分开：这里只累加本次 trim 实际回收的页。
+        defragTrimReclaimedPages = MemoryUsageSnapshot.addSaturating(
+                defragTrimReclaimedPages,
                 result.reclaimedUnits()
         );
         return result;
@@ -566,7 +570,7 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
         try {
             return requireLiveMeta(localRaw);
         } catch (StaleNativeHandleException e) {
-            doubleFreeDetections++;
+            staleHandleFreeDetections++;
             throw e;
         }
     }
@@ -610,7 +614,8 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
             target = null;
             long retiredBytes = previous.capacity();
             retainMovedSource(previous, targetCapacity);
-            defragReclaimedPages += retiredBytes / YierdisNativePageAllocator.PAGE_BYTES;
+            // 退役 block 的容量覆盖页，不是 trim 归还的页。
+            defragRetiredBlockPages += retiredBytes / YierdisNativePageAllocator.PAGE_BYTES;
             defragMovedBytes += sourceMeta.size();
             return sourceMeta.size();
         } catch (RuntimeException e) {
