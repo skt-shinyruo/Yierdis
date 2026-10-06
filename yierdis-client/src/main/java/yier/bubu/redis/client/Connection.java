@@ -19,7 +19,6 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -31,22 +30,27 @@ import java.util.Set;
  * 原始命令返回 {@code String}、{@code Long}、{@code null} 或嵌套 {@code List}。
  * 类型化方法在此之上检查回复形状；形状不对抛出 {@link DecodeException}，回复已经读完，连接可以继续用。
  * 带 {@code commandTimeoutMillis} 的重载只作用于这一次调用。
- * {@code HELLO}、{@code MULTI}、{@code EXEC}、{@code DISCARD} 没有类型化方法。
+ * {@code HELLO} 没有类型化方法。{@link #pipeline()} 和 {@link #multi()} 把这条连接切到管道或事务；
+ * {@code EXEC} 和 {@code DISCARD} 在事务对象上。
  * <p>
  * 服务端错误和 UTF-8 解码失败都读完当前回复，连接可以继续用。
  * 读超时、读写失败、超过 512 MiB 的 bulk，以及顶层 {@code %}、{@code ~}、{@code _} 会关掉连接，并且不自动重试。
  */
 public final class Connection implements AutoCloseable {
     private enum Mode {
-        NORMAL
+        NORMAL,
+        PIPELINE,
+        TRANSACTION
     }
 
     private final Socket socket;
     private final PushbackInputStream in;
     private final OutputStream out;
     private final long commandTimeoutMillis;
-    // 这条连接目前只有普通模式。之后的管道和事务仍是这一条通道上的模式，不是第二条连接。
-    private final Mode mode = Mode.NORMAL;
+    // 同一条连接只处在普通、管道、事务之一。管道和事务是这条通道上的对象，不是第二条连接。
+    private Mode mode = Mode.NORMAL;
+    private Pipeline pipeline;
+    private Transaction transaction;
     private int database;
     private boolean closed;
 
@@ -100,33 +104,58 @@ public final class Connection implements AutoCloseable {
         if (closed) {
             throw new IllegalStateException("connection is closed");
         }
+        // 管道或事务还开着时，普通命令在写出前拒绝，避免把字节写进尚未配对的回复。
         if (mode != Mode.NORMAL) {
             throw new IllegalStateException("connection is not in normal mode");
         }
         if (commandTimeoutMillis <= 0) {
             throw new IllegalArgumentException("commandTimeoutMillis must be > 0");
         }
-        validateArgs(args);
-        List<byte[]> encoded = encodeArgs(args);
-        try {
-            socket.setSoTimeout(toSocketTimeoutMillis(commandTimeoutMillis));
-            RespClientCodec.writeCommand(out, encoded);
-            out.flush();
-        } catch (IOException e) {
-            close();
-            throw new ConnectionException("connection closed after a write failure", e);
+        writeCommand(commandTimeoutMillis, args);
+        Object value = readCommandReply(commandTimeoutMillis);
+        noteSuccessfulCommand(args);
+        return value;
+    }
+
+    /**
+     * 进入管道模式。已经在管道模式时返回当前管道对象。
+     * 事务模式或连接已关闭时拒绝，并且不写出。
+     */
+    public Pipeline pipeline() {
+        if (closed) {
+            throw new IllegalStateException("connection is closed");
         }
-        try {
-            Object value = readValue();
-            noteSuccessfulCommand(args);
-            return value;
-        } catch (SocketTimeoutException e) {
-            close();
-            throw new CommandTimeoutException("timed out waiting for a reply", e);
-        } catch (IOException e) {
-            close();
-            throw new ConnectionException("connection closed after a read failure", e);
+        if (mode == Mode.PIPELINE) {
+            return pipeline;
         }
+        if (mode != Mode.NORMAL) {
+            throw new IllegalStateException("connection is not in normal mode");
+        }
+        mode = Mode.PIPELINE;
+        pipeline = new Pipeline(this);
+        return pipeline;
+    }
+
+    /**
+     * 立刻发送 {@code MULTI}。回复 {@code OK} 时进入事务模式并返回事务对象。
+     * 服务端错误保持普通模式。管道模式，或已经在事务里时，在写出前拒绝，避免嵌套 {@code MULTI}。
+     */
+    public Transaction multi() {
+        if (closed) {
+            throw new IllegalStateException("connection is closed");
+        }
+        if (mode != Mode.NORMAL) {
+            throw new IllegalStateException("connection is not in normal mode");
+        }
+        writeCommand(commandTimeoutMillis, new String[]{"MULTI"});
+        Object reply = readCommandReply(commandTimeoutMillis);
+        if (!"OK".equals(reply)) {
+            String actual = reply == null ? "null" : reply.getClass().getSimpleName();
+            throw new DecodeException("reply was " + actual + ", expected OK", null);
+        }
+        mode = Mode.TRANSACTION;
+        transaction = new Transaction(this);
+        return transaction;
     }
 
     /**
@@ -143,6 +172,10 @@ public final class Connection implements AutoCloseable {
             return;
         }
         closed = true;
+        // 调用方放弃连接时不补 EXEC、DISCARD 或 sync。未完成的管道和事务一起丢掉。
+        mode = Mode.NORMAL;
+        pipeline = null;
+        transaction = null;
         closeQuietly(socket);
     }
 
@@ -151,7 +184,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String ping(long commandTimeoutMillis) {
-        return Replies.text(command(commandTimeoutMillis, "PING"));
+        return complete(commandTimeoutMillis, Calls.ping());
     }
 
     public String ping(String message) {
@@ -159,7 +192,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String ping(long commandTimeoutMillis, String message) {
-        return Replies.text(command(commandTimeoutMillis, "PING", message));
+        return complete(commandTimeoutMillis, Calls.ping(message));
     }
 
     public String echo(String message) {
@@ -167,7 +200,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String echo(long commandTimeoutMillis, String message) {
-        return Replies.text(command(commandTimeoutMillis, "ECHO", message));
+        return complete(commandTimeoutMillis, Calls.echo(message));
     }
 
     public List<CommandInfo> commandList() {
@@ -175,7 +208,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public List<CommandInfo> commandList(long commandTimeoutMillis) {
-        return Replies.commandInfos(command(commandTimeoutMillis, "COMMAND"));
+        return complete(commandTimeoutMillis, Calls.commandList());
     }
 
     public long commandCount() {
@@ -183,7 +216,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long commandCount(long commandTimeoutMillis) {
-        return Replies.integer(command(commandTimeoutMillis, "COMMAND", "COUNT"));
+        return complete(commandTimeoutMillis, Calls.commandCount());
     }
 
     public List<CommandInfo> commandInfo(String... names) {
@@ -191,9 +224,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public List<CommandInfo> commandInfo(long commandTimeoutMillis, String... names) {
-        ArrayList<String> args = words("COMMAND", "INFO");
-        Collections.addAll(args, names);
-        return Replies.commandInfos(invoke(commandTimeoutMillis, args));
+        return complete(commandTimeoutMillis, Calls.commandInfo(names));
     }
 
     /**
@@ -204,7 +235,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String select(long commandTimeoutMillis, int index) {
-        return Replies.text(command(commandTimeoutMillis, "SELECT", Integer.toString(index)));
+        return complete(commandTimeoutMillis, Calls.select(index));
     }
 
     public String quit() {
@@ -212,7 +243,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String quit(long commandTimeoutMillis) {
-        return Replies.text(command(commandTimeoutMillis, "QUIT"));
+        return complete(commandTimeoutMillis, Calls.quit());
     }
 
     public String clientSetname(String name) {
@@ -220,7 +251,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String clientSetname(long commandTimeoutMillis, String name) {
-        return Replies.text(command(commandTimeoutMillis, "CLIENT", "SETNAME", name));
+        return complete(commandTimeoutMillis, Calls.clientSetname(name));
     }
 
     public String clientGetname() {
@@ -228,7 +259,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String clientGetname(long commandTimeoutMillis) {
-        return Replies.textOrNull(command(commandTimeoutMillis, "CLIENT", "GETNAME"));
+        return complete(commandTimeoutMillis, Calls.clientGetname());
     }
 
     public String clientSetinfo(String attribute, String value) {
@@ -236,7 +267,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String clientSetinfo(long commandTimeoutMillis, String attribute, String value) {
-        return Replies.text(command(commandTimeoutMillis, "CLIENT", "SETINFO", attribute, value));
+        return complete(commandTimeoutMillis, Calls.clientSetinfo(attribute, value));
     }
 
     public void auth(String password) {
@@ -244,7 +275,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public void auth(long commandTimeoutMillis, String password) {
-        command(commandTimeoutMillis, "AUTH", password);
+        complete(commandTimeoutMillis, Calls.auth(password));
     }
 
     public void auth(String username, String password) {
@@ -252,7 +283,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public void auth(long commandTimeoutMillis, String username, String password) {
-        command(commandTimeoutMillis, "AUTH", username, password);
+        complete(commandTimeoutMillis, Calls.auth(username, password));
     }
 
     public String flushdb() {
@@ -260,7 +291,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String flushdb(long commandTimeoutMillis) {
-        return Replies.text(command(commandTimeoutMillis, "FLUSHDB"));
+        return complete(commandTimeoutMillis, Calls.flushdb());
     }
 
     public String flushdb(FlushMode mode) {
@@ -268,8 +299,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String flushdb(long commandTimeoutMillis, FlushMode mode) {
-        Objects.requireNonNull(mode, "mode");
-        return Replies.text(command(commandTimeoutMillis, "FLUSHDB", mode.name()));
+        return complete(commandTimeoutMillis, Calls.flushdb(mode));
     }
 
     /**
@@ -280,7 +310,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String info(long commandTimeoutMillis) {
-        return Replies.text(command(commandTimeoutMillis, "INFO"));
+        return complete(commandTimeoutMillis, Calls.info());
     }
 
     public String info(String... sections) {
@@ -288,9 +318,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String info(long commandTimeoutMillis, String... sections) {
-        ArrayList<String> args = words("INFO");
-        Collections.addAll(args, sections);
-        return Replies.text(invoke(commandTimeoutMillis, args));
+        return complete(commandTimeoutMillis, Calls.info(sections));
     }
 
     /**
@@ -301,7 +329,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public Map<String, Object> infoHealth(long commandTimeoutMillis) {
-        return Replies.fieldMap(command(commandTimeoutMillis, "INFO", "health"));
+        return complete(commandTimeoutMillis, Calls.infoHealth());
     }
 
     /**
@@ -312,7 +340,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public Map<String, Object> infoYierdis(long commandTimeoutMillis) {
-        return Replies.fieldMap(command(commandTimeoutMillis, "INFO", "yierdis"));
+        return complete(commandTimeoutMillis, Calls.infoYierdis());
     }
 
     /**
@@ -323,7 +351,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public Map<String, Object> stats(long commandTimeoutMillis) {
-        return Replies.fieldMap(command(commandTimeoutMillis, "STATS"));
+        return complete(commandTimeoutMillis, Calls.stats());
     }
 
     public String ydreconcile() {
@@ -331,7 +359,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String ydreconcile(long commandTimeoutMillis) {
-        return Replies.text(command(commandTimeoutMillis, "YDRECONCILE"));
+        return complete(commandTimeoutMillis, Calls.ydreconcile());
     }
 
     public String set(String key, String value) {
@@ -339,7 +367,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String set(long commandTimeoutMillis, String key, String value) {
-        return Replies.textOrNull(command(commandTimeoutMillis, "SET", key, value));
+        return complete(commandTimeoutMillis, Calls.set(key, value));
     }
 
     public String set(String key, String value, SetOptions options) {
@@ -347,10 +375,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String set(long commandTimeoutMillis, String key, String value, SetOptions options) {
-        Objects.requireNonNull(options, "options");
-        ArrayList<String> args = words("SET", key, value);
-        args.addAll(options.tokens());
-        return Replies.textOrNull(invoke(commandTimeoutMillis, args));
+        return complete(commandTimeoutMillis, Calls.set(key, value, options));
     }
 
     /**
@@ -361,7 +386,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String setGet(long commandTimeoutMillis, String key, String value) {
-        return Replies.textOrNull(command(commandTimeoutMillis, "SET", key, value, "GET"));
+        return complete(commandTimeoutMillis, Calls.setGet(key, value));
     }
 
     public String setGet(String key, String value, SetGetOptions options) {
@@ -369,10 +394,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String setGet(long commandTimeoutMillis, String key, String value, SetGetOptions options) {
-        Objects.requireNonNull(options, "options");
-        ArrayList<String> args = words("SET", key, value);
-        args.addAll(options.tokens());
-        return Replies.textOrNull(invoke(commandTimeoutMillis, args));
+        return complete(commandTimeoutMillis, Calls.setGet(key, value, options));
     }
 
     public String get(String key) {
@@ -380,7 +402,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String get(long commandTimeoutMillis, String key) {
-        return Replies.textOrNull(command(commandTimeoutMillis, "GET", key));
+        return complete(commandTimeoutMillis, Calls.get(key));
     }
 
     public long strlen(String key) {
@@ -388,7 +410,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long strlen(long commandTimeoutMillis, String key) {
-        return Replies.integer(command(commandTimeoutMillis, "STRLEN", key));
+        return complete(commandTimeoutMillis, Calls.strlen(key));
     }
 
     public long append(String key, String value) {
@@ -396,7 +418,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long append(long commandTimeoutMillis, String key, String value) {
-        return Replies.integer(command(commandTimeoutMillis, "APPEND", key, value));
+        return complete(commandTimeoutMillis, Calls.append(key, value));
     }
 
     public long setbit(String key, long offset, long value) {
@@ -404,8 +426,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long setbit(long commandTimeoutMillis, String key, long offset, long value) {
-        return Replies.integer(command(
-                commandTimeoutMillis, "SETBIT", key, Long.toString(offset), Long.toString(value)));
+        return complete(commandTimeoutMillis, Calls.setbit(key, offset, value));
     }
 
     public long getbit(String key, long offset) {
@@ -413,7 +434,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long getbit(long commandTimeoutMillis, String key, long offset) {
-        return Replies.integer(command(commandTimeoutMillis, "GETBIT", key, Long.toString(offset)));
+        return complete(commandTimeoutMillis, Calls.getbit(key, offset));
     }
 
     public long bitcount(String key) {
@@ -421,7 +442,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long bitcount(long commandTimeoutMillis, String key) {
-        return Replies.integer(command(commandTimeoutMillis, "BITCOUNT", key));
+        return complete(commandTimeoutMillis, Calls.bitcount(key));
     }
 
     public long bitcount(String key, long start, long end) {
@@ -429,8 +450,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long bitcount(long commandTimeoutMillis, String key, long start, long end) {
-        return Replies.integer(command(
-                commandTimeoutMillis, "BITCOUNT", key, Long.toString(start), Long.toString(end)));
+        return complete(commandTimeoutMillis, Calls.bitcount(key, start, end));
     }
 
     public long incr(String key) {
@@ -438,7 +458,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long incr(long commandTimeoutMillis, String key) {
-        return Replies.integer(command(commandTimeoutMillis, "INCR", key));
+        return complete(commandTimeoutMillis, Calls.incr(key));
     }
 
     public long decr(String key) {
@@ -446,7 +466,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long decr(long commandTimeoutMillis, String key) {
-        return Replies.integer(command(commandTimeoutMillis, "DECR", key));
+        return complete(commandTimeoutMillis, Calls.decr(key));
     }
 
     public long hset(String key, String field, String value, String... more) {
@@ -454,9 +474,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long hset(long commandTimeoutMillis, String key, String field, String value, String... more) {
-        ArrayList<String> args = words("HSET", key, field, value);
-        Collections.addAll(args, more);
-        return Replies.integer(invoke(commandTimeoutMillis, args));
+        return complete(commandTimeoutMillis, Calls.hset(key, field, value, more));
     }
 
     public String hget(String key, String field) {
@@ -464,7 +482,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String hget(long commandTimeoutMillis, String key, String field) {
-        return Replies.textOrNull(command(commandTimeoutMillis, "HGET", key, field));
+        return complete(commandTimeoutMillis, Calls.hget(key, field));
     }
 
     /**
@@ -475,7 +493,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public Map<String, String> hgetall(long commandTimeoutMillis, String key) {
-        return Replies.stringMap(command(commandTimeoutMillis, "HGETALL", key));
+        return complete(commandTimeoutMillis, Calls.hgetall(key));
     }
 
     public long hlen(String key) {
@@ -483,7 +501,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long hlen(long commandTimeoutMillis, String key) {
-        return Replies.integer(command(commandTimeoutMillis, "HLEN", key));
+        return complete(commandTimeoutMillis, Calls.hlen(key));
     }
 
     public long hdel(String key, String field, String... more) {
@@ -491,9 +509,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long hdel(long commandTimeoutMillis, String key, String field, String... more) {
-        ArrayList<String> args = words("HDEL", key, field);
-        Collections.addAll(args, more);
-        return Replies.integer(invoke(commandTimeoutMillis, args));
+        return complete(commandTimeoutMillis, Calls.hdel(key, field, more));
     }
 
     public HashScan hscan(String key, String cursor) {
@@ -501,7 +517,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public HashScan hscan(long commandTimeoutMillis, String key, String cursor) {
-        return Replies.hashScan(command(commandTimeoutMillis, "HSCAN", key, cursor));
+        return complete(commandTimeoutMillis, Calls.hscan(key, cursor));
     }
 
     public HashScan hscan(String key, String cursor, ScanOptions options) {
@@ -509,7 +525,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public HashScan hscan(long commandTimeoutMillis, String key, String cursor, ScanOptions options) {
-        return Replies.hashScan(invoke(commandTimeoutMillis, scanArgs("HSCAN", key, cursor, options, false)));
+        return complete(commandTimeoutMillis, Calls.hscan(key, cursor, options));
     }
 
     /**
@@ -520,7 +536,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public HashFieldScan hscanNoValues(long commandTimeoutMillis, String key, String cursor) {
-        return Replies.hashFieldScan(command(commandTimeoutMillis, "HSCAN", key, cursor, "NOVALUES"));
+        return complete(commandTimeoutMillis, Calls.hscanNoValues(key, cursor));
     }
 
     public HashFieldScan hscanNoValues(String key, String cursor, ScanOptions options) {
@@ -528,7 +544,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public HashFieldScan hscanNoValues(long commandTimeoutMillis, String key, String cursor, ScanOptions options) {
-        return Replies.hashFieldScan(invoke(commandTimeoutMillis, scanArgs("HSCAN", key, cursor, options, true)));
+        return complete(commandTimeoutMillis, Calls.hscanNoValues(key, cursor, options));
     }
 
     public long lpush(String key, String value, String... more) {
@@ -536,7 +552,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long lpush(long commandTimeoutMillis, String key, String value, String... more) {
-        return push(commandTimeoutMillis, "LPUSH", key, value, more);
+        return complete(commandTimeoutMillis, Calls.lpush(key, value, more));
     }
 
     public long rpush(String key, String value, String... more) {
@@ -544,7 +560,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long rpush(long commandTimeoutMillis, String key, String value, String... more) {
-        return push(commandTimeoutMillis, "RPUSH", key, value, more);
+        return complete(commandTimeoutMillis, Calls.rpush(key, value, more));
     }
 
     public List<String> lrange(String key, long start, long stop) {
@@ -552,8 +568,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public List<String> lrange(long commandTimeoutMillis, String key, long start, long stop) {
-        return Replies.strings(command(
-                commandTimeoutMillis, "LRANGE", key, Long.toString(start), Long.toString(stop)));
+        return complete(commandTimeoutMillis, Calls.lrange(key, start, stop));
     }
 
     public String lpop(String key) {
@@ -561,7 +576,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String lpop(long commandTimeoutMillis, String key) {
-        return Replies.textOrNull(command(commandTimeoutMillis, "LPOP", key));
+        return complete(commandTimeoutMillis, Calls.lpop(key));
     }
 
     /**
@@ -572,7 +587,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public List<String> lpop(long commandTimeoutMillis, String key, long count) {
-        return Replies.stringsOrNull(command(commandTimeoutMillis, "LPOP", key, Long.toString(count)));
+        return complete(commandTimeoutMillis, Calls.lpop(key, count));
     }
 
     public String rpop(String key) {
@@ -580,7 +595,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String rpop(long commandTimeoutMillis, String key) {
-        return Replies.textOrNull(command(commandTimeoutMillis, "RPOP", key));
+        return complete(commandTimeoutMillis, Calls.rpop(key));
     }
 
     /**
@@ -591,7 +606,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public List<String> rpop(long commandTimeoutMillis, String key, long count) {
-        return Replies.stringsOrNull(command(commandTimeoutMillis, "RPOP", key, Long.toString(count)));
+        return complete(commandTimeoutMillis, Calls.rpop(key, count));
     }
 
     public long sadd(String key, String member, String... more) {
@@ -599,7 +614,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long sadd(long commandTimeoutMillis, String key, String member, String... more) {
-        return variadicInteger(commandTimeoutMillis, "SADD", key, member, more);
+        return complete(commandTimeoutMillis, Calls.sadd(key, member, more));
     }
 
     public long srem(String key, String member, String... more) {
@@ -607,7 +622,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long srem(long commandTimeoutMillis, String key, String member, String... more) {
-        return variadicInteger(commandTimeoutMillis, "SREM", key, member, more);
+        return complete(commandTimeoutMillis, Calls.srem(key, member, more));
     }
 
     public Set<String> smembers(String key) {
@@ -615,7 +630,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public Set<String> smembers(long commandTimeoutMillis, String key) {
-        return Replies.orderedSet(command(commandTimeoutMillis, "SMEMBERS", key));
+        return complete(commandTimeoutMillis, Calls.smembers(key));
     }
 
     public long sismember(String key, String member) {
@@ -623,7 +638,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long sismember(long commandTimeoutMillis, String key, String member) {
-        return Replies.integer(command(commandTimeoutMillis, "SISMEMBER", key, member));
+        return complete(commandTimeoutMillis, Calls.sismember(key, member));
     }
 
     public long scard(String key) {
@@ -631,7 +646,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long scard(long commandTimeoutMillis, String key) {
-        return Replies.integer(command(commandTimeoutMillis, "SCARD", key));
+        return complete(commandTimeoutMillis, Calls.scard(key));
     }
 
     public SetScan sscan(String key, String cursor) {
@@ -639,7 +654,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public SetScan sscan(long commandTimeoutMillis, String key, String cursor) {
-        return Replies.setScan(command(commandTimeoutMillis, "SSCAN", key, cursor));
+        return complete(commandTimeoutMillis, Calls.sscan(key, cursor));
     }
 
     public SetScan sscan(String key, String cursor, ScanOptions options) {
@@ -647,7 +662,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public SetScan sscan(long commandTimeoutMillis, String key, String cursor, ScanOptions options) {
-        return Replies.setScan(invoke(commandTimeoutMillis, scanArgs("SSCAN", key, cursor, options, false)));
+        return complete(commandTimeoutMillis, Calls.sscan(key, cursor, options));
     }
 
     public long zadd(String key, String score, String member, String... more) {
@@ -655,7 +670,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long zadd(long commandTimeoutMillis, String key, String score, String member, String... more) {
-        return zaddPairs(commandTimeoutMillis, key, List.of(), score, member, more);
+        return complete(commandTimeoutMillis, Calls.zadd(key, score, member, more));
     }
 
     public long zadd(String key, ZAddOptions options, String score, String member, String... more) {
@@ -663,8 +678,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long zadd(long commandTimeoutMillis, String key, ZAddOptions options, String score, String member, String... more) {
-        Objects.requireNonNull(options, "options");
-        return zaddPairs(commandTimeoutMillis, key, options.tokens(), score, member, more);
+        return complete(commandTimeoutMillis, Calls.zadd(key, options, score, member, more));
     }
 
     /**
@@ -675,7 +689,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String zaddIncr(long commandTimeoutMillis, String key, String score, String member) {
-        return zaddIncrPairs(commandTimeoutMillis, key, List.of("INCR"), score, member);
+        return complete(commandTimeoutMillis, Calls.zaddIncr(key, score, member));
     }
 
     public String zaddIncr(String key, ZAddIncrOptions options, String score, String member) {
@@ -683,8 +697,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String zaddIncr(long commandTimeoutMillis, String key, ZAddIncrOptions options, String score, String member) {
-        Objects.requireNonNull(options, "options");
-        return zaddIncrPairs(commandTimeoutMillis, key, options.tokens(), score, member);
+        return complete(commandTimeoutMillis, Calls.zaddIncr(key, options, score, member));
     }
 
     public List<String> zrange(String key, long start, long stop) {
@@ -692,7 +705,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public List<String> zrange(long commandTimeoutMillis, String key, long start, long stop) {
-        return rankedMembers(commandTimeoutMillis, key, start, stop, null);
+        return complete(commandTimeoutMillis, Calls.zrange(key, start, stop));
     }
 
     public List<String> zrange(String key, long start, long stop, ZRangeOptions options) {
@@ -700,8 +713,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public List<String> zrange(long commandTimeoutMillis, String key, long start, long stop, ZRangeOptions options) {
-        Objects.requireNonNull(options, "options");
-        return rankedMembers(commandTimeoutMillis, key, start, stop, options);
+        return complete(commandTimeoutMillis, Calls.zrange(key, start, stop, options));
     }
 
     /**
@@ -712,7 +724,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public List<ScoredMember> zrangeWithScores(long commandTimeoutMillis, String key, long start, long stop) {
-        return zrangeWithScores(commandTimeoutMillis, key, start, stop, null);
+        return complete(commandTimeoutMillis, Calls.zrangeWithScores(key, start, stop));
     }
 
     public List<ScoredMember> zrangeWithScores(String key, long start, long stop, ZRangeOptions options) {
@@ -726,7 +738,7 @@ public final class Connection implements AutoCloseable {
             long stop,
             ZRangeOptions options
     ) {
-        return Replies.scoredMembers(zrangeReply(commandTimeoutMillis, key, start, stop, true, options));
+        return complete(commandTimeoutMillis, Calls.zrangeWithScores(key, start, stop, options));
     }
 
     public List<String> zrevrange(String key, long start, long stop) {
@@ -734,8 +746,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public List<String> zrevrange(long commandTimeoutMillis, String key, long start, long stop) {
-        return Replies.strings(command(
-                commandTimeoutMillis, "ZREVRANGE", key, Long.toString(start), Long.toString(stop)));
+        return complete(commandTimeoutMillis, Calls.zrevrange(key, start, stop));
     }
 
     public List<ScoredMember> zrevrangeWithScores(String key, long start, long stop) {
@@ -743,8 +754,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public List<ScoredMember> zrevrangeWithScores(long commandTimeoutMillis, String key, long start, long stop) {
-        return Replies.scoredMembers(command(
-                commandTimeoutMillis, "ZREVRANGE", key, Long.toString(start), Long.toString(stop), "WITHSCORES"));
+        return complete(commandTimeoutMillis, Calls.zrevrangeWithScores(key, start, stop));
     }
 
     public List<String> zrangeByScore(String key, String min, String max) {
@@ -752,7 +762,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public List<String> zrangeByScore(long commandTimeoutMillis, String key, String min, String max) {
-        return scoreRange(commandTimeoutMillis, "ZRANGEBYSCORE", key, min, max, false, null);
+        return complete(commandTimeoutMillis, Calls.zrangeByScore(key, min, max));
     }
 
     public List<String> zrangeByScore(String key, String min, String max, ScoreRangeOptions options) {
@@ -766,8 +776,7 @@ public final class Connection implements AutoCloseable {
             String max,
             ScoreRangeOptions options
     ) {
-        Objects.requireNonNull(options, "options");
-        return scoreRange(commandTimeoutMillis, "ZRANGEBYSCORE", key, min, max, false, options);
+        return complete(commandTimeoutMillis, Calls.zrangeByScore(key, min, max, options));
     }
 
     public List<ScoredMember> zrangeByScoreWithScores(String key, String min, String max) {
@@ -775,7 +784,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public List<ScoredMember> zrangeByScoreWithScores(long commandTimeoutMillis, String key, String min, String max) {
-        return scoreRangeWithScores(commandTimeoutMillis, "ZRANGEBYSCORE", key, min, max, null);
+        return complete(commandTimeoutMillis, Calls.zrangeByScoreWithScores(key, min, max));
     }
 
     public List<ScoredMember> zrangeByScoreWithScores(String key, String min, String max, ScoreRangeOptions options) {
@@ -789,8 +798,7 @@ public final class Connection implements AutoCloseable {
             String max,
             ScoreRangeOptions options
     ) {
-        Objects.requireNonNull(options, "options");
-        return scoreRangeWithScores(commandTimeoutMillis, "ZRANGEBYSCORE", key, min, max, options);
+        return complete(commandTimeoutMillis, Calls.zrangeByScoreWithScores(key, min, max, options));
     }
 
     /**
@@ -801,7 +809,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public List<String> zrevrangeByScore(long commandTimeoutMillis, String key, String max, String min) {
-        return scoreRange(commandTimeoutMillis, "ZREVRANGEBYSCORE", key, max, min, false, null);
+        return complete(commandTimeoutMillis, Calls.zrevrangeByScore(key, max, min));
     }
 
     public List<String> zrevrangeByScore(String key, String max, String min, ScoreRangeOptions options) {
@@ -815,8 +823,7 @@ public final class Connection implements AutoCloseable {
             String min,
             ScoreRangeOptions options
     ) {
-        Objects.requireNonNull(options, "options");
-        return scoreRange(commandTimeoutMillis, "ZREVRANGEBYSCORE", key, max, min, false, options);
+        return complete(commandTimeoutMillis, Calls.zrevrangeByScore(key, max, min, options));
     }
 
     public List<ScoredMember> zrevrangeByScoreWithScores(String key, String max, String min) {
@@ -824,7 +831,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public List<ScoredMember> zrevrangeByScoreWithScores(long commandTimeoutMillis, String key, String max, String min) {
-        return scoreRangeWithScores(commandTimeoutMillis, "ZREVRANGEBYSCORE", key, max, min, null);
+        return complete(commandTimeoutMillis, Calls.zrevrangeByScoreWithScores(key, max, min));
     }
 
     public List<ScoredMember> zrevrangeByScoreWithScores(
@@ -843,8 +850,7 @@ public final class Connection implements AutoCloseable {
             String min,
             ScoreRangeOptions options
     ) {
-        Objects.requireNonNull(options, "options");
-        return scoreRangeWithScores(commandTimeoutMillis, "ZREVRANGEBYSCORE", key, max, min, options);
+        return complete(commandTimeoutMillis, Calls.zrevrangeByScoreWithScores(key, max, min, options));
     }
 
     public long zremrangeByScore(String key, String min, String max) {
@@ -852,7 +858,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long zremrangeByScore(long commandTimeoutMillis, String key, String min, String max) {
-        return Replies.integer(command(commandTimeoutMillis, "ZREMRANGEBYSCORE", key, min, max));
+        return complete(commandTimeoutMillis, Calls.zremrangeByScore(key, min, max));
     }
 
     public long zremrangeByRank(String key, long start, long stop) {
@@ -860,8 +866,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long zremrangeByRank(long commandTimeoutMillis, String key, long start, long stop) {
-        return Replies.integer(command(
-                commandTimeoutMillis, "ZREMRANGEBYRANK", key, Long.toString(start), Long.toString(stop)));
+        return complete(commandTimeoutMillis, Calls.zremrangeByRank(key, start, stop));
     }
 
     public long zrem(String key, String member, String... more) {
@@ -869,7 +874,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long zrem(long commandTimeoutMillis, String key, String member, String... more) {
-        return variadicInteger(commandTimeoutMillis, "ZREM", key, member, more);
+        return complete(commandTimeoutMillis, Calls.zrem(key, member, more));
     }
 
     public ZScan zscan(String key, String cursor) {
@@ -877,7 +882,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public ZScan zscan(long commandTimeoutMillis, String key, String cursor) {
-        return Replies.zscan(command(commandTimeoutMillis, "ZSCAN", key, cursor));
+        return complete(commandTimeoutMillis, Calls.zscan(key, cursor));
     }
 
     public ZScan zscan(String key, String cursor, ScanOptions options) {
@@ -885,7 +890,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public ZScan zscan(long commandTimeoutMillis, String key, String cursor, ScanOptions options) {
-        return Replies.zscan(invoke(commandTimeoutMillis, scanArgs("ZSCAN", key, cursor, options, false)));
+        return complete(commandTimeoutMillis, Calls.zscan(key, cursor, options));
     }
 
     public String type(String key) {
@@ -893,7 +898,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String type(long commandTimeoutMillis, String key) {
-        return Replies.text(command(commandTimeoutMillis, "TYPE", key));
+        return complete(commandTimeoutMillis, Calls.type(key));
     }
 
     public Long memoryUsage(String key) {
@@ -901,7 +906,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public Long memoryUsage(long commandTimeoutMillis, String key) {
-        return Replies.integerOrNull(command(commandTimeoutMillis, "MEMORY", "USAGE", key));
+        return complete(commandTimeoutMillis, Calls.memoryUsage(key));
     }
 
     public Long memoryUsage(String key, MemoryUsageOptions options) {
@@ -909,10 +914,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public Long memoryUsage(long commandTimeoutMillis, String key, MemoryUsageOptions options) {
-        Objects.requireNonNull(options, "options");
-        ArrayList<String> args = words("MEMORY", "USAGE", key);
-        args.addAll(options.tokens());
-        return Replies.integerOrNull(invoke(commandTimeoutMillis, args));
+        return complete(commandTimeoutMillis, Calls.memoryUsage(key, options));
     }
 
     public Map<String, Long> memoryStats() {
@@ -920,7 +922,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public Map<String, Long> memoryStats(long commandTimeoutMillis) {
-        return Replies.longMap(command(commandTimeoutMillis, "MEMORY", "STATS"));
+        return complete(commandTimeoutMillis, Calls.memoryStats());
     }
 
     public String objectEncoding(String key) {
@@ -928,7 +930,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public String objectEncoding(long commandTimeoutMillis, String key) {
-        return Replies.textOrNull(command(commandTimeoutMillis, "OBJECT", "ENCODING", key));
+        return complete(commandTimeoutMillis, Calls.objectEncoding(key));
     }
 
     public List<String> keys(String pattern) {
@@ -936,7 +938,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public List<String> keys(long commandTimeoutMillis, String pattern) {
-        return Replies.strings(command(commandTimeoutMillis, "KEYS", pattern));
+        return complete(commandTimeoutMillis, Calls.keys(pattern));
     }
 
     public KeyScan scan(String cursor) {
@@ -944,7 +946,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public KeyScan scan(long commandTimeoutMillis, String cursor) {
-        return Replies.keyScan(command(commandTimeoutMillis, "SCAN", cursor));
+        return complete(commandTimeoutMillis, Calls.scan(cursor));
     }
 
     public KeyScan scan(String cursor, ScanOptions options) {
@@ -952,10 +954,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public KeyScan scan(long commandTimeoutMillis, String cursor, ScanOptions options) {
-        Objects.requireNonNull(options, "options");
-        ArrayList<String> args = words("SCAN", cursor);
-        args.addAll(options.tokens());
-        return Replies.keyScan(invoke(commandTimeoutMillis, args));
+        return complete(commandTimeoutMillis, Calls.scan(cursor, options));
     }
 
     public long del(String... keys) {
@@ -963,7 +962,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long del(long commandTimeoutMillis, String... keys) {
-        return variadicInteger(commandTimeoutMillis, "DEL", keys);
+        return complete(commandTimeoutMillis, Calls.del(keys));
     }
 
     public long exists(String... keys) {
@@ -971,7 +970,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long exists(long commandTimeoutMillis, String... keys) {
-        return variadicInteger(commandTimeoutMillis, "EXISTS", keys);
+        return complete(commandTimeoutMillis, Calls.exists(keys));
     }
 
     public long expire(String key, long seconds) {
@@ -979,7 +978,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long expire(long commandTimeoutMillis, String key, long seconds) {
-        return expireCommand(commandTimeoutMillis, "EXPIRE", key, seconds, null);
+        return complete(commandTimeoutMillis, Calls.expire(key, seconds));
     }
 
     public long expire(String key, long seconds, ExpireOptions options) {
@@ -987,8 +986,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long expire(long commandTimeoutMillis, String key, long seconds, ExpireOptions options) {
-        Objects.requireNonNull(options, "options");
-        return expireCommand(commandTimeoutMillis, "EXPIRE", key, seconds, options);
+        return complete(commandTimeoutMillis, Calls.expire(key, seconds, options));
     }
 
     public long pexpire(String key, long milliseconds) {
@@ -996,7 +994,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long pexpire(long commandTimeoutMillis, String key, long milliseconds) {
-        return expireCommand(commandTimeoutMillis, "PEXPIRE", key, milliseconds, null);
+        return complete(commandTimeoutMillis, Calls.pexpire(key, milliseconds));
     }
 
     public long pexpire(String key, long milliseconds, ExpireOptions options) {
@@ -1004,8 +1002,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long pexpire(long commandTimeoutMillis, String key, long milliseconds, ExpireOptions options) {
-        Objects.requireNonNull(options, "options");
-        return expireCommand(commandTimeoutMillis, "PEXPIRE", key, milliseconds, options);
+        return complete(commandTimeoutMillis, Calls.pexpire(key, milliseconds, options));
     }
 
     public long expireat(String key, long unixSeconds) {
@@ -1013,7 +1010,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long expireat(long commandTimeoutMillis, String key, long unixSeconds) {
-        return expireCommand(commandTimeoutMillis, "EXPIREAT", key, unixSeconds, null);
+        return complete(commandTimeoutMillis, Calls.expireat(key, unixSeconds));
     }
 
     public long expireat(String key, long unixSeconds, ExpireOptions options) {
@@ -1021,8 +1018,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long expireat(long commandTimeoutMillis, String key, long unixSeconds, ExpireOptions options) {
-        Objects.requireNonNull(options, "options");
-        return expireCommand(commandTimeoutMillis, "EXPIREAT", key, unixSeconds, options);
+        return complete(commandTimeoutMillis, Calls.expireat(key, unixSeconds, options));
     }
 
     public long pexpireat(String key, long unixMilliseconds) {
@@ -1030,7 +1026,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long pexpireat(long commandTimeoutMillis, String key, long unixMilliseconds) {
-        return expireCommand(commandTimeoutMillis, "PEXPIREAT", key, unixMilliseconds, null);
+        return complete(commandTimeoutMillis, Calls.pexpireat(key, unixMilliseconds));
     }
 
     public long pexpireat(String key, long unixMilliseconds, ExpireOptions options) {
@@ -1038,8 +1034,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long pexpireat(long commandTimeoutMillis, String key, long unixMilliseconds, ExpireOptions options) {
-        Objects.requireNonNull(options, "options");
-        return expireCommand(commandTimeoutMillis, "PEXPIREAT", key, unixMilliseconds, options);
+        return complete(commandTimeoutMillis, Calls.pexpireat(key, unixMilliseconds, options));
     }
 
     public long persist(String key) {
@@ -1047,7 +1042,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long persist(long commandTimeoutMillis, String key) {
-        return Replies.integer(command(commandTimeoutMillis, "PERSIST", key));
+        return complete(commandTimeoutMillis, Calls.persist(key));
     }
 
     public long ttl(String key) {
@@ -1055,7 +1050,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long ttl(long commandTimeoutMillis, String key) {
-        return Replies.integer(command(commandTimeoutMillis, "TTL", key));
+        return complete(commandTimeoutMillis, Calls.ttl(key));
     }
 
     public long pttl(String key) {
@@ -1063,7 +1058,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long pttl(long commandTimeoutMillis, String key) {
-        return Replies.integer(command(commandTimeoutMillis, "PTTL", key));
+        return complete(commandTimeoutMillis, Calls.pttl(key));
     }
 
     public long pfadd(String key, String... elements) {
@@ -1071,9 +1066,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long pfadd(long commandTimeoutMillis, String key, String... elements) {
-        ArrayList<String> args = words("PFADD", key);
-        Collections.addAll(args, elements);
-        return Replies.integer(invoke(commandTimeoutMillis, args));
+        return complete(commandTimeoutMillis, Calls.pfadd(key, elements));
     }
 
     public long pfcount(String... keys) {
@@ -1081,7 +1074,7 @@ public final class Connection implements AutoCloseable {
     }
 
     public long pfcount(long commandTimeoutMillis, String... keys) {
-        return variadicInteger(commandTimeoutMillis, "PFCOUNT", keys);
+        return complete(commandTimeoutMillis, Calls.pfcount(keys));
     }
 
     public String pfmerge(String destination, String... sources) {
@@ -1089,171 +1082,157 @@ public final class Connection implements AutoCloseable {
     }
 
     public String pfmerge(long commandTimeoutMillis, String destination, String... sources) {
-        ArrayList<String> args = words("PFMERGE", destination);
-        Collections.addAll(args, sources);
-        return Replies.text(invoke(commandTimeoutMillis, args));
+        return complete(commandTimeoutMillis, Calls.pfmerge(destination, sources));
     }
 
-    private long zaddPairs(
-            long commandTimeoutMillis,
-            String key,
-            List<String> optionTokens,
-            String score,
-            String member,
-            String... more
-    ) {
-        ArrayList<String> args = words("ZADD", key);
-        args.addAll(optionTokens);
-        args.add(score);
-        args.add(member);
-        Collections.addAll(args, more);
-        return Replies.integer(invoke(commandTimeoutMillis, args));
+    boolean isClosed() {
+        return closed;
     }
 
-    private String zaddIncrPairs(
-            long commandTimeoutMillis,
-            String key,
-            List<String> optionTokens,
-            String score,
-            String member
-    ) {
-        ArrayList<String> args = words("ZADD", key);
-        args.addAll(optionTokens);
-        args.add(score);
-        args.add(member);
-        return Replies.textOrNull(invoke(commandTimeoutMillis, args));
+    long commandTimeoutMillis() {
+        return commandTimeoutMillis;
     }
 
-    private List<String> rankedMembers(
-            long commandTimeoutMillis,
-            String key,
-            long start,
-            long stop,
-            ZRangeOptions options
-    ) {
-        return Replies.strings(zrangeReply(commandTimeoutMillis, key, start, stop, false, options));
+    Pipeline currentPipeline() {
+        return pipeline;
     }
 
-    private Object zrangeReply(
-            long commandTimeoutMillis,
-            String key,
-            long start,
-            long stop,
-            boolean withScores,
-            ZRangeOptions options
-    ) {
-        ArrayList<String> args = words("ZRANGE", key, Long.toString(start), Long.toString(stop));
-        if (options != null) {
-            args.addAll(options.tokens(withScores));
-        } else if (withScores) {
-            args.add("WITHSCORES");
+    Transaction currentTransaction() {
+        return transaction;
+    }
+
+    void endPipeline(Pipeline source, boolean unread) {
+        if (pipeline != source) {
+            return;
         }
-        return invoke(commandTimeoutMillis, args);
-    }
-
-    private List<String> scoreRange(
-            long commandTimeoutMillis,
-            String commandName,
-            String key,
-            String start,
-            String end,
-            boolean withScores,
-            ScoreRangeOptions options
-    ) {
-        return Replies.strings(scoreRangeReply(commandTimeoutMillis, commandName, key, start, end, withScores, options));
-    }
-
-    private List<ScoredMember> scoreRangeWithScores(
-            long commandTimeoutMillis,
-            String commandName,
-            String key,
-            String start,
-            String end,
-            ScoreRangeOptions options
-    ) {
-        return Replies.scoredMembers(
-                scoreRangeReply(commandTimeoutMillis, commandName, key, start, end, true, options));
-    }
-
-    private Object scoreRangeReply(
-            long commandTimeoutMillis,
-            String commandName,
-            String key,
-            String start,
-            String end,
-            boolean withScores,
-            ScoreRangeOptions options
-    ) {
-        ArrayList<String> args = words(commandName, key, start, end);
-        if (withScores) {
-            args.add("WITHSCORES");
+        pipeline = null;
+        if (closed) {
+            return;
         }
-        if (options != null) {
-            args.addAll(options.tokens());
+        if (unread) {
+            close();
+            return;
         }
-        return invoke(commandTimeoutMillis, args);
+        mode = Mode.NORMAL;
     }
 
-    private long expireCommand(
-            long commandTimeoutMillis,
-            String commandName,
-            String key,
-            long value,
-            ExpireOptions options
-    ) {
-        ArrayList<String> args = words(commandName, key, Long.toString(value));
-        if (options != null) {
-            args.addAll(options.tokens());
+    void finishTransaction(Transaction source) {
+        source.markFinished();
+        if (transaction != source) {
+            return;
         }
-        return Replies.integer(invoke(commandTimeoutMillis, args));
-    }
-
-    private long push(long commandTimeoutMillis, String commandName, String key, String value, String... more) {
-        return variadicInteger(commandTimeoutMillis, commandName, key, value, more);
-    }
-
-    private long variadicInteger(long commandTimeoutMillis, String commandName, String... parts) {
-        ArrayList<String> args = words(commandName);
-        Collections.addAll(args, parts);
-        return Replies.integer(invoke(commandTimeoutMillis, args));
-    }
-
-    private long variadicInteger(
-            long commandTimeoutMillis,
-            String commandName,
-            String key,
-            String first,
-            String... more
-    ) {
-        ArrayList<String> args = words(commandName, key, first);
-        Collections.addAll(args, more);
-        return Replies.integer(invoke(commandTimeoutMillis, args));
-    }
-
-    private static ArrayList<String> scanArgs(
-            String commandName,
-            String key,
-            String cursor,
-            ScanOptions options,
-            boolean noValues
-    ) {
-        Objects.requireNonNull(options, "options");
-        ArrayList<String> args = words(commandName, key, cursor);
-        args.addAll(options.tokens());
-        if (noValues) {
-            args.add("NOVALUES");
+        transaction = null;
+        if (!closed) {
+            mode = Mode.NORMAL;
         }
-        return args;
     }
 
-    private Object invoke(long commandTimeoutMillis, List<String> args) {
-        return command(commandTimeoutMillis, args.toArray(String[]::new));
+    void writeCommand(long commandTimeoutMillis, String[] args) {
+        if (closed) {
+            throw new IllegalStateException("connection is closed");
+        }
+        validateArgs(args);
+        List<byte[]> encoded = encodeArgs(args);
+        try {
+            socket.setSoTimeout(toSocketTimeoutMillis(commandTimeoutMillis));
+            RespClientCodec.writeCommand(out, encoded);
+            out.flush();
+        } catch (IOException e) {
+            close();
+            throw new ConnectionException("connection closed after a write failure", e);
+        }
     }
 
-    private static ArrayList<String> words(String... args) {
-        ArrayList<String> words = new ArrayList<>(args.length);
-        Collections.addAll(words, args);
-        return words;
+    Object readCommandReply(long commandTimeoutMillis) {
+        try {
+            socket.setSoTimeout(toSocketTimeoutMillis(commandTimeoutMillis));
+            return readValue();
+        } catch (SocketTimeoutException e) {
+            close();
+            throw new CommandTimeoutException("timed out waiting for a reply", e);
+        } catch (IOException e) {
+            close();
+            throw new ConnectionException("connection closed after a read failure", e);
+        }
+    }
+
+    private <T> T complete(long commandTimeoutMillis, Call<T> call) {
+        return call.decode(command(commandTimeoutMillis, call.args));
+    }
+
+    List<Object> collectExec(List<Call<?>> queued) {
+        writeCommand(commandTimeoutMillis, new String[]{"EXEC"});
+        RespClientCodec.RespReply reply;
+        try {
+            socket.setSoTimeout(toSocketTimeoutMillis(commandTimeoutMillis));
+            reply = readExecReply();
+        } catch (SocketTimeoutException e) {
+            close();
+            throw new CommandTimeoutException("timed out waiting for a reply", e);
+        } catch (IOException e) {
+            close();
+            throw new ConnectionException("connection closed after a read failure", e);
+        }
+        return projectExec(queued, reply);
+    }
+
+    void noteQueuedResults(List<Call<?>> queued, List<Object> results) {
+        int count = Math.min(queued.size(), results.size());
+        for (int i = 0; i < count; i++) {
+            Object result = results.get(i);
+            if (result instanceof ServerException || result instanceof DecodeException) {
+                continue;
+            }
+            noteSuccessfulCommand(queued.get(i).args);
+        }
+    }
+
+    private RespClientCodec.RespReply readExecReply() throws IOException {
+        int type = in.read();
+        if (type < 0) {
+            throw new IOException("unexpected EOF before RESP reply");
+        }
+        if (type == '%' || type == '~' || type == '_') {
+            throw new IOException("RESP3 reply marker: " + (char) type);
+        }
+        if (type == '-') {
+            throw new ServerException(decodeReplyText(readLineBody(in)));
+        }
+        if (type == '+') {
+            String text = decodeReplyText(readLineBody(in));
+            return new RespClientCodec.RespReply(
+                    RespClientCodec.RespReply.Kind.SIMPLE_STRING, text, null, null, null);
+        }
+        in.unread(type);
+        return RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+    }
+
+    private List<Object> projectExec(List<Call<?>> queued, RespClientCodec.RespReply reply) {
+        if (reply.kind() != RespClientCodec.RespReply.Kind.ARRAY || reply.values() == null) {
+            throw new DecodeException("reply was " + reply.kind() + ", expected array", null);
+        }
+        List<RespClientCodec.RespReply> elements = reply.values();
+        if (elements.size() != queued.size()) {
+            throw new DecodeException(
+                    "reply was array of " + elements.size() + ", expected " + queued.size(), null);
+        }
+        List<Object> results = new ArrayList<>(elements.size());
+        for (int i = 0; i < elements.size(); i++) {
+            try {
+                results.add(projectExecElement(queued.get(i), elements.get(i)));
+            } catch (DecodeException failure) {
+                results.add(failure);
+            }
+        }
+        return results;
+    }
+
+    private static Object projectExecElement(Call<?> call, RespClientCodec.RespReply element) {
+        if (element.kind() == RespClientCodec.RespReply.Kind.ERROR) {
+            return new ServerException(serverText(element));
+        }
+        // 公开 convert 把嵌套 ERROR 收成字符串。这里保留成 ServerException，EXEC 列表才能把单条错误和成功文本分开。
+        return call.decode(convert(element, true));
     }
 
     private Object readValue() throws IOException {
@@ -1275,7 +1254,7 @@ public final class Connection implements AutoCloseable {
         }
         // `$` 和 `*` 仍交给 codec，这样 null bulk 和 null array 保持 null，连接继续可用。
         in.unread(type);
-        return convert(RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES));
+        return convert(RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES), false);
     }
 
     private static byte[] readLineBody(InputStream in) throws IOException {
@@ -1299,7 +1278,7 @@ public final class Connection implements AutoCloseable {
         }
     }
 
-    private static Object convert(RespClientCodec.RespReply reply) {
+    private static Object convert(RespClientCodec.RespReply reply, boolean preserveErrors) {
         return switch (reply.kind()) {
             case SIMPLE_STRING -> reply.text();
             case BULK_STRING -> {
@@ -1314,24 +1293,33 @@ public final class Connection implements AutoCloseable {
                 yield integer;
             }
             case NULL -> null;
-            // 顶层 `-` 已在 readValue 里抛出。数组元素里的错误没有单独的返回位置，保留服务端文本。
-            case ERROR -> reply.text();
-            case ARRAY, MAP, SET -> convertAggregate(reply.values());
+            // 顶层 `-` 已在 readValue 里抛出。公开原始命令把数组元素里的错误收成文本。
+            // EXEC 不走这条路径，否则单条错误会变成普通字符串。
+            case ERROR -> preserveErrors ? new ServerException(serverText(reply)) : reply.text();
+            case ARRAY, MAP, SET -> convertAggregate(reply.values(), preserveErrors);
         };
     }
 
-    private static List<Object> convertAggregate(List<RespClientCodec.RespReply> values) {
+    private static List<Object> convertAggregate(List<RespClientCodec.RespReply> values, boolean preserveErrors) {
         if (values == null) {
             throw new DecodeException("aggregate reply has no elements", null);
         }
         List<Object> converted = new ArrayList<>(values.size());
         for (int i = 0; i < values.size(); i++) {
-            converted.add(convert(values.get(i)));
+            converted.add(convert(values.get(i), preserveErrors));
         }
         return converted;
     }
 
-    private void noteSuccessfulCommand(String[] args) {
+    private static String serverText(RespClientCodec.RespReply reply) {
+        String text = reply.text();
+        if (text == null) {
+            throw new DecodeException("error reply has no text", null);
+        }
+        return text;
+    }
+
+    void noteSuccessfulCommand(String[] args) {
         if (isCommand(args[0], "QUIT")) {
             // QUIT 的回复先返回给调用方，本地再关掉。服务端错误在读回复时已经抛出，不会走到这里。
             close();
