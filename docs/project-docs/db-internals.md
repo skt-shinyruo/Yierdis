@@ -2,7 +2,7 @@
 
 单个 `YierdisDb` 并非一张并发 `Map<byte[], Object>`；它受 owner thread 约束，是掌管 key、entry、value、TTL、mutation、maxmemory 与生命周期的状态 owner。
 
-设计意图、层间契约、与 Redis C 实现的对照以及已知取舍见 [`db-design-analysis.md`](./db-design-analysis.md)；degraded 运维处置见 [`configuration-and-operations.md`](./configuration-and-operations.md#degraded-恢复)。
+设计意图、层间契约、与 Redis C 实现的对照以及已知取舍见 [`db-design-analysis.md`](./db-design-analysis.md)；degraded 运维处置见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
 
 本文按"这一层是什么 → 谁调用谁 → 改的时候不能破什么"三段式组织：§1–§5 是结构与所有权，§6–§7 是读/写两条完整调用序列，§8–§11 是各子系统的接入点，§12 是改动前的自检清单。
 
@@ -111,7 +111,7 @@ directory、entry table、type roots 和派生状态的所有权都归 `YierdisD
 
 ops 不直接组合 directory 与 entry table，也不能从 lifecycle 取出 backend、table、directory 或 roots。各 family root 只在 DB 组合时注入对应 family ops。删除必须让 directory entry、entry record、value/root 和 key allocation 一起收敛；替换则必须在 source identity 仍匹配时才发布。需要验证 raw graph 的底层测试把反射夹具留在 `src/test`，生产代码不提供 inspection view。
 
-`EntryRecord.expireAtMillis` 是唯一 TTL deadline。`expireCount` 只是随 entry publish/replace/release 更新的派生计数，不是独立索引；`reconcileDerivedEntryState` 里一旦发现下溢就抛 `IllegalStateException("derived expire count underflow")`。这个异常发生在 `prepared.commit()` 已经开始之后，升级为 degraded + result-unknown。下溢保持 fail-stop：钳成 0 再继续写会在错账上接着跑。恢复走 `YDRECONCILE`（运维处置见 [`configuration-and-operations.md`](./configuration-and-operations.md#degraded-恢复)）。
+`EntryRecord.expireAtMillis` 是唯一 TTL deadline。`expireCount` 只是随 entry publish/replace/release 更新的派生计数，不是独立索引；`reconcileDerivedEntryState` 里一旦发现下溢就抛 `IllegalStateException("derived expire count underflow")`。这个异常发生在 `prepared.commit()` 已经开始之后，升级为 degraded + result-unknown。下溢保持 fail-stop：钳成 0 再继续写会在错账上接着跑。恢复走 `YDRECONCILE`（运维处置见 [`production-hardening-operations.md`](./production-hardening-operations.md)）。
 
 `ExpiresIndex` 是 owner 线程独占的 `PriorityQueue`，按 `(expireAtMillis, sequence)` 排序，无同步、允许 stale 项、不计任何内存账。lifecycle 只在 deadline 真的变化且 keyHandle 非 null 时才 `add`。
 
@@ -238,7 +238,7 @@ ledger 逻辑账本与 admission 的物理重算是两套账。`ledger.usedBytes
 
 stock server 的恢复命令是 `YDRECONCILE`（`AdminCommands`，无参数，当前 `SELECT` 的库）。它把 `DbEngine` 收窄成 `RuntimeDbEngine` 后调用 `reconcileAccounting()`。这条路径绕过 mutation executor，在 owner thread 上重算物理用量，成功时用 `realignUsage` 把逻辑账本对齐到物理值并清除 degraded，协议回复 `+OK`。物理重算抛 `RuntimeException` 时回复 `-ERR reconciliation failed`，账本和 degraded 都保持。`Error` 不折成这句回复。每次尝试与结果记入 `DbHealthSnapshot.lastReconciliation`（`recordReconciliation` 成功时才清 degraded）。快照的失败字段只描述当前未恢复的 episode，对账成功后随之关闭，下一场事故重新入账。
 
-维护节拍不会自动对账。`runMaintenance` 先 `reclaimDetachedEntries`，再 `requireWritable`；degraded 时过期排空、rehash 和本库 maxmemory enforce 不会跑，异常还会中断同一次 tick 的后续 DB。持续性记账 bug 仍以事故形式暴露。步骤和回复见 [`configuration-and-operations.md`](./configuration-and-operations.md#degraded-恢复)。
+维护节拍不会自动对账。`runMaintenance` 先 `reclaimDetachedEntries`，再 `requireWritable`；degraded 时过期排空、rehash 和本库 maxmemory enforce 不会跑，异常还会中断同一次 tick 的后续 DB。持续性记账 bug 仍以事故形式暴露。步骤和回复见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
 
 更完整的 admission、OOM 和 result-unknown 边界见 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)。
 

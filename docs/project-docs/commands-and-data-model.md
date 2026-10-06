@@ -167,7 +167,7 @@ RESP2 / RESP3 的标量与 aggregate 编码由协议 writer 根据 session versi
 | key | `KEY_BYTES`（`NativeKeyDirectory` 持久化 allocator-backed key bytes） | 查找输入、`SCAN`/`KEYS` 输出时的临时 view 或快照 |
 | string payload | `STRING_BYTES`（`StringRoot`） | 解析整数、构造 embstr 时的短生命周期数组 |
 | packed hash/list/zset | `LISTPACK_BYTES`（`NativeListpack`，hash 用 `HASH_FIELD_BYTES`/`HASH_VALUE_BYTES`） | `listpack.get(...)` 返回的 `byte[]` 元素 |
-| hash/set/zset dictionary | `NativeByteMap` + `HASH_FIELD_BYTES`/`HASH_VALUE_BYTES`/`SET_MEMBER_BYTES`/`ZSET_MEMBER_BYTES`/`SCORE_BYTES` | `NativeByteMap` 的稀疏引用槽位 |
+| hash/set/zset dictionary | `NativeByteMap` + `HASH_FIELD_BYTES`/`HASH_VALUE_BYTES`/`SET_MEMBER_BYTES`/`ZSET_MEMBER_BYTES` | `NativeByteMap` 的稀疏引用槽位 |
 | set intset | —（纯 heap） | `short[]`/`int[]`/`long[]`（`intset16`/`intset32`/`intset64`） |
 | zset skiplist 索引 | `ZSET_TABLE`/`ZSET_NODE` | `ZSkipList` forward/span 数组 |
 | entry | `ENTRY_RECORD` | — |
