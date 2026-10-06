@@ -6,7 +6,7 @@ Yierdis 的 DB 层**为什么这样设计**，要从分层意图、层间契约�
 
 - [`db-internals.md`](./db-internals.md)：DB 内部结构的**机制与组合参考**（对象是什么、谁调用谁、改哪里要动什么）。
 - [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)、[`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)（含 TTL 与过期生命周期）：各专题的完整机制。
-- [`configuration-and-operations.md`](./configuration-and-operations.md#degraded-恢复)：运维手册里的 degraded 恢复。
+- [`production-hardening-operations.md`](./production-hardening-operations.md)：运维手册里的 degraded 恢复。
 
 本文的写法是：**每条设计选择都给出"为什么不选另一条路"以及这条路的代价**。只给结论不给不选它的理由，等于没论证。
 
@@ -42,7 +42,7 @@ YierdisInstance (server/runtime, 多 DB + 可选全局 governor)
 
 Redis 用 `robj*` 直接就是地址，而且**这不是问题**——因为 Redis 的 rehash 迁移的是指针数组，对象地址从不改变；没有 defrag 时 `robj*` 就是稳定身份。
 
-Yierdis 的处境不同：native 对象没有中间指针层。如果一个 128 B 的 listpack 块被 defrag 搬到新页，所有指向它的引用都必须被改写：`EntryRecord.valueHandle`、collection root record、quicklist node 的 `payloadRef`、skiplist 的 member 引用……这些引用分散在多种 native 结构里，还可能是 heap 上的 adapter 持有的 `NativeHandle`。**遍历改写既慢又必然漏。**
+Yierdis 的处境不同：native 对象没有中间指针层。如果一个 128 B 的 listpack 块被 defrag 搬到新页，所有指向它的引用都必须被改写：`EntryRecord.valueHandle`、collection root record、skiplist 的 member 引用……这些引用分散在多种 native 结构里，还可能是 heap 上的 adapter 持有的 `NativeHandle`（quicklist 的 listpack 在 `ListNode` 上，64 B node 记录里没有 payload 句柄）。**遍历改写既慢又必然漏。**
 
 于是选择把"位置"从引用中抽出来：
 
@@ -95,7 +95,7 @@ object table 槽位存当前 pageId / pageOffset / size / capacity(=descriptor �
 代价：
 
 - 系统多出一个"结果未知"状态，命令层必须能表达它；
-- degraded 是重状态：写入被 `MISCONF DB is in a degraded state; writes are disabled` 拒绝，**连回收类 mutation 一起拒**（`requireWritable` 在读取 `AdmissionMode` 之前执行）。stock server 的恢复命令是 `YDRECONCILE`，内部仍是绕过 executor 的 `reconcileAccounting()`（运维步骤见 [`configuration-and-operations.md`](./configuration-and-operations.md#degraded-恢复)）。
+- degraded 是重状态：写入被 `MISCONF DB is in a degraded state; writes are disabled` 拒绝，**连回收类 mutation 一起拒**（`requireWritable` 在读取 `AdmissionMode` 之前执行）。stock server 的恢复命令是 `YDRECONCILE`，内部仍是绕过 executor 的 `reconcileAccounting()`（运维步骤见 [`production-hardening-operations.md`](./production-hardening-operations.md)）。
 
 不这样选的后果：commit 后失败若对外报"没发生"，客户端会重试，而重试建立在错误前提上（比如 `INCR` 会被执行两次）；内部若假装回滚，账本会与物理实际不符，且这个偏差会被静默带入后续 admission。
 
@@ -224,7 +224,7 @@ admissionMode == RECLAMATION ? ledger.beginReclamation() : ledger.reserve(upperB
 | STRING | `STRING_INT` / `STRING_EMBSTR` / `STRING_RAW` | int 要求字节与 `Long.toString` canonical 形式逐字节相等；**三者物理表示相同**（一个 native `STRING_BYTES` blob），int 只影响 encoding 标签与 entry 元数据估算 |
 | SET | `SET_INTSET` / `SET_HT` | intset 是 **heap 的 `short[]`/`int[]`/`long[]` 有序数组 + 二分**，16→32→64 可跳级；超过阈值或遇非整数成员转 `NativeByteMap` 常量 value（成员在 native、value 槽零开销） |
 | HASH | `HASH_PACKED` / `HASH_HT` | packed 升级用 **COW 整体替换**；HT 用 **原位 delta**（`NativeByteMap.PreparedMutation`，source 显式记 `ACTIVE`/`OLD`/`ABSENT` + 非负 slot） |
-| LIST | `LIST_PACKED` / `LIST_QUICKLIST` | quicklist = `ArrayDeque` 装固定 **80 B** native node 记录（ownerRoot/prev/next/payloadRef/entryCount/encodedBytes/flags/reserved），每 node 一个 listpack 块；单向升级，无降级 |
+| LIST | `LIST_PACKED` / `LIST_QUICKLIST` | quicklist = `ArrayDeque` 装固定 **64 B** native node 记录（ownerRoot/prev/next/entryCount/encodedBytes/flags/reserved），每 node 另有一个 `LISTPACK_BYTES` listpack；单向升级，无降级 |
 | ZSET | `ZSET_PACKED` / `ZSET_SKIPLIST` | packed 的 member 在 native `NativeListpack`、score 在 heap `double[]`；skiplist `MAX_LEVEL=32`，member 存 native 句柄，比较走无符号 `compareLex`；`canonicalScore` 把 `-0.0` 归一为 `+0.0`；单向升级 |
 | HLL | **不是独立类型** | 以 `STRING`/`STRING_RAW` 存储，但**字节级 Redis 兼容**：`HYLL` header（16 B：magic + encoding 0=dense/1=sparse + 3 B 保留）、dense 6-bit LSB 打包共 12304 B、sparse `ZERO`/`XZERO`/`VAL` 游程、MurmurHash64A(seed `0xadc83b19`)、Ertl tau/sigma 估计器。sparse→dense 晋升与 Redis 一致：**寄存器值 > 32 或 sparse 长度超过 3000 B**；dense 永不降级 |
 
@@ -276,7 +276,7 @@ admissionMode == RECLAMATION ? ledger.beginReclamation() : ledger.reserve(upperB
 - Netty I/O 线程**只提交**；真正的 DB 执行在 `SerialOwnerExecutor` 单线程上，维护命令也投到同一个 owner executor。
 - **SCAN / KEYS 一致性靠 epoch + discovery/replay**：`KeyWindow` 在 epoch 内记录 cursor、目录 generation/capacity、glob、过期时间，`emitTo` 时按同一物理范围重放，必须得到相同 count、无多余匹配、结束游标一致，否则抛 `IllegalStateException`。
 - **degraded 不自动恢复**：写入被 `MISCONF DB is in a degraded state; writes are disabled` 拒绝。stock server 用 `YDRECONCILE` 调用 `reconcileAccounting()`；这条路径绕过 mutation executor，成功才把逻辑账本对齐到物理重算值并清除 degraded，失败则保持 degraded。持续性记账 bug 会反复以事故暴露，不会被静默抹平。
-- 其运行期副作用是：`requireWritable` 在读取 `AdmissionMode` **之前**执行，因此 degraded 时 `DEL`、`FLUSHDB` 和回收类写入仍被拒绝。读已过期 key 返回 nil，并且不删除物理记录。运维步骤见 [`configuration-and-operations.md`](./configuration-and-operations.md#degraded-恢复)。
+- 其运行期副作用是：`requireWritable` 在读取 `AdmissionMode` **之前**执行，因此 degraded 时 `DEL`、`FLUSHDB` 和回收类写入仍被拒绝。读已过期 key 返回 nil，并且不删除物理记录。运维步骤见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
 
 **为什么 owner 可以是 Netty I/O 线程之外的一个线程**：FFM 的 `Arena.ofShared()` 允许 region 跨线程关闭，但**这不解除 DB 的 thread confinement**——把 region 当共享对象来关闭是 runtime 层的权限，不是 graph 的权限。二者的边界见 [`native-memory-runtime.md`](./native-memory-runtime.md)。
 
@@ -342,11 +342,11 @@ checkThread
 - `INFO memory` 在 per-db scope 且 maxmemory 大于 0 时按库输出 `yierdis_db<N>_maxmemory_bytes`，值是装配时分到该库的额度（余数 +1）。global scope 不输出这些行。
 - ZSET 层数仍由 score 与 member 确定性推导。`defragCycle` 仍没有“已足够紧凑就跳过”的收益启发式。handle `flags` 仍由写入路径传 0。
 
-degraded 的运维处置见 [`configuration-and-operations.md`](./configuration-and-operations.md#degraded-恢复)。
+degraded 的运维处置见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
 
 ## 验证状态
 
-本文主要基于源码。下面的回源清单是 2026-09-25 审计时的符号；统计字段和恢复命令的当前名字以上一节和 [`configuration-and-operations.md`](./configuration-and-operations.md#degraded-恢复) 为准。这里明确哪些结论已逐条回源、哪些仍是推断：
+本文主要基于源码。下面的回源清单是 2026-09-25 审计时的符号；统计字段和恢复命令的当前名字以上一节和 [`production-hardening-operations.md`](./production-hardening-operations.md) 为准。这里明确哪些结论已逐条回源、哪些仍是推断：
 
 **已逐条回源核对（本次审计）**
 

@@ -175,7 +175,7 @@ entry 中的 TTL 字段和 collection topology 已进入 owned snapshot，不能
 | `used_bytes_for_maxmemory` | `usedBytesForMaxmemory` | 上面的物理快照（= `effectiveBytesForMaxmemory()`） |
 | `effective_used_bytes_for_maxmemory` | `effectiveUsedBytesForMaxmemory` | 物理快照 + ledger `reservedBytes` |
 | `heap_estimate_bytes` | `heapDataBytesEstimate` | 堆估算 |
-| `ledger_used_bytes` | `ledgerUsedBytes` | ledger 逻辑 `usedBytes()`，准入水位 |
+| `ledger_used_bytes` | `ledgerUsedBytes` | 已提交的逻辑账本 `usedBytes()`。准入比较物理快照 `used_bytes_for_maxmemory` |
 | `ledger_reserved_bytes` | `reservedBytes` | ledger `reservedBytes` |
 | `offheap_used_bytes` | `offHeapUsedBytes` | native metadata committed + native data committed |
 
@@ -233,7 +233,7 @@ estimate upper bound
 - capacity 类异常（`MemoryLedgerOutOfMemoryException` / `NativeCapacityExceededException`）在 commit 前被拦下 → 稳定映射成 Redis 风格 OOM；commit 后被包成 invariant failure，不会伪装成"确定未执行"。
 - 其他 `RuntimeException` / `Error` 若属于 `NativeMemoryException` 或 `IllegalStateException`（`isDegradingInvariantFailure`），commit 前也会 `health.recordInvariantFailure` 后转 degraded。
 
-degraded 不是终态。stock server 上对当前库执行 `YDRECONCILE`：成功回复 `+OK`，`reconcileAccounting()` 在 owner thread 上重算物理用量、把 ledger 漂移修正入账（`YierdisDbMemoryLedger.realignUsage`）并清除 degraded；物理重算失败回复 `-ERR reconciliation failed`，degraded 保持。尝试与结果记入 `DbHealthSnapshot.lastReconciliation`。命令绕过 mutation executor，因此 degraded 下仍可执行。maintenance tick 不会自动对账：它先回收 detached entry，再因 `requireWritable` 停下。触发、读路径、回复和失败后的人工处理见 [`configuration-and-operations.md`](./configuration-and-operations.md#degraded-恢复)。
+degraded 不是终态。stock server 上对当前库执行 `YDRECONCILE`：成功回复 `+OK`，`reconcileAccounting()` 在 owner thread 上重算物理用量、把 ledger 漂移修正入账（`YierdisDbMemoryLedger.realignUsage`）并清除 degraded；物理重算失败回复 `-ERR reconciliation failed`，degraded 保持。尝试与结果记入 `DbHealthSnapshot.lastReconciliation`。命令绕过 mutation executor，因此 degraded 下仍可执行。maintenance tick 不会自动对账：它先回收 detached entry，再因 `requireWritable` 停下。触发、读路径、回复和失败后的人工处理见 [`production-hardening-operations.md`](./production-hardening-operations.md)。
 
 ## per-DB scope 的判断顺序
 
@@ -351,7 +351,7 @@ return
 要点：
 
 - 每次释放后都 `trimEmptyNativePages()` 再继续，所以"淘汰一个 → 回收可能变空的 page"是交替进行的。
-- 时间预算 `evictionTimeLimitNanos` 与 `MaxmemoryEvictionAttempts.maxAttempts(keyCount)` 同时生效。下限是 64；`keyCount > Integer.MAX_VALUE / 2` 时上限是 `Integer.MAX_VALUE`，乘法发生在这道钳制之后。维护任务在调用线程内执行，必须限制淘汰循环，避免一次写入拖垮 event loop。
+- 时间预算 `evictionTimeLimitNanos` 与 `MaxmemoryEvictionAttempts.maxAttempts(keyCount)` 同时生效。下限是 64。`keyCount > Integer.MAX_VALUE / 2` 时直接返回 `Integer.MAX_VALUE`，不乘 `keyCount * 2`；不超过该阈值时才取 `max(64, keyCount * 2)`。维护任务在调用线程内执行，必须限制淘汰循环，避免一次写入拖垮 event loop。
 - 真正 eviction 时，`YierdisDbMaxmemorySupport.evict` 调用 `YierdisDbKernel.evict(...)`；reclamation plan 在 prepare 阶段复制稳定 key bytes，commit 时移除 directory entry 并释放完整 entry/value/key graph，随后结算 ledger。
 
 `PreparedDbMutation.shouldTrimNativePagesAfterCommit()` 和 snapshot 的 `nativeReclaimableBytes` 都只是回收候选提示，不代表相应字节已经离开 committed footprint。`trimMemory(...)` 返回的 `MemoryReclaimResult` 记录本次检查了什么（`inspectedUnits`）、实际回收了多少（`reclaimedUnits` / `reclaimedBytes`）、为什么停下（`StopReason.COMPLETE / INSPECTION_LIMIT / BYTE_LIMIT / TIME_LIMIT`）；admission 仍要在 trim 后**重新采样** owned snapshot，不能拿 reclaimable estimate 或一次 trim hint 就推断"已经低于 maxmemory"。

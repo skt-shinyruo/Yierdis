@@ -25,7 +25,6 @@ import yier.bubu.redis.storage.api.RuntimeDbEngine;
  * 它不经过 mutation executor，因此写入准入门控拦不住它；失败时回复 {@code -ERR} 且 degraded 保持不变。
  */
 public final class AdminCommands {
-    private static final String RECONCILE_UNSUPPORTED = "ERR reconcileAccounting is not supported";
     private static final String RECONCILE_FAILED = "ERR reconciliation failed";
 
     private final CommandSupport support;
@@ -56,12 +55,9 @@ public final class AdminCommands {
 
     private CommandResult reconcileSelectedDb(CommandSession session) {
         DbEngine db = support.commandDb(session);
-        // 命令路由只给出 DbEngine。对账入口在 RuntimeDbEngine 上，stock server 的 engine 都实现它。
-        // 失败结果留在 health 快照里，这里只把协议回复收成 -ERR，避免把一次失败说成 +OK。
-        if (!(db instanceof RuntimeDbEngine runtime)) {
-            return CommandResult.controlError(RECONCILE_UNSUPPORTED);
-        }
-        DbAccountingReconciliation reconciliation = runtime.reconcileAccounting();
+        // 分发层只暴露 DbEngine，对账入口在 RuntimeDbEngine 上；stock engine 都实现该接口。
+        // 失败结果留在 health 快照里。协议回复收成 -ERR，degraded 保持；成功才是 +OK。
+        DbAccountingReconciliation reconciliation = ((RuntimeDbEngine) db).reconcileAccounting();
         if (!reconciliation.succeeded()) {
             return CommandResult.controlError(RECONCILE_FAILED);
         }
