@@ -112,7 +112,8 @@ public final class RedisBenchmarkCommandTemplate {
             if (value < 0) {
                 throw new IllegalArgumentException("keyspace must be >= 0");
             }
-            if (value > BenchmarkRandom.TWELVE_DIGIT_LIMIT) {
+            // 与 BenchmarkConfig 同一上界：10^12 本身是 13 位，不能当成合法 keyspace。
+            if (value >= BenchmarkRandom.TWELVE_DIGIT_LIMIT) {
                 throw new IllegalArgumentException("keyspace values must fit in 12 digits");
             }
         }

@@ -60,6 +60,8 @@ public class BenchmarkConfigTest {
                 OptionalLong.empty(), 3, 0));
         assertInvalid(() -> config("127.0.0.1", 16378, 100, 4, 3, 0, OptionalLong.empty(), 3, 0));
         assertInvalid(() -> config("127.0.0.1", 16378, 100, 4, 3, 1, OptionalLong.of(-1), 3, 0));
+        assertInvalid(() -> config("127.0.0.1", 16378, 100, 4, 3, 1,
+                OptionalLong.of(1_000_000_000_000L), 3, 0));
         assertInvalid(() -> config("127.0.0.1", 16378, 100, 4, 3, 1, OptionalLong.empty(), -1, 0));
         assertInvalid(() -> config("127.0.0.1", 16378, 100, 4, 3, 1, OptionalLong.empty(), 5, 0));
         assertInvalid(() -> config("127.0.0.1", 16378, 100, 4, 3, 1, OptionalLong.empty(), 3, -1));
@@ -71,11 +73,13 @@ public class BenchmarkConfigTest {
                 "localhost", 1, 1, 1, 1, 1, OptionalLong.of(0), 0, 0
         );
         BenchmarkConfig maximums = config(
-                "localhost", 65535, 1, 1, 1_073_741_824, 1, OptionalLong.empty(), 4, 0
+                "localhost", 65535, 1, 1, 1_073_741_824, 1,
+                OptionalLong.of(999_999_999_999L), 4, 0
         );
 
         Assert.assertEquals(1, minimums.port());
         Assert.assertEquals(0L, minimums.keyspace().orElseThrow());
+        Assert.assertEquals(999_999_999_999L, maximums.keyspace().orElseThrow());
         Assert.assertEquals(65535, maximums.port());
         Assert.assertEquals(1_073_741_824, maximums.dataSize());
     }

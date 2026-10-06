@@ -265,7 +265,7 @@ public class RedisBenchmarkCommandTemplateTest {
         assertMessage(IllegalArgumentException.class, "keyspace",
                 () -> set.prepare(1, ascii("abc"), OptionalLong.of(-1)));
         assertMessage(IllegalArgumentException.class, "12 digits",
-                () -> set.prepare(1, ascii("abc"), OptionalLong.of(TWELVE_DIGIT_LIMIT + 1)));
+                () -> set.prepare(1, ascii("abc"), OptionalLong.of(TWELVE_DIGIT_LIMIT)));
 
         PreparedPipeline fixed = set.prepare(1, ascii("abc"), OptionalLong.empty());
         assertMessage(NullPointerException.class, "random", () -> fixed.bytesForWrite(null));
@@ -291,7 +291,7 @@ public class RedisBenchmarkCommandTemplateTest {
     @Test
     public void maximumRepresentableKeyspaceIsAcceptedAndRendersTwelveDigits() {
         PreparedPipeline pipeline = CaseSelection.caseById("set").template()
-                .prepare(1, ascii("abc"), OptionalLong.of(TWELVE_DIGIT_LIMIT));
+                .prepare(1, ascii("abc"), OptionalLong.of(TWELVE_DIGIT_LIMIT - 1));
 
         List<String> keys = renderedKeys(wire(
                 pipeline.bytesForWrite(new BenchmarkRandom(1L))

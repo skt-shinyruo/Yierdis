@@ -49,7 +49,7 @@ public final class BenchmarkOutputRenderer {
                 output,
                 "  %d requests completed in %.3f seconds\n",
                 statistics.completedRequests(),
-                statistics.elapsedMillis() / 1_000.0
+                statistics.elapsedNanos() / 1_000_000_000.0
         );
         append(output, "  %d parallel clients\n", config.clients());
         append(output, "  %d bytes payload\n", config.dataSize());
