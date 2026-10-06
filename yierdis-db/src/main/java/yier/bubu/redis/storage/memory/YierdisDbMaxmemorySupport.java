@@ -4,6 +4,7 @@ import yier.bubu.redis.storage.memory.internal.key.AllocatorKeyHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
+import yier.bubu.redis.storage.api.MaxmemoryEvictionAttempts;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
@@ -53,7 +54,7 @@ final class YierdisDbMaxmemorySupport {
         }
 
         int attempts = 0;
-        int maxAttempts = Math.max(64, keyLifecycle.keyCount() * 2);
+        int maxAttempts = MaxmemoryEvictionAttempts.maxAttempts(keyLifecycle.keyCount());
         long nowMillis = System.currentTimeMillis();
         long deadline = System.nanoTime() + evictionTimeLimitNanos;
         // 维护任务在调用线程内执行，必须同时用时间窗口和尝试次数限制淘汰循环，避免一次写入拖垮 event loop。

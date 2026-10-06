@@ -5,6 +5,7 @@ import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
+import yier.bubu.redis.storage.api.MaxmemoryEvictionAttempts;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.YierdisCommandException;
@@ -169,13 +170,7 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
         }
 
         int totalKeys = globalKeyCountEstimate();
-        int maxAttemptsFromKeys;
-        if (totalKeys > Integer.MAX_VALUE / 2) {
-            maxAttemptsFromKeys = Integer.MAX_VALUE;
-        } else {
-            maxAttemptsFromKeys = totalKeys * 2;
-        }
-        int maxAttempts = Math.max(64, maxAttemptsFromKeys);
+        int maxAttempts = MaxmemoryEvictionAttempts.maxAttempts(totalKeys);
 
         int attempts = 0;
         int stalledAttempts = 0;
