@@ -244,7 +244,6 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
                 0L,
                 0L,
                 0L,
-                0L,
                 maxSlots == 0 ? 0L : Math.max(0L, (long) maxSlots - objects.size()),
                 0L,
                 objects.size()

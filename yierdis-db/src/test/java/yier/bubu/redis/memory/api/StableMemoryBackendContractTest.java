@@ -25,8 +25,6 @@ public class StableMemoryBackendContractTest {
                 8,
                 9,
                 10,
-                11,
-                12,
                 13,
                 14,
                 15,
@@ -35,17 +33,19 @@ public class StableMemoryBackendContractTest {
                 18,
                 19,
                 20,
-                21
+                21,
+                22
         );
 
+        Assert.assertEquals(3L, stats.liveMediumPages());
+        Assert.assertEquals(4L, stats.liveLargePages());
         Assert.assertEquals(9L, stats.externalFragmentationBytes());
         Assert.assertEquals(10L, stats.smallFreeBytes());
-        Assert.assertEquals(11L, stats.mediumFreeBytes());
-        Assert.assertEquals(12L, stats.largeFreeBytes());
-        Assert.assertEquals(13L, stats.freePages());
+        Assert.assertEquals(13L, stats.emptySmallPages());
         Assert.assertEquals(14L, stats.quarantineBytes());
-        Assert.assertEquals(15L, stats.doubleFreeDetections());
-        Assert.assertEquals(16L, stats.defragReclaimedPages());
+        Assert.assertEquals(15L, stats.staleHandleFreeDetections());
+        Assert.assertEquals(16L, stats.defragRetiredBlockPages());
+        Assert.assertEquals(17L, stats.defragTrimReclaimedPages());
     }
 
     @Test
