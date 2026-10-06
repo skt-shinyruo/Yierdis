@@ -71,18 +71,28 @@ public final class Connection implements AutoCloseable {
 
     public static Connection connect(ConnectionSettings settings) {
         Objects.requireNonNull(settings, "settings");
+        return connect(settings, settings.connectTimeoutMillis(), settings.commandTimeoutMillis());
+    }
+
+    // 这两个超时只作用于这次打开。连接保存的命令超时仍是 settings 里的值。
+    // 池可以把 TCP 连接和 SELECT 收紧到剩余借出等待，交出去之后的命令不受那次收紧影响。
+    static Connection connect(
+            ConnectionSettings settings,
+            long socketTimeoutMillis,
+            long setupCommandTimeoutMillis
+    ) {
         Socket socket = new Socket();
         try {
             socket.setTcpNoDelay(true);
             socket.connect(
                     new InetSocketAddress(settings.host(), settings.port()),
-                    toSocketTimeoutMillis(settings.connectTimeoutMillis())
+                    toSocketTimeoutMillis(socketTimeoutMillis)
             );
             Connection connection = new Connection(socket, settings.commandTimeoutMillis());
             try {
                 if (settings.database() != 0) {
                     // 非 0 的 DB 要在把连接交给调用方之前 SELECT 成功。失败时关掉 socket，调用方拿不到这条连接。
-                    connection.command("SELECT", Integer.toString(settings.database()));
+                    connection.command(setupCommandTimeoutMillis, "SELECT", Integer.toString(settings.database()));
                 }
                 return connection;
             } catch (Throwable failure) {
@@ -1087,6 +1097,10 @@ public final class Connection implements AutoCloseable {
 
     boolean isClosed() {
         return closed;
+    }
+
+    boolean inNormalMode() {
+        return mode == Mode.NORMAL;
     }
 
     long commandTimeoutMillis() {
