@@ -183,6 +183,8 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar STATS
 
 `protocolMaxBulkBytes`、`protocolMaxArgs`、`protocolMaxLineBytes` 和 `protocolMaxCommandBytes` 会直接传给 `RespRequestDecoder`，分别约束 bulk body、参数个数、header/inline 行长度，以及单条命令的 heap footprint 估算字节数（`HeapRequestFootprint` 口径，含请求对象、argv 槽位和每个参数的数组头与对齐 payload，不等于纯 payload 求和）。`protocolGlobalInFlightBytes` 则约束 ingress 全局在途内存，见上文。暴露在不可信网络里时，优先收紧这几个入口上限，再考虑更深层的内存调参。
 
+每条连接还有一份入站硬上限，由 `YierdisServerChannelInitializer.perConnectionHardLimit` 计算：`protocolMaxCommandBytes + 48 + protocolMaxArgs * 32`。默认配置是 `67108864 + 48 + 1048576 * 32 = 100663344`。已解码请求的入站租约要等到该请求释放后才从这条连接的账上拿掉，所以**一条连接同时大约只能放得下一条接近 `protocolMaxCommandBytes` 的命令**。同一连接把两条 payload 为 `62914560`（60MiB）的 `SET` 背靠背写进一次发送时，第一条会先回复 `+OK`；第二条在 `RespRequestDecoder.requestAdmission` 为那 60MiB bulk 转入连接账时，第一条的租约还在，`InboundMemoryBudget.fitsConnection` 失败并返回 `REQUEST_LIMIT`。客户端看到 `-ERR request exceeds configured memory limit`，随后连接关闭。8KiB 接收信用本身放得进这份硬上限；卡住的是第二条命令的 bulk 准入。单条命令自己的 footprint 超过 `protocolMaxCommandBytes` 是另一条路径，文案是 `ERR Protocol error: command is too large`。executor 队列字节上限用的是 `ERR request exceeds executor queue byte limit`。同一句 `ERR request exceeds configured memory limit` 也会在全局在途预算或合并失败时出现，不要只把它读成“下一次读取放不下”。
+
 解析失败会走 RESP protocol error 路径：`RespRequestDecoder` 做 RESP 解析、入口限制和 ingress admission，出错时把 `RespProtocolError` 放进已注册 reply slot；协议错误由 `NettyExecutionRequestIngress` 统一回复并关闭连接，避免请求和回包错位。这个路径不进入 command executor。
 
 ## executor 和背压
@@ -299,6 +301,16 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar MEMORY USAGE mykey
 java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar OBJECT ENCODING mykey
 ```
 
+## 已知差异
+
+下面三项是有意保留的设计取舍，不是待修缺陷。报障时先对上这一节，再决定要不要查实现。
+
+| 差异 | Yierdis | 对照 | 看哪里 |
+| --- | --- | --- | --- |
+| 单命令默认上限 | `protocolMaxCommandBytes` 默认 `67108864`（64MiB），配置上限仍可调到 `536870912` | Redis `proto-max-bulk-len` 默认 512MiB | 上文协议入口限制。单条超限是 `ERR Protocol error: command is too large`；同一连接第二条接近上限的在途命令是 `ERR request exceeds configured memory limit` 后断连 |
+| 未实现命令 | 名单里的名字回复 `ERR unknown command '<name>'`。超过 64 字节，或含 `0x20`–`0x7e` 以外的字节、`'`、`\` 时，回复不带名字的 `ERR unknown command` | Redis 命令集更宽 | 名单在 [`protocol-reference.md`](./protocol-reference.md#当前未覆盖的命令)，不要在运维文档里再抄一份 |
+| 字符串 set 的编码名 | 非整数 member 直接是 `hashtable`（`SET_HT`）。整数 member 仍用 `intset`，直到 `SET_MAX_INTSET_ENTRIES`（512） | Redis 8 对小的字符串 set 默认用 `listpack`（`set-max-listpack-entries`，默认 128） | `OBJECT ENCODING`。整数 set 的 512/513 阈值与 Redis 的 intset 上限一致；没有 set 的 listpack 编码 |
+
 ## 常见运行场景
 
 **本地开发**：先按 `README.md` 跑默认 server，再用 CLI 或 `redis-cli` 执行 `PING`、`SET`、`GET`、`INFO yierdis`、`STATS`。需要看数据结构时加 `OBJECT ENCODING`；需要看预算口径时加 `MEMORY STATS` 和 `MEMORY USAGE`。
@@ -396,7 +408,7 @@ java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar
 #### 容量估算推导
 
 容量配比是一个严格的算术问题，不可凭经验猜测：
-1. **Ingress（入站）**：`protocolGlobalInFlightBytes` 限制已解析请求的总在途字节。正值按字面限制；为 `0` 时不是无限制，而是派生为 `max(128 MiB, 2 × executorQueueMaxBytes)`（下限 `MIN_PROTOCOL_GLOBAL_IN_FLIGHT_BYTES = 128 MiB`）。协议解码器在请求抵达 executor 之前还会强校验 `protocolMaxBulkBytes`、`protocolMaxArgs`、`protocolMaxLineBytes` 和 `protocolMaxCommandBytes`。
+1. **Ingress（入站）**：`protocolGlobalInFlightBytes` 限制已解析请求的总在途字节。正值按字面限制；为 `0` 时不是无限制，而是派生为 `max(128 MiB, 2 × executorQueueMaxBytes)`（下限 `MIN_PROTOCOL_GLOBAL_IN_FLIGHT_BYTES = 128 MiB`）。协议解码器在请求抵达 executor 之前还会强校验 `protocolMaxBulkBytes`、`protocolMaxArgs`、`protocolMaxLineBytes` 和 `protocolMaxCommandBytes`。每条连接另有 `perConnectionHardLimit`（默认 `100663344`）。同一连接把两条 payload 为 `62914560`（60MiB）的 `SET` 背靠背发出时，第一条回复 `+OK`，第二条在 bulk 准入时因第一条租约仍占用连接账而回复 `-ERR request exceeds configured memory limit`，然后断连。8KiB 接收信用放得进这份上限。公式和另外两条容易混淆的错误文案见上文协议入口限制。
 2. **Reply（出站）**：单个 Reply 最大计费为 `replyMaxTotalBytes`。由于控制预留和首个分块必须计入配额，实际有效业务回复预算约为 `replyMaxTotalBytes - (replyControlReservationBytes + replyChunkPayloadBytes) - fixedOverhead`。并发连接的总 Reply 内存严格受控于 `replyGlobalCapacityBytes`。
 3. `client-output-buffer-limit-bytes` 与 `client-output-buffer-over-limit-millis` 属于针对慢客户端的策略性保护，绝不替代上述硬性准入容量限制。
 

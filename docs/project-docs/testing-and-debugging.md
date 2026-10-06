@@ -207,6 +207,8 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 判断泄漏的判据：稳态下 peak 可以非零，但**当前** `outbound_reserved_bytes` / `outbound_allocated_bytes` / `outbound_active_slots` / `outbound_active_chunks` / `outbound_active_sources` / `live_child_channels` 以及 `inbound_reserved_bytes` 在客户端断开后必须收敛到 0。非零就是泄漏信号。对应测试见 `OffHeapLeakRegressionTest`、`NativeStorageRegressionTest`。完整口径与 shutdown 顺序见 [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作)。
 
+**LPOP/RPOP 耗时**：弹出路径不再按活跃对象数或历史槽位高水位做全表扫描。回归合同在 `ListPopLatencyRegressionTest`：`FastTestClient` 经 `CommandDispatcher`，先取空库 LPOP 中位数（预热 8 次，再取 21 次的中位数），再 `SET` 约 5 万个键，用同样的取样断言填充后的中位数不超过空库基线的 10 倍。断言只看 bulk string 回复。工单 1 落地时的一次同 seam 测量（不是测试阈值）：修复前空库中位数约 0.77ms，5 万对象后约 6.0ms（约 7.8 倍）；索引生效后填充中位数约 0.31ms，当次空库基线约 0.64ms。审计附录缺陷 1 的 0.36ms→8.45ms 是约 18 万个对象上的单次测量，RPOP 687 rps 对照 GET 114k rps 也没有附上可复现命令和原始日志，都不要当成验收数字。`drain_limited_time_budget_total` 也不在这条命令层测试里：`FastTestClient` 不走 executor drain loop。要看这个 INFO 字段，得在真实 server 的执行器上人工核对。
+
 ## 最小复现步骤
 
 1. 固定环境：用 JDK 25 起 server（写一份最小 `yierdis.conf` 后 `java -jar yierdis-server/yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --config <path>`），或用最小 fixture 直接建 DB。
@@ -228,6 +230,9 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 | maxmemory 多回包或错误回包 | `YierdisDbMemoryLedger`、mutation executor | `MaxmemoryEvictionTest`、`MaxmemoryDoubleReplyRegressionTest` |
 | off-heap 泄漏 | root/value release、blob store、native handle graph | `OffHeapLeakRegressionTest`、`NativeStorageRegressionTest` |
 | executor 卡住或背压不恢复 | submitter、drain loop、connection context | `CommandExecutorBackpressureTest`、`CommandExecutorFairSchedulingTest` |
+| LPOP/RPOP 随对象数变慢 | quarantine 槽位集合与 small-page 索引，而不是全表扫描 | `ListPopLatencyRegressionTest`（5 万对象后中位数 ≤ 空库基线的 10 倍） |
+| 同一连接第二条大命令断连 | `perConnectionHardLimit`，文案 `ERR request exceeds configured memory limit` | 见 [`configuration-and-operations.md`](./configuration-and-operations.md#协议入口限制) |
+| `OBJECT ENCODING` 对字符串 set 返回 `hashtable` | 已知差异：非整数 member 不走 listpack | 见 [`configuration-and-operations.md`](./configuration-and-operations.md#已知差异) |
 
 ## 最小验证组合
 
