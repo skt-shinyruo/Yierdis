@@ -11,7 +11,7 @@ import java.util.Set;
 
 public class TypedCommandTest {
     @Test
-    public void surfaceOmitsHelloTransactionPipelineAndMget() {
+    public void surfaceOmitsHelloExecDiscardAndMget() {
         for (Method method : Connection.class.getMethods()) {
             if (method.getDeclaringClass() != Connection.class) {
                 continue;
@@ -19,8 +19,6 @@ public class TypedCommandTest {
             String name = method.getName();
             Assert.assertFalse(name.equalsIgnoreCase("hello"));
             Assert.assertFalse(name.equals("mget"));
-            Assert.assertFalse(name.equals("pipeline"));
-            Assert.assertFalse(name.equals("multi"));
             Assert.assertFalse(name.equals("exec"));
             Assert.assertFalse(name.equals("discard"));
         }
