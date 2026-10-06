@@ -424,7 +424,8 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
                 long perDb = config.maxmemoryBytes() / Math.max(1L, (long) config.databases());
                 sb.append("yierdis_maxmemory_per_db_bytes:").append(perDb).append("\r\n");
             }
-            sb.append("yierdis_ledger_used_bytes:").append(memStats.heapDataBytesEstimate()).append("\r\n");
+            sb.append("yierdis_heap_estimate_bytes:").append(memStats.heapDataBytesEstimate()).append("\r\n");
+            sb.append("yierdis_ledger_used_bytes:").append(memStats.ledgerUsedBytes()).append("\r\n");
             sb.append("yierdis_ledger_reserved_bytes:").append(memStats.reservedBytes()).append("\r\n");
             sb.append("yierdis_ledger_effective_used_bytes:").append(memStats.heapDataBytesEstimate() + memStats.reservedBytes()).append("\r\n");
             sb.append("yierdis_maxmemory_used_bytes:").append(memStats.usedBytesForMaxmemory()).append("\r\n");

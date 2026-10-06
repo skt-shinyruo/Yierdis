@@ -98,6 +98,7 @@ public class YierdisClientTest {
             Assert.assertTrue(keys.contains("maxmemory_bytes"));
             Assert.assertTrue(keys.contains("used_bytes_for_maxmemory"));
             Assert.assertTrue(keys.contains("effective_used_bytes_for_maxmemory"));
+            Assert.assertTrue(keys.contains("heap_estimate_bytes"));
             Assert.assertTrue(keys.contains("ledger_used_bytes"));
             Assert.assertTrue(keys.contains("ledger_reserved_bytes"));
             Assert.assertTrue(keys.contains("offheap_used_bytes"));

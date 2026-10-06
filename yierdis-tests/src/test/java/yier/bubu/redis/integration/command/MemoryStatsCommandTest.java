@@ -8,6 +8,7 @@ import org.junit.Test;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.RedisReply;
+import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyBulkString;
@@ -25,6 +26,7 @@ public class MemoryStatsCommandTest {
             "maxmemory_bytes",
             "used_bytes_for_maxmemory",
             "effective_used_bytes_for_maxmemory",
+            "heap_estimate_bytes",
             "ledger_used_bytes",
             "offheap_used_bytes",
             "ledger_reserved_bytes",
@@ -60,6 +62,25 @@ public class MemoryStatsCommandTest {
     }
 
     @Test
+    public void memoryStatsBindsHeapEstimateAndLogicalLedgerBytes() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            FastTestClient client = new FastTestClient(dispatcher);
+            Assert.assertEquals(0L, memoryStat(client, "ledger_used_bytes"));
+
+            client.execute(cmd("SET", "k", "value"));
+
+            YierdisMemoryStats stats = db.memoryStats();
+            long heapEstimate = memoryStat(client, "heap_estimate_bytes");
+            long ledgerUsed = memoryStat(client, "ledger_used_bytes");
+            Assert.assertEquals(stats.heapDataBytesEstimate(), heapEstimate);
+            Assert.assertEquals(stats.ledgerUsedBytes(), ledgerUsed);
+            Assert.assertEquals(DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE, ledgerUsed);
+            Assert.assertNotEquals(heapEstimate, ledgerUsed);
+        });
+    }
+
+    @Test
     public void memoryStatsUsesGlobalProviderOnlyWhenItSuppliesAGlobalSnapshot() {
         forEachDb(db -> {
             YierdisMemoryStats global = YierdisMemoryStats.empty(31_337L, false);
@@ -71,6 +92,16 @@ public class MemoryStatsCommandTest {
             Assert.assertEquals(31_337L, maxmemoryBytes(globalDispatcher));
             Assert.assertEquals(db.memoryStats().maxmemoryBytes(), maxmemoryBytes(perDbDispatcher));
         });
+    }
+
+    private static long memoryStat(FastTestClient client, String key) {
+        ReplyMap map = (ReplyMap) client.execute(cmd("MEMORY", "STATS"));
+        for (ReplyMap.Entry entry : map.entries()) {
+            if (key.equals(((ReplyBulkString) entry.key()).asString())) {
+                return ((ReplyInteger) entry.value()).value();
+            }
+        }
+        throw new AssertionError("MEMORY STATS did not include " + key);
     }
 
     private static long maxmemoryBytes(CommandDispatcher dispatcher) {

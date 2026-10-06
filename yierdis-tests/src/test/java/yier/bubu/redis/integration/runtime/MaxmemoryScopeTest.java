@@ -8,6 +8,7 @@ import yier.bubu.redis.app.client.YierdisClient;
 import yier.bubu.redis.app.server.YierdisServerBootstrap;
 import yier.bubu.redis.integration.TestServerConfig;
 import yier.bubu.redis.protocol.resp.RespClientCodec;
+import yier.bubu.redis.storage.api.DbMemoryConstants;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -176,14 +177,42 @@ public class MaxmemoryScopeTest {
 
             HashMap<String, Long> stats = parseMemoryStats(execute(client, b("MEMORY"), b("STATS")));
             long used = stats.getOrDefault("used_bytes_for_maxmemory", -1L);
-            long ledgerUsed = stats.getOrDefault("ledger_used_bytes", -1L);
+            long heapEstimate = stats.getOrDefault("heap_estimate_bytes", -1L);
             long offHeap = stats.getOrDefault("offheap_used_bytes", -1L);
             long offHeapIncluded = stats.getOrDefault("offheap_included_in_maxmemory", -1L);
 
             Assert.assertTrue("offheap_used_bytes should be > 0 under the default FFM memory model", offHeap > 0);
             Assert.assertEquals("offheap_included_in_maxmemory should be 1 in global mode", 1L, offHeapIncluded);
-            Assert.assertEquals("used_bytes_for_maxmemory should equal ledger_used_bytes + offheap_used_bytes when included",
-                    ledgerUsed + offHeap, used);
+            Assert.assertEquals("used_bytes_for_maxmemory should equal heap_estimate_bytes + offheap_used_bytes when included",
+                    heapEstimate + offHeap, used);
+        }
+    }
+
+    @Test
+    public void infoAndMemoryStatsPublishLogicalLedgerBytes() throws Exception {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfig.config(
+                "--databases", "2",
+                "--maxmemoryScope", "global",
+                "--maxmemoryBytes", "0"
+        ));
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            ok(client, b("SELECT"), b("0"));
+            ok(client, b("SET"), b("a"), b("value"));
+            ok(client, b("SELECT"), b("1"));
+            ok(client, b("SET"), b("b"), b("other"));
+
+            HashMap<String, Long> stats = parseMemoryStats(execute(client, b("MEMORY"), b("STATS")));
+            long heapEstimate = stats.getOrDefault("heap_estimate_bytes", -1L);
+            long ledgerUsed = stats.getOrDefault("ledger_used_bytes", -1L);
+            long expectedLedger = 2L * DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
+
+            Assert.assertEquals(expectedLedger, ledgerUsed);
+            Assert.assertNotEquals(heapEstimate, ledgerUsed);
+
+            String memory = stringResult(execute(client, b("INFO"), b("memory")));
+            Assert.assertTrue(memory.contains("yierdis_heap_estimate_bytes:" + heapEstimate + "\r\n"));
+            Assert.assertTrue(memory.contains("yierdis_ledger_used_bytes:" + ledgerUsed + "\r\n"));
+            Assert.assertFalse(memory.contains("yierdis_ledger_used_bytes:" + heapEstimate + "\r\n"));
         }
     }
 
