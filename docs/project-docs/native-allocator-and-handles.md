@@ -223,12 +223,18 @@ page 固定 `PAGE_BYTES = 64 * 1024`。请求不超过 `MAX_SMALL_BYTES = B32768
 
 之所以能这么简单，是因为**同页同档位，所有块等长**——任意空槽都能装下任何请求。代价是内部碎片：一个 17 KB 的值落在 24576 档，每块浪费约 7 KB。替代方案是变长块 + 分裂/合并，那会让 free 变成 O(空闲块数) 且需要处理拼接；本层选择"固定档位"是有意的取舍。
 
-**span**：请求超过 32 KB 时走连续 region allocation，页数由 `pagesFor(bytes)` 向上取整（`((long) bytes + PAGE_BYTES - 1) / PAGE_BYTES`）：
+**span**：请求超过 32 KB 时走连续 region allocation，页数由 `pagesFor(bytes)` 向上取整（`((long) bytes + PAGE_BYTES - 1) / PAGE_BYTES`）。取整后的字节数必须放进 `int`。32767 页（2GiB - 64KiB）是最后一档合法请求；再多 1 字节会取整到 32768 页，也就是 2GiB，放不进 `int`。所以第一个被拒绝的请求是 2GiB - 65535（2147418113），不是 2GiB + 1。拒绝时抛 `IllegalArgumentException`，消息含 `too large`，不会落到 `Math.multiplyExact` 的 `ArithmeticException`。
 
 - `MEDIUM_SPAN`：不超过 `MEDIUM_MAX_BYTES = 1024 * 1024`（1 MiB）；
 - `LARGE_SPAN`：超过 1 MiB。
 
 span 没有页内 free slot 概念，`summarizePages()` 里它的 committed 与 used 都等于 `capacity`。
+
+三项相关指标的口径：
+
+- `retainedMovedBlockBytes` 是 `retiredBlocks` 里旧块的容量和。这些块还没 `close`，small page 仍把它们算进 `liveBlocks`，span 仍把整段算进 used。它们不在 `freeBytes` 里。
+- `quarantineBytes` = `retainedMovedBlockBytes` + 仍处于 `FREED_QUARANTINED` 的对象容量。两边是不同的块：一个是搬迁后留下的旧位置，一个是已经 `free` 但 pin 或 epoch 还没放开的对象。`quarantinedObjects == 0` 时，`quarantineBytes` 只来自退役块。
+- `externalFragmentationBytes` 等于 page `freeBytes`（已提交但未占用的字节）。不再减去 `retainedMovedBlockBytes`，因为那些字节已经在 used 里，再减会把真实的页内空洞压低。
 
 **物理布局全景**（把 §4.1 的对象结构图落到真实字节上，帮助建立空间直觉）：
 
@@ -450,7 +456,7 @@ if (delayRelease) {
 releaseAllocation(meta);           // 立即归还 block 与 ledger
 ```
 
-搬迁路径的判定（`reserveMovedBlock`）：`canReclaim(retiredEpoch)` 为真时直接 `block.close()`，只把容量差记入 `reservedBytes`；为假时整块容量记入 `reservedBytes` 并 append 到 `retiredBlocks`。
+搬迁路径的判定（`reserveMovedBlock`）：`canReclaim(retiredEpoch)` 为真时直接 `block.close()`，只把容量差记入 `reservedBytes`；为假时整块容量记入 `reservedBytes` 并 append 到 `retiredBlocks`。`reallocate` 和 `moveLiveObject` 都是先发布新位置，再登记旧块。登记失败时新块保持已发布，由对象表在后续 `free` 时回收。旧块会再试一次：能回收就关闭，否则补进 `retiredBlocks`。这次补救再失败时，异常压进原失败，旧块可能仍未登记。
 
 `canReclaim` 的完整语义：
 

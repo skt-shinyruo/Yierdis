@@ -172,9 +172,12 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
                     next.pageClass().ordinal()
             );
             logicalUsedBytes += (long) newSize - oldSize;
-            reserveMovedBlock(previous, next.capacity(), nextEpoch());
-            reallocMovedCount++;
+            int nextCapacity = next.capacity();
+            // 新位置已经发布。先放开 finally 对 next 的所有权，登记失败时不能再关掉它。
             moved = true;
+            next = null;
+            retainMovedSource(previous, nextCapacity);
+            reallocMovedCount++;
             if (activeAllocationScope != null) {
                 activeAllocationScope.recordGrowth();
             }
@@ -412,7 +415,8 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
                 reallocMovedCount,
                 defragMovedBytes,
                 defragSkippedPinnedObjects,
-                Math.max(0L, pageStats.freeBytes() - retainedMovedBlockBytes()),
+                // 退役块仍计在 page used 里，不在 freeBytes 中。再减一次会把页内空洞压低。
+                pageStats.freeBytes(),
                 pageStats.smallFreeBytes(),
                 pageStats.mediumFreeBytes(),
                 pageStats.largeFreeBytes(),
@@ -606,7 +610,7 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
             published = true;
             target = null;
             long retiredBytes = previous.capacity();
-            reserveMovedBlock(previous, targetCapacity, nextEpoch());
+            retainMovedSource(previous, targetCapacity);
             defragReclaimedPages += retiredBytes / YierdisNativePageAllocator.PAGE_BYTES;
             defragMovedBytes += sourceMeta.size();
             return sourceMeta.size();
@@ -644,15 +648,49 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
         releaseAllocation(meta);
     }
 
+    private boolean failNextRetainedBlockRegistration;
+
+    void failNextRetainedBlockRegistration() {
+        // 同包测试用来在发布之后、登记之前打断。
+        failNextRetainedBlockRegistration = true;
+    }
+
+    private void retainMovedSource(YierdisNativeBlock previous, int nextCapacity) {
+        long retiredEpoch = nextEpoch();
+        try {
+            reserveMovedBlock(previous, nextCapacity, retiredEpoch);
+        } catch (RuntimeException | OutOfMemoryError registrationFailure) {
+            // 新块已经发布，调用方不再关闭它。旧块再试一次关闭或登记。
+            // 这次补救再失败时，只把异常压进原失败，旧块可能仍不在 retiredBlocks 里。
+            try {
+                if (canReclaim(retiredEpoch)) {
+                    previous.close();
+                    reservedBytes += (long) nextCapacity - previous.capacity();
+                } else {
+                    retiredBlocks.add(new RetiredBlock(previous, retiredEpoch));
+                    reservedBytes += nextCapacity;
+                }
+            } catch (RuntimeException | OutOfMemoryError cleanupFailure) {
+                registrationFailure.addSuppressed(cleanupFailure);
+            }
+            throw registrationFailure;
+        }
+    }
+
     private void reserveMovedBlock(YierdisNativeBlock block, int nextCapacity, long retiredEpoch) {
+        if (failNextRetainedBlockRegistration) {
+            failNextRetainedBlockRegistration = false;
+            throw new NativeMemoryException("retained block registration failed");
+        }
         if (canReclaim(retiredEpoch)) {
             block.close();
             reservedBytes += (long) nextCapacity - block.capacity();
             return;
         }
-        // 发布新位置后，退役块要保留到所有可能看到旧位置的 scope 关闭。
-        reservedBytes += nextCapacity;
+        // 先登记再改 reservedBytes。add 失败时账还没动，调用方可以补登记。
+        // 退役块要留到所有可能看到旧位置的 scope 关闭。
         retiredBlocks.add(new RetiredBlock(block, retiredEpoch));
+        reservedBytes += nextCapacity;
     }
 
     private void reclaimEligibleQuarantine() {
@@ -699,6 +737,7 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
     }
 
     private long quarantineBytes() {
+        // 已释放但仍被 pin 或 epoch 挡住的对象，加上尚未归还的退役块。两边是不同的块。
         long bytes = retainedMovedBlockBytes();
         for (int slotId : objectTable.copyQuarantinedSlotIds()) {
             YierdisNativeObjectMeta meta = objectTable.occupiedMeta(slotId);

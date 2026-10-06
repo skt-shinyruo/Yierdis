@@ -746,7 +746,9 @@ final class YierdisNativePageAllocator
 
     private static int pagesFor(int bytes) {
         long pages = ((long) bytes + PAGE_BYTES - 1L) / PAGE_BYTES;
-        if (pages <= 0 || pages > Integer.MAX_VALUE) {
+        // 容量是 int。32768 个 64KiB 页等于 2GiB，放不进 int。
+        // 向上取整后第一个越界请求是 2GiB - 65535，不是 2GiB + 1。
+        if (pages <= 0 || pages > Integer.MAX_VALUE / PAGE_BYTES) {
             throw new IllegalArgumentException("allocation is too large: " + bytes);
         }
         return (int) pages;
