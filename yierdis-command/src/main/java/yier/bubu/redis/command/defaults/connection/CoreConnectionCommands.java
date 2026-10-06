@@ -109,7 +109,14 @@ public final class CoreConnectionCommands {
                 throw new CommandParseException(
                         "ERR wrong number of arguments for 'client|setname' command");
             }
-            String name = args.utf8(2);
+            // Redis 只接受 ASCII '!'..'~'。空串是清空名字，不走字符集校验；
+            // EngineSession.setClientName 会把空串收成 null，GETNAME 因此是 nil。
+            byte[] rawName = args.bytes(2);
+            if (rawName.length > 0 && !printableClientName(rawName)) {
+                throw new CommandParseException(
+                        "ERR Client names cannot contain spaces, newlines or special characters.");
+            }
+            String name = rawName.length == 0 ? "" : args.utf8(2);
             return session -> PreparedCommands.action(
                     ReplyShapes.simpleString("OK"),
                     execution -> {
@@ -248,6 +255,16 @@ public final class CoreConnectionCommands {
         return upper == null || upper.isBlank()
                 ? null
                 : upper.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private static boolean printableClientName(byte[] rawName) {
+        for (byte value : rawName) {
+            int code = value & 0xff;
+            if (code < '!' || code > '~') {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static PreparedCommand ok() {

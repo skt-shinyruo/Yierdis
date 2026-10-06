@@ -68,10 +68,12 @@ final class YierdisHllOps implements HllOps {
                 }
                 byte[] replacementBytes = YierdisHyperLogLog.prepareAdd(currentBytes, elements);
                 boolean changed = replacementBytes != null;
-                if (current != null && !changed) {
+                boolean created = current == null;
+                // 已有 key 且寄存器没变：Redis 返回 0。缺 key 时即使没有 element 也要建空 HLL 并返回 1。
+                if (!created && !changed) {
                     return kernel.unchanged(WriteResult.of(0, MutationOutcome.NONE));
                 }
-                if (current == null && replacementBytes == null) {
+                if (created && replacementBytes == null) {
                     replacementBytes = YierdisHyperLogLog.newSparse();
                 }
 
@@ -91,8 +93,8 @@ final class YierdisHllOps implements HllOps {
                             current == null ? -1L : current.expireAtMillis(),
                             current
                     );
-                    MutationOutcome outcome = changed ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
-                    WriteResult<Integer> result = WriteResult.of(changed ? 1 : 0, outcome);
+                    MutationOutcome outcome = changed || created ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
+                    WriteResult<Integer> result = WriteResult.of(changed || created ? 1 : 0, outcome);
                     long deltaBytes = estimateRecordBytes(targetKey, next)
                             - estimateRecordBytes(targetKey, current);
                     PreparedDbMutation<WriteResult<Integer>> prepared = kernel.upsert(

@@ -133,6 +133,11 @@ public class ZSetCommandTest {
                         b("ZADD"), key, b("1.5"), b("decimal")))).value());
                 Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
                         b("ZADD"), key, b("1e-323"), b("subnormal")))).value());
+                // Redis 8.9.241：1e-7 的原始分数文本是 "1e-7"，1e22 是 "1e+22"。
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("1e-7"), b("tiny")))).value());
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("1e22"), b("huge")))).value());
 
                 ReplyArray range = (ReplyArray) client.execute(Arrays.asList(
                         b("ZRANGE"), key, b("0"), b("-1"), b("WITHSCORES")));
@@ -140,10 +145,20 @@ public class ZSetCommandTest {
                         List.of(
                                 "exactzero", "0",
                                 "negzero", "0",
-                                "subnormal", "9.9E-324",
+                                "subnormal", "9.9e-324",
+                                "tiny", "1e-7",
                                 "decimal", "1.5",
-                                "sci", "100"),
+                                "sci", "100",
+                                "huge", "1e+22"),
                         bulkStrings(range));
+
+                // ZADD INCR 与 ZRANGE 共用同一套分数文本。-0 的原始回复是 "0"，不是 "-0"。
+                Assert.assertEquals("0", ((ReplyBulkString) client.execute(Arrays.asList(
+                        b("ZADD"), b("incr-zero"), b("INCR"), b("-0"), b("m")))).asString());
+                Assert.assertEquals("1e-7", ((ReplyBulkString) client.execute(Arrays.asList(
+                        b("ZADD"), b("incr-tiny"), b("INCR"), b("1e-7"), b("m")))).asString());
+                Assert.assertEquals("1e+22", ((ReplyBulkString) client.execute(Arrays.asList(
+                        b("ZADD"), b("incr-huge"), b("INCR"), b("1e22"), b("m")))).asString());
             }
         });
     }

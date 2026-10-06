@@ -294,6 +294,36 @@ public class YierdisServerBootstrapCommandWiringTest {
 
                 String unknown = asString(roundTrip(out, in, "INFO", "unknown-section"));
                 Assert.assertEquals("", unknown);
+
+                // Redis 8.9.241 多 section 按规范顺序去重，不保留请求顺序。
+                // Yierdis 文本顺序是 Server、Health、Clients、Memory、Stats、Keyspace。
+                String reversed = asString(roundTrip(
+                        out, in,
+                        "INFO", "keyspace", "stats", "memory", "clients", "health", "server", "server"));
+                assertHeaderOrder(
+                        reversed,
+                        "# Server",
+                        "# Health",
+                        "# Clients",
+                        "# Memory",
+                        "# Stats",
+                        "# Keyspace");
+
+                String healthWithServer = asString(roundTrip(out, in, "INFO", "health", "server"));
+                assertHeaderOrder(healthWithServer, "# Server", "# Health");
+                Assert.assertFalse(healthWithServer.contains("# Memory"));
+
+                String duplicated = asString(roundTrip(out, in, "INFO", "server", "server"));
+                int firstServer = duplicated.indexOf("# Server");
+                Assert.assertTrue(firstServer >= 0);
+                Assert.assertEquals(-1, duplicated.indexOf("# Server", firstServer + 1));
+
+                String unknownMixed = asString(roundTrip(out, in, "INFO", "memory", "no-such"));
+                Assert.assertTrue(unknownMixed.contains("# Memory"));
+                Assert.assertFalse(unknownMixed.contains("# Server"));
+
+                Map<String, Object> health = respMap(roundTrip(out, in, "INFO", "health"));
+                Assert.assertTrue(health.containsKey("ready"));
             }
         }
     }
@@ -510,6 +540,16 @@ public class YierdisServerBootstrapCommandWiringTest {
     private static List<Object> respArray(Object value) {
         Assert.assertTrue("expected RESP array", value instanceof List<?>);
         return (List<Object>) value;
+    }
+
+    private static void assertHeaderOrder(String info, String... headers) {
+        int previous = -1;
+        for (String header : headers) {
+            int at = info.indexOf(header);
+            Assert.assertTrue(header, at > previous);
+            Assert.assertEquals(header, -1, info.indexOf(header, at + header.length()));
+            previous = at;
+        }
     }
 
     private static String asString(Object value) {

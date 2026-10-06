@@ -395,7 +395,6 @@ public class TransactionCommandTest {
                     invalid("ERR value is not an integer or out of range", "ZSCAN", "z", "-1"),
                     invalid("ERR syntax error", "ZSCAN", "z", "0", "MATCH"),
                     invalid("ERR value is not an integer or out of range", "ZSCAN", "z", "0", "COUNT", "0"),
-                    invalid("ERR wrong number of arguments for 'pfadd' command", "PFADD", "h"),
                     invalid("ERR wrong number of arguments for 'pfcount' command", "PFCOUNT"),
                     invalid("ERR wrong number of arguments for 'pfmerge' command", "PFMERGE", "dest")
             )) {
