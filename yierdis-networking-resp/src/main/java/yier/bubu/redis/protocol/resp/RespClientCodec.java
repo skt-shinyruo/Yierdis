@@ -57,8 +57,8 @@ public final class RespClientCodec {
             throw new IOException("unexpected EOF before RESP reply");
         }
         return switch (type) {
-            case '+' -> new RespReply(RespReply.Kind.SIMPLE_STRING, readStringLine(in), null, null, null);
-            case '-' -> new RespReply(RespReply.Kind.ERROR, readStringLine(in), null, null, null);
+            case '+' -> new RespReply(RespReply.Kind.SIMPLE_STRING, readStringLine(in, maxBulkBytes), null, null, null);
+            case '-' -> new RespReply(RespReply.Kind.ERROR, readStringLine(in, maxBulkBytes), null, null, null);
             case ':' -> new RespReply(RespReply.Kind.INTEGER, null, null, readLongLine(in, "integer"), null);
             case '$' -> readBulkString(in, maxBulkBytes);
             case '*' -> readAggregate(in, maxBulkBytes, RespReply.Kind.ARRAY, "array");
@@ -109,10 +109,11 @@ public final class RespClientCodec {
             return new RespReply(RespReply.Kind.NULL, null, null, null, null);
         }
         long valueCount = map ? Math.multiplyExact((long) count, 2L) : count;
-        if (valueCount > Integer.MAX_VALUE) {
+        if (valueCount > Integer.MAX_VALUE || valueCount > maxBulkBytes) {
             throw new IOException("invalid RESP " + type + " length: " + count);
         }
-        List<RespReply> values = new ArrayList<>((int) valueCount);
+        // 声明的元素个数只用来循环读取，初始容量封顶，避免按超长声明直接分配巨型数组。
+        List<RespReply> values = new ArrayList<>((int) Math.min(valueCount, 16L));
         for (int i = 0; i < valueCount; i++) {
             values.add(readReply(in, maxBulkBytes));
         }
@@ -127,7 +128,7 @@ public final class RespClientCodec {
         return (int) value;
     }
 
-    private static String readStringLine(InputStream in) throws IOException {
+    private static String readStringLine(InputStream in, int maxBulkBytes) throws IOException {
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
         int prev = -1;
         while (true) {
@@ -140,6 +141,10 @@ public final class RespClientCodec {
                 return new String(bytes, 0, bytes.length - 1, StandardCharsets.UTF_8);
             }
             buf.write(b);
+            // 多留 1 字节给尚未配对的 CR，正好等于上限的正文仍能遇到 LF 后成功返回。
+            if (buf.size() > maxBulkBytes + 1) {
+                throw new IOException("RESP line exceeds limit");
+            }
             prev = b;
         }
     }

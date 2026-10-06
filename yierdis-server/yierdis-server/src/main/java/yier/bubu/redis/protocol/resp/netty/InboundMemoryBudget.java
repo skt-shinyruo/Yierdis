@@ -9,7 +9,10 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * 服务器范围的入站内存预算。等待连接按队首顺序获得已预留的额度，再回到各自事件循环继续解码。
+ * 服务器范围的入站内存预算。
+ * 未背压时，等待连接按队首顺序获得额度，再回到各自事件循环继续解码。
+ * 背压期间，队首的新请求不会挡住已经在推进当前请求的等待者：这次准入会释放已复制的输入，或者 progress waiter 已经持有本连接额度。
+ * 这样半包解码和复制替换不会被排在前面的新连接堵住。
  */
 public final class InboundMemoryBudget implements AutoCloseable {
     public enum ReservationResult {

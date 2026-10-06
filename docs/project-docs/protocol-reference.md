@@ -105,7 +105,7 @@ HELLO 3 SETNAME <name>
 
 `RedisReply` 是命令结果的语义模型。根接口的 default `shape()` 用 sealed hierarchy 上的穷尽 switch 集中完成 `ReplyShape` 投影，各 variant 不声明自己的 `shape()`。`ReplyShapes` 只管 shape 构造与规范化，`RedisReplyRenderer` 则是唯一的命令结果遍历点。命令实现只构造 `SimpleString`、`IntegerValue`、`BulkString`、`Aggregate`、`NullValue`、`Error` 等变体，renderer 再调用 `RedisReplyWriter`。所以 `RedisReplyWriter` 只是 renderer 面向 RESP encoder 的端口，并非命令 API。协议错误或 ingress admission 失败属于命令管线之外的控制回复，仍由网络边界直接编码。
 
-错误的字节形态是 `ReplyShapes.normalizeError` 决定的，不是 handler 原样写入：先替换 CR/LF 为空格，再判断首 token 是否已是 Redis 风格前缀（只由 `-`、`_`、数字、大写字母组成），不是则补 `ERR `，最后按 UTF-8 截断到 512 字节。`RespReplyWriter.controlError` 走同一条路径，并额外把输出改记为「控制预留」容量（`ReplyReservationSink.useControlReservation()`）；simple string 走 `sanitizeSimple`，只把 CR/LF 换成空格。协议错误和控制错误在 RESP2/RESP3 下字节相同，因此 ingress 用当前 session 版本构造 writer 即可。
+错误的字节形态是 `ReplyShapes.normalizeError` 决定的，不是 handler 原样写入：先替换 CR/LF 为空格，空白消息归一化成 `ERR error`，再判断首 token 是否已是 Redis 风格前缀（只由 `-`、`_`、数字、大写字母组成），不是则补 `ERR `，然后按 UTF-8 截断到 512 字节。截断按 Unicode code point 进行：有效代理对不会被拆开，孤立 surrogate 丢弃。截断或丢弃之后如果只剩下 `ERR` 和空白，再写成 `ERR error`。单独的 `ERR`、`NOAUTH`、`WRONGTYPE` 前缀保持原样。`RespReplyWriter.controlError` 走同一条路径，并额外把输出改记为「控制预留」容量（`ReplyReservationSink.useControlReservation()`）；simple string 走 `sanitizeSimple`，只把 CR/LF 换成空格。协议错误和控制错误在 RESP2/RESP3 下字节相同，因此 ingress 用当前 session 版本构造 writer 即可。
 
 RESP2 下的典型映射是：
 

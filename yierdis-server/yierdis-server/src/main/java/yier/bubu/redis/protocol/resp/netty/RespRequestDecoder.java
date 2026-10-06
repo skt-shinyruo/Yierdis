@@ -43,6 +43,8 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     private final InboundReadControl readControl;
     private DecodePhase phase = SimplePhase.READ_COMMAND;
     private AccountedRespCumulator cumulator;
+    private ByteBuf parkedRawInput;
+    private long parkedRawCharge;
 
     public static RespRequestDecoder withIngressAdmission(
             int maxBulkBytes,
@@ -105,9 +107,13 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         if (msg instanceof AccountedInboundBuffer accounted) {
             cumulator.append(accounted.takeBuffer(), accounted.takeLease());
         } else if (msg instanceof ByteBuf input) {
+            // 裸 ByteBuf 是解码器的受支持入口（不经 InboundByteAccountingHandler 的管线）。
+            // 瞬时 WAITING 停在这里等额度，不能升级成终局协议错误。
             InboundBufferLease lease = admitRawInput(ctx, input);
             if (lease == null) {
-                ReferenceCountUtil.safeRelease(input);
+                if (parkedRawInput != input) {
+                    ReferenceCountUtil.safeRelease(input);
+                }
                 return;
             }
             cumulator.append(input, lease);
@@ -138,12 +144,52 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
 
     private InboundBufferLease admitRawInput(ChannelHandlerContext ctx, ByteBuf input) {
         long charge = InboundBufferLease.chargeForRetainedBuffer(input);
+        connection.setResumeCallback(ctx.executor(), () -> resumeParkedRawInput(ctx));
         InboundMemoryBudget.ReservationResult result = budget.tryReserve(connection, charge);
-        if (result != InboundMemoryBudget.ReservationResult.RESERVED) {
-            emitRequestMemoryError(ctx);
+        if (result == InboundMemoryBudget.ReservationResult.RESERVED) {
+            return InboundBufferLease.admitted(budget, connection.account(), charge);
+        }
+        if (result == InboundMemoryBudget.ReservationResult.WAITING) {
+            parkedRawInput = input;
+            parkedRawCharge = charge;
+            readControl.pauseIngress();
             return null;
         }
-        return InboundBufferLease.admitted(budget, connection.account(), charge);
+        emitRequestMemoryError(ctx);
+        return null;
+    }
+
+    private void resumeParkedRawInput(ChannelHandlerContext ctx) {
+        ByteBuf parked = parkedRawInput;
+        long charge = parkedRawCharge;
+        if (parked == null || phase == SimplePhase.CLOSING) {
+            return;
+        }
+        if (!connection.claimGrantedReservation(charge)) {
+            return;
+        }
+        parkedRawInput = null;
+        parkedRawCharge = 0L;
+        ensureCumulator(ctx);
+        cumulator.append(parked, InboundBufferLease.admitted(budget, connection.account(), charge));
+        readControl.resumeIngress();
+        process(ctx);
+    }
+
+    private void releaseParkedRawInput() {
+        ByteBuf parked = parkedRawInput;
+        long charge = parkedRawCharge;
+        parkedRawInput = null;
+        parkedRawCharge = 0L;
+        if (parked == null) {
+            return;
+        }
+        if (connection.claimGrantedReservation(charge)) {
+            budget.release(connection, charge);
+        } else {
+            budget.cancelWaiter(connection);
+        }
+        ReferenceCountUtil.safeRelease(parked);
     }
 
     private void process(ChannelHandlerContext ctx) {
@@ -722,6 +768,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
 
     private void cleanup() {
         releasePhase();
+        releaseParkedRawInput();
         phase = SimplePhase.CLOSING;
         if (cumulator != null) {
             cumulator.close();

@@ -64,6 +64,10 @@ final class OrderedReplyTestFixture implements AutoCloseable {
         return channel;
     }
 
+    OutboundMemoryBudgetStats outboundStats() {
+        return budget.stats();
+    }
+
     NettyExecutionConnection connection() {
         return connection;
     }
