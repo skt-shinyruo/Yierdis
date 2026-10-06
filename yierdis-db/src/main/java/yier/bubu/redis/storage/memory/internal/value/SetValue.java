@@ -25,7 +25,6 @@ import java.util.function.Consumer;
 
 public final class SetValue implements YierdisValue {
     // Redis uses intset for small integer-only sets and upgrades to hashtable as needed.
-    private static final byte[] LONG_MIN_VALUE_BYTES = "-9223372036854775808".getBytes(StandardCharsets.US_ASCII);
     private static final int LONG_BYTES = Long.BYTES;
     private static final long FIXED_HEAP_BYTES = 80L;
     private static final long ARRAY_HEADER_BYTES = 16L;

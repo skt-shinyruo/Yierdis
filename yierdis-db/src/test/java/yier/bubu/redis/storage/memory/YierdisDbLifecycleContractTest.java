@@ -18,7 +18,6 @@ import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
-import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.testkit.HeapStableMemoryBackend;
 
@@ -110,12 +109,8 @@ public class YierdisDbLifecycleContractTest {
         }
 
         @Override
-        public NativeHandle reallocate(
-                NativeHandle handle,
-                int newSize,
-                NativeReallocPolicy policy
-        ) {
-            return delegate.reallocate(handle, newSize, policy);
+        public NativeHandle reallocate(NativeHandle handle, int newSize) {
+            return delegate.reallocate(handle, newSize);
         }
 
         @Override

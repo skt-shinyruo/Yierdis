@@ -7,7 +7,6 @@ import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
-import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
 import yier.bubu.redis.storage.api.result.ByteValue;
 import yier.bubu.redis.storage.memory.internal.value.NativeBytesSlice;
@@ -280,11 +279,7 @@ public final class StringRoot implements AutoCloseable {
         if (len < 0) {
             throw new IllegalArgumentException("len must be >= 0");
         }
-        NativeHandle resizedHandle = allocator.reallocate(
-                nativeHandle,
-                len,
-                NativeReallocPolicy.PRESERVE_PREFIX
-        );
+        NativeHandle resizedHandle = allocator.reallocate(nativeHandle, len);
         if (!resizedHandle.equals(nativeHandle)) {
             throw new IllegalStateException("string realloc changed stable handle");
         }

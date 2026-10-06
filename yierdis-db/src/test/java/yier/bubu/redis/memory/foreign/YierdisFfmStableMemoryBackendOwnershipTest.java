@@ -176,7 +176,7 @@ public class YierdisFfmStableMemoryBackendOwnershipTest {
     private static void assertOwnershipFailure(StableMemoryBackend backend, NativeHandle foreign) {
         Assert.assertThrows(
                 NativeMemoryException.class,
-                () -> backend.reallocate(foreign, 16, NativeReallocPolicy.PRESERVE_PREFIX)
+                () -> backend.reallocate(foreign, 16)
         );
         Assert.assertThrows(
                 NativeMemoryException.class,

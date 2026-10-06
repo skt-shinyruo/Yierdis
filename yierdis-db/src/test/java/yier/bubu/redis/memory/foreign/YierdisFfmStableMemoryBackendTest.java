@@ -20,7 +20,6 @@ import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
-import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.StableMemoryBackendIds;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
 
@@ -187,7 +186,7 @@ public class YierdisFfmStableMemoryBackendTest {
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
                 view.setByte(0, (byte) 42);
             }
-            allocator.reallocate(handle, 128, NativeReallocPolicy.PRESERVE_PREFIX);
+            allocator.reallocate(handle, 128);
             allocator.defragCycle(new NativeDefragOptions(1_024, 1, Long.MAX_VALUE));
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
                 Assert.assertEquals(42, view.getByte(0));
@@ -315,7 +314,7 @@ public class YierdisFfmStableMemoryBackendTest {
             }
 
             try {
-                allocator.reallocate(handle, 24, NativeReallocPolicy.PRESERVE_PREFIX);
+                allocator.reallocate(handle, 24);
                 Assert.fail("expected quarantined realloc rejection");
             } catch (StaleNativeHandleException expected) {
                 Assert.assertTrue(expected.getMessage().contains("quarantined"));
@@ -498,7 +497,7 @@ public class YierdisFfmStableMemoryBackendTest {
             allocator.pin(handle);
 
             try {
-                allocator.reallocate(handle, 24, NativeReallocPolicy.PRESERVE_PREFIX);
+                allocator.reallocate(handle, 24);
                 Assert.fail("expected pinned realloc rejection");
             } catch (NativeMemoryException expected) {
                 Assert.assertTrue(expected.getMessage().contains("pinned"));
@@ -651,11 +650,7 @@ public class YierdisFfmStableMemoryBackendTest {
                 view.setByte(0, (byte) 41);
             }
 
-            NativeHandle resized = allocator.reallocate(
-                    handle,
-                    24,
-                    NativeReallocPolicy.PRESERVE_PREFIX
-            );
+            NativeHandle resized = allocator.reallocate(handle, 24);
             Assert.assertEquals(handle, resized);
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
                 Assert.assertEquals(24, view.size());
@@ -762,7 +757,7 @@ public class YierdisFfmStableMemoryBackendTest {
             }
             NativeLocation beforeLocation = locationOf(allocator.objectMeta(handle.localRaw(), false));
 
-            NativeHandle resized = allocator.reallocate(handle, 24, NativeReallocPolicy.PRESERVE_PREFIX);
+            NativeHandle resized = allocator.reallocate(handle, 24);
             Assert.assertEquals(handle, resized);
 
             YierdisNativeObjectMeta after = allocator.objectMeta(handle.localRaw(), false);
@@ -797,7 +792,7 @@ public class YierdisFfmStableMemoryBackendTest {
                 view.setBytes(0, original, 0, original.length);
             }
 
-            NativeHandle resized = allocator.reallocate(handle, 90_000, NativeReallocPolicy.PRESERVE_PREFIX);
+            NativeHandle resized = allocator.reallocate(handle, 90_000);
             Assert.assertEquals(handle, resized);
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
                 byte[] actual = new byte[original.length];
@@ -834,7 +829,7 @@ public class YierdisFfmStableMemoryBackendTest {
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 16);
             NativeEpochScope epoch = allocator.beginEpoch();
 
-            allocator.reallocate(handle, 24, NativeReallocPolicy.PRESERVE_PREFIX);
+            allocator.reallocate(handle, 24);
 
             Assert.assertEquals(40L, allocator.stats().reservedBytes());
 
@@ -1060,7 +1055,7 @@ public class YierdisFfmStableMemoryBackendTest {
 
             NativeMemoryException failure = Assert.assertThrows(
                     NativeMemoryException.class,
-                    () -> allocator.reallocate(handle, 24, NativeReallocPolicy.PRESERVE_PREFIX)
+                    () -> allocator.reallocate(handle, 24)
             );
 
             Assert.assertTrue(failure.getMessage(), failure.getMessage().contains("retained block"));
@@ -1179,7 +1174,7 @@ public class YierdisFfmStableMemoryBackendTest {
                 int index = random.nextInt(live.size());
                 NativeHandle handle = live.get(index);
                 if (op < 55) {
-                    allocator.reallocate(handle, 1 + random.nextInt(192), NativeReallocPolicy.PRESERVE_PREFIX);
+                    allocator.reallocate(handle, 1 + random.nextInt(192));
                 } else if (op < 70) {
                     try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
                         view.setByte(0, (byte) i);
@@ -1275,11 +1270,7 @@ public class YierdisFfmStableMemoryBackendTest {
                             LiveObject object = live.get(random.nextInt(live.size()));
                             if (!object.pinned) {
                                 int newSize = 1 + random.nextInt(128);
-                                NativeHandle resized = allocator.reallocate(
-                                        object.handle,
-                                        newSize,
-                                        NativeReallocPolicy.PRESERVE_PREFIX
-                                );
+                                NativeHandle resized = allocator.reallocate(object.handle, newSize);
                                 Assert.assertEquals(object.handle, resized);
                                 object.size = newSize;
                                 try (NativeObjectView view = allocator.resolve(object.handle, NativeAccessMode.READ_ONLY)) {
@@ -1409,8 +1400,8 @@ public class YierdisFfmStableMemoryBackendTest {
                 view.setByte(3, (byte) 8);
             }
 
-            allocator.reallocate(handle, 4, NativeReallocPolicy.PRESERVE_PREFIX);
-            NativeHandle grown = allocator.reallocate(handle, 6, NativeReallocPolicy.PRESERVE_PREFIX);
+            allocator.reallocate(handle, 4);
+            NativeHandle grown = allocator.reallocate(handle, 6);
             Assert.assertEquals(handle, grown);
 
             try (NativeObjectView view = allocator.resolve(grown, NativeAccessMode.READ_ONLY)) {
@@ -1524,13 +1515,13 @@ public class YierdisFfmStableMemoryBackendTest {
                 empty.getBytes(0, new byte[0], 0, 0);
             }
 
-            NativeHandle grown = allocator.reallocate(handle, 3, NativeReallocPolicy.PRESERVE_PREFIX);
+            NativeHandle grown = allocator.reallocate(handle, 3);
             Assert.assertEquals(handle.localRaw(), grown.localRaw());
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
                 view.setBytes(0, new byte[] { 'a', 'b', 'c' }, 0, 3);
             }
 
-            NativeHandle shrunk = allocator.reallocate(handle, 0, NativeReallocPolicy.PRESERVE_PREFIX);
+            NativeHandle shrunk = allocator.reallocate(handle, 0);
             Assert.assertEquals(handle.localRaw(), shrunk.localRaw());
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
                 Assert.assertEquals(0, view.size());
