@@ -34,6 +34,12 @@ public final class YierdisGlobMatcher {
         // 两个公开入口只提供一种 backing，避免为 byte[] 热路径创建 BytesView 适配器。
         boolean arrayBacked = arrayText != null;
 
+        // 空文本在进入 '*' 分支之前返回：只有空模式，或恰好一个 '*'，才能匹配。
+        // "**" 不是这一种，所以不能匹配空成员。
+        if (textLen == 0) {
+            return pattern.length == 0 || (pattern.length == 1 && pattern[0] == '*');
+        }
+
         int p = 0;
         int t = 0;
         int star = -1;
@@ -73,20 +79,11 @@ public final class YierdisGlobMatcher {
                         }
                     }
                 } else if (pc == '[') {
-                    int end = findGlobClassEnd(pattern, p + 1);
-                    if (end >= 0) {
-                        if (globClassMatches(pattern, p + 1, end, tb)) {
-                            p = end + 1;
-                            t++;
-                            continue;
-                        }
-                    } else {
-                        // 未闭合的字符类按普通 '[' 匹配，而不是直接判定 pattern 非法。
-                        if (tb == '[') {
-                            p++;
-                            t++;
-                            continue;
-                        }
+                    int next = matchCharacterClass(pattern, p, tb);
+                    if (next >= 0) {
+                        p = next;
+                        t++;
+                        continue;
                     }
                 } else if (pc == tb) {
                     p++;
@@ -110,99 +107,57 @@ public final class YierdisGlobMatcher {
         return p == pattern.length;
     }
 
-    private static int findGlobClassEnd(byte[] pattern, int start) {
-        if (pattern == null) {
-            return -1;
-        }
-        int len = pattern.length;
-        if (start >= len) {
-            return -1;
-        }
-
-        int i = start;
-        if (i < len && (pattern[i] == '^' || pattern[i] == '!')) {
-            i++;
-        }
-
-        boolean first = true;
-        while (i < len) {
-            byte c = pattern[i];
-            if (c == '\\') {
-                i += i + 1 < len ? 2 : 1;
-                first = false;
-                continue;
-            }
-            if (c == ']' && !first) {
-                return i;
-            }
-            i++;
-            first = false;
-        }
-        return -1;
-    }
-
-    private static boolean globClassMatches(byte[] pattern, int start, int end, byte target) {
-        if (pattern == null) {
-            return false;
-        }
-        if (start < 0 || end < start || end >= pattern.length) {
-            return false;
+    /**
+     * 对齐 Redis stringmatchlen 的字符类。取反只认 {@code ^}，{@code !} 是字面字符。
+     * 紧跟 {@code [} 或 {@code [^} 的 {@code ]} 直接结束字符类，因此 {@code []a]} 和 {@code []]} 是空类。
+     * 未闭合时剩余模式都是类成员。范围终点可以是 {@code ]}，例如 {@code [a-]} 覆盖 {@code ]} 到 {@code a}。
+     *
+     * @return 匹配成功时返回类消费之后的模式下标：闭合时在 ']' 之后，未闭合时在模式末尾。否则返回 -1。
+     */
+    private static int matchCharacterClass(byte[] pattern, int openBracket, byte target) {
+        int index = openBracket + 1;
+        int length = pattern.length;
+        boolean negate = index < length && pattern[index] == '^';
+        if (negate) {
+            index++;
         }
 
-        int i = start;
-        boolean negate = false;
-        if (i < end && (pattern[i] == '^' || pattern[i] == '!')) {
-            negate = true;
-            i++;
-        }
-
-        int tb = target & 0xff;
+        int wanted = target & 0xff;
         boolean matched = false;
-
-        // 可选取反标记之后的首个 ']' 表示普通字符，而不是字符类结束符。
-        if (i < end && pattern[i] == ']') {
-            if (tb == (']' & 0xff)) {
-                matched = true;
-            }
-            i++;
-        }
-
-        while (i < end) {
-            int c1;
-            if (pattern[i] == '\\' && i + 1 < end) {
-                c1 = pattern[i + 1] & 0xff;
-                i += 2;
-            } else {
-                c1 = pattern[i] & 0xff;
-                i++;
-            }
-
-            // '-' 只有在后面仍有范围终点时才表示区间；末尾 '-' 按普通字符处理。
-            if (i < end - 1 && pattern[i] == '-') {
-                int j = i + 1;
-                int c2;
-                if (pattern[j] == '\\' && j + 1 < end) {
-                    c2 = pattern[j + 1] & 0xff;
-                    j += 2;
-                } else {
-                    c2 = pattern[j] & 0xff;
-                    j++;
-                }
-
-                int lo = Math.min(c1, c2);
-                int hi = Math.max(c1, c2);
-                if (tb >= lo && tb <= hi) {
+        while (true) {
+            if (index + 1 < length && pattern[index] == '\\') {
+                index++;
+                if ((pattern[index] & 0xff) == wanted) {
                     matched = true;
                 }
-                i = j;
-                continue;
-            }
-
-            if (tb == c1) {
+            } else if (index >= length) {
+                index--;
+                break;
+            } else if (pattern[index] == ']') {
+                break;
+            } else if (index + 2 < length && pattern[index + 1] == '-') {
+                int start = pattern[index] & 0xff;
+                int end = pattern[index + 2] & 0xff;
+                if (start > end) {
+                    int swap = start;
+                    start = end;
+                    end = swap;
+                }
+                index += 2;
+                if (wanted >= start && wanted <= end) {
+                    matched = true;
+                }
+            } else if ((pattern[index] & 0xff) == wanted) {
                 matched = true;
             }
+            index++;
         }
-
-        return negate ? !matched : matched;
+        if (negate) {
+            matched = !matched;
+        }
+        if (!matched) {
+            return -1;
+        }
+        return index + 1;
     }
 }

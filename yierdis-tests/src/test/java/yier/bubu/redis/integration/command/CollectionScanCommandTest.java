@@ -84,6 +84,81 @@ public class CollectionScanCommandTest {
     }
 
     @Test
+    public void scanMatchFollowsRedisCharacterClassesAndEmptyStars() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            FastTestClient client = new FastTestClient(dispatcher);
+            List<String> members = new ArrayList<>();
+            members.add("");
+            members.add("!");
+            members.add("a");
+            members.add("]");
+            members.add("b");
+            members.add("x");
+            for (int index = 0; index < 520; index++) {
+                members.add("pad:" + index);
+            }
+
+            List<byte[]> hset = new ArrayList<>();
+            hset.add(b("HSET"));
+            hset.add(b("hash"));
+            List<byte[]> sadd = new ArrayList<>();
+            sadd.add(b("SADD"));
+            sadd.add(b("set"));
+            List<byte[]> zadd = new ArrayList<>();
+            zadd.add(b("ZADD"));
+            zadd.add(b("zset"));
+            Map<String, String> hashValues = new HashMap<>();
+            Map<String, String> scores = new HashMap<>();
+            for (int index = 0; index < members.size(); index++) {
+                String member = members.get(index);
+                String hashValue = "v:" + member;
+                String score = Integer.toString(index + 1);
+                hashValues.put(member, hashValue);
+                scores.put(member, score);
+                hset.add(b(member));
+                hset.add(b(hashValue));
+                sadd.add(b(member));
+                zadd.add(b(score));
+                zadd.add(b(member));
+            }
+            client.execute(hset);
+            client.execute(sadd);
+            client.execute(zadd);
+
+            Map<String, Set<String>> expected = Map.of(
+                    "[!a]", Set.of("!", "a"),
+                    "[]a]", Set.of(),
+                    "[]]", Set.of(),
+                    "[a-]", Set.of("]", "a"),
+                    "[abc", Set.of("a", "b"),
+                    "*", new HashSet<>(members),
+                    "**", members.stream().filter(member -> !member.isEmpty()).collect(java.util.stream.Collectors.toSet())
+            );
+            for (String command : new String[]{"HSCAN", "SSCAN", "ZSCAN"}) {
+                String key = switch (command) {
+                    case "HSCAN" -> "hash";
+                    case "SSCAN" -> "set";
+                    default -> "zset";
+                };
+                for (Map.Entry<String, Set<String>> entry : expected.entrySet()) {
+                    Assert.assertEquals(
+                            command + " MATCH " + entry.getKey(),
+                            entry.getValue(),
+                            scanMatchingMembers(
+                                    client,
+                                    command,
+                                    key,
+                                    entry.getKey(),
+                                    "HSCAN".equals(command) ? hashValues : scores
+                            )
+                    );
+                }
+            }
+        });
+    }
+
+    @Test
     public void hashTableScanTerminatesAndCoversStableFields() {
         runDefaultFfm(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
@@ -310,6 +385,38 @@ public class CollectionScanCommandTest {
             }
         }
         throw new AssertionError("expected at least one member outside the first scan page");
+    }
+
+    private static Set<String> scanMatchingMembers(
+            FastTestClient client,
+            String command,
+            String key,
+            String pattern,
+            Map<String, String> pairedValues
+    ) {
+        Set<String> seen = new HashSet<>();
+        String cursor = "0";
+        int iterations = 0;
+        boolean cursorAdvanced = false;
+        do {
+            ScanReply page = scan(client, command, key, cursor, "MATCH", pattern, "COUNT", "7");
+            if ("SSCAN".equals(command)) {
+                seen.addAll(strings(page.elements()));
+            } else {
+                Map<String, String> pagePairs = pairs(page.elements());
+                for (Map.Entry<String, String> entry : pagePairs.entrySet()) {
+                    Assert.assertEquals(pairedValues.get(entry.getKey()), entry.getValue());
+                }
+                seen.addAll(pagePairs.keySet());
+            }
+            if (!"0".equals(page.cursor())) {
+                cursorAdvanced = true;
+            }
+            cursor = page.cursor();
+            Assert.assertTrue(command + " MATCH cursor did not terminate", ++iterations < 4096);
+        } while (!"0".equals(cursor));
+        Assert.assertTrue(command + " MATCH " + pattern + " must advance the cursor", cursorAdvanced);
+        return seen;
     }
 
     private static ScanReply scan(FastTestClient client, String... args) {

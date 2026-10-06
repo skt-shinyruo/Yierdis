@@ -309,10 +309,9 @@ public class CommandProcessorTest {
             Assert.assertEquals(1, lbrackets.values().size());
             Assert.assertTrue(containsBytes(lbrackets, kLbracket));
 
-            // Unclosed character classes are treated as literal '['.
-            ReplyArray literalLbracket = (ReplyArray) client.execute(cmd("KEYS", "["));
-            Assert.assertEquals(1, literalLbracket.values().size());
-            Assert.assertTrue(containsBytes(literalLbracket, kLbracket));
+            // 未闭合 '[' 的剩余模式都是类成员。只有 '[' 时类为空，匹配不到字面 '['。
+            ReplyArray unclosedClass = (ReplyArray) client.execute(cmd("KEYS", "["));
+            Assert.assertEquals(0, unclosedClass.values().size());
             }
         });
     }
