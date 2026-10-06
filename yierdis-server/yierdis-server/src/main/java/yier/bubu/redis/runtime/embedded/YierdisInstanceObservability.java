@@ -18,7 +18,7 @@ import java.util.Objects;
 public final class YierdisInstanceObservability {
     private final YierdisInstance instance;
 
-    public record YierdisDbSummary(int dbIndex, int keyCount, int expireCount) {
+    public record YierdisDbSummary(int dbIndex, int keyCount, int expireCount, long maxmemoryBytes) {
     }
 
     /** 供 server readiness 视图使用的 DB 健康聚合结果。 */
@@ -152,7 +152,7 @@ public final class YierdisInstanceObservability {
         List<YierdisDbSummary> summaries = new ArrayList<>(databases);
         for (int dbIndex = 0; dbIndex < databases; dbIndex++) {
             YierdisMemoryStats s = instance.runtimeEngine(dbIndex).memoryStats();
-            summaries.add(new YierdisDbSummary(dbIndex, s.keyCount(), s.expireCount()));
+            summaries.add(new YierdisDbSummary(dbIndex, s.keyCount(), s.expireCount(), s.maxmemoryBytes()));
         }
         return summaries;
     }
