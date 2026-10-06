@@ -21,9 +21,11 @@ import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Supplier;
 
 /**
@@ -141,16 +143,27 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
 
         ServerStatsSnapshot snapshot = serverStatsSnapshot(ex);
-        String section = args != null && args.argc() == 2 ? asciiLower(args, 1) : null;
         List<Field> fields = fields(snapshot, null);
-        if ("health".equals(section)) {
-            return mapReply(fields, Surface.HEALTH_MAP);
+        // 单独的 health / yierdis 仍是结构化 map。一旦和其他 section 写在一起，health 回到文本块，
+        // yierdis 没有文本段，按未知名字忽略。多个文本 section 在 buildRedisInfo 里按固定顺序去重。
+        if (args != null && args.argc() == 2) {
+            String section = asciiLower(args, 1);
+            if ("health".equals(section)) {
+                return mapReply(fields, Surface.HEALTH_MAP);
+            }
+            if ("yierdis".equals(section)) {
+                return mapReply(fields, Surface.STRUCTURED_MAP);
+            }
         }
-        if ("yierdis".equals(section)) {
-            return mapReply(fields, Surface.STRUCTURED_MAP);
+        Set<String> sections = null;
+        if (args != null && args.argc() > 1) {
+            sections = new HashSet<>();
+            for (int index = 1; index < args.argc(); index++) {
+                sections.add(asciiLower(args, index));
+            }
         }
 
-        byte[] response = buildRedisInfo(section, snapshot, fields).getBytes(StandardCharsets.UTF_8);
+        byte[] response = buildRedisInfo(sections, snapshot, fields).getBytes(StandardCharsets.UTF_8);
         return RedisReplies.bulkString(response);
     }
 
@@ -350,18 +363,24 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
     }
 
-    private String buildRedisInfo(String section, ServerStatsSnapshot snapshot, List<Field> fields) {
+    private String buildRedisInfo(Set<String> sections, ServerStatsSnapshot snapshot, List<Field> fields) {
         CommandExecutor.StatsSnapshot statsSnapshot = snapshot.executor();
         long uptimeMillis = snapshot.uptimeMillis();
         long uptimeSeconds = Math.max(0, uptimeMillis / 1000L);
 
-        boolean all = section == null || section.isBlank() || "default".equals(section) || "all".equals(section);
-        boolean server = all || "server".equals(section);
-        boolean clients = all || "clients".equals(section);
-        boolean health = all || "health".equals(section);
-        boolean memory = all || "memory".equals(section);
-        boolean stats = all || "stats".equals(section);
-        boolean keyspace = all || "keyspace".equals(section);
+        // null 是不带 section 的 INFO。空名字、default、all 也打开全部文本段，和原来的单 section 空白写法一样。
+        // 同名已在 HashSet 里去掉，请求里的先后不影响下面的 if 顺序。
+        boolean all = sections == null
+                || sections.contains(null)
+                || sections.contains("")
+                || sections.contains("default")
+                || sections.contains("all");
+        boolean server = all || sections.contains("server");
+        boolean clients = all || sections.contains("clients");
+        boolean health = all || sections.contains("health");
+        boolean memory = all || sections.contains("memory");
+        boolean stats = all || sections.contains("stats");
+        boolean keyspace = all || sections.contains("keyspace");
 
         StringBuilder sb = new StringBuilder(512);
 

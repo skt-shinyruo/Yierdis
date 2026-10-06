@@ -270,7 +270,7 @@ TTL 命令写路径、lazy expire、cleanup sample/budget 和 expiration reclama
 
 ## 可观测命令
 
-`INFO` 返回 Redis 风格文本块，按 section 输出 `# Server`、`# Health`、`# Clients`、`# Memory`、`# Stats`、`# Keyspace`。不带 section（或 `default`/`all`）时全部输出；指定 `server`/`health`/`clients`/`memory`/`stats`/`keyspace` 之一只输出该段。文本适合人工排查，也便于与 Redis 经验对照。
+`INFO` 返回 Redis 风格文本块。section 固定按 `# Server`、`# Health`、`# Clients`、`# Memory`、`# Stats`、`# Keyspace` 输出。不带 section，或带上 `default`/`all`，会输出全部。可以同时给出多个 section：同名只保留一次，未知名字忽略，输出仍是这个固定顺序，不按请求顺序。单独的 `INFO health` 和 `INFO yierdis` 仍是结构化 map；`health` 一旦和其他 section 写在一起，就回到文本块。文本适合人工排查，也便于与 Redis 经验对照。
 
 - `# Server`：`redis_version`、`tcp_port`、`uptime_in_seconds`、`uptime_in_milliseconds`。
 - `# Health`：`lifecycle_state`、`ready`、`writable`、`databases`、`degraded_databases`、`connected_clients`、`total_connections_received`、`rejected_connections`、`max_clients`，出故障时再加 `first_failure_type` / `first_failure_message`。

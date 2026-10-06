@@ -1117,10 +1117,10 @@ public final class ZSetValue implements YierdisValue {
         if (infinite != null) {
             return infinite;
         }
-        if (score == Math.rint(score) && score >= Long.MIN_VALUE && score <= Long.MAX_VALUE) {
+        if (integralScore(score)) {
             return Long.toString((long) score).getBytes(StandardCharsets.US_ASCII);
         }
-        return Double.toString(score).getBytes(StandardCharsets.US_ASCII);
+        return finiteScoreText(score).getBytes(StandardCharsets.US_ASCII);
     }
 
     private static void addScoreElement(NativeCollectionScanWindow.Builder builder, double score) {
@@ -1129,11 +1129,11 @@ public final class ZSetValue implements YierdisValue {
             builder.addBytes(infinite);
             return;
         }
-        if (score == Math.rint(score) && score >= Long.MIN_VALUE && score <= Long.MAX_VALUE) {
+        if (integralScore(score)) {
             builder.addLong((long) score);
             return;
         }
-        builder.addBytes(Double.toString(score).getBytes(StandardCharsets.US_ASCII));
+        builder.addBytes(finiteScoreText(score).getBytes(StandardCharsets.US_ASCII));
     }
 
     private static void writeScoreTo(ByteValueSink out, double score) {
@@ -1142,12 +1142,33 @@ public final class ZSetValue implements YierdisValue {
             out.value(infinite, 0, infinite.length);
             return;
         }
-        if (score == Math.rint(score) && score >= Long.MIN_VALUE && score <= Long.MAX_VALUE) {
+        if (integralScore(score)) {
             out.longAscii((long) score);
             return;
         }
-        byte[] encoded = Double.toString(score).getBytes(StandardCharsets.US_ASCII);
+        byte[] encoded = finiteScoreText(score).getBytes(StandardCharsets.US_ASCII);
         out.value(encoded, 0, encoded.length);
+    }
+
+    private static boolean integralScore(double score) {
+        return score == Math.rint(score) && score >= Long.MIN_VALUE && score <= Long.MAX_VALUE;
+    }
+
+    // Java Double.toString 写出 "1.0E22" / "1.0E-7"。Redis 的分数文本是 "1e+22" / "1e-7"：
+    // 正指数带 '+'，去掉尾部 ".0"，指数记号用 'e'。整数和 inf 不走这里。-0.0 在整数分支里变成 "0"。
+    private static String finiteScoreText(double score) {
+        String java = Double.toString(score);
+        int exponentMark = java.indexOf('E');
+        if (exponentMark < 0) {
+            return java;
+        }
+        String mantissa = java.substring(0, exponentMark);
+        if (mantissa.endsWith(".0")) {
+            mantissa = mantissa.substring(0, mantissa.length() - 2);
+        }
+        boolean negativeExponent = java.charAt(exponentMark + 1) == '-';
+        int exponent = Integer.parseInt(java.substring(exponentMark + (negativeExponent ? 2 : 1)));
+        return mantissa + (negativeExponent ? "e-" : "e+") + exponent;
     }
 
     private List<FinalMember> finalMembers(ZAddPlanEntry[] entries) {

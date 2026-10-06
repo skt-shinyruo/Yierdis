@@ -46,7 +46,7 @@ final class ServerCommandModule implements CommandModule {
                 this::hello
         ));
         registration.register(new CommandSpec(
-                new CommandSyntax("INFO", CommandArity.oneOf(1, 2), CommandKeySpec.NONE,
+                new CommandSyntax("INFO", CommandArity.min(1), CommandKeySpec.NONE,
                         TransactionPolicy.QUEUEABLE),
                 this::info
         ));

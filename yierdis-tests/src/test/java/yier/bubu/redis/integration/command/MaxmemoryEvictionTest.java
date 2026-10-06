@@ -331,7 +331,9 @@ public class MaxmemoryEvictionTest {
 
         ReplyObject syntaxObject = client.execute(cmd("OBJECT", "FOO", "k"));
         Assert.assertTrue(syntaxObject instanceof ReplyError);
-        Assert.assertEquals("ERR syntax error", ((ReplyError) syntaxObject).message());
+        Assert.assertEquals(
+                "ERR Unknown subcommand or wrong number of arguments for 'OBJECT'. Try OBJECT HELP.",
+                ((ReplyError) syntaxObject).message());
 
             }
         });

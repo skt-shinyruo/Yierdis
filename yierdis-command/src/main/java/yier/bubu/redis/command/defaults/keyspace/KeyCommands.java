@@ -38,6 +38,8 @@ public final class KeyCommands {
     private static final int KEY_WINDOW_DISCOVERY_ATTEMPTS = 2;
     private static final String KEYS_INCOMPLETE_ERROR = "ERR KEYS scan incomplete; use SCAN";
     private static final String SYNTAX_ERROR = "ERR syntax error";
+    private static final String OBJECT_SUBCOMMAND_ERROR =
+            "ERR Unknown subcommand or wrong number of arguments for 'OBJECT'. Try OBJECT HELP.";
     private static final String INTEGER_ERROR = "ERR value is not an integer or out of range";
     private static final String EXPIRE_UNSUPPORTED_OPTION = "ERR Unsupported option ";
     private static final String EXPIRE_NX_INCOMPATIBLE =
@@ -99,10 +101,21 @@ public final class KeyCommands {
 
     private Function<CommandSession, PreparedCommand> memory(CommandArgs args) {
         if (args.is(1, "USAGE")) {
-            if (args.argc() != 3) {
+            if (args.argc() < 3) {
                 throw new CommandParseException("ERR wrong number of arguments for 'memory' command");
             }
             BytesSlice key = args.slice(2);
+            // SAMPLES 只被接受，采样个数不改变 memoryUsage 的结果，SAMPLES 0 也合法。
+            // 缺 key 仍是 memory 的参数个数错误；选项写错或负数才是 syntax error。
+            for (int index = 3; index < args.argc(); index++) {
+                if (!args.is(index, "SAMPLES") || index + 1 >= args.argc()) {
+                    throw syntaxFailure();
+                }
+                if (args.longAt(index + 1) < 0) {
+                    throw syntaxFailure();
+                }
+                index++;
+            }
             return session -> {
                 long bytes = support.commandDb(session).memoryUsage(key);
                 RedisReply reply = bytes < 0L ? RedisReplies.nullValue() : RedisReplies.integer(bytes);
@@ -145,11 +158,9 @@ public final class KeyCommands {
     }
 
     private Function<CommandSession, PreparedCommand> object(CommandArgs args) {
-        if (args.argc() != 3) {
-            throw new CommandParseException("ERR wrong number of arguments for 'object' command");
-        }
-        if (!args.is(1, "ENCODING")) {
-            throw syntaxFailure();
+        // 没有子命令时走命令 arity（min 2），到不了这里。已知子命令参数个数不对和未知子命令共用 Redis 这句。
+        if (!(args.is(1, "ENCODING") && args.argc() == 3)) {
+            throw new CommandParseException(OBJECT_SUBCOMMAND_ERROR);
         }
         BytesSlice key = args.slice(2);
         return session -> {
