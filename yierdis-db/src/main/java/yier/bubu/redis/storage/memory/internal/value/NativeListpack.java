@@ -6,7 +6,6 @@ import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
-import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.storage.api.result.ByteValueSink;
 
 import java.util.Arrays;
@@ -474,7 +473,7 @@ public final class NativeListpack implements AutoCloseable {
         if (requiredBytes <= storageBytes) {
             return;
         }
-        blockHandle = byteStore.reallocateBlock(blockHandle, requiredBytes, NativeReallocPolicy.PRESERVE_PREFIX);
+        blockHandle = byteStore.reallocateBlock(blockHandle, requiredBytes);
         storageBytes = requiredBytes;
         allocatedBytes = byteStore.allocatedBytes(blockHandle);
     }

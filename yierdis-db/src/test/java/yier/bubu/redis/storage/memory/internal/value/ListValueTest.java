@@ -15,7 +15,7 @@ import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
 public class ListValueTest {
-    private static final int QUICKLIST_NODE_RECORD_BYTES = 80;
+    private static final int QUICKLIST_NODE_RECORD_BYTES = 64;
     private static final int QUICKLIST_NODE_OWNER_ROOT_OFFSET = 0;
     private static final int QUICKLIST_NODE_PREV_OFFSET = 16;
     private static final int QUICKLIST_NODE_NEXT_OFFSET = 32;

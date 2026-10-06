@@ -5,7 +5,6 @@ import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.storage.memory.DbThreadGuard;
 
 public class FailOnAllocationStableMemoryBackendTest {
@@ -37,25 +36,17 @@ public class FailOnAllocationStableMemoryBackendTest {
             backend.resetAttempts();
             backend.failOnAllocation(1);
 
-            NativeHandle sameCapacity = backend.reallocate(
-                    handle,
-                    8,
-                    NativeReallocPolicy.PRESERVE_PREFIX
-            );
+            NativeHandle sameCapacity = backend.reallocate(handle, 8);
             Assert.assertEquals(0L, backend.allocationAttempts());
             Assert.assertEquals(handle, sameCapacity);
 
-            NativeHandle shrunk = backend.reallocate(
-                    sameCapacity,
-                    4,
-                    NativeReallocPolicy.PRESERVE_PREFIX
-            );
+            NativeHandle shrunk = backend.reallocate(sameCapacity, 4);
             Assert.assertEquals(0L, backend.allocationAttempts());
             Assert.assertEquals(handle, shrunk);
 
             Assert.assertThrows(
                     NativeCapacityExceededException.class,
-                    () -> backend.reallocate(handle, 32, NativeReallocPolicy.PRESERVE_PREFIX)
+                    () -> backend.reallocate(handle, 32)
             );
             Assert.assertEquals(1L, backend.allocationAttempts());
             backend.free(handle);

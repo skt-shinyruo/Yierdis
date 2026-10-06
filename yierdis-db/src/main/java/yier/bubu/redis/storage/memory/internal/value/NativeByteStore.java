@@ -7,7 +7,6 @@ import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
-import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.storage.api.result.ByteValue;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
@@ -66,14 +65,13 @@ public final class NativeByteStore {
         }
     }
 
-    NativeHandle reallocateBlock(NativeHandle handle, int newSize, NativeReallocPolicy policy) {
+    NativeHandle reallocateBlock(NativeHandle handle, int newSize) {
         requireLiveHandle(handle);
-        Objects.requireNonNull(policy, "policy");
         if (newSize <= 0) {
             throw new IllegalArgumentException("newSize must be > 0");
         }
         int oldAllocatedBytes = allocatedBytes(handle);
-        NativeHandle resized = backend.reallocate(handle, newSize, policy);
+        NativeHandle resized = backend.reallocate(handle, newSize);
         if (!handle.equals(resized)) {
             throw new IllegalStateException("native realloc changed stable handle");
         }

@@ -27,7 +27,6 @@ import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
-import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 import yier.bubu.redis.memory.api.StableMemoryBackendIds;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
@@ -92,9 +91,8 @@ public final class HeapStableMemoryBackend implements StableMemoryBackend {
     }
 
     @Override
-    public NativeHandle reallocate(NativeHandle handle, int newSize, NativeReallocPolicy policy) {
+    public NativeHandle reallocate(NativeHandle handle, int newSize) {
         checkOpen();
-        Objects.requireNonNull(policy, "policy");
         if (newSize < 0) {
             throw new IllegalArgumentException("newSize must be non-negative");
         }

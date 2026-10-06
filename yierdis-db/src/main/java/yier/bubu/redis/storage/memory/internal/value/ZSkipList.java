@@ -10,7 +10,6 @@ public final class ZSkipList {
     // Mirrors Redis defaults:
     // https://github.com/redis/redis/blob/unstable/src/server.h
     private static final int MAX_LEVEL = 32;
-    private static final double P = 0.25d;
     private static final long FIXED_HEAP_BYTES = 72L;
     private static final long ARRAY_HEADER_BYTES = 16L;
     private static final long NODE_FIXED_HEAP_BYTES = 48L;

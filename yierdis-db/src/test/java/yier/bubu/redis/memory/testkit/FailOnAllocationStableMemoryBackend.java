@@ -18,7 +18,6 @@ import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
-import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.StableMemoryBackend;
 
 public final class FailOnAllocationStableMemoryBackend implements StableMemoryBackend {
@@ -59,13 +58,13 @@ public final class FailOnAllocationStableMemoryBackend implements StableMemoryBa
     }
 
     @Override
-    public NativeHandle reallocate(NativeHandle handle, int newSize, NativeReallocPolicy policy) {
+    public NativeHandle reallocate(NativeHandle handle, int newSize) {
         Objects.requireNonNull(handle, "handle");
         int currentCapacity = capacityOf(handle);
         if (newSize > currentCapacity) {
             checkAllocationAttempt();
         }
-        NativeHandle resized = delegate.reallocate(handle, newSize, policy);
+        NativeHandle resized = delegate.reallocate(handle, newSize);
         knownCapacities.remove(handle);
         rememberCapacity(resized, Math.max(newSize, currentCapacity));
         return resized;
