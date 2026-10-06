@@ -31,6 +31,7 @@
         <module>yierdis-command</module>
         <module>yierdis-db</module>
         <module>yierdis-cli</module>
+        <module>yierdis-client</module>
         <module>yierdis-benchmark</module>
         <module>yierdis-tests</module>
     </modules>
@@ -105,6 +106,11 @@
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
                 <artifactId>yierdis-server</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-client</artifactId>
                 <version>${project.version}</version>
             </dependency>
         </dependencies>
