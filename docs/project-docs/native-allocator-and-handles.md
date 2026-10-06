@@ -429,7 +429,7 @@ flowchart TD
 
 ### 4.6 统计口径
 
-（`summarizePages()`）：small page 记 `committed += PAGE_BYTES`、`used += liveBlocks * sizeClass.bytes()`、`smallFreeBytes += freeCount * sizeClass.bytes()`；span 记 `committed = used = capacity`，并把 `span.pageCount` 累加进 `liveMediumSpanPages` / `liveLargeSpanPages`。注意这两项是**页数**，span 描述符数在 `liveSpanDescriptors`（见 §10）。
+（`summarizePages()`）：small page 记 `committed += PAGE_BYTES`、`used += liveBlocks * sizeClass.bytes()`、`smallFreeBytes += freeCount * sizeClass.bytes()`；span 记 `committed = used = capacity`，并把 `span.pageCount` 累加进 `liveMediumPages` / `liveLargePages`。这两项是页数，span 描述符数在 `liveSpanDescriptors`。
 
 block（`YierdisNativeBlock`）对外只暴露 backend 所需的 capacity、page identity/class 和 byte access。requested size、page count、size class 等 test-only 镜像不留在 block 中；真实信息由 registry descriptor 和 object table 决定。
 
@@ -537,7 +537,7 @@ nextCreationSequence = checkpoint.creationSequence;
 - 复制、metadata 校验或 publication 之前的任何失败，都会关闭未发布的 target 并让 handle 继续解析到旧 block——**旧数据必须完好**；
 - publication 之后不再假装旧状态仍可回滚。
 
-`NativeReallocPolicy` 当前只有 `PRESERVE_PREFIX` 一个值，实现也没有按 policy 分支（行为上仍是保留 prefix）。要加"不保留 prefix"或"归零"策略，分支点就在这里。
+`reallocate(handle, newSize)` 没有 policy 参数。容量足够时原地更新，容量不足时分配新块并复制旧 prefix。
 
 ## 8. Active defrag
 
@@ -571,7 +571,7 @@ handle、kind、logical size 和 DB graph identity 全程不变——**defrag �
 
 `publishMoved` 之前抛异常会执行 `abortMove()` 并 `close()` target，对象回到旧位置；统计上记 `failedMoves`。
 
-**`defragReclaimedPages` 的口径**：`moveLiveObject` 里按 `retiredBytes / PAGE_BYTES` 累加（`retiredBytes = previous.capacity()`），统计的是**退役 block 覆盖的页数**，不是后端真正回收的页数——真正的回收发生在 quarantine/epoch 允许之后。另外 `trimEmptyPages(...)` 也把本次回收量累加进同一个 `defragReclaimedPages` 计数器，所以这个字段同时混入了两种来源。需要"真实回收页数"时不要用这个字段。
+搬迁和 trim 分两个计数。`moveLiveObject` 按 `retiredBytes / PAGE_BYTES` 累加 `defragRetiredBlockPages`（`retiredBytes = previous.capacity()`），这是退役 block 覆盖的页数；真正把页还回去发生在 quarantine/epoch 允许之后。`trimEmptyPages(...)` 把本次回收量累加进 `defragTrimReclaimedPages`。
 
 另一个已知边界：`defragCycle` **没有"搬迁是否有收益"的启发式**，对每个合格对象都会分配新 block 并复制。也就是说当内存已经紧凑时，defrag 仍然是纯粹的复制开销，只能靠 budget 限制规模。
 
@@ -587,21 +587,19 @@ handle、kind、logical size 和 DB graph identity 全程不变——**defrag �
 6. **`capacity` 的唯一来源是 descriptor**；slot 里的 4 B capacity 是不存在的字段，不要"补上"。
 7. **block 不携带 test-only 镜像**（requested size、page count 等）；需要时从 registry/table 取。
 
-## 10. 已知命名与口径偏差
+## 10. 统计字段口径
 
-以下都在源码中确认过，不影响已文档化的不变量，但读 stats 时容易误判：
+读 `NativeAllocatorStats` 时按这些名字。`reallocate` 不接收 policy 参数。
 
-| 观察 | 位置 | 说明 |
+| 字段 | 位置 | 说明 |
 |---|---|---|
-| `freePages` 复用 `emptySmallPages` | `YierdisNativePageAllocator.stats()` | 两个字段填的是同一个值（构造 `YierdisNativePageAllocatorStats` 时把 `summary.emptySmallPages()` 传了两次） |
-| `mediumFreeBytes` / `largeFreeBytes` 恒 0 | 同上 | span 没有页内空闲块，这两个字段硬编码为 `0L` |
-| `liveMediumSpanPages` / `liveLargeSpanPages` 是**页数** | 同上 | 累加的是 `span.pageCount`；span 描述符数在 `liveSpanDescriptors` |
-| `defragReclaimedPages` 名不符实 | `moveLiveObject` 与 `trimEmptyPages` | 一个记退役 block 覆盖页数，另一个记 trim 回收量，混在同一字段 |
-| `skippedBudgetObjects` 偏窄 | `defragCycle` | 只在 byte 预算停止时自增 |
-| `STATE_CORRUPT` 未使用 | `YierdisNativeObjectTable` | 定义但从未写入或匹配 |
+| `emptySmallPages` | `YierdisNativePageAllocator.stats()` | 空 small page 的页数。统计里没有另一列 `freePages` |
+| `liveMediumPages` / `liveLargePages` | 同上 | 累加的是页数，不是 span 描述符数 |
+| `defragRetiredBlockPages` | `moveLiveObject` | 退役 block 覆盖的页数 |
+| `defragTrimReclaimedPages` | `trimEmptyPages` | trim 实际回收的页数 |
+| `staleHandleFreeDetections` | `requireLiveMetaForFree` | free 时命中 stale 句柄就自增，包含不是 double-free 的情况 |
+| `skippedBudgetObjects` | `defragCycle` | object、time、byte 三种预算停在当前对象时都计入 |
 | handle `flags` 恒 0 | `YierdisLocalHandleCodec` / object table | 会被解码并由 `localHandleFor` 回填，但所有写入路径都传 0，也没有校验 |
-| `doubleFreeDetections` 语义偏宽 | `requireLiveMetaForFree` | 捕获 `StaleNativeHandleException` 即自增，实为"free 时命中 stale 句柄"，包含非 double-free 场景 |
-| `NativeReallocPolicy` 单值 | `reallocateLocal` | 只有 `PRESERVE_PREFIX`，实现未按 policy 分支 |
 
 ## 11. 与 DB 层的交界
 

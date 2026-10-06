@@ -6,7 +6,7 @@ Yierdis 的 DB 层**为什么这样设计**，要从分层意图、层间契约�
 
 - [`db-internals.md`](./db-internals.md)：DB 内部结构的**机制与组合参考**（对象是什么、谁调用谁、改哪里要动什么）。
 - [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)、[`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)（含 TTL 与过期生命周期）：各专题的完整机制。
-- [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作)：运维手册（degraded 恢复等）。
+- [`configuration-and-operations.md`](./configuration-and-operations.md#degraded-恢复)：运维手册里的 degraded 恢复。
 
 本文的写法是：**每条设计选择都给出"为什么不选另一条路"以及这条路的代价**。只给结论不给不选它的理由，等于没论证。
 
@@ -95,7 +95,7 @@ object table 槽位存当前 pageId / pageOffset / size / capacity(=descriptor �
 代价：
 
 - 系统多出一个"结果未知"状态，命令层必须能表达它；
-- degraded 是重状态：写入被 `MISCONF DB is in a degraded state; writes are disabled` 拒绝，**连回收类 mutation 一起拒**（`requireWritable` 在读取 `AdmissionMode` 之前执行），且唯一恢复入口 `reconcileAccounting()` 刻意绕过 executor（运维恢复路径见 [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作)）。
+- degraded 是重状态：写入被 `MISCONF DB is in a degraded state; writes are disabled` 拒绝，**连回收类 mutation 一起拒**（`requireWritable` 在读取 `AdmissionMode` 之前执行）。stock server 的恢复命令是 `YDRECONCILE`，内部仍是绕过 executor 的 `reconcileAccounting()`（运维步骤见 [`configuration-and-operations.md`](./configuration-and-operations.md#degraded-恢复)）。
 
 不这样选的后果：commit 后失败若对外报"没发生"，客户端会重试，而重试建立在错误前提上（比如 `INCR` 会被执行两次）；内部若假装回滚，账本会与物理实际不符，且这个偏差会被静默带入后续 admission。
 
@@ -112,7 +112,7 @@ object table 槽位存当前 pageId / pageOffset / size / capacity(=descriptor �
 
 - 两套账允许**静默漂移**——不会自动触发 invariant failure，只在 `reconcileAccounting()` 时暴露；
 - native reclaimable bytes 不能预先从 committed footprint 扣除（回收是否真的发生要等 trim/epoch）；
-- 报告口径容易出现"名字骗人"的字段（`ledger_used_bytes` 实为堆估算）。
+- 堆估算与逻辑账本是两列：`heap_estimate_bytes` / `yierdis_heap_estimate_bytes` 对堆估算，`ledger_used_bytes` / `yierdis_ledger_used_bytes` 对 ledger `usedBytes()`。
 
 不这样选的后果：只用逻辑账，上取整与碎片会让实际内存先于预期撑爆，且无法解释"为什么 1 GB 数据占了 1.4 GB"；只用物理账，每次写都要遍历对象做一次 O(n) 重算，单线程下不可接受。
 
@@ -275,8 +275,8 @@ admissionMode == RECLAMATION ? ledger.beginReclamation() : ledger.reserve(upperB
 - `DbThreadGuard` 是 `OPEN → CLOSING → CLOSED` 状态机 + owner thread 绑定：未绑定 / 跨线程 / CLOSING / CLOSED 一律 fail-fast；一次绑定同时锁住 DB 访问与 native 内存。
 - Netty I/O 线程**只提交**；真正的 DB 执行在 `SerialOwnerExecutor` 单线程上，维护命令也投到同一个 owner executor。
 - **SCAN / KEYS 一致性靠 epoch + discovery/replay**：`KeyWindow` 在 epoch 内记录 cursor、目录 generation/capacity、glob、过期时间，`emitTo` 时按同一物理范围重放，必须得到相同 count、无多余匹配、结束游标一致，否则抛 `IllegalStateException`。
-- **degraded 不自动恢复**：写入被 `MISCONF DB is in a degraded state; writes are disabled` 拒绝；`reconcileAccounting()` 是唯一显式恢复入口，刻意绕过 mutation executor（degraded 会拒写），把逻辑账本对齐到物理重算值，成功才清除 degraded。持续性记账 bug 会反复以事故暴露，不会被静默抹平。
-- 其运行期副作用是：`requireWritable` 在读取 `AdmissionMode` **之前**执行，因此 degraded 时连 reclamation 类 mutation 也被拒——**过期回收、`DEL`、`FLUSHDB`、读路径惰性回收都会失败**。运维恢复路径见 [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作)。
+- **degraded 不自动恢复**：写入被 `MISCONF DB is in a degraded state; writes are disabled` 拒绝。stock server 用 `YDRECONCILE` 调用 `reconcileAccounting()`；这条路径绕过 mutation executor，成功才把逻辑账本对齐到物理重算值并清除 degraded，失败则保持 degraded。持续性记账 bug 会反复以事故暴露，不会被静默抹平。
+- 其运行期副作用是：`requireWritable` 在读取 `AdmissionMode` **之前**执行，因此 degraded 时 `DEL`、`FLUSHDB` 和回收类写入仍被拒绝。读已过期 key 返回 nil，并且不删除物理记录。运维步骤见 [`configuration-and-operations.md`](./configuration-and-operations.md#degraded-恢复)。
 
 **为什么 owner 可以是 Netty I/O 线程之外的一个线程**：FFM 的 `Arena.ofShared()` 允许 region 跨线程关闭，但**这不解除 DB 的 thread confinement**——把 region 当共享对象来关闭是 runtime 层的权限，不是 graph 的权限。二者的边界见 [`native-memory-runtime.md`](./native-memory-runtime.md)。
 
@@ -328,35 +328,29 @@ checkThread
 3. **内存估算大量硬编码常量**（entry overhead 64 B、SET 32 B、ZSET 96 B、各类对象 16/48/64/72/80 B…），与真实 JVM 开销漂移时账本不会报错。替代方案是用 JOL/Instrumentation 实测，但那要求在生产路径引入 instrumentation 依赖。
 4. **expires 索引无界增长**：stale 项只在消费到队首且已到期时才丢弃，高频改 TTL 会持续堆积；且这部分堆不进任何内存账。替代方案是改 TTL 时主动删旧项，但那需要索引支持 O(log n) 定位随机项（`PriorityQueue` 不支持）。
 5. **主动过期可能被单个候选卡住**：队首候选删除失败即返回，后续候选等下一轮。替代方案是失败时跳过队首继续尝试，代价是丢失"队首必须最先处理"的语义。
-6. **degraded 是重状态**：连回收都停且不可自愈，恢复入口没有接入 server/command 路径。替代方案是让 degraded 只拒增长型写入（放开 RECLAMATION），但那样记账 bug 会被回收路径继续放大。
+6. **degraded 是重状态**：`DEL`、`FLUSHDB` 和回收类写入仍被拒绝，维护节拍也不会自动对账。恢复入口是 `YDRECONCILE`。读已过期 key 返回 nil，不在 degraded 期间改物理状态。替代方案是让 degraded 只拒增长型写入（放开 RECLAMATION），但那样记账 bug 会被回收路径继续放大。
 7. **`noeviction` 下不回收过期占用**：这是有意的策略边界（见 TTL/maxmemory 专题），但会造成"明明有可回收过期 key 仍 OOM"的运维困惑。
-8. **观测字段命名有历史包袱**：`ledger_used_bytes` 实为堆估算，与 ledger 逻辑 `usedBytes` 无关（后者全仓只有 `prepareFlushDb` 与 `reconcileAccounting` 使用）。
+8. **堆估算和逻辑账本分列**：`heap_estimate_bytes` 是堆估算，`ledger_used_bytes` 是 ledger `usedBytes()`。`INFO` 的 `yierdis_ledger_effective_used_bytes` 仍是堆估算加 `reservedBytes`。
 
-## 可疑与冗余实现观察
+## 已落地的统计与清理
 
-以下各点均读自源码，不影响正确性，但值得清理或确认：
+#116–#121 收掉了审计里名不符实的计数和死代码。当前读数：
 
-- `YierdisNativePageAllocator.stats()`：`freePages` 复用 `emptySmallPages`；`mediumFreeBytes`/`largeFreeBytes` 恒 0；`liveMediumSpanPages`/`liveLargeSpanPages` 实际计的是**页数**（累加 `span.pageCount`）而非 span 描述符数（后者是 `liveSpanDescriptors`）。
-- `NativeAllocatorStats.defragReclaimedPages` 混用两种口径：`moveLiveObject` 里按 `retiredBytes / PAGE_BYTES` 记**退役 block 覆盖页数**（不是真正回收的页数），`trimEmptyPages(...)` 又把本次 trim 回收量累加到同一字段。
-- defrag 的 `skippedBudgetObjects` 只在 byte 预算停止时自增，object/time 预算停止时为 0。
-- `state == STATE_CORRUPT` 定义但本层从未写入或匹配；handle 的 4-bit `flags` 由 `readMeta` 解出、经 `localHandleFor` 原样回填，但**所有写入路径都传 0**，也没有任何校验，实际恒为 0。
-- `doubleFreeDetections` 实为"free 时命中 stale 句柄"（`requireLiveMetaForFree` 捕获 `StaleNativeHandleException` 即自增），包含非 double-free 场景。
-- `ZSkipList.P = 0.25` 声明但未使用；`levelFor(score, member)` 以 `state = mix64(Double.doubleToLongBits(score) ^ memberStore.hashBytes(member))` 起步，从 `lvl = 1` 开始只要低 2 位为 0（`(state & 0x3L) == 0L`）就升一层并 `state = mix64(state + 0x9E3779B97F4A7C15L)`，直到 `MAX_LEVEL = 32`——每层继续概率 1/4，与声明的 P 等价，但**层数完全由 (score, member) 确定性推导**，所以 prepared insert/delete 不必携带随机状态、重放同一插入必得同一拓扑。
-- `NativeReallocPolicy` 只有 `PRESERVE_PREFIX`，实现未按 policy 分支（行为上仍保留 prefix）。
-- `defragCycle` 没有"移动是否有收益"的启发式，对每个合格对象都会重新分配并复制。
-- `SetValue.LONG_MIN_VALUE_BYTES` 为死常量；quicklist node 的 `payloadRef`（offset 48）恒为 `NULL` 且无读取者；`NativeObjectKind.SCORE_BYTES` 声明但全仓无使用。
-- 单 DB 淘汰的 `maxAttempts = Math.max(64, keyCount * 2)` 无 int 溢出保护（global governor 的同类计算有）。
-- `INFO memory` 的 `yierdis_maxmemory_per_db_bytes` 用整数除法，与实际"余数 +1"分配可能差 1 字节。
+- allocator 统计用 `emptySmallPages`、`liveMediumPages`、`liveLargePages`、`staleHandleFreeDetections`。defrag 分成 `defragRetiredBlockPages`（退役 block 覆盖页数）和 `defragTrimReclaimedPages`（trim 回收页数）。`skippedBudgetObjects` 在 object、time、byte 三种预算停在当前对象时都计入。
+- `NativeReallocPolicy` 已删除。`reallocate(handle, newSize)` 不带 policy 参数：容量足够时原地更新，否则分配新块并复制旧 prefix。
+- 单 DB 与 GLOBAL governor 的淘汰尝试上限都走 `MaxmemoryEvictionAttempts.maxAttempts`：下限 64，`keyCount > Integer.MAX_VALUE / 2` 时在乘法前取 `Integer.MAX_VALUE`。
+- `INFO memory` 在 per-db scope 且 maxmemory 大于 0 时按库输出 `yierdis_db<N>_maxmemory_bytes`，值是装配时分到该库的额度（余数 +1）。global scope 不输出这些行。
+- ZSET 层数仍由 score 与 member 确定性推导。`defragCycle` 仍没有“已足够紧凑就跳过”的收益启发式。handle `flags` 仍由写入路径传 0。
 
-上述观察项的修复状态以 issue #115 及其子任务（#116–#122）为准；degraded 的运维处置见 [`configuration-and-operations.md`](./configuration-and-operations.md#生产环境加固与验收操作)。
+degraded 的运维处置见 [`configuration-and-operations.md`](./configuration-and-operations.md#degraded-恢复)。
 
 ## 验证状态
 
-本文主要基于源码。为便于后续维护，这里明确哪些结论已逐条回源、哪些仍是推断：
+本文主要基于源码。下面的回源清单是 2026-09-25 审计时的符号；统计字段和恢复命令的当前名字以上一节和 [`configuration-and-operations.md`](./configuration-and-operations.md#degraded-恢复) 为准。这里明确哪些结论已逐条回源、哪些仍是推断：
 
 **已逐条回源核对（本次审计）**
 
-- **L0 全部**：`YierdisLocalHandleCodec`（五位段布局与全部 shift/mask 常量）、`YierdisNativeObjectSegment`（`SLOTS_PER_SEGMENT = 4096`、`freeStack`、`RETIRED_WORDS = 64`、`retire`/`isRetired`/`releaseOffset`）、`YierdisNativeObjectTable`（`META_BYTES = 36` 与七个字段偏移、packed word 的 state/pageClass/flags/kind/domain/generation 位段、`INITIAL_GENERATION = 1`、`MAX_GENERATION = 0x0fff`、六个状态常量、capacity 不在槽位）、`YierdisNativePageAllocator`（`PAGE_BYTES = 64 * 1024`、`MEDIUM_MAX_BYTES = 1 MiB`、`freeOffsets`/`freeCount`/`liveBlocks`、`findWarmPage` 与 `createdInActiveScope`、`claimPageId`/`nextPageId` 溢出、`summarizePages` 字段口径、`restoreAllocationScope` 的顺序与异常消息）、`YierdisFfmStableMemoryBackend`（`canReclaim` 实现、`freeLocal` 的 `delayRelease` 判定、`reserveMovedBlock`、`reallocateLocal` 三条分支、`defragCycle` 遍历与预算顺序、`moveLiveObject` 的 `defragReclaimedPages` 记账、`trimEmptyPages` 对同一字段的累加、`stats()` 字段映射）。
+- **L0 全部**：`YierdisLocalHandleCodec`（五位段布局与全部 shift/mask 常量）、`YierdisNativeObjectSegment`（`SLOTS_PER_SEGMENT = 4096`、`freeStack`、`RETIRED_WORDS = 64`、`retire`/`isRetired`/`releaseOffset`）、`YierdisNativeObjectTable`（`META_BYTES = 36` 与七个字段偏移、packed word 的 state/pageClass/flags/kind/domain/generation 位段、`INITIAL_GENERATION = 1`、`MAX_GENERATION = 0x0fff`、六个状态常量、capacity 不在槽位）、`YierdisNativePageAllocator`（`PAGE_BYTES = 64 * 1024`、`MEDIUM_MAX_BYTES = 1 MiB`、`freeOffsets`/`freeCount`/`liveBlocks`、`findWarmPage` 与 `createdInActiveScope`、`claimPageId`/`nextPageId` 溢出、`summarizePages` 字段口径、`restoreAllocationScope` 的顺序与异常消息）、`YierdisFfmStableMemoryBackend`（`canReclaim` 实现、`freeLocal` 的 `delayRelease` 判定、`reserveMovedBlock`、`reallocateLocal` 三条分支、`defragCycle` 遍历与预算顺序、`moveLiveObject` 的 `defragRetiredBlockPages` 记账、`trimEmptyPages` 的 `defragTrimReclaimedPages` 记账、`stats()` 字段映射）。
 - **L5 全部**：`SetValue`、`HashValue`、`ListValue`、`ZSetValue`、`ZSkipList`、`NativeByteMap`、`NativeListpack`、`YierdisHyperLogLog`、`YierdisEncodingThresholds`、`ValueEncoding`。
 - **关键行为事实**：`DbThreadGuard`、`YierdisDbHealth`（`MISCONF_DEGRADED` 文案与 `recordInvariantFailure`/`recordReconciliation` 语义）、`YierdisDbMutationExecutor`（`requireWritable` 早于 `admissionMode`、`reserveNormalPlan` 重读循环、`requireReclamationInvariants`、三处失败收口方法、容量失败不 degrade 的例外）、`EntryTable`、`NativeKeyDirectory`（`nativeBytes()` 恒 0、`WRITE_REHASH_BUDGET`、`removeEntry` 反查、`collapsedReplacement`）、`OpenAddressingTopology`（4 状态）、`HashCapacityPolicy`（三条阈值）、`ExpiresIndex`、`ScanCursorV2` 位段、`YierdisDbKeyLifecycle`（`StagedEntry`、`expireCount` 下溢、`touchRecord` 条件、close 顺序）、`YierdisDbDataMaintenance`（维护顺序与两个预算常量）、`YierdisDbExpirationSupport`（`CLEANUP_MAX_CANDIDATES = 20`）、`YierdisDbMaxmemorySupport`（`maxAttempts` 表达式、过期候选 `lruClock = 0`）、`YierdisDbMemoryEstimator` 与 `DbMemoryConstants` 常量、`YierdisInstance.create` 的 PER_DB/GLOBAL 装配、`NettyServerInfoProvider` 与 `KeyCommands` 的字段映射、`reconcileAccounting` 的全仓调用点。
 

@@ -101,8 +101,8 @@ commit 失败边界（与执行器一致）：
 
 ### 惰性过期
 
-DB ops 解析到 `EntryRecord` 后比较 `expireAtMillis` 与当前时间：未过期返回 record；已过期调用 `YierdisDbKernel.reclaimExpired(...)` 并对调用方隐藏该 key。相关入口：
-- `YierdisDbKernel.liveEntryRecord(keyHandle)`：解析 record，已过期则回收并返回 null；
+DB ops 解析到 `EntryRecord` 后比较 `expireAtMillis` 与当前时间：未过期返回 record；已过期时，可写路径调用 `YierdisDbKernel.reclaimExpired(...)` 并对调用方隐藏该 key。DB 已 degraded 时 `liveEntryRecord` 直接返回 null，不调用回收，物理记录留在原地，读命令得到 nil。相关入口：
+- `YierdisDbKernel.liveEntryRecord(keyHandle)`：解析 record。已过期且可写则回收并返回 null；已过期且 degraded 则跳过回收并返回 null；
 - `YierdisDbKernel.reclaimExpiredBeforeMutation(keyBytes, nowMillis)`：写命令在覆盖前先回收同 key 的过期残留；
 - `YierdisDbKeyLifecycle.liveEntryRecord(...)`：只判 null，不回收（给只读路径用）；它还会顺手清理 keyDirectory 指向已消失 handle 的悬挂映射。
 
@@ -112,7 +112,7 @@ DB ops 解析到 `EntryRecord` 后比较 `expireAtMillis` 与当前时间：未�
 3. commit 移除 directory entry，并释放 entry 与 key resources；
 4. settle ledger，再释放 superseded value，并按提示回收空 native page。
 
-所以惰性过期不是单纯的优化：一次读可能完成物理删除和记账。只有成功取得 live record 的 LRU 路径才会更新访问时钟。
+所以可写路径上的惰性过期不是单纯的优化：一次读可能完成物理删除和记账。degraded 下同一次读只把 key 看成不存在，不改 graph、不改账本。只有成功取得 live record 的 LRU 路径才会更新访问时钟。
 
 ### 有界主动清理
 
@@ -154,7 +154,7 @@ maxmemory 相关的一切数字都来自两个不同来源，混用它们是最�
 - `usedBytes`：按已提交 mutation 的 `actualDeltaBytes` 增减的逻辑账本，**不是** allocator / JVM 的实时物理占用；
 - `reservedBytes`：预算已通过、但 mutation 还没 commit/rollback 的那段窗口。
 
-`usedBytes` 的用途很窄：`prepareFlushDb` 用它算 flush 的 committed delta，`reconcileAccounting` 用它对比物理重算值。它不出现在任何对外字段里。
+`usedBytes` 出现在对外观测里：`MEMORY STATS` 的 `ledger_used_bytes` 和 `INFO` 的 `yierdis_ledger_used_bytes` 都绑定它（多库 `INFO` 是各库之和）。`prepareFlushDb` 用它算 flush 的 committed delta，`reconcileAccounting` 用它对比物理重算值。堆估算是另一列：`heap_estimate_bytes` / `yierdis_heap_estimate_bytes`。
 
 **物理快照 `MemoryUsageSnapshot`** 由每个 DB 报告的 owned snapshot 构成，`effectiveBytesForMaxmemory()` 固定为：
 
@@ -174,7 +174,8 @@ entry 中的 TTL 字段和 collection topology 已进入 owned snapshot，不能
 | `maxmemory_bytes` | `maxmemoryBytes` | 本 DB 的预算上限 |
 | `used_bytes_for_maxmemory` | `usedBytesForMaxmemory` | 上面的物理快照（= `effectiveBytesForMaxmemory()`） |
 | `effective_used_bytes_for_maxmemory` | `effectiveUsedBytesForMaxmemory` | 物理快照 + ledger `reservedBytes` |
-| `ledger_used_bytes` | `heapDataBytesEstimate` | **堆估算**，不是 ledger 逻辑 `usedBytes`（历史命名包袱） |
+| `heap_estimate_bytes` | `heapDataBytesEstimate` | 堆估算 |
+| `ledger_used_bytes` | `ledgerUsedBytes` | ledger 逻辑 `usedBytes()`，准入水位 |
 | `ledger_reserved_bytes` | `reservedBytes` | ledger `reservedBytes` |
 | `offheap_used_bytes` | `offHeapUsedBytes` | native metadata committed + native data committed |
 
@@ -232,7 +233,7 @@ estimate upper bound
 - capacity 类异常（`MemoryLedgerOutOfMemoryException` / `NativeCapacityExceededException`）在 commit 前被拦下 → 稳定映射成 Redis 风格 OOM；commit 后被包成 invariant failure，不会伪装成"确定未执行"。
 - 其他 `RuntimeException` / `Error` 若属于 `NativeMemoryException` 或 `IllegalStateException`（`isDegradingInvariantFailure`），commit 前也会 `health.recordInvariantFailure` 后转 degraded。
 
-degraded 不是终态：`RuntimeDbEngine.reconcileAccounting()` 在 owner thread 上重算物理用量、把 ledger 漂移修正入账（`YierdisDbMemoryLedger.realignUsage`）并清除 degraded，尝试与结果记入 `DbHealthSnapshot.lastReconciliation`。恢复只能显式触发，maintenance tick 不会自动对账。
+degraded 不是终态。stock server 上对当前库执行 `YDRECONCILE`：成功回复 `+OK`，`reconcileAccounting()` 在 owner thread 上重算物理用量、把 ledger 漂移修正入账（`YierdisDbMemoryLedger.realignUsage`）并清除 degraded；物理重算失败回复 `-ERR reconciliation failed`，degraded 保持。尝试与结果记入 `DbHealthSnapshot.lastReconciliation`。命令绕过 mutation executor，因此 degraded 下仍可执行。maintenance tick 不会自动对账：它先回收 detached entry，再因 `requireWritable` 停下。触发、读路径、回复和失败后的人工处理见 [`configuration-and-operations.md`](./configuration-and-operations.md#degraded-恢复)。
 
 ## per-DB scope 的判断顺序
 
@@ -256,8 +257,8 @@ degraded 不是终态：`RuntimeDbEngine.reconcileAccounting()` 在 owner thread
 
 配置入口是 `YierdisInstanceConfig.MaxmemoryScope`（`PER_DB` / `GLOBAL`，默认 `PER_DB`），在 `YierdisInstance.create(...)` 里被翻译成两种截然不同的预算布局：
 
-- **PER_DB**：实例级 `maxmemoryBytes` 被**均分**给各 DB——`perDbMaxmemory = maxmemoryBytes / databases`，余数（`remainder` 个字节）逐个 +1 分给前面的 DB。每个 DB 拿到的是自己那份 `dbMax`，`YierdisDbMemoryLedger` 用本地 ledger + 本地物理快照做 admission、cleanup、trim 和 eviction。不创建 governor。
-- **GLOBAL**：每个 DB 的本地 `maxmemoryBytes` 仍是**整份**实例预算（`dbMax = config.maxmemoryBytes()`），但本地 ledger 不自行计算跨 DB 预算，改为委托 `YierdisGlobalMaxmemoryGovernor.prepareWrite(participant, estimatedExtraBytes)`。governor 由 instance 在 `maxmemoryBytes > 0` 时创建并 `db.attachMaxmemoryCoordinator(governor)`。
+- **PER_DB**：实例级 `maxmemoryBytes` 被**均分**给各 DB——`perDbMaxmemory = maxmemoryBytes / databases`，余数（`remainder` 个字节）逐个 +1 分给前面的 DB。每个 DB 拿到的是自己那份 `dbMax`，`YierdisDbMemoryLedger` 用本地 ledger + 本地物理快照做 admission、cleanup、trim 和 eviction。不创建 governor。`maxmemoryBytes > 0` 时 `INFO memory` 按库输出 `yierdis_db<N>_maxmemory_bytes`，值来自该库 `memoryStats().maxmemoryBytes()`，也就是上面这份已生效的额度。例如 10000 字节、3 个 DB 时依次是 3334、3333、3333。provider 不再用实例额度整除。
+- **GLOBAL**：每个 DB 的本地 `maxmemoryBytes` 仍是**整份**实例预算（`dbMax = config.maxmemoryBytes()`），但本地 ledger 不自行计算跨 DB 预算，改为委托 `YierdisGlobalMaxmemoryGovernor.prepareWrite(participant, estimatedExtraBytes)`。governor 由 instance 在 `maxmemoryBytes > 0` 时创建并 `db.attachMaxmemoryCoordinator(governor)`。`INFO memory` 不输出 `yierdis_db<N>_maxmemory_bytes`。
 
 两种 scope 都不改变 FFM 所有权（详见 [`native-memory-runtime.md`](./native-memory-runtime.md)）。global scope 仍保留 per-DB backend / runtime ownership，也不把 runtime counter 叠加进 participant snapshots。
 
@@ -274,7 +275,7 @@ degraded 不是终态：`RuntimeDbEngine.reconcileAccounting()` 在 owner thread
 7. 需要淘汰时跨 participant 挑 victim（`pickVictim`）；每次释放后继续 trim 并汇总新 snapshots，直到全局 usage 压回目标线，或在时间 / 尝试 / stalled 预算内停止。
 8. 淘汰后再 trim 一次；仍超限且 `extra > 0` → OOM。
 
-governor 的收敛边界由多个预算共同限制：`maxAttempts = max(64, totalKeys * 2)`、时间预算（`evictionTimeLimitNanos`）、以及"连续多少轮释放后总量不下降"的 `maxStalledAttempts = max(1, totalKeys)`。任一触发即停止淘汰，把最终判定交回调用方。
+governor 的收敛边界由多个预算共同限制。尝试上限与单库淘汰共用 `MaxmemoryEvictionAttempts.maxAttempts(totalKeys)`：下限 64；`totalKeys <= Integer.MAX_VALUE / 2` 时取 `max(64, totalKeys * 2)`；更大则在乘法前钳到 `Integer.MAX_VALUE`。`globalKeyCountEstimate()` 先把各库 key 数饱和加到 `Integer.MAX_VALUE`，再交给这个函数，因此超大 keyspace 不会因为 `int` 回绕把上限静默降成 64。时间预算（`evictionTimeLimitNanos`）以及"连续多少轮释放后总量不下降"的 `maxStalledAttempts = max(1, totalKeys)` 仍各自生效。任一触发即停止淘汰，把最终判定交回调用方。
 
 两个跨 DB 约束：
 
@@ -335,7 +336,7 @@ maintenance 时的顺序由 `YierdisInstanceRuntimeAccess.maintenanceTick()` 固
 limit = max(0, requested)
 trimEmptyNativePages()                        // ① 先回收空 native page
 if used <= limit: return                      // ② 重新采样
-loop (attempts < max(64, keyCount*2) && now < deadline):
+loop (attempts < MaxmemoryEvictionAttempts.maxAttempts(keyCount) && now < deadline):
     victim = pickEvictionKey(now)             // ③ 选候选
     if victim == null: break                  //    noeviction 或 keyspace 空
     if reclaimExpired(victim, record, now):   // ④ 过期候选先走 expiration reclamation
@@ -350,7 +351,7 @@ return
 要点：
 
 - 每次释放后都 `trimEmptyNativePages()` 再继续，所以"淘汰一个 → 回收可能变空的 page"是交替进行的。
-- 时间预算 `evictionTimeLimitNanos` 与尝试次数上限同时生效；维护任务在调用线程内执行，必须限制淘汰循环，避免一次写入拖垮 event loop。
+- 时间预算 `evictionTimeLimitNanos` 与 `MaxmemoryEvictionAttempts.maxAttempts(keyCount)` 同时生效。下限是 64；`keyCount > Integer.MAX_VALUE / 2` 时上限是 `Integer.MAX_VALUE`，乘法发生在这道钳制之后。维护任务在调用线程内执行，必须限制淘汰循环，避免一次写入拖垮 event loop。
 - 真正 eviction 时，`YierdisDbMaxmemorySupport.evict` 调用 `YierdisDbKernel.evict(...)`；reclamation plan 在 prepare 阶段复制稳定 key bytes，commit 时移除 directory entry 并释放完整 entry/value/key graph，随后结算 ledger。
 
 `PreparedDbMutation.shouldTrimNativePagesAfterCommit()` 和 snapshot 的 `nativeReclaimableBytes` 都只是回收候选提示，不代表相应字节已经离开 committed footprint。`trimMemory(...)` 返回的 `MemoryReclaimResult` 记录本次检查了什么（`inspectedUnits`）、实际回收了多少（`reclaimedUnits` / `reclaimedBytes`）、为什么停下（`StopReason.COMPLETE / INSPECTION_LIMIT / BYTE_LIMIT / TIME_LIMIT`）；admission 仍要在 trim 后**重新采样** owned snapshot，不能拿 reclaimable estimate 或一次 trim hint 就推断"已经低于 maxmemory"。
