@@ -9,7 +9,7 @@ public record BenchmarkStatistics(
         long completedRequests,
         long wireRequests,
         long histogramSamples,
-        long elapsedMillis,
+        long elapsedNanos,
         LatencyRecorder.Summary latency
 ) {
     public BenchmarkStatistics {
@@ -23,6 +23,7 @@ public record BenchmarkStatistics(
     }
 
     public double requestsPerSecond() {
-        return elapsedMillis == 0 ? 0.0 : completedRequests / (elapsedMillis / 1000.0);
+        // 除数用纳秒，避免先截成毫秒把 1.9ms 算成 1ms。0 纳秒保持有限的 0，不当成除零缺陷。
+        return elapsedNanos == 0L ? 0.0 : completedRequests * 1_000_000_000.0 / elapsedNanos;
     }
 }

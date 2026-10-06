@@ -112,8 +112,31 @@ public class RedisBenchmarkCommandTest {
 
         assertUsageErrorBeforeRunner(fake, "requests must be > 0", "--requests", "0");
         assertUsageErrorBeforeRunner(fake, "format must be one of", "--format", "json");
+        assertUsageErrorBeforeRunner(fake, "keyspace must be >= 0", "--keyspace", "-1");
+        assertUsageErrorBeforeRunner(fake, "12 digits", "--keyspace", "1000000000000");
 
         Assert.assertEquals(0, calls.get());
+    }
+
+    @Test
+    public void legalKeyspaceBoundsReachTheRunner() {
+        AtomicReference<BenchmarkConfig> supplied = new AtomicReference<>();
+        Function<BenchmarkConfig, BenchmarkRunResult> fake = config -> {
+            supplied.set(config);
+            return new BenchmarkRunResult(List.of(
+                    BenchmarkCaseResult.unsupported(CaseSelection.caseById("spop"), "missing")
+            ));
+        };
+        Capture capture = capture(new RedisBenchmarkCommand(fake, renderer));
+
+        Assert.assertEquals(0, capture.execute("--keyspace", "0", "--tests", "spop", "--format", "quiet"));
+        Assert.assertEquals(0L, supplied.get().keyspace().orElseThrow());
+        Assert.assertEquals("", capture.err.toString());
+
+        Assert.assertEquals(0, capture.execute(
+                "--keyspace", "999999999999", "--tests", "spop", "--format", "quiet"
+        ));
+        Assert.assertEquals(999_999_999_999L, supplied.get().keyspace().orElseThrow());
     }
 
     @Test

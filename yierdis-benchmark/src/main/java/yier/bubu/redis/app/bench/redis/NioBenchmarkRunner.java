@@ -133,14 +133,14 @@ public final class NioBenchmarkRunner implements BenchmarkCaseExecutor {
             throwExecutionFailure(requiredCase, requiredConfig, state, failure);
         }
 
+        // 吞吐和展示都用这段纳秒。截成毫秒会把不足 1ms 的间隔算成 0，或把 1.9ms 算成 1ms。
         long elapsedNanos = Math.max(0L, state.stopNanos - state.measuredStartNanos);
-        long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(elapsedNanos);
         return new BenchmarkStatistics(
                 requiredConfig.requests(),
                 state.completedReplies,
                 state.issued,
                 state.histogramSamples,
-                elapsedMillis,
+                elapsedNanos,
                 latencyRecorder.summary()
         );
     }

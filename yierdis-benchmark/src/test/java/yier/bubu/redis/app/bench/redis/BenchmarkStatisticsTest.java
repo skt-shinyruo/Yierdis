@@ -10,13 +10,13 @@ public class BenchmarkStatisticsTest {
         LatencyRecorder.Summary latency =
                 new LatencyRecorder.Summary(100, 200.0, 100, 200, 300, 400, 500);
 
-        BenchmarkStatistics statistics = new BenchmarkStatistics(100, 102, 104, 100, 40L, latency);
+        BenchmarkStatistics statistics = new BenchmarkStatistics(100, 102, 104, 100, 40_000_000L, latency);
 
         Assert.assertEquals(100, statistics.requestedRequests());
         Assert.assertEquals(102, statistics.completedRequests());
         Assert.assertEquals(104, statistics.wireRequests());
         Assert.assertEquals(100, statistics.histogramSamples());
-        Assert.assertEquals(40, statistics.elapsedMillis());
+        Assert.assertEquals(40_000_000L, statistics.elapsedNanos());
         Assert.assertEquals(2550.0, statistics.requestsPerSecond(), 0.001);
         Assert.assertSame(latency, statistics.latency());
     }
@@ -29,6 +29,34 @@ public class BenchmarkStatisticsTest {
 
         Assert.assertEquals(0.0, statistics.requestsPerSecond(), 0.0);
         Assert.assertTrue(Double.isFinite(statistics.requestsPerSecond()));
+    }
+
+    @Test
+    public void subMillisecondElapsedKeepsTheNanosecondRateFinite() {
+        long elapsedNanos = 500_000L;
+        long completed = 112L;
+        BenchmarkStatistics statistics = new BenchmarkStatistics(
+                1, completed, completed, 1, elapsedNanos, summaryWithCount(1)
+        );
+
+        double expected = completed * 1_000_000_000.0 / elapsedNanos;
+        Assert.assertEquals(expected, statistics.requestsPerSecond(), 0.0);
+        Assert.assertTrue(Double.isFinite(statistics.requestsPerSecond()));
+        Assert.assertNotEquals(0.0, statistics.requestsPerSecond(), 0.0);
+    }
+
+    @Test
+    public void onePointNineMillisecondsIsNotTruncatedToOneMillisecond() {
+        long elapsedNanos = 1_900_000L;
+        long completed = 112L;
+        BenchmarkStatistics statistics = new BenchmarkStatistics(
+                1, completed, completed, 1, elapsedNanos, summaryWithCount(1)
+        );
+
+        double expected = completed * 1_000_000_000.0 / elapsedNanos;
+        Assert.assertEquals(expected, statistics.requestsPerSecond(), 0.0);
+        Assert.assertTrue(Double.isFinite(statistics.requestsPerSecond()));
+        Assert.assertNotEquals(completed / 0.001, statistics.requestsPerSecond(), 1.0);
     }
 
     @Test
@@ -46,10 +74,10 @@ public class BenchmarkStatisticsTest {
     @Test
     public void statisticsDerivesRateExactlyForExtremeCounters() {
         LatencyRecorder.Summary latency = summaryWithCount(1);
-        double expected = Long.MAX_VALUE / (1 / 1000.0);
+        double expected = Long.MAX_VALUE * 1_000_000_000.0 / 1_000_000.0;
 
         BenchmarkStatistics statistics = new BenchmarkStatistics(
-                1, Long.MAX_VALUE, Long.MAX_VALUE, 1, 1, latency
+                1, Long.MAX_VALUE, Long.MAX_VALUE, 1, 1_000_000L, latency
         );
 
         Assert.assertEquals(expected, statistics.requestsPerSecond(), 0.0);

@@ -217,7 +217,7 @@ RedisBenchmarkOptions
 | `--clients` | `50` | `> 0`，并发 client 数。 |
 | `--data-size` | `3` | `1..1073741824`（1 GiB），payload 字节数。 |
 | `--pipeline` | `1` | `> 0`，每个 pipeline 发送的请求数。 |
-| `--keyspace` | 未设置 | 可选；`>= 0`，且必须放进 12 位十进制（`< 1000000000000`）。 |
+| `--keyspace` | 未设置 | 可选；`0..999999999999`。`0` 表示每个随机槽都写成固定的 `000000000000`，不是随机偏移。省略与 `0` 不是一回事。负数和 `>= 1000000000000` 在 `BenchmarkConfig` 构造时拒绝，case 还没开始，退出码是 2。这是 Yierdis benchmark 自己的参数错误契约。 |
 | `--keep-alive` | `true` | 关闭时每个 pipeline 批次后重连。 |
 | `--tests` | 未设置 | 逗号分隔 selector，大小写不敏感。 |
 | `--precision` | `3` | `0..4`，HdrHistogram 有效位数。 |
@@ -229,7 +229,7 @@ RedisBenchmarkOptions
 
 1. 先编译一条具体的 command frame：`PING_INLINE` 用 raw `PING\r\n`（inline），其余 case 用 `RespClientCodec.encodeCommand(...)` 生成 RESP array。
 2. 把该 frame 复制 `pipeline` 份拼成一个 `byte[]`（总长 `frame.length × pipeline`，上限 `Integer.MAX_VALUE - 8`）。
-3. 若启用了 keyspace：把 frame 里所有 `__rand_int__` marker 就地改写成 `000000000000` 并记下偏移，运行时只原地覆写这 12 位数字；ZADD 的 score 用 marker（随机 12 位），未启用时用固定 `0`。
+3. 若启用了 keyspace：把 frame 里所有 `__rand_int__` marker 就地改写成 `000000000000` 并记下偏移，运行时只原地覆写这 12 位数字。`keyspace` 为 `0` 时每次覆写都仍是这 12 个 `0`；正数上界是 `999999999999`，运行时取 `0 .. keyspace-1`。ZADD 的 score 用 marker（随机 12 位），未启用时用固定 `0`。
 4. 若未启用 keyspace：marker 保持 literal，ZADD score 固定 `0`，每个 case 反复用同一组 key/member。
 
 随机数来自 `BenchmarkRandom(seed)`（`SplittableRandom`），`writeTwelveDigits` 固定写 12 位。payload 由 `BenchmarkPayload.generate(size)` 生成，用确定性 LCG 产出 `'0' + (state >>> 16) & 63` 的字节，每个 catalog pass 生成一次、被需要 data 的 case 复用。因此**换了 `--seed` 就换了 key 的取值，但字节长度和命令形状不变**。
@@ -269,7 +269,7 @@ RedisBenchmarkOptions
 - 每个 case 打开一个 `Selector`，把 `clients` 个 non-blocking `SocketChannel` 注册到同一个 event loop；`measuredStartNanos` 记录测量开始时间。
 - `writeIfReady`：client 处于 READY 时，只要 `issued < requests` 就发一个 pipeline 批次（`issued += pipeline`），记录 `batchStartNanos`；处于 WRITING 时继续写，写完转 awaitRead。
 - `readReplies`：每读到一条 reply 先按 case 的 expected shape 校验（`BenchmarkReplyExpectation`：`PONG`/`OK`/`INTEGER`/`BULK_OR_NULL`/`ARRAY`），通过后 `completedReplies++`；只有前 `requests` 条 reply 进入 histogram（`histogramSamples < requested`），并记录该批次的首个可读时间作为 latency。
-- **stop boundary**：当恰好记满 `requests` 个样本的那个 client（`thresholdClient`）把自己的待收 reply 收完后，记 `stopNanos` 并置 `stopping = true`，其余 client 被挂起。因此 throughput 用“stop boundary 已完成的 replies”除以“start→stop 的 elapsed”，而 histogram 只保留前 `requests` 个样本。
+- **stop boundary**：当恰好记满 `requests` 个样本的那个 client（`thresholdClient`）把自己的待收 reply 收完后，记 `stopNanos` 并置 `stopping = true`，其余 client 被挂起。因此 throughput 用“stop boundary 已完成的 replies”除以“start→stop 的 elapsed 纳秒”。elapsed 为 0 时吞吐是有限的 0。不要先把纳秒截成毫秒再除，否则不足 1ms 会变成 0，1.9ms 会变成 1ms。histogram 只保留前 `requests` 个样本。
 - `keepAlive == false` 时每批结束后 `replaceClient` 重连（旧连接关闭）。
 - `database != 0` 时，每个新连接的第一条 measured write 前带一条 `SELECT n`，其 reply 按 `OK` 校验且不计入 `completedReplies`/histogram。
 

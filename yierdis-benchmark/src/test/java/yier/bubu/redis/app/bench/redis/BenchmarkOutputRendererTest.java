@@ -320,7 +320,7 @@ public class BenchmarkOutputRendererTest {
                 3_000,
                 4_567
         );
-        return new BenchmarkStatistics(2, 5, 6, 2, 2, latency);
+        return new BenchmarkStatistics(2, 5, 6, 2, 2_000_000L, latency);
     }
 
     private static BenchmarkConfig config(
