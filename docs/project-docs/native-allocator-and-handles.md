@@ -14,15 +14,7 @@ DB graph 里存的是 key 字节、field、member、listpack 块这类数据，�
 
 生产实现 `YierdisFfmStableMemoryBackend` 因此切成三层，每层只解决一个问题：
 
-```mermaid
-flowchart TD
-  dbGraph["DB graph<br/>stores NativeHandle / typed wrappers"]
-  backend["YierdisFfmStableMemoryBackend<br/>validates backend identity and resolves localRaw"]
-  objectTable["YierdisNativeObjectTable<br/>maps stable slot/generation to current page location"]
-  pageAllocator["YierdisNativePageAllocator<br/>owns FFM-backed pages and spans"]
-
-  dbGraph --- backend --- objectTable --- pageAllocator
-```
+![三层架构：DB graph → stable memory backend → object table → page allocator](./assets/native-allocator-and-handles/layering.svg)
 
 调用方只在有界操作内 resolve handle，用完即 close 短生命周期的 `NativeObjectView`。physical page、offset、capacity 和 segment 都是 backend 私有状态。
 
@@ -126,12 +118,7 @@ object table 承担的职责：
 
 **page id 本身不携带任何信息**，它只是 `pagesById` 的 key，且不参与寻址。真正被它关联的是**一块堆外物理区域**：
 
-```mermaid
-flowchart LR
-  pageId["pageId"] -->|"pagesById.get(id)"| pageAllocation["PageAllocation"]
-  pageAllocation --> region["YierdisFfmRegion"]
-  region --> offHeap["off-heap 字节"]
-```
+![pageId 经 pagesById.get(id) 关联 PageAllocation、region 与堆外字节](./assets/native-allocator-and-handles/page-id-to-offheap-chain.svg)
 
 `PageAllocation` 是二者的抽象基类，四个字段各有明确职责：
 
@@ -153,43 +140,7 @@ private abstract static class PageAllocation {
 
 结构全景：
 
-```mermaid
-flowchart TD
-  allocator["YierdisNativePageAllocator"]
-  nextPageId["nextPageId = 1<br/>池空时才发新 id"]
-  reusable["reusablePageIds : TreeSet<br/>已回收待复用的 id；pollFirst() 取最小者并移除"]
-  pagesById["pagesById : TreeMap&lt;id, PageAllocation&gt;<br/>★ 唯一的「活页」注册表；get(id) == null 即表示该 id 已死"]
-
-  allocator --- nextPageId
-  allocator --- reusable
-  allocator --- pagesById
-  reusable -->|"registerPage(id, allocation)"| pagesById
-
-  smallPage["SmallPage<br/>pageId / creationSequence / closed<br/>sizeClass / freeOffsets / freeCount / liveBlocks"]
-  span["SpanAllocation<br/>pageId / creationSequence / closed<br/>pageCount / pageClass / capacity"]
-  pagesById --> smallPage
-  pagesById --> span
-
-  region["YierdisFfmRegion<br/>(region 才是真正的堆外内存)"]
-  smallPage -->|region| region
-  span -->|region| region
-  offHeap["off-heap 字节<br/>SmallPage: 64 KB，等长块 × N<br/>Span: pageCount × 64 KB，单块独占"]
-  region --> offHeap
-
-  subgraph blockView["YierdisNativeBlock —— 一次分配的客户端视图"]
-    owner["owner"]
-    allocation["allocation"]
-    blockRegion["region"]
-    fields["regionOffset / capacity / pageId / pageOffset / pageClass"]
-    rw["实际读写路径：region.getByte(regionOffset + index)<br/>★ 定位二元组 (pageId, pageOffset)"]
-    fields --- rw
-  end
-
-  owner -->|"close 时回调 free"| allocator
-  allocation --> smallPage
-  allocation --> span
-  blockRegion -->|"与所属 PageAllocation 共享同一个 region"| region
-```
+![page allocator 的 registry 结构全景：nextPageId、reusablePageIds、pagesById 与 SmallPage/SpanAllocation/region](./assets/native-allocator-and-handles/page-registry-structure.svg)
 
 （`SmallPage` 与 `SpanAllocation` 都 extends 抽象基类 `PageAllocation { pageId, creationSequence, region, closed }`；上图把基类字段展开进两个实现，以便对照阅读。）
 
@@ -237,30 +188,7 @@ span 没有页内 free slot 概念，`summarizePages()` 里它的 committed 与 
 
 **物理布局全景**（把 §4.1 的对象结构图落到真实字节上，帮助建立空间直觉）：
 
-```mermaid
-flowchart TD
-  alloc["allocate(bytes)"]
-  alloc -->|"≤ 32 KiB"| smallPageBox
-  alloc -->|"&gt; 32 KiB"| spanBox
-
-  subgraph smallPageBox["SmallPage: pageId=7 —— 一块 64 KiB region"]
-    direction LR
-    b1["##"] --- b2["##"] --- b3["##"] --- b4[".."]
-    b5["##"] --- b6[".."] --- b7["##"] --- b8["##"]
-    b1 ~~~ b5
-    legend["## = 已分配 block，.. = 空闲 block<br/>同档位等长 block，freeOffsets 栈管理空闲位"]
-  end
-
-  subgraph spanBox["SpanAllocation: pageId=9 —— pageCount=3 的连续 region"]
-    direction LR
-    p1["64 KiB<br/>offset = 0"] --- p2["64 KiB<br/>（连续）"] --- p3["64 KiB<br/>（连续）"]
-    spanNote["单一独占 region，无 block 概念，pageOffset 恒为 0"]
-  end
-
-  smallPageBox ~~~ claim
-  spanBox ~~~ claim
-  claim["页 id 7/9 均由 claimPageId() 领取，关闭后经 reusablePageIds 回收复用"]
-```
+![small page 块网格与 span 连续 region 的物理布局全景](./assets/native-allocator-and-handles/physical-layout.svg)
 
 这张图与 §4.1 的 registry 结构图互补：那张回答"对象怎么引用内存"，这张回答"内存本身长什么样"。small page 的空闲/占用分布会随分配与释放动态变化（图示为某一时刻的快照）；span 的 `pageCount` 个页只是容量记账单位，物理上是**一块整 region、一个 pageId**，不像图中三格那样各自独立注册。
 
@@ -268,31 +196,7 @@ flowchart TD
 
 `allocate(requestedBytes)` 按 `MAX_SMALL_BYTES` 一分为二，两条路径的 id 获取时机和 `pageOffset` 语义都不同：
 
-```mermaid
-flowchart TD
-  entry["allocate(requestedBytes)"]
-  smallPath["allocateSmall()<br/>forSize() → SizeClass<br/>findNonFullPage(sizeClass)"]
-  spanPath["allocateSpan()<br/>pagesFor() → pageCount<br/>claimPageId()"]
-  pop["popFreeOffset()<br/>liveBlocks++"]
-  newPage["newSmallPage"]
-  allocRegion["runtime.allocateRegion(<br/>MEDIUM_SPAN / LARGE_SPAN, cap)"]
-  spanAlloc["SpanAllocation(pageId, region, …)"]
-  register["registerPage()"]
-  ret["返回 YierdisNativeBlock：<br/>small: pageId = page.pageId, pageOffset = offset,<br/>regionOffset = offset, capacity = sizeClass.bytes(),<br/>pageClass = SMALL<br/>span : pageId = span.pageId, pageOffset = 0（恒定）,<br/>regionOffset = 0, capacity = span.capacity,<br/>pageClass = MEDIUM_SPAN / LARGE_SPAN"]
-  fail["releaseFailedAllocation()：<br/>从 registry 摘除（仅当 owner 仍是它）→ close region<br/>→ reusablePageIds.add(pageId) 退还 id → close 异常作为<br/>suppressed 挂在原异常上后重抛"]
-
-  entry -->|"≤ 32768 (B32768)"| smallPath
-  entry -->|"&gt; 32768"| spanPath
-  smallPath -->|"找到了"| pop
-  smallPath -->|"没找到"| newPage
-  spanPath --> allocRegion
-  allocRegion --> spanAlloc
-  spanAlloc -->|"registerPage(pageId, span)"| register
-  newPage --> register
-  pop --> register
-  register --> ret
-  ret -->|"任何一步失败"| fail
-```
+![allocate 按 32KiB 分叉的两条分配路径及失败回收](./assets/native-allocator-and-handles/allocation-paths.svg)
 
 两条路径都有两点值得注意：
 
@@ -349,23 +253,7 @@ private int claimPageId() {
 
 #### 完整生命周期
 
-```mermaid
-flowchart TD
-  claim["claimPageId()"]
-  poll["reusablePageIds.pollFirst()"]
-  exhaust["nextPageId++<br/>（到 MAX_VALUE 置 -1，下次抛 native page id space exhausted）"]
-  register["registerPage(id, alloc)<br/>pagesById.put(id, alloc)<br/>putIfAbsent != null 即抛 &quot;page id is already live&quot;"]
-  serving["服务期：pagesById.get(id) → PageAllocation<br/>← 所有 (pageId, pageOffset) 查表都走这里"]
-  remove["removePage(id, expected, recycleId = true)<br/>1. pagesById.get(id) != expected → &quot;page id owner mismatch&quot;<br/>2. pagesById.remove(id) ★ 从此刻 null<br/>3. reusablePageIds.add(id) 返回 false → &quot;page id is already reusable&quot;"]
-
-  claim -->|"池里有货"| poll
-  claim -->|"池空"| exhaust
-  poll --> register
-  exhaust --> register
-  register --> serving
-  serving -->|"block.close() / freeSmall / freeSpan / trimEmptyPages / scope abort"| remove
-  remove -->|"回到 pollFirst() 等待复用"| poll
-```
+![page id 从 claimPageId 到 registerPage、服务期、removePage 再回到 pollFirst 的完整生命周期](./assets/native-allocator-and-handles/page-id-lifecycle.svg)
 
 `removePage` 的三步顺序不可调换：**先摘表，再入复用集合**。反过来的话，会有一个窗口让 `claimPageId()` 把仍能查到描述符的 id 发出去，两个描述符共用同一 id，随后 `registerPage` 的 `"page id is already live"` 与 `removePage` 的 `"page id owner mismatch"` 会开始随机报错。同理，`releaseFailedAllocation` 也必须先摘表（且只在 owner 仍是它时才摘）才能退还 id。
 
@@ -373,31 +261,7 @@ flowchart TD
 
 id 复用本身**不承担** ABA 防护。安全性来自两道互不依赖的关卡：
 
-```mermaid
-flowchart TD
-  handle["旧句柄 (pageId = 7, generation = 3)"]
-  table["YierdisNativeObjectTable"]
-  subgraph checks["三道关"]
-    c1["state == STATE_FREE?"]
-    c2["segment.isRetired(offset)?"]
-    c3["generation != handle.generation"]
-  end
-  stale["stale"]
-  lookup["pagesById.get(7)"]
-  e1["&quot;unknown or closed native page id: 7&quot;"]
-  e2["&quot;native small page location is not live&quot;（pageClass 不符）<br/>或 &quot;native small block location mismatch&quot;（offset 不对齐/越界/capacity 不符）"]
-  e3["&quot;native span location mismatch&quot;（offset ≠ 0 / capacity 不符）"]
-
-  handle --> table
-  table --> checks
-  c1 --> stale
-  c2 --> stale
-  c3 --> stale
-  checks -->|"三道关全在 object table，page id 复用根本轮不到它"| lookup
-  lookup -->|"null（尚未复用）"| e1
-  lookup -->|"已复用为 SmallPage"| e2
-  lookup -->|"已复用为 SpanAllocation"| e3
-```
+![id 复用安全：object table 三道关判 stale，pagesById 查找再按页类型报错](./assets/native-allocator-and-handles/reuse-safety-checks.svg)
 
 | 层 | 职责 | 拦什么 |
 |---|---|---|
@@ -551,18 +415,7 @@ nextCreationSequence = checkpoint.creationSequence;
 
 单次搬迁（`moveLiveObject`）的完整序列：
 
-```mermaid
-flowchart TD
-  s1["beginMove(handle)"]
-  s2["pageAllocator.moveSource(meta)<br/>// 拿旧 block"]
-  s3["pageAllocator.allocate(...)<br/>// 分配 target"]
-  s4["previous.copyTo(target, size)<br/>// 复制 logical bytes"]
-  s5["objectTable.publishMoved(...)<br/>// 发布新 location（此后不可回滚）"]
-  s6["reserveMovedBlock(previous, targetCapacity, nextEpoch())"]
-  s7["retire 旧 block（或立即 close）"]
-
-  s1 --> s2 --> s3 --> s4 --> s5 --> s6 --> s7
-```
+![moveLiveObject 的七步线性搬迁序列](./assets/native-allocator-and-handles/move-live-object-sequence.svg)
 
 handle、kind、logical size 和 DB graph identity 全程不变——**defrag 的安全性正建立在"file 身份与物理位置彻底分离"之上**：搬迁只改 object table 里的 pageId/pageOffset/capacity，DB graph 里的 `NativeHandle` 一个字节都没动。
 

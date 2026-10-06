@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 806" width="760" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M1 1 L7 4 L1 7 Z" fill="#8b949e"/></marker>
+  </defs>
+
+  <rect x="228" y="20" width="305" height="40" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="380" y="45" text-anchor="middle" font-size="13" fill="#1f2328">旧句柄 (pageId = 7, generation = 3)</text>
+
+  <rect x="265" y="110" width="230" height="40" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="380" y="135" text-anchor="middle" font-size="13" fill="#1f2328">YierdisNativeObjectTable</text>
+
+  <rect x="50" y="200" width="320" height="210" rx="8" fill="none" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="210" y="224" text-anchor="middle" font-size="13" fill="#57606a">三道关</text>
+
+  <rect x="115" y="244" width="190" height="40" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="210" y="269" text-anchor="middle" font-size="13" fill="#1f2328">state == STATE_FREE?</text>
+  <rect x="90" y="304" width="240" height="40" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="210" y="329" text-anchor="middle" font-size="13" fill="#1f2328">segment.isRetired(offset)?</text>
+  <rect x="70" y="364" width="280" height="40" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="210" y="389" text-anchor="middle" font-size="13" fill="#1f2328">generation != handle.generation</text>
+
+  <rect x="480" y="290" width="70" height="40" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="515" y="315" text-anchor="middle" font-size="13" fill="#1f2328">stale</text>
+
+  <rect x="145" y="470" width="160" height="40" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="225" y="495" text-anchor="middle" font-size="13" fill="#1f2328">pagesById.get(7)</text>
+
+  <rect x="30" y="570" width="335" height="40" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="197" y="595" text-anchor="middle" font-size="12" fill="#1f2328">"unknown or closed native page id: 7"</text>
+
+  <rect x="30" y="650" width="605" height="56" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="332" y="674" text-anchor="middle" font-size="12" fill="#1f2328">"native small page location is not live"（pageClass 不符）</text>
+  <text x="332" y="692" text-anchor="middle" font-size="12" fill="#1f2328">或 "native small block location mismatch"（offset 不对齐/越界/capacity 不符）</text>
+
+  <rect x="30" y="746" width="505" height="40" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="282" y="771" text-anchor="middle" font-size="12" fill="#1f2328">"native span location mismatch"（offset ≠ 0 / capacity 不符）</text>
+
+  <line x1="380" y1="60" x2="380" y2="106" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <line x1="340" y1="150" x2="252" y2="196" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <line x1="305" y1="264" x2="476" y2="302" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <line x1="330" y1="324" x2="476" y2="315" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <line x1="350" y1="384" x2="476" y2="326" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <line x1="210" y1="410" x2="224" y2="466" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <text x="240" y="434" font-size="12" fill="#57606a">三道关全在 object table，</text>
+  <text x="240" y="452" font-size="12" fill="#57606a">page id 复用根本轮不到它</text>
+  <line x1="180" y1="510" x2="142" y2="566" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <text x="44" y="544" font-size="12" fill="#57606a">null（尚未复用）</text>
+  <line x1="270" y1="510" x2="558" y2="646" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <text x="380" y="558" font-size="12" fill="#57606a">已复用为 SmallPage</text>
+  <polyline points="305,490 700,490 700,766 539,766" fill="none" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+  <text x="530" y="640" font-size="12" fill="#57606a">已复用为 SpanAllocation</text>
+</svg>

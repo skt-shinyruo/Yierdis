@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 460" width="760" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M1 1 L7 4 L1 7 Z" fill="#8b949e"/></marker>
+  </defs>
+
+  <rect x="305" y="20" width="150" height="40" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="380" y="45" text-anchor="middle" font-size="14" fill="#1f2328">allocate(bytes)</text>
+
+  <rect x="24" y="110" width="350" height="230" rx="8" fill="none" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="199" y="134" text-anchor="middle" font-size="13" fill="#57606a">SmallPage: pageId=7 —— 一块 64 KiB region</text>
+
+  <rect x="88" y="146" width="48" height="36" rx="8" fill="#d1fae5" stroke="#10b981" stroke-width="1.5"/>
+  <text x="112" y="169" text-anchor="middle" font-size="13" fill="#065f46">##</text>
+  <rect x="146" y="146" width="48" height="36" rx="8" fill="#d1fae5" stroke="#10b981" stroke-width="1.5"/>
+  <text x="170" y="169" text-anchor="middle" font-size="13" fill="#065f46">##</text>
+  <rect x="204" y="146" width="48" height="36" rx="8" fill="#d1fae5" stroke="#10b981" stroke-width="1.5"/>
+  <text x="228" y="169" text-anchor="middle" font-size="13" fill="#065f46">##</text>
+  <rect x="262" y="146" width="48" height="36" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="286" y="169" text-anchor="middle" font-size="13" fill="#1f2328">..</text>
+  <rect x="88" y="206" width="48" height="36" rx="8" fill="#d1fae5" stroke="#10b981" stroke-width="1.5"/>
+  <text x="112" y="229" text-anchor="middle" font-size="13" fill="#065f46">##</text>
+  <rect x="146" y="206" width="48" height="36" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="170" y="229" text-anchor="middle" font-size="13" fill="#1f2328">..</text>
+  <rect x="204" y="206" width="48" height="36" rx="8" fill="#d1fae5" stroke="#10b981" stroke-width="1.5"/>
+  <text x="228" y="229" text-anchor="middle" font-size="13" fill="#065f46">##</text>
+  <rect x="262" y="206" width="48" height="36" rx="8" fill="#d1fae5" stroke="#10b981" stroke-width="1.5"/>
+  <text x="286" y="229" text-anchor="middle" font-size="13" fill="#065f46">##</text>
+
+  <line x1="136" y1="164" x2="146" y2="164" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="194" y1="164" x2="204" y2="164" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="252" y1="164" x2="262" y2="164" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="136" y1="224" x2="146" y2="224" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="194" y1="224" x2="204" y2="224" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="252" y1="224" x2="262" y2="224" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round"/>
+
+  <rect x="39" y="262" width="320" height="64" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="199" y="282" text-anchor="middle" font-size="12" fill="#57606a">## = 已分配 block，.. = 空闲 block</text>
+  <text x="199" y="298" text-anchor="middle" font-size="12" fill="#57606a">同档位等长 block，</text>
+  <text x="199" y="314" text-anchor="middle" font-size="12" fill="#57606a">freeOffsets 栈管理空闲位</text>
+
+  <rect x="398" y="110" width="338" height="230" rx="8" fill="none" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="567" y="130" text-anchor="middle" font-size="13" fill="#57606a">SpanAllocation: pageId=9 ——</text>
+  <text x="567" y="146" text-anchor="middle" font-size="13" fill="#57606a">pageCount=3 的连续 region</text>
+
+  <rect x="409" y="170" width="100" height="44" rx="8" fill="#d1fae5" stroke="#10b981" stroke-width="1.5"/>
+  <text x="459" y="188" text-anchor="middle" font-size="12" fill="#065f46">64 KiB</text>
+  <text x="459" y="204" text-anchor="middle" font-size="12" fill="#065f46">offset = 0</text>
+  <rect x="517" y="170" width="100" height="44" rx="8" fill="#d1fae5" stroke="#10b981" stroke-width="1.5"/>
+  <text x="567" y="188" text-anchor="middle" font-size="12" fill="#065f46">64 KiB</text>
+  <text x="567" y="204" text-anchor="middle" font-size="12" fill="#065f46">（连续）</text>
+  <rect x="625" y="170" width="100" height="44" rx="8" fill="#d1fae5" stroke="#10b981" stroke-width="1.5"/>
+  <text x="675" y="188" text-anchor="middle" font-size="12" fill="#065f46">64 KiB</text>
+  <text x="675" y="204" text-anchor="middle" font-size="12" fill="#065f46">（连续）</text>
+
+  <line x1="509" y1="192" x2="517" y2="192" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="617" y1="192" x2="625" y2="192" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round"/>
+
+  <rect x="427" y="246" width="280" height="56" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="567" y="270" text-anchor="middle" font-size="12" fill="#57606a">单一独占 region，无 block 概念，</text>
+  <text x="567" y="288" text-anchor="middle" font-size="12" fill="#57606a">pageOffset 恒为 0</text>
+
+  <rect x="110" y="396" width="540" height="44" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="380" y="423" text-anchor="middle" font-size="12" fill="#1f2328">页 id 7/9 均由 claimPageId() 领取，关闭后经 reusablePageIds 回收复用</text>
+
+  <line x1="340" y1="60" x2="252" y2="106" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <text x="246" y="84" text-anchor="middle" font-size="12" fill="#57606a">≤ 32 KiB</text>
+  <line x1="420" y1="60" x2="518" y2="106" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <text x="506" y="84" text-anchor="middle" font-size="12" fill="#57606a">&gt; 32 KiB</text>
+</svg>

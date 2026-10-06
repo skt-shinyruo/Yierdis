@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 588" width="760" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M1 1 L7 4 L1 7 Z" fill="#8b949e"/></marker>
+  </defs>
+
+  <rect x="297" y="20" width="165" height="40" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="380" y="45" text-anchor="middle" font-size="13" fill="#1f2328">beginMove(handle)</text>
+
+  <rect x="245" y="94" width="270" height="56" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="380" y="118" text-anchor="middle" font-size="13" fill="#1f2328">pageAllocator.moveSource(meta)</text>
+  <text x="380" y="136" text-anchor="middle" font-size="12" fill="#57606a">// 拿旧 block</text>
+
+  <rect x="257" y="184" width="245" height="56" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="380" y="208" text-anchor="middle" font-size="13" fill="#1f2328">pageAllocator.allocate(...)</text>
+  <text x="380" y="226" text-anchor="middle" font-size="12" fill="#57606a">// 分配 target</text>
+
+  <rect x="250" y="274" width="260" height="56" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="380" y="298" text-anchor="middle" font-size="13" fill="#1f2328">previous.copyTo(target, size)</text>
+  <text x="380" y="316" text-anchor="middle" font-size="12" fill="#57606a">// 复制 logical bytes</text>
+
+  <rect x="245" y="364" width="270" height="56" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="380" y="388" text-anchor="middle" font-size="13" fill="#1f2328">objectTable.publishMoved(...)</text>
+  <text x="380" y="406" text-anchor="middle" font-size="12" fill="#57606a">// 发布新 location（此后不可回滚）</text>
+
+  <rect x="135" y="454" width="490" height="40" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="380" y="479" text-anchor="middle" font-size="13" fill="#1f2328">reserveMovedBlock(previous, targetCapacity, nextEpoch())</text>
+
+  <rect x="255" y="528" width="250" height="40" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="380" y="553" text-anchor="middle" font-size="13" fill="#1f2328">retire 旧 block（或立即 close）</text>
+
+  <line x1="380" y1="60" x2="380" y2="90" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <line x1="380" y1="150" x2="380" y2="180" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <line x1="380" y1="240" x2="380" y2="270" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <line x1="380" y1="330" x2="380" y2="360" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <line x1="380" y1="420" x2="380" y2="450" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <line x1="380" y1="494" x2="380" y2="524" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+</svg>
