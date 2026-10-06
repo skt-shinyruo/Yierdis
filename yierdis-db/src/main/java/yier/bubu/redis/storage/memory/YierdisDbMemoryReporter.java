@@ -62,7 +62,8 @@ final class YierdisDbMemoryReporter {
         long reservedBytes = ledger.reservedBytes();
         int pendingHashTableCount = hashTableMaintenanceRegistry.pendingTableCount();
 
-        // ledger.usedBytes() 才是准入水位；heapEstimatedBytes 只留在堆估算字段。
+        // ledger.usedBytes() 是已提交的逻辑账本，写进 ledgerUsedBytes。
+        // 准入比较物理快照 effectiveBytesForMaxmemory()；heapEstimatedBytes 只进堆估算字段。
         return new YierdisMemoryStats(
                 maxmemoryBytes,
                 totalEstimatedBytes,

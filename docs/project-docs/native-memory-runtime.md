@@ -207,7 +207,7 @@ FFM-backed storage 主要包括：
 - `NativeKeyDirectory`：key 到 `EntryHandle`；key bytes 是 `KEY_BYTES` object；
 - `EntryTable`：`EntryHandle` 到固定布局的 `ENTRY_RECORD`（`NativeStorageLayout.ENTRY_RECORD_BYTES = 72`）；
 - `EntryRecord.expireAtMillis`：唯一 TTL deadline（位于 offset 48）；
-- string、list、hash、set、zset 的 root、node 和 payload objects（`NativeObjectKind` 中 `STRING_BYTES` / `LISTPACK_BYTES` / `HASH_FIELD_BYTES` / `SET_MEMBER_BYTES` / `ZSET_MEMBER_BYTES` / `SCORE_BYTES` / `*_ROOT` / `LIST_NODE` / `*_TABLE` / `ZSET_NODE` 等）；
+- string、list、hash、set、zset 的 root、node 和 payload objects（`NativeObjectKind` 中 `STRING_BYTES` / `LISTPACK_BYTES` / `HASH_FIELD_BYTES` / `SET_MEMBER_BYTES` / `ZSET_MEMBER_BYTES` / `*_ROOT` / `LIST_NODE` / `*_TABLE` / `ZSET_NODE` 等）；
 - object table 与 page allocator 的 native metadata。
 
 `EntryHandle`、`ValueHandle` 和 `KeyHandle` 是 stable-handle wrapper，不等于 physical address，也不能当作长期有效的 segment view。`YierdisDbKeyLifecycle` 发布、替换和释放 directory entry、entry record、value root 与 derived accounting（`expireCount`、expires 索引）。

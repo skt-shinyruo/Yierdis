@@ -99,7 +99,6 @@ DB/API 调用方不得复制这套 codec，也不得把 `localRaw` 当作完整 
 | `STATE_PINNED` | 2 | 存活且 pin 计数非零相关 |
 | `STATE_MOVING` | 3 | 正在搬迁（`beginMove` 之后、`publishMoved` 之前） |
 | `STATE_FREED_QUARANTINED` | 4 | 已 free 但被 pin/epoch 拖住，延迟归还 |
-| `STATE_CORRUPT` | 5 | 定义但从未写入或匹配（见 §10） |
 
 **generation 与 ABA 防范**：`INITIAL_GENERATION = 1`，槽位每次被释放时递增；涨到 `MAX_GENERATION = 0x0fff` 后该槽**永久 retire**，不再回 free stack。
 
@@ -548,7 +547,7 @@ nextCreationSequence = checkpoint.creationSequence;
 - 对象的 `pinCount() > 0` 时计 `skippedPinnedObjects` 并跳过；
 - 受 `maxObjects`、`timeBudgetNanos`、`maxMoveBytes` 三重预算约束，结束时调 `reclaimEligibleQuarantine()`。
 
-预算检查顺序是 **object → time → pinned → byte**，`skippedBudgetObjects` 只在 byte 预算停止时自增（object/time 预算停止时为 0），这是统计口径问题而非行为问题。
+预算检查顺序是 **object → time → pinned → byte**。object、time、byte 三种预算停在当前对象时都把该对象计入 `skippedBudgetObjects`。pinned 对象计入 `skippedPinnedObjects` 后继续扫描。
 
 单次搬迁（`moveLiveObject`）的完整序列：
 

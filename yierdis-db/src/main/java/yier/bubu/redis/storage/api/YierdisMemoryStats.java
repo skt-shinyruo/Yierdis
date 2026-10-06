@@ -5,7 +5,8 @@ import java.util.Objects;
 /**
  * maxmemory / eviction 的内存预算分解，供 {@code MEMORY STATS} 与 {@code INFO} 读取。
  * <p>
- * {@link #ledgerUsedBytes()} 是准入账本的逻辑用量，不是堆估算。
+ * {@link #ledgerUsedBytes()} 是已提交的逻辑账本 {@code MemoryLedger.usedBytes()}。
+ * 准入比较物理快照 {@link #usedBytesForMaxmemory()}。堆估算在 {@link #heapDataBytesEstimate()}。
  * 其余字节字段保持原有的估算或提交量口径，不是精确的 JVM 堆测量。
  */
 public record YierdisMemoryStats(
@@ -28,7 +29,8 @@ public record YierdisMemoryStats(
         long nativeLiveObjects,
         long nativeLiveRegions,
         /**
-         * 准入账本的逻辑用量（{@code MemoryLedger.usedBytes()}），不是堆估算。
+         * 已提交的逻辑账本（{@code MemoryLedger.usedBytes()}）。
+         * 准入比较 {@link #usedBytesForMaxmemory()}。
          */
         long ledgerUsedBytes
 ) {

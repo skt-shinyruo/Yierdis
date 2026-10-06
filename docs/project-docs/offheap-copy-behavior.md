@@ -47,7 +47,7 @@ string 写入时，`StringRoot` 会把输入 `BytesSlice` / `byte[]` 内容写�
 
 因此不要把 `BytesSlice` 自动理解成 address-to-address copy：slice 到 native 之间当前经由 heap scratch 中转。
 
-collection 写入也类似：root record 和 payload internals 都是 allocator-backed native objects（`NativeObjectKind` 覆盖 `LIST_ROOT`/`HASH_ROOT`/`SET_ROOT`/`ZSET_ROOT`、`LIST_NODE`、以及 `HASH_FIELD_BYTES`/`SET_MEMBER_BYTES`/`ZSET_MEMBER_BYTES`/`SCORE_BYTES` 等）。输入仍通常来自 heap argv，因此写入会把 field、member、score 或 list entry bytes 复制到 type-specific native handles。
+collection 写入也类似：root record 和 payload internals 都是 allocator-backed native objects（`NativeObjectKind` 覆盖 `LIST_ROOT`/`HASH_ROOT`/`SET_ROOT`/`ZSET_ROOT`、`LIST_NODE`、以及 `HASH_FIELD_BYTES`/`SET_MEMBER_BYTES`/`ZSET_MEMBER_BYTES` 等）。输入仍通常来自 heap argv，因此写入会把 field、member 或 list entry bytes 复制到 type-specific native handles。zset score 留在 heap：packed 用 `double[]`，skiplist 用 `Node.score`。
 
 ## Off-heap -> heap
 
