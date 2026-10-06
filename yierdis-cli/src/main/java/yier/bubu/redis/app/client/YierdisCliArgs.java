@@ -26,18 +26,21 @@ final class YierdisCliArgs {
                 inlineValue = name.substring(eq + 1);
                 name = name.substring(0, eq);
             }
+            // --name=value 的值已经在当前单词里。先 ++i 会把后面的命令单词跳过，
+            // --port=16379 PING 就会变成空命令并进入 REPL。
+            boolean inline = inlineValue != null;
             switch (name) {
                 case "--host":
-                    args.host = value(argv, ++i, inlineValue, name);
+                    args.host = value(argv, i, inlineValue, name);
                     break;
                 case "--port":
-                    args.port = intValue(name, value(argv, ++i, inlineValue, name));
+                    args.port = portValue(value(argv, i, inlineValue, name));
                     break;
                 case "--timeoutMillis":
-                    args.timeoutMillis = longValue(name, value(argv, ++i, inlineValue, name));
+                    args.timeoutMillis = timeoutValue(value(argv, i, inlineValue, name));
                     break;
                 case "--hex":
-                    if (inlineValue != null) {
+                    if (inline) {
                         throw new IllegalArgumentException("option '--hex' does not take a value");
                     }
                     args.hex = true;
@@ -45,7 +48,7 @@ final class YierdisCliArgs {
                 default:
                     throw new IllegalArgumentException("Unknown option: '" + name + "'");
             }
-            i++;
+            i += inline || "--hex".equals(name) ? 1 : 2;
         }
         for (; i < argv.length; i++) {
             args.command.add(argv[i]);
@@ -53,14 +56,34 @@ final class YierdisCliArgs {
         return args;
     }
 
-    private static String value(String[] argv, int index, String inlineValue, String name) {
+    private static String value(String[] argv, int optionIndex, String inlineValue, String name) {
         if (inlineValue != null) {
             return inlineValue;
         }
-        if (index >= argv.length) {
+        int valueIndex = optionIndex + 1;
+        if (valueIndex >= argv.length) {
             throw new IllegalArgumentException("Missing required parameter for option '" + name + "'");
         }
-        return argv[index];
+        return argv[valueIndex];
+    }
+
+    private static int portValue(String raw) {
+        int port = intValue("--port", raw);
+        // 连 socket 之前就拒绝。InetSocketAddress 对同样的范围也会抛异常，但那已经走进连接路径，退出码会变成 1。
+        if (port < 0 || port > 65535) {
+            throw new IllegalArgumentException("Invalid value for option '--port': '" + raw + "' is out of range");
+        }
+        return port;
+    }
+
+    private static long timeoutValue(String raw) {
+        long timeout = longValue("--timeoutMillis", raw);
+        // execute() 也会拒绝非正超时，但那发生在 connect() 之后。参数错误不能先把连接建起来。
+        if (timeout <= 0) {
+            throw new IllegalArgumentException(
+                    "Invalid value for option '--timeoutMillis': '" + raw + "' is out of range");
+        }
+        return timeout;
     }
 
     private static int intValue(String name, String raw) {

@@ -12,8 +12,72 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class YierdisCliTest {
+    @Test
+    public void inlineOptionsKeepTheFollowingCommandAndRangeErrorsStayUsageFailures() throws Exception {
+        try (TestServer server = TestServer.start()) {
+            String port = Integer.toString(server.port());
+            CliResult inlinePort = runWithIo("", "--port=" + port, "PING");
+            Assert.assertEquals(inlinePort.toString(), 0, inlinePort.status());
+            Assert.assertEquals("PONG\n", inlinePort.out());
+            Assert.assertTrue(inlinePort.err().isEmpty());
+
+            CliResult inlineHostAndPort = runWithIo(
+                    "",
+                    "--host=127.0.0.1",
+                    "--port=" + port,
+                    "PING");
+            Assert.assertEquals(inlineHostAndPort.toString(), 0, inlineHostAndPort.status());
+            Assert.assertEquals("PONG\n", inlineHostAndPort.out());
+            Assert.assertTrue(inlineHostAndPort.err().isEmpty());
+        }
+
+        AtomicBoolean connected = new AtomicBoolean();
+        try (ScriptedSocketServer server = ScriptedSocketServer.start(socket -> connected.set(true))) {
+            CliResult missing = runWithIo("", "--port");
+            Assert.assertEquals(missing.toString(), 2, missing.status());
+            Assert.assertTrue(missing.out().isEmpty());
+            Assert.assertEquals(
+                    "Missing required parameter for option '--port'\n",
+                    missing.err());
+
+            CliResult notAnInt = runWithIo("", "--port=nope", "PING");
+            Assert.assertEquals(notAnInt.toString(), 2, notAnInt.status());
+            Assert.assertTrue(notAnInt.out().isEmpty());
+            Assert.assertEquals(
+                    "Invalid value for option '--port': 'nope' is not an int\n",
+                    notAnInt.err());
+
+            CliResult portRange = runWithIo("", "--port", "70000", "PING");
+            Assert.assertEquals(portRange.toString(), 2, portRange.status());
+            Assert.assertTrue(portRange.out().isEmpty());
+            Assert.assertEquals(
+                    "Invalid value for option '--port': '70000' is out of range\n",
+                    portRange.err());
+
+            CliResult inlinePortRange = runWithIo("", "--port=70000", "PING");
+            Assert.assertEquals(inlinePortRange.toString(), 2, inlinePortRange.status());
+            Assert.assertTrue(inlinePortRange.out().isEmpty());
+            Assert.assertEquals(
+                    "Invalid value for option '--port': '70000' is out of range\n",
+                    inlinePortRange.err());
+
+            CliResult timeoutRange = runWithIo(
+                    "",
+                    "--port", Integer.toString(server.port()),
+                    "--timeoutMillis=0",
+                    "PING");
+            Assert.assertEquals(timeoutRange.toString(), 2, timeoutRange.status());
+            Assert.assertTrue(timeoutRange.out().isEmpty());
+            Assert.assertEquals(
+                    "Invalid value for option '--timeoutMillis': '0' is out of range\n",
+                    timeoutRange.err());
+            Assert.assertFalse(connected.get());
+        }
+    }
+
     @Test
     public void invalidArgumentsReturnWithoutConnecting() {
         CliResult help = runWithIo("", "--help");
@@ -55,6 +119,7 @@ public class YierdisCliTest {
             CliResult error = run(server, "NO_SUCH_COMMAND");
             Assert.assertEquals(1, error.status());
             Assert.assertTrue(error.out().startsWith("(error) ERR unknown command"));
+            Assert.assertTrue(error.err().isEmpty());
         }
     }
 
@@ -136,6 +201,7 @@ public class YierdisCliTest {
         Assert.assertEquals(result.toString(), 1, result.status());
         Assert.assertTrue(result.out().isEmpty());
         Assert.assertTrue(result.err().startsWith("(error) "));
+        Assert.assertFalse(result.err().contains("out of range"));
     }
 
     @Test
