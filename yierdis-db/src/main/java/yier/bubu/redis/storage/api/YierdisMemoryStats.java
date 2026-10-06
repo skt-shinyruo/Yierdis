@@ -3,9 +3,10 @@ package yier.bubu.redis.storage.api;
 import java.util.Objects;
 
 /**
- * A best-effort memory budget breakdown for explaining maxmemory / eviction behavior.
+ * maxmemory / eviction 的内存预算分解，供 {@code MEMORY STATS} 与 {@code INFO} 读取。
  * <p>
- * This is an <b>estimate</b> designed to be stable and explainable, not a precise JVM heap measurement.
+ * {@link #ledgerUsedBytes()} 是准入账本的逻辑用量，不是堆估算。
+ * 其余字节字段保持原有的估算或提交量口径，不是精确的 JVM 堆测量。
  */
 public record YierdisMemoryStats(
         long maxmemoryBytes,
@@ -25,7 +26,11 @@ public record YierdisMemoryStats(
         int pendingHashTableCount,
         String lastHashTableMaintenanceStopReason,
         long nativeLiveObjects,
-        long nativeLiveRegions
+        long nativeLiveRegions,
+        /**
+         * 准入账本的逻辑用量（{@code MemoryLedger.usedBytes()}），不是堆估算。
+         */
+        long ledgerUsedBytes
 ) {
     public YierdisMemoryStats {
         if (pendingHashTableCount < 0) {
@@ -52,6 +57,7 @@ public record YierdisMemoryStats(
                 0L,
                 0,
                 "COMPLETE",
+                0L,
                 0L,
                 0L
         );

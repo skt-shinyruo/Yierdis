@@ -62,6 +62,7 @@ final class YierdisDbMemoryReporter {
         long reservedBytes = ledger.reservedBytes();
         int pendingHashTableCount = hashTableMaintenanceRegistry.pendingTableCount();
 
+        // ledger.usedBytes() 才是准入水位；heapEstimatedBytes 只留在堆估算字段。
         return new YierdisMemoryStats(
                 maxmemoryBytes,
                 totalEstimatedBytes,
@@ -80,7 +81,8 @@ final class YierdisDbMemoryReporter {
                 pendingHashTableCount,
                 hashTableMaintenanceRegistry.lastStopReason().name(),
                 allocatorStats == null ? 0L : allocatorStats.liveObjects(),
-                safeNativeLiveRegionCount()
+                safeNativeLiveRegionCount(),
+                ledger.usedBytes()
         );
     }
 
