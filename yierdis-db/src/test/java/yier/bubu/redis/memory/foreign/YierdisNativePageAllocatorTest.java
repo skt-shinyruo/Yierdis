@@ -366,4 +366,41 @@ public class YierdisNativePageAllocatorTest {
             Assert.assertEquals(1L, afterFree.freePages());
         }
     }
+
+    @Test
+    public void pageAlignedSpanAcceptsTheLastLegalRequestAndRejectsTheNextByte() {
+        int pageBytes = YierdisNativePageAllocator.PAGE_BYTES;
+        int lastLegal = (Integer.MAX_VALUE / pageBytes) * pageBytes;
+        int firstOverflow = lastLegal + 1;
+
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-span-overflow");
+             YierdisNativePageAllocator allocator = new YierdisNativePageAllocator(runtime)) {
+
+            YierdisNativeBlock block = allocator.allocate(lastLegal);
+            try {
+                Assert.assertEquals(lastLegal, block.capacity());
+            } finally {
+                block.close();
+            }
+
+            IllegalArgumentException overflow = Assert.assertThrows(
+                    IllegalArgumentException.class,
+                    () -> allocator.allocate(firstOverflow)
+            );
+            IllegalArgumentException maxInt = Assert.assertThrows(
+                    IllegalArgumentException.class,
+                    () -> allocator.allocate(Integer.MAX_VALUE)
+            );
+            IllegalArgumentException estimated = Assert.assertThrows(
+                    IllegalArgumentException.class,
+                    () -> allocator.estimateAdditionalGrowth(firstOverflow)
+            );
+
+            Assert.assertEquals(2_147_418_113, firstOverflow);
+            Assert.assertTrue(overflow.getMessage(), overflow.getMessage().contains("too large"));
+            Assert.assertTrue(maxInt.getMessage(), maxInt.getMessage().contains("too large"));
+            Assert.assertTrue(estimated.getMessage(), estimated.getMessage().contains("too large"));
+            Assert.assertEquals(0L, runtime.usedBytes());
+        }
+    }
 }

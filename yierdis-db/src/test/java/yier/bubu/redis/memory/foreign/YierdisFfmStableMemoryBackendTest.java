@@ -1012,6 +1012,117 @@ public class YierdisFfmStableMemoryBackendTest {
     }
 
     @Test
+    public void publishedBlockRemainsReclaimableWhenRetainedRegistrationFails() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-move-registration");
+             YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 8)) {
+
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 16);
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
+                view.setByte(0, (byte) 9);
+                view.setByte(1, (byte) 8);
+            }
+            NativeEpochScope epoch = allocator.beginEpoch();
+            allocator.failNextRetainedBlockRegistration();
+
+            NativeDefragReport report = allocator.defragCycle(new NativeDefragOptions(16, 1, Long.MAX_VALUE));
+
+            Assert.assertEquals(1L, report.failedMoves());
+            Assert.assertEquals(0L, report.movedObjects());
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(9, view.getByte(0));
+                Assert.assertEquals(8, view.getByte(1));
+            }
+            Assert.assertEquals(16L, allocator.stats().quarantineBytes());
+            Assert.assertEquals(0L, allocator.stats().quarantinedObjects());
+
+            allocator.free(handle);
+            epoch.close();
+
+            NativeAllocatorStats released = allocator.stats();
+            Assert.assertEquals(0L, released.liveObjects());
+            Assert.assertEquals(0L, released.reservedBytes());
+            Assert.assertEquals(0L, released.quarantineBytes());
+            Assert.assertEquals(released.committedBytes(), released.freeBytes());
+        }
+    }
+
+    @Test
+    public void reallocKeepsPublishedBlockReclaimableWhenRetainedRegistrationFails() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-realloc-registration");
+             YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 8)) {
+
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 16);
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
+                view.setByte(0, (byte) 4);
+                view.setByte(1, (byte) 5);
+            }
+            allocator.failNextRetainedBlockRegistration();
+
+            NativeMemoryException failure = Assert.assertThrows(
+                    NativeMemoryException.class,
+                    () -> allocator.reallocate(handle, 24, NativeReallocPolicy.PRESERVE_PREFIX)
+            );
+
+            Assert.assertTrue(failure.getMessage(), failure.getMessage().contains("retained block"));
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(24, view.size());
+                Assert.assertEquals(4, view.getByte(0));
+                Assert.assertEquals(5, view.getByte(1));
+            }
+            allocator.free(handle);
+            NativeAllocatorStats released = allocator.stats();
+            Assert.assertEquals(0L, released.liveObjects());
+            Assert.assertEquals(0L, released.reservedBytes());
+            Assert.assertEquals(0L, released.quarantineBytes());
+            Assert.assertEquals(released.committedBytes(), released.freeBytes());
+        }
+    }
+
+    @Test
+    public void quarantineBytesAddRetainedMovesToFreedObjectsAndFragmentationStaysPageFree() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-metric-invariants");
+             YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 8)) {
+
+            NativeHandle moved = allocator.allocate(NativeObjectKind.STRING_BYTES, 16);
+            NativeHandle pinned = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
+            NativeEpochScope epoch = allocator.beginEpoch();
+            allocator.pin(pinned);
+            NativeAllocatorStats before = allocator.stats();
+            long occupiedBefore = before.committedBytes() - before.freeBytes();
+
+            NativeDefragReport report = allocator.defragCycle(new NativeDefragOptions(16, 1, Long.MAX_VALUE));
+
+            Assert.assertEquals(1L, report.movedObjects());
+            NativeAllocatorStats retained = allocator.stats();
+            long occupiedAfter = retained.committedBytes() - retained.freeBytes();
+            Assert.assertEquals(0L, retained.quarantinedObjects());
+            Assert.assertEquals(16L, retained.quarantineBytes());
+            // 旧块仍在 page used 里，不在 freeBytes 中。占用只多了新块的 16 字节。
+            Assert.assertEquals(occupiedBefore + 16L, occupiedAfter);
+            Assert.assertEquals(retained.freeBytes(), retained.externalFragmentationBytes());
+            Assert.assertTrue(retained.externalFragmentationBytes() > 16L);
+
+            allocator.free(pinned);
+
+            NativeAllocatorStats both = allocator.stats();
+            Assert.assertEquals(1L, both.quarantinedObjects());
+            Assert.assertEquals(40L, both.quarantineBytes());
+            Assert.assertEquals(both.freeBytes(), both.externalFragmentationBytes());
+
+            allocator.unpin(pinned);
+            epoch.close();
+            allocator.free(moved);
+
+            NativeAllocatorStats released = allocator.stats();
+            Assert.assertEquals(0L, released.liveObjects());
+            Assert.assertEquals(0L, released.quarantineBytes());
+            Assert.assertEquals(0L, released.quarantinedObjects());
+            Assert.assertEquals(released.freeBytes(), released.externalFragmentationBytes());
+            Assert.assertEquals(released.committedBytes(), released.freeBytes());
+        }
+    }
+
+    @Test
     public void statsExposeProductionAllocatorMetrics() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
              YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 1024)) {
