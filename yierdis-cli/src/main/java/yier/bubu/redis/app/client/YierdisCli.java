@@ -111,7 +111,7 @@ public final class YierdisCli {
             case INTEGER -> System.out.println(prefix + reply.integer());
             case BULK_STRING -> System.out.println(prefix + formatBulk(reply.bytes(), hex));
             case ARRAY, MAP, SET -> printArray(reply, hex, prefix);
-            case NULL -> System.out.println(prefix + "(nil)");
+            case NULL, NULL_TYPE -> System.out.println(prefix + "(nil)");
         }
     }
 

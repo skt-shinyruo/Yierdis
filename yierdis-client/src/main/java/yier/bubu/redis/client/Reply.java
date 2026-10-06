@@ -1,14 +1,13 @@
 package yier.bubu.redis.client;
 
 /**
- * 管道里一条已经写出的命令。{@link #get()} 按发送顺序读完它自己和它前面还没读的回复。
- * 已经读过的句柄再取，返回保存下来的结果，服务端错误也只从对应句柄抛出。
+ * 管道里一条已经写出的命令。{@link #get()} 按发送顺序读完当时已经写出、还没读的全部回复。
+ * 已经读过的句柄再取，返回保存下来的结果。服务端错误只从对应句柄抛出。
  */
 public final class Reply<T> {
     private final Pipeline pipeline;
     private final Call<T> call;
     private boolean read;
-    private boolean taken;
     private T value;
     private RuntimeException error;
 
@@ -23,7 +22,7 @@ public final class Reply<T> {
 
     /**
      * {@code commandTimeoutMillis <= 0} 在读回复之前拒绝。
-     * 这次调用若要连读前面几条，每条都单独使用这个超时。
+     * 这次调用若要连读已经写出的回复，每条都单独使用这个超时。
      */
     public T get(long commandTimeoutMillis) {
         if (commandTimeoutMillis <= 0) {
@@ -43,14 +42,8 @@ public final class Reply<T> {
         return read;
     }
 
-    /**
-     * 套接字上还没读到的回复算未读。服务端错误即使已经读进句柄，在 {@link #get()} 取走过之前也仍算未读。
-     */
     boolean holdsUnread() {
-        if (!read) {
-            return true;
-        }
-        return error instanceof ServerException && !taken;
+        return !read;
     }
 
     void complete(Object raw) {
@@ -64,7 +57,6 @@ public final class Reply<T> {
     }
 
     private T deliver() {
-        taken = true;
         if (error != null) {
             throw error;
         }

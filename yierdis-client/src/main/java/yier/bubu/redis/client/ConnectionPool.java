@@ -18,9 +18,11 @@ import java.util.concurrent.TimeUnit;
  * 名额还没用完时，这次借出仍会打开一条连接。等待者按到达顺序获得连接。
  * <p>
  * 借出不发送 {@code PING}，也不为核对 DB 再发 {@code SELECT}。
- * 新建连接走 {@link Connection#connect(ConnectionSettings)}；DB 不是 0 时由那里先 {@code SELECT}，失败则不借出。
- * 借出等待耗尽是 {@link BorrowException}，不关闭已经借出的连接。
- * 打开新连接时，连接超时和剩余借出等待谁先到，这次借出就失败，没交出去的套接字会被放弃。
+ * 新建时先 TCP。借出等待大于 0 时，TCP 返回后再量剩余时间：没有剩余就关掉套接字；
+ * 非 0 DB 的 {@code SELECT} 只用这段剩余，不用连接前采样的整段。
+ * {@code SELECT} 超时，或交出去之前期限已过，是 {@link BorrowException}，连接不借出。
+ * 连接超时同样是 {@link BorrowException}。等待 0 仍按连接超时试一次，不把 0 当成已经到期。
+ * 借出等待耗尽不关闭已经借出的连接。没交出去的套接字会被放弃。
  * <p>
  * {@link #returnConnection(Connection)} 不代发 {@code sync()}、{@code DISCARD} 或 {@code EXEC}。
  * 不在普通模式，或 DB 下标不是池的下标时，关掉这条连接并不放回。
@@ -170,11 +172,17 @@ public final class ConnectionPool implements AutoCloseable {
             error = e;
         }
         boolean handOut = false;
+        boolean waitElapsed = false;
         synchronized (lock) {
             connecting--;
             if (failure == null && error == null && !closed) {
-                borrowed.add(created);
-                handOut = true;
+                // 打开已经返回、放进 borrowed 之前，借出期限仍可能已经过了。这时不放进 borrowed。
+                if (borrowWaitMillis > 0 && remainingMillis(deadlineNanos) <= 0) {
+                    waitElapsed = true;
+                } else {
+                    borrowed.add(created);
+                    handOut = true;
+                }
             }
             lock.notifyAll();
         }
@@ -187,6 +195,9 @@ public final class ConnectionPool implements AutoCloseable {
         if (failure != null) {
             throw failure;
         }
+        if (waitElapsed) {
+            throw new BorrowException("borrow wait elapsed");
+        }
         if (!handOut) {
             throw new BorrowException("pool is closed");
         }
@@ -195,20 +206,34 @@ public final class ConnectionPool implements AutoCloseable {
 
     private Connection openWithin(long deadlineNanos) {
         long socketTimeoutMillis = settings.connectTimeoutMillis();
-        long setupTimeoutMillis = settings.commandTimeoutMillis();
         if (borrowWaitMillis > 0) {
             long remaining = remainingMillis(deadlineNanos);
             if (remaining <= 0) {
-                // 剩余借出等待已经用尽，不再打开套接字。
+                // 剩余借出等待已经用尽，不再打开套接字。等待 0 不走这里，仍按连接超时试一次。
                 throw new BorrowException("borrow wait elapsed");
             }
-            // 连接超时和剩余借出等待谁先到，这次打开就失败。没交给调用方的连接由 connect 或下面的失败路径关掉。
-            // 这种超时是借出失败，不是命令读超时。
+            // 连接超时和剩余借出等待谁先到，这次 TCP 就失败。这种超时是借出失败，不是命令读超时。
             socketTimeoutMillis = Math.min(socketTimeoutMillis, remaining);
-            setupTimeoutMillis = Math.min(setupTimeoutMillis, remaining);
         }
+        Connection connection = null;
         try {
-            return Connection.connect(settings, socketTimeoutMillis, setupTimeoutMillis);
+            connection = Connection.openSocket(settings, socketTimeoutMillis);
+            long setupTimeoutMillis = settings.commandTimeoutMillis();
+            if (borrowWaitMillis > 0) {
+                // TCP 已经用掉一部分借出等待。没有剩余就关掉套接字，不把连接交出去。
+                // SELECT 只能用现在还剩的时间，不能用连接前采样的整段。等待 0 不进这里。
+                long remaining = remainingMillis(deadlineNanos);
+                if (remaining <= 0) {
+                    throw new BorrowException("borrow wait elapsed");
+                }
+                setupTimeoutMillis = Math.min(setupTimeoutMillis, remaining);
+            }
+            if (settings.database() != 0) {
+                connection.command(setupTimeoutMillis, "SELECT", Integer.toString(settings.database()));
+            }
+            Connection ready = connection;
+            connection = null;
+            return ready;
         } catch (CommandTimeoutException e) {
             throw new BorrowException("timed out opening a connection", e);
         } catch (ConnectionException e) {
@@ -216,6 +241,10 @@ public final class ConnectionPool implements AutoCloseable {
                 throw new BorrowException("timed out opening a connection", e);
             }
             throw e;
+        } finally {
+            if (connection != null) {
+                connection.close();
+            }
         }
     }
 

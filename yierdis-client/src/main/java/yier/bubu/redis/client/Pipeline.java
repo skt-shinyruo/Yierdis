@@ -8,9 +8,9 @@ import java.util.Set;
 /**
  * 同一条连接上的管道。命令立刻写出，回复留到句柄或 {@link #sync()} 再读。
  * <p>
- * 取任何一个句柄会按发送顺序读完它和它之前还没读的回复，每条回复单独计超时。
- * 服务端错误只在对应句柄上抛出。没有未读回复时 {@link #close()} 让连接回到普通模式；
- * 还有未读回复时关掉连接。
+ * 取任何一个还没读的句柄，会按发送顺序读完当时已经写出的全部回复，每条单独计超时。
+ * 服务端错误只从对应句柄的 {@link Reply#get()} 抛出。
+ * 套接字上还有没读走的回复时 {@link #close()} 关掉连接；已经读进句柄的结果，包括服务端错误，不算未读。
  */
 public final class Pipeline implements AutoCloseable {
     private final Connection connection;
@@ -80,11 +80,9 @@ public final class Pipeline implements AutoCloseable {
             if (reply.isRead()) {
                 continue;
             }
-            // 这一次 get 连读前面几条时，每条读之前都重新计超时，一条用满不会吃掉下一条。
+            // 读完目标之后还要继续把已经写出的回复读走，否则 close 会把还在套接字上的回复当成未读并关掉连接。
+            // 每条读之前重新计超时。服务端错误记在对应句柄上，不从这次 get 抛出。
             readOne(reply, timeoutMillis);
-            if (reply == target) {
-                return;
-            }
         }
         if (!target.isRead()) {
             throw new IllegalStateException("pipeline reply was not read");
@@ -137,7 +135,6 @@ public final class Pipeline implements AutoCloseable {
         }
     }
 
-    // BEGIN TYPED COMMANDS
     public Reply<String> ping() {
         return enqueue(Calls.ping());
     }
@@ -573,6 +570,4 @@ public final class Pipeline implements AutoCloseable {
     public Reply<String> pfmerge(String destination, String... sources) {
         return enqueue(Calls.pfmerge(destination, sources));
     }
-
-    // END TYPED COMMANDS
 }

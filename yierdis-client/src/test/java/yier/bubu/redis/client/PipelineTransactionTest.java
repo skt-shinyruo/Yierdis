@@ -95,20 +95,41 @@ public class PipelineTransactionTest {
     }
 
     @Test
-    public void closingAfterSyncStillClosesWhenAServerErrorWasNotTaken() throws Exception {
+    public void closingAfterAReadServerErrorLeavesTheConnectionOpen() throws Exception {
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
             Pipeline pipeline = connection.pipeline();
             Reply<String> ok = pipeline.set("k", "v");
-            pipeline.command("NO_SUCH");
-            pipeline.sync();
-            Assert.assertEquals("OK", ok.get());
+            Reply<Object> bad = pipeline.command("NO_SUCH");
+            Reply<String> later = pipeline.set("k2", "v2");
+            Assert.assertEquals("OK", later.get());
             pipeline.close();
+            Assert.assertEquals("PONG", connection.ping());
             try {
-                connection.ping();
-                Assert.fail("expected IllegalStateException");
-            } catch (IllegalStateException expected) {
+                bad.get();
+                Assert.fail("expected ServerException");
+            } catch (ServerException e) {
+                Assert.assertEquals("ERR unknown command 'NO_SUCH'", e.getMessage());
             }
+            Assert.assertEquals("OK", ok.get());
+            Assert.assertEquals("PONG", connection.ping());
+        }
+    }
+
+    @Test
+    public void gettingTheFirstPipelineReplyReadsTheRestSoCloseKeepsTheConnection() throws Exception {
+        try (TestServer server = TestServer.start();
+             Connection connection = connect(server)) {
+            Pipeline pipeline = connection.pipeline();
+            Reply<String> first = pipeline.set("a", "1");
+            pipeline.set("b", "2");
+            pipeline.set("c", "3");
+            Assert.assertEquals("OK", first.get());
+            pipeline.close();
+            Assert.assertEquals("PONG", connection.ping());
+            Assert.assertEquals("1", connection.get("a"));
+            Assert.assertEquals("2", connection.get("b"));
+            Assert.assertEquals("3", connection.get("c"));
         }
     }
 

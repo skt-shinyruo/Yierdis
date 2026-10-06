@@ -56,8 +56,19 @@ public class RespClientCodecTest {
         Assert.assertEquals(RespClientCodec.RespReply.Kind.ERROR, error.kind());
         Assert.assertEquals("ERR failure", error.text());
 
-        Assert.assertTrue(RespClientCodec.readReply(in("_\r\n"), 1024).isNull());
+        RespClientCodec.RespReply resp3Null = RespClientCodec.readReply(in("_\r\n"), 1024);
+        Assert.assertEquals(RespClientCodec.RespReply.Kind.NULL_TYPE, resp3Null.kind());
+        Assert.assertNotEquals(RespClientCodec.RespReply.Kind.NULL, resp3Null.kind());
+        Assert.assertFalse(resp3Null.isNull());
+        RespClientCodec.RespReply nullBulk = RespClientCodec.readReply(in("$-1\r\n"), 1024);
+        Assert.assertEquals(RespClientCodec.RespReply.Kind.NULL, nullBulk.kind());
+        Assert.assertTrue(nullBulk.isNull());
         Assert.assertTrue(RespClientCodec.readReply(in("*-1\r\n"), 1024).isNull());
+        RespClientCodec.RespReply nestedNull = RespClientCodec.readReply(in("*1\r\n_\r\n"), 1024);
+        Assert.assertEquals(
+                RespClientCodec.RespReply.Kind.NULL_TYPE,
+                nestedNull.values().get(0).kind()
+        );
 
         RespClientCodec.RespReply nested = RespClientCodec.readReply(
                 in("*2\r\n*1\r\n+OK\r\n$0\r\n\r\n"),
