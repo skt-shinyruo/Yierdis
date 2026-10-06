@@ -26,7 +26,9 @@ public class YierdisGlobMatcherTest {
         assertMatchesBoth(false, "key[0-9]", "keyx");
         assertMatchesBoth(true, "key[^0-9]", "keyx");
         assertMatchesBoth(false, "key[^0-9]", "key7");
-        assertMatchesBoth(true, "key[!a-c]", "keyz");
+        assertMatchesBoth(false, "key[!a-c]", "keyz");
+        assertMatchesBoth(true, "key[!a-c]", "key!");
+        assertMatchesBoth(true, "key[!a-c]", "keyb");
         assertMatchesBoth(true, "key[z-a]", "keym");
     }
 
@@ -35,15 +37,27 @@ public class YierdisGlobMatcherTest {
         assertMatchesBoth(true, "a\\*b", "a*b");
         assertMatchesBoth(false, "a\\*b", "axxb");
         assertMatchesBoth(true, "a\\", "a\\");
-        assertMatchesBoth(true, "a[", "a[");
-        assertMatchesBoth(true, "a[]]", "a]");
+        assertMatchesBoth(false, "a[", "a[");
+        assertMatchesBoth(false, "a[]]", "a]");
+        assertMatchesBoth(true, "[!a]", "!");
+        assertMatchesBoth(true, "[!a]", "a");
+        assertMatchesBoth(false, "[!a]", "b");
+        assertMatchesBoth(false, "[]a]", "]");
+        assertMatchesBoth(false, "[]]", "]");
+        assertMatchesBoth(true, "[a-]", "]");
+        assertMatchesBoth(true, "[a-]", "a");
+        assertMatchesBoth(false, "[a-]", "b");
+        assertMatchesBoth(true, "[abc", "a");
+        assertMatchesBoth(true, "[abc", "b");
+        assertMatchesBoth(false, "[abc", "x");
     }
 
     @Test
     public void matchesEmptyTextAndTrailingStarsAcrossInputBackings() {
         assertMatchesBoth(true, "", "");
         assertMatchesBoth(true, "*", "");
-        assertMatchesBoth(true, "***", "");
+        assertMatchesBoth(false, "**", "");
+        assertMatchesBoth(false, "***", "");
         assertMatchesBoth(true, "a**", "a");
         assertMatchesBoth(false, "?", "");
         assertMatchesBoth(false, "*a", "");
