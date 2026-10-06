@@ -26,7 +26,9 @@ public class FfmPageTrimIntegrationTest {
 
             long physicalBefore = backend.memoryUsage().effectiveBytesForMaxmemory();
             long dataCommittedBefore = backend.memoryUsage().nativeDataCommittedBytes();
-            Assert.assertTrue(backend.stats().freePages() > 0L);
+            Assert.assertTrue(backend.stats().emptySmallPages() > 0L);
+            Assert.assertEquals(0L, backend.stats().defragTrimReclaimedPages());
+            Assert.assertEquals(0L, backend.stats().defragRetiredBlockPages());
 
             YierdisDbMemoryLedger ledger = new YierdisDbMemoryLedger(
                     physicalBefore - 1L,
@@ -40,7 +42,9 @@ public class FfmPageTrimIntegrationTest {
             MemoryReservation reservation = ledger.reserve(1L);
 
             Assert.assertEquals(1L, reservation.reservedBytes());
-            Assert.assertEquals(0L, backend.stats().freePages());
+            Assert.assertEquals(0L, backend.stats().emptySmallPages());
+            Assert.assertTrue(backend.stats().defragTrimReclaimedPages() > 0L);
+            Assert.assertEquals(0L, backend.stats().defragRetiredBlockPages());
             Assert.assertTrue(backend.memoryUsage().nativeDataCommittedBytes() < dataCommittedBefore);
             Assert.assertTrue(
                     backend.memoryUsage().effectiveBytesForMaxmemory() + reservation.reservedBytes()

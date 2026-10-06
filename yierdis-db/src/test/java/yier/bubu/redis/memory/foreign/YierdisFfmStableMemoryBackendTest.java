@@ -983,6 +983,50 @@ public class YierdisFfmStableMemoryBackendTest {
     }
 
     @Test
+    public void defragCycleCountsTheCurrentObjectWhenObjectBudgetStops() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-object-budget");
+             YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 16)) {
+
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
+            NativeLocation location = locationOf(allocator.objectMeta(handle.localRaw(), false));
+
+            NativeDefragReport report = allocator.defragCycle(
+                    new NativeDefragOptions(Long.MAX_VALUE, 0L, Long.MAX_VALUE)
+            );
+
+            Assert.assertTrue(report.stoppedByObjectBudget());
+            Assert.assertFalse(report.stoppedByTimeBudget());
+            Assert.assertFalse(report.stoppedByByteBudget());
+            Assert.assertNotEquals(0L, report.skippedBudgetObjects());
+            Assert.assertEquals(0L, report.movedObjects());
+            Assert.assertEquals(location, locationOf(allocator.objectMeta(handle.localRaw(), false)));
+            allocator.free(handle);
+        }
+    }
+
+    @Test
+    public void defragCycleCountsTheCurrentObjectWhenTimeBudgetStops() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-time-budget");
+             YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 16)) {
+
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
+            NativeLocation location = locationOf(allocator.objectMeta(handle.localRaw(), false));
+
+            NativeDefragReport report = allocator.defragCycle(
+                    new NativeDefragOptions(Long.MAX_VALUE, Long.MAX_VALUE, 0L)
+            );
+
+            Assert.assertTrue(report.stoppedByTimeBudget());
+            Assert.assertFalse(report.stoppedByObjectBudget());
+            Assert.assertFalse(report.stoppedByByteBudget());
+            Assert.assertNotEquals(0L, report.skippedBudgetObjects());
+            Assert.assertEquals(0L, report.movedObjects());
+            Assert.assertEquals(location, locationOf(allocator.objectMeta(handle.localRaw(), false)));
+            allocator.free(handle);
+        }
+    }
+
+    @Test
     public void defragCycleSkipsPinnedObjectsAndContinues() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
              YierdisFfmStableMemoryBackend allocator = newAllocator(runtime, 1024)) {
@@ -1129,15 +1173,14 @@ public class YierdisFfmStableMemoryBackendTest {
             Assert.assertEquals(2L, allocated.liveObjects());
             Assert.assertTrue(allocated.externalFragmentationBytes() > 0L);
             Assert.assertTrue(allocated.smallFreeBytes() > 0L);
-            Assert.assertEquals(0L, allocated.mediumFreeBytes());
-            Assert.assertEquals(0L, allocated.largeFreeBytes());
-            Assert.assertEquals(0L, allocated.freePages());
+            Assert.assertEquals(0L, allocated.emptySmallPages());
 
-            long reclaimedPages = allocator.objectMeta(entry.localRaw(), false).capacity()
+            long retiredBlockPages = allocator.objectMeta(entry.localRaw(), false).capacity()
                     / YierdisNativePageAllocator.PAGE_BYTES;
             NativeDefragReport moved = allocator.defragCycle(new NativeDefragOptions(70_024, 2, Long.MAX_VALUE));
             Assert.assertEquals(2L, moved.movedObjects());
-            Assert.assertEquals(reclaimedPages, allocator.stats().defragReclaimedPages());
+            Assert.assertEquals(retiredBlockPages, allocator.stats().defragRetiredBlockPages());
+            Assert.assertEquals(0L, allocator.stats().defragTrimReclaimedPages());
 
             allocator.pin(string);
             allocator.free(string);
@@ -1145,12 +1188,12 @@ public class YierdisFfmStableMemoryBackendTest {
 
             try {
                 allocator.free(string);
-                Assert.fail("expected double-free detection");
+                Assert.fail("expected stale-handle rejection on free");
             } catch (StaleNativeHandleException expected) {
                 Assert.assertTrue(expected.getMessage().contains("quarantined"));
             }
 
-            Assert.assertEquals(1L, allocator.stats().doubleFreeDetections());
+            Assert.assertEquals(1L, allocator.stats().staleHandleFreeDetections());
             allocator.unpin(string);
             allocator.free(entry);
         }
