@@ -62,7 +62,9 @@ TCP 字节流 -> 增量解码器(跨半帧状态机) -> 完整 RespReply(校验�
 | `--hex` | 关闭 | 仅当 bulk string 不是合法 UTF-8 时，把它按十六进制打印。 |
 | 位置参数 `COMMAND [ARG...]` | 空 | 0 个或多个；省略则进入 REPL。 |
 
-`YierdisCliArgs.parse(...)` 只解析第一个位置参数之前的选项，其后的内容不再被当作选项。这意味着 `yierdis-cli GET --hex` 会把 `--hex` 当成 GET 的一个参数，而不是 CLI 选项——把选项放在命令之前。
+`YierdisCliArgs.parse(...)` 只解析第一个位置参数之前的选项，其后的内容不再被当作选项。这意味着 `yierdis-cli GET --hex` 会把 `--hex` 当成 GET 的一个参数，而不是 CLI 选项——把选项放在命令之前。`--name value` 和 `--name=value` 都只消费这个选项自己的值；等号后面的值不会再吃掉下一个单词，所以 `--port=16379 PING` 仍然执行 `PING`。
+
+端口必须落在 `0..65535`，`--timeoutMillis` 必须大于 0。缺参数、格式错误和范围错误都在建立连接之前失败：stderr 只有一行原因，没有 `(error)` 前缀，退出码是 2。退出码 2 是 Yierdis CLI 自己的参数错误契约，不表示 Redis CLI 在同样场景也返回 2。单次命令的连接失败和 `ERROR` 回复仍是退出码 1。REPL 里单条命令失败只打印错误并继续，进程仍以 0 结束。
 
 单次命令模式：
 
@@ -80,7 +82,7 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar GET a
 - `BULK_STRING` → 能解成 UTF-8 就打印文本；否则在 `--hex` 时打印 `0x...`，否则按 UTF-8 尽力打印。
 - `ARRAY` / `MAP` / `SET` → 逐项递归，带 `1) `、`2) ` 前缀。
 
-退出码：reply 不是 `ERROR` 时为 `0`，是 `ERROR` 时为 `1`；`runClient` 抛异常时向 stderr 打印 `(error) <message>` 并返回 `1`。
+退出码：参数错误是 `2`；reply 不是 `ERROR` 时为 `0`，是 `ERROR` 时为 `1`；连接失败或 `runClient` 抛异常时向 stderr 打印 `(error) <message>` 并返回 `1`。`2` 只区分本工具的参数校验，不拿来表示 Redis CLI 的退出码。
 
 REPL 模式（不带位置参数）：
 
