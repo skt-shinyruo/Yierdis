@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 390" width="760" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M1 1 L7 4 L1 7 Z" fill="#8b949e"/></marker>
+  </defs>
+  <rect x="160" y="20" width="440" height="56" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="380" y="43" text-anchor="middle" font-size="14" fill="#1f2328">DB graph</text>
+  <text x="380" y="61" text-anchor="middle" font-size="12" fill="#57606a">stores NativeHandle / typed wrappers</text>
+  <rect x="160" y="118" width="440" height="56" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="380" y="141" text-anchor="middle" font-size="14" fill="#1f2328">YierdisFfmStableMemoryBackend</text>
+  <text x="380" y="159" text-anchor="middle" font-size="12" fill="#57606a">validates backend identity and resolves localRaw</text>
+  <rect x="160" y="216" width="440" height="56" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="380" y="239" text-anchor="middle" font-size="14" fill="#1f2328">YierdisNativeObjectTable</text>
+  <text x="380" y="257" text-anchor="middle" font-size="12" fill="#57606a">maps stable slot/generation to current page location</text>
+  <rect x="160" y="314" width="440" height="56" rx="8" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="380" y="337" text-anchor="middle" font-size="14" fill="#1f2328">YierdisNativePageAllocator</text>
+  <text x="380" y="355" text-anchor="middle" font-size="12" fill="#57606a">owns FFM-backed pages and spans</text>
+  <line x1="380" y1="76" x2="380" y2="118" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="380" y1="174" x2="380" y2="216" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="380" y1="272" x2="380" y2="314" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round"/>
+</svg>
