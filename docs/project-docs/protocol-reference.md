@@ -188,7 +188,7 @@ FIFO 保护是例外：若 ingress 队列里仍有更早提交、但尚未拿到
 - `ERR Protocol error: invalid bulk string terminator`；
 - `ERR Protocol error: invalid inline command`；
 - `ERR Protocol error: command is too large`（命中 `protocolMaxCommandBytes`）；
-- `ERR request exceeds configured memory limit`（ingress admission 预算不足）。
+- `ERR request exceeds configured memory limit`（ingress admission 预算不足。同一连接上第二条接近 64MiB 的在途命令，会在第一条租约还在、第二条 bulk 准入时因连接硬上限走这里，然后断连；全局在途预算和合并失败也会用这句。口径见 [`configuration-and-operations.md`](./configuration-and-operations.md#协议入口限制)）。
 
 这个做法让坏请求后面的残留 bytes 不再被解释成下一条请求，避免请求和响应错配。
 
