@@ -17,15 +17,18 @@ final class YierdisDbKernel {
     private final Runnable threadChecker;
     private final YierdisDbMutationExecutor mutationExecutor;
     private final YierdisDbKeyLifecycle keyLifecycle;
+    private final YierdisDbHealth health;
 
     YierdisDbKernel(
             Runnable threadChecker,
             YierdisDbMutationExecutor mutationExecutor,
-            YierdisDbKeyLifecycle keyLifecycle
+            YierdisDbKeyLifecycle keyLifecycle,
+            YierdisDbHealth health
     ) {
         this.threadChecker = Objects.requireNonNull(threadChecker, "threadChecker");
         this.mutationExecutor = Objects.requireNonNull(mutationExecutor, "mutationExecutor");
         this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
+        this.health = Objects.requireNonNull(health, "health");
     }
 
     <R> R execute(MutationPlan<R> plan) {
@@ -164,6 +167,12 @@ final class YierdisDbKernel {
         long nowMillis = System.currentTimeMillis();
         if (!keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
             return record;
+        }
+        // requireWritable 先于 admissionMode，degraded 下 RECLAMATION 也会被拒。
+        // 读路径因此不能调用 reclaimExpired，否则 GET 已过期 key 会收到 MISCONF。
+        // 跳过回收、按不存在应答，物理记录保持不动，恢复后再由可写路径回收。
+        if (health.degraded()) {
+            return null;
         }
         reclaimExpired(keyHandle, record, nowMillis);
         return null;

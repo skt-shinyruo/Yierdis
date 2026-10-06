@@ -195,6 +195,7 @@ public class CommandParseIsolationTest {
                 parseCase("AUTH", "AUTH", "password"),
                 parseCase("FLUSHDB", "FLUSHDB", "SYNC"),
                 parseCase("TYPE", "TYPE", "k"),
+                parseCase("YDRECONCILE", "YDRECONCILE"),
                 parseCase("MEMORY", "MEMORY", "STATS"),
                 parseCase("OBJECT", "OBJECT", "ENCODING", "k"),
                 parseCase("KEYS", "KEYS", "*"),

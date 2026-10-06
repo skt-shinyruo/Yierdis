@@ -29,7 +29,7 @@ public class DefaultCommandRegistrationTest {
             "LPUSH", "LRANGE", "MEMORY", "MULTI", "OBJECT", "PERSIST", "PEXPIRE", "PEXPIREAT",
             "PFADD", "PFCOUNT", "PFMERGE", "PING", "PTTL", "QUIT", "RPOP", "RPUSH", "SADD",
             "SCAN", "SCARD", "SELECT", "SET", "SETBIT", "SISMEMBER", "SMEMBERS", "SREM",
-            "SSCAN", "STRLEN", "TTL", "TYPE", "ZADD", "ZRANGE", "ZRANGEBYSCORE", "ZREM",
+            "SSCAN", "STRLEN", "TTL", "TYPE", "YDRECONCILE", "ZADD", "ZRANGE", "ZRANGEBYSCORE", "ZREM",
             "ZREMRANGEBYRANK", "ZREMRANGEBYSCORE", "ZREVRANGE", "ZREVRANGEBYSCORE", "ZSCAN"
     );
 
@@ -101,6 +101,7 @@ public class DefaultCommandRegistrationTest {
             assertMetadata(byName.get("PFMERGE"), -3, 1, -1, 1);
             assertMetadata(byName.get("PING"), -1, 0, 0, 0);
             assertMetadata(byName.get("MULTI"), 1, 0, 0, 0);
+            assertMetadata(byName.get("YDRECONCILE"), 1, 0, 0, 0);
         });
     }
 

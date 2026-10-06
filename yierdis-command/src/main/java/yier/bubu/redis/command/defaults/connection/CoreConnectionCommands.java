@@ -154,9 +154,11 @@ public final class CoreConnectionCommands {
             throw new CommandParseException("ERR syntax error");
         }
         boolean async = args.argc() == 2 && args.is(1, "ASYNC");
-        return session -> PreparedCommands.action(
+        return session -> CommandSupport.preparedAction(
                 ReplyShapes.simpleString("OK"),
                 execution -> {
+                    // degraded 时 flush 在 requireWritable 抛 MISCONF。译成控制错误，
+                    // 否则执行器会把它当成执行期故障并回复 ERR internal error。
                     var db = support.commandDb(execution);
                     if (async) {
                         db.flushDbAsync();
