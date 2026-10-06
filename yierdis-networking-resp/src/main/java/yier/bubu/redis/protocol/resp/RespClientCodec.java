@@ -48,6 +48,18 @@ public final class RespClientCodec {
     }
 
     public static RespReply readReply(InputStream in, int maxBulkBytes) throws IOException {
+        return readReply(in, maxBulkBytes, false);
+    }
+
+    /**
+     * 读完整帧，simple string 和 error 不解码为 {@code text}，正文保存在 {@link RespReply#bytes()} 中。
+     * 调用方可在帧读完后严格解码 UTF-8，解码失败不会留下尚未读取的数组元素。
+     */
+    public static RespReply readReplyWithRawText(InputStream in, int maxBulkBytes) throws IOException {
+        return readReply(in, maxBulkBytes, true);
+    }
+
+    private static RespReply readReply(InputStream in, int maxBulkBytes, boolean rawText) throws IOException {
         Objects.requireNonNull(in, "in");
         if (maxBulkBytes < 0) {
             throw new IllegalArgumentException("maxBulkBytes must be >= 0");
@@ -57,13 +69,13 @@ public final class RespClientCodec {
             throw new IOException("unexpected EOF before RESP reply");
         }
         return switch (type) {
-            case '+' -> new RespReply(RespReply.Kind.SIMPLE_STRING, readStringLine(in, maxBulkBytes), null, null, null);
-            case '-' -> new RespReply(RespReply.Kind.ERROR, readStringLine(in, maxBulkBytes), null, null, null);
+            case '+' -> readText(in, maxBulkBytes, RespReply.Kind.SIMPLE_STRING, rawText);
+            case '-' -> readText(in, maxBulkBytes, RespReply.Kind.ERROR, rawText);
             case ':' -> new RespReply(RespReply.Kind.INTEGER, null, null, readLongLine(in, "integer"), null);
             case '$' -> readBulkString(in, maxBulkBytes);
-            case '*' -> readAggregate(in, maxBulkBytes, RespReply.Kind.ARRAY, "array");
-            case '%' -> readAggregate(in, maxBulkBytes, RespReply.Kind.MAP, "map", true);
-            case '~' -> readAggregate(in, maxBulkBytes, RespReply.Kind.SET, "set");
+            case '*' -> readAggregate(in, maxBulkBytes, RespReply.Kind.ARRAY, "array", false, rawText);
+            case '%' -> readAggregate(in, maxBulkBytes, RespReply.Kind.MAP, "map", true, rawText);
+            case '~' -> readAggregate(in, maxBulkBytes, RespReply.Kind.SET, "set", false, rawText);
             case '_' -> {
                 expectEmptyLine(in);
                 // `_` 不是 RESP2 的 $-1 / *-1。单独成类，调用方才能关掉连接，而不是把它当成 null。
@@ -93,17 +105,9 @@ public final class RespClientCodec {
             InputStream in,
             int maxBulkBytes,
             RespReply.Kind kind,
-            String type
-    ) throws IOException {
-        return readAggregate(in, maxBulkBytes, kind, type, false);
-    }
-
-    private static RespReply readAggregate(
-            InputStream in,
-            int maxBulkBytes,
-            RespReply.Kind kind,
             String type,
-            boolean map
+            boolean map,
+            boolean rawText
     ) throws IOException {
         int count = readLengthLine(in, type);
         if (count < 0) {
@@ -116,7 +120,7 @@ public final class RespClientCodec {
         // 声明的元素个数只用来循环读取，初始容量封顶，避免按超长声明直接分配巨型数组。
         List<RespReply> values = new ArrayList<>((int) Math.min(valueCount, 16L));
         for (int i = 0; i < valueCount; i++) {
-            values.add(readReply(in, maxBulkBytes));
+            values.add(readReply(in, maxBulkBytes, rawText));
         }
         return new RespReply(kind, null, null, null, values);
     }
@@ -129,7 +133,14 @@ public final class RespClientCodec {
         return (int) value;
     }
 
-    private static String readStringLine(InputStream in, int maxBulkBytes) throws IOException {
+    private static RespReply readText(
+            InputStream in, int maxBulkBytes, RespReply.Kind kind, boolean rawText
+    ) throws IOException {
+        byte[] bytes = readLineBytes(in, maxBulkBytes);
+        return new RespReply(kind, rawText ? null : new String(bytes, StandardCharsets.UTF_8), rawText ? bytes : null, null, null);
+    }
+
+    private static byte[] readLineBytes(InputStream in, int maxBulkBytes) throws IOException {
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
         int prev = -1;
         while (true) {
@@ -139,7 +150,7 @@ public final class RespClientCodec {
             }
             if (prev == '\r' && b == '\n') {
                 byte[] bytes = buf.toByteArray();
-                return new String(bytes, 0, bytes.length - 1, StandardCharsets.UTF_8);
+                return java.util.Arrays.copyOf(bytes, bytes.length - 1);
             }
             buf.write(b);
             // 多留 1 字节给尚未配对的 CR，正好等于上限的正文仍能遇到 LF 后成功返回。
@@ -169,12 +180,19 @@ public final class RespClientCodec {
             throw new IOException("invalid RESP " + type);
         }
 
+        // 用负数累积才能表示 Long.MIN_VALUE；每次运算前检查，避免溢出后绕回合法正数。
+        long limit = negative ? Long.MIN_VALUE : -Long.MAX_VALUE;
         long value = 0;
         while (true) {
-            value = value * 10 + (b - '0');
-            if (value < 0) {
+            int digit = b - '0';
+            if (value < limit / 10) {
                 throw new IOException("invalid RESP " + type);
             }
+            value *= 10;
+            if (value < limit + digit) {
+                throw new IOException("invalid RESP " + type);
+            }
+            value -= digit;
 
             b = in.read();
             if (b < 0) {
@@ -185,7 +203,7 @@ public final class RespClientCodec {
                 if (lf != '\n') {
                     throw new IOException("expected RESP CRLF");
                 }
-                return negative ? -value : value;
+                return negative ? value : -value;
             }
             if (b < '0' || b > '9') {
                 throw new IOException("invalid RESP " + type);

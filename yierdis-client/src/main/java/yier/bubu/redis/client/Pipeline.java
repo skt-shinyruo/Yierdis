@@ -1,6 +1,7 @@
 package yier.bubu.redis.client;
 
-import java.util.ArrayList;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -10,11 +11,12 @@ import java.util.Set;
  * <p>
  * 取任何一个还没读的句柄，会按发送顺序读完当时已经写出的全部回复，每条单独计超时。
  * 服务端错误只从对应句柄的 {@link Reply#get()} 抛出。
+ * 原始 {@code MULTI} 在写出前拒绝，管道不能同时进入事务模式。
  * 套接字上还有没读走的回复时 {@link #close()} 关掉连接；已经读进句柄的结果，包括服务端错误，不算未读。
  */
 public final class Pipeline implements AutoCloseable {
     private final Connection connection;
-    private final List<Reply<?>> replies = new ArrayList<>();
+    private final Deque<Reply<?>> replies = new ArrayDeque<>();
     private boolean finished;
     private RuntimeException broken;
 
@@ -43,14 +45,7 @@ public final class Pipeline implements AutoCloseable {
             return;
         }
         finished = true;
-        boolean unread = false;
-        for (Reply<?> reply : replies) {
-            if (reply.holdsUnread()) {
-                unread = true;
-                break;
-            }
-        }
-        connection.endPipeline(this, unread);
+        connection.endPipeline(this, !replies.isEmpty());
     }
 
     long defaultTimeoutMillis() {
@@ -76,31 +71,21 @@ public final class Pipeline implements AutoCloseable {
         if (connection.isClosed()) {
             throw new IllegalStateException("connection is closed");
         }
-        for (Reply<?> reply : replies) {
-            if (reply.isRead()) {
-                continue;
-            }
-            // 读完目标之后还要继续把已经写出的回复读走，否则 close 会把还在套接字上的回复当成未读并关掉连接。
-            // 每条读之前重新计超时。服务端错误记在对应句柄上，不从这次 get 抛出。
-            readOne(reply, timeoutMillis);
-        }
+        // 读完目标之后仍读走其余已写出的回复；已完成句柄自己持有结果，不再由管道保留。
+        readOutstanding(timeoutMillis);
         if (!target.isRead()) {
             throw new IllegalStateException("pipeline reply was not read");
         }
     }
 
     private void readOutstanding(long timeoutMillis) {
-        for (Reply<?> reply : replies) {
-            if (!reply.isRead()) {
-                readOne(reply, timeoutMillis);
-            }
+        while (!replies.isEmpty()) {
+            readOne(replies.getFirst(), timeoutMillis);
+            replies.removeFirst();
         }
     }
 
     private void readOne(Reply<?> reply, long timeoutMillis) {
-        if (reply.isRead()) {
-            return;
-        }
         if (broken != null) {
             throw broken;
         }
