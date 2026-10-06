@@ -66,7 +66,8 @@ public final class RespClientCodec {
             case '~' -> readAggregate(in, maxBulkBytes, RespReply.Kind.SET, "set");
             case '_' -> {
                 expectEmptyLine(in);
-                yield new RespReply(RespReply.Kind.NULL, null, null, null, null);
+                // `_` 不是 RESP2 的 $-1 / *-1。单独成类，调用方才能关掉连接，而不是把它当成 null。
+                yield new RespReply(RespReply.Kind.NULL_TYPE, null, null, null, null);
             }
             default -> throw new IOException("unexpected RESP reply type: " + (char) type);
         };
@@ -231,9 +232,13 @@ public final class RespClientCodec {
         }
 
         public enum Kind {
-            SIMPLE_STRING, ERROR, INTEGER, BULK_STRING, NULL, ARRAY, MAP, SET
+            SIMPLE_STRING, ERROR, INTEGER, BULK_STRING, NULL, ARRAY, MAP, SET, NULL_TYPE
         }
 
+        /**
+         * RESP2 null bulk（{@code $-1}）和 null array（{@code *-1}）为 true。
+         * RESP3 {@code _} 是 {@link Kind#NULL_TYPE}，这里为 false。
+         */
         public boolean isNull() {
             return kind == Kind.NULL;
         }

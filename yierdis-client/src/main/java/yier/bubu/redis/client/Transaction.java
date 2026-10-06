@@ -94,7 +94,6 @@ public final class Transaction {
         }
     }
 
-    // BEGIN TYPED COMMANDS
     public void ping() {
         queue(Calls.ping());
     }
@@ -510,6 +509,4 @@ public final class Transaction {
     public void pfmerge(String destination, String... sources) {
         queue(Calls.pfmerge(destination, sources));
     }
-
-    // END TYPED COMMANDS
 }

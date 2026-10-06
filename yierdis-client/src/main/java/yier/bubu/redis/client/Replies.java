@@ -8,8 +8,10 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 类型化方法先经 {@code command} 读完回复，再在这里收成该方法声明的 Java 类型。
- * 形状对不上抛 {@link DecodeException}，连接保持可用。
+ * 把已经读成 Java 值的回复收成类型化方法声明的类型。形状对不上抛 {@link DecodeException}，连接保持可用。
+ * <p>
+ * 只有 {@code Connection.complete} 是先经 {@code command} 再在这里解码。
+ * 管道在 {@code readCommandReply} 之后解码，事务在 {@code EXEC} 时解码。
  */
 final class Replies {
     private Replies() {

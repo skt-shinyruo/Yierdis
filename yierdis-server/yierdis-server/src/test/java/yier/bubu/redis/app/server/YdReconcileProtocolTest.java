@@ -142,7 +142,7 @@ public class YdReconcileProtocolTest {
             case ERROR -> new RespError(reply.text());
             case INTEGER -> reply.integer();
             case BULK_STRING -> new String(reply.bytes(), StandardCharsets.UTF_8);
-            case NULL -> null;
+            case NULL, NULL_TYPE -> null;
             case ARRAY, MAP, SET -> reply.values().stream().map(YdReconcileProtocolTest::respValue).toList();
         };
     }

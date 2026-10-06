@@ -34,7 +34,7 @@ import java.util.Set;
  * {@code EXEC} 和 {@code DISCARD} 在事务对象上。
  * <p>
  * 服务端错误和 UTF-8 解码失败都读完当前回复，连接可以继续用。
- * 读超时、读写失败、超过 512 MiB 的 bulk，以及顶层 {@code %}、{@code ~}、{@code _} 会关掉连接，并且不自动重试。
+ * 读超时、读写失败、超过 512 MiB 的 bulk，以及回复中任何深度的 {@code %}、{@code ~}、{@code _} 会关掉连接，并且不自动重试。
  */
 public final class Connection implements AutoCloseable {
     private enum Mode {
@@ -75,12 +75,26 @@ public final class Connection implements AutoCloseable {
     }
 
     // 这两个超时只作用于这次打开。连接保存的命令超时仍是 settings 里的值。
-    // 池可以把 TCP 连接和 SELECT 收紧到剩余借出等待，交出去之后的命令不受那次收紧影响。
+    // 池的借出不走这里：TCP 返回后还要按当时剩余的借出等待决定 SELECT 超时。
     static Connection connect(
             ConnectionSettings settings,
             long socketTimeoutMillis,
             long setupCommandTimeoutMillis
     ) {
+        Connection connection = openSocket(settings, socketTimeoutMillis);
+        try {
+            if (settings.database() != 0) {
+                // 非 0 的 DB 要在把连接交给调用方之前 SELECT 成功。失败时关掉 socket，调用方拿不到这条连接。
+                connection.command(setupCommandTimeoutMillis, "SELECT", Integer.toString(settings.database()));
+            }
+            return connection;
+        } catch (Throwable failure) {
+            connection.close();
+            throw failure;
+        }
+    }
+
+    static Connection openSocket(ConnectionSettings settings, long socketTimeoutMillis) {
         Socket socket = new Socket();
         try {
             socket.setTcpNoDelay(true);
@@ -88,17 +102,7 @@ public final class Connection implements AutoCloseable {
                     new InetSocketAddress(settings.host(), settings.port()),
                     toSocketTimeoutMillis(socketTimeoutMillis)
             );
-            Connection connection = new Connection(socket, settings.commandTimeoutMillis());
-            try {
-                if (settings.database() != 0) {
-                    // 非 0 的 DB 要在把连接交给调用方之前 SELECT 成功。失败时关掉 socket，调用方拿不到这条连接。
-                    connection.command(setupCommandTimeoutMillis, "SELECT", Integer.toString(settings.database()));
-                }
-                return connection;
-            } catch (Throwable failure) {
-                connection.close();
-                throw failure;
-            }
+            return new Connection(socket, settings.commandTimeoutMillis());
         } catch (IOException e) {
             closeQuietly(socket);
             throw new ConnectionException(
@@ -1176,10 +1180,11 @@ public final class Connection implements AutoCloseable {
 
     List<Object> collectExec(List<Call<?>> queued) {
         writeCommand(commandTimeoutMillis, new String[]{"EXEC"});
-        RespClientCodec.RespReply reply;
         try {
             socket.setSoTimeout(toSocketTimeoutMillis(commandTimeoutMillis));
-            reply = readExecReply();
+            RespClientCodec.RespReply reply = readExecReply();
+            // projectExec 里的嵌套 RESP3 标记也抛 IOException。放在这个 try 里才会关掉连接，而不是把半个 EXEC 列表交出去。
+            return projectExec(queued, reply);
         } catch (SocketTimeoutException e) {
             close();
             throw new CommandTimeoutException("timed out waiting for a reply", e);
@@ -1187,7 +1192,6 @@ public final class Connection implements AutoCloseable {
             close();
             throw new ConnectionException("connection closed after a read failure", e);
         }
-        return projectExec(queued, reply);
     }
 
     void noteQueuedResults(List<Call<?>> queued, List<Object> results) {
@@ -1221,7 +1225,7 @@ public final class Connection implements AutoCloseable {
         return RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
     }
 
-    private List<Object> projectExec(List<Call<?>> queued, RespClientCodec.RespReply reply) {
+    private List<Object> projectExec(List<Call<?>> queued, RespClientCodec.RespReply reply) throws IOException {
         if (reply.kind() != RespClientCodec.RespReply.Kind.ARRAY || reply.values() == null) {
             throw new DecodeException("reply was " + reply.kind() + ", expected array", null);
         }
@@ -1241,7 +1245,7 @@ public final class Connection implements AutoCloseable {
         return results;
     }
 
-    private static Object projectExecElement(Call<?> call, RespClientCodec.RespReply element) {
+    private static Object projectExecElement(Call<?> call, RespClientCodec.RespReply element) throws IOException {
         if (element.kind() == RespClientCodec.RespReply.Kind.ERROR) {
             return new ServerException(serverText(element));
         }
@@ -1254,7 +1258,7 @@ public final class Connection implements AutoCloseable {
         if (type < 0) {
             throw new IOException("unexpected EOF before RESP reply");
         }
-        // 只看顶层回复的第一个字节。`%`、`~`、`_` 表示这条连接已经离开 RESP2，关掉它，不能交给 readReply 当成成功结果。
+        // 顶层 `%`、`~`、`_` 在这里就失败。嵌套的同类标记由 convert 抛 IOException，读回复的地方关掉连接，不重试。
         if (type == '%' || type == '~' || type == '_') {
             throw new IOException("RESP3 reply marker: " + (char) type);
         }
@@ -1292,7 +1296,7 @@ public final class Connection implements AutoCloseable {
         }
     }
 
-    private static Object convert(RespClientCodec.RespReply reply, boolean preserveErrors) {
+    private static Object convert(RespClientCodec.RespReply reply, boolean preserveErrors) throws IOException {
         return switch (reply.kind()) {
             case SIMPLE_STRING -> reply.text();
             case BULK_STRING -> {
@@ -1307,14 +1311,21 @@ public final class Connection implements AutoCloseable {
                 yield integer;
             }
             case NULL -> null;
-            // 顶层 `-` 已在 readValue 里抛出。公开原始命令把数组元素里的错误收成文本。
-            // EXEC 不走这条路径，否则单条错误会变成普通字符串。
-            case ERROR -> preserveErrors ? new ServerException(serverText(reply)) : reply.text();
-            case ARRAY, MAP, SET -> convertAggregate(reply.values(), preserveErrors);
+            case ERROR -> {
+                if (preserveErrors) {
+                    yield new ServerException(serverText(reply));
+                }
+                // 收成文本只发生在 preserveErrors == false。EXEC 传入 true，单条错误仍是 ServerException。
+                yield reply.text();
+            }
+            case ARRAY -> convertAggregate(reply.values(), preserveErrors);
+            // 任何深度的 %、~、_ 都和顶层标记一样变成 IOException，不收成列表或 null。
+            case MAP, SET, NULL_TYPE -> throw new IOException("RESP3 reply marker: " + reply.kind());
         };
     }
 
-    private static List<Object> convertAggregate(List<RespClientCodec.RespReply> values, boolean preserveErrors) {
+    private static List<Object> convertAggregate(List<RespClientCodec.RespReply> values, boolean preserveErrors)
+            throws IOException {
         if (values == null) {
             throw new DecodeException("aggregate reply has no elements", null);
         }
