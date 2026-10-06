@@ -12,6 +12,7 @@ import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocationGrowth;
 import yier.bubu.redis.memory.api.NativeAllocationScope;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
+import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.memory.api.NativeEpochScope;
@@ -968,7 +969,7 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
                 throw new IllegalStateException("native allocation scope is closed");
             }
             if (handleCount == handles.length) {
-                handles = Arrays.copyOf(handles, Math.max(8, handles.length << 1));
+                handles = Arrays.copyOf(handles, nextAllocationScopeHandleCapacity(handles.length));
             }
             handles[handleCount++] = localRaw;
             recordGrowth();
@@ -998,6 +999,17 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
 
     private static long arrayHeapBytes(int length, long elementBytes) {
         return ARRAY_HEADER_BYTES + (long) length * elementBytes;
+    }
+
+    static int nextAllocationScopeHandleCapacity(int length) {
+        // 长度超过 Integer.MAX_VALUE/2 后再做 int 左移会变成负数，Math.max 会把容量收成 8。
+        if (length > Integer.MAX_VALUE / 2) {
+            if (length == Integer.MAX_VALUE) {
+                throw new NativeCapacityExceededException("allocation scope handle table is full");
+            }
+            return Integer.MAX_VALUE;
+        }
+        return Math.max(8, length << 1);
     }
 
     private static int allocationScopeHandleCapacity(int expectedAllocationCount) {

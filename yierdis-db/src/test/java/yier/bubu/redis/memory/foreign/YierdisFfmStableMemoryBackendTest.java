@@ -1571,6 +1571,22 @@ public class YierdisFfmStableMemoryBackendTest {
         return bytes;
     }
 
+    @Test
+    public void allocationScopeHandleTableSaturatesPastSignedShift() {
+        Assert.assertEquals(8, YierdisFfmStableMemoryBackend.nextAllocationScopeHandleCapacity(0));
+        Assert.assertEquals(16, YierdisFfmStableMemoryBackend.nextAllocationScopeHandleCapacity(8));
+        Assert.assertEquals(
+                Integer.MAX_VALUE,
+                YierdisFfmStableMemoryBackend.nextAllocationScopeHandleCapacity(1 << 30)
+        );
+        try {
+            YierdisFfmStableMemoryBackend.nextAllocationScopeHandleCapacity(Integer.MAX_VALUE);
+            Assert.fail("full handle table must not grow by a signed shift");
+        } catch (NativeCapacityExceededException expected) {
+            Assert.assertTrue(expected.getMessage().contains("full"));
+        }
+    }
+
     private static YierdisFfmStableMemoryBackend newAllocator(
             YierdisFfmMemoryRuntime runtime,
             int maxSlots
