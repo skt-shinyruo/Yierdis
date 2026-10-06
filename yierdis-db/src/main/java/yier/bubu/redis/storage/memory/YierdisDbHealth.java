@@ -39,6 +39,11 @@ public final class YierdisDbHealth {
         }
     }
 
+    boolean degraded() {
+        threadChecker.run();
+        return degraded;
+    }
+
     public void recordInvariantFailure(Throwable failure) {
         threadChecker.run();
         Objects.requireNonNull(failure, "failure");

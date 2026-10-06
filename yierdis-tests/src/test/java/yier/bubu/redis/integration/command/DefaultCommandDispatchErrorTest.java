@@ -95,6 +95,7 @@ public class DefaultCommandDispatchErrorTest {
         errorCase(cases, wrongArity("strlen"), "STRLEN");
         errorCase(cases, wrongArity("ttl"), "TTL");
         errorCase(cases, wrongArity("type"), "TYPE");
+        errorCase(cases, wrongArity("ydreconcile"), "YDRECONCILE", "extra");
         errorCase(cases, wrongArity("zadd"), "ZADD", "zset", "1");
         errorCase(cases, wrongArity("zrange"), "ZRANGE", "zset", "0");
         errorCase(cases, wrongArity("zrangebyscore"), "ZRANGEBYSCORE", "zset", "0");

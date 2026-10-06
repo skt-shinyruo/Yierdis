@@ -4,6 +4,7 @@ import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandLimits;
 import yier.bubu.redis.command.api.YierdisDbRouter;
+import yier.bubu.redis.command.defaults.admin.AdminCommands;
 import yier.bubu.redis.command.defaults.connection.CoreConnectionCommands;
 import yier.bubu.redis.command.defaults.hash.HashCommands;
 import yier.bubu.redis.command.defaults.hll.HllCommands;
@@ -31,6 +32,7 @@ public final class DefaultCommandModules {
         return registration -> {
             CommandSupport support = new CommandSupport(dbRouter, infoProvider, slowCommandLimits);
             new CoreConnectionCommands(support).register(registration);
+            new AdminCommands(support).register(registration);
             new KeyCommands(support).register(registration);
             new StringCommands(support).register(registration);
             new HllCommands(support).register(registration);

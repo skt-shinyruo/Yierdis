@@ -121,7 +121,8 @@ public final class YierdisDb
             YierdisDbKernel kernel = new YierdisDbKernel(
                     threadChecker,
                     mutationExecutor,
-                    keyLifecycle
+                    keyLifecycle,
+                    health
             );
             YierdisDbExpirationSupport expirationSupport = new YierdisDbExpirationSupport(
                     kernel,
