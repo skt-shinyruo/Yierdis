@@ -486,18 +486,20 @@ public class MutationFaultInjectionTest {
             );
             Runnable threadChecker = () -> {
             };
+            YierdisDbHealth health = new YierdisDbHealth(threadChecker);
             YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(
                     threadChecker,
                     ledger,
                     allocator,
-                    new YierdisDbHealth(threadChecker)
+                    health
             );
             YierdisDbMemoryContext memoryContext = new YierdisDbMemoryContext(ledger, allocator);
             YierdisDbKernel kernel = new YierdisDbKernel(
                     () -> {
                     },
                     executor,
-                    keyLifecycle
+                    keyLifecycle,
+                    health
             );
             YierdisStringOps stringOps = new YierdisStringOps(kernel, keyLifecycle, memoryContext, stringRoot);
             YierdisListOps listOps = new YierdisListOps(kernel, keyLifecycle, memoryContext, listRoot);

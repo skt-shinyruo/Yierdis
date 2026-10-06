@@ -410,6 +410,14 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         return infoProvider;
     }
 
+    YierdisInstance instanceForTests() {
+        return instance;
+    }
+
+    CommandExecutor executorForTests() {
+        return executor;
+    }
+
     InboundMemoryBudget inboundMemoryBudgetForTests() {
         return inboundMemoryBudget;
     }
