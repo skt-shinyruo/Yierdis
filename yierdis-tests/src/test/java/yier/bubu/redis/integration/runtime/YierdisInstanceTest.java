@@ -384,6 +384,29 @@ public class YierdisInstanceTest {
     }
 
     @Test
+    public void perDbMaxmemoryRemainderIsExposedOnEachDbSummary() {
+        // 10000 / 3 = 3333 余 1。装配把这 1 字节加给 DB0，观测必须抄这个额度，不能再整除成 3333。
+        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
+                .databases(3)
+                .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.PER_DB)
+                .maxmemoryBytes(10_000L)
+                .build();
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
+            instance.runtimeAccess().bindToCurrentThread();
+            long[] expected = {3334L, 3333L, 3333L};
+            List<YierdisInstanceObservability.YierdisDbSummary> summaries = instance.observability().dbSummaries();
+            Assert.assertEquals(expected.length, summaries.size());
+            for (int i = 0; i < expected.length; i++) {
+                Assert.assertEquals(i, summaries.get(i).dbIndex());
+                Assert.assertEquals("assigned maxmemory must match the engine admission limit",
+                        instance.engines()[i].memoryStats().maxmemoryBytes(),
+                        summaries.get(i).maxmemoryBytes());
+                Assert.assertEquals(expected[i], summaries.get(i).maxmemoryBytes());
+            }
+        }
+    }
+
+    @Test
     public void observabilityDbSummariesExposePerDbKeysAndExpires() {
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(2)

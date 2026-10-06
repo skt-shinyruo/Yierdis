@@ -164,6 +164,40 @@ public class MaxmemoryScopeTest {
     }
 
     @Test
+    public void perDbInfoReportsAssignedMaxmemoryIncludingRemainder() throws Exception {
+        // 10000 / 3 = 3333 余 1，只有 DB0 的上报值是 3334。旧的整除字段不再出现。
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfig.config(
+                "--databases", "3",
+                "--maxmemoryBytes", "10000",
+                "--maxmemoryScope", "per-db"
+        ));
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            String info = stringResult(execute(client, b("INFO"), b("memory")));
+            Assert.assertTrue(info.contains("yierdis_db0_maxmemory_bytes:3334\r\n"));
+            Assert.assertTrue(info.contains("yierdis_db1_maxmemory_bytes:3333\r\n"));
+            Assert.assertTrue(info.contains("yierdis_db2_maxmemory_bytes:3333\r\n"));
+            Assert.assertFalse(info.contains("yierdis_db3_maxmemory_bytes"));
+            Assert.assertFalse(info.contains("yierdis_maxmemory_per_db_bytes"));
+        }
+    }
+
+    @Test
+    public void globalInfoOmitsPerDbMaxmemoryLines() throws Exception {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfig.config(
+                "--databases", "3",
+                "--maxmemoryBytes", "10000",
+                "--maxmemoryScope", "global"
+        ));
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            String info = stringResult(execute(client, b("INFO"), b("memory")));
+            Assert.assertTrue(info.contains("yierdis_maxmemory_scope:global\r\n"));
+            Assert.assertTrue(info.contains("maxmemory:10000\r\n"));
+            Assert.assertFalse(info.contains("yierdis_db0_maxmemory_bytes"));
+            Assert.assertFalse(info.contains("yierdis_maxmemory_per_db_bytes"));
+        }
+    }
+
+    @Test
     public void globalMemoryStatsIncludesDefaultFfmNativeMemoryOnce() throws Exception {
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfig.config(
                 "--databases", "2",

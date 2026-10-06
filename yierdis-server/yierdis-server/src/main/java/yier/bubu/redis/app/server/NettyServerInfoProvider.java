@@ -421,8 +421,8 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
                             : "global")
                     .append("\r\n");
             if (config.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.PER_DB && config.maxmemoryBytes() > 0) {
-                long perDb = config.maxmemoryBytes() / Math.max(1L, (long) config.databases());
-                sb.append("yierdis_maxmemory_per_db_bytes:").append(perDb).append("\r\n");
+                // 余数在装配时已经 +1 分给前几个 DB。这里只抄各引擎已生效的额度；再整除时，分到余数的 DB 会和准入差 1 字节。
+                appendPerDbMaxmemory(sb);
             }
             sb.append("yierdis_ledger_used_bytes:").append(memStats.heapDataBytesEstimate()).append("\r\n");
             sb.append("yierdis_ledger_reserved_bytes:").append(memStats.reservedBytes()).append("\r\n");
@@ -460,6 +460,18 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
 
         return sb.toString();
+    }
+
+    private void appendPerDbMaxmemory(StringBuilder sb) {
+        YierdisInstanceObservability runtimeObservability = observability;
+        if (runtimeObservability == null) {
+            return;
+        }
+        for (YierdisInstanceObservability.YierdisDbSummary summary : runtimeObservability.dbSummaries()) {
+            sb.append("yierdis_db").append(summary.dbIndex())
+                    .append("_maxmemory_bytes:").append(summary.maxmemoryBytes())
+                    .append("\r\n");
+        }
     }
 
     private void appendRuntimeKeyspaceSummary(StringBuilder sb) {
