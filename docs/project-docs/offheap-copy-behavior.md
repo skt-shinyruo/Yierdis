@@ -107,7 +107,7 @@ heap -> heap：
 
 off-heap -> off-heap：
 
-- `StringRoot` append/growth 调用 allocator `reallocate(..., NativeReallocPolicy.PRESERVE_PREFIX)` 时，`reallocateLocal` 先判断 `newSize <= meta.capacity()`：容量够则原地更新 location，不搬字节；容量不足才 `pageAllocator.allocate(...)` 新块并 `previous.copyTo(next, oldSize)`（保留旧 prefix）。注意 `reallocateLocal` 要求 `meta.pinCount() == 0`，否则抛 `"native object is pinned"`。
+- `StringRoot` append/growth 调用 allocator `reallocate(handle, newSize)` 时，`reallocateLocal` 先判断 `newSize <= meta.capacity()`：容量够则原地更新 location，不搬字节；容量不足才 `pageAllocator.allocate(...)` 新块并 `previous.copyTo(next, oldSize)`（保留旧 prefix）。注意 `reallocateLocal` 要求 `meta.pinCount() == 0`，否则抛 `"native object is pinned"`。
 - active defrag 移动 `KEY_BYTES`、`ENTRY_RECORD`、`STRING_BYTES`、collection root records、`LIST_NODE` metadata record 或 collection internal byte handles 时，`moveLiveObject(...)` 会 `previous.copyTo(target, sourceMeta.size())`，再通过 object table `publishMoved(...)` 发布新 location。defrag 同样跳过 `pinCount() > 0` 的对象。
 - `YierdisNativeBlock.copyTo(...)` → `YierdisFfmRegion.copyTo(...)` → `MemorySegment.copy(...)` 是这些搬家的底层实现。
 - `NativeObjectView.copyBytes(...)` 默认实现逐字节 `getByte`/`setByte`，用于对象内偏移搬移。
