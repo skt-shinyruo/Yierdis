@@ -82,15 +82,6 @@ final class YierdisListOps implements ListOps {
         kernel.checkOwner();
         Objects.requireNonNull(keyBytes, "keyBytes");
         byte[] preparedKey = java.util.Arrays.copyOf(keyBytes, keyBytes.length);
-        if (count == 0) {
-            return new PreparedPopMutation(
-                    preparedKey,
-                    count,
-                    left,
-                    preparedEntryState(preparedKey),
-                    NativePoppedValueSequence.empty()
-            );
-        }
         if (count < 0) {
             throw new IllegalArgumentException("count must be >= 0");
         }
@@ -101,9 +92,11 @@ final class YierdisListOps implements ListOps {
             preview = NativePoppedValueSequence.nullValue();
         } else {
             requireList(record);
-            preview = memoryContext.capturePoppedValues(
-                    listRoot.popEntries(requireListHandle(record), count, left)
-            );
+            preview = count == 0
+                    ? NativePoppedValueSequence.empty()
+                    : memoryContext.capturePoppedValues(
+                            listRoot.popEntries(requireListHandle(record), count, left)
+                    );
         }
         return new PreparedPopMutation(preparedKey, count, left, state, preview);
     }
@@ -178,11 +171,18 @@ final class YierdisListOps implements ListOps {
             int count,
             boolean left
     ) {
-        if (count == 0) {
-            return WriteResult.unchanged(NativePoppedValueSequence.empty());
-        }
         if (count < 0) {
             throw new IllegalArgumentException("count must be >= 0");
+        }
+        if (count == 0) {
+            long now = System.currentTimeMillis();
+            kernel.reclaimExpiredBeforeMutation(keyBytes, now);
+            EntryRecord current = keyLifecycle.currentEntry(keyBytes).record();
+            if (current == null) {
+                return WriteResult.unchanged(NativePoppedValueSequence.nullValue());
+            }
+            requireList(current);
+            return WriteResult.unchanged(NativePoppedValueSequence.empty());
         }
 
         long now = System.currentTimeMillis();

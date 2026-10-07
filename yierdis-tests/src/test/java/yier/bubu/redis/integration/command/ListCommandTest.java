@@ -9,6 +9,8 @@ import yier.bubu.redis.testutil.ReplyArray;
 import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyError;
 import yier.bubu.redis.testutil.ReplyInteger;
+import yier.bubu.redis.testutil.ReplyNullArray;
+import yier.bubu.redis.testutil.ReplyObject;
 import yier.bubu.redis.testutil.ReplySimpleString;
 
 import java.util.ArrayList;
@@ -191,5 +193,52 @@ public class ListCommandTest {
             Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key))).value());
             }
         });
+    }
+
+    @Test
+    public void lpopRpopCountZeroChecksExistenceAndType() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+
+            ReplyObject missingWithCount = client.execute(Arrays.asList(b("LPOP"), b("missing"), b("2")));
+            Assert.assertTrue(missingWithCount instanceof ReplyNullArray);
+            Assert.assertSame(missingWithCount, client.execute(Arrays.asList(b("LPOP"), b("missing"), b("0"))));
+            Assert.assertSame(missingWithCount, client.execute(Arrays.asList(b("RPOP"), b("missing"), b("0"))));
+
+            client.execute(Arrays.asList(b("SET"), b("str"), b("v")));
+            assertWrongType(client.execute(Arrays.asList(b("LPOP"), b("str"), b("0"))));
+            assertWrongType(client.execute(Arrays.asList(b("RPOP"), b("str"), b("0"))));
+
+            client.execute(Arrays.asList(b("SADD"), b("set"), b("v")));
+            assertWrongType(client.execute(Arrays.asList(b("LPOP"), b("set"), b("0"))));
+            assertWrongType(client.execute(Arrays.asList(b("RPOP"), b("set"), b("0"))));
+
+            client.execute(Arrays.asList(b("ZADD"), b("zset"), b("1"), b("v")));
+            assertWrongType(client.execute(Arrays.asList(b("LPOP"), b("zset"), b("0"))));
+            assertWrongType(client.execute(Arrays.asList(b("RPOP"), b("zset"), b("0"))));
+
+            byte[] key = b("list");
+            client.execute(Arrays.asList(b("RPUSH"), key, b("a"), b("b")));
+            ReplyArray lpopZero = (ReplyArray) client.execute(Arrays.asList(b("LPOP"), key, b("0")));
+            Assert.assertTrue(lpopZero.values().isEmpty());
+            ReplyArray rpopZero = (ReplyArray) client.execute(Arrays.asList(b("RPOP"), key, b("0")));
+            Assert.assertTrue(rpopZero.values().isEmpty());
+
+            ReplyArray range = (ReplyArray) client.execute(Arrays.asList(b("LRANGE"), key, b("0"), b("-1")));
+            Assert.assertEquals(2, range.values().size());
+            Assert.assertEquals("a", ((ReplyBulkString) range.values().get(0)).asString());
+            Assert.assertEquals("b", ((ReplyBulkString) range.values().get(1)).asString());
+            }
+        });
+    }
+
+    private static void assertWrongType(ReplyObject reply) {
+        ReplyError error = (ReplyError) reply;
+        Assert.assertEquals(
+                "WRONGTYPE Operation against a key holding the wrong kind of value",
+                error.message()
+        );
     }
 }
