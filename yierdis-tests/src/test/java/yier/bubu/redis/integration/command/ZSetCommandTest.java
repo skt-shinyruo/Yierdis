@@ -170,7 +170,7 @@ public class ZSetCommandTest {
                         b("ZADD"), key, b("1.5"), b("decimal")))).value());
                 Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
                         b("ZADD"), key, b("1e-323"), b("subnormal")))).value());
-                // 1e-7 与 1e22 的回复文本仍是当前格式化结果。对齐 Redis 8.0.2 的 d2string 不在本测试里。
+                // 1e-7 与 1e22 走 Redis 8.0.2 d2string，分别是 "1e-7" 和 "1e+22"。
                 Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
                         b("ZADD"), key, b("1e-7"), b("tiny")))).value());
                 Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
@@ -181,16 +181,16 @@ public class ZSetCommandTest {
                 Assert.assertEquals(
                         List.of(
                                 "exactzero", "0",
-                                "negzero", "0",
-                                "subnormal", "9.9e-324",
+                                "negzero", "-0",
+                                "subnormal", "1e-323",
                                 "tiny", "1e-7",
                                 "decimal", "1.5",
                                 "sci", "100",
                                 "huge", "1e+22"),
                         bulkStrings(range));
 
-                // ZADD INCR 与 ZRANGE 共用同一套分数文本。-0 的原始回复是 "0"，不是 "-0"。
-                Assert.assertEquals("0", ((ReplyBulkString) client.execute(Arrays.asList(
+                // ZADD INCR 与 ZRANGE 共用 Redis 8.0.2 d2string。新成员 -0 的回复是 "-0"。
+                Assert.assertEquals("-0", ((ReplyBulkString) client.execute(Arrays.asList(
                         b("ZADD"), b("incr-zero"), b("INCR"), b("-0"), b("m")))).asString());
                 Assert.assertEquals("1e-7", ((ReplyBulkString) client.execute(Arrays.asList(
                         b("ZADD"), b("incr-tiny"), b("INCR"), b("1e-7"), b("m")))).asString());
@@ -1141,6 +1141,56 @@ public class ZSetCommandTest {
             Assert.assertEquals(flatPairs.get(index * 2), ((ReplyBulkString) pair.values().get(0)).asString());
             Assert.assertEquals(flatPairs.get(index * 2 + 1), ((ReplyBulkString) pair.values().get(1)).asString());
         }
+    }
+
+    @Test
+    public void finiteScoresUseRedisD2string() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("z-d2string");
+                client.execute(Arrays.asList(
+                        b("ZADD"), key,
+                        b("0.000001"), b("a"),
+                        b("0.00001"), b("b"),
+                        b("0.0005"), b("c"),
+                        b("5e-324"), b("d"),
+                        b("1e-323"), b("e"),
+                        b("1759740000.123456"), b("ts"),
+                        b("1759740000.5"), b("half"),
+                        b("1759740000123.25"), b("wide"),
+                        b("12345.6789012"), b("sci1"),
+                        b("14169.626117023414"), b("sci2"),
+                        b("5.34e18"), b("big"),
+                        b("7.055553895214843e18"), b("rounded")));
+                ReplyArray range = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGE"), key, b("0"), b("-1"), b("WITHSCORES")));
+                Assert.assertEquals(
+                        List.of(
+                                "d", "5e-324",
+                                "e", "1e-323",
+                                "a", "0.000001",
+                                "b", "0.00001",
+                                "c", "0.0005",
+                                "sci1", "1.23456789012e+4",
+                                "sci2", "1.4169626117023414e+4",
+                                "ts", "1759740000.123456",
+                                "half", "1759740000.5",
+                                "wide", "1759740000123.25",
+                                "big", "5.34e+18",
+                                "rounded", "7055553895214843000"),
+                        bulkStrings(range));
+                for (int index = 1; index < range.values().size(); index += 2) {
+                    double parsed = Double.parseDouble(((ReplyBulkString) range.values().get(index)).asString());
+                    Assert.assertEquals(Double.parseDouble(List.of(
+                            "5e-324", "1e-323", "0.000001", "0.00001", "0.0005",
+                            "12345.6789012", "14169.626117023414", "1759740000.123456",
+                            "1759740000.5", "1759740000123.25", "5.34e18",
+                            "7.055553895214843e18").get(index / 2)), parsed, 0.0d);
+                }
+            }
+        });
     }
 
     private static List<String> bulkStrings(ReplyArray array) {

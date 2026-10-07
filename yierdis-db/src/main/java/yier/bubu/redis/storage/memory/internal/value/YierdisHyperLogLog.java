@@ -62,10 +62,10 @@ public final class YierdisHyperLogLog {
     private YierdisHyperLogLog() {
     }
 
-    /** 与 Redis createHLLObject 一致：空 sparse（XZERO:16384），基数缓存为有效的 0。 */
+    /** 空 sparse（XZERO:16384）。创建后基数缓存标为失效，与 Redis createHLLObject 之后的 HLL_INVALIDATE_CACHE 一致。 */
     public static byte[] newSparse() {
         byte[] out = new byte[SPARSE_EMPTY_BYTES];
-        writeHeader(out, ENCODING_SPARSE, false);
+        writeHeader(out, ENCODING_SPARSE, true);
         writeXzero(out, HEADER_BYTES, REGISTERS);
         return out;
     }
