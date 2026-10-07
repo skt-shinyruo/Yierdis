@@ -321,6 +321,10 @@ final class YierdisZSetOps implements ZSetOps {
             return ByteSequenceSources.empty();
         }
         ValueHandle handle = requireZSetHandle(record);
+        // 负 offset 在 Redis 里是空数组，但类型错误必须先抛出来，否则 string key 会被空结果盖住。
+        if (offset < 0L) {
+            return ByteSequenceSources.empty();
+        }
         return ByteSequenceSources.copiedFrom(out -> zsetRoot.zrangeByScoreWriteTo(
                 handle,
                 min,
@@ -351,6 +355,10 @@ final class YierdisZSetOps implements ZSetOps {
             return ByteSequenceSources.empty();
         }
         ValueHandle handle = requireZSetHandle(record);
+        // 与正向范围相同：先确认是 zset，负 offset 再返回空数组。
+        if (offset < 0L) {
+            return ByteSequenceSources.empty();
+        }
         return ByteSequenceSources.copiedFrom(out -> zsetRoot.zrevrangeByScoreWriteTo(
                 handle,
                 min,
