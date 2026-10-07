@@ -319,8 +319,9 @@ public final class ZSkipList {
         return memberStore.compareLex(node.member, member) < 0;
     }
 
+    // -0 与 +0 比较相等，但 d2string 要保留符号，所以这里不再把 -0 折成 +0。
     private static double canonicalScore(double score) {
-        return score == 0.0d ? 0.0d : score;
+        return score;
     }
 
     private static boolean scoresEqual(double left, double right) {
