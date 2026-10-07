@@ -875,12 +875,8 @@ public final class ZSetValue implements YierdisValue {
             ScoreRangeQuery query,
             IntConsumer selectedIndex
     ) {
-        int first = query.min() == Double.NEGATIVE_INFINITY
-                ? 0
-                : firstIndexForMin(query.min(), query.minExclusive());
-        int last = query.max() == Double.POSITIVE_INFINITY
-                ? listpack.size() - 1
-                : lastIndexForMax(query.max(), query.maxExclusive());
+        int first = firstIndexForMin(query.min(), query.minExclusive());
+        int last = lastIndexForMax(query.max(), query.maxExclusive());
         if (first > last) {
             return 0;
         }
@@ -961,16 +957,10 @@ public final class ZSetValue implements YierdisValue {
     }
 
     private ZSkipList.Node firstNodeForMin(double min, boolean minExclusive) {
-        if (min == Double.NEGATIVE_INFINITY) {
-            return byScore.first();
-        }
         return byScore.findFirstByScore(min, minExclusive);
     }
 
     private ZSkipList.Node lastNodeForMax(double max, boolean maxExclusive) {
-        if (max == Double.POSITIVE_INFINITY) {
-            return byScore.last();
-        }
         return byScore.findLastByScore(max, maxExclusive);
     }
 
