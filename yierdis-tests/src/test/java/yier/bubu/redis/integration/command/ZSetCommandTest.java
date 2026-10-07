@@ -1036,6 +1036,81 @@ public class ZSetCommandTest {
     }
 
     @Test
+    public void exclusiveInfinityBoundsApplyOnBothEncodings() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            FastTestClient client = new FastTestClient(dispatcher);
+            assertExclusiveInfinityBounds(client, false);
+            assertExclusiveInfinityBounds(client, true);
+        });
+    }
+
+    private static void assertExclusiveInfinityBounds(FastTestClient client, boolean skiplist) {
+        byte[] key = b(skiplist ? "z-large" : "z-small");
+        ArrayList<byte[]> zadd = new ArrayList<>();
+        zadd.add(b("ZADD"));
+        zadd.add(key);
+        zadd.add(b("-inf"));
+        zadd.add(b("ninf"));
+        zadd.add(b("0"));
+        zadd.add(b("zero"));
+        if (skiplist) {
+            for (int index = 0; index < 200; index++) {
+                zadd.add(b(Integer.toString(index + 1)));
+                zadd.add(b("f" + index));
+            }
+        }
+        zadd.add(b("+inf"));
+        zadd.add(b("pinf"));
+        Assert.assertEquals(skiplist ? 203L : 3L, ((ReplyInteger) client.execute(zadd)).value());
+
+        Assert.assertEquals(List.of("zero"), members(client, b("ZRANGEBYSCORE"), key, b("(-inf"), b("0")));
+        Assert.assertEquals(
+                skiplist ? List.of("f199") : List.of(),
+                members(client, b("ZRANGEBYSCORE"), key, b("200"), b("(+inf")));
+        Assert.assertEquals(List.of("zero"), members(client, b("ZREVRANGEBYSCORE"), key, b("0"), b("(-inf")));
+        Assert.assertEquals(
+                skiplist ? List.of("f199") : List.of(),
+                members(client, b("ZREVRANGEBYSCORE"), key, b("(+inf"), b("200")));
+        Assert.assertEquals(
+                skiplist ? List.of("zero", "f0", "f1") : List.of("zero"),
+                members(client, b("ZRANGEBYSCORE"), key, b("(-inf"), b("(+inf"), b("LIMIT"), b("0"), b("3")));
+
+        List<String> closed = new ArrayList<>();
+        closed.add("ninf");
+        closed.add("zero");
+        if (skiplist) {
+            for (int index = 0; index < 200; index++) {
+                closed.add("f" + index);
+            }
+        }
+        closed.add("pinf");
+        Assert.assertEquals(closed, members(client, b("ZRANGEBYSCORE"), key, b("-inf"), b("+inf")));
+
+        Assert.assertEquals(List.of(), members(client, b("ZRANGEBYSCORE"), key, b("(0"), b("(1")));
+        Assert.assertEquals(List.of("zero"), members(client, b("ZRANGEBYSCORE"), key, b("0"), b("(1")));
+        Assert.assertEquals(
+                skiplist ? List.of("f0") : List.of(),
+                members(client, b("ZRANGEBYSCORE"), key, b("(0"), b("1")));
+
+        Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
+                b("ZREMRANGEBYSCORE"), key, b("(-inf"), b("0")))).value());
+        List<String> remaining = new ArrayList<>();
+        remaining.add("ninf");
+        if (skiplist) {
+            for (int index = 0; index < 200; index++) {
+                remaining.add("f" + index);
+            }
+        }
+        remaining.add("pinf");
+        Assert.assertEquals(remaining, members(client, b("ZRANGE"), key, b("0"), b("-1")));
+    }
+
+    private static List<String> members(FastTestClient client, byte[]... command) {
+        return bulkStrings((ReplyArray) client.execute(Arrays.asList(command)));
+    }
+
+    @Test
     public void zremrangeByRankRemovesAndDeletesKeyWhenEmpty() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
