@@ -112,9 +112,20 @@ public final class CommandDispatcher {
     }
 
     private static void preflightMultiQueue(CommandSpec spec, CommandArgs args) {
-        Function<CommandSession, PreparedCommand> deferredPrepare = spec.handler().parse(args);
-        // EXEC replay 会重新 parse 并应用届时的 session；这里仅确认 preflight 产出了合法的延迟 prepare。
-        Objects.requireNonNull(deferredPrepare, "command handler returned null");
+        try {
+            Function<CommandSession, PreparedCommand> deferredPrepare = spec.handler().parse(args);
+            // EXEC replay 会重新 parse 并应用届时的 session；这里只确认 parse 能产出延迟 prepare。
+            Objects.requireNonNull(deferredPrepare, "command handler returned null");
+        } catch (CommandParseException failure) {
+            // 入队只拒绝参数个数。选项、取值和语法错误先 QUEUED，EXEC 时只有这一条失败。
+            if (wrongArity(failure.getMessage())) {
+                throw failure;
+            }
+        }
+    }
+
+    private static boolean wrongArity(String message) {
+        return message != null && message.contains("wrong number of arguments");
     }
 
     private static PreparedCommand prepareRetainedRequestEnqueue(

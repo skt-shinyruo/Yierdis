@@ -519,28 +519,40 @@ public class ZSetCommandTest {
     }
 
     @Test
-    public void zaddIncompatibleFlagsInsideMultiAbortTransaction() {
+    public void zaddIncompatibleFlagsInsideMultiFailOnlyThoseCommands() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             {
                 FastTestClient client = new FastTestClient(dispatcher);
                 byte[] key = b("zcombo:multi");
+                client.execute(List.of(b("FLUSHDB")));
 
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
                 Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(Arrays.asList(
                         b("ZADD"), key, b("1"), b("seed")))).value());
-                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("NX"), b("XX"), b("1"), b("a"))),
-                        "ERR XX and NX options at the same time are not compatible");
-                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("GT"), b("NX"), b("1"), b("a"))),
-                        "ERR GT, LT, and/or NX options at the same time are not compatible");
-                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("INCR"), b("1"), b("a"), b("2"), b("b"))),
-                        "ERR INCR option supports a single increment-element pair");
+                Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("NX"), b("XX"), b("1"), b("a")))).value());
+                Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("GT"), b("NX"), b("1"), b("a")))).value());
+                Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("INCR"), b("1"), b("a"), b("2"), b("b")))).value());
 
-                ReplyObject exec = client.execute(List.of(b("EXEC")));
-                Assert.assertTrue(exec instanceof ReplyError);
-                Assert.assertEquals("EXECABORT Transaction discarded because of previous errors.",
-                        ((ReplyError) exec).message());
-                Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key))).value());
+                ReplyArray exec = (ReplyArray) client.execute(List.of(b("EXEC")));
+                Assert.assertEquals(4, exec.values().size());
+                Assert.assertEquals(1L, ((ReplyInteger) exec.values().get(0)).value());
+                Assert.assertEquals(
+                        "ERR XX and NX options at the same time are not compatible",
+                        ((ReplyError) exec.values().get(1)).message()
+                );
+                Assert.assertEquals(
+                        "ERR GT, LT, and/or NX options at the same time are not compatible",
+                        ((ReplyError) exec.values().get(2)).message()
+                );
+                Assert.assertEquals(
+                        "ERR INCR option supports a single increment-element pair",
+                        ((ReplyError) exec.values().get(3)).message()
+                );
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key))).value());
             }
         });
     }

@@ -72,8 +72,8 @@ public final class ZSetCommands {
         return new CommandSyntax(nameUpper, arity, KEY, TransactionPolicy.QUEUEABLE);
     }
 
-    // flag 解析与 Redis zaddGenericCommand 同序：先数对（syntax error），再组合错误，最后校验分数，
-    // 这样非法组合在 MULTI preflight 阶段就 EXECABORT，且错误文案与 Redis 一致。
+    // flag 解析与 Redis zaddGenericCommand 同序：先数对（syntax error），再组合错误，最后校验分数。
+    // 这些错误文案与 Redis 一致；在 MULTI 里它们入队，EXEC 时只有这一条失败。
     private Function<CommandSession, PreparedCommand> zadd(CommandArgs args) {
         int index = 2;
         boolean nx = false;

@@ -357,44 +357,81 @@ public class TransactionCommandTest {
     }
 
     @Test
-    public void setOptionSyntaxInsideMultiAbortsBeforeExecAfterParserMigration() {
+    public void setOptionSyntaxInsideMultiFailsOnlyThatCommand() {
+        forEachDb(db -> assertContentErrorFailsOnlyThatCommand(
+                db,
+                Arrays.asList(b("SET"), b("k"), b("v"), b("NX"), b("XX")),
+                "ERR syntax error"
+        ));
+    }
+
+    @Test
+    public void representativeQueueTimeErrorsLeaveEarlierWrites() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
-            TestSession session = new TestSession();
-            {
-                FastTestClient client = new FastTestClient(dispatcher, session);
-                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
+            FastTestClient client = new FastTestClient(dispatcher);
+            client.execute(List.of(b("FLUSHDB")));
 
-                ReplyObject badSet = client.execute(Arrays.asList(b("SET"), b("k"), b("v"), b("NX"), b("XX")));
-                Assert.assertTrue(badSet instanceof ReplyError);
-                Assert.assertEquals("ERR syntax error", ((ReplyError) badSet).message());
-                Assert.assertEquals(0, session.transactionState().size());
+            Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+            Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(List.of(b("SET"), b("a"), b("1")))).value());
+            Assert.assertEquals(
+                    "QUEUED",
+                    ((ReplySimpleString) client.execute(List.of(b("SET"), b("b"), b("1"), b("FOO")))).value()
+            );
+            ReplyArray exec = (ReplyArray) client.execute(List.of(b("EXEC")));
+            Assert.assertEquals("OK", ((ReplySimpleString) exec.values().get(0)).value());
+            Assert.assertEquals("ERR syntax error", ((ReplyError) exec.values().get(1)).message());
+            Assert.assertEquals("1", ((ReplyBulkString) client.execute(List.of(b("GET"), b("a")))).asString());
 
-                ReplyObject exec = client.execute(Arrays.asList(b("EXEC")));
-                Assert.assertTrue(exec instanceof ReplyError);
-                Assert.assertEquals("EXECABORT Transaction discarded because of previous errors.", ((ReplyError) exec).message());
-            }
+            assertContentErrorFailsOnlyThatCommand(
+                    db, List.of(b("SET"), b("k"), b("0"), b("XX"), b("NX")), "ERR syntax error");
+            assertContentErrorFailsOnlyThatCommand(
+                    db,
+                    List.of(b("ZADD"), b("k"), b("XX"), b("NX"), b("1"), b("m")),
+                    "ERR XX and NX options at the same time are not compatible"
+            );
+            assertContentErrorFailsOnlyThatCommand(
+                    db,
+                    List.of(b("SETBIT"), b("k"), b("-1"), b("1")),
+                    "ERR bit offset is not an integer or out of range"
+            );
+            assertContentErrorFailsOnlyThatCommand(
+                    db,
+                    List.of(b("EXPIRE"), b("k"), b("x"), b("NX")),
+                    "ERR value is not an integer or out of range"
+            );
+            assertContentErrorFailsOnlyThatCommand(
+                    db,
+                    List.of(b("LPOP"), b("k"), b("-1")),
+                    "ERR value is out of range, must be positive"
+            );
         });
     }
 
     @Test
-    public void bitmapParseErrorsInsideMultiAbortBeforeExec() {
+    public void bitmapParseErrorsInsideMultiFailOnlyThatCommand() {
+        forEachDb(db -> assertContentErrorFailsOnlyThatCommand(
+                db,
+                Arrays.asList(b("SETBIT"), b("k"), b("0"), b("nope")),
+                "ERR bit is not an integer or out of range"
+        ));
+    }
+
+    @Test
+    public void keyspaceArityErrorsInsideMultiAbortBeforeExec() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
-            TestSession session = new TestSession();
-            {
+            for (List<byte[]> invalid : List.of(
+                    Arrays.asList(b("MEMORY"), b("USAGE")),
+                    Arrays.asList(b("MEMORY"), b("STATS"), b("extra")),
+                    Arrays.asList(b("OBJECT"), b("ENCODING"))
+            )) {
+                CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+                TestSession session = new TestSession();
                 FastTestClient client = new FastTestClient(dispatcher, session);
-                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
-
-                ReplyObject invalid = client.execute(Arrays.asList(b("SETBIT"), b("k"), b("0"), b("nope")));
-                Assert.assertTrue(invalid instanceof ReplyError);
-                Assert.assertEquals(
-                        "ERR bit is not an integer or out of range",
-                        ((ReplyError) invalid).message()
-                );
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+                Assert.assertTrue(client.execute(invalid) instanceof ReplyError);
                 Assert.assertEquals(0, session.transactionState().size());
-
-                ReplyObject exec = client.execute(Arrays.asList(b("EXEC")));
+                ReplyObject exec = client.execute(List.of(b("EXEC")));
                 Assert.assertTrue(exec instanceof ReplyError);
                 Assert.assertEquals(
                         "EXECABORT Transaction discarded because of previous errors.",
@@ -405,12 +442,9 @@ public class TransactionCommandTest {
     }
 
     @Test
-    public void keyspaceParseErrorsInsideMultiAbortBeforeExec() {
+    public void keyspaceContentErrorsInsideMultiFailOnlyThatCommand() {
         forEachDb(db -> {
             for (List<byte[]> invalid : List.of(
-                    Arrays.asList(b("MEMORY"), b("USAGE")),
-                    Arrays.asList(b("MEMORY"), b("STATS"), b("extra")),
-                    Arrays.asList(b("OBJECT"), b("ENCODING")),
                     Arrays.asList(b("SCAN"), b("-1")),
                     Arrays.asList(b("SCAN"), b("0"), b("MATCH")),
                     Arrays.asList(b("SCAN"), b("0"), b("COUNT")),
@@ -420,30 +454,13 @@ public class TransactionCommandTest {
                     Arrays.asList(b("EXPIREAT"), b("k"), b("nope")),
                     Arrays.asList(b("PEXPIREAT"), b("k"), b("nope"))
             )) {
-                CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
-                TestSession session = new TestSession();
-                {
-                    FastTestClient client = new FastTestClient(dispatcher, session);
-                    Assert.assertEquals(
-                            "OK",
-                            ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value()
-                    );
-                    Assert.assertTrue(client.execute(invalid) instanceof ReplyError);
-                    Assert.assertEquals(0, session.transactionState().size());
-
-                    ReplyObject exec = client.execute(Arrays.asList(b("EXEC")));
-                    Assert.assertTrue(exec instanceof ReplyError);
-                    Assert.assertEquals(
-                            "EXECABORT Transaction discarded because of previous errors.",
-                            ((ReplyError) exec).message()
-                    );
-                }
+                assertContentErrorFailsOnlyThatCommand(db, invalid, null);
             }
         });
     }
 
     @Test
-    public void collectionParseErrorsInsideMultiAbortBeforeExec() {
+    public void collectionParseErrorsInsideMultiFailOnlyThatCommand() {
         forEachDb(db -> {
             for (List<byte[]> invalid : List.of(
                     Arrays.asList(b("LPOP"), b("list"), b("-1")),
@@ -455,30 +472,38 @@ public class TransactionCommandTest {
                     Arrays.asList(b("SSCAN"), b("set"), b("0"), b("COUNT")),
                     Arrays.asList(b("SSCAN"), b("set"), b("0"), b("NOVALUES"))
             )) {
-                CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
-                TestSession session = new TestSession();
-                {
-                    FastTestClient client = new FastTestClient(dispatcher, session);
-                    Assert.assertEquals(
-                            "OK",
-                            ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value()
-                    );
-                    Assert.assertTrue(client.execute(invalid) instanceof ReplyError);
-                    Assert.assertEquals(0, session.transactionState().size());
-
-                    ReplyObject exec = client.execute(Arrays.asList(b("EXEC")));
-                    Assert.assertTrue(exec instanceof ReplyError);
-                    Assert.assertEquals(
-                            "EXECABORT Transaction discarded because of previous errors.",
-                            ((ReplyError) exec).message()
-                    );
-                }
+                assertContentErrorFailsOnlyThatCommand(db, invalid, null);
             }
         });
     }
 
     @Test
-    public void sortedSetAndHllParseErrorsInsideMultiAbortBeforeExec() {
+    public void sortedSetArityErrorsInsideMultiAbortBeforeExec() {
+        forEachDb(db -> {
+            for (InvalidCommand invalid : List.of(
+                    invalid("ERR wrong number of arguments for 'pfcount' command", "PFCOUNT"),
+                    invalid("ERR wrong number of arguments for 'pfmerge' command", "PFMERGE", "dest")
+            )) {
+                CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+                TestSession session = new TestSession();
+                FastTestClient client = new FastTestClient(dispatcher, session);
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+                ReplyObject failure = client.execute(invalid.args());
+                Assert.assertTrue(failure instanceof ReplyError);
+                Assert.assertEquals(invalid.message(), ((ReplyError) failure).message());
+                Assert.assertEquals(0, session.transactionState().size());
+                ReplyObject exec = client.execute(List.of(b("EXEC")));
+                Assert.assertTrue(exec instanceof ReplyError);
+                Assert.assertEquals(
+                        "EXECABORT Transaction discarded because of previous errors.",
+                        ((ReplyError) exec).message()
+                );
+            }
+        });
+    }
+
+    @Test
+    public void sortedSetAndHllContentErrorsInsideMultiFailOnlyThatCommand() {
         forEachDb(db -> {
             for (InvalidCommand invalid : List.of(
                     invalid("ERR value is not a valid float", "ZADD", "z", "NaN", "member"),
@@ -504,28 +529,9 @@ public class TransactionCommandTest {
                     invalid("ERR value is not an integer or out of range", "ZREMRANGEBYRANK", "z", "bad", "-1"),
                     invalid("ERR value is not an integer or out of range", "ZSCAN", "z", "-1"),
                     invalid("ERR syntax error", "ZSCAN", "z", "0", "MATCH"),
-                    invalid("ERR value is not an integer or out of range", "ZSCAN", "z", "0", "COUNT", "0"),
-                    invalid("ERR wrong number of arguments for 'pfcount' command", "PFCOUNT"),
-                    invalid("ERR wrong number of arguments for 'pfmerge' command", "PFMERGE", "dest")
+                    invalid("ERR value is not an integer or out of range", "ZSCAN", "z", "0", "COUNT", "0")
             )) {
-                CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
-                TestSession session = new TestSession();
-                {
-                    FastTestClient client = new FastTestClient(dispatcher, session);
-                    Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
-
-                    ReplyObject failure = client.execute(invalid.args());
-                    Assert.assertTrue(failure instanceof ReplyError);
-                    Assert.assertEquals(invalid.message(), ((ReplyError) failure).message());
-                    Assert.assertEquals(0, session.transactionState().size());
-
-                    ReplyObject exec = client.execute(List.of(b("EXEC")));
-                    Assert.assertTrue(exec instanceof ReplyError);
-                    Assert.assertEquals(
-                            "EXECABORT Transaction discarded because of previous errors.",
-                            ((ReplyError) exec).message()
-                    );
-                }
+                assertContentErrorFailsOnlyThatCommand(db, invalid.args(), invalid.message());
             }
         });
     }
@@ -590,35 +596,14 @@ public class TransactionCommandTest {
     }
 
     @Test
-    public void timeIndependentSetErrorsInsideMultiStillAbort() {
+    public void timeIndependentSetErrorsInsideMultiFailOnlyThatCommand() {
         forEachDb(db -> {
             for (InvalidCommand invalid : List.of(
                     invalid("ERR syntax error", "SET", "k", "v", "NOPE"),
                     invalid("ERR invalid expire time in 'set' command", "SET", "k", "v", "EXAT", "0"),
                     invalid("ERR invalid expire time in 'set' command", "SET", "k", "v", "PXAT", "-1")
             )) {
-                CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
-                TestSession session = new TestSession();
-                {
-                    FastTestClient client = new FastTestClient(dispatcher, session);
-                    Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
-                    Assert.assertEquals(
-                            "QUEUED",
-                            ((ReplySimpleString) client.execute(List.of(b("SET"), b("queued-k"), b("v")))).value()
-                    );
-
-                    ReplyObject badSet = client.execute(invalid.args());
-                    Assert.assertTrue(badSet instanceof ReplyError);
-                    Assert.assertEquals(invalid.message(), ((ReplyError) badSet).message());
-
-                    ReplyObject exec = client.execute(List.of(b("EXEC")));
-                    Assert.assertTrue(exec instanceof ReplyError);
-                    Assert.assertEquals(
-                            "EXECABORT Transaction discarded because of previous errors.",
-                            ((ReplyError) exec).message()
-                    );
-                    Assert.assertSame(ReplyNull.INSTANCE, client.execute(List.of(b("GET"), b("queued-k"))));
-                }
+                assertContentErrorFailsOnlyThatCommand(db, invalid.args(), invalid.message());
             }
         });
     }
@@ -695,6 +680,32 @@ public class TransactionCommandTest {
                 Assert.assertTrue(client.execute(List.of(b("GET"), b("k"))) instanceof ReplyNull);
             }
         });
+    }
+
+    private static void assertContentErrorFailsOnlyThatCommand(
+            YierdisDb db,
+            List<byte[]> invalid,
+            String message
+    ) {
+        CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+        FastTestClient client = new FastTestClient(dispatcher);
+        Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("FLUSHDB")))).value());
+        Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+        Assert.assertEquals(
+                "QUEUED",
+                ((ReplySimpleString) client.execute(List.of(b("SET"), b("kept"), b("1")))).value()
+        );
+        Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(invalid)).value());
+
+        ReplyArray exec = (ReplyArray) client.execute(List.of(b("EXEC")));
+        Assert.assertNotNull(exec.values());
+        Assert.assertEquals(2, exec.values().size());
+        Assert.assertEquals("OK", ((ReplySimpleString) exec.values().get(0)).value());
+        ReplyError failure = (ReplyError) exec.values().get(1);
+        if (message != null) {
+            Assert.assertEquals(message, failure.message());
+        }
+        Assert.assertEquals("1", ((ReplyBulkString) client.execute(List.of(b("GET"), b("kept")))).asString());
     }
 
     private static InvalidCommand invalid(String message, String... args) {

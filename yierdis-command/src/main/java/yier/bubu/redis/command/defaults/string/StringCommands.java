@@ -126,8 +126,7 @@ public final class StringCommands {
             if (value <= 0L) {
                 throw new CommandParseException(INVALID_SET_EXPIRE);
             }
-            // 绝对过期的墙钟比较不在 parse：过去但为正的 EXAT/PXAT 在 execute 时先写后过期，
-            // 这样 MULTI preflight 不会因入队时刻的时钟把事务 EXECABORT。
+            // 绝对过期的墙钟比较不在 parse：过去但为正的 EXAT/PXAT 在 execute 时先写后过期。
             if ("EX".equals(option)) {
                 expire = ExpireOption.ex(value);
             } else if ("PX".equals(option)) {
