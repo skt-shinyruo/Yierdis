@@ -27,6 +27,7 @@ import yier.bubu.redis.execution.api.PreparedCommands;
 import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.execution.api.ReplyShapes;
+import yier.bubu.redis.execution.api.ValidationResult;
 import yier.bubu.redis.storage.api.ExpireCondition;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
@@ -253,24 +254,37 @@ public final class KeyCommands {
     }
 
     private static PreparedCommand keyWindowReply(KeyScanWindow window) {
-        return PreparedCommands.ready(DbReplies.sequence(snapshot(window)));
+        RedisReply discovered = DbReplies.sequence(window);
+        return PreparedCommands.ownedAction(
+                discovered.shape(),
+                window,
+                () -> window.current() ? ValidationResult.VALID : ValidationResult.STALE,
+                context -> CommandResult.reply(DbReplies.sequence(snapshot(window)))
+        );
     }
 
     private static PreparedCommand scanWindowReply(KeyScanWindow window) {
         byte[] cursor = window.nextCursor().toAsciiBytes();
-        RedisReply reply = RedisReplies.array(List.of(
+        RedisReply discovered = RedisReplies.array(List.of(
                 RedisReplies.bulkString(cursor),
-                DbReplies.sequence(snapshot(window))
+                DbReplies.sequence(window)
         ));
-        return PreparedCommands.ready(reply);
+        return PreparedCommands.ownedAction(
+                discovered.shape(),
+                window,
+                () -> window.current() ? ValidationResult.VALID : ValidationResult.STALE,
+                context -> CommandResult.reply(RedisReplies.array(List.of(
+                        RedisReplies.bulkString(cursor),
+                        DbReplies.sequence(snapshot(window))
+                )))
+        );
     }
 
+    // EXEC 先执行这条命令，再执行队列里后面的写入，整笔回复要到 EXEC 结束才渲染。
+    // 拷贝发生在 execute：后面的写入改不了这份 key。发现窗口仍只用于预留形状和 STALE 重试，
+    // 过期时调用方会关掉窗口并重新发现，不会走到这里。窗口要等回复渲染完才由 PreparedCommand 关闭。
     private static ByteSequenceSource snapshot(KeyScanWindow window) {
-        try {
-            return ByteSequenceSources.copiedFrom(window::emitTo);
-        } finally {
-            window.close();
-        }
+        return ByteSequenceSources.copiedFrom(window::emitTo);
     }
 
     private static long deadlineNanos(long budgetNanos) {
