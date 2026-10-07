@@ -11,6 +11,7 @@ import org.junit.Test;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.PreparedCommands;
+import yier.bubu.redis.storage.memory.YierdisDb;
 import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.testutil.FastTestClient;
@@ -24,7 +25,9 @@ import yier.bubu.redis.testutil.ReplySimpleString;
 
 import java.util.Arrays;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
@@ -53,6 +56,113 @@ public class TransactionCommandTest {
                 Assert.assertEquals("v", ((ReplyBulkString) client.execute(Arrays.asList(b("GET"), b("k")))).asString());
             }
         });
+    }
+
+    @Test
+    public void execFreezesKeysAndScanAtTheMomentTheyRun() {
+        forEachDb(db -> {
+            keysThenInsertSeesOnlyTheEarlierKey(db);
+            keysWithStableCountDoesNotMixLaterMembers(db);
+            scanWithStableCountDoesNotMixLaterMembers(db);
+            keysThenManyInsertsKeepsTheOriginalMembers(db);
+            keysPatternDoesNotIncludeALaterMatch(db);
+        });
+    }
+
+    private static void keysThenInsertSeesOnlyTheEarlierKey(YierdisDb db) {
+        FastTestClient client = client(db);
+        Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("SET"), b("a"), b("1")))).value());
+        Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+        Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(List.of(b("KEYS"), b("*")))).value());
+        Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(List.of(b("SET"), b("b"), b("1")))).value());
+
+        ReplyArray exec = (ReplyArray) client.execute(List.of(b("EXEC")));
+        Assert.assertEquals(2, exec.values().size());
+        Assert.assertEquals(Set.of("a"), bulkStrings((ReplyArray) exec.values().get(0)));
+        Assert.assertEquals("OK", ((ReplySimpleString) exec.values().get(1)).value());
+        Assert.assertEquals(Set.of("a", "b"), bulkStrings((ReplyArray) client.execute(List.of(b("KEYS"), b("*")))));
+    }
+
+    private static void keysWithStableCountDoesNotMixLaterMembers(YierdisDb db) {
+        FastTestClient client = client(db);
+        Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("SET"), b("h"), b("1")))).value());
+        Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("SET"), b("a"), b("1")))).value());
+        Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("SET"), b("c"), b("1")))).value());
+        Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+        Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(List.of(b("KEYS"), b("*")))).value());
+        Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(List.of(b("DEL"), b("a")))).value());
+        Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(List.of(b("SET"), b("b"), b("1")))).value());
+
+        ReplyArray exec = (ReplyArray) client.execute(List.of(b("EXEC")));
+        Assert.assertEquals(3, exec.values().size());
+        Assert.assertEquals(Set.of("h", "a", "c"), bulkStrings((ReplyArray) exec.values().get(0)));
+        Assert.assertEquals(1L, ((ReplyInteger) exec.values().get(1)).value());
+        Assert.assertEquals("OK", ((ReplySimpleString) exec.values().get(2)).value());
+    }
+
+    private static void scanWithStableCountDoesNotMixLaterMembers(YierdisDb db) {
+        FastTestClient client = client(db);
+        Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("SET"), b("h"), b("1")))).value());
+        Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("SET"), b("a"), b("1")))).value());
+        Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("SET"), b("c"), b("1")))).value());
+        Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+        Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(List.of(b("SCAN"), b("0")))).value());
+        Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(List.of(b("DEL"), b("a")))).value());
+        Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(List.of(b("SET"), b("b"), b("1")))).value());
+
+        ReplyArray exec = (ReplyArray) client.execute(List.of(b("EXEC")));
+        ReplyArray scan = (ReplyArray) exec.values().get(0);
+        Assert.assertEquals(Set.of("h", "a", "c"), bulkStrings((ReplyArray) scan.values().get(1)));
+        Assert.assertEquals(1L, ((ReplyInteger) exec.values().get(1)).value());
+    }
+
+    private static void keysThenManyInsertsKeepsTheOriginalMembers(YierdisDb db) {
+        FastTestClient client = client(db);
+        Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("SET"), b("a"), b("1")))).value());
+        Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("SET"), b("c"), b("1")))).value());
+        Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("SET"), b("h"), b("1")))).value());
+        Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+        Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(List.of(b("KEYS"), b("*")))).value());
+        for (int index = 1; index <= 20; index++) {
+            Assert.assertEquals(
+                    "QUEUED",
+                    ((ReplySimpleString) client.execute(List.of(b("SET"), b("k" + index), b("1")))).value()
+            );
+        }
+
+        ReplyArray exec = (ReplyArray) client.execute(List.of(b("EXEC")));
+        Assert.assertEquals(21, exec.values().size());
+        Assert.assertEquals(Set.of("a", "c", "h"), bulkStrings((ReplyArray) exec.values().get(0)));
+        for (int index = 1; index <= 20; index++) {
+            Assert.assertEquals("OK", ((ReplySimpleString) exec.values().get(index)).value());
+        }
+    }
+
+    private static void keysPatternDoesNotIncludeALaterMatch(YierdisDb db) {
+        FastTestClient client = client(db);
+        Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("SET"), b("h"), b("1")))).value());
+        Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+        Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(List.of(b("KEYS"), b("h*")))).value());
+        Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(List.of(b("SET"), b("h2"), b("1")))).value());
+
+        ReplyArray exec = (ReplyArray) client.execute(List.of(b("EXEC")));
+        Assert.assertEquals(Set.of("h"), bulkStrings((ReplyArray) exec.values().get(0)));
+        Assert.assertEquals("OK", ((ReplySimpleString) exec.values().get(1)).value());
+        Assert.assertEquals(1L, ((ReplyInteger) client.execute(List.of(b("EXISTS"), b("h2")))).value());
+    }
+
+    private static FastTestClient client(YierdisDb db) {
+        FastTestClient client = new FastTestClient(TestCommandComposition.createDispatcher(db), new TestSession());
+        Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("FLUSHDB")))).value());
+        return client;
+    }
+
+    private static Set<String> bulkStrings(ReplyArray array) {
+        Set<String> names = new HashSet<>();
+        for (ReplyObject value : array.values()) {
+            names.add(((ReplyBulkString) value).asString());
+        }
+        return names;
     }
 
     @Test
