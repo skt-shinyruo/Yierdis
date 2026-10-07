@@ -434,6 +434,16 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
         );
     }
 
+    long fullPageSummaryVisits() {
+        ensureOpen();
+        return pageAllocator.fullSummaryPageVisits();
+    }
+
+    YierdisNativePageAllocatorStats auditedPageStats() {
+        ensureOpen();
+        return pageAllocator.auditedStats();
+    }
+
     public MemoryUsageSnapshot memoryUsage() {
         ensureOpen();
         YierdisNativePageAllocatorStats pageStats = pageAllocator.stats();

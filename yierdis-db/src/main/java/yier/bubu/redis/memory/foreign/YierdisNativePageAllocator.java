@@ -38,6 +38,20 @@ final class YierdisNativePageAllocator
     private int nextPageId = 1;
     private long nextCreationSequence;
     private AllocationScopeCheckpoint activeAllocationScope;
+    // committed/used/空页数在建页、毁页、拿走或归还小块时更新。
+    // stats()、heapEstimatedBytes() 和 allocation scope 的 memoryUsage() 只读这些字段。
+    // 全表扫描只留在 auditedStats()；回到热路径会让每次 allocate/free 的成本随 page 数增长。
+    private long committedBytes;
+    private long usedBytes;
+    private long smallFreeBytes;
+    private long liveSmallPageCount;
+    private long liveMediumPageCount;
+    private long liveLargePageCount;
+    private long emptySmallPageCount;
+    private long liveSpanDescriptorCount;
+    private long descriptorHeapBytes;
+    // 测试核对热路径有没有走进 summarizePages。每真正扫到一页加一，不参与账本。
+    private long fullSummaryPageVisits;
 
     public YierdisNativePageAllocator(YierdisFfmMemoryRuntime runtime) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
@@ -113,7 +127,30 @@ final class YierdisNativePageAllocator
     }
 
     public YierdisNativePageAllocatorStats stats() {
-        PageSummary summary = summarizePages();
+        return new YierdisNativePageAllocatorStats(
+                committedBytes,
+                usedBytes,
+                subtractAccounting(committedBytes, usedBytes),
+                liveSmallPageCount,
+                liveMediumPageCount,
+                liveLargePageCount,
+                smallFreeBytes,
+                emptySmallPageCount,
+                pagesById.size(),
+                liveSpanDescriptorCount,
+                pageRegistryHeapEstimatedBytes()
+        );
+    }
+
+    long fullSummaryPageVisits() {
+        return fullSummaryPageVisits;
+    }
+
+    YierdisNativePageAllocatorStats auditedStats() {
+        return statsFromSummary(summarizePages());
+    }
+
+    private YierdisNativePageAllocatorStats statsFromSummary(PageSummary summary) {
         return new YierdisNativePageAllocatorStats(
                 summary.committedBytes(),
                 summary.usedBytes(),
@@ -180,10 +217,7 @@ final class YierdisNativePageAllocator
     }
 
     long heapEstimatedBytes() {
-        return MemoryUsageSnapshot.addSaturating(
-                pageRegistryHeapEstimatedBytes(),
-                summarizePages().descriptorHeapBytes()
-        );
+        return MemoryUsageSnapshot.addSaturating(pageRegistryHeapEstimatedBytes(), descriptorHeapBytes);
     }
 
     AllocationScopeCheckpoint beginAllocationScope() {
@@ -264,6 +298,7 @@ final class YierdisNativePageAllocator
         }
         reusablePageIds.clear();
         clearSmallPageIndexes();
+        resetAccounting();
         if (activeAllocationScope != null) {
             activeAllocationScope.releaseReferences();
             activeAllocationScope = null;
@@ -361,6 +396,7 @@ final class YierdisNativePageAllocator
         if (page.liveBlocks == 1) {
             unindexEmpty(page);
         }
+        accountSmallBlockAllocated(page);
         return new YierdisNativeBlock(
                 this,
                 page,
@@ -432,7 +468,9 @@ final class YierdisNativePageAllocator
                 reusableSmallPages[sizeClass.ordinal()].remove(page.pageId);
             }
             if (emptyIndexed) {
+                // 失败路径直接摘索引，不走 unindexEmpty，空页计数要在这里配对减掉。
                 emptySmallPages[sizeClass.ordinal()].remove(page.pageId);
+                emptySmallPageCount = subtractAccounting(emptySmallPageCount, 1L);
             }
             releaseFailedAllocation(pageId, page, region, failure);
             throw failure;
@@ -453,6 +491,7 @@ final class YierdisNativePageAllocator
         if (wasFull) {
             indexReusable(page);
         }
+        accountSmallBlockFreed(page);
         if (page.liveBlocks != 0) {
             return;
         }
@@ -586,6 +625,7 @@ final class YierdisNativePageAllocator
         if (pagesById.putIfAbsent(pageId, allocation) != null) {
             throw new IllegalStateException("page id is already live: " + pageId);
         }
+        accountRegistered(allocation);
     }
 
     private void removePage(int pageId, PageAllocation expected, boolean recycleId) {
@@ -593,6 +633,7 @@ final class YierdisNativePageAllocator
             throw new IllegalStateException("page id owner mismatch: " + pageId);
         }
         pagesById.remove(pageId);
+        accountRemoved(expected);
         if (recycleId && !reusablePageIds.add(pageId)) {
             throw new IllegalStateException("page id is already reusable: " + pageId);
         }
@@ -606,6 +647,7 @@ final class YierdisNativePageAllocator
     ) {
         if (allocation != null && pagesById.get(pageId) == allocation) {
             pagesById.remove(pageId);
+            accountRemoved(allocation);
         }
         if (region != null) {
             try {
@@ -617,6 +659,105 @@ final class YierdisNativePageAllocator
         reusablePageIds.add(pageId);
     }
 
+    private void accountRegistered(PageAllocation allocation) {
+        if (allocation instanceof SmallPage page) {
+            committedBytes = MemoryUsageSnapshot.addSaturating(committedBytes, PAGE_BYTES);
+            usedBytes = MemoryUsageSnapshot.addSaturating(usedBytes, smallBlockBytes(page.liveBlocks, page));
+            smallFreeBytes = MemoryUsageSnapshot.addSaturating(smallFreeBytes, smallBlockBytes(page.freeCount, page));
+            liveSmallPageCount++;
+            descriptorHeapBytes = MemoryUsageSnapshot.addSaturating(descriptorHeapBytes, smallPageHeapBytes(page));
+            return;
+        }
+        if (allocation instanceof SpanAllocation span) {
+            accountSpan(span, true);
+            return;
+        }
+        throw new IllegalStateException("unknown native page allocation");
+    }
+
+    private void accountRemoved(PageAllocation allocation) {
+        if (allocation instanceof SmallPage page) {
+            committedBytes = subtractAccounting(committedBytes, PAGE_BYTES);
+            usedBytes = subtractAccounting(usedBytes, smallBlockBytes(page.liveBlocks, page));
+            smallFreeBytes = subtractAccounting(smallFreeBytes, smallBlockBytes(page.freeCount, page));
+            liveSmallPageCount = subtractAccounting(liveSmallPageCount, 1L);
+            descriptorHeapBytes = subtractAccounting(descriptorHeapBytes, smallPageHeapBytes(page));
+            return;
+        }
+        if (allocation instanceof SpanAllocation span) {
+            accountSpan(span, false);
+            return;
+        }
+        throw new IllegalStateException("unknown native page allocation");
+    }
+
+    private void accountSpan(SpanAllocation span, boolean registered) {
+        if (registered) {
+            committedBytes = MemoryUsageSnapshot.addSaturating(committedBytes, span.capacity);
+            usedBytes = MemoryUsageSnapshot.addSaturating(usedBytes, span.capacity);
+            addSpanPages(span, span.pageCount);
+            liveSpanDescriptorCount++;
+            descriptorHeapBytes = MemoryUsageSnapshot.addSaturating(descriptorHeapBytes, spanHeapBytes());
+            return;
+        }
+        committedBytes = subtractAccounting(committedBytes, span.capacity);
+        usedBytes = subtractAccounting(usedBytes, span.capacity);
+        addSpanPages(span, -span.pageCount);
+        liveSpanDescriptorCount = subtractAccounting(liveSpanDescriptorCount, 1L);
+        descriptorHeapBytes = subtractAccounting(descriptorHeapBytes, spanHeapBytes());
+    }
+
+    private void addSpanPages(SpanAllocation span, int pageCount) {
+        if (span.pageClass == YierdisNativePageClass.MEDIUM_SPAN) {
+            liveMediumPageCount = addAccounting(liveMediumPageCount, pageCount);
+            return;
+        }
+        liveLargePageCount = addAccounting(liveLargePageCount, pageCount);
+    }
+
+    private void accountSmallBlockAllocated(SmallPage page) {
+        long blockBytes = page.sizeClass.bytes();
+        usedBytes = MemoryUsageSnapshot.addSaturating(usedBytes, blockBytes);
+        smallFreeBytes = subtractAccounting(smallFreeBytes, blockBytes);
+    }
+
+    private void accountSmallBlockFreed(SmallPage page) {
+        long blockBytes = page.sizeClass.bytes();
+        usedBytes = subtractAccounting(usedBytes, blockBytes);
+        smallFreeBytes = MemoryUsageSnapshot.addSaturating(smallFreeBytes, blockBytes);
+    }
+
+    private void resetAccounting() {
+        committedBytes = 0L;
+        usedBytes = 0L;
+        smallFreeBytes = 0L;
+        liveSmallPageCount = 0L;
+        liveMediumPageCount = 0L;
+        liveLargePageCount = 0L;
+        emptySmallPageCount = 0L;
+        liveSpanDescriptorCount = 0L;
+        descriptorHeapBytes = 0L;
+    }
+
+    private static long smallBlockBytes(int blocks, SmallPage page) {
+        return (long) blocks * page.sizeClass.bytes();
+    }
+
+    private static long addAccounting(long current, int delta) {
+        if (delta >= 0) {
+            return MemoryUsageSnapshot.addSaturating(current, delta);
+        }
+        return subtractAccounting(current, -(long) delta);
+    }
+
+    private static long subtractAccounting(long current, long amount) {
+        if (amount < 0L || current < amount) {
+            throw new IllegalStateException("native page accounting underflow: " + current + " - " + amount);
+        }
+        return current - amount;
+    }
+
+    // 显式核对。allocate、free、stats() 和 allocation scope 不能调用这里。
     private PageSummary summarizePages() {
         long committedBytes = 0L;
         long usedBytes = 0L;
@@ -628,6 +769,7 @@ final class YierdisNativePageAllocator
         long liveSpanDescriptors = 0L;
         long descriptorHeapBytes = 0L;
         for (PageAllocation allocation : pagesById.values()) {
+            fullSummaryPageVisits++;
             if (allocation instanceof SmallPage page) {
                 committedBytes = MemoryUsageSnapshot.addSaturating(committedBytes, PAGE_BYTES);
                 usedBytes = MemoryUsageSnapshot.addSaturating(
@@ -718,12 +860,15 @@ final class YierdisNativePageAllocator
         if (emptySmallPages[page.sizeClass.ordinal()].putIfAbsent(page.pageId, page) != null) {
             throw new IllegalStateException("small page is already empty: " + page.pageId);
         }
+        // 空页数跟着索引走，不在 register/remove 里再记一次。失败回滚直接摘 map 时要配对减。
+        emptySmallPageCount++;
     }
 
     private void unindexEmpty(SmallPage page) {
         if (emptySmallPages[page.sizeClass.ordinal()].remove(page.pageId) == null) {
             throw new IllegalStateException("small page is not empty: " + page.pageId);
         }
+        emptySmallPageCount = subtractAccounting(emptySmallPageCount, 1L);
     }
 
     private void clearSmallPageIndexes() {
