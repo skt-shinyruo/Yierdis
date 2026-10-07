@@ -1,9 +1,11 @@
 package yier.bubu.redis.command.defaults.zset;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Supplier;
+import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.String2d;
 import yier.bubu.redis.command.api.CommandArgs;
 import yier.bubu.redis.command.api.CommandArity;
@@ -28,6 +30,7 @@ import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.storage.api.ZAddOptions;
 import yier.bubu.redis.storage.api.ZAddOutcome;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 
 public final class ZSetCommands {
     private static final String SYNTAX_ERROR = "ERR syntax error";
@@ -173,7 +176,7 @@ public final class ZSetCommands {
             ZRangeArgs args,
             yier.bubu.redis.execution.api.CommandSession session
     ) {
-        return prepareSequence(() -> args.direction() == RangeDirection.REVERSE
+        return scoreReply(session, args.withScores(), () -> args.direction() == RangeDirection.REVERSE
                 ? support.commandDb(session).zsets()
                         .zrevrange(args.key(), args.start(), args.stop(), args.withScores())
                 : support.commandDb(session).zsets()
@@ -224,7 +227,7 @@ public final class ZSetCommands {
             ZRangeByScoreArgs args,
             yier.bubu.redis.execution.api.CommandSession session
     ) {
-        return prepareSequence(() -> args.direction() == RangeDirection.REVERSE
+        return scoreReply(session, args.withScores(), () -> args.direction() == RangeDirection.REVERSE
                 ? support.commandDb(session).zsets().zrevrangeByScore(
                         args.key(), args.min().value(), args.min().exclusive(),
                         args.max().value(), args.max().exclusive(),
@@ -271,19 +274,74 @@ public final class ZSetCommands {
                         parsed.key(), parsed.cursor(), parsed.match(), parsed.count()));
     }
 
-    private static PreparedCommand ownedSequence(ByteSequenceSource source) {
-        RedisReply reply = DbReplies.sequence(source);
-        return PreparedCommands.owned(CommandResult.reply(reply), source);
-    }
-
-    private static PreparedCommand prepareSequence(Supplier<ByteSequenceSource> read) {
+    private PreparedCommand scoreReply(
+            CommandSession session,
+            boolean withScores,
+            Supplier<ByteSequenceSource> read
+    ) {
         ByteSequenceSource source;
         try {
             source = read.get();
         } catch (IllegalArgumentException failure) {
             return PreparedCommands.ready(RedisReplies.error("ERR " + failure.getMessage()));
         }
+        // RESP3 的 WITHSCORES 是 [member, score] 二元数组。分数仍是 bulk string，没有 RESP3 double。
+        if (withScores && session.respVersion() >= 3) {
+            return ownedNestedScores(source);
+        }
         return ownedSequence(source);
+    }
+
+    private static PreparedCommand ownedNestedScores(ByteSequenceSource source) {
+        ArrayList<byte[]> flat = new ArrayList<>();
+        source.emitTo(new ByteValueSink() {
+            @Override
+            public void value(byte[] data) {
+                flat.add(data == null ? new byte[0] : data.clone());
+            }
+
+            @Override
+            public void value(byte[] data, int offset, int length) {
+                byte[] copy = new byte[length];
+                if (data != null && length > 0) {
+                    System.arraycopy(data, offset, copy, 0, length);
+                }
+                flat.add(copy);
+            }
+
+            @Override
+            public void value(BytesSlice slice) {
+                byte[] copy = new byte[slice.length()];
+                slice.getBytes(0, copy, 0, copy.length);
+                flat.add(copy);
+            }
+
+            @Override
+            public void longAscii(long value) {
+                flat.add(Long.toString(value).getBytes(StandardCharsets.US_ASCII));
+            }
+
+            @Override
+            public void nullValue() {
+                flat.add(new byte[0]);
+            }
+        });
+        if ((flat.size() & 1) != 0) {
+            throw new IllegalStateException("WITHSCORES sequence must contain member/score pairs");
+        }
+        ArrayList<RedisReply> pairs = new ArrayList<>(flat.size() / 2);
+        for (int index = 0; index < flat.size(); index += 2) {
+            pairs.add(RedisReplies.array(List.of(
+                    RedisReplies.bulkString(flat.get(index)),
+                    RedisReplies.bulkString(flat.get(index + 1))
+            )));
+        }
+        return PreparedCommands.owned(CommandResult.reply(RedisReplies.array(pairs)), source);
+    }
+
+    private static PreparedCommand ownedSequence(ByteSequenceSource source) {
+        RedisReply reply = DbReplies.sequence(source);
+        return PreparedCommands.owned(CommandResult.reply(reply), source);
     }
 
     private static double parseScore(byte[] raw) {

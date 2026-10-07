@@ -3,6 +3,7 @@ package yier.bubu.redis.integration.command;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
+import yier.bubu.redis.execution.engine.EngineSession;
 import yier.bubu.redis.storage.api.DbEngine;
 import yier.bubu.redis.storage.api.ZSetOps;
 import yier.bubu.redis.testutil.FastTestClient;
@@ -1086,6 +1087,60 @@ public class ZSetCommandTest {
                 Assert.assertEquals(0, ((ReplyArray) exec.values().get(0)).values().size());
             }
         });
+    }
+
+    @Test
+    public void withScoresNestsPairsOnlyInResp3() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient resp2 = new FastTestClient(dispatcher);
+                byte[] key = b("z-withscores");
+                resp2.execute(Arrays.asList(b("ZADD"), key, b("1"), b("a"), b("2.5"), b("b")));
+
+                ReplyArray flat = (ReplyArray) resp2.execute(Arrays.asList(
+                        b("ZRANGE"), key, b("0"), b("-1"), b("WITHSCORES")));
+                Assert.assertEquals(List.of("a", "1", "b", "2.5"), bulkStrings(flat));
+
+                EngineSession session = new EngineSession(0, 0);
+                session.setRespVersion(3);
+                FastTestClient resp3 = new FastTestClient(dispatcher, session);
+                assertScorePairs(resp3.execute(Arrays.asList(
+                        b("ZRANGE"), key, b("0"), b("-1"), b("WITHSCORES"))),
+                        List.of("a", "1", "b", "2.5"));
+                assertScorePairs(resp3.execute(Arrays.asList(
+                        b("ZREVRANGE"), key, b("0"), b("-1"), b("WITHSCORES"))),
+                        List.of("b", "2.5", "a", "1"));
+                assertScorePairs(resp3.execute(Arrays.asList(
+                        b("ZRANGEBYSCORE"), key, b("-inf"), b("+inf"), b("WITHSCORES"))),
+                        List.of("a", "1", "b", "2.5"));
+                assertScorePairs(resp3.execute(Arrays.asList(
+                        b("ZREVRANGEBYSCORE"), key, b("+inf"), b("-inf"), b("WITHSCORES"))),
+                        List.of("b", "2.5", "a", "1"));
+
+                ReplyArray membersOnly = (ReplyArray) resp3.execute(Arrays.asList(
+                        b("ZRANGE"), key, b("0"), b("-1")));
+                Assert.assertEquals(List.of("a", "b"), bulkStrings(membersOnly));
+
+                ReplyArray empty = (ReplyArray) resp3.execute(Arrays.asList(
+                        b("ZRANGE"), b("missing"), b("0"), b("-1"), b("WITHSCORES")));
+                Assert.assertEquals(0, empty.values().size());
+
+                Assert.assertTrue(resp3.execute(Arrays.asList(
+                        b("ZADD"), key, b("INCR"), b("1"), b("a"))) instanceof ReplyBulkString);
+            }
+        });
+    }
+
+    private static void assertScorePairs(ReplyObject reply, List<String> flatPairs) {
+        ReplyArray outer = (ReplyArray) reply;
+        Assert.assertEquals(flatPairs.size() / 2, outer.values().size());
+        for (int index = 0; index < outer.values().size(); index++) {
+            ReplyArray pair = (ReplyArray) outer.values().get(index);
+            Assert.assertEquals(2, pair.values().size());
+            Assert.assertEquals(flatPairs.get(index * 2), ((ReplyBulkString) pair.values().get(0)).asString());
+            Assert.assertEquals(flatPairs.get(index * 2 + 1), ((ReplyBulkString) pair.values().get(1)).asString());
+        }
     }
 
     private static List<String> bulkStrings(ReplyArray array) {
