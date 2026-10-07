@@ -475,6 +475,13 @@ public final class YierdisFfmStableMemoryBackend implements StableMemoryBackend 
         return runtime.liveRegionCount();
     }
 
+    @Override
+    public void releaseUnusedMetadata() {
+        ensureOpen();
+        pageAllocator.releaseIdlePageIds();
+        objectTable.releaseUnusedMetadata();
+    }
+
     public MemoryReclaimResult trimEmptyPages(MemoryPressureBudget budget) {
         ensureOpen();
         MemoryReclaimResult result = pageAllocator.trimEmptyPages(budget);

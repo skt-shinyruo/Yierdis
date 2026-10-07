@@ -51,6 +51,13 @@ public interface StableMemoryBackend extends AutoCloseable {
 
     MemoryReclaimResult trimEmptyPages(MemoryPressureBudget budget);
 
+    /**
+     * 没有存活、pin 或隔离对象时释放多余的 metadata 段，使 committed 回到空库。
+     * 堆后端没有 native metadata，默认什么也不做。
+     */
+    default void releaseUnusedMetadata() {
+    }
+
     NativeAllocationGrowth estimateAdditionalGrowth(int... requestedBytes);
 
     long liveRegionCount();

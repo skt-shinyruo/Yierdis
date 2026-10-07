@@ -126,6 +126,15 @@ final class YierdisNativePageAllocator
         );
     }
 
+    // 页都关掉之后，回收过的 page id 仍留在集合里，按条计入 heap。空库没有这些 id。
+    void releaseIdlePageIds() {
+        ensureOpen();
+        if (!pagesById.isEmpty() || emptySmallPageCount != 0L) {
+            return;
+        }
+        reusablePageIds.clear();
+    }
+
     public YierdisNativePageAllocatorStats stats() {
         return new YierdisNativePageAllocatorStats(
                 committedBytes,

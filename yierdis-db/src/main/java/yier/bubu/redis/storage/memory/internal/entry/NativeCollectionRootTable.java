@@ -220,6 +220,11 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
         adapterHeapBytes = subtractSaturating(adapterHeapBytes, HASH_MAP_ENTRY_BYTES);
         adapterHeapBytes = subtractSaturating(adapterHeapBytes, ADAPTER_SLOT_HEAP_BYTES);
         adapterHeapBytes = subtractSaturating(adapterHeapBytes, expected.adapterHeapBytes);
+        if (adapters.isEmpty()) {
+            adapters = new HashMap<>();
+            adapterMapCapacity = 0;
+            adapterMapHeapBytes = MAP_OBJECT_BYTES;
+        }
     }
 
     private void refreshAdapter(NativeHandle handle) {
