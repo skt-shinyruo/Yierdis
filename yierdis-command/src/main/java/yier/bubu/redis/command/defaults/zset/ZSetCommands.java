@@ -312,11 +312,19 @@ public final class ZSetCommands {
         }
 
         String value = new String(raw, start, raw.length - start, StandardCharsets.US_ASCII);
-        if ("-inf".equalsIgnoreCase(value)) {
+        // Redis 8.0.2 的 zslParseRange 不剥空白，也不接受十六进制。8.10.2 这两点不同，这里不跟。
+        // inf 以 f 结尾，必须先于 Java 浮点后缀判断，否则 +inf 会被当成 后缀错误。
+        if (hasBoundWhitespace(value) || isHexBound(value)) {
+            throw new CommandParseException(SCORE_BOUND_ERROR);
+        }
+        if (isNegativeInfinitySpelling(value)) {
             return new ScoreBound(Double.NEGATIVE_INFINITY, exclusive);
         }
-        if ("+inf".equalsIgnoreCase(value) || "inf".equalsIgnoreCase(value)) {
+        if (isPositiveInfinitySpelling(value)) {
             return new ScoreBound(Double.POSITIVE_INFINITY, exclusive);
+        }
+        if (hasJavaFloatSuffix(value)) {
+            throw new CommandParseException(SCORE_BOUND_ERROR);
         }
         double parsed;
         try {
@@ -324,10 +332,55 @@ public final class ZSetCommands {
         } catch (NumberFormatException failure) {
             throw new CommandParseException(SCORE_BOUND_ERROR);
         }
-        if (!Double.isFinite(parsed)) {
+        if (Double.isNaN(parsed)) {
             throw new CommandParseException(SCORE_BOUND_ERROR);
         }
+        // 1e309 在边界上是 ±inf，不像 ZADD 分数那样因上溢拒绝。
         return new ScoreBound(parsed, exclusive);
+    }
+
+    private static boolean hasBoundWhitespace(String value) {
+        if (value.isEmpty()) {
+            return true;
+        }
+        return isBoundSpace(value.charAt(0)) || isBoundSpace(value.charAt(value.length() - 1));
+    }
+
+    private static boolean isBoundSpace(char value) {
+        return value == ' ' || value == '\t' || value == '\n' || value == '\r' || value == '\f' || value == 0x0b;
+    }
+
+    private static boolean isHexBound(String value) {
+        int index = (value.charAt(0) == '+' || value.charAt(0) == '-') ? 1 : 0;
+        return value.length() >= index + 2
+                && value.charAt(index) == '0'
+                && (value.charAt(index + 1) == 'x' || value.charAt(index + 1) == 'X');
+    }
+
+    private static boolean hasJavaFloatSuffix(String value) {
+        char last = value.charAt(value.length() - 1);
+        return last == 'd' || last == 'D' || last == 'f' || last == 'F';
+    }
+
+    private static boolean isNegativeInfinitySpelling(String value) {
+        String body = infinityBody(value);
+        return body != null && value.charAt(0) == '-' && (body.equals("inf") || body.equals("infinity"));
+    }
+
+    private static boolean isPositiveInfinitySpelling(String value) {
+        String body = infinityBody(value);
+        return body != null && value.charAt(0) != '-' && (body.equals("inf") || body.equals("infinity"));
+    }
+
+    private static String infinityBody(String value) {
+        String lowered = value.toLowerCase(java.util.Locale.ROOT);
+        if (lowered.startsWith("+") || lowered.startsWith("-")) {
+            lowered = lowered.substring(1);
+        }
+        if (lowered.equals("inf") || lowered.equals("infinity")) {
+            return lowered;
+        }
+        return null;
     }
 
     private static CommandParseException syntaxFailure() {

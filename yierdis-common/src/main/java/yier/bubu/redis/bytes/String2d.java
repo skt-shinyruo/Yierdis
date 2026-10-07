@@ -4,11 +4,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 /**
- * Redis {@code string2d} 里 ZADD 分数用到的那一部分：拒绝首尾空白、十进制字面量上溢成无穷、
- * 下溢成 0，同时接受任意大小写的 {@code inf}/{@code infinity}。
+ * Redis 8.0.2 {@code string2d} 里 ZADD 分数用到的那一部分：拒绝首尾空白、{@code d}/{@code f}
+ * 后缀、十进制字面量上溢成无穷、下溢成 0，同时接受任意大小写的 {@code inf}/{@code infinity}
+ * 和不带二进制指数的十六进制（{@code 0x10}、{@code 0x1.8}）。
  * <p>
- * {@code ZRANGEBYSCORE} 的 min/max 不走这里。开区间才有 {@code (} 前缀；没有前缀的边界
- * 仍由 {@code Double.parseDouble} 接受空白和下溢字面量。
+ * {@code ZRANGEBYSCORE} 的 min/max 不走这里。边界拒绝全部十六进制，上溢则收成无穷。
  */
 public final class String2d {
     private String2d() {
@@ -29,6 +29,13 @@ public final class String2d {
             return text.toLowerCase(Locale.ROOT).startsWith("-")
                     ? Double.NEGATIVE_INFINITY
                     : Double.POSITIVE_INFINITY;
+        }
+        if (isHexLiteral(text)) {
+            return parseHex(text);
+        }
+        // JDK 的 parseDouble 把 1d/1f 当成 Java 浮点后缀。string2d 没有这个后缀。
+        if (hasJavaFloatSuffix(text)) {
+            throw invalid();
         }
         double value;
         try {
@@ -51,6 +58,74 @@ public final class String2d {
 
     private static boolean isCSpace(byte value) {
         return value == ' ' || value == '\t' || value == '\n' || value == '\r' || value == '\f' || value == 0x0b;
+    }
+
+    private static boolean isHexLiteral(String text) {
+        int index = (text.charAt(0) == '+' || text.charAt(0) == '-') ? 1 : 0;
+        return text.length() >= index + 2
+                && text.charAt(index) == '0'
+                && (text.charAt(index + 1) == 'x' || text.charAt(index + 1) == 'X');
+    }
+
+    // parseDouble 要求十六进制带 p 指数。C strtod 把缺省指数当成 0，所以 0x10 是 16 而不是错误。
+    private static double parseHex(String text) {
+        String normalized = hasBinaryExponent(text) ? text : text + "p0";
+        double value;
+        try {
+            value = Double.parseDouble(normalized);
+        } catch (NumberFormatException failure) {
+            throw invalid();
+        }
+        if (!Double.isFinite(value) || hexLiteralUnderflowedToZero(text, value)) {
+            throw invalid();
+        }
+        return value;
+    }
+
+    private static boolean hasBinaryExponent(String text) {
+        int index = 0;
+        if (text.charAt(0) == '+' || text.charAt(0) == '-') {
+            index++;
+        }
+        index += 2;
+        for (int cursor = index; cursor < text.length(); cursor++) {
+            char current = text.charAt(cursor);
+            if (current == 'p' || current == 'P') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hexLiteralUnderflowedToZero(String text, double value) {
+        if (value != 0.0d) {
+            return false;
+        }
+        int index = (text.charAt(0) == '+' || text.charAt(0) == '-') ? 1 : 0;
+        index += 2;
+        boolean nonzero = false;
+        for (; index < text.length(); index++) {
+            char current = text.charAt(index);
+            if (current == 'p' || current == 'P') {
+                break;
+            }
+            if (current == '.') {
+                continue;
+            }
+            int digit = Character.digit(current, 16);
+            if (digit < 0) {
+                return false;
+            }
+            if (digit != 0) {
+                nonzero = true;
+            }
+        }
+        return nonzero;
+    }
+
+    private static boolean hasJavaFloatSuffix(String text) {
+        char last = text.charAt(text.length() - 1);
+        return last == 'd' || last == 'D' || last == 'f' || last == 'F';
     }
 
     private static boolean isInfinitySpelling(String text) {
