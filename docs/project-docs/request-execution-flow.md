@@ -261,7 +261,7 @@ backlog 预算由 `ExecutorBacklogBudget` 统一记账：`tryReserve(retainedByt
 
 ## 事务和 replay
 
-事务队列保存的是自己拥有的 retained `ExecutionRequest`，不是另一套命令 IR。`MULTI` 中的 queueable 命令会先经过同一个 registry lookup、arity 校验和 `handler.parse(CommandArgs)`；只有这些 preflight 成功，排队用的 prepared action 才会在 reply reservation 后调用 `TransactionState.tryEnqueue(request)` 并返回 `QUEUED`。此时不会把 session 应用到 handler 返回的 function，也不会访问 DB。队列满（命令数或字节数超限）时 `tryEnqueue` 置 `aborted` 并返回 `ERR Transaction queue is full`。
+事务队列保存的是自己拥有的 retained `ExecutionRequest`，不是另一套命令 IR。`MULTI` 中的 queueable 命令会先经过同一个 registry lookup、arity 校验和 `handler.parse(CommandArgs)`。参数个数不对拒绝入队并作废事务；其余解析错误仍入队。排队用的 prepared action 在 reply reservation 后调用 `TransactionState.tryEnqueue(request)` 并返回 `QUEUED`。此时不会把 session 应用到 handler 返回的 function，也不会访问 DB。队列满（命令数或字节数超限）时 `tryEnqueue` 置 `aborted` 并返回 `ERR Transaction queue is full`。
 
 `EXEC` 重放每条 retained request 时调用 `CommandDispatcher.prepareExecReplay(...)`（复用 `prepare(..., false)`，只跳过再次排队）。每条 child 依次 `validateBeforeExecute()`，`STALE` 时关闭并重试 prepare；随后 `execute(session)`。子命令返回的 `RedisReply` 收集成外层数组，`PreparedExec.execute` 只返回一个聚合结果，executor 最终只调用一次 `RedisReplyRenderer`。
 

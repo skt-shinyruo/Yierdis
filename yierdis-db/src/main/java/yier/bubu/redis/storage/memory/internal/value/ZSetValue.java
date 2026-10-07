@@ -25,7 +25,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
-import java.nio.charset.StandardCharsets;
+import yier.bubu.redis.bytes.FpconvDtoa;
 
 public final class ZSetValue implements YierdisValue {
     // newScore 仅服务 INCR：未被 NX/XX/GT/LT 阻挡时携带按 Redis 双精度格式渲染的结果分数。
@@ -875,12 +875,8 @@ public final class ZSetValue implements YierdisValue {
             ScoreRangeQuery query,
             IntConsumer selectedIndex
     ) {
-        int first = query.min() == Double.NEGATIVE_INFINITY
-                ? 0
-                : firstIndexForMin(query.min(), query.minExclusive());
-        int last = query.max() == Double.POSITIVE_INFINITY
-                ? listpack.size() - 1
-                : lastIndexForMax(query.max(), query.maxExclusive());
+        int first = firstIndexForMin(query.min(), query.minExclusive());
+        int last = lastIndexForMax(query.max(), query.maxExclusive());
         if (first > last) {
             return 0;
         }
@@ -961,16 +957,10 @@ public final class ZSetValue implements YierdisValue {
     }
 
     private ZSkipList.Node firstNodeForMin(double min, boolean minExclusive) {
-        if (min == Double.NEGATIVE_INFINITY) {
-            return byScore.first();
-        }
         return byScore.findFirstByScore(min, minExclusive);
     }
 
     private ZSkipList.Node lastNodeForMax(double max, boolean maxExclusive) {
-        if (max == Double.POSITIVE_INFINITY) {
-            return byScore.last();
-        }
         return byScore.findLastByScore(max, maxExclusive);
     }
 
@@ -1092,8 +1082,8 @@ public final class ZSetValue implements YierdisValue {
         } catch (NumberFormatException failure) {
             throw new YierdisCommandException("ERR value is not a valid float");
         }
-        // 负零与正零比较相等。写入前折成正零，保存下去的分数不带符号位。
-        return parsed == 0.0d ? 0.0d : parsed;
+        // -0 必须留到 d2string：ZADD INCR -0 的回复是 "-0"。比较时 -0 与 +0 仍然相等。
+        return parsed;
     }
 
     private static boolean scoresEqual(double left, double right) {
@@ -1104,71 +1094,17 @@ public final class ZSetValue implements YierdisValue {
         return left < right ? -1 : left > right ? 1 : 0;
     }
 
-    // Redis 在 WITHSCORES 输出中把 ±inf 分数渲染为 "inf"/"-inf"；有限值返回 null，由调用方走常规格式化。
-    private static byte[] infiniteScoreBytes(double score) {
-        if (!Double.isInfinite(score)) {
-            return null;
-        }
-        return (score > 0 ? "inf" : "-inf").getBytes(StandardCharsets.US_ASCII);
-    }
-
     private static byte[] formatScoreBytes(double score) {
-        byte[] infinite = infiniteScoreBytes(score);
-        if (infinite != null) {
-            return infinite;
-        }
-        if (integralScore(score)) {
-            return Long.toString((long) score).getBytes(StandardCharsets.US_ASCII);
-        }
-        return finiteScoreText(score).getBytes(StandardCharsets.US_ASCII);
+        return FpconvDtoa.d2string(score).getBytes(java.nio.charset.StandardCharsets.US_ASCII);
     }
 
     private static void addScoreElement(NativeCollectionScanWindow.Builder builder, double score) {
-        byte[] infinite = infiniteScoreBytes(score);
-        if (infinite != null) {
-            builder.addBytes(infinite);
-            return;
-        }
-        if (integralScore(score)) {
-            builder.addLong((long) score);
-            return;
-        }
-        builder.addBytes(finiteScoreText(score).getBytes(StandardCharsets.US_ASCII));
+        builder.addBytes(formatScoreBytes(score));
     }
 
     private static void writeScoreTo(ByteValueSink out, double score) {
-        byte[] infinite = infiniteScoreBytes(score);
-        if (infinite != null) {
-            out.value(infinite, 0, infinite.length);
-            return;
-        }
-        if (integralScore(score)) {
-            out.longAscii((long) score);
-            return;
-        }
-        byte[] encoded = finiteScoreText(score).getBytes(StandardCharsets.US_ASCII);
+        byte[] encoded = formatScoreBytes(score);
         out.value(encoded, 0, encoded.length);
-    }
-
-    private static boolean integralScore(double score) {
-        return score == Math.rint(score) && score >= Long.MIN_VALUE && score <= Long.MAX_VALUE;
-    }
-
-    // Java Double.toString 写出 "1.0E22" / "1.0E-7"。Redis 的分数文本是 "1e+22" / "1e-7"：
-    // 正指数带 '+'，去掉尾部 ".0"，指数记号用 'e'。整数和 inf 不走这里。-0.0 在整数分支里变成 "0"。
-    private static String finiteScoreText(double score) {
-        String java = Double.toString(score);
-        int exponentMark = java.indexOf('E');
-        if (exponentMark < 0) {
-            return java;
-        }
-        String mantissa = java.substring(0, exponentMark);
-        if (mantissa.endsWith(".0")) {
-            mantissa = mantissa.substring(0, mantissa.length() - 2);
-        }
-        boolean negativeExponent = java.charAt(exponentMark + 1) == '-';
-        int exponent = Integer.parseInt(java.substring(exponentMark + (negativeExponent ? 2 : 1)));
-        return mantissa + (negativeExponent ? "e-" : "e+") + exponent;
     }
 
     private List<FinalMember> finalMembers(ZAddPlanEntry[] entries) {

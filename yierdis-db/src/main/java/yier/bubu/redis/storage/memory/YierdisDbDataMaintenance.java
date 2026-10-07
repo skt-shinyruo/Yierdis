@@ -19,7 +19,6 @@ import java.util.Objects;
 
 final class YierdisDbDataMaintenance {
     private static final long MAINTENANCE_REHASH_MAX_INSPECTED_SLOTS = 64L;
-    private static final int ASYNC_FLUSH_RECLAIM_MAX_ENTRIES = 64;
 
     private final YierdisDbRuntimeState runtimeState;
     private final YierdisDbStorage storage;
@@ -303,6 +302,8 @@ final class YierdisDbDataMaintenance {
         runtimeState.checkThread();
         storage.clearData();
         keyLifecycle.resetExpirationTracking();
+        // 同步 FLUSH 要在回复前把页和 metadata 还回空库，否则 used_memory 仍占着 maxmemory。
+        returnFreedNativeCapacity();
     }
 
     private void commitFlushDbAsync() {
@@ -314,9 +315,10 @@ final class YierdisDbDataMaintenance {
 
     private void reclaimDetachedEntries() {
         try {
-            int reclaimed = reclaimDetachedEntries(ASYNC_FLUSH_RECLAIM_MAX_ENTRIES);
-            if (reclaimed > 0) {
-                memoryContext.trimEmptyNativePages(MemoryPressureBudget.UNLIMITED);
+            // 一次维护回收完分离目录。按固定 64 个一拍，metadata 会以大约每秒几十个 key 的速度才回到空库。
+            int reclaimed = reclaimDetachedEntriesUnchecked(Integer.MAX_VALUE);
+            if (reclaimed > 0 && storage.detachedEntryCount() == 0L) {
+                returnFreedNativeCapacity();
             }
         } catch (RuntimeException | Error failure) {
             health.recordInvariantFailure(failure);
@@ -324,16 +326,16 @@ final class YierdisDbDataMaintenance {
         }
     }
 
+    private void returnFreedNativeCapacity() {
+        memoryContext.trimEmptyNativePages(MemoryPressureBudget.UNLIMITED);
+        memoryContext.releaseUnusedNativeMetadata();
+    }
+
     private FlushPreparation prepareFlushDb() {
         runtimeState.checkThread();
         boolean hadKeys = keyLifecycle.keyCount() != 0;
         boolean hadTtl = keyLifecycle.expireCount() != 0;
         return new FlushPreparation(MutationOutcome.of(hadKeys, hadTtl), -ledger.usedBytes());
-    }
-
-    private int reclaimDetachedEntries(int maxEntries) {
-        runtimeState.checkThread();
-        return reclaimDetachedEntriesUnchecked(maxEntries);
     }
 
     private int reclaimDetachedEntriesUnchecked(int maxEntries) {

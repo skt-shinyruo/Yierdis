@@ -5,10 +5,10 @@ import org.junit.Test;
 
 public class MemoryUsageSnapshotTest {
     @Test
-    public void effectiveBytesUsePhysicalCommittedMemory() {
+    public void effectiveBytesChargeLiveNativeData() {
         MemoryUsageSnapshot usage = new MemoryUsageSnapshot(7, 11, 13, 5, 8);
 
-        Assert.assertEquals(31L, usage.effectiveBytesForMaxmemory());
+        Assert.assertEquals(23L, usage.effectiveBytesForMaxmemory());
     }
 
     @Test

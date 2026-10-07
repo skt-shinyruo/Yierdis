@@ -8,6 +8,7 @@ import yier.bubu.redis.storage.api.DbDefragConfig;
 import yier.bubu.redis.storage.api.DbEngineConfig;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.testutil.FastTestClient;
+import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyError;
 import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplyObject;
@@ -246,6 +247,24 @@ public class HllCommandTest {
                 ReplyObject mergeErr = client.execute(Arrays.asList(b("PFMERGE"), b("k"), b("real-hll")));
                 Assert.assertTrue(mergeErr instanceof ReplyError);
                 Assert.assertEquals("WRONGTYPE Key is not a valid HyperLogLog string value.", ((ReplyError) mergeErr).message());
+            }
+        });
+    }
+
+    @Test
+    public void emptyPfaddMarksTheCardinalityCacheInvalid() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(cmd("PFADD", "h"))).value());
+                byte[] raw = ((ReplyBulkString) client.execute(cmd("GET", "h"))).data();
+                Assert.assertEquals((byte) 0x80, raw[15]);
+                Assert.assertEquals(0L, ((ReplyInteger) client.execute(cmd("PFCOUNT", "h"))).value());
+
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(cmd("PFADD", "h", "a"))).value());
+                byte[] withElement = ((ReplyBulkString) client.execute(cmd("GET", "h"))).data();
+                Assert.assertEquals((byte) 0x80, withElement[15]);
             }
         });
     }

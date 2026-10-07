@@ -1,9 +1,11 @@
 package yier.bubu.redis.command.defaults.zset;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Supplier;
+import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.String2d;
 import yier.bubu.redis.command.api.CommandArgs;
 import yier.bubu.redis.command.api.CommandArity;
@@ -28,6 +30,7 @@ import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.storage.api.ZAddOptions;
 import yier.bubu.redis.storage.api.ZAddOutcome;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
+import yier.bubu.redis.storage.api.result.ByteValueSink;
 
 public final class ZSetCommands {
     private static final String SYNTAX_ERROR = "ERR syntax error";
@@ -69,8 +72,8 @@ public final class ZSetCommands {
         return new CommandSyntax(nameUpper, arity, KEY, TransactionPolicy.QUEUEABLE);
     }
 
-    // flag 解析与 Redis zaddGenericCommand 同序：先数对（syntax error），再组合错误，最后校验分数，
-    // 这样非法组合在 MULTI preflight 阶段就 EXECABORT，且错误文案与 Redis 一致。
+    // flag 解析与 Redis zaddGenericCommand 同序：先数对（syntax error），再组合错误，最后校验分数。
+    // 这些错误文案与 Redis 一致；在 MULTI 里它们入队，EXEC 时只有这一条失败。
     private Function<CommandSession, PreparedCommand> zadd(CommandArgs args) {
         int index = 2;
         boolean nx = false;
@@ -173,7 +176,7 @@ public final class ZSetCommands {
             ZRangeArgs args,
             yier.bubu.redis.execution.api.CommandSession session
     ) {
-        return prepareSequence(() -> args.direction() == RangeDirection.REVERSE
+        return scoreReply(session, args.withScores(), () -> args.direction() == RangeDirection.REVERSE
                 ? support.commandDb(session).zsets()
                         .zrevrange(args.key(), args.start(), args.stop(), args.withScores())
                 : support.commandDb(session).zsets()
@@ -206,7 +209,7 @@ public final class ZSetCommands {
                 if (index + 2 >= args.argc()) {
                     throw syntaxFailure();
                 }
-                offset = args.nonNegativeLongAt(index + 1);
+                offset = args.longAt(index + 1);
                 long requestedCount = args.longAt(index + 2);
                 count = requestedCount < 0L ? Long.MAX_VALUE : requestedCount;
                 index += 3;
@@ -224,7 +227,7 @@ public final class ZSetCommands {
             ZRangeByScoreArgs args,
             yier.bubu.redis.execution.api.CommandSession session
     ) {
-        return prepareSequence(() -> args.direction() == RangeDirection.REVERSE
+        return scoreReply(session, args.withScores(), () -> args.direction() == RangeDirection.REVERSE
                 ? support.commandDb(session).zsets().zrevrangeByScore(
                         args.key(), args.min().value(), args.min().exclusive(),
                         args.max().value(), args.max().exclusive(),
@@ -271,19 +274,74 @@ public final class ZSetCommands {
                         parsed.key(), parsed.cursor(), parsed.match(), parsed.count()));
     }
 
-    private static PreparedCommand ownedSequence(ByteSequenceSource source) {
-        RedisReply reply = DbReplies.sequence(source);
-        return PreparedCommands.owned(CommandResult.reply(reply), source);
-    }
-
-    private static PreparedCommand prepareSequence(Supplier<ByteSequenceSource> read) {
+    private PreparedCommand scoreReply(
+            CommandSession session,
+            boolean withScores,
+            Supplier<ByteSequenceSource> read
+    ) {
         ByteSequenceSource source;
         try {
             source = read.get();
         } catch (IllegalArgumentException failure) {
             return PreparedCommands.ready(RedisReplies.error("ERR " + failure.getMessage()));
         }
+        // RESP3 的 WITHSCORES 是 [member, score] 二元数组。分数仍是 bulk string，没有 RESP3 double。
+        if (withScores && session.respVersion() >= 3) {
+            return ownedNestedScores(source);
+        }
         return ownedSequence(source);
+    }
+
+    private static PreparedCommand ownedNestedScores(ByteSequenceSource source) {
+        ArrayList<byte[]> flat = new ArrayList<>();
+        source.emitTo(new ByteValueSink() {
+            @Override
+            public void value(byte[] data) {
+                flat.add(data == null ? new byte[0] : data.clone());
+            }
+
+            @Override
+            public void value(byte[] data, int offset, int length) {
+                byte[] copy = new byte[length];
+                if (data != null && length > 0) {
+                    System.arraycopy(data, offset, copy, 0, length);
+                }
+                flat.add(copy);
+            }
+
+            @Override
+            public void value(BytesSlice slice) {
+                byte[] copy = new byte[slice.length()];
+                slice.getBytes(0, copy, 0, copy.length);
+                flat.add(copy);
+            }
+
+            @Override
+            public void longAscii(long value) {
+                flat.add(Long.toString(value).getBytes(StandardCharsets.US_ASCII));
+            }
+
+            @Override
+            public void nullValue() {
+                flat.add(new byte[0]);
+            }
+        });
+        if ((flat.size() & 1) != 0) {
+            throw new IllegalStateException("WITHSCORES sequence must contain member/score pairs");
+        }
+        ArrayList<RedisReply> pairs = new ArrayList<>(flat.size() / 2);
+        for (int index = 0; index < flat.size(); index += 2) {
+            pairs.add(RedisReplies.array(List.of(
+                    RedisReplies.bulkString(flat.get(index)),
+                    RedisReplies.bulkString(flat.get(index + 1))
+            )));
+        }
+        return PreparedCommands.owned(CommandResult.reply(RedisReplies.array(pairs)), source);
+    }
+
+    private static PreparedCommand ownedSequence(ByteSequenceSource source) {
+        RedisReply reply = DbReplies.sequence(source);
+        return PreparedCommands.owned(CommandResult.reply(reply), source);
     }
 
     private static double parseScore(byte[] raw) {
@@ -312,11 +370,19 @@ public final class ZSetCommands {
         }
 
         String value = new String(raw, start, raw.length - start, StandardCharsets.US_ASCII);
-        if ("-inf".equalsIgnoreCase(value)) {
+        // Redis 8.0.2 的 zslParseRange 不剥空白，也不接受十六进制。8.10.2 这两点不同，这里不跟。
+        // inf 以 f 结尾，必须先于 Java 浮点后缀判断，否则 +inf 会被当成 后缀错误。
+        if (hasBoundWhitespace(value) || isHexBound(value)) {
+            throw new CommandParseException(SCORE_BOUND_ERROR);
+        }
+        if (isNegativeInfinitySpelling(value)) {
             return new ScoreBound(Double.NEGATIVE_INFINITY, exclusive);
         }
-        if ("+inf".equalsIgnoreCase(value) || "inf".equalsIgnoreCase(value)) {
+        if (isPositiveInfinitySpelling(value)) {
             return new ScoreBound(Double.POSITIVE_INFINITY, exclusive);
+        }
+        if (hasJavaFloatSuffix(value)) {
+            throw new CommandParseException(SCORE_BOUND_ERROR);
         }
         double parsed;
         try {
@@ -324,10 +390,55 @@ public final class ZSetCommands {
         } catch (NumberFormatException failure) {
             throw new CommandParseException(SCORE_BOUND_ERROR);
         }
-        if (!Double.isFinite(parsed)) {
+        if (Double.isNaN(parsed)) {
             throw new CommandParseException(SCORE_BOUND_ERROR);
         }
+        // 1e309 在边界上是 ±inf，不像 ZADD 分数那样因上溢拒绝。
         return new ScoreBound(parsed, exclusive);
+    }
+
+    private static boolean hasBoundWhitespace(String value) {
+        if (value.isEmpty()) {
+            return true;
+        }
+        return isBoundSpace(value.charAt(0)) || isBoundSpace(value.charAt(value.length() - 1));
+    }
+
+    private static boolean isBoundSpace(char value) {
+        return value == ' ' || value == '\t' || value == '\n' || value == '\r' || value == '\f' || value == 0x0b;
+    }
+
+    private static boolean isHexBound(String value) {
+        int index = (value.charAt(0) == '+' || value.charAt(0) == '-') ? 1 : 0;
+        return value.length() >= index + 2
+                && value.charAt(index) == '0'
+                && (value.charAt(index + 1) == 'x' || value.charAt(index + 1) == 'X');
+    }
+
+    private static boolean hasJavaFloatSuffix(String value) {
+        char last = value.charAt(value.length() - 1);
+        return last == 'd' || last == 'D' || last == 'f' || last == 'F';
+    }
+
+    private static boolean isNegativeInfinitySpelling(String value) {
+        String body = infinityBody(value);
+        return body != null && value.charAt(0) == '-' && (body.equals("inf") || body.equals("infinity"));
+    }
+
+    private static boolean isPositiveInfinitySpelling(String value) {
+        String body = infinityBody(value);
+        return body != null && value.charAt(0) != '-' && (body.equals("inf") || body.equals("infinity"));
+    }
+
+    private static String infinityBody(String value) {
+        String lowered = value.toLowerCase(java.util.Locale.ROOT);
+        if (lowered.startsWith("+") || lowered.startsWith("-")) {
+            lowered = lowered.substring(1);
+        }
+        if (lowered.equals("inf") || lowered.equals("infinity")) {
+            return lowered;
+        }
+        return null;
     }
 
     private static CommandParseException syntaxFailure() {

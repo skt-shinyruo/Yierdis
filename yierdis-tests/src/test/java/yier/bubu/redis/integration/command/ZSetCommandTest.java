@@ -3,6 +3,7 @@ package yier.bubu.redis.integration.command;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.kernel.CommandDispatcher;
+import yier.bubu.redis.execution.engine.EngineSession;
 import yier.bubu.redis.storage.api.DbEngine;
 import yier.bubu.redis.storage.api.ZSetOps;
 import yier.bubu.redis.testutil.FastTestClient;
@@ -71,6 +72,42 @@ public class ZSetCommandTest {
     }
 
     @Test
+    public void zaddScoreLiteralsFollowRedis802String2d() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("z-literals");
+
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("1d"), b("m"))),
+                        "ERR value is not a valid float");
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("1f"), b("m"))),
+                        "ERR value is not a valid float");
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("1D"), b("m"))),
+                        "ERR value is not a valid float");
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("1F"), b("m"))),
+                        "ERR value is not a valid float");
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("INCR"), b("1d"), b("m"))),
+                        "ERR value is not a valid float");
+                Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key))).value());
+
+                Assert.assertEquals(5L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key,
+                        b("0x10"), b("hex"),
+                        b("-0x10"), b("neg"),
+                        b("0X1A"), b("upper"),
+                        b("0x1.8"), b("frac"),
+                        b("0x1p3"), b("exp")))).value());
+                ReplyArray range = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGE"), key, b("0"), b("-1"), b("WITHSCORES")));
+                Assert.assertEquals(
+                        List.of("neg", "-16", "frac", "1.5", "exp", "8", "hex", "16", "upper", "26"),
+                        bulkStrings(range));
+            }
+        });
+    }
+
+    @Test
     public void zaddRejectsDecimalScoresThatOverflowToInfinity() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
@@ -133,7 +170,7 @@ public class ZSetCommandTest {
                         b("ZADD"), key, b("1.5"), b("decimal")))).value());
                 Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
                         b("ZADD"), key, b("1e-323"), b("subnormal")))).value());
-                // Redis 8.9.241：1e-7 的原始分数文本是 "1e-7"，1e22 是 "1e+22"。
+                // 1e-7 与 1e22 走 Redis 8.0.2 d2string，分别是 "1e-7" 和 "1e+22"。
                 Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
                         b("ZADD"), key, b("1e-7"), b("tiny")))).value());
                 Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
@@ -144,16 +181,16 @@ public class ZSetCommandTest {
                 Assert.assertEquals(
                         List.of(
                                 "exactzero", "0",
-                                "negzero", "0",
-                                "subnormal", "9.9e-324",
+                                "negzero", "-0",
+                                "subnormal", "1e-323",
                                 "tiny", "1e-7",
                                 "decimal", "1.5",
                                 "sci", "100",
                                 "huge", "1e+22"),
                         bulkStrings(range));
 
-                // ZADD INCR 与 ZRANGE 共用同一套分数文本。-0 的原始回复是 "0"，不是 "-0"。
-                Assert.assertEquals("0", ((ReplyBulkString) client.execute(Arrays.asList(
+                // ZADD INCR 与 ZRANGE 共用 Redis 8.0.2 d2string。新成员 -0 的回复是 "-0"。
+                Assert.assertEquals("-0", ((ReplyBulkString) client.execute(Arrays.asList(
                         b("ZADD"), b("incr-zero"), b("INCR"), b("-0"), b("m")))).asString());
                 Assert.assertEquals("1e-7", ((ReplyBulkString) client.execute(Arrays.asList(
                         b("ZADD"), b("incr-tiny"), b("INCR"), b("1e-7"), b("m")))).asString());
@@ -164,7 +201,7 @@ public class ZSetCommandTest {
     }
 
     @Test
-    public void rangeByScoreStillAcceptsWhitespaceAndUnderflowLiterals() {
+    public void rangeBoundsFollowRedis802Literals() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             {
@@ -177,22 +214,37 @@ public class ZSetCommandTest {
                         b("ZRANGEBYSCORE"), key, b("1e-400"), b("+inf")));
                 Assert.assertEquals(List.of("zero", "one"), bulkStrings(fromUnderflowLiteral));
 
-                ReplyArray fromSpacedMin = (ReplyArray) client.execute(Arrays.asList(
-                        b("ZRANGEBYSCORE"), key, b(" 1"), b("+inf")));
-                Assert.assertEquals(List.of("one"), bulkStrings(fromSpacedMin));
+                assertError(
+                        client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b(" 1"), b("+inf"))),
+                        "ERR min or max is not a float");
+                assertError(
+                        client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("-inf"), b("1 "))),
+                        "ERR min or max is not a float");
+                assertError(
+                        client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("1d"), b("+inf"))),
+                        "ERR min or max is not a float");
+                assertError(
+                        client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("0x10"), b("+inf"))),
+                        "ERR min or max is not a float");
+                assertError(
+                        client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("0x1p3"), b("+inf"))),
+                        "ERR min or max is not a float");
+                assertError(
+                        client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("0x1.8"), b("+inf"))),
+                        "ERR min or max is not a float");
 
                 ReplyArray exclusive = (ReplyArray) client.execute(Arrays.asList(
                         b("ZRANGEBYSCORE"), key, b("(0"), b("+inf")));
                 Assert.assertEquals(List.of("one"), bulkStrings(exclusive));
 
-                assertError(
-                        client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("1e309"), b("+inf"))),
-                        "ERR min or max is not a float");
-                assertError(
-                        client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("infinity"), b("+inf"))),
-                        "ERR min or max is not a float");
+                ReplyArray overflow = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGEBYSCORE"), key, b("-inf"), b("1e309")));
+                Assert.assertEquals(List.of("zero", "one"), bulkStrings(overflow));
+                ReplyArray infinity = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGEBYSCORE"), key, b("-inf"), b("infinity")));
+                Assert.assertEquals(List.of("zero", "one"), bulkStrings(infinity));
                 ReplyArray reversed = (ReplyArray) client.execute(Arrays.asList(
-                        b("ZREVRANGEBYSCORE"), key, b("+inf"), b("1e-400")));
+                        b("ZREVRANGEBYSCORE"), key, b("Infinity"), b("1e-400")));
                 Assert.assertEquals(List.of("one", "zero"), bulkStrings(reversed));
             }
         });
@@ -467,28 +519,40 @@ public class ZSetCommandTest {
     }
 
     @Test
-    public void zaddIncompatibleFlagsInsideMultiAbortTransaction() {
+    public void zaddIncompatibleFlagsInsideMultiFailOnlyThoseCommands() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             {
                 FastTestClient client = new FastTestClient(dispatcher);
                 byte[] key = b("zcombo:multi");
+                client.execute(List.of(b("FLUSHDB")));
 
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
                 Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(Arrays.asList(
                         b("ZADD"), key, b("1"), b("seed")))).value());
-                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("NX"), b("XX"), b("1"), b("a"))),
-                        "ERR XX and NX options at the same time are not compatible");
-                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("GT"), b("NX"), b("1"), b("a"))),
-                        "ERR GT, LT, and/or NX options at the same time are not compatible");
-                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("INCR"), b("1"), b("a"), b("2"), b("b"))),
-                        "ERR INCR option supports a single increment-element pair");
+                Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("NX"), b("XX"), b("1"), b("a")))).value());
+                Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("GT"), b("NX"), b("1"), b("a")))).value());
+                Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(Arrays.asList(
+                        b("ZADD"), key, b("INCR"), b("1"), b("a"), b("2"), b("b")))).value());
 
-                ReplyObject exec = client.execute(List.of(b("EXEC")));
-                Assert.assertTrue(exec instanceof ReplyError);
-                Assert.assertEquals("EXECABORT Transaction discarded because of previous errors.",
-                        ((ReplyError) exec).message());
-                Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key))).value());
+                ReplyArray exec = (ReplyArray) client.execute(List.of(b("EXEC")));
+                Assert.assertEquals(4, exec.values().size());
+                Assert.assertEquals(1L, ((ReplyInteger) exec.values().get(0)).value());
+                Assert.assertEquals(
+                        "ERR XX and NX options at the same time are not compatible",
+                        ((ReplyError) exec.values().get(1)).message()
+                );
+                Assert.assertEquals(
+                        "ERR GT, LT, and/or NX options at the same time are not compatible",
+                        ((ReplyError) exec.values().get(2)).message()
+                );
+                Assert.assertEquals(
+                        "ERR INCR option supports a single increment-element pair",
+                        ((ReplyError) exec.values().get(3)).message()
+                );
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key))).value());
             }
         });
     }
@@ -1002,6 +1066,145 @@ public class ZSetCommandTest {
         });
     }
 
+    @Test
+    public void negativeLimitOffsetIsEmptyAfterTheTypeCheck() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("zrangebyscore:negative-offset");
+                client.execute(Arrays.asList(b("ZADD"), key, b("1"), b("a")));
+
+                ReplyArray forward = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGEBYSCORE"), key, b("0"), b("2"), b("LIMIT"), b("-1"), b("1")));
+                Assert.assertEquals(0, forward.values().size());
+                ReplyArray reverse = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZREVRANGEBYSCORE"), key, b("2"), b("0"), b("LIMIT"), b("-5"), b("-1")));
+                Assert.assertEquals(0, reverse.values().size());
+
+                ReplyArray missing = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGEBYSCORE"), b("missing"), b("0"), b("1"), b("LIMIT"), b("-1"), b("1")));
+                Assert.assertEquals(0, missing.values().size());
+
+                client.execute(Arrays.asList(b("SET"), b("str"), b("v")));
+                assertError(client.execute(Arrays.asList(
+                        b("ZRANGEBYSCORE"), b("str"), b("0"), b("1"), b("LIMIT"), b("-1"), b("1"))),
+                        "WRONGTYPE Operation against a key holding the wrong kind of value");
+
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+                Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(Arrays.asList(
+                        b("ZRANGEBYSCORE"), key, b("0"), b("2"), b("LIMIT"), b("-1"), b("1")))).value());
+                ReplyArray exec = (ReplyArray) client.execute(List.of(b("EXEC")));
+                Assert.assertEquals(1, exec.values().size());
+                Assert.assertEquals(0, ((ReplyArray) exec.values().get(0)).values().size());
+            }
+        });
+    }
+
+    @Test
+    public void withScoresNestsPairsOnlyInResp3() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient resp2 = new FastTestClient(dispatcher);
+                byte[] key = b("z-withscores");
+                resp2.execute(Arrays.asList(b("ZADD"), key, b("1"), b("a"), b("2.5"), b("b")));
+
+                ReplyArray flat = (ReplyArray) resp2.execute(Arrays.asList(
+                        b("ZRANGE"), key, b("0"), b("-1"), b("WITHSCORES")));
+                Assert.assertEquals(List.of("a", "1", "b", "2.5"), bulkStrings(flat));
+
+                EngineSession session = new EngineSession(0, 0);
+                session.setRespVersion(3);
+                FastTestClient resp3 = new FastTestClient(dispatcher, session);
+                assertScorePairs(resp3.execute(Arrays.asList(
+                        b("ZRANGE"), key, b("0"), b("-1"), b("WITHSCORES"))),
+                        List.of("a", "1", "b", "2.5"));
+                assertScorePairs(resp3.execute(Arrays.asList(
+                        b("ZREVRANGE"), key, b("0"), b("-1"), b("WITHSCORES"))),
+                        List.of("b", "2.5", "a", "1"));
+                assertScorePairs(resp3.execute(Arrays.asList(
+                        b("ZRANGEBYSCORE"), key, b("-inf"), b("+inf"), b("WITHSCORES"))),
+                        List.of("a", "1", "b", "2.5"));
+                assertScorePairs(resp3.execute(Arrays.asList(
+                        b("ZREVRANGEBYSCORE"), key, b("+inf"), b("-inf"), b("WITHSCORES"))),
+                        List.of("b", "2.5", "a", "1"));
+
+                ReplyArray membersOnly = (ReplyArray) resp3.execute(Arrays.asList(
+                        b("ZRANGE"), key, b("0"), b("-1")));
+                Assert.assertEquals(List.of("a", "b"), bulkStrings(membersOnly));
+
+                ReplyArray empty = (ReplyArray) resp3.execute(Arrays.asList(
+                        b("ZRANGE"), b("missing"), b("0"), b("-1"), b("WITHSCORES")));
+                Assert.assertEquals(0, empty.values().size());
+
+                Assert.assertTrue(resp3.execute(Arrays.asList(
+                        b("ZADD"), key, b("INCR"), b("1"), b("a"))) instanceof ReplyBulkString);
+            }
+        });
+    }
+
+    private static void assertScorePairs(ReplyObject reply, List<String> flatPairs) {
+        ReplyArray outer = (ReplyArray) reply;
+        Assert.assertEquals(flatPairs.size() / 2, outer.values().size());
+        for (int index = 0; index < outer.values().size(); index++) {
+            ReplyArray pair = (ReplyArray) outer.values().get(index);
+            Assert.assertEquals(2, pair.values().size());
+            Assert.assertEquals(flatPairs.get(index * 2), ((ReplyBulkString) pair.values().get(0)).asString());
+            Assert.assertEquals(flatPairs.get(index * 2 + 1), ((ReplyBulkString) pair.values().get(1)).asString());
+        }
+    }
+
+    @Test
+    public void finiteScoresUseRedisD2string() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("z-d2string");
+                client.execute(Arrays.asList(
+                        b("ZADD"), key,
+                        b("0.000001"), b("a"),
+                        b("0.00001"), b("b"),
+                        b("0.0005"), b("c"),
+                        b("5e-324"), b("d"),
+                        b("1e-323"), b("e"),
+                        b("1759740000.123456"), b("ts"),
+                        b("1759740000.5"), b("half"),
+                        b("1759740000123.25"), b("wide"),
+                        b("12345.6789012"), b("sci1"),
+                        b("14169.626117023414"), b("sci2"),
+                        b("5.34e18"), b("big"),
+                        b("7.055553895214843e18"), b("rounded")));
+                ReplyArray range = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGE"), key, b("0"), b("-1"), b("WITHSCORES")));
+                Assert.assertEquals(
+                        List.of(
+                                "d", "5e-324",
+                                "e", "1e-323",
+                                "a", "0.000001",
+                                "b", "0.00001",
+                                "c", "0.0005",
+                                "sci1", "1.23456789012e+4",
+                                "sci2", "1.4169626117023414e+4",
+                                "ts", "1759740000.123456",
+                                "half", "1759740000.5",
+                                "wide", "1759740000123.25",
+                                "big", "5.34e+18",
+                                "rounded", "7055553895214843000"),
+                        bulkStrings(range));
+                for (int index = 1; index < range.values().size(); index += 2) {
+                    double parsed = Double.parseDouble(((ReplyBulkString) range.values().get(index)).asString());
+                    Assert.assertEquals(Double.parseDouble(List.of(
+                            "5e-324", "1e-323", "0.000001", "0.00001", "0.0005",
+                            "12345.6789012", "14169.626117023414", "1759740000.123456",
+                            "1759740000.5", "1759740000123.25", "5.34e18",
+                            "7.055553895214843e18").get(index / 2)), parsed, 0.0d);
+                }
+            }
+        });
+    }
+
     private static List<String> bulkStrings(ReplyArray array) {
         List<String> rendered = new ArrayList<>(array.values().size());
         for (ReplyObject element : array.values()) {
@@ -1033,6 +1236,81 @@ public class ZSetCommandTest {
                 type.getClassLoader(),
                 new Class<?>[]{type},
                 handler));
+    }
+
+    @Test
+    public void exclusiveInfinityBoundsApplyOnBothEncodings() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            FastTestClient client = new FastTestClient(dispatcher);
+            assertExclusiveInfinityBounds(client, false);
+            assertExclusiveInfinityBounds(client, true);
+        });
+    }
+
+    private static void assertExclusiveInfinityBounds(FastTestClient client, boolean skiplist) {
+        byte[] key = b(skiplist ? "z-large" : "z-small");
+        ArrayList<byte[]> zadd = new ArrayList<>();
+        zadd.add(b("ZADD"));
+        zadd.add(key);
+        zadd.add(b("-inf"));
+        zadd.add(b("ninf"));
+        zadd.add(b("0"));
+        zadd.add(b("zero"));
+        if (skiplist) {
+            for (int index = 0; index < 200; index++) {
+                zadd.add(b(Integer.toString(index + 1)));
+                zadd.add(b("f" + index));
+            }
+        }
+        zadd.add(b("+inf"));
+        zadd.add(b("pinf"));
+        Assert.assertEquals(skiplist ? 203L : 3L, ((ReplyInteger) client.execute(zadd)).value());
+
+        Assert.assertEquals(List.of("zero"), members(client, b("ZRANGEBYSCORE"), key, b("(-inf"), b("0")));
+        Assert.assertEquals(
+                skiplist ? List.of("f199") : List.of(),
+                members(client, b("ZRANGEBYSCORE"), key, b("200"), b("(+inf")));
+        Assert.assertEquals(List.of("zero"), members(client, b("ZREVRANGEBYSCORE"), key, b("0"), b("(-inf")));
+        Assert.assertEquals(
+                skiplist ? List.of("f199") : List.of(),
+                members(client, b("ZREVRANGEBYSCORE"), key, b("(+inf"), b("200")));
+        Assert.assertEquals(
+                skiplist ? List.of("zero", "f0", "f1") : List.of("zero"),
+                members(client, b("ZRANGEBYSCORE"), key, b("(-inf"), b("(+inf"), b("LIMIT"), b("0"), b("3")));
+
+        List<String> closed = new ArrayList<>();
+        closed.add("ninf");
+        closed.add("zero");
+        if (skiplist) {
+            for (int index = 0; index < 200; index++) {
+                closed.add("f" + index);
+            }
+        }
+        closed.add("pinf");
+        Assert.assertEquals(closed, members(client, b("ZRANGEBYSCORE"), key, b("-inf"), b("+inf")));
+
+        Assert.assertEquals(List.of(), members(client, b("ZRANGEBYSCORE"), key, b("(0"), b("(1")));
+        Assert.assertEquals(List.of("zero"), members(client, b("ZRANGEBYSCORE"), key, b("0"), b("(1")));
+        Assert.assertEquals(
+                skiplist ? List.of("f0") : List.of(),
+                members(client, b("ZRANGEBYSCORE"), key, b("(0"), b("1")));
+
+        Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
+                b("ZREMRANGEBYSCORE"), key, b("(-inf"), b("0")))).value());
+        List<String> remaining = new ArrayList<>();
+        remaining.add("ninf");
+        if (skiplist) {
+            for (int index = 0; index < 200; index++) {
+                remaining.add("f" + index);
+            }
+        }
+        remaining.add("pinf");
+        Assert.assertEquals(remaining, members(client, b("ZRANGE"), key, b("0"), b("-1")));
+    }
+
+    private static List<String> members(FastTestClient client, byte[]... command) {
+        return bulkStrings((ReplyArray) client.execute(Arrays.asList(command)));
     }
 
     @Test

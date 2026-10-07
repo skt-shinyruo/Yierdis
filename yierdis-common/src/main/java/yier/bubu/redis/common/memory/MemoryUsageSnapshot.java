@@ -19,10 +19,11 @@ public record MemoryUsageSnapshot(
         requireNonNegative(nativeReclaimableBytes, "nativeReclaimableBytes");
     }
 
+    // 数据按仍占用的字节计。块释放后 used memory 马上下降，不用等整页变空。
     public long effectiveBytesForMaxmemory() {
         return addSaturating(
                 addSaturating(heapEstimatedBytes, nativeMetadataCommittedBytes),
-                nativeDataCommittedBytes
+                nativeDataLiveBytes
         );
     }
 

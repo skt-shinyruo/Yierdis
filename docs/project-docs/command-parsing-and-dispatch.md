@@ -100,7 +100,7 @@ CommandSession capabilities (连接状态)
 
 异常分类决定了回复是否 abort 事务：
 
-- `CommandParseException` → `abortingError(session, failure.getMessage())`。错误在 transaction active 时会 abort；
+- `CommandParseException` → 事务外是这条命令自己的错误。事务内只有参数个数不对（错误文案含 `wrong number of arguments`，含 `OBJECT` 的子命令个数/未知子命令）走 `abortingError`；其余解析错误先入队，`EXEC` 时只有那一条失败；
 - `WrongTypeException` 与 `YierdisCommandException` → `error(failure.getMessage())`，是普通 ready error，**不** abort 事务；
 - 其他未预期异常不在这里吞掉，继续交给 executor 的 terminal failure 路径，不能误报为确定的业务失败。
 
@@ -227,7 +227,7 @@ transaction active 时，dispatcher 仍先完成命令名检查、registry looku
 
 - `TRANSACTION_CONTROL`（`MULTI`/`EXEC`/`DISCARD`）：立即应用各自的准备函数，不重新排队；
 - `DISALLOWED_IN_MULTI`：准备 `abortingError`，文案 `ERR <NAME> is not allowed in MULTI`，执行时标记 aborted；
-- `QUEUEABLE`：调用同一个 `handler.parse(CommandArgs)` 做完整参数 preflight，但不应用其返回的准备函数。
+- `QUEUEABLE`：调用同一个 `handler.parse(CommandArgs)`，但不应用其返回的准备函数。参数个数不对则拒绝入队并作废事务；参数内容、选项冲突、取值范围和语法错误不在这里拒绝。
 
 queueable preflight 成功后，dispatcher 返回 `prepareRetainedRequestEnqueue` 构造的 action，预留形状是 `ReplyShapes.errorUpperBound()`（错误上限 512 字节，足以覆盖 `QUEUED` 和 queue-full 错误）。该 action 在执行期调用 `transaction.tryEnqueue(request)`：
 
