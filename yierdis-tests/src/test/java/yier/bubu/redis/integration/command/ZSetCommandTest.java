@@ -71,6 +71,42 @@ public class ZSetCommandTest {
     }
 
     @Test
+    public void zaddScoreLiteralsFollowRedis802String2d() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("z-literals");
+
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("1d"), b("m"))),
+                        "ERR value is not a valid float");
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("1f"), b("m"))),
+                        "ERR value is not a valid float");
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("1D"), b("m"))),
+                        "ERR value is not a valid float");
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("1F"), b("m"))),
+                        "ERR value is not a valid float");
+                assertError(client.execute(Arrays.asList(b("ZADD"), key, b("INCR"), b("1d"), b("m"))),
+                        "ERR value is not a valid float");
+                Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key))).value());
+
+                Assert.assertEquals(5L, ((ReplyInteger) client.execute(Arrays.asList(
+                        b("ZADD"), key,
+                        b("0x10"), b("hex"),
+                        b("-0x10"), b("neg"),
+                        b("0X1A"), b("upper"),
+                        b("0x1.8"), b("frac"),
+                        b("0x1p3"), b("exp")))).value());
+                ReplyArray range = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGE"), key, b("0"), b("-1"), b("WITHSCORES")));
+                Assert.assertEquals(
+                        List.of("neg", "-16", "frac", "1.5", "exp", "8", "hex", "16", "upper", "26"),
+                        bulkStrings(range));
+            }
+        });
+    }
+
+    @Test
     public void zaddRejectsDecimalScoresThatOverflowToInfinity() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
@@ -133,7 +169,7 @@ public class ZSetCommandTest {
                         b("ZADD"), key, b("1.5"), b("decimal")))).value());
                 Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
                         b("ZADD"), key, b("1e-323"), b("subnormal")))).value());
-                // Redis 8.9.241：1e-7 的原始分数文本是 "1e-7"，1e22 是 "1e+22"。
+                // 1e-7 与 1e22 的回复文本仍是当前格式化结果。对齐 Redis 8.0.2 的 d2string 不在本测试里。
                 Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
                         b("ZADD"), key, b("1e-7"), b("tiny")))).value());
                 Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(
@@ -164,7 +200,7 @@ public class ZSetCommandTest {
     }
 
     @Test
-    public void rangeByScoreStillAcceptsWhitespaceAndUnderflowLiterals() {
+    public void rangeBoundsFollowRedis802Literals() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             {
@@ -177,22 +213,37 @@ public class ZSetCommandTest {
                         b("ZRANGEBYSCORE"), key, b("1e-400"), b("+inf")));
                 Assert.assertEquals(List.of("zero", "one"), bulkStrings(fromUnderflowLiteral));
 
-                ReplyArray fromSpacedMin = (ReplyArray) client.execute(Arrays.asList(
-                        b("ZRANGEBYSCORE"), key, b(" 1"), b("+inf")));
-                Assert.assertEquals(List.of("one"), bulkStrings(fromSpacedMin));
+                assertError(
+                        client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b(" 1"), b("+inf"))),
+                        "ERR min or max is not a float");
+                assertError(
+                        client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("-inf"), b("1 "))),
+                        "ERR min or max is not a float");
+                assertError(
+                        client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("1d"), b("+inf"))),
+                        "ERR min or max is not a float");
+                assertError(
+                        client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("0x10"), b("+inf"))),
+                        "ERR min or max is not a float");
+                assertError(
+                        client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("0x1p3"), b("+inf"))),
+                        "ERR min or max is not a float");
+                assertError(
+                        client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("0x1.8"), b("+inf"))),
+                        "ERR min or max is not a float");
 
                 ReplyArray exclusive = (ReplyArray) client.execute(Arrays.asList(
                         b("ZRANGEBYSCORE"), key, b("(0"), b("+inf")));
                 Assert.assertEquals(List.of("one"), bulkStrings(exclusive));
 
-                assertError(
-                        client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("1e309"), b("+inf"))),
-                        "ERR min or max is not a float");
-                assertError(
-                        client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("infinity"), b("+inf"))),
-                        "ERR min or max is not a float");
+                ReplyArray overflow = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGEBYSCORE"), key, b("-inf"), b("1e309")));
+                Assert.assertEquals(List.of("zero", "one"), bulkStrings(overflow));
+                ReplyArray infinity = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGEBYSCORE"), key, b("-inf"), b("infinity")));
+                Assert.assertEquals(List.of("zero", "one"), bulkStrings(infinity));
                 ReplyArray reversed = (ReplyArray) client.execute(Arrays.asList(
-                        b("ZREVRANGEBYSCORE"), key, b("+inf"), b("1e-400")));
+                        b("ZREVRANGEBYSCORE"), key, b("Infinity"), b("1e-400")));
                 Assert.assertEquals(List.of("one", "zero"), bulkStrings(reversed));
             }
         });
