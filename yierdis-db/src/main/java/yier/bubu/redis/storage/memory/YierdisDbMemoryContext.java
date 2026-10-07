@@ -72,6 +72,10 @@ final class YierdisDbMemoryContext {
         return stableMemoryBackend.trimEmptyPages(Objects.requireNonNull(budget, "budget"));
     }
 
+    void releaseUnusedNativeMetadata() {
+        stableMemoryBackend.releaseUnusedMetadata();
+    }
+
     MemoryUsageSnapshot nativeMemoryUsage() {
         return stableMemoryBackend.memoryUsage();
     }

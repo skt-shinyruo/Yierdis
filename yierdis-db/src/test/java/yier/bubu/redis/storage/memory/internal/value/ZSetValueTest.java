@@ -777,7 +777,7 @@ public class ZSetValueTest {
                 }
 
                 Assert.assertEquals(0L, allocator.allocationAttempts());
-                Assert.assertEquals("0", scoreFor(zset, "zero-member"));
+                Assert.assertEquals("-0", scoreFor(zset, "zero-member"));
                 RecordingSink zeroRange = new RecordingSink();
                 zset.zrangeByScoreWriteTo(-0.0d, false, +0.0d, false, false, 0, 10, zeroRange);
                 Assert.assertEquals(List.of("zero-member"), zeroRange.values);

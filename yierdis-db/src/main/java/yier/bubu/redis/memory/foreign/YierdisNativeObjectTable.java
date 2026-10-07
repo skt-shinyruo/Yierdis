@@ -321,6 +321,28 @@ final class YierdisNativeObjectTable implements AutoCloseable {
         transitionState(slot, STATE_ALLOCATED);
     }
 
+    // 空库从零段开始。FLUSH 把对象都释放之后，留下的段仍算在 metadata committed 里，
+    // maxmemory 就回不到空库基线。还有存活句柄或分配作用域时不能把槽号交回去。
+    void releaseUnusedMetadata() {
+        ensureOpen();
+        if (liveSlots != 0L
+                || pinnedSlots.size() != 0
+                || quarantinedSlots.size() != 0
+                || segments.length == 0) {
+            return;
+        }
+        for (YierdisNativeObjectSegment segment : segments) {
+            segment.close();
+        }
+        segments = new YierdisNativeObjectSegment[0];
+        freeSlots = 0L;
+        retiredSlots = 0L;
+        // commit 还在分配作用域里。把检查点收成零段，回滚才不会按旧段数去关已经释放的段。
+        if (activeAllocationScope != null) {
+            activeAllocationScope.segmentCount = 0;
+        }
+    }
+
     public YierdisNativeObjectTableStats stats() {
         ensureOpen();
         return new YierdisNativeObjectTableStats(
@@ -842,7 +864,7 @@ final class YierdisNativeObjectTable implements AutoCloseable {
     }
 
     static final class AllocationScopeCheckpoint {
-        private final int segmentCount;
+        private int segmentCount;
 
         private AllocationScopeCheckpoint(int segmentCount) {
             this.segmentCount = segmentCount;
