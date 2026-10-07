@@ -206,7 +206,7 @@ public final class ZSetCommands {
                 if (index + 2 >= args.argc()) {
                     throw syntaxFailure();
                 }
-                offset = args.nonNegativeLongAt(index + 1);
+                offset = args.longAt(index + 1);
                 long requestedCount = args.longAt(index + 2);
                 count = requestedCount < 0L ? Long.MAX_VALUE : requestedCount;
                 index += 3;

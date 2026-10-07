@@ -1002,6 +1002,41 @@ public class ZSetCommandTest {
         });
     }
 
+    @Test
+    public void negativeLimitOffsetIsEmptyAfterTheTypeCheck() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                byte[] key = b("zrangebyscore:negative-offset");
+                client.execute(Arrays.asList(b("ZADD"), key, b("1"), b("a")));
+
+                ReplyArray forward = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGEBYSCORE"), key, b("0"), b("2"), b("LIMIT"), b("-1"), b("1")));
+                Assert.assertEquals(0, forward.values().size());
+                ReplyArray reverse = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZREVRANGEBYSCORE"), key, b("2"), b("0"), b("LIMIT"), b("-5"), b("-1")));
+                Assert.assertEquals(0, reverse.values().size());
+
+                ReplyArray missing = (ReplyArray) client.execute(Arrays.asList(
+                        b("ZRANGEBYSCORE"), b("missing"), b("0"), b("1"), b("LIMIT"), b("-1"), b("1")));
+                Assert.assertEquals(0, missing.values().size());
+
+                client.execute(Arrays.asList(b("SET"), b("str"), b("v")));
+                assertError(client.execute(Arrays.asList(
+                        b("ZRANGEBYSCORE"), b("str"), b("0"), b("1"), b("LIMIT"), b("-1"), b("1"))),
+                        "WRONGTYPE Operation against a key holding the wrong kind of value");
+
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+                Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(Arrays.asList(
+                        b("ZRANGEBYSCORE"), key, b("0"), b("2"), b("LIMIT"), b("-1"), b("1")))).value());
+                ReplyArray exec = (ReplyArray) client.execute(List.of(b("EXEC")));
+                Assert.assertEquals(1, exec.values().size());
+                Assert.assertEquals(0, ((ReplyArray) exec.values().get(0)).values().size());
+            }
+        });
+    }
+
     private static List<String> bulkStrings(ReplyArray array) {
         List<String> rendered = new ArrayList<>(array.values().size());
         for (ReplyObject element : array.values()) {
