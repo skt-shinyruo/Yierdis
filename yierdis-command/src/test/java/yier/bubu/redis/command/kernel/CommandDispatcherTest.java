@@ -140,7 +140,7 @@ public class CommandDispatcherTest {
     }
 
     @Test
-    public void parseErrorsSkipPreparationAndAbortActiveTransactionAfterReservation() {
+    public void contentParseErrorsQueueWithoutAbortingTheTransaction() {
         AtomicInteger parses = new AtomicInteger();
         AtomicInteger prepares = new AtomicInteger();
         CommandDispatcher dispatcher = dispatcher(spec(
@@ -156,10 +156,31 @@ public class CommandDispatcherTest {
              PreparedCommand prepared = dispatcher.prepare(session, request)) {
             Assert.assertFalse(session.tx.aborted());
             CapturedReply reply = execute(prepared, session, request);
-            Assert.assertEquals("ERR injected parse failure", reply.error());
-            Assert.assertTrue(session.tx.aborted());
+            Assert.assertEquals("QUEUED", reply.simpleString());
+            Assert.assertFalse(session.tx.aborted());
             Assert.assertEquals(1, parses.get());
             Assert.assertEquals(0, prepares.get());
+            Assert.assertEquals(1, session.tx.enqueueCalls);
+        }
+    }
+
+    @Test
+    public void handlerWrongArityStillAbortsTheTransaction() {
+        CommandDispatcher dispatcher = dispatcher(spec(
+                "STRICT", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
+                args -> {
+                    throw new CommandParseException("ERR wrong number of arguments for 'strict' command");
+                }
+        ));
+        RecordingSession session = new RecordingSession(true);
+
+        try (ExecutionRequest request = request("STRICT");
+             PreparedCommand prepared = dispatcher.prepare(session, request)) {
+            Assert.assertFalse(session.tx.aborted());
+            CapturedReply reply = execute(prepared, session, request);
+            Assert.assertEquals("ERR wrong number of arguments for 'strict' command", reply.error());
+            Assert.assertTrue(session.tx.aborted());
+            Assert.assertEquals(0, session.tx.enqueueCalls);
         }
     }
 
