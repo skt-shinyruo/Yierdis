@@ -27,11 +27,12 @@ import yier.bubu.redis.execution.api.PreparedCommands;
 import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.execution.api.ReplyShapes;
-import yier.bubu.redis.execution.api.ValidationResult;
 import yier.bubu.redis.storage.api.ExpireCondition;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
+import yier.bubu.redis.storage.api.result.ByteSequenceSource;
+import yier.bubu.redis.storage.api.result.ByteSequenceSources;
 import yier.bubu.redis.storage.api.result.KeyScanWindow;
 
 public final class KeyCommands {
@@ -252,27 +253,24 @@ public final class KeyCommands {
     }
 
     private static PreparedCommand keyWindowReply(KeyScanWindow window) {
-        RedisReply reply = DbReplies.sequence(window);
-        return PreparedCommands.ownedAction(
-                reply.shape(),
-                window,
-                () -> window.current() ? ValidationResult.VALID : ValidationResult.STALE,
-                context -> CommandResult.reply(reply)
-        );
+        return PreparedCommands.ready(DbReplies.sequence(snapshot(window)));
     }
 
     private static PreparedCommand scanWindowReply(KeyScanWindow window) {
-        RedisReply elements = DbReplies.sequence(window);
+        byte[] cursor = window.nextCursor().toAsciiBytes();
         RedisReply reply = RedisReplies.array(List.of(
-                RedisReplies.bulkString(window.nextCursor().toAsciiBytes()),
-                elements
+                RedisReplies.bulkString(cursor),
+                DbReplies.sequence(snapshot(window))
         ));
-        return PreparedCommands.ownedAction(
-                reply.shape(),
-                window,
-                () -> window.current() ? ValidationResult.VALID : ValidationResult.STALE,
-                context -> CommandResult.reply(reply)
-        );
+        return PreparedCommands.ready(reply);
+    }
+
+    private static ByteSequenceSource snapshot(KeyScanWindow window) {
+        try {
+            return ByteSequenceSources.copiedFrom(window::emitTo);
+        } finally {
+            window.close();
+        }
     }
 
     private static long deadlineNanos(long budgetNanos) {
