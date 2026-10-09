@@ -15,6 +15,9 @@ import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyError;
 import yier.bubu.redis.testutil.ReplyObject;
 
+import static yier.bubu.redis.testutil.GrowingScanSupport.assertHscanCoversBaseWhileGrowing;
+import static yier.bubu.redis.testutil.GrowingScanSupport.assertSscanCoversBaseWhileGrowing;
+import static yier.bubu.redis.testutil.GrowingScanSupport.assertZscanCoversBaseWhileGrowing;
 import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestBytes.cmd;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
@@ -39,7 +42,7 @@ public class CollectionScanCommandTest {
                 assertError(client.execute(cmd("SSCAN", "string", "0")), WRONG_TYPE);
                 assertError(client.execute(cmd("ZSCAN", "string", "0")), WRONG_TYPE);
 
-                // 不透明 cursor：任意非负值（含 phase 位超出内部约定的值）都返回合法 scan 窗口，
+                // 不透明 cursor：任意非负值（含超出哈希空间映射范围的值）都返回合法 scan 窗口，
                 // 而不是命令错误；不存在的 key 一律回空窗口且结束 cursor 为 0。
                 assertEmpty(scan(client, "HSCAN", "hash", "8589934592"));
                 assertEmpty(scan(client, "SSCAN", "set", "12884901888"));
@@ -220,7 +223,7 @@ public class CollectionScanCommandTest {
                 client.execute(sadd);
                 client.execute(zadd);
 
-                // 不透明 cursor：phase 位非法值与极大值都必须按重启迭代处理（允许重复），
+                // 不透明 cursor：超出哈希空间可映射范围的值都必须按重启迭代处理（允许重复），
                 // 不得报错，结束仍回 0；集合 scan 与 key SCAN 行为一致。
                 for (String command : new String[]{"HSCAN", "SSCAN", "ZSCAN"}) {
                     String key = switch (command) {
@@ -233,7 +236,7 @@ public class CollectionScanCommandTest {
                             "12884901888",
                             "9223372036854775807"
                     ));
-                    // 伪造一个 generation 匹配但 phase 位非法的 cursor：改写该集合在线 cursor 的 phase 位。
+                    // 给在线 cursor 置高位，使其无法映射到当前表容量掩码范围内的位置。
                     String live = scan(client, command, key, "0", "COUNT", "1").cursor();
                     Assert.assertNotEquals("0", live);
                     cursors.add(Long.toString(Long.parseLong(live) | (2L << 32)));
@@ -331,43 +334,10 @@ public class CollectionScanCommandTest {
 
     @Test
     public void sscanTerminatesAndCoversBaseMembersWhileWritesOutpaceTheCursor() {
-        forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
-            FastTestClient client = new FastTestClient(dispatcher);
-            int baseMembers = 600;
-            List<byte[]> sadd = new ArrayList<>(baseMembers + 2);
-            sadd.add(b("SADD"));
-            sadd.add(b("growing"));
-            for (int i = 0; i < baseMembers; i++) {
-                sadd.add(b("base:" + i));
-            }
-            client.execute(sadd);
-
-            Set<String> seen = new HashSet<>();
-            int inserted = 0;
-            String cursor = "0";
-            int rounds = 0;
-            do {
-                ScanReply reply = scan(client, "SSCAN", "growing", cursor, "COUNT", "20");
-                seen.addAll(strings(reply.elements()));
-                cursor = reply.cursor();
-                List<byte[]> grow = new ArrayList<>(42);
-                grow.add(b("SADD"));
-                grow.add(b("growing"));
-                for (int i = 0; i < 40; i++) {
-                    grow.add(b("grow:" + inserted++));
-                }
-                client.execute(grow);
-                Assert.assertTrue(
-                        "SSCAN did not terminate while the set kept growing; inserted=" + inserted,
-                        ++rounds < 1_000
-                );
-            } while (!"0".equals(cursor));
-
-            for (int i = 0; i < baseMembers; i++) {
-                Assert.assertTrue("SSCAN missed base member base:" + i, seen.contains("base:" + i));
-            }
-        });
+        forEachDb(db -> assertSscanCoversBaseWhileGrowing(
+                new FastTestClient(TestCommandComposition.createDispatcher(db)),
+                600
+        ));
     }
 
     @Test
@@ -409,74 +379,9 @@ public class CollectionScanCommandTest {
     @Test
     public void hscanAndZscanCursorSurvivesGrowthBetweenCalls() {
         forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
-            FastTestClient client = new FastTestClient(dispatcher);
-
-            int baseFields = 520;
-            List<byte[]> hset = new ArrayList<>(2 + baseFields * 2);
-            hset.add(b("HSET"));
-            hset.add(b("hash"));
-            for (int i = 0; i < baseFields; i++) {
-                hset.add(b("base:" + i));
-                hset.add(b("v" + i));
-            }
-            client.execute(hset);
-
-            Set<String> hashSeen = new HashSet<>();
-            int hashInserted = 0;
-            String hashCursor = "0";
-            int hashRounds = 0;
-            do {
-                ScanReply reply = scan(client, "HSCAN", "hash", hashCursor, "COUNT", "20");
-                hashSeen.addAll(pairs(reply.elements()).keySet());
-                hashCursor = reply.cursor();
-                List<byte[]> grow = new ArrayList<>(82);
-                grow.add(b("HSET"));
-                grow.add(b("hash"));
-                for (int i = 0; i < 40; i++) {
-                    grow.add(b("grow:" + hashInserted));
-                    grow.add(b("v"));
-                    hashInserted++;
-                }
-                client.execute(grow);
-                Assert.assertTrue("HSCAN did not terminate while hash grew", ++hashRounds < 1_000);
-            } while (!"0".equals(hashCursor));
-            for (int i = 0; i < baseFields; i++) {
-                Assert.assertTrue("HSCAN missed base:" + i, hashSeen.contains("base:" + i));
-            }
-
-            int baseMembers = 200;
-            List<byte[]> zadd = new ArrayList<>(2 + baseMembers * 2);
-            zadd.add(b("ZADD"));
-            zadd.add(b("zset"));
-            for (int i = 0; i < baseMembers; i++) {
-                zadd.add(b(Integer.toString(i)));
-                zadd.add(b("base:" + i));
-            }
-            client.execute(zadd);
-
-            Set<String> zsetSeen = new HashSet<>();
-            int zsetInserted = 0;
-            String zsetCursor = "0";
-            int zsetRounds = 0;
-            do {
-                ScanReply reply = scan(client, "ZSCAN", "zset", zsetCursor, "COUNT", "20");
-                zsetSeen.addAll(pairs(reply.elements()).keySet());
-                zsetCursor = reply.cursor();
-                List<byte[]> grow = new ArrayList<>(82);
-                grow.add(b("ZADD"));
-                grow.add(b("zset"));
-                for (int i = 0; i < 40; i++) {
-                    grow.add(b(Integer.toString(1_000 + zsetInserted)));
-                    grow.add(b("grow:" + zsetInserted));
-                    zsetInserted++;
-                }
-                client.execute(grow);
-                Assert.assertTrue("ZSCAN did not terminate while zset grew", ++zsetRounds < 1_000);
-            } while (!"0".equals(zsetCursor));
-            for (int i = 0; i < baseMembers; i++) {
-                Assert.assertTrue("ZSCAN missed base:" + i, zsetSeen.contains("base:" + i));
-            }
+            FastTestClient client = new FastTestClient(TestCommandComposition.createDispatcher(db));
+            assertHscanCoversBaseWhileGrowing(client, 520);
+            assertZscanCoversBaseWhileGrowing(client, 200);
         });
     }
 
@@ -500,7 +405,11 @@ public class CollectionScanCommandTest {
                         "SSCAN", "large-set", "0", "COUNT", Integer.toString(Integer.MAX_VALUE)
                 );
 
-                Assert.assertEquals(1_024, first.elements().values().size());
+                // COUNT 是 hint；命中上限后仍会扫完当前游标位置（本位槽/双表同位），允许少量超额。
+                int returned = first.elements().values().size();
+                Assert.assertTrue("huge COUNT must stay near the internal match cap, got " + returned, returned <= 1_024 + 64);
+                Assert.assertTrue(returned >= 1_024);
+                Assert.assertTrue(returned < memberCount);
                 Assert.assertNotEquals("0", first.cursor());
             }
         });

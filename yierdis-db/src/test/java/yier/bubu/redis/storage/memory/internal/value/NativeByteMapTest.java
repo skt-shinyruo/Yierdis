@@ -759,13 +759,17 @@ public class NativeByteMapTest {
                 }
 
                 Assert.assertTrue("fixture must still be mid-rehash before scanning", map.metrics().rehashing());
-                // 先扫一小段拿到可继续的哈希空间游标，再推进 rehash；游标不应因换代而作废。
-                ScanCursorV2 mid = map.scan(ScanCursorV2.start(), 4, (keyHandle, value) -> true);
+                // 前缀 + mid 后续扫合起来必须覆盖全程仍在的全部元素（允许前缀与后缀各自不完整）。
+                Set<String> seenBeforeMid = new HashSet<>();
+                ScanCursorV2 mid = map.scan(ScanCursorV2.start(), 4, (keyHandle, value) -> {
+                    seenBeforeMid.add(new String(store.toByteArray(keyHandle), StandardCharsets.US_ASCII));
+                    return true;
+                });
                 Assert.assertNotEquals(0L, mid.value());
                 map.advanceRehash(HashTableWorkBudget.of(8L, Long.MAX_VALUE));
                 Assert.assertTrue("scan mid-cursor must remain usable while still rehashing", map.metrics().rehashing());
 
-                Set<String> seenAfterRehashProgress = new HashSet<>();
+                Set<String> seenFromMid = new HashSet<>();
                 ScanCursorV2 cursor = mid;
                 int calls = 0;
                 do {
@@ -773,7 +777,7 @@ public class NativeByteMapTest {
                             cursor,
                             2L,
                             (keyHandle, value) -> {
-                                seenAfterRehashProgress.add(new String(
+                                seenFromMid.add(new String(
                                         store.toByteArray(keyHandle),
                                         StandardCharsets.US_ASCII
                                 ));
@@ -787,19 +791,14 @@ public class NativeByteMapTest {
                     Assert.assertTrue("scan must terminate across rehash", ++calls < 128);
                 } while (cursor.value() != 0L);
 
-                Set<String> full = new HashSet<>();
-                ScanCursorV2 fullCursor = ScanCursorV2.start();
-                do {
-                    fullCursor = map.scan(fullCursor, 8, (keyHandle, value) -> {
-                        full.add(new String(store.toByteArray(keyHandle), StandardCharsets.US_ASCII));
-                        return true;
-                    });
-                } while (fullCursor.value() != 0L);
+                Set<String> continued = new HashSet<>(seenBeforeMid);
+                continued.addAll(seenFromMid);
                 for (int i = 0; i < 13; i++) {
-                    Assert.assertTrue(full.contains(string(keys.get(i))));
+                    Assert.assertTrue(
+                            "continued scan from mid missed always-present key " + string(keys.get(i)),
+                            continued.contains(string(keys.get(i)))
+                    );
                 }
-                // mid 之后的后缀扫描不必覆盖已扫过的前缀，但整表全量扫描必须完整。
-                Assert.assertFalse(seenAfterRehashProgress.isEmpty());
             }
         }
     }
@@ -823,7 +822,11 @@ public class NativeByteMapTest {
                 drainRehash(map);
                 int peakCapacity = map.metrics().capacity();
 
-                ScanCursorV2 mid = map.scan(ScanCursorV2.start(), 8, (keyHandle, value) -> true);
+                Set<String> seenBeforeMid = new HashSet<>();
+                ScanCursorV2 mid = map.scan(ScanCursorV2.start(), 8, (keyHandle, value) -> {
+                    seenBeforeMid.add(new String(store.toByteArray(keyHandle), StandardCharsets.US_ASCII));
+                    return true;
+                });
                 Assert.assertNotEquals(0L, mid.value());
 
                 for (int i = 0; i < 480; i++) {
@@ -831,36 +834,35 @@ public class NativeByteMapTest {
                 }
                 Assert.assertTrue(map.hasMaintenanceDebt());
                 publishMaintenanceResize(map);
-                Assert.assertTrue(map.metrics().rehashing());
+                Assert.assertTrue("shrink must start dual-table rehash before resume", map.metrics().rehashing());
                 Assert.assertTrue(map.metrics().capacity() < peakCapacity
                         || map.metrics().oldCapacity() == peakCapacity);
 
-                Set<String> seen = new HashSet<>();
+                Set<String> seenFromMid = new HashSet<>();
                 ScanCursorV2 cursor = mid;
                 int calls = 0;
+                boolean observedRehashing = map.metrics().rehashing();
                 do {
                     cursor = map.scan(cursor, 64, (keyHandle, value) -> {
-                        seen.add(new String(store.toByteArray(keyHandle), StandardCharsets.US_ASCII));
+                        seenFromMid.add(new String(store.toByteArray(keyHandle), StandardCharsets.US_ASCII));
                         return true;
                     });
                     if (map.metrics().rehashing()) {
+                        observedRehashing = true;
                         map.advanceRehash(HashTableWorkBudget.of(64L, Long.MAX_VALUE));
                     }
                     Assert.assertTrue("scan must terminate across shrink", ++calls < 2_048);
                 } while (cursor.value() != 0L);
+                Assert.assertTrue(observedRehashing);
 
-                Set<String> full = new HashSet<>();
-                ScanCursorV2 fullCursor = ScanCursorV2.start();
-                do {
-                    fullCursor = map.scan(fullCursor, 8, (keyHandle, value) -> {
-                        full.add(new String(store.toByteArray(keyHandle), StandardCharsets.US_ASCII));
-                        return true;
-                    });
-                } while (fullCursor.value() != 0L);
+                Set<String> continued = new HashSet<>(seenBeforeMid);
+                continued.addAll(seenFromMid);
                 for (int i = 480; i < 512; i++) {
-                    Assert.assertTrue(full.contains(string(keys.get(i))));
+                    Assert.assertTrue(
+                            "continued scan missed survivor " + string(keys.get(i)),
+                            continued.contains(string(keys.get(i)))
+                    );
                 }
-                Assert.assertFalse(seen.isEmpty());
             }
         }
     }

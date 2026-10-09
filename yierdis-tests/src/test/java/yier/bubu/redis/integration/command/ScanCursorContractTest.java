@@ -16,6 +16,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import static yier.bubu.redis.testutil.GrowingScanSupport.assertKeyScanCoversBaseWhileGrowing;
 import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
@@ -131,7 +132,7 @@ public class ScanCursorContractTest {
 
     @Test
     public void scanTerminatesAndCoversBaseKeysWhileWritesOutpaceTheCursor() {
-        forEachDb(db -> assertGrowingScanCoversBaseKeys(
+        forEachDb(db -> assertKeyScanCoversBaseWhileGrowing(
                 new FastTestClient(TestCommandComposition.createDispatcher(db)),
                 null,
                 500
@@ -140,7 +141,7 @@ public class ScanCursorContractTest {
 
     @Test
     public void scanWithMatchTerminatesWhileWritesOutpaceTheCursor() {
-        forEachDb(db -> assertGrowingScanCoversBaseKeys(
+        forEachDb(db -> assertKeyScanCoversBaseWhileGrowing(
                 new FastTestClient(TestCommandComposition.createDispatcher(db)),
                 "base:*",
                 500
@@ -200,10 +201,8 @@ public class ScanCursorContractTest {
             for (int i = survivors; i < total; i++) {
                 client.execute(Arrays.asList(b("DEL"), b("k" + i)));
             }
-            // 删到 size << capacity 后，维护路径会启动缩容 rehash；游标应仍能推进并结束。
-            for (int i = 0; i < 200; i++) {
-                db.runMaintenance();
-            }
+            // 只推进少量维护，尽量在仍可能处于缩容 rehash 时续扫；不一次跑完维护。
+            db.runMaintenance();
 
             Set<String> seen = new HashSet<>(keys(first));
             int rounds = 0;
@@ -212,6 +211,7 @@ public class ScanCursorContractTest {
                         b("SCAN"), b(cursor), b("COUNT"), b("10")));
                 seen.addAll(keys(reply));
                 cursor = ((ReplyBulkString) reply.values().get(0)).asString();
+                db.runMaintenance();
                 Assert.assertTrue("SCAN did not terminate across shrink", ++rounds < 5_000);
             }
 
@@ -294,14 +294,14 @@ public class ScanCursorContractTest {
                     client.execute(Arrays.asList(b("SET"), b("k" + i), b("v")));
                 }
 
-                // 不透明 cursor：phase 位超出内部 0/1 约定或 generation 不匹配的值都必须按
+                // 不透明 cursor：超出哈希空间可映射范围（>32 位）或乱改高位的值都必须按
                 // 重启迭代处理（允许重复），不得报错，结束仍回 0。
                 List<String> cursors = new ArrayList<>(List.of(
                         "8589934592",
                         "12884901888",
                         "9223372036854775807"
                 ));
-                // 伪造一个 generation 匹配但 phase 位非法的 cursor：改写在线 cursor 的 phase 位。
+                // 给在线 cursor 置高位，使其无法映射到当前表容量掩码范围内的位置。
                 long live = parseCursor((ReplyArray) client.execute(Arrays.asList(
                         b("SCAN"), b("0"), b("COUNT"), b("1"))));
                 Assert.assertNotEquals(0L, live);
@@ -380,46 +380,6 @@ public class ScanCursorContractTest {
                 Assert.assertFalse("KEYS must not return expired names", keyNames.contains("gone"));
             }
         });
-    }
-
-    private static void assertGrowingScanCoversBaseKeys(FastTestClient client, String match, int baseKeys) {
-        for (int i = 0; i < baseKeys; i++) {
-            client.execute(Arrays.asList(b("SET"), b("base:" + i), b("v")));
-        }
-
-        Set<String> seen = new HashSet<>();
-        int inserted = 0;
-        String cursor = "0";
-        int rounds = 0;
-        do {
-            List<byte[]> scan = new ArrayList<>();
-            scan.add(b("SCAN"));
-            scan.add(b(cursor));
-            if (match != null) {
-                scan.add(b("MATCH"));
-                scan.add(b(match));
-            }
-            scan.add(b("COUNT"));
-            scan.add(b("20"));
-            ReplyArray reply = (ReplyArray) client.execute(scan);
-            seen.addAll(keys(reply));
-            cursor = ((ReplyBulkString) reply.values().get(0)).asString();
-            for (int i = 0; i < 40; i++) {
-                client.execute(Arrays.asList(b("SET"), b("grow:" + inserted++), b("v")));
-            }
-            Assert.assertTrue(
-                    "SCAN did not terminate while the keyspace kept growing; inserted=" + inserted,
-                    ++rounds < 1_000
-            );
-        } while (!"0".equals(cursor));
-
-        if (match == null) {
-            for (int i = 0; i < baseKeys; i++) {
-                Assert.assertTrue("SCAN missed base key base:" + i, seen.contains("base:" + i));
-            }
-        } else {
-            Assert.assertEquals(baseKeys, seen.size());
-        }
     }
 
     private static List<String> keys(ReplyArray reply) {
