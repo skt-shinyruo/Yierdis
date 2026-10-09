@@ -122,6 +122,10 @@ final class NettyReplyDecodedMessageGate implements RespDecodedMessageGate {
         return sequencer.shutdownGracefully();
     }
 
+    CompletableFuture<Void> closeAfterPendingReplies() {
+        return sequencer.closeAfterPendingReplies();
+    }
+
     OutboundMemoryBudget.Connection connectionMemoryForTests() {
         return connectionMemory;
     }

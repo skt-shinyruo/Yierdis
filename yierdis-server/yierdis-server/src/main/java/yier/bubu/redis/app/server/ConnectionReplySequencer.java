@@ -134,6 +134,26 @@ final class ConnectionReplySequencer implements AutoCloseable {
         return shutdownDrained;
     }
 
+    /**
+     * 对端输入已结束后：停止登记新槽位，但保留已登记（含尚未 READY）的回复，全部写出后再关连接。
+     * 与 {@link #shutdownGracefully()} 不同，这里不能取消仍在执行中的槽位，否则会丢掉"已执行未回写"的回复。
+     */
+    CompletableFuture<Void> closeAfterPendingReplies() {
+        synchronized (lock) {
+            acceptingRegistrations = false;
+            shutdownRequested = true;
+        }
+        disableInput.run();
+        if (!channel.isOpen() || channel.closeFuture().isDone()) {
+            cancelAll();
+            markChannelClosed(null);
+            return shutdownDrained;
+        }
+        // 不走 beginShutdownOnEventLoop：那条路径会取消非 READY/WRITING 槽位，半关闭必须等执行完成。
+        executeOnEventLoop(this::drainOnEventLoop);
+        return shutdownDrained;
+    }
+
     CompletableFuture<Void> terminationFuture() {
         return shutdownDrained;
     }
