@@ -162,8 +162,8 @@ RESP3 下，已有专属形态的语义会换成 RESP3 编码（RESP2/RESP3 差�
 部分命令名带子命令，子命令不是独立的注册项：
 
 - `CLIENT SETINFO` / `CLIENT SETNAME` / `CLIENT GETNAME` / `CLIENT HELP`（只列已实现子命令；其余子命令报 `ERR unknown subcommand '<x>'. Try CLIENT HELP.`，回显走 `RedisArgEcho`）；
-- `MEMORY USAGE` / `MEMORY STATS`；
-- `OBJECT ENCODING`；
+- `MEMORY USAGE` / `MEMORY STATS` / `MEMORY HELP`（未知子命令同形：`Try MEMORY HELP.`，回显走 `RedisArgEcho`）；
+- `OBJECT ENCODING` / `OBJECT HELP`（未知子命令同形：`Try OBJECT HELP.`，回显走 `RedisArgEcho`）；
 - `COMMAND`（裸形式列全部命令）/ `COMMAND COUNT` / `COMMAND INFO <name>...`。
 
 `COMMAND` 的信息仅 6 个元素（name、arity、空 flags 数组、first key、last key、step），不回显 flags、ACL 类别或更为完整的 Redis 元数据；查询未注册命令时对应元素是 null array。

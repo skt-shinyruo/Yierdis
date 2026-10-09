@@ -221,14 +221,14 @@ backlog 预算由 `ExecutorBacklogBudget` 统一记账：`tryReserve(retainedByt
 
 `CommandDispatcher` 是 command-kernel 的单一入口。`prepare(...)` 的分支顺序固定：
 
-1. argc ≤ 0、`argv[0]` 为 null 或长度为 0 → `ERR empty command`，并在事务中 `markAborted()`；
+1. argc ≤ 0 或 `argv[0]` 为 null → `ERR empty command`，并在事务中 `markAborted()`；长度为 0 的命令名 bulk 不是空命令，走 unknown command `''`；
 2. 命令名按 ASCII 大写归一（非 ASCII 返回 null）；
 3. 除 `PING`/`ECHO` 的第 2 个参数外，出现 null argument → `ERR Protocol error: null bulk string`；
-4. `registry.specByExactUpperName(nameUpper)` 查表；未命中 → `ERR unknown command '<name>'`（名称含不可打印字符或超长时省略引号内内容）；
-5. `spec.syntax().arity().validate(...)`；
-6. 事务策略：`DISALLOWED_IN_MULTI` 报错，`QUEUEABLE` 走 `preflightMultiQueue`（只调用 `handler.parse` 做 preflight）并返回 `prepareRetainedRequestEnqueue`；
+4. `registry.specByExactUpperName(nameUpper)` 查表；未命中 → `ERR unknown command '<name>'`（回显与可选的 `with args beginning with` 均走 `RedisArgEcho`）；
+5. `spec.syntax().arity().validate(...)`（失败抛 `CommandParseException.aborting`；被拒的是 `EXEC` 时走 `prepareRejectedExec`）；
+6. 事务策略：`DISALLOWED_IN_MULTI` 报错，`QUEUEABLE` 走 `preflightMultiQueue`（只调用 `handler.parse` 做 preflight；`abortsMulti()` 才拒绝入队）并返回 `prepareRetainedRequestEnqueue`；
 7. 普通路径：`spec.handler().parse(args)` 得到 `Function<CommandSession, PreparedCommand>`，再 `apply(session)` 得到 `PreparedCommand`；
-8. `CommandParseException` → 可中止的错误回复；`WrongTypeException`/`YierdisCommandException` → 普通 `RedisReply.Error`。
+8. `CommandParseException` → 事务外是错误回复；事务内由 `abortsMulti()` 决定入队拒绝还是先 `QUEUED`；`WrongTypeException`/`YierdisCommandException` → 普通 `RedisReply.Error`。
 
 查到的 `CommandSpec` 只有两部分：
 

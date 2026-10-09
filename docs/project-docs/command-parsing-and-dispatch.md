@@ -89,11 +89,11 @@ CommandSession capabilities (连接状态)
 
 `prepare(session, request)` 等价于 `prepare(session, request, true)`；事务 replay 走 `prepareExecReplay(session, request)`，即 `prepare(session, request, false)`，唯一差别是跳过事务策略分支（队列已经 drain，不必再次排队）。私有 `prepare` 的顺序是：
 
-1. **空命令**：`argc() <= 0`、`request.isNull(0)` 或 `request.len(0) == 0` 三者任一成立，返回 `abortingError(session, "ERR empty command")`。空 RESP array（`*0\r\n`）和空字符串命令名（`*1\r\n$0\r\n\r\n`）都落在这里。
+1. **空命令**：`argc() <= 0` 或 `request.isNull(0)` 时返回 `abortingError(session, "ERR empty command")`。只有空 RESP array（`*0\r\n`）和 null 命令名落在这里；长度为 0 的 bulk（`*1\r\n$0\r\n\r\n`）以及仅 NUL 截断后的空名走下面的 unknown command `''`。
 2. **名称规范化**：`exactUpperAsciiName(request)` 逐字节把 `argv[0]` 转成大写 ASCII；任一字节能值 `> 0x7f` 就返回 `null`。
 3. **非法 null**：`hasIllegalNullArgument(request, nameUpper)` 逐参数检查。只有 `argc == 2` 且名称是 `PING` 或 `ECHO` 时，`argv[1]` 才允许是 null bulk string。命中则返回 `abortingError(session, "ERR Protocol error: null bulk string")`。注意非 ASCII 名称会让 `nameUpper` 为 `null`，`"PING".equals(null)` 为假，所以非法 null 在名称检查之前就报出来，不会先报 unknown command。
-4. **查表**：`registry.specByExactUpperName(nameUpper)`。未命中返回 `abortingError(session, unknownCommandMessage(request))`。
-5. **arity 校验**：`spec.syntax().arity().validate(spec.syntax().nameLower(), args)`，不满足抛 `CommandParseException("ERR wrong number of arguments for '<nameLower>' command")`。
+4. **查表**：`registry.specByExactUpperName(nameUpper)`。未命中（含空名、`nameUpper == null`）返回 `abortingError(session, unknownCommandMessage(request))`。
+5. **arity 校验**：`spec.syntax().arity().validate(spec.syntax().nameLower(), args)`，不满足抛 `CommandParseException.aborting("ERR wrong number of arguments for '<nameLower>' command")`。
 6. **事务策略**：仅当 `applyTransactionPolicy && transaction.active()` 时生效，见下文「事务排队 preflight」。
 7. **handler parse**：`spec.handler().parse(args)` 得到准备函数，`null` 会触发 `NullPointerException("command handler returned null")`。
 8. **apply**：`invocation.apply(session)` 得到 `PreparedCommand`，`null` 触发 `NullPointerException("command invocation returned null")`。
@@ -215,7 +215,7 @@ execute(CommandSession)
 
 ## 未知命令、null argument 和运行时错误
 
-unknown command 文案由 `unknownCommandMessage` 决定：名称长度 `<= 64` 且每个字节都在 `0x20..0x7e` 之间、且不是 `'` 或 `\` 时回显原名（`ERR unknown command '<name>'`）；否则返回不带原始内容的 `ERR unknown command`。这样控制字符、引号和反斜杠不会进入错误流。
+unknown command 文案由 `unknownCommandMessage` 决定：始终是 `ERR unknown command '<name>'`，若还有参数再追加 `, with args beginning with: '<a>' '<b>' ...`（参数回显累计 128 字节预算）。命令名与每个参数的回显都走 `RedisArgEcho`（NUL 截断该段、CR/LF→空格、非 ASCII→`?`，单段最多 128 字符），与 unknown subcommand / HELLO option / CLIENT SETINFO 未知属性共用同一套规则。
 
 RESP decoder 会忠实保留 array 中的 null bulk string。命令级合法性判断都在 dispatcher 里：二参数 `PING` / `ECHO` 可以带 null，其余位置出现 null 时返回 `ERR Protocol error: null bulk string`。frame 本身非法的 protocol error（非法长度、缺 `$`、缺终止符等）仍由 decoder/ingress 处理，不进入 dispatcher。
 

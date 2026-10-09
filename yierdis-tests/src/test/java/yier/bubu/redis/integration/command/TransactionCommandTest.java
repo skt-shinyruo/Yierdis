@@ -487,6 +487,8 @@ public class TransactionCommandTest {
             for (InvalidCommand invalid : List.of(
                     invalid("ERR unknown command 'foo', with args beginning with: 'a' ", "foo", "a"),
                     invalid("ERR unknown command ''", ""),
+                    invalid("ERR unknown subcommand 'foo'. Try CLIENT HELP.", "CLIENT", "foo"),
+                    invalid("ERR wrong number of arguments for 'client|help' command", "CLIENT", "HELP", "x"),
                     invalid("ERR unknown subcommand 'foo'. Try OBJECT HELP.", "OBJECT", "foo", "k"),
                     invalid("ERR wrong number of arguments for 'object|encoding' command", "OBJECT", "ENCODING"),
                     invalid("ERR unknown subcommand 'foo'. Try MEMORY HELP.", "MEMORY", "foo"),

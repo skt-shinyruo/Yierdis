@@ -4,7 +4,7 @@ import yier.bubu.redis.execution.api.ExecutionRequest;
 
 /**
  * 把 argv 片段回显进 Redis 风格错误文案：NUL 截断该段、CR/LF→空格、非 ASCII→`?`。
- * unknown command 与 unknown subcommand 共用，避免两套规则漂移。
+ * unknown command、unknown subcommand、HELLO option 与 CLIENT SETINFO 未知属性共用，避免两套规则漂移。
  */
 public final class RedisArgEcho {
     private RedisArgEcho() {
