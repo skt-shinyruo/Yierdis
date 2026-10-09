@@ -157,8 +157,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         }
         inputClosed = true;
         readControl.pauseIngress();
-        process(ctx);
-        finishPeerInputIfIdle(ctx);
+        processThenFinishPeerInputIfNeeded(ctx);
     }
 
     private void ensureCumulator(ChannelHandlerContext ctx) {
