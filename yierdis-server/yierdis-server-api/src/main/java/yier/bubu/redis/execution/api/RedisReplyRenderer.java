@@ -26,6 +26,8 @@ public final class RedisReplyRenderer {
                 }
                 value.emitter().accept(out);
             }
+            case RedisReply.ProtocolVersioned value ->
+                    render(value.reply(), out.withProtocolVersion(value.protocolVersion()));
         }
     }
 

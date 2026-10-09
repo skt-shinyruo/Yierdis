@@ -140,9 +140,10 @@ queue 条数或字节超限由 `TransactionState.tryEnqueue(...)` 返回 `ERR Tr
 3. `prepareCurrentChild` 是无限循环：`dispatcher.prepareExecReplay(session, request)` 得到 child，调 `validateBeforeExecute()`；`STALE` 就 `closeSuppressing(null, child::close)` 后重来，非 STALE 才返回。当前 child 执行完成后才准备下一个，因此前一个 child 的 session 或 DB side effect 对后一个 child 的准备和执行可见；
 4. 每个 child 都用 `addOwnedChild(children, child)` 发布到清理列表（发布失败时在**当前栈帧**归还 child owner），然后把同一个 `session` 直接传给 `child.execute(session)`；
 5. child execute 返回 `CommandResult`；若 reply 是 `RedisReply.ControlError`，降级为 `RedisReplies.error(controlError.message())` 再放进数组，因为 control error 依赖顶层预留槽位，在 aggregate 里只能当普通 error；
-6. 所有 child reply 聚合为一个 `RedisReply.Aggregate(ARRAY, ...)`；
-7. 所有 child 的 `closeAfterReply` 做 OR，决定外层 `CommandResult` 是否 close-after-reply；
-8. 外层 executor 调用一次 `RedisReplyRenderer` 渲染整个 array。
+6. child 执行后若 session 的 RESP 版本已不同于 `EXEC` prepare 时声明的外层版本（排队的 `HELLO` 切换了协议），这条 reply 包成 `RedisReply.ProtocolVersioned` 按新版本编码，与 Redis 一致；
+7. 所有 child reply 聚合为一个 `RedisReply.Aggregate(ARRAY, ...)`；
+8. 所有 child 的 `closeAfterReply` 做 OR，决定外层 `CommandResult` 是否 close-after-reply；
+9. 外层 executor 调用一次 `RedisReplyRenderer` 渲染整个 array。
 
 `prepareExecReplay(...)` 仍复用：空命令、null argument 与 name 安全检查；同一个 `CommandRegistry` 与 `CommandSpec`；同一个 `CommandArity` 和 `handler.parse(CommandArgs)`；handler 返回的准备函数及其 `apply(session)`；`PreparedCommand` validation/execution 语义；相同的 DB mutation path。reply reservation 由外层 `PreparedExec` 统一拥有。
 

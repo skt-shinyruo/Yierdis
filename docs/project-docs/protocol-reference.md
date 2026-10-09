@@ -85,6 +85,7 @@ HELLO 2
 HELLO 3
 HELLO 2 SETNAME <name>
 HELLO 3 SETNAME <name>
+HELLO 3 AUTH default <password>
 ```
 
 `HELLO 2` 把连接设为 RESP2 回包，`HELLO 3` 把连接切到基础 RESP3 reply encoding；不带版本号的 `HELLO` 只回显当前版本，不改动它。切换成功后，作为连接 session owner 的 `EngineSession` 会记录当前版本（`setRespVersion`，只接受 2 或 3，其余值抛 `NOPROTO unsupported protocol version`）。
@@ -93,17 +94,23 @@ HELLO 3 SETNAME <name>
 
 `HELLO` 返回 5 个字段：`server`、`version`、`proto`、`mode`、`role`（常量值 `yierdis`、构建版本、请求的 proto、`standalone`、`master`）。在 RESP2 下这个 reply 是 flat array，在 RESP3 下是 map。例如 `HELLO 3` 成功后，响应包含 `proto: 3`，后续 map、set、null 语义会使用 RESP3 基础编码。
 
-限制：
+处理顺序与 Redis `helloCommand` 一致：版本号 → 逐个选项（`SETNAME` 名字在这里校验）→ 认证 → 改名 → 切协议。前面任何一步失败都只回错误，连接名和协议版本都不变。错误文案对照 Redis 8.9.241：
 
-- 不支持的版本，例如 `HELLO 4`，返回 `-NOPROTO unsupported protocol version`（`CommandParseException` 抛出的消息本身已带 Redis 风格前缀，renderer 不会再补 `ERR `）；
-- `HELLO ... AUTH ...` 固定返回 no-password-configured 错误，因为项目没有认证配置面；
-- `HELLO` 的 `TransactionPolicy` 是 `DISALLOWED_IN_MULTI`，在 `MULTI` 中报 `ERR HELLO is not allowed in MULTI`；
-- 除版本号和 `SETNAME`/`AUTH` 之外的参数报 `ERR syntax error`；
+- 版本号不是规范整数（`HELLO x`、`HELLO 02`）：`ERR Protocol version is not an integer or out of range`；
+- 整数但不是 2 或 3，例如 `HELLO 4`：`-NOPROTO unsupported protocol version`（`CommandParseException` 抛出的消息本身已带 Redis 风格前缀，renderer 不会再补 `ERR `）；
+- 未知选项，或 `AUTH` 少于两个参数、`SETNAME` 缺名字：`ERR Syntax error in HELLO option '<选项原文>'`；
+- `SETNAME` 名字含 ASCII `'!'..'~'` 以外的字节：`ERR Client names cannot contain spaces, newlines or special characters.`，即使同一条命令里的 `AUTH` 也会失败，先报这一条；空名字清空连接名；
+- 项目没有认证配置面，`AUTH` 选项按 Redis 未设 `requirepass` 的 nopass `default` 用户处理：用户名是 `default`（区分大小写）时任何密码都通过，其他用户名回复 `WRONGPASS invalid username-password pair or user is disabled.`；
+- `HELLO` 是 `QUEUEABLE`。在 `MULTI` 里回复 `QUEUED`，`EXEC` 时才执行。它切换协议后，`EXEC` 数组里它自己和之后的元素按新版本编码，之前的元素按旧版本编码（见下一段）。上面这些错误在 `MULTI` 里也先 `QUEUED`，`EXEC` 时只有这一条失败；
 - RESP3 协商只表示回包编码切换，不表示完整 Redis RESP3 客户端生态兼容。
+
+`EXEC` 的外层数组按 `EXEC` prepare 时的版本预留和编码（`PreparedExec.replyProtocolVersion()`）。某个 child 执行后 session 版本和外层不同，它的回复会包成 `RedisReply.ProtocolVersioned`，renderer 用 `RedisReplyWriter.withProtocolVersion` 派生的 writer 写入同一个 sink。这种回复按 `ReplyShapes.maximum()` 定价；非空 `EXEC` 本来就是 maximum 预留，所以不改变容量记账。
+
+Redis 的 `addAuthErrReply` 在连接还有未发出的回复时会直接丢掉 `WRONGPASS`（例如 pipeline 里先 `CLIENT SETNAME` 再发认证失败的 `HELLO`，这条 `HELLO` 没有任何回复）。Yierdis 不照搬这一点：每条命令都有一个回复，否则请求和回复会错位。
 
 ## RedisReply 到 RESP 回包
 
-`RedisReply` 是命令结果的语义模型。根接口的 default `shape()` 用 sealed hierarchy 上的穷尽 switch 集中完成 `ReplyShape` 投影，各 variant 不声明自己的 `shape()`。`ReplyShapes` 只管 shape 构造与规范化，`RedisReplyRenderer` 则是唯一的命令结果遍历点。命令实现只构造 `SimpleString`、`IntegerValue`、`BulkString`、`Aggregate`、`NullValue`、`Error` 等变体，renderer 再调用 `RedisReplyWriter`。所以 `RedisReplyWriter` 只是 renderer 面向 RESP encoder 的端口，并非命令 API。协议错误或 ingress admission 失败属于命令管线之外的控制回复，仍由网络边界直接编码。
+`RedisReply` 是命令结果的语义模型。根接口的 default `shape()` 用 sealed hierarchy 上的穷尽 switch 集中完成 `ReplyShape` 投影，各 variant 不声明自己的 `shape()`。`ReplyShapes` 只管 shape 构造与规范化，`RedisReplyRenderer` 则是唯一的命令结果遍历点。命令实现只构造 `SimpleString`、`IntegerValue`、`BulkString`、`Aggregate`、`NullValue`、`Error` 等变体，renderer 再调用 `RedisReplyWriter`。`ProtocolVersioned` 只由 `EXEC` 在 child 切换了协议版本时包裹 child 回复。所以 `RedisReplyWriter` 只是 renderer 面向 RESP encoder 的端口，并非命令 API。协议错误或 ingress admission 失败属于命令管线之外的控制回复，仍由网络边界直接编码。
 
 错误的字节形态是 `ReplyShapes.normalizeError` 决定的，不是 handler 原样写入：先替换 CR/LF 为空格，空白消息归一化成 `ERR error`，再判断首 token 是否已是 Redis 风格前缀（只由 `-`、`_`、数字、大写字母组成），不是则补 `ERR `，然后按 UTF-8 截断到 512 字节。截断按 Unicode code point 进行：有效代理对不会被拆开，孤立 surrogate 丢弃。截断或丢弃之后如果只剩下 `ERR` 和空白，再写成 `ERR error`。单独的 `ERR`、`NOAUTH`、`WRONGTYPE` 前缀保持原样。`RespReplyWriter.controlError` 走同一条路径，并额外把输出改记为「控制预留」容量（`ReplyReservationSink.useControlReservation()`）；simple string 走 `sanitizeSimple`，只把 CR/LF 换成空格。协议错误和控制错误在 RESP2/RESP3 下字节相同，因此 ingress 用当前 session 版本构造 writer 即可。
 
@@ -215,7 +222,7 @@ Yierdis 支持 Redis 风格 RESP 入口和一组基础握手命令，但不声�
 
 - RESP2 是默认请求和回包兼容目标；
 - `HELLO 3` 可以切换到基础 RESP3 回包编码；
-- `CLIENT SETINFO` 只接受属性名 `LIB-NAME`/`LIB-VER`（其它属性报 `ERR Unrecognized option '<x>'`），`CLIENT SETNAME`/`CLIENT GETNAME` 维护连接名，`AUTH` 固定返回 no-password-configured 错误；
+- `CLIENT SETINFO` 只接受属性名 `LIB-NAME`/`LIB-VER`（其它属性报 `ERR Unrecognized option '<x>'`），`CLIENT SETNAME`/`CLIENT GETNAME` 维护连接名；`AUTH` 按 Redis 未设 `requirepass` 时的语义处理：`AUTH <password>` 返回 no-password-configured 错误，`AUTH default <password>` 返回 `OK`，其他用户名返回 `WRONGPASS`，多于 3 个参数返回 `ERR syntax error`；
 - 达到 `maxClients` 上限时，新连接先收到 `-ERR max number of clients reached\r\n`，随后被关闭；
 - malformed RESP 返回协议错误并关闭连接；
 - 命令语义以第「已注册命令清单」一节列出的命令为准。

@@ -26,7 +26,14 @@ import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 // 未知子命令按原样大小写回显：ERR unknown subcommand 'Foo'. Try OBJECT HELP.（MEMORY 同理）。
 // 已知子命令参数个数不对：ERR wrong number of arguments for 'object|encoding' command，子命令名总是小写。
 // MEMORY USAGE 选项写错或 SAMPLES 为负：ERR syntax error。SAMPLES 不是整数：ERR value is not an integer or out of range。
+// 未配置 requirepass 时（default 用户 nopass）：AUTH <pw> 是 no-password 错误；AUTH default <任意> 是 OK；
+// 其他用户名（区分大小写，Default 也算）是 WRONGPASS；AUTH 多于 3 个参数是 ERR syntax error。
 public class RedisCompatibilityBoundaryTest {
+    private static final String AUTH_WITHOUT_PASSWORD =
+            "ERR AUTH <password> called without any password configured for the default user. "
+                    + "Are you sure your configuration is correct?";
+    private static final String WRONGPASS =
+            "WRONGPASS invalid username-password pair or user is disabled.";
     private static final String CLIENT_NAME_ERROR =
             "ERR Client names cannot contain spaces, newlines or special characters.";
 
@@ -64,6 +71,23 @@ public class RedisCompatibilityBoundaryTest {
             assertError(client.execute(cmd("CLIENT", "SETNAME", "bad\nname")), CLIENT_NAME_ERROR);
             assertError(client.execute(cmd("CLIENT", "SETNAME", "café")), CLIENT_NAME_ERROR);
             Assert.assertTrue(client.execute(cmd("CLIENT", "GETNAME")) instanceof ReplyNull);
+        });
+    }
+
+    @Test
+    public void authWithoutConfiguredPasswordMatchesTheNopassDefaultUser() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            FastTestClient client = new FastTestClient(dispatcher);
+
+            assertError(client.execute(cmd("AUTH", "secret")), AUTH_WITHOUT_PASSWORD);
+            Assert.assertEquals("OK", ((ReplySimpleString) client.execute(
+                    cmd("AUTH", "default", "secret"))).value());
+            Assert.assertEquals("OK", ((ReplySimpleString) client.execute(
+                    cmd("AUTH", "default", ""))).value());
+            assertError(client.execute(cmd("AUTH", "bob", "secret")), WRONGPASS);
+            assertError(client.execute(cmd("AUTH", "Default", "secret")), WRONGPASS);
+            assertError(client.execute(cmd("AUTH", "a", "b", "c")), "ERR syntax error");
         });
     }
 

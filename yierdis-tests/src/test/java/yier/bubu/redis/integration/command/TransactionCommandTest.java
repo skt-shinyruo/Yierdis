@@ -820,6 +820,27 @@ public class TransactionCommandTest {
         });
     }
 
+    @Test
+    public void authInsideMultiIsQueuedAndFailsOnlyAtExec() {
+        forEachDb(db -> {
+            FastTestClient client = new FastTestClient(TestCommandComposition.createDispatcher(db));
+            Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+            Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(List.of(b("AUTH"), b("pw")))).value());
+            Assert.assertEquals(
+                    "QUEUED",
+                    ((ReplySimpleString) client.execute(List.of(b("AUTH"), b("default"), b("pw")))).value()
+            );
+            ReplyArray exec = (ReplyArray) client.execute(List.of(b("EXEC")));
+            Assert.assertEquals(2, exec.values().size());
+            Assert.assertEquals(
+                    "ERR AUTH <password> called without any password configured for the default user. "
+                            + "Are you sure your configuration is correct?",
+                    ((ReplyError) exec.values().get(0)).message()
+            );
+            Assert.assertEquals("OK", ((ReplySimpleString) exec.values().get(1)).value());
+        });
+    }
+
     private static void assertContentErrorFailsOnlyThatCommand(
             YierdisDb db,
             List<byte[]> invalid,

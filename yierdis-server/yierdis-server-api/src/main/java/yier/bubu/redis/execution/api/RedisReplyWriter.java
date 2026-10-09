@@ -16,6 +16,15 @@ public interface RedisReplyWriter extends ReplySink {
         error(message);
     }
 
+    /**
+     * 返回写入同一 sink、但按 {@code protocolVersion} 编码的 writer，供 {@link RedisReply.ProtocolVersioned} 使用。
+     *
+     * <p>不区分 RESP 版本的 writer（例如只捕获语义结构的测试 writer）可以返回自身。</p>
+     */
+    default RedisReplyWriter withProtocolVersion(int protocolVersion) {
+        return this;
+    }
+
     // --- Scalars ---
     void simpleString(String value);
 

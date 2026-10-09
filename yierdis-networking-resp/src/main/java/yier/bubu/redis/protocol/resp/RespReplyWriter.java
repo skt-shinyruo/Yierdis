@@ -21,6 +21,12 @@ public final class RespReplyWriter implements RedisReplyWriter {
         this.version = RespProtocolVersion.fromWireValue(protocolVersion);
     }
 
+    // 派生 writer 共享同一个 sink（包括 control reservation 记账），只改变后续编码的版本。
+    @Override
+    public RedisReplyWriter withProtocolVersion(int protocolVersion) {
+        return protocolVersion == version.wireValue() ? this : new RespReplyWriter(protocolVersion, out);
+    }
+
     @Override
     public void simpleString(String value) {
         writeAsciiLine('+', ReplyShapes.sanitizeSimple(value));

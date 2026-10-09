@@ -3,6 +3,7 @@ package yier.bubu.redis.command.kernel;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.OptionalInt;
 import yier.bubu.redis.command.api.CommandArgs;
 import yier.bubu.redis.command.api.CommandArity;
 import java.util.function.Function;
@@ -116,7 +117,7 @@ final class TransactionCommands {
         ReplyShape reservationShape = tx.size() == 0
                 ? ReplyShapes.array(List.of())
                 : ReplyShapes.maximum();
-        return new PreparedExec(tx, dispatcher, session, reservationShape);
+        return new PreparedExec(tx, dispatcher, session, reservationShape, session.respVersion());
     }
 
     /**
@@ -182,6 +183,7 @@ final class TransactionCommands {
         private final CommandSession session;
         private final ArrayList<PreparedCommand> children;
         private final ReplyShape reservationShape;
+        private final int replyProtocolVersion;
         private List<ExecutionRequest> drainedRequests = List.of();
         private boolean executed;
         private boolean closed;
@@ -190,18 +192,26 @@ final class TransactionCommands {
                 TransactionState tx,
                 CommandDispatcher dispatcher,
                 CommandSession session,
-                ReplyShape reservationShape
+                ReplyShape reservationShape,
+                int replyProtocolVersion
         ) {
             this.tx = Objects.requireNonNull(tx, "tx");
             this.dispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
             this.session = Objects.requireNonNull(session, "session");
             this.children = new ArrayList<>();
             this.reservationShape = Objects.requireNonNull(reservationShape, "reservationShape");
+            this.replyProtocolVersion = replyProtocolVersion;
         }
 
         @Override
         public ReplyShape reservationShape() {
             return reservationShape;
+        }
+
+        // 显式声明外层版本，execute 里才能确定哪些 child 回复需要按另一版本编码。
+        @Override
+        public OptionalInt replyProtocolVersion() {
+            return OptionalInt.of(replyProtocolVersion);
         }
 
         @Override
@@ -233,6 +243,13 @@ final class TransactionCommands {
                     RedisReply reply = result.reply();
                     if (reply instanceof RedisReply.ControlError controlError) {
                         reply = RedisReplies.error(controlError.message());
+                    }
+                    // 对齐 Redis：排队的 HELLO 在执行时切换协议，它自己和之后的 child 回复按新版本编码，
+                    // 之前的仍按外层版本。只有空队列才用精确预留，而切换版本至少需要一个 child，
+                    // 所以这里一定处在 maximum 预留下。
+                    int childProtocolVersion = session.respVersion();
+                    if (childProtocolVersion != replyProtocolVersion) {
+                        reply = RedisReplies.protocolVersioned(childProtocolVersion, reply);
                     }
                     replies.add(reply);
                     closeAfterReply |= result.closeAfterReply();
