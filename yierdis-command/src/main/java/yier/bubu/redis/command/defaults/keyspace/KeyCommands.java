@@ -20,6 +20,7 @@ import yier.bubu.redis.command.api.SlowCommandLimits;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.defaults.CommandSupport;
 import yier.bubu.redis.command.defaults.DbReplies;
+import yier.bubu.redis.command.defaults.ScanArguments;
 import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.PreparedCommand;
@@ -29,7 +30,6 @@ import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.execution.api.ValidationResult;
 import yier.bubu.redis.storage.api.ExpireCondition;
-import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
@@ -42,7 +42,6 @@ public final class KeyCommands {
     private static final String SYNTAX_ERROR = "ERR syntax error";
     private static final String OBJECT_SUBCOMMAND_ERROR =
             "ERR Unknown subcommand or wrong number of arguments for 'OBJECT'. Try OBJECT HELP.";
-    private static final String INTEGER_ERROR = "ERR value is not an integer or out of range";
     private static final String EXPIRE_UNSUPPORTED_OPTION = "ERR Unsupported option ";
     private static final String EXPIRE_NX_INCOMPATIBLE =
             "ERR NX and XX, GT or LT options at the same time are not compatible";
@@ -205,15 +204,12 @@ public final class KeyCommands {
         };
     }
 
-    private record ScanArgs(long cursor, byte[] match, int count) {
-    }
-
     private Function<CommandSession, PreparedCommand> scan(CommandArgs args) {
-        ScanArgs parsed = scanArgs(args);
+        ScanArguments parsed = ScanArguments.parse(args, 1, ScanArguments.Target.KEYSPACE);
         return session -> {
             for (int attempt = 0; attempt < KEY_WINDOW_DISCOVERY_ATTEMPTS; attempt++) {
                 KeyScanWindow window = support.commandDb(session).keyspace().scan(
-                        ScanCursorV2.of(parsed.cursor()), parsed.match(), parsed.count());
+                        parsed.cursor(), parsed.match(), parsed.types(), parsed.count());
                 if (!window.current()) {
                     window.close();
                     continue;
@@ -223,34 +219,6 @@ public final class KeyCommands {
             return PreparedCommands.ready(RedisReplies.error(
                     "ERR scan window changed before reply preflight"));
         };
-    }
-
-    private static ScanArgs scanArgs(CommandArgs args) {
-        long cursor = args.nonNegativeLongAt(1);
-        byte[] match = null;
-        int count = 10;
-        for (int index = 2; index < args.argc(); index++) {
-            if (args.is(index, "MATCH")) {
-                if (++index >= args.argc()) {
-                    throw syntaxFailure();
-                }
-                match = args.bytes(index);
-                continue;
-            }
-            if (args.is(index, "COUNT")) {
-                if (++index >= args.argc()) {
-                    throw syntaxFailure();
-                }
-                long value = args.positiveLongAt(index);
-                if (value > Integer.MAX_VALUE) {
-                    throw new CommandParseException(INTEGER_ERROR);
-                }
-                count = (int) value;
-                continue;
-            }
-            throw syntaxFailure();
-        }
-        return new ScanArgs(cursor, match, count);
     }
 
     private static PreparedCommand keyWindowReply(KeyScanWindow window) {

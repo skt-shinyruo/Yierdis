@@ -336,7 +336,7 @@ public class TypedCommandTest {
 
             Assert.assertEquals(Long.valueOf(1), Await.join(connection.del("k", "missing")));
             Assert.assertEquals(Long.valueOf(0), Await.join(connection.exists("k")));
-            assertServerError(() -> Await.join(connection.scan("-1")), "not an integer");
+            assertServerError(() -> Await.join(connection.scan("-1")), "invalid cursor");
             Assert.assertEquals("PONG", Await.join(connection.ping()));
         }
     }

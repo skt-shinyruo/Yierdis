@@ -193,22 +193,27 @@ HLL 没有独立 `ValueType`。命令层由 `HllCommands` 表达语义，DB 层�
 
 命令家族因此可以独立演进，主类型系统也不必为 bitmap 和 HLL 增加额外逻辑类型。
 
-## HSCAN、SSCAN 和 ZSCAN
+## SCAN 系列的参数
 
-三条命令复用 `CollectionScanCommandSupport` 的参数规则：
+`SCAN`、`HSCAN`、`SSCAN`、`ZSCAN` 的 cursor 与 option 都由 `ScanArguments.parse` 解析，对应 Redis `scanGenericCommand` 的同一条 option 路径，错误文案也一致：
 
 ```text
+SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]
 HSCAN key cursor [MATCH pattern] [COUNT count] [NOVALUES]
 SSCAN key cursor [MATCH pattern] [COUNT count]
 ZSCAN key cursor [MATCH pattern] [COUNT count]
 ```
 
-规则：
+- `cursor` 先于 option 校验，规则同 Redis `parseScanCursorOrReply`：参数按 C 字符串处理（第一个 NUL 之后不算）；先按 `string2ll` 解析，能解析出的负数报 `ERR invalid cursor`；解析不了再退回 `strtoull`，所以 `" 1"`、`"+1"`、`"01"`、`"-0"` 可以通过，超出 u64、非数字、空串都报 `ERR invalid cursor`。
+- cursor 对客户端不透明。Yierdis 发出的 cursor 只用低 63 位，大于 `Long.MAX_VALUE` 的 u64 会被钳成 `Long.MAX_VALUE`；它和其他无法映射到当前表拓扑的 cursor 一样，由存储层从头重启迭代（允许重复，结束仍回 `0`），不会报错。
+- option 从左到右逐个解析，第一个失败的 option 决定错误。`COUNT`、`MATCH`、`TYPE` 缺值，或出现未知 option，都报 `ERR syntax error`。
+- `COUNT` 默认 10。不是整数（包括 `+5`、`010` 这类非规范写法）或超出 long 时报 `ERR value is not an integer or out of range`；小于 1 报 `ERR syntax error`。超过 `Integer.MAX_VALUE` 的值按 `Integer.MAX_VALUE` 处理，它只是工作量 hint。
+- `MATCH` 在集合 scan 上只匹配 field/member，不匹配 hash value 或 zset score。
+- `NOVALUES` 只适用于 `HSCAN`，在 `SCAN`/`SSCAN`/`ZSCAN` 上报 `ERR NOVALUES option can only be used in HSCAN`。
+- `TYPE` 只适用于 `SCAN`，在集合 scan 上报 `ERR syntax error`。它按 key 的值类型过滤，类型名不分大小写：`string`、`list`、`set`、`zset`、`hash`。HLL key 的类型是 `string`。过滤在 `KeyspaceOps.scan(cursor, glob, types, count)` 里做，discovery 和 replay 用同一组类型。未知类型名不报错，和 Redis 8 一样只是不匹配任何 key，cursor 照常推进到 `0`。`stream` 这类 Yierdis 不存储的 Redis 类型也一样。重复 `TYPE` 时以最后一个为准。
+- 这些都是 handler parse 阶段的错误，不访问 DB。所以集合 scan 遇到不存在的 key 或类型不符的 key 时，参数错误先报出；Redis 则先回空 scan 或 `WRONGTYPE`。在 `MULTI` 里这类错误照常 `QUEUED`，只在 `EXEC` 时让这一条失败。
 
-- `cursor` 由 `ScanCursorV2.of(args.nonNegativeLongAt(2))` 解析，即不透明非负整数；负数与溢出报 `ERR value is not an integer or out of range`。旧 cursor 无法映射到当前表拓扑时由存储层按重启迭代处理，不会报错；
-- `MATCH` 只匹配 field/member，不匹配 hash value 或 zset score；
-- `COUNT` 默认 10（`DEFAULT_COUNT`），必须为正，超过 `Integer.MAX_VALUE` 报整数错误；
-- option 可以换序；`NOVALUES` 只适用于 `HSCAN`，`SSCAN`/`ZSCAN` 上出现报 `ERR syntax error`。
+## HSCAN、SSCAN 和 ZSCAN
 
 三条命令都返回两元素 array：下一 cursor（bulk string）和元素 sequence。元素形状分别为：
 

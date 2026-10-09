@@ -91,11 +91,13 @@ public class CommandParseIsolationTest {
                 argv("OBJECT", "ENCODING"),
                 argv("OBJECT", "UNKNOWN", "k"),
                 argv("SCAN", "-1"),
-                argv("SCAN", "9223372036854775808"),
+                argv("SCAN", "18446744073709551616"),
                 argv("SCAN", "0", "MATCH"),
                 argv("SCAN", "0", "COUNT"),
                 argv("SCAN", "0", "COUNT", "0"),
-                argv("SCAN", "0", "COUNT", "2147483648"),
+                argv("SCAN", "0", "COUNT", "9223372036854775808"),
+                argv("SCAN", "0", "TYPE"),
+                argv("SCAN", "0", "NOVALUES"),
                 argv("EXPIRE", "k", "not-a-number"),
                 argv("PEXPIRE", "k", "not-a-number"),
                 argv("EXPIREAT", "k", "not-a-number"),
@@ -119,16 +121,17 @@ public class CommandParseIsolationTest {
                 argv("RPOP", "list", "-1"),
                 argv("RPOP", "list", "not-a-number"),
                 argv("HSCAN", "hash", "-1"),
-                argv("HSCAN", "hash", "9223372036854775808"),
+                argv("HSCAN", "hash", "18446744073709551616"),
                 argv("HSCAN", "hash", "0", "MATCH"),
                 argv("HSCAN", "hash", "0", "COUNT"),
                 argv("HSCAN", "hash", "0", "COUNT", "0"),
                 argv("SSCAN", "set", "-1"),
-                argv("SSCAN", "set", "9223372036854775808"),
+                argv("SSCAN", "set", "18446744073709551616"),
                 argv("SSCAN", "set", "0", "MATCH"),
                 argv("SSCAN", "set", "0", "COUNT"),
                 argv("SSCAN", "set", "0", "COUNT", "0"),
-                argv("SSCAN", "set", "0", "NOVALUES")
+                argv("SSCAN", "set", "0", "NOVALUES"),
+                argv("SSCAN", "set", "0", "TYPE", "set")
         }) {
             assertParseFailure(registry, invalid);
         }
@@ -154,7 +157,8 @@ public class CommandParseIsolationTest {
                 argv("ZREMRANGEBYRANK", "z", "bad", "-1"),
                 argv("ZSCAN", "z", "-1"),
                 argv("ZSCAN", "z", "0", "MATCH"),
-                argv("ZSCAN", "z", "0", "COUNT", "0")
+                argv("ZSCAN", "z", "0", "COUNT", "0"),
+                argv("ZSCAN", "z", "0", "NOVALUES")
         }) {
             assertParseFailure(registry, invalid);
         }

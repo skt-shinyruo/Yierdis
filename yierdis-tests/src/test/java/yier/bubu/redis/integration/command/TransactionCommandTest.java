@@ -502,7 +502,7 @@ public class TransactionCommandTest {
                     Arrays.asList(b("HSCAN"), b("hash"), b("-1")),
                     Arrays.asList(b("HSCAN"), b("hash"), b("0"), b("MATCH")),
                     Arrays.asList(b("HSCAN"), b("hash"), b("0"), b("COUNT"), b("0")),
-                    Arrays.asList(b("SSCAN"), b("set"), b("9223372036854775808")),
+                    Arrays.asList(b("SSCAN"), b("set"), b("18446744073709551616")),
                     Arrays.asList(b("SSCAN"), b("set"), b("0"), b("COUNT")),
                     Arrays.asList(b("SSCAN"), b("set"), b("0"), b("NOVALUES"))
             )) {
@@ -561,9 +561,9 @@ public class TransactionCommandTest {
                             "ZRANGEBYSCORE", "z", "-inf", "+inf", "LIMIT", "bad", "1"),
                     invalid("ERR min or max is not a float", "ZREMRANGEBYSCORE", "z", "-inf", "bad"),
                     invalid("ERR value is not an integer or out of range", "ZREMRANGEBYRANK", "z", "bad", "-1"),
-                    invalid("ERR value is not an integer or out of range", "ZSCAN", "z", "-1"),
+                    invalid("ERR invalid cursor", "ZSCAN", "z", "-1"),
                     invalid("ERR syntax error", "ZSCAN", "z", "0", "MATCH"),
-                    invalid("ERR value is not an integer or out of range", "ZSCAN", "z", "0", "COUNT", "0")
+                    invalid("ERR syntax error", "ZSCAN", "z", "0", "COUNT", "0")
             )) {
                 assertContentErrorFailsOnlyThatCommand(db, invalid.args(), invalid.message());
             }
