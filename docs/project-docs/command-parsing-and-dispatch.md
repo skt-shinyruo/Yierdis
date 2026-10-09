@@ -158,7 +158,7 @@ parse 阶段的错误文案按来源分三类：
 - 参数方言：`ERR syntax error`（handler 自己）、`ERR value is not an integer or out of range`（`CommandArgs`）、`ERR value is out of range, must be positive`（LPOP/RPOP 负 count）、`ERR bit offset is not an integer or out of range`（SETBIT/GETBIT 非法 offset）；
 - 命令家族定义的专用 parse error（`CommandParseException(replyMessage)`）。
 
-不是所有错误都在 parse 期抛出。`ERR increment or decrement would overflow` 由 `YierdisStringOps` 在执行期抛出；`WRONGTYPE Key is not a valid HyperLogLog string value.` 来自 `YierdisHyperLogLog`，也不是 handler parse。
+不是所有错误都在 parse 期抛出。`ERR increment or decrement would overflow` 由 `YierdisStringOps` 在执行期抛出；`WRONGTYPE Key is not a valid HyperLogLog string value.` 和 `INVALIDOBJ Corrupted HLL object detected` 来自 `YierdisHyperLogLog`，也不是 handler parse。
 
 所有 error 文字最终都过 `ReplyShapes.normalizeError`：`\r`/`\n` 替换成空格、缺少 Redis 错误前缀时补 `ERR `、超 512 字节按 UTF-8 码点边界截断。前缀判定 `hasRedisErrorPrefix` 要求首个空白分隔 token 只由 `-`、`_`、数字、大写字母组成，所以 `NOPROTO ...` 这类自带前缀的错误不会被重复加 `ERR `。
 

@@ -156,24 +156,24 @@ final class YierdisHllOps implements HllOps {
 
             @Override
             public PreparedDbMutation<WriteResult<Void>> prepare() {
-                MergeRegisters merged = mergeSourceRegisters(sourceKeys, now);
                 CurrentEntry currentEntry = keyLifecycle.currentEntry(destKeyBytes);
                 EntryRecord current = currentEntry.record();
                 byte[] currentBytes = null;
+                int[] registers = new int[YierdisHyperLogLog.REGISTERS];
+                boolean anyDense = false;
+
+                // Redis pfmergeCommand 从 argv[1] 开始按参数顺序校验并合并：已存在的 dest 先于 source
+                // 参与 union，所以 dest 与 source 同时有错时由 dest 决定回复；dest 的 TTL 保留
+                // （Redis 复用原 value 对象，不触碰 expire）。
                 if (current != null) {
                     requireString(current);
                     currentBytes = stringRoot.copy(requireHllHandle(current));
+                    anyDense = YierdisHyperLogLog.isDenseBytes(currentBytes);
+                    YierdisHyperLogLog.mergeHllIntoRegisters(currentBytes, registers);
                 }
+                anyDense = mergeSourceRegisters(sourceKeys, now, registers) || anyDense;
 
-                // Redis pfmergeCommand 从 argv[1] 开始合并：已存在的 dest 自身也参与 union，
-                // 且 dest 的 TTL 保留（Redis 复用原 value 对象，不触碰 expire）。
-                boolean anySourceDense = merged.anySourceDense();
-                if (currentBytes != null) {
-                    anySourceDense = anySourceDense || YierdisHyperLogLog.isDenseBytes(currentBytes);
-                    YierdisHyperLogLog.mergeHllIntoRegisters(currentBytes, merged.registers());
-                }
-
-                byte[] replacementBytes = YierdisHyperLogLog.prepareMerge(currentBytes, anySourceDense, merged.registers());
+                byte[] replacementBytes = YierdisHyperLogLog.prepareMerge(currentBytes, anyDense, registers);
                 boolean valueChanged = replacementBytes != null;
                 MutationOutcome outcome = MutationOutcome.of(valueChanged, false);
                 if (current != null && !valueChanged) {
@@ -324,18 +324,17 @@ final class YierdisHllOps implements HllOps {
                 continue;
             }
             AllocatorKeyHandle keyHandle = keyLifecycle.keyHandle(sourceKey);
-            if (keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
+            // 只估算容量，不在这里报错：类型、header 和 body 错误都留给 prepare，
+            // 由它按 Redis 参数顺序（dest 的 body 也先于 source）决定回复。
+            if (keyLifecycle.isKeyExpired(keyHandle, nowMillis) || record.type() != ValueType.STRING) {
                 continue;
             }
-            requireString(record);
-            bytes = addSaturating(bytes, stringRoot.length(requireHllHandle(record)));
+            bytes = addSaturating(bytes, stringRoot.length(requireStringHandle(record)));
         }
         return bytes;
     }
 
-    private MergeRegisters mergeSourceRegisters(List<byte[]> sourceKeys, long nowMillis) {
-        int[] registers = new int[YierdisHyperLogLog.REGISTERS];
-        long copiedBytes = 0L;
+    private boolean mergeSourceRegisters(List<byte[]> sourceKeys, long nowMillis, int[] registers) {
         boolean anySourceDense = false;
         for (byte[] sourceKey : sourceKeys) {
             EntryRecord record = liveStringRecordForPrepare(sourceKey, nowMillis);
@@ -343,11 +342,10 @@ final class YierdisHllOps implements HllOps {
                 continue;
             }
             byte[] raw = stringRoot.copy(requireHllHandle(record));
-            copiedBytes = addSaturating(copiedBytes, raw.length);
             anySourceDense = anySourceDense || YierdisHyperLogLog.isDenseBytes(raw);
             YierdisHyperLogLog.mergeHllIntoRegisters(raw, registers);
         }
-        return new MergeRegisters(registers, copiedBytes, anySourceDense);
+        return anySourceDense;
     }
 
     private EntryRecord liveStringRecord(YierdisDbKernel kernel, byte[] keyBytes) {
@@ -381,11 +379,16 @@ final class YierdisHllOps implements HllOps {
         );
     }
 
-    private ValueHandle requireHllHandle(EntryRecord record) {
+    private ValueHandle requireStringHandle(EntryRecord record) {
         ValueHandle handle = record.valueHandle();
         if (!stringRoot.contains(handle)) {
             throw new IllegalStateException("native hll value handle is not available: " + (handle == null ? "null" : handle.nativeHandle()));
         }
+        return handle;
+    }
+
+    private ValueHandle requireHllHandle(EntryRecord record) {
+        ValueHandle handle = requireStringHandle(record);
         if (!YierdisHyperLogLog.isHllString(stringRoot, handle)) {
             // 普通 string 走 PF* 时，Redis 在 isHLLObjectOrReply 报专用文案，而不是通用 WRONGTYPE。
             throw new YierdisCommandException(YierdisHyperLogLog.INVALID_HLL_ERROR);
@@ -423,8 +426,5 @@ final class YierdisHllOps implements HllOps {
                 Math.max(0L, upperBound),
                 memoryContext.nativeAllocationScopeBookkeepingBytes(0)
         );
-    }
-
-    private record MergeRegisters(int[] registers, long copiedBytes, boolean anySourceDense) {
     }
 }

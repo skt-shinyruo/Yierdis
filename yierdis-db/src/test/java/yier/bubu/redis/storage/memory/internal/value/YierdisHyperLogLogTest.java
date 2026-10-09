@@ -167,11 +167,19 @@ public class YierdisHyperLogLogTest {
     }
 
     @Test
-    public void corruptSparseContentRaisesWrongType() {
-        // header 合法但游程没有精确覆盖 16384 个寄存器。
+    public void corruptSparseContentRaisesInvalidObj() {
+        // header 合法但游程没有精确覆盖 16384 个寄存器：Redis 报 INVALIDOBJ 而不是 WRONGTYPE。
         byte[] truncated = YierdisHyperLogLog.newSparse();
         truncated = java.util.Arrays.copyOf(truncated, truncated.length - 1);
-        assertInvalidHll(truncated);
+        assertCorruptedHll(truncated);
+        // 没有 element 的 PFADD 不读 body。
+        Assert.assertNull(YierdisHyperLogLog.prepareAdd(truncated, List.of()));
+        try {
+            YierdisHyperLogLog.prepareAdd(truncated, List.of(bytes("a")));
+            Assert.fail("expected corrupted HyperLogLog error");
+        } catch (YierdisCommandException expected) {
+            Assert.assertEquals(YierdisHyperLogLog.CORRUPTED_HLL_ERROR, expected.getMessage());
+        }
 
         byte[] overflow = new byte[YierdisHyperLogLog.HEADER_BYTES + 2];
         System.arraycopy(YierdisHyperLogLog.newSparse(), 0, overflow, 0, YierdisHyperLogLog.HEADER_BYTES);
@@ -181,7 +189,7 @@ public class YierdisHyperLogLogTest {
         // 长度到这里恰好合法；追加一个 VAL 使总数溢出。
         overflow = java.util.Arrays.copyOf(overflow, overflow.length + 1);
         overflow[overflow.length - 1] = (byte) 0x80;
-        assertInvalidHll(overflow);
+        assertCorruptedHll(overflow);
     }
 
     @Test
@@ -215,6 +223,15 @@ public class YierdisHyperLogLogTest {
             Assert.fail("expected invalid HyperLogLog error");
         } catch (YierdisCommandException expected) {
             Assert.assertEquals(YierdisHyperLogLog.INVALID_HLL_ERROR, expected.getMessage());
+        }
+    }
+
+    private static void assertCorruptedHll(byte[] raw) {
+        try {
+            YierdisHyperLogLog.mergeHllIntoRegisters(raw, new int[YierdisHyperLogLog.REGISTERS]);
+            Assert.fail("expected corrupted HyperLogLog error");
+        } catch (YierdisCommandException expected) {
+            Assert.assertEquals(YierdisHyperLogLog.CORRUPTED_HLL_ERROR, expected.getMessage());
         }
     }
 
