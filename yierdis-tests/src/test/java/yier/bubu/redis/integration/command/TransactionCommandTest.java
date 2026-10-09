@@ -33,6 +33,9 @@ import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class TransactionCommandTest {
+    private static final String EXEC_WRONG_ARITY_ABORT =
+            "EXECABORT Transaction discarded because of: wrong number of arguments for 'exec' command";
+
     private record InvalidCommand(List<byte[]> args, String message) {
     }
 
@@ -681,7 +684,7 @@ public class TransactionCommandTest {
     @Test
     public void transactionControlParseErrorsAbortAndDiscardQueuedWrites() {
         forEachDb(db -> {
-            for (String control : List.of("MULTI", "EXEC", "DISCARD")) {
+            for (String control : List.of("MULTI", "DISCARD")) {
                 CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
                 TestSession session = new TestSession();
                 byte[] key = b("dirty:" + control.toLowerCase(java.util.Locale.ROOT));
@@ -709,6 +712,71 @@ public class TransactionCommandTest {
                     Assert.assertSame(ReplyNull.INSTANCE, client.execute(List.of(b("GET"), key)));
                 }
             }
+        });
+    }
+
+    // Redis 8 rejectCommand：被拒的是 EXEC 本身时走 execCommandAbort，立刻丢弃队列并退出 MULTI。
+    @Test
+    public void wrongArityExecInsideMultiDiscardsTransactionAndLeavesMulti() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            TestSession session = new TestSession();
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+                Assert.assertEquals(
+                        "QUEUED",
+                        ((ReplySimpleString) client.execute(List.of(b("SET"), b("k"), b("v")))).value()
+                );
+
+                ReplyError abort = (ReplyError) client.execute(List.of(b("EXEC"), b("extra")));
+                Assert.assertEquals(EXEC_WRONG_ARITY_ABORT, abort.message());
+                Assert.assertFalse(session.transactionState().active());
+
+                Assert.assertEquals("PONG", ((ReplySimpleString) client.execute(List.of(b("PING")))).value());
+                Assert.assertSame(ReplyNull.INSTANCE, client.execute(List.of(b("GET"), b("k"))));
+                Assert.assertEquals(
+                        "ERR EXEC without MULTI",
+                        ((ReplyError) client.execute(List.of(b("EXEC")))).message()
+                );
+                Assert.assertEquals(
+                        "ERR DISCARD without MULTI",
+                        ((ReplyError) client.execute(List.of(b("DISCARD")))).message()
+                );
+            }
+        });
+    }
+
+    @Test
+    public void wrongArityExecAfterAQueueRejectionStillReportsItsOwnReason() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            TestSession session = new TestSession();
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+                Assert.assertEquals(
+                        "ERR unknown command 'NOSUCH'",
+                        ((ReplyError) client.execute(List.of(b("NOSUCH")))).message()
+                );
+
+                ReplyError abort = (ReplyError) client.execute(List.of(b("EXEC"), b("x"), b("y")));
+                Assert.assertEquals(EXEC_WRONG_ARITY_ABORT, abort.message());
+                Assert.assertFalse(session.transactionState().active());
+                Assert.assertEquals("PONG", ((ReplySimpleString) client.execute(List.of(b("PING")))).value());
+            }
+        });
+    }
+
+    @Test
+    public void wrongArityExecOutsideMultiUsesTheExecAbortShape() {
+        forEachDb(db -> {
+            TestSession session = new TestSession();
+            FastTestClient client = new FastTestClient(TestCommandComposition.createDispatcher(db), session);
+            ReplyError abort = (ReplyError) client.execute(List.of(b("EXEC"), b("x")));
+            Assert.assertEquals(EXEC_WRONG_ARITY_ABORT, abort.message());
+            Assert.assertFalse(session.transactionState().active());
+            Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
         });
     }
 

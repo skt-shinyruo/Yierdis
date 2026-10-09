@@ -27,7 +27,11 @@ import yier.bubu.redis.execution.api.ValidationResult;
 
 /** 事务控制命令以及 EXEC 的延迟回复所有权边界。 */
 final class TransactionCommands {
+    static final String EXEC = "EXEC";
+
     private static final String EXEC_ABORT = "EXECABORT Transaction discarded because of previous errors.";
+    private static final String EXEC_REJECTED_PREFIX = "EXECABORT Transaction discarded because of: ";
+    private static final String ERR_PREFIX = "ERR ";
 
     private final CommandDispatcher dispatcher;
 
@@ -40,7 +44,7 @@ final class TransactionCommands {
         registration.register(new CommandSpec(syntax("MULTI"), this::multi));
         registration.register(new CommandSpec(syntax("DISCARD"), this::discard));
         registration.register(new CommandSpec(
-                syntax("EXEC", ReplyAdmissionRequirement.BARRIER_UNTIL_CLEANUP),
+                syntax(EXEC, ReplyAdmissionRequirement.BARRIER_UNTIL_CLEANUP),
                 this::exec
         ));
     }
@@ -113,6 +117,26 @@ final class TransactionCommands {
                 ? ReplyShapes.array(List.of())
                 : ReplyShapes.maximum();
         return new PreparedExec(tx, dispatcher, session, reservationShape);
+    }
+
+    /**
+     * EXEC 自身在 dispatcher 被拒（目前只有参数个数不对）时的回复：不论是否在 MULTI 里都返回
+     * {@code EXECABORT Transaction discarded because of: <原因>}，执行时丢弃排队并回到普通模式。
+     */
+    static PreparedCommand prepareRejectedExec(CommandSession session, String reason) {
+        // Redis 的 rejectCommandFormat 原因文本不带 "ERR "；这里的 arity 文案带前缀，拼接前去掉以保持同一字节形态。
+        String detail = reason.startsWith(ERR_PREFIX) ? reason.substring(ERR_PREFIX.length()) : reason;
+        String message = EXEC_REJECTED_PREFIX + detail;
+        return PreparedCommands.action(
+                ReplyShapes.error(message),
+                context -> {
+                    TransactionState tx = session.transaction();
+                    if (tx.active()) {
+                        tx.discard();
+                    }
+                    return CommandResult.error(message);
+                }
+        );
     }
 
     private static PreparedCommand error(String message) {

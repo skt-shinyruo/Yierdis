@@ -242,6 +242,25 @@ public class YierdisServerBootstrapCommandWiringTest {
     }
 
     @Test
+    public void wrongArityExecAbortsAndLeavesMultiOverTheWire() throws Exception {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config()); Socket socket = new Socket("127.0.0.1", server.port())) {
+            socket.setSoTimeout(2000);
+            OutputStream out = socket.getOutputStream();
+            InputStream in = socket.getInputStream();
+            RespError abort = new RespError(
+                    "EXECABORT Transaction discarded because of: wrong number of arguments for 'exec' command");
+
+            Assert.assertEquals("OK", asString(roundTrip(out, in, "MULTI")));
+            Assert.assertEquals("QUEUED", asString(roundTrip(out, in, "SET", "tx:abort", "v")));
+            Assert.assertEquals(abort, roundTrip(out, in, "EXEC", "extra"));
+            Assert.assertEquals("PONG", asString(roundTrip(out, in, "PING")));
+            Assert.assertNull(roundTrip(out, in, "GET", "tx:abort"));
+            Assert.assertEquals(abort, roundTrip(out, in, "EXEC", "extra"));
+            Assert.assertEquals(new RespError("ERR EXEC without MULTI"), roundTrip(out, in, "EXEC"));
+        }
+    }
+
+    @Test
     public void observabilityUsesNormalizedRuntimeConfigValues() throws Exception {
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config(
                 "--databases", "2",

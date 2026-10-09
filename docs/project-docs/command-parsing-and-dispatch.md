@@ -223,7 +223,7 @@ RESP decoder 会忠实保留 array 中的 null bulk string。命令级合法性�
 
 ## 事务排队 preflight
 
-transaction active 时，dispatcher 仍先完成命令名检查、registry lookup 和 arity validation。之后按 `CommandSyntax.transactionPolicy()` 分支：
+transaction active 时，dispatcher 仍先完成命令名检查、registry lookup 和 arity validation（`EXEC` 自身 arity 不对时不论事务是否 active 都走 `TransactionCommands.prepareRejectedExec`，丢弃事务并回复 `EXECABORT Transaction discarded because of: ...`）。之后按 `CommandSyntax.transactionPolicy()` 分支：
 
 - `TRANSACTION_CONTROL`（`MULTI`/`EXEC`/`DISCARD`）：立即应用各自的准备函数，不重新排队；
 - `DISALLOWED_IN_MULTI`：准备 `abortingError`，文案 `ERR <NAME> is not allowed in MULTI`，执行时标记 aborted；

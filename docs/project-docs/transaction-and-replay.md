@@ -100,6 +100,8 @@ CommandExecutor
 
 这些错误都用 `abortingError`，`markAborted()` 推迟到错误回复获得容量并进入执行之后，prepare 阶段不碰 session。
 
+例外是 `EXEC` 自己参数个数不对（如 `EXEC extra`）。它对齐 Redis `rejectCommand` → `execCommandAbort`：dispatcher 调 `TransactionCommands.prepareRejectedExec`，回复 `EXECABORT Transaction discarded because of: wrong number of arguments for 'exec' command`，执行时 `tx.discard()` 丢弃队列并回到普通模式，之后的命令不再 `QUEUED`。不在 `MULTI` 里时回复同一条 `EXECABORT`，而不是 `ERR EXEC without MULTI`。`MULTI extra`、`DISCARD extra` 仍按上面的规则只标记 aborted。
+
 queue 条数或字节超限由 `TransactionState.tryEnqueue(...)` 返回 `ERR Transaction queue is full` 并标记 aborted。`TRANSACTION_CONTROL` 命令不进入 queueable 分支，立即应用各自的准备函数。
 
 ## queue limits
@@ -168,7 +170,8 @@ renderer 先输出完整的 `EXEC` array，executor 再根据外层 result flag 
 
 - nested `MULTI`：`ERR MULTI calls can not be nested`；
 - `EXEC` without `MULTI`：`ERR EXEC without MULTI`；
-- aborted `EXEC`：discard 后返回 `EXECABORT Transaction discarded because of previous errors.`。
+- aborted `EXEC`：discard 后返回 `EXECABORT Transaction discarded because of previous errors.`；
+- 参数个数不对的 `EXEC`（事务内外相同）：discard 后返回 `EXECABORT Transaction discarded because of: wrong number of arguments for 'exec' command`。
 
 `WATCH`/`UNWATCH` 在当前实现里完全不存在（全仓库没有注册，也没有 match 到任何源码引用）。这意味着 `EXEC` 没有“被其他连接修改则放弃”的语义：只要队列未被 abort，`EXEC` 一定执行全部 child。要做条件执行只能靠命令自身的 `PreparedMutation` preview/isCurrent 校验，或客户端自己比较。
 

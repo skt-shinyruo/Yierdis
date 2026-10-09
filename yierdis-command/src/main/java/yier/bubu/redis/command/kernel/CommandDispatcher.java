@@ -84,7 +84,14 @@ public final class CommandDispatcher {
         CommandArgs args = new CommandArgs(request);
         try {
             spec.syntax().arity().validate(spec.syntax().nameLower(), args);
-
+        } catch (CommandParseException failure) {
+            // 对齐 Redis rejectCommand：被拒的是 EXEC 本身时不只是标记 dirty，而是立刻丢弃队列并退出 MULTI。
+            if (TransactionCommands.EXEC.equals(spec.syntax().nameUpper())) {
+                return TransactionCommands.prepareRejectedExec(session, failure.getMessage());
+            }
+            return abortingError(session, failure.getMessage());
+        }
+        try {
             TransactionState transaction = session.transaction();
             if (applyTransactionPolicy && transaction.active()) {
                 TransactionPolicy policy = spec.syntax().transactionPolicy();
