@@ -143,7 +143,7 @@ final class ConnectionReplySequencer implements AutoCloseable {
             markChannelClosed(null);
             return shutdownDrained;
         }
-        // cancelIncompleteSlots=true 走 beginShutdownOnEventLoop；半关闭必须等执行完成，只 drain。
+        // 半关闭必须等执行完成，只 drain；server 关停才取消未 READY 槽位。
         executeOnEventLoop(cancelIncompleteSlots ? this::beginShutdownOnEventLoop : this::drainOnEventLoop);
         return shutdownDrained;
     }
