@@ -10,24 +10,20 @@ Yierdis 进程之外的调用方所持有的命令入口，指向一台正在运
 _Avoid_: YierdisClient、CLI、压测客户端、SDK、驱动、Jedis
 
 **连接**:
-应用客户端指向一台 standalone Yierdis 的一条命令通道。同一时刻只由一个调用方使用。
-_Avoid_: YierdisClient、socket、EngineSession
+应用客户端指向一台 standalone Yierdis 的一条命令通道。命令提交后，回复按提交顺序稍后配对。同一时刻只由一个调用方使用。
+_Avoid_: YierdisClient、socket、EngineSession、管道、管道对象
+
+**未配对命令**:
+一条连接上已经提交、回复尚未配对的命令。
+_Avoid_: 管道、在途请求
 
 **连接模式**:
-一条连接在某一时刻所处的使用方式：普通、管道或事务。同一时刻只有一种。
-_Avoid_: session、EngineSession
+一条连接在某一时刻所处的使用方式：普通或事务。同一时刻只有一种。
+_Avoid_: 管道、session、EngineSession
 
 **连接池**:
 持有多条连接，并把其中一条借给一个调用方的对象。
 _Avoid_: 线程池
-
-**管道**:
-一条连接上已经写出、尚未取回回复的一串命令。
-_Avoid_: 事务、批量、脚本
-
-**管道对象**:
-调用方在管道模式期间用来发命令的入口。它和那条连接是同一条命令通道。
-_Avoid_: 事务对象、连接池
 
 **事务**:
 一条连接上由 MULTI 开始、由 EXEC 或 DISCARD 结束的排队。

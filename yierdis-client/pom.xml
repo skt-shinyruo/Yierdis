@@ -12,12 +12,16 @@
     </parent>
 
     <artifactId>yierdis-client</artifactId>
-    <description>Blocking application client for a standalone Yierdis.</description>
+    <description>Async Netty application client for a standalone Yierdis.</description>
 
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-networking-resp</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-handler</artifactId>
         </dependency>
 
         <dependency>

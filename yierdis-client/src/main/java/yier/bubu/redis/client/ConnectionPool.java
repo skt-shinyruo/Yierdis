@@ -1,6 +1,13 @@
 package yier.bubu.redis.client;
 
-import java.net.SocketTimeoutException;
+import io.netty.channel.EventLoopGroup;
+import io.netty.channel.nio.NioEventLoopGroup;
+import yier.bubu.redis.client.exception.BorrowException;
+import yier.bubu.redis.client.exception.CommandTimeoutException;
+import yier.bubu.redis.client.exception.ConnectionException;
+
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -33,6 +40,8 @@ public final class ConnectionPool implements AutoCloseable {
     private final ConnectionSettings settings;
     private final int maximumSize;
     private final long borrowWaitMillis;
+    private final EventLoopGroup group;
+    private final AtomicBoolean groupClosed = new AtomicBoolean();
     private final Object lock = new Object();
     private final ArrayDeque<Connection> idle = new ArrayDeque<>();
     private final ArrayDeque<Waiter> waiters = new ArrayDeque<>();
@@ -50,6 +59,7 @@ public final class ConnectionPool implements AutoCloseable {
         }
         this.maximumSize = maximumSize;
         this.borrowWaitMillis = borrowWaitMillis;
+        this.group = new NioEventLoopGroup(settings.ioThreadCount());
     }
 
     public Connection borrow() {
@@ -124,6 +134,7 @@ public final class ConnectionPool implements AutoCloseable {
             closeOnReturn = closed
                     || connection.isClosed()
                     || !connection.inNormalMode()
+                    || connection.hasUnpairedCommands()
                     || connection.database() != settings.database();
             if (!closeOnReturn) {
                 Waiter head = waiters.pollFirst();
@@ -138,9 +149,10 @@ public final class ConnectionPool implements AutoCloseable {
             lock.notifyAll();
         }
         if (closeOnReturn && !connection.isClosed()) {
-            // 不放回时只 close()。不发 sync、DISCARD 或 EXEC，未读回复和未提交的事务不会被池代为处理。
+            // 不放回时只 close()。不发 DISCARD 或 EXEC，未配对命令和未结束的事务不会被池代为处理。
             connection.close();
         }
+        shutdownGroupIfIdle();
     }
 
     @Override
@@ -158,6 +170,47 @@ public final class ConnectionPool implements AutoCloseable {
         for (Connection connection : idleConnections) {
             connection.close();
         }
+        shutdownGroupIfIdle();
+    }
+
+    private void shutdownGroupIfIdle() {
+        boolean shutdown;
+        synchronized (lock) {
+            shutdown = closed && borrowed.isEmpty() && connecting == 0;
+        }
+        if (shutdown && groupClosed.compareAndSet(false, true)) {
+            group.shutdownGracefully();
+        }
+    }
+
+    private static Object join(java.util.concurrent.CompletableFuture<Object> future) {
+        try {
+            return future.join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause() == null ? failure : failure.getCause();
+            if (cause instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
+    }
+
+    private static boolean isTimeout(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current.getClass().getSimpleName().contains("Timeout")) {
+                return true;
+            }
+            String message = current.getMessage();
+            if (message != null && message.toLowerCase().contains("timed out")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private Connection openForBorrow(long deadlineNanos) {
@@ -189,6 +242,7 @@ public final class ConnectionPool implements AutoCloseable {
         if (!handOut && created != null) {
             created.close();
         }
+        shutdownGroupIfIdle();
         if (error != null) {
             throw error;
         }
@@ -217,11 +271,11 @@ public final class ConnectionPool implements AutoCloseable {
         }
         Connection connection = null;
         try {
-            connection = Connection.openSocket(settings, socketTimeoutMillis);
+            // 先只建立 TCP。SELECT 要用 TCP 返回之后剩余的借出等待，不能在连接前把整段超时交进去。
+            connection = Connection.connect(
+                    settings.withDatabase(0), group, false, socketTimeoutMillis, settings.commandTimeoutMillis());
             long setupTimeoutMillis = settings.commandTimeoutMillis();
             if (borrowWaitMillis > 0) {
-                // TCP 已经用掉一部分借出等待。没有剩余就关掉套接字，不把连接交出去。
-                // SELECT 只能用现在还剩的时间，不能用连接前采样的整段。等待 0 不进这里。
                 long remaining = remainingMillis(deadlineNanos);
                 if (remaining <= 0) {
                     throw new BorrowException("borrow wait elapsed");
@@ -229,7 +283,7 @@ public final class ConnectionPool implements AutoCloseable {
                 setupTimeoutMillis = Math.min(setupTimeoutMillis, remaining);
             }
             if (settings.database() != 0) {
-                connection.command(setupTimeoutMillis, "SELECT", Integer.toString(settings.database()));
+                join(connection.command(setupTimeoutMillis, "SELECT", Integer.toString(settings.database())));
             }
             Connection ready = connection;
             connection = null;
@@ -237,7 +291,7 @@ public final class ConnectionPool implements AutoCloseable {
         } catch (CommandTimeoutException e) {
             throw new BorrowException("timed out opening a connection", e);
         } catch (ConnectionException e) {
-            if (e.getCause() instanceof SocketTimeoutException) {
+            if (isTimeout(e)) {
                 throw new BorrowException("timed out opening a connection", e);
             }
             throw e;
