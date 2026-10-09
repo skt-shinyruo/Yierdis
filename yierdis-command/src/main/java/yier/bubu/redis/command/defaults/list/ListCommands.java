@@ -25,7 +25,6 @@ import yier.bubu.redis.storage.api.result.ByteSequenceSource;
 import yier.bubu.redis.storage.api.result.PoppedValueSequence;
 
 public final class ListCommands {
-    // Redis getPositiveLongFromObjectOrReply：非整数与负数都报这句（msg 一路传到 getLong*）。
     private static final String POSITIVE_RANGE_ERROR = "ERR value is out of range, must be positive";
     private static final CommandKeySpec KEY = new CommandKeySpec(1, 1, 1);
 
