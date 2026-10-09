@@ -109,12 +109,10 @@ public final class CoreConnectionCommands {
                 throw new CommandParseException(
                         "ERR wrong number of arguments for 'client|setname' command");
             }
-            // Redis 只接受 ASCII '!'..'~'。空串是清空名字，不走字符集校验；
-            // EngineSession.setClientName 会把空串收成 null，GETNAME 因此是 nil。
+            // 空串是清空名字：EngineSession.setClientName 会把空串收成 null，GETNAME 因此是 nil。
             byte[] rawName = args.bytes(2);
-            if (rawName.length > 0 && !printableClientName(rawName)) {
-                throw new CommandParseException(
-                        "ERR Client names cannot contain spaces, newlines or special characters.");
+            if (!ConnectionHandshake.validClientName(rawName)) {
+                throw new CommandParseException(ConnectionHandshake.INVALID_CLIENT_NAME);
             }
             String name = rawName.length == 0 ? "" : args.utf8(2);
             return session -> PreparedCommands.action(
@@ -142,11 +140,20 @@ public final class CoreConnectionCommands {
                 "ERR unknown subcommand '" + args.utf8(1) + "'. Try CLIENT HELP.");
     }
 
+    // 与 Redis authCommand 同序：先拒多余参数，再处理只给密码的旧形式，最后按用户名认证。
     private Function<CommandSession, PreparedCommand> auth(CommandArgs args) {
-        return session -> error(
-                "ERR AUTH <password> called without any password configured for the default user. "
-                        + "Are you sure your configuration is correct?"
-        );
+        if (args.argc() > 3) {
+            throw new CommandParseException("ERR syntax error");
+        }
+        if (args.argc() == 2) {
+            // Redis 对 nopass default 用户的 AUTH <password> 保留旧报错，提示配置可能写错，而不是直接放行。
+            return session -> error(
+                    "ERR AUTH <password> called without any password configured for the default user. "
+                            + "Are you sure your configuration is correct?"
+            );
+        }
+        boolean accepted = ConnectionHandshake.acceptsCredentials(args.bytes(1));
+        return session -> accepted ? ok() : error(ConnectionHandshake.WRONGPASS);
     }
 
     private Function<CommandSession, PreparedCommand> flushdb(CommandArgs args) {
@@ -257,16 +264,6 @@ public final class CoreConnectionCommands {
         return upper == null || upper.isBlank()
                 ? null
                 : upper.trim().toUpperCase(Locale.ROOT);
-    }
-
-    private static boolean printableClientName(byte[] rawName) {
-        for (byte value : rawName) {
-            int code = value & 0xff;
-            if (code < '!' || code > '~') {
-                return false;
-            }
-        }
-        return true;
     }
 
     private static PreparedCommand ok() {

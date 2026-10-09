@@ -70,6 +70,26 @@ public class RedisReplyRespContractTest {
     }
 
     @Test
+    public void protocolVersionedElementsRenderInTheirOwnVersionAndPlanMaximum() {
+        RedisReply reply = RedisReplies.array(List.of(
+                RedisReplies.nullValue(),
+                RedisReplies.protocolVersioned(3, RedisReplies.map(List.of(
+                        RedisReplies.simpleString("proto"), RedisReplies.integer(3)))),
+                RedisReplies.protocolVersioned(3, RedisReplies.nullValue()),
+                RedisReplies.protocolVersioned(2, RedisReplies.nullValue())
+        ));
+
+        ReplyPlan plan = sizer.apply(2, reply.shape());
+        ByteArraySink sink = new ByteArraySink();
+        RedisReplyRenderer.render(reply, writerFactory.apply(2, sink));
+
+        Assert.assertTrue(plan.reserveMaximum());
+        Assert.assertEquals("*4\r\n$-1\r\n%1\r\n+proto\r\n:3\r\n_\r\n$-1\r\n", sink.utf8());
+        Assert.assertThrows(IllegalArgumentException.class,
+                () -> RedisReplies.protocolVersioned(3, RedisReplies.controlError("OOM rejected")));
+    }
+
+    @Test
     public void controlErrorsCannotBeNestedInsideOrdinaryAggregates() {
         RedisReply controlError = RedisReplies.controlError("OOM rejected");
 
@@ -86,6 +106,8 @@ public class RedisReplyRespContractTest {
             covered.add(fixture.reply().getClass());
         }
         covered.add(RedisReplies.controlError("ERR control").getClass());
+        // 与 control error 一样按 maximum 预留，由 protocolVersionedElementsRenderInTheirOwnVersionAndPlanMaximum 覆盖。
+        covered.add(RedisReplies.protocolVersioned(3, RedisReplies.nullValue()).getClass());
 
         Set<Class<?>> permitted = new HashSet<>(
                 Arrays.asList(RedisReply.class.getPermittedSubclasses()));

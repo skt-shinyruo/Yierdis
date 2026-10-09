@@ -9,7 +9,7 @@ import java.util.function.IntConsumer;
 public sealed interface RedisReply permits
         RedisReply.SimpleString, RedisReply.Error, RedisReply.ControlError,
         RedisReply.IntegerValue, RedisReply.BulkString, RedisReply.NullValue, RedisReply.NullArray,
-        RedisReply.Aggregate, RedisReply.ByteAggregate {
+        RedisReply.Aggregate, RedisReply.ByteAggregate, RedisReply.ProtocolVersioned {
 
     default ReplyShape shape() {
         return switch (this) {
@@ -23,6 +23,8 @@ public sealed interface RedisReply permits
             case Aggregate value -> aggregateShape(value);
             case ByteAggregate value -> ReplyShapes.byteAggregate(
                     value.kind, value.count, value.retainedSourceBytes, value.payloadLengths);
+            // sizer 只按外层捕获的一个版本定价，无法精确计算另一版本的编码长度，只能按上限预留。
+            case ProtocolVersioned ignored -> ReplyShapes.maximum();
         };
     }
 
@@ -82,10 +84,32 @@ public sealed interface RedisReply permits
         }
     }
 
+    /**
+     * 按指定 RESP 版本编码的子回复，用于一个顶层回复内部切换协议版本（EXEC 里排队的 HELLO）。
+     *
+     * <p>只能出现在已按 {@link ReplyShapes#maximum()} 预留的回复里；不能包裹 control error。</p>
+     */
+    record ProtocolVersioned(int protocolVersion, RedisReply reply) implements RedisReply {
+        public ProtocolVersioned {
+            if (protocolVersion != 2 && protocolVersion != 3) {
+                throw new IllegalArgumentException("NOPROTO unsupported protocol version");
+            }
+            Objects.requireNonNull(reply, "reply");
+            if (reply instanceof ControlError) {
+                throw new IllegalArgumentException("control error must be a top-level reply");
+            }
+        }
+    }
+
     private static ReplyShape aggregateShape(Aggregate aggregate) {
         List<ReplyShape> shapes = new ArrayList<>(aggregate.elements.size());
         for (RedisReply element : aggregate.elements) {
-            shapes.add(element.shape());
+            ReplyShape shape = element.shape();
+            // Maximum 只能作为顶层形状；子回复无法定价时整棵回复都按上限预留。
+            if (shape instanceof ReplyShape.Maximum) {
+                return shape;
+            }
+            shapes.add(shape);
         }
         return switch (aggregate.kind) {
             case ARRAY -> ReplyShapes.array(shapes);

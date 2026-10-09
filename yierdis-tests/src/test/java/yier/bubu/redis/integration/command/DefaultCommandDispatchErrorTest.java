@@ -54,7 +54,9 @@ public class DefaultCommandDispatchErrorTest {
         errorCase(cases, wrongArity("del"), "DEL");
         errorCase(cases, wrongArity("discard"), "DISCARD", "extra");
         errorCase(cases, wrongArity("echo"), "ECHO");
-        errorCase(cases, wrongArity("exec"), "EXEC", "extra");
+        errorCase(cases,
+                "EXECABORT Transaction discarded because of: wrong number of arguments for 'exec' command",
+                "EXEC", "extra");
         errorCase(cases, wrongArity("exists"), "EXISTS");
         errorCase(cases, wrongArity("expire"), "EXPIRE", "key");
         errorCase(cases, wrongArity("expireat"), "EXPIREAT", "key");

@@ -33,7 +33,7 @@ CommandExecutor
 - `CommandSyntax`：name、`CommandArity`、`CommandKeySpec`、`TransactionPolicy` 和 `ReplyAdmissionRequirement`；
 - `CommandHandler`：`parse(CommandArgs)`，成功时返回 `Function<CommandSession, PreparedCommand>`。
 
-`CommandSyntax` 构造时把名称 trim + 大写，并校验非空且全 ASCII；非法名称在启动注册阶段就抛 `IllegalArgumentException`，不会流入运行时。`DefaultCommandModules` 创建的八个命令家族统一使用 `TransactionPolicy.QUEUEABLE` 和 `ReplyAdmissionRequirement.PIPELINED`，只有 `HELLO`（`DISALLOWED_IN_MULTI`）和 `EXEC`（`BARRIER_UNTIL_CLEANUP`）是例外。
+`CommandSyntax` 构造时把名称 trim + 大写，并校验非空且全 ASCII；非法名称在启动注册阶段就抛 `IllegalArgumentException`，不会流入运行时。`DefaultCommandModules` 创建的八个命令家族统一使用 `TransactionPolicy.QUEUEABLE` 和 `ReplyAdmissionRequirement.PIPELINED`；`ServerCommandModule` 的 `HELLO` 也是 `QUEUEABLE`，只有 `EXEC`（`BARRIER_UNTIL_CLEANUP`）是例外。
 
 dispatcher 先检查命令名、null argument、lookup 和 arity，再调用 handler。handler 只读 argv、生成不可变的解析结果，不读 session、不路由 DB、也不调用 server provider。这条限制让普通执行与 `MULTI` 入队 preflight 共用同一套 parse 行为。
 
@@ -62,7 +62,7 @@ parse 阶段只产生 `Function<CommandSession, PreparedCommand>`，不会访问
 `PreparedCommand` 把执行前和执行后的责任分开：
 
 - `reservationShape()` 给出 encoded reply 与 retained source 的容量上界；
-- `replyProtocolVersion()` 可选声明本次回复的目标 RESP 版本（`HELLO` 用它声明协商后版本，其余命令返回空，由 executor 取 session 当前版本）；
+- `replyProtocolVersion()` 可选声明本次回复的目标 RESP 版本（`HELLO` 用它声明协商后版本，`EXEC` 用它固定外层数组的版本，其余命令返回空，由 executor 取 session 当前版本）；
 - `validateBeforeExecute()` 检查 prepare 时观察的状态是否仍可执行；
 - `execute(CommandSession)` 在容量已预留时提交动作，返回 `CommandResult`；
 - `close()` 归还 mutation、DB source、retained request 或其他 owner。

@@ -3,6 +3,7 @@ package yier.bubu.redis.command.kernel;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.OptionalInt;
 import yier.bubu.redis.command.api.CommandArgs;
 import yier.bubu.redis.command.api.CommandArity;
 import java.util.function.Function;
@@ -27,7 +28,11 @@ import yier.bubu.redis.execution.api.ValidationResult;
 
 /** 事务控制命令以及 EXEC 的延迟回复所有权边界。 */
 final class TransactionCommands {
+    static final String EXEC = "EXEC";
+
     private static final String EXEC_ABORT = "EXECABORT Transaction discarded because of previous errors.";
+    private static final String EXEC_REJECTED_PREFIX = "EXECABORT Transaction discarded because of: ";
+    private static final String ERR_PREFIX = "ERR ";
 
     private final CommandDispatcher dispatcher;
 
@@ -40,7 +45,7 @@ final class TransactionCommands {
         registration.register(new CommandSpec(syntax("MULTI"), this::multi));
         registration.register(new CommandSpec(syntax("DISCARD"), this::discard));
         registration.register(new CommandSpec(
-                syntax("EXEC", ReplyAdmissionRequirement.BARRIER_UNTIL_CLEANUP),
+                syntax(EXEC, ReplyAdmissionRequirement.BARRIER_UNTIL_CLEANUP),
                 this::exec
         ));
     }
@@ -112,7 +117,27 @@ final class TransactionCommands {
         ReplyShape reservationShape = tx.size() == 0
                 ? ReplyShapes.array(List.of())
                 : ReplyShapes.maximum();
-        return new PreparedExec(tx, dispatcher, session, reservationShape);
+        return new PreparedExec(tx, dispatcher, session, reservationShape, session.respVersion());
+    }
+
+    /**
+     * EXEC 自身在 dispatcher 被拒（目前只有参数个数不对）时的回复：不论是否在 MULTI 里都返回
+     * {@code EXECABORT Transaction discarded because of: <原因>}，执行时丢弃排队并回到普通模式。
+     */
+    static PreparedCommand prepareRejectedExec(CommandSession session, String reason) {
+        // Redis 的 rejectCommandFormat 原因文本不带 "ERR "；这里的 arity 文案带前缀，拼接前去掉以保持同一字节形态。
+        String detail = reason.startsWith(ERR_PREFIX) ? reason.substring(ERR_PREFIX.length()) : reason;
+        String message = EXEC_REJECTED_PREFIX + detail;
+        return PreparedCommands.action(
+                ReplyShapes.error(message),
+                context -> {
+                    TransactionState tx = session.transaction();
+                    if (tx.active()) {
+                        tx.discard();
+                    }
+                    return CommandResult.error(message);
+                }
+        );
     }
 
     private static PreparedCommand error(String message) {
@@ -158,6 +183,7 @@ final class TransactionCommands {
         private final CommandSession session;
         private final ArrayList<PreparedCommand> children;
         private final ReplyShape reservationShape;
+        private final int replyProtocolVersion;
         private List<ExecutionRequest> drainedRequests = List.of();
         private boolean executed;
         private boolean closed;
@@ -166,18 +192,26 @@ final class TransactionCommands {
                 TransactionState tx,
                 CommandDispatcher dispatcher,
                 CommandSession session,
-                ReplyShape reservationShape
+                ReplyShape reservationShape,
+                int replyProtocolVersion
         ) {
             this.tx = Objects.requireNonNull(tx, "tx");
             this.dispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
             this.session = Objects.requireNonNull(session, "session");
             this.children = new ArrayList<>();
             this.reservationShape = Objects.requireNonNull(reservationShape, "reservationShape");
+            this.replyProtocolVersion = replyProtocolVersion;
         }
 
         @Override
         public ReplyShape reservationShape() {
             return reservationShape;
+        }
+
+        // 显式声明外层版本，execute 里才能确定哪些 child 回复需要按另一版本编码。
+        @Override
+        public OptionalInt replyProtocolVersion() {
+            return OptionalInt.of(replyProtocolVersion);
         }
 
         @Override
@@ -209,6 +243,13 @@ final class TransactionCommands {
                     RedisReply reply = result.reply();
                     if (reply instanceof RedisReply.ControlError controlError) {
                         reply = RedisReplies.error(controlError.message());
+                    }
+                    // 对齐 Redis：排队的 HELLO 在执行时切换协议，它自己和之后的 child 回复按新版本编码，
+                    // 之前的仍按外层版本。只有空队列才用精确预留，而切换版本至少需要一个 child，
+                    // 所以这里一定处在 maximum 预留下。
+                    int childProtocolVersion = session.respVersion();
+                    if (childProtocolVersion != replyProtocolVersion) {
+                        reply = RedisReplies.protocolVersioned(childProtocolVersion, reply);
                     }
                     replies.add(reply);
                     closeAfterReply |= result.closeAfterReply();

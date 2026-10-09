@@ -181,7 +181,7 @@ execute(CommandSession)
 
 只读命令可以在 apply 时取得 DB source，并由 `PreparedCommand` 持有到渲染完成。需要 optimistic preview 的写命令可以准备 `PreparedMutation`，把 `isCurrent()` 接到 `validateBeforeExecute()`，真正的 commit 留到 execute。无需状态预读的写命令也可以返回带上界 shape 的 action，在 execute 时直接调用 DB capability。
 
-`PreparedCommand.replyProtocolVersion()` 是给“execute 期才切换协议版本”的命令（`HELLO`）用的：默认空表示按 prepare/预留时刻捕获的 session 版本算容量；`HELLO` 在 prepare 时就声明协商后的目标版本，让容量预留和实际写出用同一个版本。
+`PreparedCommand.replyProtocolVersion()` 是给“execute 期才切换协议版本”的命令（`HELLO`）用的：默认空表示按 prepare/预留时刻捕获的 session 版本算容量；`HELLO` 在 prepare 时就声明协商后的目标版本，让容量预留和实际写出用同一个版本。`EXEC` 也显式声明 prepare 时的外层版本；队列里的 `HELLO` 切换版本后，之后的 child 回复用 `RedisReply.ProtocolVersioned` 按各自版本编码（见 [`protocol-reference.md`](./protocol-reference.md#hello-2--hello-3)）。
 
 `PreparedCommands` 提供四种现成形状：`ready(result)`（结果已定，shape 取 result 的 shape）、`action(shape, fn)`、`action(shape, version, fn)`、`owned(result, owner)` / `ownedAction(shape, owner, validation, fn)`。owner 的 `close()` 由 prepared command 的 `close()` 幂等触发一次，`null` owner 时 `close()` 是空操作。
 
@@ -223,7 +223,7 @@ RESP decoder 会忠实保留 array 中的 null bulk string。命令级合法性�
 
 ## 事务排队 preflight
 
-transaction active 时，dispatcher 仍先完成命令名检查、registry lookup 和 arity validation。之后按 `CommandSyntax.transactionPolicy()` 分支：
+transaction active 时，dispatcher 仍先完成命令名检查、registry lookup 和 arity validation（`EXEC` 自身 arity 不对时不论事务是否 active 都走 `TransactionCommands.prepareRejectedExec`，丢弃事务并回复 `EXECABORT Transaction discarded because of: ...`）。之后按 `CommandSyntax.transactionPolicy()` 分支：
 
 - `TRANSACTION_CONTROL`（`MULTI`/`EXEC`/`DISCARD`）：立即应用各自的准备函数，不重新排队；
 - `DISALLOWED_IN_MULTI`：准备 `abortingError`，文案 `ERR <NAME> is not allowed in MULTI`，执行时标记 aborted；

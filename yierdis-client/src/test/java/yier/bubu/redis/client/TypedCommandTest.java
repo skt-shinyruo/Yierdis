@@ -85,9 +85,10 @@ public class TypedCommandTest {
                     () -> Await.join(connection.auth("secret")),
                     "AUTH <password> called without any password configured"
             );
+            Assert.assertEquals("OK", Await.join(connection.auth("default", "secret")));
             assertServerError(
-                    () -> Await.join(connection.auth("default", "secret")),
-                    "AUTH <password> called without any password configured"
+                    () -> Await.join(connection.auth("bob", "secret")),
+                    "WRONGPASS invalid username-password pair or user is disabled."
             );
 
             Assert.assertEquals("OK", Await.join(connection.set("gone", "v")));
