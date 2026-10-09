@@ -3,6 +3,7 @@ package yier.bubu.redis.integration.command;
 import java.util.function.IntConsumer;
 
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Assert;
 import org.junit.Test;
@@ -452,12 +453,17 @@ public class ReplyPreflightCommandTest {
             }
 
             @Override
-            public KeyScanWindow scan(ScanCursorV2 cursor, byte[] globPattern, int count) {
+            public KeyScanWindow scan(
+                    ScanCursorV2 cursor,
+                    byte[] globPattern,
+                    Set<ValueType> types,
+                    int count
+            ) {
                 int call = scanCalls.incrementAndGet();
                 if (call == 2) {
                     Assert.assertEquals("stale window must close before reprepare", 1, firstWindowCloses.get());
                 }
-                KeyScanWindow window = delegate.scan(cursor, globPattern, count);
+                KeyScanWindow window = delegate.scan(cursor, globPattern, types, count);
                 return call == 1 ? staleAfterPreparation(window, firstWindowCloses) : window;
             }
 

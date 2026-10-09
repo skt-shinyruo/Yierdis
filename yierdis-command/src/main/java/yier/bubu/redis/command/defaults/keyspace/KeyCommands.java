@@ -2,9 +2,11 @@ package yier.bubu.redis.command.defaults.keyspace;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.ToLongFunction;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.command.api.CommandArgs;
@@ -205,7 +207,7 @@ public final class KeyCommands {
         };
     }
 
-    private record ScanArgs(long cursor, byte[] match, int count) {
+    private record ScanArgs(long cursor, byte[] match, Set<ValueType> types, int count) {
     }
 
     private Function<CommandSession, PreparedCommand> scan(CommandArgs args) {
@@ -213,7 +215,7 @@ public final class KeyCommands {
         return session -> {
             for (int attempt = 0; attempt < KEY_WINDOW_DISCOVERY_ATTEMPTS; attempt++) {
                 KeyScanWindow window = support.commandDb(session).keyspace().scan(
-                        ScanCursorV2.of(parsed.cursor()), parsed.match(), parsed.count());
+                        ScanCursorV2.of(parsed.cursor()), parsed.match(), parsed.types(), parsed.count());
                 if (!window.current()) {
                     window.close();
                     continue;
@@ -228,6 +230,7 @@ public final class KeyCommands {
     private static ScanArgs scanArgs(CommandArgs args) {
         long cursor = args.nonNegativeLongAt(1);
         byte[] match = null;
+        Set<ValueType> types = EnumSet.allOf(ValueType.class);
         int count = 10;
         for (int index = 2; index < args.argc(); index++) {
             if (args.is(index, "MATCH")) {
@@ -235,6 +238,13 @@ public final class KeyCommands {
                     throw syntaxFailure();
                 }
                 match = args.bytes(index);
+                continue;
+            }
+            if (args.is(index, "TYPE")) {
+                if (++index >= args.argc()) {
+                    throw syntaxFailure();
+                }
+                types = scanTypes(args, index);
                 continue;
             }
             if (args.is(index, "COUNT")) {
@@ -250,7 +260,18 @@ public final class KeyCommands {
             }
             throw syntaxFailure();
         }
-        return new ScanArgs(cursor, match, count);
+        return new ScanArgs(cursor, match, types, count);
+    }
+
+    // Redis 8 对未知类型名不报错，只是让这次 SCAN 不匹配任何 key；stream 这类 Yierdis 不存储的
+    // Redis 类型也落在这里。类型名比较不分大小写，与 TYPE 命令回复的小写名字一一对应。
+    private static Set<ValueType> scanTypes(CommandArgs args, int index) {
+        for (ValueType type : ValueType.values()) {
+            if (args.is(index, type.name())) {
+                return EnumSet.of(type);
+            }
+        }
+        return EnumSet.noneOf(ValueType.class);
     }
 
     private static PreparedCommand keyWindowReply(KeyScanWindow window) {

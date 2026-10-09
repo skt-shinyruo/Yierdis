@@ -193,6 +193,16 @@ HLL 没有独立 `ValueType`。命令层由 `HllCommands` 表达语义，DB 层�
 
 命令家族因此可以独立演进，主类型系统也不必为 bitmap 和 HLL 增加额外逻辑类型。
 
+## SCAN
+
+```text
+SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]
+```
+
+- `TYPE` 按 key 的值类型过滤，类型名不分大小写：`string`、`list`、`set`、`zset`、`hash`。HLL key 的类型是 `string`。过滤在 `KeyspaceOps.scan(cursor, glob, types, count)` 里做，discovery 和 replay 用同一组类型。
+- 未知类型名不报错，和 Redis 8 一样只是不匹配任何 key，cursor 照常推进到 `0`。`stream` 这类 Yierdis 不存储的 Redis 类型也一样。重复 `TYPE` 时以最后一个为准。
+- 只有 `SCAN` 接受 `TYPE`，`HSCAN`/`SSCAN`/`ZSCAN` 上出现报 `ERR syntax error`。
+
 ## HSCAN、SSCAN 和 ZSCAN
 
 三条命令复用 `CollectionScanCommandSupport` 的参数规则：
