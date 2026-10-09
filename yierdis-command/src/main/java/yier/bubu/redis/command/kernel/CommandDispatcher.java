@@ -63,7 +63,9 @@ public final class CommandDispatcher {
         Objects.requireNonNull(request, "request");
 
         int argc = request.argc();
-        if (argc <= 0 || request.isNull(0) || request.len(0) == 0) {
+        // Redis 只有“没有命令名数组”才算协议级空命令；长度为 0 的 bulk（含仅 NUL 截断后的空名）
+        // 走 unknown command ''，这样 MULTI 里也会 EXECABORT 并带上 args beginning with。
+        if (argc <= 0 || request.isNull(0)) {
             return abortingError(session, EMPTY_COMMAND);
         }
 
@@ -72,7 +74,9 @@ public final class CommandDispatcher {
             return abortingError(session, NULL_BULK_STRING);
         }
 
-        CommandSpec spec = registry.specByExactUpperName(nameUpper);
+        CommandSpec spec = nameUpper == null || nameUpper.isEmpty()
+                ? null
+                : registry.specByExactUpperName(nameUpper);
         if (spec == null) {
             return abortingError(session, unknownCommandMessage(request));
         }
@@ -117,15 +121,18 @@ public final class CommandDispatcher {
             // EXEC replay 会重新 parse 并应用届时的 session；这里只确认 parse 能产出延迟 prepare。
             Objects.requireNonNull(deferredPrepare, "command handler returned null");
         } catch (CommandParseException failure) {
-            // 入队只拒绝参数个数。选项、取值和语法错误先 QUEUED，EXEC 时只有这一条失败。
-            if (wrongArity(failure.getMessage())) {
+            // 入队只拒绝参数个数和未知子命令（与 Redis 容器命令 lookup 失败一致）。
+            // 选项、取值和语法错误先 QUEUED，EXEC 时只有这一条失败。
+            if (abortsMultiOnParse(failure.getMessage())) {
                 throw failure;
             }
         }
     }
 
-    private static boolean wrongArity(String message) {
-        return message != null && message.contains("wrong number of arguments");
+    private static boolean abortsMultiOnParse(String message) {
+        return message != null
+                && (message.contains("wrong number of arguments")
+                || message.contains("unknown subcommand"));
     }
 
     private static PreparedCommand prepareRetainedRequestEnqueue(
@@ -190,18 +197,45 @@ public final class CommandDispatcher {
         return new String(upper, StandardCharsets.US_ASCII);
     }
 
+    // 对齐 Redis commandCheckArity 的 unknown-command 文案：命令名 %.128s；若有参数再追加
+    // ", with args beginning with: " 与逐个 "'%.*s' "（累计 128 字节预算）；NUL 截断该段；
+    // 整句再把 CR/LF 换成空格。非 ASCII 字节在 Yierdis 里写成 '?'，因为错误回复按 US_ASCII 计量。
     private static String unknownCommandMessage(ExecutionRequest request) {
-        int length = request.len(0);
-        if (length > 64) {
-            return "ERR unknown command";
-        }
-        for (int index = 0; index < length; index++) {
-            int value = request.byteAt(0, index) & 0xff;
-            if (value < 0x20 || value > 0x7e || value == '\'' || value == '\\') {
-                return "ERR unknown command";
+        StringBuilder message = new StringBuilder("ERR unknown command '");
+        appendRedisEcho(message, request, 0, 128);
+        message.append('\'');
+        if (request.argc() >= 2) {
+            message.append(", with args beginning with: ");
+            int argsBytes = 0;
+            for (int index = 1; index < request.argc() && argsBytes < 128; index++) {
+                int budget = 128 - argsBytes;
+                message.append('\'');
+                int written = appendRedisEcho(message, request, index, budget);
+                message.append("' ");
+                argsBytes += 1 + written + 2;
             }
         }
-        byte[] name = request.readOnlyByteArray(0);
-        return "ERR unknown command '" + new String(name, StandardCharsets.US_ASCII) + "'";
+        return message.toString();
+    }
+
+    /** @return 写入的字符数（已计入 NUL 截断与替换） */
+    public static int appendRedisEcho(StringBuilder out, ExecutionRequest request, int argIndex, int maxChars) {
+        int length = request.len(argIndex);
+        int written = 0;
+        for (int index = 0; index < length && written < maxChars; index++) {
+            int value = request.byteAt(argIndex, index) & 0xff;
+            if (value == 0) {
+                break;
+            }
+            if (value == '\r' || value == '\n') {
+                out.append(' ');
+            } else if (value < 0x20 || value > 0x7e) {
+                out.append('?');
+            } else {
+                out.append((char) value);
+            }
+            written++;
+        }
+        return written;
     }
 }

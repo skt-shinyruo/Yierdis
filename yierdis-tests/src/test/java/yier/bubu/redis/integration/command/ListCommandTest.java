@@ -161,15 +161,22 @@ public class ListCommandTest {
 
             client.execute(Arrays.asList(b("RPUSH"), b("list"), b("a")));
 
-            // Redis 对负 count 报 "must be positive"，只有非整数 count 才报通用整数错误。
-            ReplyError lpopNegative = (ReplyError) client.execute(Arrays.asList(b("LPOP"), b("list"), b("-1")));
-            Assert.assertEquals("ERR value is out of range, must be positive", lpopNegative.message());
+            client.execute(Arrays.asList(b("SET"), b("string"), b("v")));
 
-            ReplyError rpopNegative = (ReplyError) client.execute(Arrays.asList(b("RPOP"), b("list"), b("-1")));
-            Assert.assertEquals("ERR value is out of range, must be positive", rpopNegative.message());
-
-            ReplyError notInteger = (ReplyError) client.execute(Arrays.asList(b("LPOP"), b("list"), b("abc")));
-            Assert.assertEquals("ERR value is not an integer or out of range", notInteger.message());
+            // Redis 8.9.241 的 getPositiveLongFromObjectOrReply 把非整数和负数都报成 "must be positive"，
+            // 而且 count 先于查 key 解析，所以缺 key 和非 list key 也是这句。
+            for (String command : List.of("LPOP", "RPOP")) {
+                for (String key : List.of("list", "missing", "string")) {
+                    for (String count : List.of("-1", "abc", "1.5", "", "-0", "+1", "007", " 1",
+                            "9223372036854775808", "-9223372036854775808")) {
+                        ReplyError failure = (ReplyError) client.execute(Arrays.asList(b(command), b(key), b(count)));
+                        Assert.assertEquals(command + " " + key + " " + count,
+                                "ERR value is out of range, must be positive", failure.message());
+                    }
+                }
+            }
+            Assert.assertEquals(1, ((ReplyArray) client.execute(
+                    Arrays.asList(b("LRANGE"), b("list"), b("0"), b("-1")))).values().size());
             }
         });
     }

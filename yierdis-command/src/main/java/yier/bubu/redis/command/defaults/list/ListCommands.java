@@ -25,7 +25,7 @@ import yier.bubu.redis.storage.api.result.ByteSequenceSource;
 import yier.bubu.redis.storage.api.result.PoppedValueSequence;
 
 public final class ListCommands {
-    // Redis getPositiveLongFromObjectOrReply 文案：count 解析失败走通用整数错误，解析成功但为负则报“必须为正”。
+    // Redis getPositiveLongFromObjectOrReply：非整数与负数都报这句（msg 一路传到 getLong*）。
     private static final String POSITIVE_RANGE_ERROR = "ERR value is out of range, must be positive";
     private static final CommandKeySpec KEY = new CommandKeySpec(1, 1, 1);
 
@@ -78,7 +78,14 @@ public final class ListCommands {
         boolean hasCount = args.argc() == 3;
         int count = 1;
         if (hasCount) {
-            long parsed = args.longAt(2);
+            // Redis getPositiveLongFromObjectOrReply：非整数和负数都用 "must be positive"；
+            // 区间下限是 0，所以 count 0 仍合法（空数组），先于查 key 解析。
+            long parsed;
+            try {
+                parsed = args.longAt(2);
+            } catch (CommandParseException notAnInteger) {
+                throw new CommandParseException(POSITIVE_RANGE_ERROR);
+            }
             if (parsed < 0L) {
                 throw new CommandParseException(POSITIVE_RANGE_ERROR);
             }

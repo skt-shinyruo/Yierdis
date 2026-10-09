@@ -475,6 +475,42 @@ public class TransactionCommandTest {
         });
     }
 
+    // Redis 8.9.241：未知命令（含空命令名）、未知子命令和子命令参数个数不对都在入队时拒绝并 EXECABORT；
+    // MEMORY USAGE 的 SAMPLES 取值和选项错误先 QUEUED，EXEC 时只有这一条失败。
+    @Test
+    public void unknownCommandAndSubcommandErrorTextInsideMulti() {
+        forEachDb(db -> {
+            for (InvalidCommand invalid : List.of(
+                    invalid("ERR unknown command 'foo', with args beginning with: 'a' ", "foo", "a"),
+                    invalid("ERR unknown command ''", ""),
+                    invalid("ERR unknown subcommand 'foo'. Try OBJECT HELP.", "OBJECT", "foo", "k"),
+                    invalid("ERR wrong number of arguments for 'object|encoding' command", "OBJECT", "ENCODING"),
+                    invalid("ERR unknown subcommand 'foo'. Try MEMORY HELP.", "MEMORY", "foo"),
+                    invalid("ERR wrong number of arguments for 'memory|help' command", "MEMORY", "HELP", "x")
+            )) {
+                CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+                TestSession session = new TestSession();
+                FastTestClient client = new FastTestClient(dispatcher, session);
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+                Assert.assertEquals(invalid.message(), ((ReplyError) client.execute(invalid.args())).message());
+                Assert.assertEquals(0, session.transactionState().size());
+                Assert.assertEquals(
+                        "EXECABORT Transaction discarded because of previous errors.",
+                        ((ReplyError) client.execute(List.of(b("EXEC")))).message()
+                );
+            }
+            assertContentErrorFailsOnlyThatCommand(db,
+                    List.of(b("MEMORY"), b("USAGE"), b("k"), b("SAMPLES"), b("x")),
+                    "ERR value is not an integer or out of range");
+            assertContentErrorFailsOnlyThatCommand(db,
+                    List.of(b("MEMORY"), b("USAGE"), b("k"), b("bad")),
+                    "ERR syntax error");
+            assertContentErrorFailsOnlyThatCommand(db,
+                    List.of(b("LPOP"), b("list"), b("x")),
+                    "ERR value is out of range, must be positive");
+        });
+    }
+
     @Test
     public void keyspaceContentErrorsInsideMultiFailOnlyThatCommand() {
         forEachDb(db -> {

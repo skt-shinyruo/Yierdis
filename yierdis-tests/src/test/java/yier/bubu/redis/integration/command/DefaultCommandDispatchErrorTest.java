@@ -32,9 +32,13 @@ public class DefaultCommandDispatchErrorTest {
     public void commandProcessorRejectsEmptyAndUnknownCommandsBeforeDispatch() {
         withClient(client -> {
             assertError("ERR empty command", client.execute(Collections.emptyList()));
-            assertError("ERR empty command", client.execute(Arrays.asList(b(""))));
+            assertError("ERR unknown command ''", client.execute(Arrays.asList(b(""))));
+            assertError("ERR unknown command '', with args beginning with: 'a' ",
+                    client.execute(Arrays.asList(b(""), b("a"))));
             assertError("ERR unknown command 'NOPE'", client.execute(cmd("NOPE")));
-            assertError("ERR unknown command", client.execute(Arrays.asList(new byte[]{0})));
+            assertError("ERR unknown command 'NOPE', with args beginning with: 'a' 'b' ",
+                    client.execute(cmd("NOPE", "a", "b")));
+            assertError("ERR unknown command ''", client.execute(Arrays.asList(new byte[]{0})));
             assertError("ERR Protocol error: null bulk string", client.execute(Arrays.asList(b("SET"), b("k"), null)));
         });
     }
