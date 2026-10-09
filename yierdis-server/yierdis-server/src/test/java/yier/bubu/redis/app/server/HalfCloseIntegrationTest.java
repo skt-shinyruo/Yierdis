@@ -170,6 +170,35 @@ public class HalfCloseIntegrationTest {
     }
 
     @Test
+    public void halfCloseSlowClientStillSubjectToOutputBufferOverLimit() throws Exception {
+        // story 14：半关闭排空期间写缓冲背压仍生效；慢读超过宽限会被关掉，不会留下半开连接。
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config(
+                "--client-output-buffer-limit-bytes", "1024",
+                "--client-output-buffer-over-limit-millis", "200"
+        ))) {
+            ChildChannelRegistry registry = server.childChannelRegistryForTests();
+            // 小收窗：回复堆在服务端 outbound，才能顶满写水位并触发慢客户端宽限。
+            Socket socket = connectWithReceiveBuffer(server, 256);
+            try {
+                ByteArrayOutputStream batch = new ByteArrayOutputStream();
+                for (int index = 0; index < 2_000; index++) {
+                    batch.writeBytes(command("SET", "bp" + index, "xxxxxxxx"));
+                }
+                writeRaw(socket, batch.toByteArray());
+                socket.shutdownOutput();
+
+                // 故意不读：水位超限后宽限到期应关掉连接并释放 maxClients 槽。
+                awaitActiveClients(registry, 0);
+                while (socket.getInputStream().read() >= 0) {
+                    // 排空对端关闭前已入内核的字节，直到 EOF。
+                }
+            } finally {
+                socket.close();
+            }
+        }
+    }
+
+    @Test
     public void halfCloseDrainKeepsReplyBudgetReservedUntilRepliesFlush() throws Exception {
         // story 14：半关闭排空期间回复预算仍记账；全部写出并断连后额度归零。
         int commandCount = 256;
@@ -215,11 +244,14 @@ public class HalfCloseIntegrationTest {
 
     @Test
     public void halfCloseHoldsMaxClientsSlotUntilRepliesAreDrained() throws Exception {
+        int commandCount = 1_000;
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config("--maxClients", "1"))) {
             ChildChannelRegistry registry = server.childChannelRegistryForTests();
-            try (Socket first = connect(server)) {
+            // 小收窗 + 足够多回复：未读时服务端写堵，半关闭连接在读完前一直占 maxClients 槽。
+            Socket first = connectWithReceiveBuffer(server, 256);
+            try {
                 ByteArrayOutputStream batch = new ByteArrayOutputStream();
-                for (int index = 0; index < 256; index++) {
+                for (int index = 0; index < commandCount; index++) {
                     batch.writeBytes(command("SET", "mc" + index, "1"));
                 }
                 writeRaw(first, batch.toByteArray());
@@ -235,10 +267,12 @@ public class HalfCloseIntegrationTest {
                 }
 
                 awaitActiveClients(registry, 1);
-                for (int index = 0; index < 256; index++) {
+                for (int index = 0; index < commandCount; index++) {
                     Assert.assertEquals("+OK\r\n", readAsciiFrame(first));
                 }
                 assertEof(first);
+            } finally {
+                first.close();
             }
             awaitActiveClients(registry, 0);
 
@@ -263,7 +297,15 @@ public class HalfCloseIntegrationTest {
     }
 
     private static Socket connect(YierdisServerBootstrap server) throws IOException {
+        return connectWithReceiveBuffer(server, 0);
+    }
+
+    private static Socket connectWithReceiveBuffer(YierdisServerBootstrap server, int receiveBufferBytes)
+            throws IOException {
         Socket socket = new Socket();
+        if (receiveBufferBytes > 0) {
+            socket.setReceiveBufferSize(receiveBufferBytes);
+        }
         socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2_000);
         socket.setSoTimeout(5_000);
         return socket;
