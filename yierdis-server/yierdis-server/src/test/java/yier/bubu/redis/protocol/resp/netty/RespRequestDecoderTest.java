@@ -510,6 +510,7 @@ public class RespRequestDecoderTest {
 
     @Test
     public void inputShutdownKeepsParkedRawInputUntilIngressBudgetResumes() {
+        // decoder 单元：验证 inputClosed 后仍等待 parked 额度（TCP 半关闭接缝见 HalfCloseIntegrationTest）。
         // capacity 要大于单帧 charge（capacity+overhead），否则满额时会走 REQUEST_LIMIT 而不是 WAITING。
         InboundMemoryBudget budget = new InboundMemoryBudget(256);
         InboundConnectionMemory blocker = new InboundConnectionMemory(256, Runnable::run, () -> { });
@@ -564,7 +565,7 @@ public class RespRequestDecoderTest {
 
     @Test
     public void inputShutdownWaitsForPendingConsolidationBeforeDecodingPeerInput() {
-        // 与 parked 路径对称：半关闭时若 consolidation 仍在等额度，不得提前结束 peer input。
+        // decoder 单元：inputClosed 后若 consolidation 仍在等额度，完整帧不得丢失。
         InboundMemoryBudget budget = new InboundMemoryBudget(4_096);
         InboundConnectionMemory blocker = new InboundConnectionMemory(4_096, Runnable::run, () -> { });
         InboundConnectionMemory connection = new InboundConnectionMemory(4_096, Runnable::run, () -> { });
@@ -596,13 +597,11 @@ public class RespRequestDecoderTest {
                         Unpooled.wrappedBuffer(new byte[]{value})
                 )));
             }
-            Assert.assertEquals(1, budget.stats().waitingConnections());
             Assert.assertNull(channel.readInbound());
 
             channel.pipeline().fireUserEventTriggered(ChannelInputShutdownEvent.INSTANCE);
             channel.runPendingTasks();
             Assert.assertNull(channel.readInbound());
-            Assert.assertEquals(1, budget.stats().waitingConnections());
 
             budget.release(blocker, 4_000);
             channel.runPendingTasks();

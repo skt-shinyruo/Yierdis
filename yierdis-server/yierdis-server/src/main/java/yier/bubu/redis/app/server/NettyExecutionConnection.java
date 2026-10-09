@@ -82,7 +82,6 @@ final class NettyExecutionConnection implements ExecutionConnection {
         return beginReplyShutdown(false);
     }
 
-    /** 与 sequencer 半关闭/关停分流同语义：true 取消未完成槽，false 只排空。 */
     private CompletableFuture<Void> beginReplyShutdown(boolean cancelIncompleteSlots) {
         NettyReplyDecodedMessageGate gate = replyGate;
         if (gate != null) {
