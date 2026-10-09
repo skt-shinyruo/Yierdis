@@ -122,6 +122,26 @@ public class HalfCloseIntegrationTest {
             socket.shutdownOutput();
 
             Assert.assertEquals("+PONG\r\n", readAsciiFrame(socket));
+            // 残帧若误走协议错误路径会先写出 -ERR；读到 EOF 即证明没有错误回复。
+            assertEof(socket);
+        }
+    }
+
+    @Test
+    public void protocolErrorThenHalfCloseStillWritesErrorAndCloses() throws Exception {
+        // story 15：半关闭修复不得改写 fail-closed——畸形帧仍回一条协议错误再断连。
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config());
+             Socket socket = connect(server)) {
+            writeRaw(socket, join(
+                    command("PING"),
+                    "*01\r\n$4\r\nPING\r\n".getBytes(StandardCharsets.US_ASCII)
+            ));
+            socket.shutdownOutput();
+
+            Assert.assertEquals("+PONG\r\n", readAsciiFrame(socket));
+            RespClientCodec.RespReply error = readReply(socket);
+            Assert.assertEquals(RespClientCodec.RespReply.Kind.ERROR, error.kind());
+            Assert.assertEquals("ERR Protocol error: invalid multibulk length", error.text());
             assertEof(socket);
         }
     }
