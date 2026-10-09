@@ -4,6 +4,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.storage.api.BitRangeUnit;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
@@ -43,6 +44,22 @@ public class StringDirectOpsTest {
 
             db.lists().rpush(b("list"), List.of(b("a")));
             expectWrongType(() -> db.strings().bitcount(view("list")));
+        });
+    }
+
+    @Test
+    public void bitcountBitUnitMasksPartialEdgeBytes() {
+        withDb(db -> {
+            db.strings().setString(b("bits"), new byte[]{(byte) 0xF0, 0x0F, 0x55}, SetMode.NORMAL, null);
+
+            Assert.assertEquals(4L, db.strings().bitcount(view("bits"), 0, 3, BitRangeUnit.BIT));
+            Assert.assertEquals(0L, db.strings().bitcount(view("bits"), 4, 11, BitRangeUnit.BIT));
+            Assert.assertEquals(4L, db.strings().bitcount(view("bits"), 2, 13, BitRangeUnit.BIT));
+            Assert.assertEquals(1L, db.strings().bitcount(view("bits"), -1, -1, BitRangeUnit.BIT));
+            Assert.assertEquals(12L, db.strings().bitcount(view("bits"), 0, 100, BitRangeUnit.BIT));
+            Assert.assertEquals(0L, db.strings().bitcount(view("bits"), -1, -2, BitRangeUnit.BIT));
+            Assert.assertEquals(8L, db.strings().bitcount(view("bits"), 0, 1, BitRangeUnit.BYTE));
+            Assert.assertEquals(0L, db.strings().bitcount(view("missing"), 0, 7, BitRangeUnit.BIT));
         });
     }
 

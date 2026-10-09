@@ -67,7 +67,10 @@ public class CommandParseIsolationTest {
                 argv("SETBIT", "k", "0", "2"),
                 argv("GETBIT", "k", "-1"),
                 argv("BITCOUNT", "k", "from", "2"),
-                argv("BITCOUNT", "k", "0", "to")
+                argv("BITCOUNT", "k", "0", "to"),
+                argv("BITCOUNT", "k", "0"),
+                argv("BITCOUNT", "k", "0", "1", "FOO"),
+                argv("BITCOUNT", "k", "0", "1", "BIT", "extra")
         }) {
             assertParseFailure(registry, invalid);
         }

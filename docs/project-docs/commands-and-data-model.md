@@ -115,7 +115,7 @@ RESP2 / RESP3 的标量与 aggregate 编码由协议 writer 根据 session versi
 | --- | --- | --- |
 | connection/server | `CoreConnectionCommands`、`ServerCommandModule` | `SELECT`/`FLUSHDB` 用会话与 `flushDb*`；`INFO`/`STATS`/`MEMORY STATS` 走 `ServerInfoProvider`；`PING`/`ECHO`/`COMMAND`/`QUIT`/`CLIENT`/`AUTH`/`HELLO` 不访问 DB |
 | key/TTL | `KeyCommands` | `TYPE`→`keyspace().typeOf`；`KEYS`→`keyspace().keys`；`SCAN`→`keyspace().scan`；`DEL`→`keyspace().del`；`EXISTS`→`keyspace().existsKey`；四个 EXPIRE 系列→`ttl().expire/pexpire/expireAtSeconds/expireAtMillis`；`PERSIST`→`ttl().persist`；`TTL`/`PTTL`→`ttl().ttlSeconds/ttlMillis`；`MEMORY USAGE`→`memoryUsage`；`MEMORY STATS`→`memoryStats`；`OBJECT ENCODING`→`objectEncoding` |
-| string/bitmap | `StringCommands` | `SET`→`prepareSet`；`GET`→`getStringValue`；`STRLEN`→`strlen`；`APPEND`→`append`；`SETBIT`/`GETBIT`→`setBit`/`getBit`；`BITCOUNT`→`bitcount`；`INCR`/`DECR`→`incrBy(key, ±1)` |
+| string/bitmap | `StringCommands` | `SET`→`prepareSet`；`GET`→`getStringValue`；`STRLEN`→`strlen`；`APPEND`→`append`；`SETBIT`/`GETBIT`→`setBit`/`getBit`；`BITCOUNT`→`bitcount`（可带 `BitRangeUnit`）；`INCR`/`DECR`→`incrBy(key, ±1)` |
 | HLL | `HllCommands` | `pfadd`/`pfcount`/`pfmerge` |
 | list | `ListCommands` | `lpush`/`rpush`/`lrange`/`preparePop` |
 | hash | `HashCommands` | `hset`/`hget`/`hgetall`/`hlen`/`hdel`/`hscan` |
@@ -183,7 +183,7 @@ RESP2 / RESP3 的标量与 aggregate 编码由协议 writer 根据 session versi
 - `GET` 在 prepare 阶段取得 `ByteValue`，用 `DbReplies.value(...)` 生成 semantic bulk reply，并以 `PreparedCommands.owned(...)` 持有 source，渲染后释放（native pin 在 `StringRoot.retainedValue` 取出时建立）；
 - `APPEND`、`SETBIT`、`INCR`/`DECR` 等已知 reply 上界的动作在 execute 阶段访问 string typed ops，预留 `ReplyShapes.integerUpperBound()`。
 
-bitmap 是 string bytes 的一种视图，因此 `SETBIT`、`GETBIT`、`BITCOUNT` 与普通 string 命令共享 `ValueType.STRING` 和 wrong-type 约束。`SETBIT` 和 `GETBIT` 在 parse 阶段就拒绝 offset/8 >= 512 MiB（`MAX_STRING_BYTES`），错误文案都是 `ERR bit offset is not an integer or out of range`。`SETBIT` 写路径仍经过 DB mutation、TTL 和 memory ledger；读路径返回 `RedisReply`，不直接编码 RESP。
+bitmap 是 string bytes 的一种视图，因此 `SETBIT`、`GETBIT`、`BITCOUNT` 与普通 string 命令共享 `ValueType.STRING` 和 wrong-type 约束。`SETBIT` 和 `GETBIT` 在 parse 阶段就拒绝 offset/8 >= 512 MiB（`MAX_STRING_BYTES`），错误文案都是 `ERR bit offset is not an integer or out of range`。`BITCOUNT key [start end [BIT|BYTE]]` 的 unit 不区分大小写、默认 `BYTE`，在 parse 阶段转成 `BitRangeUnit` 交给 `bitcount(key, start, end, unit)`；arity 与 Redis 一样只要求 key，只带 start、unit 非法或参数多于 5 个时由 handler 报 `ERR syntax error`，所以在 `MULTI` 里会入队、EXEC 时只让这一条失败。start/end/unit 都在查 key 之前解析，参数错误优先于 `WRONGTYPE`。区间规则照搬 Redis 8 `bitcountCommand`：start、end 原值都为负且 start > end 时直接回 0；否则按单位（BIT 下是总位数）换算负下标并钳位。`SETBIT` 写路径仍经过 DB mutation、TTL 和 memory ledger；读路径返回 `RedisReply`，不直接编码 RESP。
 
 `SET` 的选项解析有一条实现上的边界值得记住：`EX`/`PX`/`EXAT`/`PXAT` 要求参数为正，因此过去但为正的 `EXAT`/`PXAT` 不在 parse 阶段失败，而会在 execute 时先写后过期——这样 `MULTI` preflight 不会因为入队时刻的时钟把整个事务判成 `EXECABORT`。
 
