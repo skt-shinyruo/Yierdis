@@ -27,6 +27,9 @@ import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 // 不再是 Yierdis 私有哈希夹具：相同 member -> 相同寄存器 -> 相同计数。
 public class HllCommandTest {
     private static final long DENSE_HLL_PHYSICAL_MAXMEMORY_BYTES = 700_000L;
+    private static final String INVALID_HLL = "WRONGTYPE Key is not a valid HyperLogLog string value.";
+    private static final String CORRUPTED_HLL = "INVALIDOBJ Corrupted HLL object detected";
+    private static final String WRONG_TYPE = "WRONGTYPE Operation against a key holding the wrong kind of value";
 
     @Test
     public void pfaddCreatesAndUpdates() {
@@ -169,6 +172,45 @@ public class HllCommandTest {
     }
 
     @Test
+    public void pfmergeWithOnlyDestinationCreatesOrKeepsTheHyperLogLog() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                // Redis PFMERGE 的 arity 是 -2：只给 dest 时 dest 缺失就建空 sparse HLL（18 字节、TYPE string）。
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(cmd("PFMERGE", "d1"))).value());
+                Assert.assertEquals(1, ((ReplyInteger) client.execute(cmd("EXISTS", "d1"))).value());
+                Assert.assertEquals("string", ((ReplySimpleString) client.execute(cmd("TYPE", "d1"))).value());
+                Assert.assertEquals(0, ((ReplyInteger) client.execute(cmd("PFCOUNT", "d1"))).value());
+                Assert.assertEquals(18, ((ReplyInteger) client.execute(cmd("STRLEN", "d1"))).value());
+
+                // dest 已存在时只与自身合并：内容、计数和 TTL 都不变。
+                client.execute(cmd("PFADD", "d2", "a", "b"));
+                client.execute(cmd("PEXPIRE", "d2", "500000"));
+                byte[] before = ((ReplyBulkString) client.execute(cmd("GET", "d2"))).data();
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(cmd("PFMERGE", "d2"))).value());
+                Assert.assertArrayEquals(before, ((ReplyBulkString) client.execute(cmd("GET", "d2"))).data());
+                Assert.assertEquals(2, ((ReplyInteger) client.execute(cmd("PFCOUNT", "d2"))).value());
+                Assert.assertEquals(24, ((ReplyInteger) client.execute(cmd("STRLEN", "d2"))).value());
+                long pttl = ((ReplyInteger) client.execute(cmd("PTTL", "d2"))).value();
+                Assert.assertTrue("PTTL after PFMERGE: " + pttl, pttl > 0);
+
+                client.execute(cmd("SET", "s", "foo"));
+                Assert.assertEquals(
+                        "WRONGTYPE Key is not a valid HyperLogLog string value.",
+                        ((ReplyError) client.execute(cmd("PFMERGE", "s"))).message());
+                client.execute(cmd("LPUSH", "l", "x"));
+                Assert.assertEquals(
+                        "WRONGTYPE Operation against a key holding the wrong kind of value",
+                        ((ReplyError) client.execute(cmd("PFMERGE", "l"))).message());
+                Assert.assertEquals(
+                        "ERR wrong number of arguments for 'pfmerge' command",
+                        ((ReplyError) client.execute(cmd("PFMERGE"))).message());
+            }
+        });
+    }
+
+    @Test
     public void denseHllSupportsInPlacePfaddAfterPfmergeUnderFfmStorage() {
         YierdisDb db = openFfm(0L);
         try {
@@ -252,6 +294,86 @@ public class HllCommandTest {
     }
 
     @Test
+    public void corruptedSparseBodyRepliesInvalidObjLikeRedis() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                // Redis：header 合法但 sparse 游程损坏时报 INVALIDOBJ；header 校验失败才报 HLL 专用 WRONGTYPE。
+                client.execute(cmd("PFADD", "h", "a", "b", "c"));
+                Assert.assertEquals(28, ((ReplyInteger) client.execute(cmd("APPEND", "h", "x"))).value());
+                assertError(client.execute(cmd("PFCOUNT", "h")), CORRUPTED_HLL);
+                assertError(client.execute(cmd("PFCOUNT", "h", "nosuch")), CORRUPTED_HLL);
+                assertError(client.execute(cmd("PFMERGE", "out", "h")), CORRUPTED_HLL);
+                Assert.assertEquals(0, ((ReplyInteger) client.execute(cmd("EXISTS", "out"))).value());
+                assertError(client.execute(cmd("PFMERGE", "h")), CORRUPTED_HLL);
+                assertError(client.execute(cmd("PFMERGE", "h", "nosuch")), CORRUPTED_HLL);
+                // 没有 element 的 PFADD 在 Redis 里不解析 body，已有 key 直接回 0。
+                Assert.assertEquals(0, ((ReplyInteger) client.execute(cmd("PFADD", "h"))).value());
+
+                // 只有 sparse header、没有游程的 payload：Redis PFADD 带 element 也报 INVALIDOBJ。
+                byte[] headerOnly = new byte[16];
+                System.arraycopy(b("HYLL"), 0, headerOnly, 0, 4);
+                headerOnly[4] = 1;
+                headerOnly[15] = (byte) 0x80;
+                client.execute(Arrays.asList(b("SET"), b("hdr"), headerOnly));
+                assertError(client.execute(cmd("PFADD", "hdr", "a")), CORRUPTED_HLL);
+                Assert.assertEquals(0, ((ReplyInteger) client.execute(cmd("PFADD", "hdr"))).value());
+                assertError(client.execute(cmd("PFCOUNT", "hdr")), CORRUPTED_HLL);
+                assertError(client.execute(cmd("PFMERGE", "hdr")), CORRUPTED_HLL);
+                assertError(client.execute(cmd("PFMERGE", "o", "hdr")), CORRUPTED_HLL);
+                Assert.assertEquals(0, ((ReplyInteger) client.execute(cmd("EXISTS", "o"))).value());
+                Assert.assertArrayEquals(headerOnly, ((ReplyBulkString) client.execute(cmd("GET", "hdr"))).data());
+            }
+        });
+    }
+
+    @Test
+    public void hllErrorsFollowRedisArgumentOrder() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                // Redis PFMERGE/PFCOUNT 从 argv[1] 起逐个校验 key，第一个出错的 key 决定回复；PFMERGE 先查 dest。
+                client.execute(cmd("PFADD", "bad", "a"));
+                client.execute(cmd("APPEND", "bad", "x"));
+                client.execute(cmd("SET", "str", "foo"));
+                client.execute(cmd("LPUSH", "lst", "x"));
+
+                assertError(client.execute(cmd("PFMERGE", "str", "bad")), INVALID_HLL);
+                assertError(client.execute(cmd("PFMERGE", "bad", "str")), CORRUPTED_HLL);
+                assertError(client.execute(cmd("PFMERGE", "lst", "bad")), WRONG_TYPE);
+                assertError(client.execute(cmd("PFMERGE", "bad", "lst")), CORRUPTED_HLL);
+                assertError(client.execute(cmd("PFCOUNT", "str", "bad")), INVALID_HLL);
+                assertError(client.execute(cmd("PFCOUNT", "bad", "str")), CORRUPTED_HLL);
+                assertError(client.execute(cmd("PFCOUNT", "bad", "lst")), CORRUPTED_HLL);
+            }
+        });
+    }
+
+    @Test
+    public void invalidHllHeaderStaysWrongType() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                // dense 的长度属于 header 校验：APPEND 之后 Redis 回 HLL 专用 WRONGTYPE，而不是 INVALIDOBJ。
+                client.execute(pfaddArgs("dn", 300000, 3000));
+                Assert.assertEquals(12304, ((ReplyInteger) client.execute(cmd("STRLEN", "dn"))).value());
+                client.execute(cmd("APPEND", "dn", "x"));
+                assertError(client.execute(cmd("PFCOUNT", "dn")), INVALID_HLL);
+                assertError(client.execute(cmd("PFADD", "dn", "q")), INVALID_HLL);
+
+                client.execute(cmd("SET", "k", "foo"));
+                assertError(client.execute(cmd("PFADD", "k")), INVALID_HLL);
+                assertError(client.execute(cmd("PFMERGE", "o3", "k")), INVALID_HLL);
+                client.execute(cmd("SET", "hb", "HYLL"));
+                assertError(client.execute(cmd("PFCOUNT", "hb")), INVALID_HLL);
+            }
+        });
+    }
+
+    @Test
     public void emptyPfaddMarksTheCardinalityCacheInvalid() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
@@ -277,6 +399,11 @@ public class HllCommandTest {
             argv.add(b("member:" + (memberStartInclusive + i)));
         }
         return argv;
+    }
+
+    private static void assertError(ReplyObject reply, String message) {
+        Assert.assertTrue("expected error, got " + reply, reply instanceof ReplyError);
+        Assert.assertEquals(message, ((ReplyError) reply).message());
     }
 
     private static String replyDescription(ReplyObject reply) {

@@ -76,7 +76,7 @@ public class DefaultCommandDispatchErrorTest {
         errorCase(cases, wrongArity("pexpireat"), "PEXPIREAT", "key");
         errorCase(cases, wrongArity("pfadd"), "PFADD");
         errorCase(cases, wrongArity("pfcount"), "PFCOUNT");
-        errorCase(cases, wrongArity("pfmerge"), "PFMERGE", "dst");
+        errorCase(cases, wrongArity("pfmerge"), "PFMERGE");
         errorCase(cases, wrongArity("ping"), "PING", "a", "b");
         errorCase(cases, wrongArity("pttl"), "PTTL");
         errorCase(cases, wrongArity("quit"), "QUIT", "extra");

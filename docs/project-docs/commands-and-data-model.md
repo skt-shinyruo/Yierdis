@@ -189,7 +189,7 @@ bitmap 是 string bytes 的一种视图，因此 `SETBIT`、`GETBIT`、`BITCOUNT
 
 ## HLL 和 string
 
-HLL 没有独立 `ValueType`。命令层由 `HllCommands` 表达语义，DB 层由 `HllOps` 处理，但底层对象仍是 `ValueType.STRING`；payload 是否为有效 HLL 由格式约定判断。payload 格式与 Redis 对齐（`HYLL` header、sparse/dense 编码），因此 PF* 对相同 member 给出 Redis 类计数。把普通 string 当作 HLL 使用会走 HLL 的格式校验并可能返回 `WRONGTYPE Key is not a valid HyperLogLog string value.`。
+HLL 没有独立 `ValueType`。命令层由 `HllCommands` 表达语义，DB 层由 `HllOps` 处理，但底层对象仍是 `ValueType.STRING`；payload 是否为有效 HLL 由格式约定判断。payload 格式与 Redis 对齐（`HYLL` header、sparse/dense 编码），因此 PF* 对相同 member 给出 Redis 类计数。把普通 string 当作 HLL 使用会走 HLL 的格式校验：header（`HYLL` magic、encoding、dense 长度）不合法时返回 `WRONGTYPE Key is not a valid HyperLogLog string value.`；header 合法但 sparse 游程损坏（例如 PFADD 之后 APPEND）时返回 `INVALIDOBJ Corrupted HLL object detected`。非 string 类型仍是通用 `WRONGTYPE`。多 key 的 PFCOUNT/PFMERGE 按参数顺序校验（PFMERGE 先查 dest），第一个出错的 key 决定回复。
 
 命令家族因此可以独立演进，主类型系统也不必为 bitmap 和 HLL 增加额外逻辑类型。
 

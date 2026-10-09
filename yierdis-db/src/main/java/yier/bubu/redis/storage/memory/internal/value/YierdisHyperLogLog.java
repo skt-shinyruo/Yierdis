@@ -55,9 +55,10 @@ public final class YierdisHyperLogLog {
     // 空 sparse HLL 的字节数：header + 单个 XZERO:16384。
     private static final int SPARSE_EMPTY_BYTES = HEADER_BYTES + 2;
 
-    // 与 Redis isHLLObjectOrReply 的文案对齐：stored string 不是合法 HLL（magic/encoding/长度校验失败）时的统一文案。
-    // 注意 Redis 另有 INVALIDOBJ 错误，只用于 header 合法但 sparse 内容损坏的负载，这里不涉及。
+    // 与 Redis isHLLObjectOrReply 的文案对齐：stored string 的 header 校验（magic/encoding/dense 长度）失败。
     public static final String INVALID_HLL_ERROR = "WRONGTYPE Key is not a valid HyperLogLog string value.";
+    // 与 Redis invalid_hll_err 对齐：header 合法，但 sparse 游程没有恰好覆盖 16384 个寄存器。
+    public static final String CORRUPTED_HLL_ERROR = "INVALIDOBJ Corrupted HLL object detected";
 
     private YierdisHyperLogLog() {
     }
@@ -206,6 +207,11 @@ public final class YierdisHyperLogLog {
             if (!isValidHllBytes(current)) {
                 throw new YierdisCommandException(INVALID_HLL_ERROR);
             }
+            // Redis pfaddCommand 只在逐个 element 调 hllAdd 时才读 body：没有 element 时，
+            // header 合法但 sparse body 损坏的 key 也直接回 0，不能在这里报 INVALIDOBJ。
+            if (elements == null || elements.isEmpty()) {
+                return null;
+            }
             denseFloor = isDenseBytes(current);
             mergeHllIntoRegisters(current, registers);
         }
@@ -340,7 +346,7 @@ public final class YierdisHyperLogLog {
         out[pos + 1] = (byte) ((len - 1) & 0xFF);
     }
 
-    /** sparse 游程解码并 max 进寄存器；结构不合法（游程越界/总寄存器数不为 16384）时报 WRONGTYPE。 */
+    /** sparse 游程解码并 max 进寄存器；结构不合法（游程越界/总寄存器数不为 16384）时报 INVALIDOBJ。 */
     private static void mergeSparseIntoRegisters(Cursor cursor, int[] registers) {
         int index = 0;
         while (cursor.pos < cursor.length) {
@@ -352,7 +358,7 @@ public final class YierdisHyperLogLog {
             } else if ((b & 0xC0) == 0x40) {
                 // XZERO
                 if (cursor.pos + 1 >= cursor.length) {
-                    throw new YierdisCommandException(INVALID_HLL_ERROR);
+                    throw new YierdisCommandException(CORRUPTED_HLL_ERROR);
                 }
                 int len = (((b & 0x3F) << 8) | (cursor.get(cursor.pos + 1) & 0xFF)) + 1;
                 index += len;
@@ -363,7 +369,7 @@ public final class YierdisHyperLogLog {
                 int len = (b & 0x3) + 1;
                 for (int k = 0; k < len; k++) {
                     if (index >= REGISTERS) {
-                        throw new YierdisCommandException(INVALID_HLL_ERROR);
+                        throw new YierdisCommandException(CORRUPTED_HLL_ERROR);
                     }
                     if (value > registers[index]) {
                         registers[index] = value;
@@ -373,11 +379,11 @@ public final class YierdisHyperLogLog {
                 cursor.pos += 1;
             }
             if (index > REGISTERS) {
-                throw new YierdisCommandException(INVALID_HLL_ERROR);
+                throw new YierdisCommandException(CORRUPTED_HLL_ERROR);
             }
         }
         if (index != REGISTERS) {
-            throw new YierdisCommandException(INVALID_HLL_ERROR);
+            throw new YierdisCommandException(CORRUPTED_HLL_ERROR);
         }
     }
 
