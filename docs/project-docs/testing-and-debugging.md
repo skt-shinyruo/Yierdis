@@ -45,10 +45,10 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 再跑 server 协议集成：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server -am -Dtest=RespProtocolIntegrationTest,RespProtocolErrorIntegrationTest,RespHandshakeIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server -am -Dtest=RespProtocolIntegrationTest,RespProtocolErrorIntegrationTest,RespHandshakeIntegrationTest,HalfCloseIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-排障顺序：先确认 `RespRequestDecoder` 把 admission 后的线上 bytes 正确转成 `ByteArrayExecutionRequest`，并移交 argv 与 lease；再看 `InboundMemoryBudget` 的 lease 是否在最后一个消费者处释放（`inbound_reserved_bytes` 回到 0）；最后确认 `RespReplyWriter` 的 reply 语义编码是否正确。
+排障顺序：先确认 `RespRequestDecoder` 把 admission 后的线上 bytes 正确转成 `ByteArrayExecutionRequest`，并移交 argv 与 lease；再看 `InboundMemoryBudget` 的 lease 是否在最后一个消费者处释放（`inbound_reserved_bytes` 回到 0）；最后确认 `RespReplyWriter` 的 reply 语义编码是否正确。半关闭（`shutdownOutput`）排空与慢客户端写缓冲宽限见 `HalfCloseIntegrationTest`。
 
 ## 改命令时
 

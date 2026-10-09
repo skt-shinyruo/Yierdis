@@ -71,7 +71,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 # 2. server 侧协议集成：握手、错误关闭、生命周期
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
   mvn -pl yierdis-server/yierdis-server -am \
-  -Dtest=RespProtocolIntegrationTest,RespProtocolErrorIntegrationTest,RespHandshakeIntegrationTest,RespIngressLifecycleIntegrationTest \
+  -Dtest=RespProtocolIntegrationTest,RespProtocolErrorIntegrationTest,RespHandshakeIntegrationTest,RespIngressLifecycleIntegrationTest,HalfCloseIntegrationTest \
   -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
