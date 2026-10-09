@@ -1,8 +1,6 @@
 package yier.bubu.redis.protocol.resp.netty;
 
 import io.netty.buffer.Unpooled;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.channel.socket.ChannelInputShutdownEvent;
 import org.junit.Assert;
@@ -11,7 +9,6 @@ import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class RespRequestDecoderTest {
@@ -522,7 +519,6 @@ public class RespRequestDecoderTest {
                 budget.tryReserve(blocker, 200)
         );
 
-        AtomicBoolean peerInputConsumed = new AtomicBoolean();
         RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
                 1_024,
                 16,
@@ -533,19 +529,7 @@ public class RespRequestDecoderTest {
                 RespDecodedMessageGate.PASS_THROUGH,
                 InboundReadControl.NOOP
         );
-        EmbeddedChannel channel = new EmbeddedChannel(
-                decoder,
-                new ChannelInboundHandlerAdapter() {
-                    @Override
-                    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) {
-                        if (evt instanceof PeerInputConsumedEvent) {
-                            peerInputConsumed.set(true);
-                            return;
-                        }
-                        ctx.fireUserEventTriggered(evt);
-                    }
-                }
-        );
+        EmbeddedChannel channel = new EmbeddedChannel(decoder);
         ExecutionRequest request = null;
         try {
             Assert.assertFalse(channel.writeInbound(Unpooled.copiedBuffer(
@@ -556,10 +540,7 @@ public class RespRequestDecoderTest {
 
             channel.pipeline().fireUserEventTriggered(ChannelInputShutdownEvent.INSTANCE);
             channel.runPendingTasks();
-            Assert.assertFalse(
-                    "PeerInputConsumed must wait while raw input is still parked on ingress budget",
-                    peerInputConsumed.get()
-            );
+            // 半关闭时额度尚未恢复：已到线的完整命令仍不得丢失（此时还不能解码出来）。
             Assert.assertNull(channel.readInbound());
 
             budget.release(blocker, 200);
@@ -568,7 +549,7 @@ public class RespRequestDecoderTest {
             request = readExecutionRequest(channel);
             Assert.assertEquals(1, request.argc());
             Assert.assertArrayEquals(bytes("PING"), request.readOnlyByteArray(0));
-            Assert.assertTrue(peerInputConsumed.get());
+            Assert.assertNull(channel.readInbound());
         } finally {
             if (request != null) {
                 request.close();

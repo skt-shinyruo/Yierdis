@@ -201,10 +201,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         if (!inputClosed) {
             readControl.resumeIngress();
         }
-        process(ctx);
-        if (inputClosed) {
-            finishPeerInputIfIdle(ctx);
-        }
+        processThenFinishPeerInputIfNeeded(ctx);
     }
 
     private void releaseParkedRawInput() {
@@ -786,18 +783,17 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
 
     private void resumeOnEventLoop(ChannelHandlerContext ctx) {
         if (ctx.executor().inEventLoop()) {
-            process(ctx);
-            if (inputClosed) {
-                finishPeerInputIfIdle(ctx);
-            }
+            processThenFinishPeerInputIfNeeded(ctx);
             return;
         }
-        ctx.executor().execute(() -> {
-            process(ctx);
-            if (inputClosed) {
-                finishPeerInputIfIdle(ctx);
-            }
-        });
+        ctx.executor().execute(() -> processThenFinishPeerInputIfNeeded(ctx));
+    }
+
+    private void processThenFinishPeerInputIfNeeded(ChannelHandlerContext ctx) {
+        process(ctx);
+        if (inputClosed) {
+            finishPeerInputIfIdle(ctx);
+        }
     }
 
     private void resumeHandoffLater(
@@ -812,9 +808,9 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             // gate 可能同步触发 wake-up；延后到 event loop，避免 tryAdmit 返回前重入同一 handoff。
             ctx.executor().execute(() -> {
                 if (phase == handoff) {
-                    process(ctx);
-                }
-                if (inputClosed) {
+                    processThenFinishPeerInputIfNeeded(ctx);
+                } else {
+                    // handoff 已被替换时仍可能需要在半关闭后收尾。
                     finishPeerInputIfIdle(ctx);
                 }
             });
