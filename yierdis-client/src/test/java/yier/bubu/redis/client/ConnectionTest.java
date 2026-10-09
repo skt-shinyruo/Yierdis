@@ -2,6 +2,10 @@ package yier.bubu.redis.client;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.client.exception.CommandTimeoutException;
+import yier.bubu.redis.client.exception.ConnectionException;
+import yier.bubu.redis.client.exception.DecodeException;
+import yier.bubu.redis.client.exception.ServerException;
 import yier.bubu.redis.protocol.resp.RespClientCodec;
 import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 
@@ -31,38 +35,43 @@ public class ConnectionTest {
                     "SET".getBytes(StandardCharsets.US_ASCII),
                     "binary".getBytes(StandardCharsets.US_ASCII),
                     new byte[]{(byte) 0xFF}));
-            connection.command("MULTI");
-            connection.command("GET", "binary");
-            connection.command("SELECT", "1");
-            Assert.assertThrows(DecodeException.class, () -> connection.command("EXEC"));
+            java.util.concurrent.CompletableFuture<Object> multi = connection.command("MULTI");
+            java.util.concurrent.CompletableFuture<Object> get = connection.command("GET", "binary");
+            java.util.concurrent.CompletableFuture<Object> select = connection.command("SELECT", "1");
+            java.util.concurrent.CompletableFuture<Object> exec = connection.command("EXEC");
+            Assert.assertEquals("OK", Await.join(multi));
+            Assert.assertThrows(DecodeException.class, () -> Await.join(get));
+            Assert.assertEquals("OK", Await.join(select));
+            Assert.assertTrue(Await.join(exec) instanceof List);
             Assert.assertEquals(1, connection.database());
-            Assert.assertEquals("OK", connection.set("k", "on-one"));
+            Assert.assertEquals("OK", Await.join(connection.set("k", "on-one")));
             try (Connection db0 = connect(server)) {
-                Assert.assertNull(db0.get("k"));
+                Assert.assertNull(Await.join(db0.get("k")));
             }
-            Assert.assertEquals("PONG", connection.ping());
+            Assert.assertEquals("PONG", Await.join(connection.ping()));
         }
     }
 
     @Test
-    public void longMinimumIsReturnedByRawTypedPipelineAndTransactionCommands() throws Exception {
+    public void longMinimumIsReturnedByRawTypedAndTransactionCommands() throws Exception {
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
             String aboveMinimum = Long.toString(Long.MIN_VALUE + 1);
-            connection.set("minimum", aboveMinimum);
-            Assert.assertEquals(Long.MIN_VALUE, connection.decr("minimum"));
-            Assert.assertEquals(Long.toString(Long.MIN_VALUE), connection.get("minimum"));
-            connection.set("minimum", aboveMinimum);
-            Assert.assertEquals(Long.valueOf(Long.MIN_VALUE), connection.command("DECR", "minimum"));
-            connection.set("minimum", aboveMinimum);
-            try (Pipeline pipeline = connection.pipeline()) {
-                Assert.assertEquals(Long.valueOf(Long.MIN_VALUE), pipeline.decr("minimum").get());
-            }
-            connection.set("minimum", aboveMinimum);
+            Await.join(connection.set("minimum", aboveMinimum));
+            Assert.assertEquals(Long.valueOf(Long.MIN_VALUE), Await.join(connection.decr("minimum")));
+            Assert.assertEquals(Long.toString(Long.MIN_VALUE), Await.join(connection.get("minimum")));
+            Await.join(connection.set("minimum", aboveMinimum));
+            Assert.assertEquals(Long.valueOf(Long.MIN_VALUE), Await.join(connection.command("DECR", "minimum")));
+            Await.join(connection.set("minimum", aboveMinimum));
+            java.util.concurrent.CompletableFuture<Object> outstanding = connection.command("DECR", "minimum");
+            java.util.concurrent.CompletableFuture<String> followed = connection.ping();
+            Assert.assertEquals(Long.valueOf(Long.MIN_VALUE), Await.join(outstanding));
+            Assert.assertEquals("PONG", Await.join(followed));
+            Await.join(connection.set("minimum", aboveMinimum));
             Transaction transaction = connection.multi();
             transaction.decr("minimum");
-            Assert.assertEquals(List.of(Long.MIN_VALUE), transaction.exec());
-            Assert.assertEquals("PONG", connection.ping());
+            Assert.assertEquals(List.of(Long.MIN_VALUE), Await.join(transaction.exec()));
+            Assert.assertEquals("PONG", Await.join(connection.ping()));
         }
     }
 
@@ -86,11 +95,11 @@ public class ConnectionTest {
     public void defaultAddressAndOverriddenHostPortCompleteRawPing() throws Exception {
         try (TestServer server = TestServer.start(ConnectionSettings.DEFAULT_PORT);
              Connection connection = Connection.connect()) {
-            Assert.assertEquals("PONG", connection.command("PING"));
+            Assert.assertEquals("PONG", Await.join(connection.command("PING")));
         }
         try (TestServer server = TestServer.start();
              Connection connection = Connection.connect("127.0.0.1", server.port())) {
-            Assert.assertEquals("PONG", connection.command(1_000, "PING"));
+            Assert.assertEquals("PONG", Await.join(connection.command(1_000, "PING")));
             Assert.assertEquals(0, connection.database());
         }
     }
@@ -99,9 +108,9 @@ public class ConnectionTest {
     public void missingGetIsNullAndSetThenGetReturnsTheString() throws Exception {
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
-            Assert.assertNull(connection.command("GET", "missing"));
-            Assert.assertEquals("OK", connection.command("SET", "k", "v"));
-            Assert.assertEquals("v", connection.command("GET", "k"));
+            Assert.assertNull(Await.join(connection.command("GET", "missing")));
+            Assert.assertEquals("OK", Await.join(connection.command("SET", "k", "v")));
+            Assert.assertEquals("v", Await.join(connection.command("GET", "k")));
         }
     }
 
@@ -109,14 +118,14 @@ public class ConnectionTest {
     public void incrIsLongAndUnknownCommandLeavesTheConnectionUsable() throws Exception {
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
-            Assert.assertEquals(Long.valueOf(1), connection.command("INCR", "n"));
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.command("INCR", "n")));
             try {
-                connection.command("NO_SUCH");
+                Await.join(connection.command("NO_SUCH"));
                 Assert.fail("expected ServerException");
             } catch (ServerException e) {
                 Assert.assertEquals("ERR unknown command 'NO_SUCH'", e.getMessage());
             }
-            Assert.assertEquals("PONG", connection.command("PING"));
+            Assert.assertEquals("PONG", Await.join(connection.command("PING")));
         }
     }
 
@@ -130,11 +139,11 @@ public class ConnectionTest {
                     new byte[]{(byte) 0xFF}
             ));
             try {
-                connection.command("GET", "bin");
+                Await.join(connection.command("GET", "bin"));
                 Assert.fail("expected DecodeException");
             } catch (DecodeException expected) {
             }
-            Assert.assertEquals("PONG", connection.command("PING"));
+            Assert.assertEquals("PONG", Await.join(connection.command("PING")));
         }
     }
 
@@ -142,13 +151,13 @@ public class ConnectionTest {
     public void unencodableStringIsRejectedBeforeWrite() throws Exception {
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
-            Assert.assertEquals("OK", connection.command("SET", "k", "stored"));
+            Assert.assertEquals("OK", Await.join(connection.command("SET", "k", "stored")));
             try {
-                connection.command("SET", "k", "\uD800");
+                Await.join(connection.command("SET", "k", "\uD800"));
                 Assert.fail("expected DecodeException");
             } catch (DecodeException expected) {
             }
-            Assert.assertEquals("stored", connection.command("GET", "k"));
+            Assert.assertEquals("stored", Await.join(connection.command("GET", "k")));
         }
     }
 
@@ -156,21 +165,21 @@ public class ConnectionTest {
     public void nonPositiveCommandTimeoutIsRejectedAndPingStillReturnsPong() throws Exception {
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
-            Assert.assertEquals("OK", connection.command("SET", "k", "stored"));
+            Assert.assertEquals("OK", Await.join(connection.command("SET", "k", "stored")));
             try {
-                connection.command(0, "GET", "k");
+                Await.join(connection.command(0, "GET", "k"));
                 Assert.fail("expected IllegalArgumentException");
             } catch (IllegalArgumentException e) {
                 Assert.assertTrue(e.getMessage().contains("commandTimeoutMillis"));
             }
             try {
-                connection.command(-1, "PING");
+                Await.join(connection.command(-1, "PING"));
                 Assert.fail("expected IllegalArgumentException");
             } catch (IllegalArgumentException e) {
                 Assert.assertTrue(e.getMessage().contains("commandTimeoutMillis"));
             }
-            Assert.assertEquals("PONG", connection.command("PING"));
-            Assert.assertEquals("stored", connection.command("GET", "k"));
+            Assert.assertEquals("PONG", Await.join(connection.command("PING")));
+            Assert.assertEquals("stored", Await.join(connection.command("GET", "k")));
         }
     }
 
@@ -207,6 +216,12 @@ public class ConnectionTest {
         } catch (IllegalArgumentException e) {
             Assert.assertTrue(e.getMessage().contains("port"));
         }
+        try {
+            ConnectionSettings.defaults().withIoThreadCount(0);
+            Assert.fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            Assert.assertTrue(e.getMessage().contains("ioThreadCount"));
+        }
     }
 
     @Test
@@ -218,22 +233,22 @@ public class ConnectionTest {
                          .withDatabase(1))) {
                 Assert.assertEquals(0, db0.database());
                 Assert.assertEquals(1, db1.database());
-                Assert.assertEquals("OK", db0.command("SET", "k", "from-zero"));
-                Assert.assertNull(db1.command("GET", "k"));
-                Assert.assertEquals("OK", db1.command("SET", "k", "from-one"));
-                Assert.assertEquals("from-one", db1.command("GET", "k"));
-                Assert.assertEquals("from-zero", db0.command("GET", "k"));
+                Assert.assertEquals("OK", Await.join(db0.command("SET", "k", "from-zero")));
+                Assert.assertNull(Await.join(db1.command("GET", "k")));
+                Assert.assertEquals("OK", Await.join(db1.command("SET", "k", "from-one")));
+                Assert.assertEquals("from-one", Await.join(db1.command("GET", "k")));
+                Assert.assertEquals("from-zero", Await.join(db0.command("GET", "k")));
 
-                Assert.assertEquals("OK", db0.command("select", "2"));
+                Assert.assertEquals("OK", Await.join(db0.command("select", "2")));
                 Assert.assertEquals(2, db0.database());
                 try {
-                    db0.command("SELECT", "16");
+                    Await.join(db0.command("SELECT", "16"));
                     Assert.fail("expected ServerException");
                 } catch (ServerException e) {
                     Assert.assertEquals("ERR DB index is out of range", e.getMessage());
                 }
                 Assert.assertEquals(2, db0.database());
-                Assert.assertEquals("PONG", db0.command("PING"));
+                Assert.assertEquals("PONG", Await.join(db0.command("PING")));
             }
 
             try {
@@ -246,7 +261,7 @@ public class ConnectionTest {
             }
             try (Connection connection = connect(server)) {
                 Assert.assertEquals(0, connection.database());
-                Assert.assertEquals("PONG", connection.command("PING"));
+                Assert.assertEquals("PONG", Await.join(connection.command("PING")));
             }
         }
     }
@@ -256,14 +271,14 @@ public class ConnectionTest {
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
             try {
-                connection.command("QUIT", "extra");
+                Await.join(connection.command("QUIT", "extra"));
                 Assert.fail("expected ServerException");
             } catch (ServerException expected) {
             }
-            Assert.assertEquals("PONG", connection.command("PING"));
-            Assert.assertEquals("OK", connection.command("quit"));
+            Assert.assertEquals("PONG", Await.join(connection.command("PING")));
+            Assert.assertEquals("OK", Await.join(connection.command("quit")));
             try {
-                connection.command("PING");
+                Await.join(connection.command("PING"));
                 Assert.fail("expected IllegalStateException");
             } catch (IllegalStateException expected) {
             }
@@ -271,19 +286,15 @@ public class ConnectionTest {
     }
 
     @Test
-    public void hello3ClosesWhenTheReplyMarkerIsAMap() throws Exception {
+    public void hello3FailsThatCommandAndLeavesTheConnectionUsable() throws Exception {
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
             try {
-                connection.command("HELLO", "3");
+                Await.join(connection.command("HELLO", "3"));
                 Assert.fail("expected ConnectionException");
             } catch (ConnectionException expected) {
             }
-            try {
-                connection.command("PING");
-                Assert.fail("expected IllegalStateException");
-            } catch (IllegalStateException expected) {
-            }
+            Assert.assertEquals("PONG", Await.join(connection.ping()));
         }
     }
 
@@ -291,8 +302,8 @@ public class ConnectionTest {
     public void rawHgetallStaysANestedList() throws Exception {
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
-            connection.command("HSET", "h", "f", "v");
-            Object reply = connection.command("HGETALL", "h");
+            Await.join(connection.command("HSET", "h", "f", "v"));
+            Object reply = Await.join(connection.command("HGETALL", "h"));
             Assert.assertTrue(reply instanceof List);
             Assert.assertFalse(reply instanceof java.util.Map);
             Assert.assertEquals(List.of("f", "v"), reply);
@@ -304,19 +315,19 @@ public class ConnectionTest {
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
             try {
-                connection.command();
+                Await.join(connection.command());
                 Assert.fail("expected IllegalArgumentException");
             } catch (IllegalArgumentException expected) {
             }
             try {
-                connection.command("");
+                Await.join(connection.command(""));
                 Assert.fail("expected IllegalArgumentException");
             } catch (IllegalArgumentException expected) {
             }
-            Assert.assertEquals("PONG", connection.command("PING"));
+            Assert.assertEquals("PONG", Await.join(connection.command("PING")));
             connection.close();
             try {
-                connection.command("PING");
+                Await.join(connection.command("PING"));
                 Assert.fail("expected IllegalStateException");
             } catch (IllegalStateException expected) {
             }

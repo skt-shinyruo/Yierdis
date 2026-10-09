@@ -1,5 +1,26 @@
 package yier.bubu.redis.client;
 
+import yier.bubu.redis.client.command.ExpireOptions;
+import yier.bubu.redis.client.command.FlushMode;
+import yier.bubu.redis.client.command.MemoryUsageOptions;
+import yier.bubu.redis.client.command.ScanOptions;
+import yier.bubu.redis.client.command.ScoreRangeOptions;
+import yier.bubu.redis.client.command.SetGetOptions;
+import yier.bubu.redis.client.command.SetOptions;
+import yier.bubu.redis.client.command.ZAddIncrOptions;
+import yier.bubu.redis.client.command.ZAddOptions;
+import yier.bubu.redis.client.command.ZRangeOptions;
+import yier.bubu.redis.client.exception.DecodeException;
+import yier.bubu.redis.client.exception.ServerException;
+import yier.bubu.redis.client.reply.CommandInfo;
+import yier.bubu.redis.client.reply.HashEntry;
+import yier.bubu.redis.client.reply.HashFieldScan;
+import yier.bubu.redis.client.reply.HashScan;
+import yier.bubu.redis.client.reply.KeyScan;
+import yier.bubu.redis.client.reply.ScoredMember;
+import yier.bubu.redis.client.reply.SetScan;
+import yier.bubu.redis.client.reply.ZScan;
+
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -28,66 +49,66 @@ public class TypedCommandTest {
     public void connectionCommandsCoverSuccessAndServerErrors() throws Exception {
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
-            Assert.assertEquals("PONG", connection.ping());
-            Assert.assertEquals("PONG", connection.ping(1_000));
-            Assert.assertEquals("hi", connection.ping("hi"));
-            Assert.assertEquals("hi", connection.echo("hi"));
+            Assert.assertEquals("PONG", Await.join(connection.ping()));
+            Assert.assertEquals("PONG", Await.join(connection.ping(1_000)));
+            Assert.assertEquals("hi", Await.join(connection.ping("hi")));
+            Assert.assertEquals("hi", Await.join(connection.echo("hi")));
 
-            long count = connection.commandCount();
+            long count = Await.join(connection.commandCount());
             Assert.assertTrue(count > 0);
-            Assert.assertEquals(count, connection.commandCount(1_000));
-            List<CommandInfo> listed = connection.commandList();
+            Assert.assertEquals(Long.valueOf(count), Await.join(connection.commandCount(1_000)));
+            List<CommandInfo> listed = Await.join(connection.commandList());
             Assert.assertEquals(count, listed.size());
             Assert.assertTrue(listed.stream().anyMatch(info -> "ping".equals(info.name())));
-            List<CommandInfo> info = connection.commandInfo("ping", "no-such-command");
+            List<CommandInfo> info = Await.join(connection.commandInfo("ping", "no-such-command"));
             Assert.assertEquals(2, info.size());
             Assert.assertEquals("ping", info.get(0).name());
             Assert.assertNotNull(info.get(0).flags());
             Assert.assertNull(info.get(1));
 
-            Assert.assertEquals("OK", connection.clientSetname("app"));
-            Assert.assertEquals("app", connection.clientGetname());
-            Assert.assertEquals("OK", connection.clientSetname(""));
-            Assert.assertNull(connection.clientGetname());
-            Assert.assertEquals("OK", connection.clientSetinfo("LIB-NAME", "yierdis-client"));
-            Assert.assertEquals("OK", connection.clientSetinfo("LIB-VER", "0"));
+            Assert.assertEquals("OK", Await.join(connection.clientSetname("app")));
+            Assert.assertEquals("app", Await.join(connection.clientGetname()));
+            Assert.assertEquals("OK", Await.join(connection.clientSetname("")));
+            Assert.assertNull(Await.join(connection.clientGetname()));
+            Assert.assertEquals("OK", Await.join(connection.clientSetinfo("LIB-NAME", "yierdis-client")));
+            Assert.assertEquals("OK", Await.join(connection.clientSetinfo("LIB-VER", "0")));
             assertServerError(
-                    () -> connection.clientSetinfo("NOPE", "x"),
+                    () -> Await.join(connection.clientSetinfo("NOPE", "x")),
                     "Unrecognized option"
             );
             assertServerError(
-                    () -> connection.clientSetname("bad name"),
+                    () -> Await.join(connection.clientSetname("bad name")),
                     "Client names cannot contain spaces"
             );
 
             assertServerError(
-                    () -> connection.auth("secret"),
+                    () -> Await.join(connection.auth("secret")),
                     "AUTH <password> called without any password configured"
             );
             assertServerError(
-                    () -> connection.auth("default", "secret"),
+                    () -> Await.join(connection.auth("default", "secret")),
                     "AUTH <password> called without any password configured"
             );
 
-            Assert.assertEquals("OK", connection.set("gone", "v"));
-            Assert.assertEquals("OK", connection.flushdb());
-            Assert.assertNull(connection.get("gone"));
-            Assert.assertEquals("OK", connection.set("gone", "v"));
-            Assert.assertEquals("OK", connection.flushdb(FlushMode.ASYNC));
-            Assert.assertNull(connection.get("gone"));
-            Assert.assertEquals("OK", connection.flushdb(1_000, FlushMode.SYNC));
+            Assert.assertEquals("OK", Await.join(connection.set("gone", "v")));
+            Assert.assertEquals("OK", Await.join(connection.flushdb()));
+            Assert.assertNull(Await.join(connection.get("gone")));
+            Assert.assertEquals("OK", Await.join(connection.set("gone", "v")));
+            Assert.assertEquals("OK", Await.join(connection.flushdb(FlushMode.ASYNC)));
+            Assert.assertNull(Await.join(connection.get("gone")));
+            Assert.assertEquals("OK", Await.join(connection.flushdb(1_000, FlushMode.SYNC)));
 
-            Assert.assertEquals("OK", connection.select(2));
+            Assert.assertEquals("OK", Await.join(connection.select(2)));
             Assert.assertEquals(2, connection.database());
-            assertServerError(() -> connection.select(16), "DB index is out of range");
+            assertServerError(() -> Await.join(connection.select(16)), "DB index is out of range");
             Assert.assertEquals(2, connection.database());
-            Assert.assertEquals("PONG", connection.ping());
+            Assert.assertEquals("PONG", Await.join(connection.ping()));
         }
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
-            Assert.assertEquals("OK", connection.quit());
+            Assert.assertEquals("OK", Await.join(connection.quit()));
             try {
-                connection.ping();
+                Await.join(connection.ping());
                 Assert.fail("expected IllegalStateException");
             } catch (IllegalStateException expected) {
             }
@@ -98,48 +119,48 @@ public class TypedCommandTest {
     public void stringCommandsSplitSetReplyShapes() throws Exception {
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
-            Assert.assertEquals("OK", connection.set("k", "v1"));
-            Assert.assertNull(connection.set("k", "v2", SetOptions.nx()));
-            Assert.assertEquals("v1", connection.get("k"));
-            Assert.assertEquals("v1", connection.setGet("k", "v2"));
-            Assert.assertEquals("v2", connection.get("k"));
-            Assert.assertEquals("v2", connection.setGet("k", "v3", SetGetOptions.nx()));
-            Assert.assertEquals("v2", connection.get("k"));
-            Assert.assertEquals("OK", connection.set("k", "v4", SetOptions.xx().andEx(60)));
-            Assert.assertEquals("v4", connection.get(1_000, "k"));
-            Assert.assertNull(connection.set("missing", "v", SetOptions.xx()));
-            Assert.assertEquals("OK", connection.set("fresh", "v", SetOptions.nx().andPx(60_000)));
+            Assert.assertEquals("OK", Await.join(connection.set("k", "v1")));
+            Assert.assertNull(Await.join(connection.set("k", "v2", SetOptions.nx())));
+            Assert.assertEquals("v1", Await.join(connection.get("k")));
+            Assert.assertEquals("v1", Await.join(connection.setGet("k", "v2")));
+            Assert.assertEquals("v2", Await.join(connection.get("k")));
+            Assert.assertEquals("v2", Await.join(connection.setGet("k", "v3", SetGetOptions.nx())));
+            Assert.assertEquals("v2", Await.join(connection.get("k")));
+            Assert.assertEquals("OK", Await.join(connection.set("k", "v4", SetOptions.xx().andEx(60))));
+            Assert.assertEquals("v4", Await.join(connection.get(1_000, "k")));
+            Assert.assertNull(Await.join(connection.set("missing", "v", SetOptions.xx())));
+            Assert.assertEquals("OK", Await.join(connection.set("fresh", "v", SetOptions.nx().andPx(60_000))));
 
             try {
-                connection.set("k", "next", SetOptions.xx().withGet());
+                Await.join(connection.set("k", "next", SetOptions.xx().withGet()));
                 Assert.fail("expected IllegalArgumentException");
             } catch (IllegalArgumentException expected) {
             }
-            Assert.assertEquals("v4", connection.get("k"));
+            Assert.assertEquals("v4", Await.join(connection.get("k")));
             assertLocal(() -> SetOptions.nx().andXx());
             assertLocal(() -> SetOptions.ex(1).andKeepTtl());
 
-            Assert.assertEquals(2L, connection.strlen("k"));
-            Assert.assertEquals(3L, connection.append("k", "!"));
-            Assert.assertEquals("v4!", connection.get("k"));
-            Assert.assertEquals(0L, connection.setbit("bits", 0, 1));
-            Assert.assertEquals(1L, connection.getbit("bits", 0));
-            Assert.assertEquals(1L, connection.bitcount("bits"));
-            Assert.assertEquals(1L, connection.bitcount("bits", 0, -1));
-            Assert.assertEquals(1L, connection.incr("n"));
-            Assert.assertEquals(0L, connection.decr("n"));
+            Assert.assertEquals(Long.valueOf(2), Await.join(connection.strlen("k")));
+            Assert.assertEquals(Long.valueOf(3), Await.join(connection.append("k", "!")));
+            Assert.assertEquals("v4!", Await.join(connection.get("k")));
+            Assert.assertEquals(Long.valueOf(0), Await.join(connection.setbit("bits", 0, 1)));
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.getbit("bits", 0)));
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.bitcount("bits")));
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.bitcount("bits", 0, -1)));
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.incr("n")));
+            Assert.assertEquals(Long.valueOf(0), Await.join(connection.decr("n")));
 
-            Assert.assertEquals(1L, connection.lpush("list", "a"));
-            assertServerError(() -> connection.get("list"), "WRONGTYPE");
-            assertServerError(() -> connection.incr("k"), "not an integer");
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.lpush("list", "a")));
+            assertServerError(() -> Await.join(connection.get("list")), "WRONGTYPE");
+            assertServerError(() -> Await.join(connection.incr("k")), "not an integer");
             try {
-                connection.get(0, "k");
+                Await.join(connection.get(0, "k"));
                 Assert.fail("expected IllegalArgumentException");
             } catch (IllegalArgumentException e) {
                 Assert.assertTrue(e.getMessage().contains("commandTimeoutMillis"));
             }
-            Assert.assertEquals("v4!", connection.get("k"));
-            Assert.assertEquals("PONG", connection.ping());
+            Assert.assertEquals("v4!", Await.join(connection.get("k")));
+            Assert.assertEquals("PONG", Await.join(connection.ping()));
         }
     }
 
@@ -147,32 +168,32 @@ public class TypedCommandTest {
     public void hashCommandsKeepReplyOrder() throws Exception {
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
-            Assert.assertEquals(2L, connection.hset("h", "a", "1", "b", "2"));
-            Assert.assertEquals(1L, connection.hset(1_000, "h", "c", "3"));
-            Assert.assertEquals("2", connection.hget("h", "b"));
-            Assert.assertNull(connection.hget("h", "missing"));
-            Map<String, String> all = connection.hgetall("h");
+            Assert.assertEquals(Long.valueOf(2), Await.join(connection.hset("h", "a", "1", "b", "2")));
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.hset(1_000, "h", "c", "3")));
+            Assert.assertEquals("2", Await.join(connection.hget("h", "b")));
+            Assert.assertNull(Await.join(connection.hget("h", "missing")));
+            Map<String, String> all = Await.join(connection.hgetall("h"));
             Assert.assertEquals(List.of("a", "1", "b", "2", "c", "3"), flat(all));
-            Object raw = connection.command("HGETALL", "h");
+            Object raw = Await.join(connection.command("HGETALL", "h"));
             Assert.assertTrue(raw instanceof List);
             Assert.assertFalse(raw instanceof Map);
             Assert.assertEquals(flat(all), raw);
-            Assert.assertEquals(3L, connection.hlen("h"));
-            Assert.assertEquals(1L, connection.hdel("h", "b", "missing"));
-            Assert.assertEquals(List.of("a", "c"), new ArrayList<>(connection.hgetall("h").keySet()));
+            Assert.assertEquals(Long.valueOf(3), Await.join(connection.hlen("h")));
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.hdel("h", "b", "missing")));
+            Assert.assertEquals(List.of("a", "c"), new ArrayList<>(Await.join(connection.hgetall("h")).keySet()));
 
-            HashScan scan = connection.hscan("h", "0", ScanOptions.count(100));
-            Object rawScan = connection.command("HSCAN", "h", "0", "COUNT", "100");
+            HashScan scan = Await.join(connection.hscan("h", "0", ScanOptions.count(100)));
+            Object rawScan = Await.join(connection.command("HSCAN", "h", "0", "COUNT", "100"));
             Assert.assertEquals(scanRow(rawScan, 0), scan.cursor());
             Assert.assertEquals(scanRow(rawScan, 1), flatEntries(scan.entries()));
-            HashFieldScan fields = connection.hscanNoValues("h", "0", ScanOptions.match("a*").andCount(100));
+            HashFieldScan fields = Await.join(connection.hscanNoValues("h", "0", ScanOptions.match("a*").andCount(100)));
             Assert.assertEquals(List.of("a"), fields.fields());
             assertLocal(() -> ScanOptions.count(10).withNoValues());
-            Assert.assertEquals("1", connection.hget("h", "a"));
+            Assert.assertEquals("1", Await.join(connection.hget("h", "a")));
 
-            Assert.assertEquals("OK", connection.set("s", "v"));
-            assertServerError(() -> connection.hget("s", "a"), "WRONGTYPE");
-            Assert.assertEquals("PONG", connection.ping());
+            Assert.assertEquals("OK", Await.join(connection.set("s", "v")));
+            assertServerError(() -> Await.join(connection.hget("s", "a")), "WRONGTYPE");
+            Assert.assertEquals("PONG", Await.join(connection.ping()));
         }
     }
 
@@ -180,20 +201,20 @@ public class TypedCommandTest {
     public void listCommandsSplitPopReplyShapes() throws Exception {
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
-            Assert.assertEquals(1L, connection.rpush("l", "a"));
-            Assert.assertEquals(3L, connection.rpush("l", "b", "c"));
-            Assert.assertEquals(List.of("a", "b", "c"), connection.lrange("l", 0, -1));
-            Assert.assertEquals("a", connection.lpop("l"));
-            Assert.assertEquals(List.of("b", "c"), connection.lpop("l", 2));
-            Assert.assertNull(connection.lpop("missing"));
-            Assert.assertNull(connection.rpop("missing", 2));
-            Assert.assertEquals(2L, connection.lpush("l", "d", "e"));
-            Assert.assertEquals("d", connection.rpop("l"));
-            Assert.assertEquals(List.of("e"), connection.rpop(1_000, "l", 1));
-            assertServerError(() -> connection.lpop("l", -1), "positive");
-            Assert.assertEquals("OK", connection.set("s", "v"));
-            assertServerError(() -> connection.lpop("s"), "WRONGTYPE");
-            Assert.assertEquals("PONG", connection.ping());
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.rpush("l", "a")));
+            Assert.assertEquals(Long.valueOf(3), Await.join(connection.rpush("l", "b", "c")));
+            Assert.assertEquals(List.of("a", "b", "c"), Await.join(connection.lrange("l", 0, -1)));
+            Assert.assertEquals("a", Await.join(connection.lpop("l")));
+            Assert.assertEquals(List.of("b", "c"), Await.join(connection.lpop("l", 2)));
+            Assert.assertNull(Await.join(connection.lpop("missing")));
+            Assert.assertNull(Await.join(connection.rpop("missing", 2)));
+            Assert.assertEquals(Long.valueOf(2), Await.join(connection.lpush("l", "d", "e")));
+            Assert.assertEquals("d", Await.join(connection.rpop("l")));
+            Assert.assertEquals(List.of("e"), Await.join(connection.rpop(1_000, "l", 1)));
+            assertServerError(() -> Await.join(connection.lpop("l", -1)), "positive");
+            Assert.assertEquals("OK", Await.join(connection.set("s", "v")));
+            assertServerError(() -> Await.join(connection.lpop("s")), "WRONGTYPE");
+            Assert.assertEquals("PONG", Await.join(connection.ping()));
         }
     }
 
@@ -201,22 +222,22 @@ public class TypedCommandTest {
     public void setCommandsKeepMemberOrder() throws Exception {
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
-            Assert.assertEquals(2L, connection.sadd("s", "a", "b"));
-            Assert.assertEquals(1L, connection.sadd("s", "c"));
-            Assert.assertEquals(1L, connection.srem("s", "b", "missing"));
-            Set<String> members = connection.smembers("s");
-            Object raw = connection.command("SMEMBERS", "s");
+            Assert.assertEquals(Long.valueOf(2), Await.join(connection.sadd("s", "a", "b")));
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.sadd("s", "c")));
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.srem("s", "b", "missing")));
+            Set<String> members = Await.join(connection.smembers("s"));
+            Object raw = Await.join(connection.command("SMEMBERS", "s"));
             Assert.assertEquals(raw, new ArrayList<>(members));
-            Assert.assertEquals(1L, connection.sismember("s", "a"));
-            Assert.assertEquals(0L, connection.sismember("s", "b"));
-            Assert.assertEquals(2L, connection.scard("s"));
-            SetScan scan = connection.sscan("s", "0", ScanOptions.count(100));
-            Object rawScan = connection.command("SSCAN", "s", "0", "COUNT", "100");
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.sismember("s", "a")));
+            Assert.assertEquals(Long.valueOf(0), Await.join(connection.sismember("s", "b")));
+            Assert.assertEquals(Long.valueOf(2), Await.join(connection.scard("s")));
+            SetScan scan = Await.join(connection.sscan("s", "0", ScanOptions.count(100)));
+            Object rawScan = Await.join(connection.command("SSCAN", "s", "0", "COUNT", "100"));
             Assert.assertEquals(scanRow(rawScan, 0), scan.cursor());
             Assert.assertEquals(scanRow(rawScan, 1), new ArrayList<>(scan.members()));
-            Assert.assertEquals("OK", connection.set("str", "v"));
-            assertServerError(() -> connection.sismember("str", "a"), "WRONGTYPE");
-            Assert.assertEquals("PONG", connection.ping());
+            Assert.assertEquals("OK", Await.join(connection.set("str", "v")));
+            assertServerError(() -> Await.join(connection.sismember("str", "a")), "WRONGTYPE");
+            Assert.assertEquals("PONG", Await.join(connection.ping()));
         }
     }
 
@@ -224,48 +245,48 @@ public class TypedCommandTest {
     public void zsetCommandsSplitIncrAndScores() throws Exception {
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
-            Assert.assertEquals(1L, connection.zadd("z", "1", "a"));
-            Assert.assertEquals(2L, connection.zadd("z", "2", "b", "3", "c"));
-            Assert.assertEquals(0L, connection.zadd("z", ZAddOptions.nx(), "9", "a"));
-            Assert.assertEquals(1L, connection.zadd("z", ZAddOptions.ch(), "4", "c"));
-            Assert.assertEquals("5", connection.zaddIncr("z", "1", "c"));
-            Assert.assertNull(connection.zaddIncr("z", ZAddIncrOptions.xx(), "1", "missing"));
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.zadd("z", "1", "a")));
+            Assert.assertEquals(Long.valueOf(2), Await.join(connection.zadd("z", "2", "b", "3", "c")));
+            Assert.assertEquals(Long.valueOf(0), Await.join(connection.zadd("z", ZAddOptions.nx(), "9", "a")));
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.zadd("z", ZAddOptions.ch(), "4", "c")));
+            Assert.assertEquals("5", Await.join(connection.zaddIncr("z", "1", "c")));
+            Assert.assertNull(Await.join(connection.zaddIncr("z", ZAddIncrOptions.xx(), "1", "missing")));
 
-            Assert.assertEquals(List.of("a", "b", "c"), connection.zrange("z", 0, -1));
-            Assert.assertEquals(List.of("c", "b", "a"), connection.zrange("z", 0, -1, ZRangeOptions.rev()));
+            Assert.assertEquals(List.of("a", "b", "c"), Await.join(connection.zrange("z", 0, -1)));
+            Assert.assertEquals(List.of("c", "b", "a"), Await.join(connection.zrange("z", 0, -1, ZRangeOptions.rev())));
             Assert.assertEquals(
                     List.of(new ScoredMember("a", "1"), new ScoredMember("b", "2"), new ScoredMember("c", "5")),
-                    connection.zrangeWithScores("z", 0, -1)
+                    Await.join(connection.zrangeWithScores("z", 0, -1))
             );
-            Assert.assertEquals(List.of("c", "b", "a"), connection.zrevrange("z", 0, -1));
+            Assert.assertEquals(List.of("c", "b", "a"), Await.join(connection.zrevrange("z", 0, -1)));
             Assert.assertEquals(
                     new ScoredMember("c", "5"),
-                    connection.zrevrangeWithScores("z", 0, 0).get(0)
+                    Await.join(connection.zrevrangeWithScores("z", 0, 0)).get(0)
             );
-            Assert.assertEquals(List.of("b"), connection.zrangeByScore("z", "2", "2"));
+            Assert.assertEquals(List.of("b"), Await.join(connection.zrangeByScore("z", "2", "2")));
             Assert.assertEquals(
                     List.of("c"),
-                    connection.zrangeByScore("z", "-inf", "+inf", ScoreRangeOptions.limit(2, 1))
+                    Await.join(connection.zrangeByScore("z", "-inf", "+inf", ScoreRangeOptions.limit(2, 1)))
             );
             Assert.assertEquals(
                     List.of(new ScoredMember("b", "2")),
-                    connection.zrangeByScoreWithScores("z", "(1", "3")
+                    Await.join(connection.zrangeByScoreWithScores("z", "(1", "3"))
             );
-            Assert.assertEquals(List.of("c", "b", "a"), connection.zrevrangeByScore("z", "+inf", "-inf"));
+            Assert.assertEquals(List.of("c", "b", "a"), Await.join(connection.zrevrangeByScore("z", "+inf", "-inf")));
             Assert.assertEquals(
                     List.of(new ScoredMember("a", "1")),
-                    connection.zrevrangeByScoreWithScores("z", "2", "-inf", ScoreRangeOptions.limit(1, 1))
+                    Await.join(connection.zrevrangeByScoreWithScores("z", "2", "-inf", ScoreRangeOptions.limit(1, 1)))
             );
 
-            ZScan scan = connection.zscan("z", "0", ScanOptions.count(100));
-            Object rawScan = connection.command("ZSCAN", "z", "0", "COUNT", "100");
+            ZScan scan = Await.join(connection.zscan("z", "0", ScanOptions.count(100)));
+            Object rawScan = Await.join(connection.command("ZSCAN", "z", "0", "COUNT", "100"));
             Assert.assertEquals(scanRow(rawScan, 0), scan.cursor());
             Assert.assertEquals(scanRow(rawScan, 1), flatScored(scan.entries()));
 
-            Assert.assertEquals(1L, connection.zrem("z", "b"));
-            Assert.assertEquals(1L, connection.zremrangeByScore("z", "5", "5"));
-            Assert.assertEquals(1L, connection.zremrangeByRank("z", 0, 0));
-            Assert.assertEquals(List.of(), connection.zrange("z", 0, -1));
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.zrem("z", "b")));
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.zremrangeByScore("z", "5", "5")));
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.zremrangeByRank("z", 0, 0)));
+            Assert.assertEquals(List.of(), Await.join(connection.zrange("z", 0, -1)));
 
             assertLocal(() -> ZAddOptions.nx().withIncr());
             assertLocal(() -> ZAddOptions.nx().andXx());
@@ -273,12 +294,12 @@ public class TypedCommandTest {
             assertLocal(() -> ZAddOptions.nx().andGt());
             assertLocal(() -> ZRangeOptions.rev().withScores());
             assertLocal(() -> ScoreRangeOptions.limit(0, 1).withScores());
-            Assert.assertEquals(1L, connection.zadd(1_000, "z", "1", "a"));
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.zadd(1_000, "z", "1", "a")));
 
-            Assert.assertEquals("OK", connection.set("s", "v"));
-            assertServerError(() -> connection.zrange("s", 0, -1), "WRONGTYPE");
-            assertServerError(() -> connection.zadd("z", "nope", "m"), "not a valid float");
-            Assert.assertEquals("PONG", connection.ping());
+            Assert.assertEquals("OK", Await.join(connection.set("s", "v")));
+            assertServerError(() -> Await.join(connection.zrange("s", 0, -1)), "WRONGTYPE");
+            assertServerError(() -> Await.join(connection.zadd("z", "nope", "m")), "not a valid float");
+            Assert.assertEquals("PONG", Await.join(connection.ping()));
         }
     }
 
@@ -286,37 +307,37 @@ public class TypedCommandTest {
     public void keyCommandsCoverScanExpireAndMemory() throws Exception {
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
-            Assert.assertEquals("none", connection.type("missing"));
-            Assert.assertNull(connection.memoryUsage("missing"));
-            Assert.assertNull(connection.objectEncoding("missing"));
-            Assert.assertEquals("OK", connection.set("k", "v"));
-            Assert.assertEquals("string", connection.type("k"));
-            Assert.assertTrue(connection.memoryUsage("k") > 0);
-            Assert.assertTrue(connection.memoryUsage("k", MemoryUsageOptions.samples(0)) > 0);
-            Assert.assertTrue(connection.memoryStats().get("key_count") instanceof Long);
-            Assert.assertNotNull(connection.objectEncoding("k"));
-            Assert.assertTrue(connection.keys("k*").contains("k"));
-            KeyScan scan = connection.scan("0", ScanOptions.match("k*").andCount(100));
-            Object rawScan = connection.command("SCAN", "0", "MATCH", "k*", "COUNT", "100");
+            Assert.assertEquals("none", Await.join(connection.type("missing")));
+            Assert.assertNull(Await.join(connection.memoryUsage("missing")));
+            Assert.assertNull(Await.join(connection.objectEncoding("missing")));
+            Assert.assertEquals("OK", Await.join(connection.set("k", "v")));
+            Assert.assertEquals("string", Await.join(connection.type("k")));
+            Assert.assertTrue(Await.join(connection.memoryUsage("k")) > 0);
+            Assert.assertTrue(Await.join(connection.memoryUsage("k", MemoryUsageOptions.samples(0))) > 0);
+            Assert.assertTrue(Await.join(connection.memoryStats()).get("key_count") instanceof Long);
+            Assert.assertNotNull(Await.join(connection.objectEncoding("k")));
+            Assert.assertTrue(Await.join(connection.keys("k*")).contains("k"));
+            KeyScan scan = Await.join(connection.scan("0", ScanOptions.match("k*").andCount(100)));
+            Object rawScan = Await.join(connection.command("SCAN", "0", "MATCH", "k*", "COUNT", "100"));
             Assert.assertEquals(scanRow(rawScan, 0), scan.cursor());
             Assert.assertEquals(scanRow(rawScan, 1), scan.keys());
 
-            Assert.assertEquals(1L, connection.exists("k", "missing"));
-            Assert.assertEquals(1L, connection.expire("k", 30));
-            Assert.assertTrue(connection.ttl("k") > 0);
-            Assert.assertEquals(1L, connection.pexpire("k", 60_000, ExpireOptions.xx().andGt()));
-            Assert.assertTrue(connection.pttl("k") > 0);
-            Assert.assertEquals(1L, connection.expireat("k", 4_102_444_800L));
-            Assert.assertEquals(1L, connection.pexpireat("k", 4_102_444_800_000L, ExpireOptions.xx()));
-            Assert.assertEquals(1L, connection.persist("k"));
-            Assert.assertEquals(-1L, connection.ttl("k"));
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.exists("k", "missing")));
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.expire("k", 30)));
+            Assert.assertTrue(Await.join(connection.ttl("k")) > 0);
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.pexpire("k", 60_000, ExpireOptions.xx().andGt())));
+            Assert.assertTrue(Await.join(connection.pttl("k")) > 0);
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.expireat("k", 4_102_444_800L)));
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.pexpireat("k", 4_102_444_800_000L, ExpireOptions.xx())));
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.persist("k")));
+            Assert.assertEquals(Long.valueOf(-1), Await.join(connection.ttl("k")));
             assertLocal(() -> ExpireOptions.nx().andXx());
             assertLocal(() -> ExpireOptions.gt().andLt());
 
-            Assert.assertEquals(1L, connection.del("k", "missing"));
-            Assert.assertEquals(0L, connection.exists("k"));
-            assertServerError(() -> connection.scan("-1"), "not an integer");
-            Assert.assertEquals("PONG", connection.ping());
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.del("k", "missing")));
+            Assert.assertEquals(Long.valueOf(0), Await.join(connection.exists("k")));
+            assertServerError(() -> Await.join(connection.scan("-1")), "not an integer");
+            Assert.assertEquals("PONG", Await.join(connection.ping()));
         }
     }
 
@@ -324,14 +345,14 @@ public class TypedCommandTest {
     public void hyperLogLogCommandsAndWrongType() throws Exception {
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
-            Assert.assertEquals(1L, connection.pfadd("h", "a", "b"));
-            Assert.assertEquals(0L, connection.pfadd("h", "a"));
-            Assert.assertTrue(connection.pfcount("h") >= 1L);
-            Assert.assertEquals("OK", connection.pfmerge("out", "h"));
-            Assert.assertTrue(connection.pfcount(1_000, "out") >= 1L);
-            Assert.assertEquals("OK", connection.set("s", "v"));
-            assertServerError(() -> connection.pfadd("s", "a"), "WRONGTYPE");
-            Assert.assertEquals("PONG", connection.ping());
+            Assert.assertEquals(Long.valueOf(1), Await.join(connection.pfadd("h", "a", "b")));
+            Assert.assertEquals(Long.valueOf(0), Await.join(connection.pfadd("h", "a")));
+            Assert.assertTrue(Await.join(connection.pfcount("h")) >= 1L);
+            Assert.assertEquals("OK", Await.join(connection.pfmerge("out", "h")));
+            Assert.assertTrue(Await.join(connection.pfcount(1_000, "out")) >= 1L);
+            Assert.assertEquals("OK", Await.join(connection.set("s", "v")));
+            assertServerError(() -> Await.join(connection.pfadd("s", "a")), "WRONGTYPE");
+            Assert.assertEquals("PONG", Await.join(connection.ping()));
         }
     }
 
@@ -339,36 +360,36 @@ public class TypedCommandTest {
     public void infoIsTextStatsCountersAreLongAndWrongShapeStaysUsable() throws Exception {
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
-            String info = connection.info();
+            String info = Await.join(connection.info());
             Assert.assertTrue(info.contains("# Server"));
-            Assert.assertTrue(connection.info("server").contains("# Server"));
-            Assert.assertTrue(connection.info(1_000).contains("redis_version"));
+            Assert.assertTrue(Await.join(connection.info("server")).contains("# Server"));
+            Assert.assertTrue(Await.join(connection.info(1_000)).contains("redis_version"));
             try {
-                connection.info("health");
+                Await.join(connection.info("health"));
                 Assert.fail("expected DecodeException");
             } catch (DecodeException expected) {
             }
-            Assert.assertEquals("PONG", connection.ping());
-            Map<String, Object> health = connection.infoHealth();
+            Assert.assertEquals("PONG", Await.join(connection.ping()));
+            Map<String, Object> health = Await.join(connection.infoHealth());
             Assert.assertTrue(health.get("ready") instanceof Long);
             Assert.assertTrue(health.get("lifecycle_state") instanceof String);
-            Map<String, Object> yierdis = connection.infoYierdis();
+            Map<String, Object> yierdis = Await.join(connection.infoYierdis());
             Assert.assertEquals("yierdis", yierdis.get("server"));
             Assert.assertTrue(yierdis.get("port") instanceof Long);
 
-            Map<String, Object> stats = connection.stats();
+            Map<String, Object> stats = Await.join(connection.stats());
             Assert.assertTrue(stats.get("commands_executed_total") instanceof Long);
             Assert.assertTrue(stats.get("lifecycle_state") instanceof String);
-            List<?> rawStats = (List<?>) connection.command("STATS");
+            List<?> rawStats = (List<?>) Await.join(connection.command("STATS"));
             ArrayList<String> rawKeys = new ArrayList<>();
             for (int index = 0; index < rawStats.size(); index += 2) {
                 rawKeys.add((String) rawStats.get(index));
             }
-            Assert.assertEquals(rawKeys, new ArrayList<>(connection.stats().keySet()));
+            Assert.assertEquals(rawKeys, new ArrayList<>(Await.join(connection.stats()).keySet()));
 
-            Assert.assertEquals("OK", connection.ydreconcile());
-            Assert.assertEquals("OK", connection.ydreconcile(1_000));
-            Assert.assertEquals("PONG", connection.ping());
+            Assert.assertEquals("OK", Await.join(connection.ydreconcile()));
+            Assert.assertEquals("OK", Await.join(connection.ydreconcile(1_000)));
+            Assert.assertEquals("PONG", Await.join(connection.ping()));
         }
     }
 
@@ -376,17 +397,17 @@ public class TypedCommandTest {
     public void rawMgetIsUnknownAndConnectionStaysUsable() throws Exception {
         try (TestServer server = TestServer.start();
              Connection connection = connect(server)) {
-            connection.hset("h", "f", "v");
-            Object raw = connection.command("HGETALL", "h");
+            Await.join(connection.hset("h", "f", "v"));
+            Object raw = Await.join(connection.command("HGETALL", "h"));
             Assert.assertEquals(List.of("f", "v"), raw);
             Assert.assertFalse(raw instanceof Map);
             try {
-                connection.command("MGET", "h");
+                Await.join(connection.command("MGET", "h"));
                 Assert.fail("expected ServerException");
             } catch (ServerException e) {
                 Assert.assertEquals("ERR unknown command 'MGET'", e.getMessage());
             }
-            Assert.assertEquals("PONG", connection.ping());
+            Assert.assertEquals("PONG", Await.join(connection.ping()));
         }
     }
 

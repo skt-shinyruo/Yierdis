@@ -2,7 +2,12 @@ package yier.bubu.redis.client;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.client.exception.BorrowException;
+import yier.bubu.redis.client.exception.CommandTimeoutException;
+import yier.bubu.redis.client.exception.ConnectionException;
+import yier.bubu.redis.client.exception.ServerException;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -13,14 +18,14 @@ public class ConnectionPoolTest {
         try (TestServer server = TestServer.start();
              ConnectionPool pool = new ConnectionPool(settings(server), 1, 1_000)) {
             Connection borrowed = pool.borrow();
-            Assert.assertEquals("OK", borrowed.command("MULTI"));
-            Assert.assertEquals("QUEUED", borrowed.command("SET", "k", "uncommitted"));
+            Assert.assertEquals("OK", Await.join(borrowed.command("MULTI")));
+            borrowed.command("SET", "k", "uncommitted");
             pool.returnConnection(borrowed);
             assertClosed(borrowed);
             Connection next = pool.borrow();
             Assert.assertNotSame(borrowed, next);
-            Assert.assertEquals("PONG", next.ping());
-            Assert.assertNull(next.get("k"));
+            Assert.assertEquals("PONG", Await.join(next.ping()));
+            Assert.assertNull(Await.join(next.get("k")));
             pool.returnConnection(next);
         }
     }
@@ -33,14 +38,14 @@ public class ConnectionPoolTest {
             borrowed.command("MULTI");
             borrowed.command("SELECT", "1");
             borrowed.command("SET", "k", "on-one");
-            Assert.assertEquals(java.util.List.of("OK", "OK"), borrowed.command("EXEC"));
+            Assert.assertEquals(java.util.List.of("OK", "OK"), Await.join(borrowed.command("EXEC")));
             Assert.assertEquals(1, borrowed.database());
             pool.returnConnection(borrowed);
             assertClosed(borrowed);
             Connection next = pool.borrow();
             Assert.assertNotSame(borrowed, next);
             Assert.assertEquals(0, next.database());
-            Assert.assertNull(next.get("k"));
+            Assert.assertNull(Await.join(next.get("k")));
             pool.returnConnection(next);
         }
     }
@@ -95,9 +100,9 @@ public class ConnectionPoolTest {
             Assert.assertFalse(failure.get() instanceof ConnectionException);
             Assert.assertTrue("elapsed " + elapsedMillis, elapsedMillis >= 300);
             Assert.assertTrue("elapsed " + elapsedMillis, elapsedMillis < 2_000);
-            Assert.assertEquals("PONG", first.ping());
-            Assert.assertEquals("OK", first.set("k", "still-held"));
-            Assert.assertEquals("still-held", first.get("k"));
+            Assert.assertEquals("PONG", Await.join(first.ping()));
+            Assert.assertEquals("OK", Await.join(first.set("k", "still-held")));
+            Assert.assertEquals("still-held", Await.join(first.get("k")));
             pool.returnConnection(first);
         }
     }
@@ -124,8 +129,8 @@ public class ConnectionPoolTest {
             long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
             Assert.assertTrue(failure.get() instanceof BorrowException);
             Assert.assertTrue("elapsed " + elapsedMillis, elapsedMillis < 500);
-            Assert.assertEquals("OK", first.set("k", "held"));
-            Assert.assertEquals("held", first.get("k"));
+            Assert.assertEquals("OK", Await.join(first.set("k", "held")));
+            Assert.assertEquals("held", Await.join(first.get("k")));
             pool.returnConnection(first);
         }
     }
@@ -151,8 +156,8 @@ public class ConnectionPoolTest {
                     Connection connection = pool.borrow();
                     firstConnection.set(connection);
                     Assert.assertTrue(firstMayUse.await(5, TimeUnit.SECONDS));
-                    Assert.assertEquals("OK", connection.set("owner", "first"));
-                    firstValue.set(connection.get("owner"));
+                    Assert.assertEquals("OK", Await.join(connection.set("owner", "first")));
+                    firstValue.set(Await.join(connection.get("owner")));
                     pool.returnConnection(connection);
                 } catch (Throwable thrown) {
                     firstFailure.set(thrown);
@@ -163,8 +168,8 @@ public class ConnectionPoolTest {
                 try {
                     Connection connection = pool.borrow();
                     secondConnection.set(connection);
-                    Assert.assertEquals("OK", connection.set("owner", "second"));
-                    secondValue.set(connection.get("owner"));
+                    Assert.assertEquals("OK", Await.join(connection.set("owner", "second")));
+                    secondValue.set(Await.join(connection.get("owner")));
                     pool.returnConnection(connection);
                 } catch (Throwable thrown) {
                     secondFailure.set(thrown);
@@ -208,18 +213,18 @@ public class ConnectionPoolTest {
             try (ConnectionPool pool = new ConnectionPool(pooled, 1, 1_000)) {
                 Connection first = pool.borrow();
                 Assert.assertEquals(1, first.database());
-                Assert.assertEquals("OK", first.set("k", "on-pool-db"));
+                Assert.assertEquals("OK", Await.join(first.set("k", "on-pool-db")));
                 pool.returnConnection(first);
 
                 Connection second = pool.borrow();
                 Assert.assertSame(first, second);
                 Assert.assertEquals(1, second.database());
-                Assert.assertEquals("on-pool-db", second.get("k"));
+                Assert.assertEquals("on-pool-db", Await.join(second.get("k")));
                 pool.returnConnection(second);
             }
             try (Connection other = Connection.connect(ConnectionSettings.defaults().withPort(server.port()))) {
                 Assert.assertEquals(0, other.database());
-                Assert.assertNull(other.get("k"));
+                Assert.assertNull(Await.join(other.get("k")));
             }
         }
     }
@@ -229,22 +234,22 @@ public class ConnectionPoolTest {
         try (TestServer server = TestServer.start();
              ConnectionPool pool = new ConnectionPool(settings(server), 1, 1_000)) {
             Connection borrowed = pool.borrow();
-            Assert.assertEquals("OK", borrowed.select(1));
+            Assert.assertEquals("OK", Await.join(borrowed.select(1)));
             Assert.assertEquals(1, borrowed.database());
-            Assert.assertEquals("OK", borrowed.set("k", "on-one"));
+            Assert.assertEquals("OK", Await.join(borrowed.set("k", "on-one")));
             pool.returnConnection(borrowed);
             assertClosed(borrowed);
 
             Connection next = pool.borrow();
             Assert.assertNotSame(borrowed, next);
             Assert.assertEquals(0, next.database());
-            Assert.assertNull(next.get("k"));
+            Assert.assertNull(Await.join(next.get("k")));
             pool.returnConnection(next);
 
             try (Connection db1 = Connection.connect(ConnectionSettings.defaults()
                     .withPort(server.port())
                     .withDatabase(1))) {
-                Assert.assertEquals("on-one", db1.get("k"));
+                Assert.assertEquals("on-one", Await.join(db1.get("k")));
             }
         }
     }
@@ -261,31 +266,30 @@ public class ConnectionPoolTest {
 
             Connection next = pool.borrow();
             Assert.assertNotSame(borrowed, next);
-            Assert.assertNull(next.get("k"));
-            Assert.assertEquals("PONG", next.ping());
+            Assert.assertNull(Await.join(next.get("k")));
+            Assert.assertEquals("PONG", Await.join(next.ping()));
             pool.returnConnection(next);
         }
     }
 
     @Test
-    public void unreadPipelineIsNotHandedOutAgain() throws Exception {
+    public void unpairedCommandIsNotHandedOutAgain() throws Exception {
         try (TestServer server = TestServer.start();
              ConnectionPool pool = new ConnectionPool(settings(server), 1, 1_000)) {
             Connection borrowed = pool.borrow();
-            Pipeline pipeline = borrowed.pipeline();
-            Reply<String> pending = pipeline.set("k", "v");
+            CompletableFuture<String> pending = borrowed.set("k", "v");
             pool.returnConnection(borrowed);
             try {
-                pending.get();
-                Assert.fail("expected IllegalStateException");
-            } catch (IllegalStateException expected) {
+                Await.join(pending);
+                Assert.fail("expected ConnectionException");
+            } catch (ConnectionException expected) {
             }
             assertClosed(borrowed);
 
             Connection next = pool.borrow();
             Assert.assertNotSame(borrowed, next);
-            Assert.assertEquals("PONG", next.ping());
-            Assert.assertEquals(1L, next.incr("n"));
+            Assert.assertEquals("PONG", Await.join(next.ping()));
+            Assert.assertEquals(Long.valueOf(1), Await.join(next.incr("n")));
             pool.returnConnection(next);
         }
     }
@@ -296,7 +300,7 @@ public class ConnectionPoolTest {
              ConnectionPool pool = new ConnectionPool(settings(server), 1, 1_000)) {
             Connection borrowed = pool.borrow();
             try {
-                borrowed.command("NO_SUCH");
+                Await.join(borrowed.command("NO_SUCH"));
                 Assert.fail("expected ServerException");
             } catch (ServerException e) {
                 Assert.assertEquals("ERR unknown command 'NO_SUCH'", e.getMessage());
@@ -305,9 +309,9 @@ public class ConnectionPoolTest {
 
             Connection again = pool.borrow();
             Assert.assertSame(borrowed, again);
-            Assert.assertEquals("PONG", again.ping());
-            Assert.assertEquals("OK", again.set("k", "after-error"));
-            Assert.assertEquals("after-error", again.get("k"));
+            Assert.assertEquals("PONG", Await.join(again.ping()));
+            Assert.assertEquals("OK", Await.join(again.set("k", "after-error")));
+            Assert.assertEquals("after-error", Await.join(again.get("k")));
             pool.returnConnection(again);
         }
     }
@@ -323,8 +327,8 @@ public class ConnectionPoolTest {
                 Assert.fail("expected BorrowException");
             } catch (BorrowException expected) {
             }
-            Assert.assertEquals("OK", borrowed.set("k", "in-flight"));
-            Assert.assertEquals("in-flight", borrowed.get("k"));
+            Assert.assertEquals("OK", Await.join(borrowed.set("k", "in-flight")));
+            Assert.assertEquals("in-flight", Await.join(borrowed.get("k")));
             pool.returnConnection(borrowed);
             assertClosed(borrowed);
             try {
@@ -363,7 +367,7 @@ public class ConnectionPoolTest {
 
     private static void assertClosed(Connection connection) {
         try {
-            connection.ping();
+            Await.join(connection.ping());
             Assert.fail("expected IllegalStateException");
         } catch (IllegalStateException expected) {
         }

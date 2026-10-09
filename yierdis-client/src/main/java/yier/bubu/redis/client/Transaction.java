@@ -1,19 +1,42 @@
 package yier.bubu.redis.client;
 
-import java.util.ArrayList;
+import yier.bubu.redis.client.command.ExpireOptions;
+import yier.bubu.redis.client.command.FlushMode;
+import yier.bubu.redis.client.command.MemoryUsageOptions;
+import yier.bubu.redis.client.command.ScanOptions;
+import yier.bubu.redis.client.command.ScoreRangeOptions;
+import yier.bubu.redis.client.command.SetGetOptions;
+import yier.bubu.redis.client.command.SetOptions;
+import yier.bubu.redis.client.command.ZAddIncrOptions;
+import yier.bubu.redis.client.command.ZAddOptions;
+import yier.bubu.redis.client.command.ZRangeOptions;
+import yier.bubu.redis.client.exception.DecodeException;
+import yier.bubu.redis.client.exception.ServerException;
+import yier.bubu.redis.client.internal.Call;
+import yier.bubu.redis.client.internal.Calls;
+import yier.bubu.redis.client.reply.CommandInfo;
+import yier.bubu.redis.client.reply.HashFieldScan;
+import yier.bubu.redis.client.reply.HashScan;
+import yier.bubu.redis.client.reply.KeyScan;
+import yier.bubu.redis.client.reply.ScoredMember;
+import yier.bubu.redis.client.reply.SetScan;
+import yier.bubu.redis.client.reply.ZScan;
+
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 
 /**
- * 同一条连接上的事务。{@code MULTI} 已在 {@link Connection#multi()} 里送出。
+ * 同一条连接上的事务。{@code MULTI} 已在 {@link Connection#multi()} 里提交。
  * <p>
- * 类型化命令立刻发送，回复是 {@code QUEUED} 时返回。原始 {@link #command(String...)} 返回当时的 RESP 值，
- * 入队成功时是字符串 {@code QUEUED}。{@link #exec()} 按入队顺序给出结果；其中的单条错误是
- * {@link ServerException}，不向外抛。{@code EXEC} 自身失败会抛出并结束这个对象。
- * {@link #discard()} 成功后同样结束。
+ * 类型化命令立刻提交。它的 {@link CompletableFuture} 在 {@code EXEC} 时完成，拿到的是执行结果，不是 {@code QUEUED}。
+ * 原始 {@link #command(String...)} 同样在 {@code EXEC} 时完成；原始 {@code EXEC} 的列表里，单条错误仍是服务端原文。
+ * {@link #exec()} 的列表里，单条错误是 {@link ServerException}，不让这次 {@code EXEC} 本身失败。
+ * {@code EXEC} 自身失败则它的 Future 失败，事务结束。{@link #discard()} 成功才结束事务。
  */
 public final class Transaction {
     private final Connection connection;
-    private final List<Call<?>> queued = new ArrayList<>();
     private boolean finished;
 
     Transaction(Connection connection) {
@@ -21,90 +44,61 @@ public final class Transaction {
     }
 
     /**
-     * 立刻发送。入队成功时返回服务端回复，包括字符串 {@code QUEUED}。
-     * 入队期的服务端错误抛出，连接保持事务模式，这条不进入后来的 {@link #exec()} 列表。
-     * 原始 {@code EXEC} 返回 RESP 数组并结束事务；原始 {@code DISCARD} 成功同样结束。嵌套 {@code MULTI} 在写出前拒绝。
+     * 写出后返回 Future。入队拒绝立刻失败这一条，不进入后来的 {@code EXEC} 结果列表。
+     * 事务保持到 {@code EXEC} 或 {@code DISCARD}。{@code EXEC} 作废整笔排队时，已经入队的命令一起失败。
+     * 嵌套 {@code MULTI} 在写出前拒绝。原始 {@code EXEC} 结束事务；原始 {@code DISCARD} 成功同样结束。
      */
-    public Object command(String... args) {
+    public CompletableFuture<Object> command(String... args) {
         return command(connection.commandTimeoutMillis(), args);
     }
 
-    Object command(long timeoutMillis, String[] args) {
+    CompletableFuture<Object> command(long timeoutMillis, String[] args) {
         ensureActive();
-        Call<Object> call = Call.raw(args);
-        if (call.args.length == 1 && Connection.isCommand(call.args[0], "EXEC")) {
-            connection.writeCommand(timeoutMillis, call.args);
-            try {
-                // 原始 EXEC 不应用入队时的类型化转换，仍按 RESP 形状返回；状态只按已执行的结果更新。
-                return connection.readCommandReply(timeoutMillis, queued);
-            } finally {
-                connection.finishTransaction(this);
+        return connection.submitTransaction(timeoutMillis, Call.raw(args));
+    }
+
+    /**
+     * 提交 {@code EXEC}。空队列也提交。单条执行错误留在列表里，这条 Future 仍完成。
+     * {@code EXEC} 自身的错误，包括 {@code EXECABORT}，让这条 Future 失败并结束事务。
+     */
+    public CompletableFuture<List<Object>> exec() {
+        ensureActive();
+        return connection.submitTypedExec();
+    }
+
+    /**
+     * 提交 {@code DISCARD}。{@code OK} 结束这个对象并让连接回到普通模式。
+     * 服务端错误让这条 Future 失败，事务不结束。
+     */
+    public CompletableFuture<String> discard() {
+        ensureActive();
+        CompletableFuture<Object> raw = connection.submitTransaction(
+                connection.commandTimeoutMillis(), Call.raw("DISCARD"));
+        CompletableFuture<String> typed = new CompletableFuture<>();
+        raw.whenComplete((value, error) -> {
+            if (error != null) {
+                typed.completeExceptionally(Connection.unwrap(error));
+                return;
             }
-        }
-        Object reply = send(call, timeoutMillis);
-        if ("QUEUED".equals(reply)) {
-            queued.add(call);
-        } else if (call.args.length == 1 && Connection.isCommand(call.args[0], "DISCARD") && "OK".equals(reply)) {
-            connection.finishTransaction(this);
-        } else {
-            connection.noteSuccessfulCommand(call.args);
-        }
-        return reply;
-    }
-
-    /**
-     * 发送 {@code EXEC}。空队列也发送，回复空数组时返回空列表。
-     * 数组元素里的错误是 {@link ServerException}。{@code EXEC} 自身的错误，包括 {@code EXECABORT}，抛出并结束这个对象。
-     */
-    public List<Object> exec() {
-        ensureActive();
-        List<Call<?>> batch = new ArrayList<>(queued);
-        queued.clear();
-        try {
-            List<Object> results = connection.collectExec(batch);
-            connection.finishTransaction(this);
-            return results;
-        } catch (RuntimeException failure) {
-            connection.finishTransaction(this);
-            throw failure;
-        }
-    }
-
-    /**
-     * 发送 {@code DISCARD}。{@code OK} 结束这个对象并让连接回到普通模式。
-     * 服务端错误抛出，不把事务当成已经结束。
-     */
-    public void discard() {
-        ensureActive();
-        connection.writeCommand(connection.commandTimeoutMillis(), new String[]{"DISCARD"});
-        Object reply = connection.readCommandReply(connection.commandTimeoutMillis());
-        if (!"OK".equals(reply)) {
-            String actual = reply == null ? "null" : reply.getClass().getSimpleName();
-            throw new DecodeException("reply was " + actual + ", expected OK", null);
-        }
-        connection.finishTransaction(this);
+            if (value instanceof String text) {
+                typed.complete(text);
+                return;
+            }
+            String actual = value == null ? "null" : value.getClass().getSimpleName();
+            typed.completeExceptionally(new DecodeException("reply was " + actual + ", expected OK", null));
+        });
+        return typed;
     }
 
     void markFinished() {
         finished = true;
-        queued.clear();
     }
 
-    private Object queue(Call<?> call) {
-        Object reply = send(call, connection.commandTimeoutMillis());
-        if (!(reply instanceof String text) || !"QUEUED".equals(text)) {
-            String actual = reply == null ? "null" : reply.getClass().getSimpleName();
-            throw new DecodeException("reply was " + actual + ", expected QUEUED", null);
-        }
-        queued.add(call);
-        return reply;
-    }
-
-    private Object send(Call<?> call, long timeoutMillis) {
+    @SuppressWarnings("unchecked")
+    private <T> CompletableFuture<T> queue(Call<T> call) {
         ensureActive();
-        // 参数编不成 UTF-8 时在写出前抛出。事务模式保持不变，这条也不进入 EXEC 列表。
-        connection.writeCommand(timeoutMillis, call.args);
-        return connection.readCommandReply(timeoutMillis);
+        // 执行结果在 EXEC 时已经按这个 Call 解码，并完成同一次提交的 Future。
+        return (CompletableFuture<T>) connection.submitTransaction(connection.commandTimeoutMillis(), call);
     }
 
     private void ensureActive() {
@@ -116,419 +110,419 @@ public final class Transaction {
         }
     }
 
-    public void ping() {
-        queue(Calls.ping());
+    public CompletableFuture<String> ping() {
+        return queue(Calls.ping());
     }
 
-    public void ping(String message) {
-        queue(Calls.ping(message));
+    public CompletableFuture<String> ping(String message) {
+        return queue(Calls.ping(message));
     }
 
-    public void echo(String message) {
-        queue(Calls.echo(message));
+    public CompletableFuture<String> echo(String message) {
+        return queue(Calls.echo(message));
     }
 
-    public void commandList() {
-        queue(Calls.commandList());
+    public CompletableFuture<List<CommandInfo>> commandList() {
+        return queue(Calls.commandList());
     }
 
-    public void commandCount() {
-        queue(Calls.commandCount());
+    public CompletableFuture<Long> commandCount() {
+        return queue(Calls.commandCount());
     }
 
-    public void commandInfo(String... names) {
-        queue(Calls.commandInfo(names));
+    public CompletableFuture<List<CommandInfo>> commandInfo(String... names) {
+        return queue(Calls.commandInfo(names));
     }
 
-    public void select(int index) {
-        queue(Calls.select(index));
+    public CompletableFuture<String> select(int index) {
+        return queue(Calls.select(index));
     }
 
-    public void quit() {
-        queue(Calls.quit());
+    public CompletableFuture<String> quit() {
+        return queue(Calls.quit());
     }
 
-    public void clientSetname(String name) {
-        queue(Calls.clientSetname(name));
+    public CompletableFuture<String> clientSetname(String name) {
+        return queue(Calls.clientSetname(name));
     }
 
-    public void clientGetname() {
-        queue(Calls.clientGetname());
+    public CompletableFuture<String> clientGetname() {
+        return queue(Calls.clientGetname());
     }
 
-    public void clientSetinfo(String attribute, String value) {
-        queue(Calls.clientSetinfo(attribute, value));
+    public CompletableFuture<String> clientSetinfo(String attribute, String value) {
+        return queue(Calls.clientSetinfo(attribute, value));
     }
 
-    public void auth(String password) {
-        queue(Calls.auth(password));
+    public CompletableFuture<Object> auth(String password) {
+        return queue(Calls.auth(password));
     }
 
-    public void auth(String username, String password) {
-        queue(Calls.auth(username, password));
+    public CompletableFuture<Object> auth(String username, String password) {
+        return queue(Calls.auth(username, password));
     }
 
-    public void flushdb() {
-        queue(Calls.flushdb());
+    public CompletableFuture<String> flushdb() {
+        return queue(Calls.flushdb());
     }
 
-    public void flushdb(FlushMode mode) {
-        queue(Calls.flushdb(mode));
+    public CompletableFuture<String> flushdb(FlushMode mode) {
+        return queue(Calls.flushdb(mode));
     }
 
-    public void info() {
-        queue(Calls.info());
+    public CompletableFuture<String> info() {
+        return queue(Calls.info());
     }
 
-    public void info(String... sections) {
-        queue(Calls.info(sections));
+    public CompletableFuture<String> info(String... sections) {
+        return queue(Calls.info(sections));
     }
 
-    public void infoHealth() {
-        queue(Calls.infoHealth());
+    public CompletableFuture<Map<String, Object>> infoHealth() {
+        return queue(Calls.infoHealth());
     }
 
-    public void infoYierdis() {
-        queue(Calls.infoYierdis());
+    public CompletableFuture<Map<String, Object>> infoYierdis() {
+        return queue(Calls.infoYierdis());
     }
 
-    public void stats() {
-        queue(Calls.stats());
+    public CompletableFuture<Map<String, Object>> stats() {
+        return queue(Calls.stats());
     }
 
-    public void ydreconcile() {
-        queue(Calls.ydreconcile());
+    public CompletableFuture<String> ydreconcile() {
+        return queue(Calls.ydreconcile());
     }
 
-    public void set(String key, String value) {
-        queue(Calls.set(key, value));
+    public CompletableFuture<String> set(String key, String value) {
+        return queue(Calls.set(key, value));
     }
 
-    public void set(String key, String value, SetOptions options) {
-        queue(Calls.set(key, value, options));
+    public CompletableFuture<String> set(String key, String value, SetOptions options) {
+        return queue(Calls.set(key, value, options));
     }
 
-    public void setGet(String key, String value) {
-        queue(Calls.setGet(key, value));
+    public CompletableFuture<String> setGet(String key, String value) {
+        return queue(Calls.setGet(key, value));
     }
 
-    public void setGet(String key, String value, SetGetOptions options) {
-        queue(Calls.setGet(key, value, options));
+    public CompletableFuture<String> setGet(String key, String value, SetGetOptions options) {
+        return queue(Calls.setGet(key, value, options));
     }
 
-    public void get(String key) {
-        queue(Calls.get(key));
+    public CompletableFuture<String> get(String key) {
+        return queue(Calls.get(key));
     }
 
-    public void strlen(String key) {
-        queue(Calls.strlen(key));
+    public CompletableFuture<Long> strlen(String key) {
+        return queue(Calls.strlen(key));
     }
 
-    public void append(String key, String value) {
-        queue(Calls.append(key, value));
+    public CompletableFuture<Long> append(String key, String value) {
+        return queue(Calls.append(key, value));
     }
 
-    public void setbit(String key, long offset, long value) {
-        queue(Calls.setbit(key, offset, value));
+    public CompletableFuture<Long> setbit(String key, long offset, long value) {
+        return queue(Calls.setbit(key, offset, value));
     }
 
-    public void getbit(String key, long offset) {
-        queue(Calls.getbit(key, offset));
+    public CompletableFuture<Long> getbit(String key, long offset) {
+        return queue(Calls.getbit(key, offset));
     }
 
-    public void bitcount(String key) {
-        queue(Calls.bitcount(key));
+    public CompletableFuture<Long> bitcount(String key) {
+        return queue(Calls.bitcount(key));
     }
 
-    public void bitcount(String key, long start, long end) {
-        queue(Calls.bitcount(key, start, end));
+    public CompletableFuture<Long> bitcount(String key, long start, long end) {
+        return queue(Calls.bitcount(key, start, end));
     }
 
-    public void incr(String key) {
-        queue(Calls.incr(key));
+    public CompletableFuture<Long> incr(String key) {
+        return queue(Calls.incr(key));
     }
 
-    public void decr(String key) {
-        queue(Calls.decr(key));
+    public CompletableFuture<Long> decr(String key) {
+        return queue(Calls.decr(key));
     }
 
-    public void hset(String key, String field, String value, String... more) {
-        queue(Calls.hset(key, field, value, more));
+    public CompletableFuture<Long> hset(String key, String field, String value, String... more) {
+        return queue(Calls.hset(key, field, value, more));
     }
 
-    public void hget(String key, String field) {
-        queue(Calls.hget(key, field));
+    public CompletableFuture<String> hget(String key, String field) {
+        return queue(Calls.hget(key, field));
     }
 
-    public void hgetall(String key) {
-        queue(Calls.hgetall(key));
+    public CompletableFuture<Map<String, String>> hgetall(String key) {
+        return queue(Calls.hgetall(key));
     }
 
-    public void hlen(String key) {
-        queue(Calls.hlen(key));
+    public CompletableFuture<Long> hlen(String key) {
+        return queue(Calls.hlen(key));
     }
 
-    public void hdel(String key, String field, String... more) {
-        queue(Calls.hdel(key, field, more));
+    public CompletableFuture<Long> hdel(String key, String field, String... more) {
+        return queue(Calls.hdel(key, field, more));
     }
 
-    public void hscan(String key, String cursor) {
-        queue(Calls.hscan(key, cursor));
+    public CompletableFuture<HashScan> hscan(String key, String cursor) {
+        return queue(Calls.hscan(key, cursor));
     }
 
-    public void hscan(String key, String cursor, ScanOptions options) {
-        queue(Calls.hscan(key, cursor, options));
+    public CompletableFuture<HashScan> hscan(String key, String cursor, ScanOptions options) {
+        return queue(Calls.hscan(key, cursor, options));
     }
 
-    public void hscanNoValues(String key, String cursor) {
-        queue(Calls.hscanNoValues(key, cursor));
+    public CompletableFuture<HashFieldScan> hscanNoValues(String key, String cursor) {
+        return queue(Calls.hscanNoValues(key, cursor));
     }
 
-    public void hscanNoValues(String key, String cursor, ScanOptions options) {
-        queue(Calls.hscanNoValues(key, cursor, options));
+    public CompletableFuture<HashFieldScan> hscanNoValues(String key, String cursor, ScanOptions options) {
+        return queue(Calls.hscanNoValues(key, cursor, options));
     }
 
-    public void lpush(String key, String value, String... more) {
-        queue(Calls.lpush(key, value, more));
+    public CompletableFuture<Long> lpush(String key, String value, String... more) {
+        return queue(Calls.lpush(key, value, more));
     }
 
-    public void rpush(String key, String value, String... more) {
-        queue(Calls.rpush(key, value, more));
+    public CompletableFuture<Long> rpush(String key, String value, String... more) {
+        return queue(Calls.rpush(key, value, more));
     }
 
-    public void lrange(String key, long start, long stop) {
-        queue(Calls.lrange(key, start, stop));
+    public CompletableFuture<List<String>> lrange(String key, long start, long stop) {
+        return queue(Calls.lrange(key, start, stop));
     }
 
-    public void lpop(String key) {
-        queue(Calls.lpop(key));
+    public CompletableFuture<String> lpop(String key) {
+        return queue(Calls.lpop(key));
     }
 
-    public void lpop(String key, long count) {
-        queue(Calls.lpop(key, count));
+    public CompletableFuture<List<String>> lpop(String key, long count) {
+        return queue(Calls.lpop(key, count));
     }
 
-    public void rpop(String key) {
-        queue(Calls.rpop(key));
+    public CompletableFuture<String> rpop(String key) {
+        return queue(Calls.rpop(key));
     }
 
-    public void rpop(String key, long count) {
-        queue(Calls.rpop(key, count));
+    public CompletableFuture<List<String>> rpop(String key, long count) {
+        return queue(Calls.rpop(key, count));
     }
 
-    public void sadd(String key, String member, String... more) {
-        queue(Calls.sadd(key, member, more));
+    public CompletableFuture<Long> sadd(String key, String member, String... more) {
+        return queue(Calls.sadd(key, member, more));
     }
 
-    public void srem(String key, String member, String... more) {
-        queue(Calls.srem(key, member, more));
+    public CompletableFuture<Long> srem(String key, String member, String... more) {
+        return queue(Calls.srem(key, member, more));
     }
 
-    public void smembers(String key) {
-        queue(Calls.smembers(key));
+    public CompletableFuture<Set<String>> smembers(String key) {
+        return queue(Calls.smembers(key));
     }
 
-    public void sismember(String key, String member) {
-        queue(Calls.sismember(key, member));
+    public CompletableFuture<Long> sismember(String key, String member) {
+        return queue(Calls.sismember(key, member));
     }
 
-    public void scard(String key) {
-        queue(Calls.scard(key));
+    public CompletableFuture<Long> scard(String key) {
+        return queue(Calls.scard(key));
     }
 
-    public void sscan(String key, String cursor) {
-        queue(Calls.sscan(key, cursor));
+    public CompletableFuture<SetScan> sscan(String key, String cursor) {
+        return queue(Calls.sscan(key, cursor));
     }
 
-    public void sscan(String key, String cursor, ScanOptions options) {
-        queue(Calls.sscan(key, cursor, options));
+    public CompletableFuture<SetScan> sscan(String key, String cursor, ScanOptions options) {
+        return queue(Calls.sscan(key, cursor, options));
     }
 
-    public void zadd(String key, String score, String member, String... more) {
-        queue(Calls.zadd(key, score, member, more));
+    public CompletableFuture<Long> zadd(String key, String score, String member, String... more) {
+        return queue(Calls.zadd(key, score, member, more));
     }
 
-    public void zadd(String key, ZAddOptions options, String score, String member, String... more) {
-        queue(Calls.zadd(key, options, score, member, more));
+    public CompletableFuture<Long> zadd(String key, ZAddOptions options, String score, String member, String... more) {
+        return queue(Calls.zadd(key, options, score, member, more));
     }
 
-    public void zaddIncr(String key, String score, String member) {
-        queue(Calls.zaddIncr(key, score, member));
+    public CompletableFuture<String> zaddIncr(String key, String score, String member) {
+        return queue(Calls.zaddIncr(key, score, member));
     }
 
-    public void zaddIncr(String key, ZAddIncrOptions options, String score, String member) {
-        queue(Calls.zaddIncr(key, options, score, member));
+    public CompletableFuture<String> zaddIncr(String key, ZAddIncrOptions options, String score, String member) {
+        return queue(Calls.zaddIncr(key, options, score, member));
     }
 
-    public void zrange(String key, long start, long stop) {
-        queue(Calls.zrange(key, start, stop));
+    public CompletableFuture<List<String>> zrange(String key, long start, long stop) {
+        return queue(Calls.zrange(key, start, stop));
     }
 
-    public void zrange(String key, long start, long stop, ZRangeOptions options) {
-        queue(Calls.zrange(key, start, stop, options));
+    public CompletableFuture<List<String>> zrange(String key, long start, long stop, ZRangeOptions options) {
+        return queue(Calls.zrange(key, start, stop, options));
     }
 
-    public void zrangeWithScores(String key, long start, long stop) {
-        queue(Calls.zrangeWithScores(key, start, stop));
+    public CompletableFuture<List<ScoredMember>> zrangeWithScores(String key, long start, long stop) {
+        return queue(Calls.zrangeWithScores(key, start, stop));
     }
 
-    public void zrangeWithScores(String key, long start, long stop, ZRangeOptions options) {
-        queue(Calls.zrangeWithScores(key, start, stop, options));
+    public CompletableFuture<List<ScoredMember>> zrangeWithScores(String key, long start, long stop, ZRangeOptions options) {
+        return queue(Calls.zrangeWithScores(key, start, stop, options));
     }
 
-    public void zrevrange(String key, long start, long stop) {
-        queue(Calls.zrevrange(key, start, stop));
+    public CompletableFuture<List<String>> zrevrange(String key, long start, long stop) {
+        return queue(Calls.zrevrange(key, start, stop));
     }
 
-    public void zrevrangeWithScores(String key, long start, long stop) {
-        queue(Calls.zrevrangeWithScores(key, start, stop));
+    public CompletableFuture<List<ScoredMember>> zrevrangeWithScores(String key, long start, long stop) {
+        return queue(Calls.zrevrangeWithScores(key, start, stop));
     }
 
-    public void zrangeByScore(String key, String min, String max) {
-        queue(Calls.zrangeByScore(key, min, max));
+    public CompletableFuture<List<String>> zrangeByScore(String key, String min, String max) {
+        return queue(Calls.zrangeByScore(key, min, max));
     }
 
-    public void zrangeByScore(String key, String min, String max, ScoreRangeOptions options) {
-        queue(Calls.zrangeByScore(key, min, max, options));
+    public CompletableFuture<List<String>> zrangeByScore(String key, String min, String max, ScoreRangeOptions options) {
+        return queue(Calls.zrangeByScore(key, min, max, options));
     }
 
-    public void zrangeByScoreWithScores(String key, String min, String max) {
-        queue(Calls.zrangeByScoreWithScores(key, min, max));
+    public CompletableFuture<List<ScoredMember>> zrangeByScoreWithScores(String key, String min, String max) {
+        return queue(Calls.zrangeByScoreWithScores(key, min, max));
     }
 
-    public void zrangeByScoreWithScores(String key, String min, String max, ScoreRangeOptions options) {
-        queue(Calls.zrangeByScoreWithScores(key, min, max, options));
+    public CompletableFuture<List<ScoredMember>> zrangeByScoreWithScores(String key, String min, String max, ScoreRangeOptions options) {
+        return queue(Calls.zrangeByScoreWithScores(key, min, max, options));
     }
 
-    public void zrevrangeByScore(String key, String max, String min) {
-        queue(Calls.zrevrangeByScore(key, max, min));
+    public CompletableFuture<List<String>> zrevrangeByScore(String key, String max, String min) {
+        return queue(Calls.zrevrangeByScore(key, max, min));
     }
 
-    public void zrevrangeByScore(String key, String max, String min, ScoreRangeOptions options) {
-        queue(Calls.zrevrangeByScore(key, max, min, options));
+    public CompletableFuture<List<String>> zrevrangeByScore(String key, String max, String min, ScoreRangeOptions options) {
+        return queue(Calls.zrevrangeByScore(key, max, min, options));
     }
 
-    public void zrevrangeByScoreWithScores(String key, String max, String min) {
-        queue(Calls.zrevrangeByScoreWithScores(key, max, min));
+    public CompletableFuture<List<ScoredMember>> zrevrangeByScoreWithScores(String key, String max, String min) {
+        return queue(Calls.zrevrangeByScoreWithScores(key, max, min));
     }
 
-    public void zrevrangeByScoreWithScores(String key, String max, String min, ScoreRangeOptions options) {
-        queue(Calls.zrevrangeByScoreWithScores(key, max, min, options));
+    public CompletableFuture<List<ScoredMember>> zrevrangeByScoreWithScores(String key, String max, String min, ScoreRangeOptions options) {
+        return queue(Calls.zrevrangeByScoreWithScores(key, max, min, options));
     }
 
-    public void zremrangeByScore(String key, String min, String max) {
-        queue(Calls.zremrangeByScore(key, min, max));
+    public CompletableFuture<Long> zremrangeByScore(String key, String min, String max) {
+        return queue(Calls.zremrangeByScore(key, min, max));
     }
 
-    public void zremrangeByRank(String key, long start, long stop) {
-        queue(Calls.zremrangeByRank(key, start, stop));
+    public CompletableFuture<Long> zremrangeByRank(String key, long start, long stop) {
+        return queue(Calls.zremrangeByRank(key, start, stop));
     }
 
-    public void zrem(String key, String member, String... more) {
-        queue(Calls.zrem(key, member, more));
+    public CompletableFuture<Long> zrem(String key, String member, String... more) {
+        return queue(Calls.zrem(key, member, more));
     }
 
-    public void zscan(String key, String cursor) {
-        queue(Calls.zscan(key, cursor));
+    public CompletableFuture<ZScan> zscan(String key, String cursor) {
+        return queue(Calls.zscan(key, cursor));
     }
 
-    public void zscan(String key, String cursor, ScanOptions options) {
-        queue(Calls.zscan(key, cursor, options));
+    public CompletableFuture<ZScan> zscan(String key, String cursor, ScanOptions options) {
+        return queue(Calls.zscan(key, cursor, options));
     }
 
-    public void type(String key) {
-        queue(Calls.type(key));
+    public CompletableFuture<String> type(String key) {
+        return queue(Calls.type(key));
     }
 
-    public void memoryUsage(String key) {
-        queue(Calls.memoryUsage(key));
+    public CompletableFuture<Long> memoryUsage(String key) {
+        return queue(Calls.memoryUsage(key));
     }
 
-    public void memoryUsage(String key, MemoryUsageOptions options) {
-        queue(Calls.memoryUsage(key, options));
+    public CompletableFuture<Long> memoryUsage(String key, MemoryUsageOptions options) {
+        return queue(Calls.memoryUsage(key, options));
     }
 
-    public void memoryStats() {
-        queue(Calls.memoryStats());
+    public CompletableFuture<Map<String, Long>> memoryStats() {
+        return queue(Calls.memoryStats());
     }
 
-    public void objectEncoding(String key) {
-        queue(Calls.objectEncoding(key));
+    public CompletableFuture<String> objectEncoding(String key) {
+        return queue(Calls.objectEncoding(key));
     }
 
-    public void keys(String pattern) {
-        queue(Calls.keys(pattern));
+    public CompletableFuture<List<String>> keys(String pattern) {
+        return queue(Calls.keys(pattern));
     }
 
-    public void scan(String cursor) {
-        queue(Calls.scan(cursor));
+    public CompletableFuture<KeyScan> scan(String cursor) {
+        return queue(Calls.scan(cursor));
     }
 
-    public void scan(String cursor, ScanOptions options) {
-        queue(Calls.scan(cursor, options));
+    public CompletableFuture<KeyScan> scan(String cursor, ScanOptions options) {
+        return queue(Calls.scan(cursor, options));
     }
 
-    public void del(String... keys) {
-        queue(Calls.del(keys));
+    public CompletableFuture<Long> del(String... keys) {
+        return queue(Calls.del(keys));
     }
 
-    public void exists(String... keys) {
-        queue(Calls.exists(keys));
+    public CompletableFuture<Long> exists(String... keys) {
+        return queue(Calls.exists(keys));
     }
 
-    public void expire(String key, long seconds) {
-        queue(Calls.expire(key, seconds));
+    public CompletableFuture<Long> expire(String key, long seconds) {
+        return queue(Calls.expire(key, seconds));
     }
 
-    public void expire(String key, long seconds, ExpireOptions options) {
-        queue(Calls.expire(key, seconds, options));
+    public CompletableFuture<Long> expire(String key, long seconds, ExpireOptions options) {
+        return queue(Calls.expire(key, seconds, options));
     }
 
-    public void pexpire(String key, long milliseconds) {
-        queue(Calls.pexpire(key, milliseconds));
+    public CompletableFuture<Long> pexpire(String key, long milliseconds) {
+        return queue(Calls.pexpire(key, milliseconds));
     }
 
-    public void pexpire(String key, long milliseconds, ExpireOptions options) {
-        queue(Calls.pexpire(key, milliseconds, options));
+    public CompletableFuture<Long> pexpire(String key, long milliseconds, ExpireOptions options) {
+        return queue(Calls.pexpire(key, milliseconds, options));
     }
 
-    public void expireat(String key, long unixSeconds) {
-        queue(Calls.expireat(key, unixSeconds));
+    public CompletableFuture<Long> expireat(String key, long unixSeconds) {
+        return queue(Calls.expireat(key, unixSeconds));
     }
 
-    public void expireat(String key, long unixSeconds, ExpireOptions options) {
-        queue(Calls.expireat(key, unixSeconds, options));
+    public CompletableFuture<Long> expireat(String key, long unixSeconds, ExpireOptions options) {
+        return queue(Calls.expireat(key, unixSeconds, options));
     }
 
-    public void pexpireat(String key, long unixMilliseconds) {
-        queue(Calls.pexpireat(key, unixMilliseconds));
+    public CompletableFuture<Long> pexpireat(String key, long unixMilliseconds) {
+        return queue(Calls.pexpireat(key, unixMilliseconds));
     }
 
-    public void pexpireat(String key, long unixMilliseconds, ExpireOptions options) {
-        queue(Calls.pexpireat(key, unixMilliseconds, options));
+    public CompletableFuture<Long> pexpireat(String key, long unixMilliseconds, ExpireOptions options) {
+        return queue(Calls.pexpireat(key, unixMilliseconds, options));
     }
 
-    public void persist(String key) {
-        queue(Calls.persist(key));
+    public CompletableFuture<Long> persist(String key) {
+        return queue(Calls.persist(key));
     }
 
-    public void ttl(String key) {
-        queue(Calls.ttl(key));
+    public CompletableFuture<Long> ttl(String key) {
+        return queue(Calls.ttl(key));
     }
 
-    public void pttl(String key) {
-        queue(Calls.pttl(key));
+    public CompletableFuture<Long> pttl(String key) {
+        return queue(Calls.pttl(key));
     }
 
-    public void pfadd(String key, String... elements) {
-        queue(Calls.pfadd(key, elements));
+    public CompletableFuture<Long> pfadd(String key, String... elements) {
+        return queue(Calls.pfadd(key, elements));
     }
 
-    public void pfcount(String... keys) {
-        queue(Calls.pfcount(keys));
+    public CompletableFuture<Long> pfcount(String... keys) {
+        return queue(Calls.pfcount(keys));
     }
 
-    public void pfmerge(String destination, String... sources) {
-        queue(Calls.pfmerge(destination, sources));
+    public CompletableFuture<String> pfmerge(String destination, String... sources) {
+        return queue(Calls.pfmerge(destination, sources));
     }
 }
