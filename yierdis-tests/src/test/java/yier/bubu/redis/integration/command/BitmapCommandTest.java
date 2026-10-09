@@ -78,15 +78,97 @@ public class BitmapCommandTest {
                 FastTestClient client = new FastTestClient(dispatcher);
                 byte[] key = b("b");
                 // \xff\x00\xff 各位计数是 8、0、8。end 换算后仍小于 0 时 Redis 钳到字节 0，统计该字节而不是空区间。
+                // 例外是 start、end 原值都为负且 start > end：Redis 在换算前直接回 0。
                 client.execute(Arrays.asList(b("SET"), key, new byte[]{(byte) 0xff, 0x00, (byte) 0xff}));
 
                 Assert.assertEquals(8, ((ReplyInteger) client.execute(cmd("BITCOUNT", "b", "0", "-4"))).value());
-                Assert.assertEquals(8, ((ReplyInteger) client.execute(cmd("BITCOUNT", "b", "-3", "-4"))).value());
+                Assert.assertEquals(0, ((ReplyInteger) client.execute(cmd("BITCOUNT", "b", "-3", "-4"))).value());
                 Assert.assertEquals(8, ((ReplyInteger) client.execute(cmd("BITCOUNT", "b", "-10", "-8"))).value());
                 Assert.assertEquals(8, ((ReplyInteger) client.execute(cmd("BITCOUNT", "b", "-5", "-3"))).value());
                 Assert.assertEquals(8, ((ReplyInteger) client.execute(cmd("BITCOUNT", "b", "0", "-3"))).value());
                 Assert.assertEquals(0, ((ReplyInteger) client.execute(cmd("BITCOUNT", "b", "1", "-3"))).value());
             }
+        });
+    }
+
+    @Test
+    public void bitcountBitAndByteUnitsMatchRedisOnFoobar() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            FastTestClient client = new FastTestClient(dispatcher);
+            client.execute(cmd("SET", "mykey", "foobar"));
+            client.execute(cmd("SET", "empty", ""));
+
+            // 期望值取自 Redis 8 对同一 fixture 的回复；BIT 单位下 "foobar" 共 48 位。
+            assertCount(client, 26, "BITCOUNT", "mykey");
+            assertCount(client, 6, "BITCOUNT", "mykey", "1", "1");
+            assertCount(client, 6, "BITCOUNT", "mykey", "1", "1", "BYTE");
+            assertCount(client, 17, "BITCOUNT", "mykey", "5", "30", "BIT");
+            assertCount(client, 0, "BITCOUNT", "mykey", "0", "0", "bit");
+            assertCount(client, 0, "BITCOUNT", "mykey", "7", "7", "bIt");
+            assertCount(client, 4, "BITCOUNT", "mykey", "0", "0", "ByTe");
+            assertCount(client, 26, "BITCOUNT", "mykey", "0", "-1", "byte");
+            assertCount(client, 26, "BITCOUNT", "mykey", "0", "-1", "BIT");
+            assertCount(client, 4, "BITCOUNT", "mykey", "-1", "-1", "BYTE");
+            assertCount(client, 0, "BITCOUNT", "mykey", "-1", "-1", "BIT");
+            assertCount(client, 4, "BITCOUNT", "mykey", "-8", "-1", "BIT");
+            assertCount(client, 7, "BITCOUNT", "mykey", "-2", "-1", "byte");
+            assertCount(client, 26, "BITCOUNT", "mykey", "-100", "-1", "BIT");
+            assertCount(client, 0, "BITCOUNT", "mykey", "-100", "-50", "BIT");
+            assertCount(client, 26, "BITCOUNT", "mykey", "0", "100", "BIT");
+            assertCount(client, 0, "BITCOUNT", "mykey", "47", "47", "BIT");
+            assertCount(client, 0, "BITCOUNT", "mykey", "48", "100", "BIT");
+            assertCount(client, 0, "BITCOUNT", "mykey", "6", "100", "BYTE");
+            assertCount(client, 0, "BITCOUNT", "mykey", "30", "5", "BIT");
+            assertCount(client, 0, "BITCOUNT", "mykey", "3", "1", "BYTE");
+            assertCount(client, 0, "BITCOUNT", "mykey", "-1", "-2", "BIT");
+            assertCount(client, 0, "BITCOUNT", "mykey", "-1", "-2", "BYTE");
+            assertCount(client, 0, "BITCOUNT", "mykey", "1", "-100", "BIT");
+            assertCount(client, 0, "BITCOUNT", "mykey", "0", "-100", "BIT");
+            assertCount(client, 0, "BITCOUNT", "mykey", "9223372036854775807", "-1", "BIT");
+            assertCount(client, 26, "BITCOUNT", "mykey", "-9223372036854775808", "-1", "BIT");
+            assertCount(client, 26, "BITCOUNT", "mykey", "-9223372036854775808", "9223372036854775807", "BIT");
+            assertCount(client, 0, "BITCOUNT", "nokey", "0", "10", "BIT");
+            assertCount(client, 0, "BITCOUNT", "nokey", "0", "10", "BYTE");
+            assertCount(client, 0, "BITCOUNT", "empty", "0", "-1", "BIT");
+        });
+    }
+
+    @Test
+    public void bitcountUnitAndArityErrorsMatchRedisBeforeTypeCheck() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            FastTestClient client = new FastTestClient(dispatcher);
+            client.execute(cmd("SET", "mykey", "foobar"));
+            client.execute(cmd("RPUSH", "mylist", "a"));
+            String syntax = "ERR syntax error";
+            String integer = "ERR value is not an integer or out of range";
+            String wrongType = new WrongTypeException().getMessage();
+
+            assertExactError(syntax, client.execute(cmd("BITCOUNT", "mykey", "0")));
+            assertExactError(syntax, client.execute(cmd("BITCOUNT", "nokey", "0")));
+            assertExactError(syntax, client.execute(cmd("BITCOUNT", "mykey", "0", "1", "FOO")));
+            assertExactError(syntax, client.execute(cmd("BITCOUNT", "nokey", "0", "10", "FOO")));
+            assertExactError(syntax, client.execute(cmd("BITCOUNT", "mykey", "0", "1", "")));
+            assertExactError(syntax, client.execute(cmd("BITCOUNT", "mykey", "0", "1", "BIT", "extra")));
+            assertExactError(integer, client.execute(cmd("BITCOUNT", "mykey", "a", "1", "BIT")));
+            assertExactError(integer, client.execute(cmd("BITCOUNT", "mykey", "0", "b", "BIT")));
+            assertExactError(integer, client.execute(cmd("BITCOUNT", "mykey", "0", "b", "FOO")));
+            assertExactError(integer, client.execute(cmd("BITCOUNT", "mykey", "a", "1", "FOO")));
+            assertExactError(integer, client.execute(cmd("BITCOUNT", "mykey", "0.5", "1")));
+            assertExactError(integer, client.execute(cmd("BITCOUNT", "mykey", "0", "9223372036854775808", "BIT")));
+            assertExactError(
+                    "ERR wrong number of arguments for 'bitcount' command",
+                    client.execute(cmd("BITCOUNT")));
+
+            // Redis 先解析 start/end/unit 再查 key 类型，所以参数错误优先于 WRONGTYPE。
+            assertExactError(wrongType, client.execute(cmd("BITCOUNT", "mylist")));
+            assertExactError(wrongType, client.execute(cmd("BITCOUNT", "mylist", "0", "1")));
+            assertExactError(wrongType, client.execute(cmd("BITCOUNT", "mylist", "0", "1", "BIT")));
+            assertExactError(syntax, client.execute(cmd("BITCOUNT", "mylist", "0", "1", "FOO")));
+            assertExactError(integer, client.execute(cmd("BITCOUNT", "mylist", "a", "1", "BIT")));
+            assertExactError(syntax, client.execute(cmd("BITCOUNT", "mylist", "0")));
+            assertExactError(syntax, client.execute(cmd("BITCOUNT", "mylist", "0", "1", "BIT", "extra")));
         });
     }
 
@@ -158,6 +240,17 @@ public class BitmapCommandTest {
                         client.execute(cmd("GETBIT", "k", "4294967296")));
             }
         });
+    }
+
+    private static void assertCount(FastTestClient client, long expected, String... argv) {
+        ReplyObject reply = client.execute(cmd(argv));
+        Assert.assertTrue(String.join(" ", argv) + " -> " + reply, reply instanceof ReplyInteger);
+        Assert.assertEquals(String.join(" ", argv), expected, ((ReplyInteger) reply).value());
+    }
+
+    private static void assertExactError(String message, ReplyObject reply) {
+        Assert.assertTrue(String.valueOf(reply), reply instanceof ReplyError);
+        Assert.assertEquals(message, ((ReplyError) reply).message());
     }
 
     private static void assertError(String message, ReplyObject reply) {

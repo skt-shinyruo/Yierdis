@@ -418,6 +418,40 @@ public class TransactionCommandTest {
     }
 
     @Test
+    public void bitcountUnitAndArgumentErrorsInsideMultiFailOnlyThatCommand() {
+        forEachDb(db -> {
+            // BITCOUNT 的 Redis arity 是 -2：只带 start、多出一个参数或非法 unit 都能入队，EXEC 时才报 syntax error。
+            for (List<byte[]> invalid : List.of(
+                    List.of(b("BITCOUNT"), b("k"), b("0")),
+                    List.of(b("BITCOUNT"), b("k"), b("0"), b("1"), b("FOO")),
+                    List.of(b("BITCOUNT"), b("k"), b("0"), b("1"), b("BIT"), b("extra"))
+            )) {
+                assertContentErrorFailsOnlyThatCommand(db, invalid, "ERR syntax error");
+            }
+            assertContentErrorFailsOnlyThatCommand(
+                    db,
+                    List.of(b("BITCOUNT"), b("k"), b("a"), b("1"), b("BIT")),
+                    "ERR value is not an integer or out of range"
+            );
+
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            TestSession session = new TestSession();
+            FastTestClient client = new FastTestClient(dispatcher, session);
+            Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+            ReplyObject noKey = client.execute(List.of(b("BITCOUNT")));
+            Assert.assertEquals(
+                    "ERR wrong number of arguments for 'bitcount' command",
+                    ((ReplyError) noKey).message()
+            );
+            Assert.assertEquals(0, session.transactionState().size());
+            Assert.assertEquals(
+                    "EXECABORT Transaction discarded because of previous errors.",
+                    ((ReplyError) client.execute(List.of(b("EXEC")))).message()
+            );
+        });
+    }
+
+    @Test
     public void keyspaceArityErrorsInsideMultiAbortBeforeExec() {
         forEachDb(db -> {
             for (List<byte[]> invalid : List.of(
