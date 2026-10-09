@@ -9,6 +9,7 @@ import java.util.function.Function;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParseException;
+import yier.bubu.redis.command.api.RedisArgEcho;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.ServerInfoProvider;
@@ -96,7 +97,10 @@ final class ServerCommandModule implements CommandModule {
                 index += 2;
                 continue;
             }
-            throw new CommandParseException("ERR Syntax error in HELLO option '" + args.utf8(index) + "'");
+            throw new CommandParseException(
+                    "ERR Syntax error in HELLO option '"
+                            + RedisArgEcho.echo(args.request(), index, 128)
+                            + "'");
         }
         boolean authRejected = authUsername != null && !ConnectionHandshake.acceptsCredentials(authUsername);
 

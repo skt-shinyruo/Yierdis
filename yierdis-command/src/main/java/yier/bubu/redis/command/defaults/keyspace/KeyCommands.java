@@ -201,15 +201,15 @@ public final class KeyCommands {
     }
 
     private static CommandParseException wrongSubcommandArity(String fullname) {
-        return new CommandParseException(
+        return CommandParseException.aborting(
                 "ERR wrong number of arguments for '" + fullname + "' command");
     }
 
     private static CommandParseException unknownSubcommand(CommandArgs args, String parentUpper) {
-        StringBuilder echoed = new StringBuilder();
-        RedisArgEcho.append(echoed, args.request(), 1, 128);
-        return new CommandParseException(
-                "ERR unknown subcommand '" + echoed + "'. Try " + parentUpper + " HELP.");
+        return CommandParseException.aborting(
+                "ERR unknown subcommand '"
+                        + RedisArgEcho.echo(args.request(), 1, 128)
+                        + "'. Try " + parentUpper + " HELP.");
     }
 
     private static RedisReply helpReply(String commandUpper, String[] lines) {

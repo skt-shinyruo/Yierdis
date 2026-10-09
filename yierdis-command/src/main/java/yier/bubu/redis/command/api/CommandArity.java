@@ -61,7 +61,7 @@ public final class CommandArity {
 
     public void validate(String commandLower, CommandArgs args) {
         if (!accepts(args.argc())) {
-            throw new CommandParseException(
+            throw CommandParseException.aborting(
                     "ERR wrong number of arguments for '" + commandLower + "' command"
             );
         }

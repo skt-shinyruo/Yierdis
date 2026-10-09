@@ -24,8 +24,7 @@ public final class CollectionScanCommandSupport {
     }
 
     private static Arguments parse(CommandArgs args, ScanArguments.Target target) {
-        // cursor 是不透明整数，非法时 Redis 回 invalid cursor；能解析的任意值（含 phase 位超出内部约定的值）
-        // 都交给存储层，无法映射到当前表拓扑时按重启迭代处理。
+        // cursor / option 规则与错误文案见 ScanArguments；这里只把解析结果接到集合 scan 的 Arguments。
         ScanArguments parsed = ScanArguments.parse(args, 2, target);
         return new Arguments(args.bytes(1), parsed.cursor(), parsed.match(), parsed.count(), parsed.noValues());
     }

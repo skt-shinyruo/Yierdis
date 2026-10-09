@@ -170,7 +170,8 @@ public class CommandDispatcherTest {
         CommandDispatcher dispatcher = dispatcher(spec(
                 "STRICT", CommandArity.exact(1), TransactionPolicy.QUEUEABLE,
                 args -> {
-                    throw new CommandParseException("ERR wrong number of arguments for 'strict' command");
+                    throw CommandParseException.aborting(
+                            "ERR wrong number of arguments for 'strict' command");
                 }
         ));
         RecordingSession session = new RecordingSession(true);
@@ -190,7 +191,8 @@ public class CommandDispatcherTest {
         CommandDispatcher dispatcher = dispatcher(spec(
                 "STRICT", CommandArity.min(2), TransactionPolicy.QUEUEABLE,
                 args -> {
-                    throw new CommandParseException("ERR unknown subcommand 'nope'. Try STRICT HELP.");
+                    throw CommandParseException.aborting(
+                            "ERR unknown subcommand 'nope'. Try STRICT HELP.");
                 }
         ));
         RecordingSession session = new RecordingSession(true);

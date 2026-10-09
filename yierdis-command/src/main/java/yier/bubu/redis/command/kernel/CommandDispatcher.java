@@ -129,18 +129,12 @@ public final class CommandDispatcher {
             // EXEC replay 会重新 parse 并应用届时的 session；这里只确认 parse 能产出延迟 prepare。
             Objects.requireNonNull(deferredPrepare, "command handler returned null");
         } catch (CommandParseException failure) {
-            // 入队只拒绝参数个数和未知子命令（与 Redis 容器命令 lookup 失败一致）。
-            // 选项、取值和语法错误先 QUEUED，EXEC 时只有这一条失败。
-            if (abortsMultiOnParse(failure.getMessage())) {
+            // 入队拒绝由 CommandParseException.abortsMulti() 标明（arity / 未知子命令），
+            // 不扫错误文案。选项、取值和语法错误默认 QUEUE，EXEC 时只有这一条失败。
+            if (failure.abortsMulti()) {
                 throw failure;
             }
         }
-    }
-
-    private static boolean abortsMultiOnParse(String message) {
-        return message != null
-                && (message.contains("wrong number of arguments")
-                || message.contains("unknown subcommand"));
     }
 
     private static PreparedCommand prepareRetainedRequestEnqueue(

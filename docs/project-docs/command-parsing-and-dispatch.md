@@ -100,7 +100,7 @@ CommandSession capabilities (连接状态)
 
 异常分类决定了回复是否 abort 事务：
 
-- `CommandParseException` → 事务外是这条命令自己的错误。事务内只有参数个数不对（错误文案含 `wrong number of arguments`，含 `OBJECT` 的子命令个数/未知子命令）走 `abortingError`；其余解析错误先入队，`EXEC` 时只有那一条失败；
+- `CommandParseException` → 事务外是这条命令自己的错误。事务内看 `abortsMulti()`：arity（`CommandArity` / `CommandParseException.aborting`）与未知子命令整笔入队拒绝；其余解析错误先入队，`EXEC` 时只有那一条失败；
 - `WrongTypeException` 与 `YierdisCommandException` → `error(failure.getMessage())`，是普通 ready error，**不** abort 事务；
 - 其他未预期异常不在这里吞掉，继续交给 executor 的 terminal failure 路径，不能误报为确定的业务失败。
 

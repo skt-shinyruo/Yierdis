@@ -30,4 +30,10 @@ public final class RedisArgEcho {
         }
         return written;
     }
+
+    public static String echo(ExecutionRequest request, int argIndex, int maxChars) {
+        StringBuilder out = new StringBuilder(Math.min(maxChars, 32));
+        append(out, request, argIndex, maxChars);
+        return out.toString();
+    }
 }

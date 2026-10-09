@@ -71,6 +71,22 @@ public class RedisCompatibilityBoundaryTest {
             assertError(client.execute(cmd("CLIENT", "SETNAME", "bad\nname")), CLIENT_NAME_ERROR);
             assertError(client.execute(cmd("CLIENT", "SETNAME", "café")), CLIENT_NAME_ERROR);
             Assert.assertTrue(client.execute(cmd("CLIENT", "GETNAME")) instanceof ReplyNull);
+
+            assertError(client.execute(cmd("CLIENT", "foo")),
+                    "ERR unknown subcommand 'foo'. Try CLIENT HELP.");
+            assertError(client.execute(cmd("CLIENT", "a\nb")),
+                    "ERR unknown subcommand 'a b'. Try CLIENT HELP.");
+            Assert.assertEquals(List.of(
+                    "CLIENT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:",
+                    "GETNAME",
+                    "    Return the name of the current connection.",
+                    "SETNAME <name>",
+                    "    Assign a name to the current connection.",
+                    "SETINFO <attr> <value>",
+                    "    Set client library / version metadata attributes.",
+                    "HELP",
+                    "    Print this help."
+            ), simpleStrings(client.execute(cmd("CLIENT", "HELP"))));
         });
     }
 
