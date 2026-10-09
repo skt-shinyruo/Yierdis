@@ -185,6 +185,66 @@ public final class OpenAddressingTopology {
         return new HashTableWorkResult(inspected, migrated, true, HashTableWorkResult.StopReason.COMPLETE);
     }
 
+    /**
+     * 按 Redis {@code dictScan} 的反向二进制游标推进一次 SCAN：游标表示哈希空间中的本位槽位置，
+     * 而不是某一代表里的物理槽位，因此扩容、缩容或 rehash 完成后仍可在新表里接着扫。
+     * <p>
+     * 线性探测下，本位为 {@code b} 的元素都落在从 {@code b} 开始、到第一个 EMPTY 之前的连续区间里
+     * （槽位一旦非 EMPTY 就不会回到 EMPTY），所以扫描一个本位槽就是沿探测链走到 EMPTY，只交出本位
+     * 等于 {@code b} 的 FILLED 槽。双表期在同一游标位置上同时覆盖小表的本位槽和大表里低位相同的
+     * 全部本位槽；元素不论此刻在哪张表，命中条件都只取决于 {@code hash & smallMask}。
+     * <p>
+     * 契约：全程存在的元素至少交出一次；只扩容时不重复，缩容时可能重复。visitor 返回 false 只会让
+     * 本次调用在当前游标位置扫完后停下，因为游标无法表示“本位槽扫了一半”。visitor 不得修改拓扑。
+     *
+     * @param cursor 客户端游标；超出 32 位的值无法映射到哈希空间，按从头开始处理
+     */
+    public ScanStep scan(long cursor, long maxInspectedSlots, ScanVisitor visitor) {
+        Objects.requireNonNull(visitor, "visitor");
+        if (maxInspectedSlots < 0L) {
+            throw new IllegalArgumentException("maxInspectedSlots must be >= 0");
+        }
+        TableSide smallSide = TableSide.ACTIVE;
+        Table small = active;
+        TableSide largeSide = null;
+        Table large = null;
+        if (old != null) {
+            boolean oldIsSmaller = old.capacity < active.capacity;
+            smallSide = oldIsSmaller ? TableSide.OLD : TableSide.ACTIVE;
+            small = oldIsSmaller ? old : active;
+            largeSide = oldIsSmaller ? TableSide.ACTIVE : TableSide.OLD;
+            large = oldIsSmaller ? active : old;
+        }
+        int smallMask = small.capacity - 1;
+        int largeMask = large == null ? smallMask : large.capacity - 1;
+        int start = cursor < 0L || cursor > 0xFFFF_FFFFL ? 0 : (int) cursor & largeMask;
+        if (size == 0) {
+            return new ScanStep(start, 0L, 0L);
+        }
+
+        ScanRun run = new ScanRun(visitor);
+        int position = start;
+        while (run.inspected < maxInspectedSlots && !run.stopRequested) {
+            run.visitHomeSlot(smallSide, small, position & smallMask);
+            if (large == null) {
+                position = reverseIncrement(position, smallMask);
+            } else {
+                do {
+                    run.visitHomeSlot(largeSide, large, position & largeMask);
+                    position = reverseIncrement(position, largeMask);
+                } while ((position & (smallMask ^ largeMask)) != 0);
+            }
+            if (position == 0) {
+                return new ScanStep(start, 0L, run.inspected);
+            }
+        }
+        return new ScanStep(start, position, run.inspected);
+    }
+
+    private static int reverseIncrement(int position, int mask) {
+        return Integer.reverse(Integer.reverse(position | ~mask) + 1);
+    }
+
     public int invalidateOldShadow(int hash, SlotMatcher matcher) {
         Objects.requireNonNull(matcher, "matcher");
         if (old == null) {
@@ -383,6 +443,46 @@ public final class OpenAddressingTopology {
     @FunctionalInterface
     public interface SlotMover {
         void move(int oldSlot, int activeSlot);
+    }
+
+    @FunctionalInterface
+    public interface ScanVisitor {
+        /** 返回 false 表示本次 scan 在当前游标位置扫完后停止。 */
+        boolean visit(Location location);
+    }
+
+    /** 游标都是非负值；{@code nextCursor == 0} 表示完整迭代结束。 */
+    public record ScanStep(long startCursor, long nextCursor, long inspectedSlots) {
+    }
+
+    private static final class ScanRun {
+        private final ScanVisitor visitor;
+        private long inspected;
+        private boolean stopRequested;
+
+        private ScanRun(ScanVisitor visitor) {
+            this.visitor = visitor;
+        }
+
+        private void visitHomeSlot(TableSide side, Table table, int home) {
+            // COUNT / maxInspectedSlots 按“本位槽”计费，对齐 Redis 对 hash bucket 的计数；
+            // 线性探测链上的 EMPTY/TOMBSTONE/错位槽只是扫完该本位槽的内部工作。
+            inspected++;
+            int mask = table.capacity - 1;
+            int slot = home;
+            for (int probes = 0; probes < table.capacity; probes++) {
+                byte state = table.states[slot];
+                if (state == STATE_EMPTY) {
+                    return;
+                }
+                if (state == STATE_FILLED
+                        && (table.hashes[slot] & mask) == home
+                        && !visitor.visit(new Location(side, slot))) {
+                    stopRequested = true;
+                }
+                slot = (slot + 1) & mask;
+            }
+        }
     }
 
     public enum TableSide {

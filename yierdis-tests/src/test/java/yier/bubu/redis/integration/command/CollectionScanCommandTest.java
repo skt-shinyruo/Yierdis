@@ -330,6 +330,156 @@ public class CollectionScanCommandTest {
     }
 
     @Test
+    public void sscanTerminatesAndCoversBaseMembersWhileWritesOutpaceTheCursor() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            FastTestClient client = new FastTestClient(dispatcher);
+            int baseMembers = 600;
+            List<byte[]> sadd = new ArrayList<>(baseMembers + 2);
+            sadd.add(b("SADD"));
+            sadd.add(b("growing"));
+            for (int i = 0; i < baseMembers; i++) {
+                sadd.add(b("base:" + i));
+            }
+            client.execute(sadd);
+
+            Set<String> seen = new HashSet<>();
+            int inserted = 0;
+            String cursor = "0";
+            int rounds = 0;
+            do {
+                ScanReply reply = scan(client, "SSCAN", "growing", cursor, "COUNT", "20");
+                seen.addAll(strings(reply.elements()));
+                cursor = reply.cursor();
+                List<byte[]> grow = new ArrayList<>(42);
+                grow.add(b("SADD"));
+                grow.add(b("growing"));
+                for (int i = 0; i < 40; i++) {
+                    grow.add(b("grow:" + inserted++));
+                }
+                client.execute(grow);
+                Assert.assertTrue(
+                        "SSCAN did not terminate while the set kept growing; inserted=" + inserted,
+                        ++rounds < 1_000
+                );
+            } while (!"0".equals(cursor));
+
+            for (int i = 0; i < baseMembers; i++) {
+                Assert.assertTrue("SSCAN missed base member base:" + i, seen.contains("base:" + i));
+            }
+        });
+    }
+
+    @Test
+    public void fullSscanDuringBackgroundRehashReturnsEveryMemberExactlyOnce() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            FastTestClient client = new FastTestClient(dispatcher);
+            for (int memberCount : new int[]{200, 600}) {
+                client.execute(cmd("DEL", "set"));
+                List<byte[]> sadd = new ArrayList<>(memberCount + 2);
+                sadd.add(b("SADD"));
+                sadd.add(b("set"));
+                for (int i = 0; i < memberCount; i++) {
+                    sadd.add(b("m" + i));
+                }
+                client.execute(sadd);
+
+                List<String> returned = new ArrayList<>();
+                String cursor = "0";
+                int rounds = 0;
+                do {
+                    ScanReply reply = scan(client, "SSCAN", "set", cursor, "COUNT", "10");
+                    returned.addAll(listStrings(reply.elements()));
+                    cursor = reply.cursor();
+                    Assert.assertTrue("SSCAN did not terminate", ++rounds < 10_000);
+                } while (!"0".equals(cursor));
+
+                Assert.assertEquals(memberCount, new HashSet<>(returned).size());
+                Assert.assertEquals(
+                        "SSCAN over a quiescent set of " + memberCount + " members returned duplicates",
+                        memberCount,
+                        returned.size()
+                );
+            }
+        });
+    }
+
+    @Test
+    public void hscanAndZscanCursorSurvivesGrowthBetweenCalls() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            FastTestClient client = new FastTestClient(dispatcher);
+
+            int baseFields = 520;
+            List<byte[]> hset = new ArrayList<>(2 + baseFields * 2);
+            hset.add(b("HSET"));
+            hset.add(b("hash"));
+            for (int i = 0; i < baseFields; i++) {
+                hset.add(b("base:" + i));
+                hset.add(b("v" + i));
+            }
+            client.execute(hset);
+
+            Set<String> hashSeen = new HashSet<>();
+            int hashInserted = 0;
+            String hashCursor = "0";
+            int hashRounds = 0;
+            do {
+                ScanReply reply = scan(client, "HSCAN", "hash", hashCursor, "COUNT", "20");
+                hashSeen.addAll(pairs(reply.elements()).keySet());
+                hashCursor = reply.cursor();
+                List<byte[]> grow = new ArrayList<>(82);
+                grow.add(b("HSET"));
+                grow.add(b("hash"));
+                for (int i = 0; i < 40; i++) {
+                    grow.add(b("grow:" + hashInserted));
+                    grow.add(b("v"));
+                    hashInserted++;
+                }
+                client.execute(grow);
+                Assert.assertTrue("HSCAN did not terminate while hash grew", ++hashRounds < 1_000);
+            } while (!"0".equals(hashCursor));
+            for (int i = 0; i < baseFields; i++) {
+                Assert.assertTrue("HSCAN missed base:" + i, hashSeen.contains("base:" + i));
+            }
+
+            int baseMembers = 200;
+            List<byte[]> zadd = new ArrayList<>(2 + baseMembers * 2);
+            zadd.add(b("ZADD"));
+            zadd.add(b("zset"));
+            for (int i = 0; i < baseMembers; i++) {
+                zadd.add(b(Integer.toString(i)));
+                zadd.add(b("base:" + i));
+            }
+            client.execute(zadd);
+
+            Set<String> zsetSeen = new HashSet<>();
+            int zsetInserted = 0;
+            String zsetCursor = "0";
+            int zsetRounds = 0;
+            do {
+                ScanReply reply = scan(client, "ZSCAN", "zset", zsetCursor, "COUNT", "20");
+                zsetSeen.addAll(pairs(reply.elements()).keySet());
+                zsetCursor = reply.cursor();
+                List<byte[]> grow = new ArrayList<>(82);
+                grow.add(b("ZADD"));
+                grow.add(b("zset"));
+                for (int i = 0; i < 40; i++) {
+                    grow.add(b(Integer.toString(1_000 + zsetInserted)));
+                    grow.add(b("grow:" + zsetInserted));
+                    zsetInserted++;
+                }
+                client.execute(grow);
+                Assert.assertTrue("ZSCAN did not terminate while zset grew", ++zsetRounds < 1_000);
+            } while (!"0".equals(zsetCursor));
+            for (int i = 0; i < baseMembers; i++) {
+                Assert.assertTrue("ZSCAN missed base:" + i, zsetSeen.contains("base:" + i));
+            }
+        });
+    }
+
+    @Test
     public void hugeCountRemainsABoundedHintForHashTableEncoding() {
         runDefaultFfm(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
@@ -442,7 +592,11 @@ public class CollectionScanCommandTest {
     }
 
     private static Set<String> strings(ReplyArray elements) {
-        Set<String> values = new HashSet<>();
+        return new HashSet<>(listStrings(elements));
+    }
+
+    private static List<String> listStrings(ReplyArray elements) {
+        List<String> values = new ArrayList<>(elements.values().size());
         for (int index = 0; index < elements.values().size(); index++) {
             values.add(bulk(elements, index));
         }

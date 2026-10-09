@@ -18,8 +18,10 @@ import yier.bubu.redis.storage.memory.internal.hash.SipHash24;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 public class NativeByteMapTest {
@@ -740,7 +742,7 @@ public class NativeByteMapTest {
     }
 
     @Test
-    public void scanUsesMigratedOldSlotsAndRestartsAfterGenerationChange() {
+    public void scanContinuesAcrossRehashWithoutLosingEntries() {
         List<byte[]> keys = collidingKeys(13, 1);
         try (TestBackend runtime = TestBackend.open("native-byte-map-scan-rehash");
              StableMemoryBackend allocator = runtime.backend()) {
@@ -757,71 +759,53 @@ public class NativeByteMapTest {
                 }
 
                 Assert.assertTrue(map.metrics().rehashing());
-                long generation = map.metrics().generation();
-                ScanCursorV2 oldPhase = map.scan(
-                        ScanCursorV2.start(),
-                        map.metrics().capacity(),
-                        (keyHandle, value) -> true
-                );
-                Assert.assertEquals((int) generation, oldPhase.generation());
-                Assert.assertEquals(1, oldPhase.phase());
-                Assert.assertEquals(0L, oldPhase.position());
-
+                // 先扫一小段拿到可继续的哈希空间游标，再推进 rehash；游标不应因换代而作废。
+                ScanCursorV2 mid = map.scan(ScanCursorV2.start(), 4, (keyHandle, value) -> true);
+                Assert.assertNotEquals(0L, mid.value());
                 map.advanceRehash(HashTableWorkBudget.of(8L, Long.MAX_VALUE));
-                Set<String> migratedFromOldPhase = new HashSet<>();
-                ScanCursorV2 afterOldPrefix = map.scan(oldPhase, 8, (keyHandle, value) -> {
-                    migratedFromOldPhase.add(new String(store.toByteArray(keyHandle), StandardCharsets.US_ASCII));
-                    return true;
-                });
+                Assert.assertTrue(map.metrics().rehashing());
 
-                Assert.assertTrue(migratedFromOldPhase.contains(string(keys.get(0))));
-                Assert.assertEquals(1, afterOldPrefix.phase());
-                Assert.assertEquals(8L, afterOldPrefix.position());
-
-                Set<String> seenWhileMigrating = new HashSet<>();
-                ScanCursorV2 interleavedCursor = ScanCursorV2.start();
+                Set<String> seenAfterRehashProgress = new HashSet<>();
+                ScanCursorV2 cursor = mid;
                 int calls = 0;
                 do {
                     NativeByteMap.ScanResult result = map.scanWithWork(
-                            interleavedCursor,
+                            cursor,
                             2L,
                             (keyHandle, value) -> {
-                                seenWhileMigrating.add(new String(
+                                seenAfterRehashProgress.add(new String(
                                         store.toByteArray(keyHandle),
                                         StandardCharsets.US_ASCII
                                 ));
                                 return true;
                             }
                     );
-                    interleavedCursor = result.nextCursor();
+                    cursor = result.nextCursor();
                     if (map.metrics().rehashing()) {
                         map.advanceRehash(HashTableWorkBudget.of(1L, Long.MAX_VALUE));
                     }
-                    calls++;
-                    Assert.assertTrue("interleaved scan must terminate", calls < 128);
-                } while (interleavedCursor.value() != 0L);
+                    Assert.assertTrue("scan must terminate across rehash", ++calls < 128);
+                } while (cursor.value() != 0L);
 
-                Assert.assertFalse(map.metrics().rehashing());
+                Set<String> full = new HashSet<>();
+                ScanCursorV2 fullCursor = ScanCursorV2.start();
+                do {
+                    fullCursor = map.scan(fullCursor, 8, (keyHandle, value) -> {
+                        full.add(new String(store.toByteArray(keyHandle), StandardCharsets.US_ASCII));
+                        return true;
+                    });
+                } while (fullCursor.value() != 0L);
                 for (int i = 0; i < 13; i++) {
-                    Assert.assertTrue(seenWhileMigrating.contains(string(keys.get(i))));
+                    Assert.assertTrue(full.contains(string(keys.get(i))));
                 }
-
-                Set<String> restarted = new HashSet<>();
-                ScanCursorV2 complete = map.scan(oldPhase, map.metrics().capacity(), (keyHandle, value) -> {
-                    restarted.add(new String(store.toByteArray(keyHandle), StandardCharsets.US_ASCII));
-                    return true;
-                });
-
-                Assert.assertEquals(0L, complete.value());
-                for (int i = 0; i < 13; i++) {
-                    Assert.assertTrue(restarted.contains(string(keys.get(i))));
-                }
+                // mid 之后的后缀扫描不必覆盖已扫过的前缀，但整表全量扫描必须完整。
+                Assert.assertFalse(seenAfterRehashProgress.isEmpty());
             }
         }
     }
 
     @Test
-    public void scanResolvesMigratedShadowValueFromTheActiveTable() {
+    public void scanSeesReplacedValueWhileRehashIsInProgress() {
         List<byte[]> keys = collidingKeys(13, 1, "field-");
         try (TestBackend runtime = TestBackend.open("native-byte-map-scan-shadow-value");
              StableMemoryBackend allocator = runtime.backend()) {
@@ -839,12 +823,6 @@ public class NativeByteMapTest {
                         map.put(keys.get(i), valueStore.store(bytes("value-" + i)));
                     }
                     Assert.assertTrue(map.metrics().rehashing());
-
-                    ScanCursorV2 oldPhase = map.scan(
-                            ScanCursorV2.start(),
-                            map.metrics().capacity(),
-                            (keyHandle, valueHandle) -> true
-                    );
                     map.advanceRehash(HashTableWorkBudget.of(8L, Long.MAX_VALUE));
 
                     NativeHandle replacement = valueStore.store(bytes("replacement"));
@@ -852,20 +830,20 @@ public class NativeByteMapTest {
                     Assert.assertNotNull(released);
                     valueStore.release(released);
 
-                    Set<String> scanned = new HashSet<>();
-                    ScanCursorV2 next = map.scan(oldPhase, 8, (keyHandle, valueHandle) -> {
-                        String field = new String(keyStore.toByteArray(keyHandle), StandardCharsets.US_ASCII);
-                        scanned.add(field);
-                        if (field.equals(string(keys.get(0)))) {
-                            Assert.assertEquals(replacement, valueHandle);
-                            Assert.assertArrayEquals(bytes("replacement"), valueStore.toByteArray(valueHandle));
-                        }
-                        return true;
-                    });
+                    Map<String, String> scanned = new HashMap<>();
+                    ScanCursorV2 cursor = ScanCursorV2.start();
+                    int calls = 0;
+                    do {
+                        cursor = map.scan(cursor, 4, (keyHandle, valueHandle) -> {
+                            String field = new String(keyStore.toByteArray(keyHandle), StandardCharsets.US_ASCII);
+                            scanned.put(field, new String(valueStore.toByteArray(valueHandle), StandardCharsets.US_ASCII));
+                            return true;
+                        });
+                        Assert.assertTrue(++calls < 128);
+                    } while (cursor.value() != 0L);
 
-                    Assert.assertTrue(scanned.contains(string(keys.get(0))));
-                    Assert.assertEquals(1, next.phase());
-                    Assert.assertEquals(8L, next.position());
+                    Assert.assertEquals("replacement", scanned.get(string(keys.get(0))));
+                    Assert.assertEquals(13, scanned.size());
                 } finally {
                     map.forEach((keyHandle, valueHandle) -> valueStore.release(valueHandle));
                 }

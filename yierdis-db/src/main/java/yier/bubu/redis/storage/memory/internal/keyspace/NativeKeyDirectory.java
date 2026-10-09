@@ -205,7 +205,7 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
             NativeHandle keyHandle = old.keyHandles[sourceIndex];
             active.keyHandles[targetIndex] = keyHandle;
             active.entryHandles[targetIndex] = old.entryHandles[sourceIndex];
-            // old shadow 只保留 key 用于 scan 定位；清空 entry 后，detach 可按 ownership marker 精确回收一次。
+            // 清空 old 槽位的 entry 后，detach 可按 ownership marker 精确回收一次。
             old.entryHandles[sourceIndex] = null;
         });
         if (result.rehashComplete()) {
@@ -251,6 +251,9 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
         return scanWithWork(cursor, Math.max(0L, maxSteps), consumer).nextCursor();
     }
 
+    /**
+     * 按哈希空间本位槽推进一次 SCAN，委托 {@link OpenAddressingTopology#scan}，与集合内部哈希表共用游标语义。
+     */
     public synchronized ScanResult scanWithWork(ScanCursorV2 cursor, long maxSteps, ScanConsumer consumer) {
         Objects.requireNonNull(cursor, "cursor");
         Objects.requireNonNull(consumer, "consumer");
@@ -259,42 +262,16 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
             throw new IllegalArgumentException("maxSteps must be >= 0");
         }
 
-        ScanCursorV2 start = normalizeScanCursor(cursor);
-        if (topology.metrics().size() == 0) {
-            return new ScanResult(start, ScanCursorV2.start(), 0L, topology.metrics().generation());
-        }
-
-        int phase = start.phase();
-        long position = start.position();
-        long inspected = 0L;
-        while (true) {
-            Table table = tableForPhase(phase);
-            if (table == null || position >= table.capacity) {
-                if (phase == 0 && old != null) {
-                    phase = 1;
-                    position = 0L;
-                    continue;
-                }
-                return new ScanResult(start, ScanCursorV2.start(), inspected, topology.metrics().generation());
-            }
-
-            if (inspected >= maxSteps) {
-                return new ScanResult(start, cursorFor(phase, position), inspected, topology.metrics().generation());
-            }
-
-            int index = (int) position;
-            position++;
-            inspected++;
-            if (!acceptScanSlot(table, phase, index, consumer)) {
-                if (position >= table.capacity) {
-                    if (phase == 0 && topology.metrics().rehashing()) {
-                        return new ScanResult(start, cursorFor(1, 0L), inspected, topology.metrics().generation());
-                    }
-                    return new ScanResult(start, ScanCursorV2.start(), inspected, topology.metrics().generation());
-                }
-                return new ScanResult(start, cursorFor(phase, position), inspected, topology.metrics().generation());
-            }
-        }
+        OpenAddressingTopology.ScanStep step = topology.scan(cursor.value(), maxSteps, location -> consumer.accept(
+                keyHandleAt(location),
+                entryHandleAt(table(location.table()), location.slot())
+        ));
+        return new ScanResult(
+                ScanCursorV2.of(step.startCursor()),
+                ScanCursorV2.of(step.nextCursor()),
+                step.inspectedSlots(),
+                topology.metrics().generation()
+        );
     }
 
     public StagedInsert stageInsert(byte[] keyBytes) {
@@ -541,53 +518,6 @@ public final class NativeKeyDirectory implements AutoCloseable, HashTableMainten
 
     private static EntryHandle entryHandleAt(Table table, int index) {
         return new EntryHandle(table.entryHandles[index]);
-    }
-
-    private boolean acceptScanSlot(Table table, int phase, int index, ScanConsumer consumer) {
-        TableSide side = phase == 0 ? TableSide.ACTIVE : TableSide.OLD;
-        SlotState state = topology.slotState(side, index);
-        if (state == SlotState.FILLED) {
-            return consumer.accept(keyHandleAt(new Location(side, index)), entryHandleAt(table, index));
-        }
-        if (phase != 1 || state != SlotState.MIGRATED_SCAN_SHADOW) {
-            return true;
-        }
-        NativeHandle keyHandle = table.keyHandles[index];
-        ProbeResult probe = probeStoredKey(keyHandle, topology.hashAt(new Location(TableSide.OLD, index)));
-        return !probe.found()
-                || consumer.accept(
-                        keyHandleAt(probe.location()),
-                        entryHandleAt(table(probe.location().table()), probe.location().slot())
-                );
-    }
-
-    private ScanCursorV2 normalizeScanCursor(ScanCursorV2 cursor) {
-        int currentGeneration = wireGeneration();
-        // wire token 只有 generation 的低 29 位；代数不匹配时旧表可能已经退休，只能从当前 active 表重启。
-        if (cursor.value() == 0L || cursor.generation() != currentGeneration) {
-            return ScanCursorV2.of(currentGeneration, 0, 0L);
-        }
-        // 客户端可把 cursor 当不透明整数乱填：phase 位超出 0/1 时无法映射到当前双表拓扑，
-        // 按从 active 表头重启处理（允许重复），绝不让非法 phase 进入扫描循环。
-        if (cursor.phase() > 1) {
-            return ScanCursorV2.of(currentGeneration, 0, 0L);
-        }
-        if (cursor.phase() == 1 && !topology.metrics().rehashing()) {
-            return ScanCursorV2.of(currentGeneration, 0, 0L);
-        }
-        return cursor;
-    }
-
-    private Table tableForPhase(int phase) {
-        return phase == 0 ? active : old;
-    }
-
-    private ScanCursorV2 cursorFor(int phase, long position) {
-        return ScanCursorV2.of(wireGeneration(), phase, position);
-    }
-
-    private int wireGeneration() {
-        return (int) (topology.metrics().generation() & 0x1fff_ffffL);
     }
 
     private void clearInternal() {
