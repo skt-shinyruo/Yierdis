@@ -20,7 +20,7 @@ import java.util.concurrent.TimeUnit;
  */
 public class HalfCloseIntegrationTest {
     @Test
-    public void pipelineThenImmediateHalfCloseReturnsEveryReplyInOrderAndAppliesWrites() throws Exception {
+    public void multiCommandThenImmediateHalfCloseReturnsEveryReplyInOrderAndAppliesWrites() throws Exception {
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config());
              Socket socket = connect(server)) {
             writeRaw(socket, join(
@@ -38,15 +38,15 @@ public class HalfCloseIntegrationTest {
     }
 
     @Test
-    public void largePipelineThenHalfCloseReturnsOneReplyPerCommand() throws Exception {
+    public void largeMultiCommandThenHalfCloseReturnsOneReplyPerCommand() throws Exception {
         int commandCount = 4_000;
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config());
              Socket socket = connect(server)) {
-            ByteArrayOutputStream pipeline = new ByteArrayOutputStream();
+            ByteArrayOutputStream batch = new ByteArrayOutputStream();
             for (int index = 0; index < commandCount; index++) {
-                pipeline.writeBytes(command("SET", "k" + index, "v" + index));
+                batch.writeBytes(command("SET", "k" + index, "v" + index));
             }
-            writeRaw(socket, pipeline.toByteArray());
+            writeRaw(socket, batch.toByteArray());
             socket.shutdownOutput();
 
             for (int index = 0; index < commandCount; index++) {
@@ -147,7 +147,7 @@ public class HalfCloseIntegrationTest {
     }
 
     @Test
-    public void quitInHalfClosedPipelineRepliesOkThenCloses() throws Exception {
+    public void quitInHalfClosedBatchRepliesOkThenCloses() throws Exception {
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config());
              Socket socket = connect(server)) {
             writeRaw(socket, join(
@@ -170,15 +170,59 @@ public class HalfCloseIntegrationTest {
     }
 
     @Test
+    public void halfCloseDrainKeepsReplyBudgetReservedUntilRepliesFlush() throws Exception {
+        // story 14：半关闭排空期间回复预算仍记账；全部写出并断连后额度归零。
+        int commandCount = 256;
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config());
+             Socket socket = connect(server)) {
+            ByteArrayOutputStream batch = new ByteArrayOutputStream();
+            for (int index = 0; index < commandCount; index++) {
+                batch.writeBytes(command("SET", "rb" + index, "1"));
+            }
+            writeRaw(socket, batch.toByteArray());
+            socket.shutdownOutput();
+
+            OutboundMemoryBudget budget = server.outboundMemoryBudgetForTests();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2L);
+            boolean sawReservation = false;
+            while (System.nanoTime() < deadline) {
+                OutboundMemoryBudgetStats stats = budget.stats();
+                if (stats.reservedBytes() > 0L || stats.activeSlots() > 0L) {
+                    sawReservation = true;
+                    break;
+                }
+                Thread.sleep(1L);
+            }
+            Assert.assertTrue("reply budget should stay charged while half-close replies drain", sawReservation);
+
+            for (int index = 0; index < commandCount; index++) {
+                Assert.assertEquals("+OK\r\n", readAsciiFrame(socket));
+            }
+            assertEof(socket);
+
+            deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2L);
+            while (System.nanoTime() < deadline) {
+                OutboundMemoryBudgetStats stats = budget.stats();
+                if (stats.reservedBytes() == 0L && stats.activeSlots() == 0L) {
+                    break;
+                }
+                Thread.sleep(10L);
+            }
+            Assert.assertEquals(0L, budget.stats().reservedBytes());
+            Assert.assertEquals(0L, budget.stats().activeSlots());
+        }
+    }
+
+    @Test
     public void halfCloseHoldsMaxClientsSlotUntilRepliesAreDrained() throws Exception {
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config("--maxClients", "1"))) {
             ChildChannelRegistry registry = server.childChannelRegistryForTests();
             try (Socket first = connect(server)) {
-                ByteArrayOutputStream pipeline = new ByteArrayOutputStream();
+                ByteArrayOutputStream batch = new ByteArrayOutputStream();
                 for (int index = 0; index < 256; index++) {
-                    pipeline.writeBytes(command("SET", "mc" + index, "1"));
+                    batch.writeBytes(command("SET", "mc" + index, "1"));
                 }
-                writeRaw(first, pipeline.toByteArray());
+                writeRaw(first, batch.toByteArray());
                 first.shutdownOutput();
 
                 awaitActiveClients(registry, 1);
