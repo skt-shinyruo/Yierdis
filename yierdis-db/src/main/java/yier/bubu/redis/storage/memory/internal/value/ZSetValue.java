@@ -1663,7 +1663,8 @@ public final class ZSetValue implements YierdisValue {
             if (size - index > 0) {
                 System.arraycopy(scores, index, scores, index + 1, size - index);
             }
-            scores[index] = score;
+            // Redis listpack 把整数值 score 存成整数，-0 写进去就成了 +0；skiplist 仍保留 double 原值。
+            scores[index] = score == 0.0d ? 0.0d : score;
             size++;
             generation++;
         }

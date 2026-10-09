@@ -112,7 +112,8 @@ public class CommandDispatcherTest {
         List<ValidationCase> cases = List.of(
                 new ValidationCase(request(), "ERR empty command"),
                 new ValidationCase(request((String) null), "ERR empty command"),
-                new ValidationCase(request(""), "ERR empty command"),
+                new ValidationCase(request(""), "ERR unknown command ''"),
+                new ValidationCase(request("", "a"), "ERR unknown command '', with args beginning with: 'a' "),
                 new ValidationCase(request("PING", "value", null), "ERR Protocol error: null bulk string"),
                 new ValidationCase(request("MISSING"), "ERR unknown command 'MISSING'"),
                 new ValidationCase(request("PING", "extra"),
@@ -179,6 +180,25 @@ public class CommandDispatcherTest {
             Assert.assertFalse(session.tx.aborted());
             CapturedReply reply = execute(prepared, session, request);
             Assert.assertEquals("ERR wrong number of arguments for 'strict' command", reply.error());
+            Assert.assertTrue(session.tx.aborted());
+            Assert.assertEquals(0, session.tx.enqueueCalls);
+        }
+    }
+
+    @Test
+    public void handlerUnknownSubcommandStillAbortsTheTransaction() {
+        CommandDispatcher dispatcher = dispatcher(spec(
+                "STRICT", CommandArity.min(2), TransactionPolicy.QUEUEABLE,
+                args -> {
+                    throw new CommandParseException("ERR unknown subcommand 'nope'. Try STRICT HELP.");
+                }
+        ));
+        RecordingSession session = new RecordingSession(true);
+
+        try (ExecutionRequest request = request("STRICT", "nope");
+             PreparedCommand prepared = dispatcher.prepare(session, request)) {
+            CapturedReply reply = execute(prepared, session, request);
+            Assert.assertEquals("ERR unknown subcommand 'nope'. Try STRICT HELP.", reply.error());
             Assert.assertTrue(session.tx.aborted());
             Assert.assertEquals(0, session.tx.enqueueCalls);
         }
@@ -325,13 +345,64 @@ public class CommandDispatcherTest {
     }
 
     @Test
-    public void nonAsciiCommandNameUsesSafeUnknownCommandReply() {
+    public void nonAsciiCommandNameEchoesEachHighByteAsQuestionMark() {
         CommandDispatcher dispatcher = dispatcher(spec("PING"));
         RecordingSession session = new RecordingSession(false);
-        ExecutionRequest request = ByteArrayExecutionRequest.copyOf(List.of(new byte[]{(byte) 0xff}));
+        ExecutionRequest request = ByteArrayExecutionRequest.copyOf(List.of(new byte[]{'a', (byte) 0xff, (byte) 0xc3}));
 
         try (request; PreparedCommand prepared = dispatcher.prepare(session, request)) {
-            Assert.assertEquals("ERR unknown command", execute(prepared, session, request).error());
+            Assert.assertEquals("ERR unknown command 'a??'", execute(prepared, session, request).error());
+        }
+    }
+
+    // 期望值取自 Redis 8.9.241 原始回复：命令名按 %.128s 回显；参数逐个追加 "'%.*s' "，
+    // 累计到 128 字节就停，最后一个参数只取剩余预算；NUL 截断该段，CR/LF 换成空格。
+    @Test
+    public void unknownCommandEchoesNameAndLeadingArgsLikeRedis() {
+        String a128 = "a".repeat(128);
+        String a120 = "a".repeat(120);
+        List<ValidationCase> cases = List.of(
+                new ValidationCase(request("foo", "a", "b"),
+                        "ERR unknown command 'foo', with args beginning with: 'a' 'b' "),
+                new ValidationCase(request("foo", "", "x"),
+                        "ERR unknown command 'foo', with args beginning with: '' 'x' "),
+                new ValidationCase(request("foo", "a'b", "c\\d"),
+                        "ERR unknown command 'foo', with args beginning with: 'a'b' 'c\\d' "),
+                new ValidationCase(request("foo", "a\nb", "c\rd"),
+                        "ERR unknown command 'foo', with args beginning with: 'a b' 'c d' "),
+                new ValidationCase(request("fo\no", "x"),
+                        "ERR unknown command 'fo o', with args beginning with: 'x' "),
+                new ValidationCase(request("fo'o"), "ERR unknown command 'fo'o'"),
+                new ValidationCase(request("a".repeat(200)), "ERR unknown command '" + a128 + "'"),
+                new ValidationCase(request("foo", "a".repeat(200), "b"),
+                        "ERR unknown command 'foo', with args beginning with: '" + a128 + "' "),
+                new ValidationCase(request("foo", a120, "bbbbbbbbbbbbbbb", "c"),
+                        "ERR unknown command 'foo', with args beginning with: '" + a120 + "' 'bbbbb' "),
+                new ValidationCase(request("\0"), "ERR unknown command ''"),
+                new ValidationCase(request("foo", "\0x", "y"),
+                        "ERR unknown command 'foo', with args beginning with: '' 'y' ")
+        );
+        for (ValidationCase testCase : cases) {
+            CommandDispatcher dispatcher = dispatcher(spec("PING"));
+            RecordingSession session = new RecordingSession(false);
+            try (ExecutionRequest request = testCase.request();
+                 PreparedCommand prepared = dispatcher.prepare(session, request)) {
+                Assert.assertEquals(testCase.expectedReply(), execute(prepared, session, request).error());
+            }
+        }
+
+        String[] alphabet = new String[27];
+        alphabet[0] = "foo";
+        StringBuilder expected = new StringBuilder("ERR unknown command 'foo', with args beginning with: ");
+        for (int index = 0; index < 26; index++) {
+            alphabet[index + 1] = String.valueOf((char) ('a' + index));
+            expected.append('\'').append((char) ('a' + index)).append("' ");
+        }
+        CommandDispatcher dispatcher = dispatcher(spec("PING"));
+        RecordingSession session = new RecordingSession(false);
+        try (ExecutionRequest request = request(alphabet);
+             PreparedCommand prepared = dispatcher.prepare(session, request)) {
+            Assert.assertEquals(expected.toString(), execute(prepared, session, request).error());
         }
     }
 
