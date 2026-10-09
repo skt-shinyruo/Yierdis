@@ -124,6 +124,8 @@ executor.start()                                              // 绑定 owner th
 
 `NettyExecutionConnection.markClosing()` 先标记 executor connection context，再把事务清理调度到 command owner（`ownerTaskExecutor.accept(session::discardTransaction)`）；owner 已退出时才同步兜底清理。这样 `QUIT`、协议错误或 transport close 都不会把 retained transaction requests 留在队列里。server 主动发起的关闭都收敛到 `initiateClose()`：idle timeout 的 `CloseOnReadIdleHandler`、慢客户端宽限期结束的 `WriteBufferBackpressureHandler`、ingress 异常路径，先 `markClosing()` 再 `channel.close()`。reply sequencer/gate 等回复写路径的关闭，以及其余关闭来源，由 `closeFuture` 上的 `markClosing()` 监听兜底。executor 执行前除 `isClosing()` 外还会回看 transport 是否 active；某条关闭路径漏掉 closing 标记时，已入队命令也不会在断开的连接上继续执行。
 
+对端半关闭（`shutdownOutput` / `ChannelInputShutdownEvent`）不走 `initiateClose()`：子通道开启 `ALLOW_HALF_CLOSURE` 后，`RespRequestDecoder` 停读、消化已完整帧、安静丢弃残帧（含等待 parked ingress / consolidation 额度恢复），再发 `PeerInputConsumedEvent`；ingress 调用 `finishAfterPeerInputClosed()` → `ConnectionReplySequencer.closeAfterPendingReplies()`，**不**提前 `markClosing`（避免跳过执行器队列里尚未跑完的命令），等已登记 reply slot 全部写出后再 `channel.close()`，由 `closeFuture` 兜底 `markClosing` / `discardTransaction`。回复预算、背压与 `maxClients` 在排空期间仍生效。整连接关闭、RST、写失败与协议错误 fail-closed 仍立即清理。
+
 ## Netty pipeline
 
 连接 pipeline 把网络数据推进到请求模型，再推进到 executor admission：
@@ -269,7 +271,7 @@ backlog 预算由 `ExecutorBacklogBudget` 统一记账：`tryReserve(retainedByt
 
 ## QUIT、错误和关闭
 
-`QUIT` 的关闭语义属于结果而不是 writer side effect：其 handler（`CoreConnectionCommands.quit`）返回 `PreparedCommands.ready(CommandResult.closeAfterReply(RedisReplies.simpleString("OK")))`。executor 先渲染 `OK`，再依据 result flag 标记连接 closing 并 `reply.markReady(true)`；`ConnectionReplySequencer.readyOnEventLoop` 看到 `slot.closeAfterReply()` 后关闭后续 slot 注册并取消排在它之后的 slot，写完这条回复即 `channel.close()`。`EXEC` 中若任一子结果请求关闭，外层 `PreparedExec` 会传播该 flag。
+`QUIT` 的关闭语义属于结果而不是 writer side effect：其 handler（`CoreConnectionCommands.quit`）返回 `PreparedCommands.ready(CommandResult.closeAfterReply(RedisReplies.simpleString("OK")))`。executor 先渲染 `OK`，再依据 result flag 标记连接 closing 并 `reply.markReady(true)`；`ConnectionReplySequencer.readyOnEventLoop` 看到 `slot.closeAfterReply()` 后关闭后续 slot 注册并取消排在它之后的 slot，写完这条回复即 `channel.close()`。`EXEC` 中若任一子结果请求关闭，外层 `PreparedExec` 会传播该 flag。半关闭批次里若含 `QUIT`，行为与平常相同：`QUIT` 之前的命令照常回复，`QUIT` 回 `OK` 后因 `closeAfterReply` 关连接。
 
 普通 command handler 不直接调用 `RedisReplyWriter`。预期的执行期命令错误可返回顶层 `ControlError`，renderer 会调用 `controlError(...)`（`RespReplyWriter.controlError` 会先 `useControlReservation()`）切换到当前槽位的 control reservation；该方法本身不请求关闭连接。executor/ingress 的控制路径直接写入 control error，并通过 reply slot 的 `markReady(true)` 传递关闭语义；普通命令的关闭语义仍由 `CommandResult` 携带。
 
