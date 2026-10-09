@@ -13,6 +13,7 @@ import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.ExecutorAdmissionAttempt;
 import yier.bubu.redis.protocol.resp.netty.InboundReadCreditHandler;
+import yier.bubu.redis.protocol.resp.netty.PeerInputConsumedEvent;
 import yier.bubu.redis.protocol.resp.netty.RespDecodedMessage;
 import yier.bubu.redis.protocol.resp.netty.RespProtocolError;
 
@@ -94,6 +95,22 @@ public final class NettyExecutionRequestIngress extends ChannelInboundHandlerAda
                 }
             }
         }
+    }
+
+    @Override
+    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+        if (evt instanceof PeerInputConsumedEvent) {
+            // decoder 已丢弃不完整帧并 handoff 完完整命令：等已登记回复写完后再关连接。
+            NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
+            if (connection != null) {
+                safeDisableAutoRead(ctx);
+                connection.finishAfterPeerInputClosed();
+            } else {
+                ctx.close();
+            }
+            return;
+        }
+        super.userEventTriggered(ctx, evt);
     }
 
     @Override
