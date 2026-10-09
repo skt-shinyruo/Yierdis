@@ -161,7 +161,7 @@ RESP3 下，已有专属形态的语义会换成 RESP3 编码（RESP2/RESP3 差�
 
 部分命令名带子命令，子命令不是独立的注册项：
 
-- `CLIENT SETINFO` / `CLIENT SETNAME` / `CLIENT GETNAME`（`CLIENT` 其余子命令报 `ERR unknown subcommand '<x>'. Try CLIENT HELP.`）；
+- `CLIENT SETINFO` / `CLIENT SETNAME` / `CLIENT GETNAME` / `CLIENT HELP`（只列已实现子命令；其余子命令报 `ERR unknown subcommand '<x>'. Try CLIENT HELP.`，回显走 `RedisArgEcho`）；
 - `MEMORY USAGE` / `MEMORY STATS`；
 - `OBJECT ENCODING`；
 - `COMMAND`（裸形式列全部命令）/ `COMMAND COUNT` / `COMMAND INFO <name>...`。
