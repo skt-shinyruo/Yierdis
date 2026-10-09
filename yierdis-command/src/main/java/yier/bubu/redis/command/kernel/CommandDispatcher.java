@@ -3,6 +3,7 @@ package yier.bubu.redis.command.kernel;
 import yier.bubu.redis.command.api.CommandArgs;
 import yier.bubu.redis.command.api.CommandParseException;
 import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.RedisArgEcho;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.CommandSession;
@@ -205,11 +206,10 @@ public final class CommandDispatcher {
     }
 
     // 对齐 Redis commandCheckArity 的 unknown-command 文案：命令名 %.128s；若有参数再追加
-    // ", with args beginning with: " 与逐个 "'%.*s' "（累计 128 字节预算）；NUL 截断该段；
-    // 整句再把 CR/LF 换成空格。非 ASCII 字节在 Yierdis 里写成 '?'，因为错误回复按 US_ASCII 计量。
+    // ", with args beginning with: " 与逐个 "'%.*s' "（累计 128 字节预算）；回显规则见 RedisArgEcho。
     private static String unknownCommandMessage(ExecutionRequest request) {
         StringBuilder message = new StringBuilder("ERR unknown command '");
-        appendRedisEcho(message, request, 0, 128);
+        RedisArgEcho.append(message, request, 0, 128);
         message.append('\'');
         if (request.argc() >= 2) {
             message.append(", with args beginning with: ");
@@ -217,32 +217,11 @@ public final class CommandDispatcher {
             for (int index = 1; index < request.argc() && argsBytes < 128; index++) {
                 int budget = 128 - argsBytes;
                 message.append('\'');
-                int written = appendRedisEcho(message, request, index, budget);
+                int written = RedisArgEcho.append(message, request, index, budget);
                 message.append("' ");
                 argsBytes += 1 + written + 2;
             }
         }
         return message.toString();
-    }
-
-    /** @return 写入的字符数（已计入 NUL 截断与替换） */
-    public static int appendRedisEcho(StringBuilder out, ExecutionRequest request, int argIndex, int maxChars) {
-        int length = request.len(argIndex);
-        int written = 0;
-        for (int index = 0; index < length && written < maxChars; index++) {
-            int value = request.byteAt(argIndex, index) & 0xff;
-            if (value == 0) {
-                break;
-            }
-            if (value == '\r' || value == '\n') {
-                out.append(' ');
-            } else if (value < 0x20 || value > 0x7e) {
-                out.append('?');
-            } else {
-                out.append((char) value);
-            }
-            written++;
-        }
-        return written;
     }
 }

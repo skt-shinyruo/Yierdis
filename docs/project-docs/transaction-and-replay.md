@@ -94,6 +94,7 @@ CommandExecutor
 - empty 或 unknown command（`ERR empty command` / `ERR unknown command ...`）；
 - illegal null bulk argument（`ERR Protocol error: null bulk string`）；
 - wrong arity（`CommandArity`，或 handler parse 文案里的 `wrong number of arguments`）；
+- 容器命令的未知子命令（handler parse 文案里的 `unknown subcommand`，与 Redis 容器命令 lookup 失败一致）；
 - `TransactionPolicy.DISALLOWED_IN_MULTI`（`ERR <NAME> is not allowed in MULTI`）。
 
 参数内容、选项冲突、取值范围和语法错误不是入队拒绝。它们返回 `QUEUED`，`EXEC` 的数组里只有那一条是错误，同一笔事务的其他命令照常执行。依赖墙钟的 `EXAT`/`PXAT` 比较留在执行时。

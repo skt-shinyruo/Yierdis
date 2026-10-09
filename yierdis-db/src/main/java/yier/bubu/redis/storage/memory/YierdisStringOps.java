@@ -530,6 +530,7 @@ final class YierdisStringOps implements StringOps {
     @Override
     public long bitcount(BytesView keyView, long start, long end, BitRangeUnit unit) {
         kernel.checkOwner();
+        Objects.requireNonNull(unit, "unit");
         EntryRecord record = liveTouchedStringRecord(kernel, keyView);
         if (record == null) {
             return 0L;

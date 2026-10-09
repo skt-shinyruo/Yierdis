@@ -255,6 +255,29 @@ public class RespHandshakeIntegrationTest {
         }
     }
 
+    // MULTI 内 HELLO AUTH 失败：先 QUEUED，EXEC 时只该槽 WRONGPASS，不改名、不切协议。
+    @Test
+    public void helloWrongPassInsideMultiFailsOnlyThatCommand() throws Exception {
+        YierdisServerRuntimeConfig config = serverConfig();
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(config);
+             Socket socket = new Socket("127.0.0.1", server.port())) {
+            socket.setSoTimeout(3000);
+            OutputStream out = socket.getOutputStream();
+            InputStream in = socket.getInputStream();
+
+            Assert.assertEquals("+OK\r\n", sendAscii(out, in, 5, "CLIENT", "SETNAME", "kept"));
+            Assert.assertEquals("+OK\r\n", sendAscii(out, in, 5, "MULTI"));
+            Assert.assertEquals(
+                    "+QUEUED\r\n",
+                    sendAscii(out, in, 9, "HELLO", "3", "AUTH", "bob", "x", "SETNAME", "next"));
+            Assert.assertEquals("+QUEUED\r\n", sendAscii(out, in, 9, "GET", "missing"));
+            String expected = "*2\r\n" + WRONGPASS_LINE + "$-1\r\n";
+            Assert.assertEquals(expected, sendAscii(out, in, expected.length(), "EXEC"));
+            Assert.assertEquals("$4\r\nkept\r\n", sendAscii(out, in, 10, "CLIENT", "GETNAME"));
+            Assert.assertEquals("$-1\r\n", sendAscii(out, in, 5, "GET", "missing"));
+        }
+    }
+
     @Test
     public void clientSetinfoSetnameAndGetnameAreAccepted() throws Exception {
         YierdisServerRuntimeConfig config = serverConfig();

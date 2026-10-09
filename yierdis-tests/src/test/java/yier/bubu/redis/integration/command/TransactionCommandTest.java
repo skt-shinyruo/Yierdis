@@ -262,15 +262,16 @@ public class TransactionCommandTest {
         });
     }
 
+    // 用假命令测 TransactionPolicy.DISALLOWED_IN_MULTI；真实 HELLO 已是 QUEUEABLE（见 #181）。
     @Test
     public void modulesCanRejectCommandsInsideMultiAndAbortTransaction() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(
                     db,
                     registration -> registration.register(new CommandSpec(
-                            new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
+                            new CommandSyntax("FORBIDTX", CommandArity.min(1), CommandKeySpec.NONE,
                                     TransactionPolicy.DISALLOWED_IN_MULTI),
-                            args -> session -> PreparedCommands.ready(RedisReplies.simpleString("HELLO"))
+                            args -> session -> PreparedCommands.ready(RedisReplies.simpleString("FORBIDTX"))
                     ))
             );
             TestSession session = new TestSession();
@@ -278,9 +279,9 @@ public class TransactionCommandTest {
                 FastTestClient client = new FastTestClient(dispatcher, session);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
 
-                ReplyObject hello = client.execute(Arrays.asList(b("HELLO")));
-                Assert.assertTrue(hello instanceof ReplyError);
-                Assert.assertEquals("ERR HELLO is not allowed in MULTI", ((ReplyError) hello).message());
+                ReplyObject forbidden = client.execute(Arrays.asList(b("FORBIDTX")));
+                Assert.assertTrue(forbidden instanceof ReplyError);
+                Assert.assertEquals("ERR FORBIDTX is not allowed in MULTI", ((ReplyError) forbidden).message());
 
                 ReplyObject exec = client.execute(Arrays.asList(b("EXEC")));
                 Assert.assertTrue(exec instanceof ReplyError);

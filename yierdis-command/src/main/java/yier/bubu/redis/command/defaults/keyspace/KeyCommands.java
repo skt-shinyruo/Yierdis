@@ -15,6 +15,7 @@ import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParseException;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
+import yier.bubu.redis.command.api.RedisArgEcho;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandLimits;
 import yier.bubu.redis.command.api.TransactionPolicy;
@@ -206,30 +207,9 @@ public final class KeyCommands {
 
     private static CommandParseException unknownSubcommand(CommandArgs args, String parentUpper) {
         StringBuilder echoed = new StringBuilder();
-        appendSubcommandEcho(echoed, args, 1, 128);
+        RedisArgEcho.append(echoed, args.request(), 1, 128);
         return new CommandParseException(
                 "ERR unknown subcommand '" + echoed + "'. Try " + parentUpper + " HELP.");
-    }
-
-    // 与 CommandDispatcher 的 unknown-command 回显同一套规则：NUL 截断、CR/LF→空格、非 ASCII→?。
-    private static void appendSubcommandEcho(StringBuilder out, CommandArgs args, int argIndex, int maxChars) {
-        var request = args.request();
-        int length = request.len(argIndex);
-        int written = 0;
-        for (int index = 0; index < length && written < maxChars; index++) {
-            int value = request.byteAt(argIndex, index) & 0xff;
-            if (value == 0) {
-                break;
-            }
-            if (value == '\r' || value == '\n') {
-                out.append(' ');
-            } else if (value < 0x20 || value > 0x7e) {
-                out.append('?');
-            } else {
-                out.append((char) value);
-            }
-            written++;
-        }
     }
 
     private static RedisReply helpReply(String commandUpper, String[] lines) {

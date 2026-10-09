@@ -67,7 +67,8 @@ final class ServerCommandModule implements CommandModule {
     }
 
     // 与 Redis helloCommand 同序：版本号 → 逐个选项（SETNAME 名字在这里校验）→ 认证 → 改名 → 切协议。
-    // 前面任何一步失败都直接回错，连接名和协议版本保持不变。
+    // parse 失败（版本/选项/非法 SETNAME）立刻抛错；WRONGPASS 推迟到 execute，以便 SETNAME 校验先于认证。
+    // 任一失败都不改连接名、不切协议。
     private Function<CommandSession, PreparedCommand> hello(CommandArgs args) {
         Integer requestedVersion = null;
         int index = 1;
