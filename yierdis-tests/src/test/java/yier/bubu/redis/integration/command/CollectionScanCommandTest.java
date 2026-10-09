@@ -371,10 +371,11 @@ public class CollectionScanCommandTest {
     }
 
     @Test
-    public void fullSscanDuringBackgroundRehashReturnsEveryMemberExactlyOnce() {
+    public void fullSscanImmediatelyAfterBulkInsertReturnsEveryMemberExactlyOnce() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
             FastTestClient client = new FastTestClient(dispatcher);
+            // 刚写入大集合后立刻全量扫：常落在 hashtable 扩容/双表期；严格 rehash 断言见 NativeByteMapTest。
             for (int memberCount : new int[]{200, 600}) {
                 client.execute(cmd("DEL", "set"));
                 List<byte[]> sadd = new ArrayList<>(memberCount + 2);

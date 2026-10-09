@@ -11,12 +11,13 @@ import java.nio.charset.StandardCharsets;
  * 在表扩容、缩容或 rehash 完成后仍可映射到新表对应位置继续扫描。目标是“可推进、可终止”：
  * 完整迭代在有限步内回到 {@code 0}；全程存在的元素至少返回一次。
  *
- * <p>cursor 对客户端是不透明非负整数：{@link #of(long)} 接受任意非负值，绝不因客户端输入抛出异常；
- * 无法映射到当前哈希空间的 cursor（例如超出 32 位）由存储层按“从头重启迭代”处理（允许重复，结束仍回 0）。</p>
+ * <p>cursor 对客户端是不透明非负整数。命令层先拒绝负数字符串；进入存储层后 {@link #of(long)} 只接受
+ * {@code >= 0}（负数仍抛 {@link IllegalArgumentException}）。无法映射到当前哈希空间的非负 cursor
+ * （例如超出 32 位）由存储层按“从头重启迭代”处理（允许重复，结束仍回 0），不因乱填而报命令错误。</p>
  *
  * <p>{@link #of(int, int, long)} / {@link #generation()} / {@link #phase()} / {@link #position()}
- * 保留对历史“代数 + 阶段 + 物理槽位”打包格式的编解码能力，便于测试与兼容旧 token；
- * 当前 SCAN 实现不再把 generation/phase 写入线上游标。</p>
+ * 是历史“代数 + 阶段 + 物理槽位”打包格式的编解码遗留，仅供单测与解析旧 token；
+ * 当前 SCAN 实现不再把 generation/phase 写入线上游标。类名保留 {@code V2} 以免大面积改调用点。</p>
  */
 public final class ScanCursorV2 {
     private static final byte[] ZERO_ASCII = "0".getBytes(StandardCharsets.US_ASCII);

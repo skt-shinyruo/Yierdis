@@ -758,12 +758,12 @@ public class NativeByteMapTest {
                     map.put(keys.get(i), i);
                 }
 
-                Assert.assertTrue(map.metrics().rehashing());
+                Assert.assertTrue("fixture must still be mid-rehash before scanning", map.metrics().rehashing());
                 // 先扫一小段拿到可继续的哈希空间游标，再推进 rehash；游标不应因换代而作废。
                 ScanCursorV2 mid = map.scan(ScanCursorV2.start(), 4, (keyHandle, value) -> true);
                 Assert.assertNotEquals(0L, mid.value());
                 map.advanceRehash(HashTableWorkBudget.of(8L, Long.MAX_VALUE));
-                Assert.assertTrue(map.metrics().rehashing());
+                Assert.assertTrue("scan mid-cursor must remain usable while still rehashing", map.metrics().rehashing());
 
                 Set<String> seenAfterRehashProgress = new HashSet<>();
                 ScanCursorV2 cursor = mid;
@@ -800,6 +800,67 @@ public class NativeByteMapTest {
                 }
                 // mid 之后的后缀扫描不必覆盖已扫过的前缀，但整表全量扫描必须完整。
                 Assert.assertFalse(seenAfterRehashProgress.isEmpty());
+            }
+        }
+    }
+
+    @Test
+    public void scanCursorSurvivesShrinkRehashWithoutLosingSurvivors() {
+        List<byte[]> keys = collidingKeys(512, 1);
+        try (TestBackend runtime = TestBackend.open("native-byte-map-scan-shrink");
+             StableMemoryBackend allocator = runtime.backend()) {
+            NativeByteStore store = new NativeByteStore(allocator, NativeObjectKind.SET_MEMBER_BYTES);
+            try (NativeByteMap<Integer> map = new NativeByteMap<>(
+                    store,
+                    NativeObjectKind.SET_MEMBER_BYTES,
+                    FIXED_SEED,
+                    null,
+                    null
+            )) {
+                for (int i = 0; i < 512; i++) {
+                    map.put(keys.get(i), i);
+                }
+                drainRehash(map);
+                int peakCapacity = map.metrics().capacity();
+
+                ScanCursorV2 mid = map.scan(ScanCursorV2.start(), 8, (keyHandle, value) -> true);
+                Assert.assertNotEquals(0L, mid.value());
+
+                for (int i = 0; i < 480; i++) {
+                    Assert.assertEquals(Integer.valueOf(i), map.remove(keys.get(i)));
+                }
+                Assert.assertTrue(map.hasMaintenanceDebt());
+                publishMaintenanceResize(map);
+                Assert.assertTrue(map.metrics().rehashing());
+                Assert.assertTrue(map.metrics().capacity() < peakCapacity
+                        || map.metrics().oldCapacity() == peakCapacity);
+
+                Set<String> seen = new HashSet<>();
+                ScanCursorV2 cursor = mid;
+                int calls = 0;
+                do {
+                    cursor = map.scan(cursor, 64, (keyHandle, value) -> {
+                        seen.add(new String(store.toByteArray(keyHandle), StandardCharsets.US_ASCII));
+                        return true;
+                    });
+                    if (map.metrics().rehashing()) {
+                        map.advanceRehash(HashTableWorkBudget.of(64L, Long.MAX_VALUE));
+                    }
+                    Assert.assertTrue("scan must terminate across shrink", ++calls < 2_048);
+                } while (cursor.value() != 0L);
+
+                Set<String> full = new HashSet<>();
+                ScanCursorV2 fullCursor = ScanCursorV2.start();
+                do {
+                    fullCursor = map.scan(fullCursor, 8, (keyHandle, value) -> {
+                        full.add(new String(store.toByteArray(keyHandle), StandardCharsets.US_ASCII));
+                        return true;
+                    });
+                } while (fullCursor.value() != 0L);
+                for (int i = 480; i < 512; i++) {
+                    Assert.assertTrue(full.contains(string(keys.get(i))));
+                }
+                Assert.assertFalse(seen.isEmpty());
             }
         }
     }
