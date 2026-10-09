@@ -165,15 +165,15 @@ object table 槽位存当前 pageId / pageOffset / size / capacity(=descriptor �
 
 `NativeKeyDirectory` 与 `NativeByteMap`（HASH/SET 的 HT 编码）**都不自己实现哈希逻辑**，委托同一个 `OpenAddressingTopology`。
 
-- 4 种槽状态：`EMPTY`、`FILLED`、`TOMBSTONE`、`MIGRATED_SCAN_SHADOW`。**shadow 是为 SCAN 正确性专设的**：迁移后 old 表保留 key 用于定位与重放。
+- 4 种槽状态：`EMPTY`、`FILLED`、`TOMBSTONE`、`MIGRATED_SCAN_SHADOW`。shadow 标记已迁走但仍占 old 探测链的槽，供删除路径的 `invalidateOldShadow` / 反查使用；**当前 SCAN 只交出 `FILLED` 且本位匹配的槽，不再靠 shadow 补扫**。
 - 容量策略（`HashCapacityPolicy`）：`filled > capacity - capacity/4` → `GROW`；`tombstones > max(size, capacity/8)` → `COMPACT`；`capacity > 16 && size < capacity/8` → `SHRINK`。容量必须是 2 的幂，范围 `[16, 1<<30]`。
 - **线性探测**；插入复用第一个 tombstone；remove 只置墓碑。
 - **双表增量 rehash**：写路径每次顺带推进 `WRITE_REHASH_BUDGET = HashTableWorkBudget.of(2L, Long.MAX_VALUE)`（2 个 slot）；维护节拍另有 64 slot 预算。若 rehash 期间插入会顶穿合并占用，目录 API 会**同步坍缩**成一张装得下全部存活 entry 的 standalone 表，显式防止 "no insertion slot"。
 - 哈希是 **SipHash24，种子来自 `SecureRandom`**（`HashSeed`），每个 `YierdisDbEngineFactory` 一份。
 - 删除有两条路：按 key 字节探测；或**按 entry 持有的 key 句柄 + dict hash 反查槽位**（`removeEntry(keyHandle, keyHash, expectedHandle)`，O(probe)）。位置在删除时现查，所以双表状态下也不会指向 stale slot。
-- **SCAN 游标**（`ScanCursorV2`）：`position[31:0] | phase[33:32] | generation[62:34]`（29 位 generation）。generation 不匹配或 phase 非法时从 active 表重启（允许重复，绝不因客户端乱填 cursor 抛错）。
+- **SCAN 游标**：线上是哈希空间中的不透明非负整数（与 Redis `dictScan` 同族的反向二进制位置；`0` 表示结束）。`OpenAddressingTopology.scan` 按本位槽推进，双表期在同一游标位置同时覆盖 small/large。扩容/缩容/rehash 完成后仍可映射到新表继续扫；无法映射的非负 cursor（例如超出 32 位）按从头重启处理，允许重复，但不因客户端乱填而报错。`ScanCursorV2` 仍保留历史 `generation|phase|position` 打包编解码，仅供单测与解析旧 token，生产 SCAN 不再写入该格式。
 
-**为什么不用链式哈希（Redis `dict` 的做法）**：链式实现上的增量 rehash 更简单（把桶里的节点逐个搬走即可），但每个 entry 需要额外指针，且 tombstone 问题变成"空桶/单链表"的复合状态机。开放寻址把状态收敛成一个 byte，让 keyspace 与 HASH/SET 的 HT 编码能共享同一份拓扑实现——代价是 tombstone 必须显式压缩，而且 SCAN 必须专门为 old 表加一个 shadow 状态。
+**为什么不用链式哈希（Redis `dict` 的做法）**：链式实现上的增量 rehash 更简单（把桶里的节点逐个搬走即可），但每个 entry 需要额外指针，且 tombstone 问题变成"空桶/单链表"的复合状态机。开放寻址把状态收敛成一个 byte，让 keyspace 与 HASH/SET 的 HT 编码能共享同一份拓扑实现——代价是 tombstone 必须显式压缩，且删除/反查在 old 表需要 `MIGRATED_SCAN_SHADOW` 保住探测链；SCAN 本身则走反向二进制本位槽，不再依赖 shadow 重放。
 
 ## L3 key 生命周期与 staging
 

@@ -186,16 +186,11 @@ public final class OpenAddressingTopology {
     }
 
     /**
-     * 按 Redis {@code dictScan} 的反向二进制游标推进一次 SCAN：游标表示哈希空间中的本位槽位置，
-     * 而不是某一代表里的物理槽位，因此扩容、缩容或 rehash 完成后仍可在新表里接着扫。
+     * 按 Redis {@code dictScan} 同族的反向二进制游标推进一次 SCAN。
      * <p>
-     * 线性探测下，本位为 {@code b} 的元素都落在从 {@code b} 开始、到第一个 EMPTY 之前的连续区间里
-     * （槽位一旦非 EMPTY 就不会回到 EMPTY），所以扫描一个本位槽就是沿探测链走到 EMPTY，只交出本位
-     * 等于 {@code b} 的 FILLED 槽。双表期在同一游标位置上同时覆盖小表的本位槽和大表里低位相同的
-     * 全部本位槽；元素不论此刻在哪张表，命中条件都只取决于 {@code hash & smallMask}。
-     * <p>
+     * 游标是哈希空间中的本位槽位置（非某代表的物理槽）；扩容、缩容或 rehash 完成后仍可映射到新表继续扫。
      * 契约：全程存在的元素至少交出一次；只扩容时不重复，缩容时可能重复。visitor 返回 false 只会让
-     * 本次调用在当前游标位置扫完后停下，因为游标无法表示“本位槽扫了一半”。visitor 不得修改拓扑。
+     * 本次调用在当前游标位置扫完后停下（游标无法表示“本位槽扫了一半”）。visitor 不得修改拓扑。
      *
      * @param cursor 客户端游标；超出 32 位的值无法映射到哈希空间，按从头开始处理
      */
@@ -204,6 +199,7 @@ public final class OpenAddressingTopology {
         if (maxInspectedSlots < 0L) {
             throw new IllegalArgumentException("maxInspectedSlots must be >= 0");
         }
+        // 双表期：小表一次本位槽，大表扫完与之低位相同的全部本位槽（与 Redis dictScan 同位覆盖一致）。
         TableSide smallSide = TableSide.ACTIVE;
         Table small = active;
         TableSide largeSide = null;
@@ -225,6 +221,7 @@ public final class OpenAddressingTopology {
         ScanRun run = new ScanRun(visitor);
         int position = start;
         while (run.inspected < maxInspectedSlots && !run.stopRequested) {
+            // 线性探测：本位 b 的 FILLED 都落在从 b 到第一个 EMPTY 的连续区间；只交出 home 匹配的 FILLED。
             run.visitHomeSlot(smallSide, small, position & smallMask);
             if (large == null) {
                 position = reverseIncrement(position, smallMask);
@@ -232,6 +229,7 @@ public final class OpenAddressingTopology {
                 do {
                     run.visitHomeSlot(largeSide, large, position & largeMask);
                     position = reverseIncrement(position, largeMask);
+                    // 大表 mask 多出的高位清零前，继续扫同一小表桶对应的大表同位集合。
                 } while ((position & (smallMask ^ largeMask)) != 0);
             }
             if (position == 0) {

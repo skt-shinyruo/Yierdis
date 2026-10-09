@@ -216,6 +216,36 @@ public class OpenAddressingTopologyCompatibilityTest {
         } while (cursor != 0L);
     }
 
+    @Test
+    public void fullScanWhileGrowingRehashReturnsEachLiveHashExactlyOnce() {
+        OpenAddressingTopology topology = new OpenAddressingTopology(16);
+        int live = 14;
+        for (int hash = 0; hash < live; hash++) {
+            OpenAddressingTopology.ProbeResult probe = topology.probe(hash, ignored -> false);
+            topology.occupyActive(probe.location().slot(), hash);
+        }
+        topology.beginRehash(new OpenAddressingTopology(32));
+        topology.advanceRehash(HashTableWorkBudget.of(4L, Long.MAX_VALUE), (from, to) -> {
+        });
+        Assert.assertTrue("fixture must remain mid-rehash for the quiescent full scan", topology.metrics().rehashing());
+
+        List<Integer> returned = new ArrayList<>();
+        long cursor = 0L;
+        int steps = 0;
+        do {
+            OpenAddressingTopology.ScanStep step = topology.scan(cursor, 3L, location -> {
+                returned.add(topology.hashAt(location));
+                return true;
+            });
+            cursor = step.nextCursor();
+            Assert.assertTrue("mid-rehash full scan must terminate", ++steps < 256);
+        } while (cursor != 0L);
+
+        Assert.assertTrue("scan must finish while dual-table is still open", topology.metrics().rehashing());
+        Assert.assertEquals(live, new HashSet<>(returned).size());
+        Assert.assertEquals("grow-era dual-table scan must not systematically duplicate", live, returned.size());
+    }
+
     private static void put(
             TopologyFixture topology,
             NativeByteMap<Integer> map,
