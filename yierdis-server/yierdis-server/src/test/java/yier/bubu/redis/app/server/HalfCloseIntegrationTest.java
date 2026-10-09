@@ -127,6 +127,65 @@ public class HalfCloseIntegrationTest {
     }
 
     @Test
+    public void quitInHalfClosedPipelineRepliesOkThenCloses() throws Exception {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config());
+             Socket socket = connect(server)) {
+            writeRaw(socket, join(
+                    command("PING"),
+                    command("SET", "viaQuit", "1"),
+                    command("QUIT")
+            ));
+            socket.shutdownOutput();
+
+            Assert.assertEquals("+PONG\r\n", readAsciiFrame(socket));
+            Assert.assertEquals("+OK\r\n", readAsciiFrame(socket));
+            Assert.assertEquals("+OK\r\n", readAsciiFrame(socket));
+            assertEof(socket);
+
+            try (Socket verify = connect(server)) {
+                writeRaw(verify, command("GET", "viaQuit"));
+                Assert.assertEquals("$1\r\n1\r\n", readAsciiFrame(verify));
+            }
+        }
+    }
+
+    @Test
+    public void halfCloseHoldsMaxClientsSlotUntilRepliesAreDrained() throws Exception {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config("--maxClients", "1"))) {
+            ChildChannelRegistry registry = server.childChannelRegistryForTests();
+            try (Socket first = connect(server)) {
+                ByteArrayOutputStream pipeline = new ByteArrayOutputStream();
+                for (int index = 0; index < 256; index++) {
+                    pipeline.writeBytes(command("SET", "mc" + index, "1"));
+                }
+                writeRaw(first, pipeline.toByteArray());
+                first.shutdownOutput();
+
+                awaitActiveClients(registry, 1);
+
+                try (Socket second = connect(server)) {
+                    second.setSoTimeout(3_000);
+                    String rejection = new String(second.getInputStream().readNBytes(36), StandardCharsets.US_ASCII);
+                    Assert.assertEquals("-ERR max number of clients reached\r\n", rejection);
+                    Assert.assertEquals(-1, second.getInputStream().read());
+                }
+
+                awaitActiveClients(registry, 1);
+                for (int index = 0; index < 256; index++) {
+                    Assert.assertEquals("+OK\r\n", readAsciiFrame(first));
+                }
+                assertEof(first);
+            }
+            awaitActiveClients(registry, 0);
+
+            try (Socket third = connect(server)) {
+                writeRaw(third, command("PING"));
+                Assert.assertEquals("+PONG\r\n", readAsciiFrame(third));
+            }
+        }
+    }
+
+    @Test
     public void fullCloseReleasesClientSlotPromptly() throws Exception {
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config("--maxClients", "2"))) {
             ChildChannelRegistry registry = server.childChannelRegistryForTests();

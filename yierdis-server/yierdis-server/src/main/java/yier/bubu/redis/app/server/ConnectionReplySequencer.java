@@ -120,18 +120,8 @@ final class ConnectionReplySequencer implements AutoCloseable {
     }
 
     CompletableFuture<Void> shutdownGracefully() {
-        synchronized (lock) {
-            acceptingRegistrations = false;
-            shutdownRequested = true;
-        }
-        disableInput.run();
-        if (!channel.isOpen() || channel.closeFuture().isDone()) {
-            cancelAll();
-            markChannelClosed(null);
-            return shutdownDrained;
-        }
-        executeOnEventLoop(this::beginShutdownOnEventLoop);
-        return shutdownDrained;
+        // server 关停：取消尚未 READY 的槽位，尽快排空。
+        return beginReplyShutdown(true);
     }
 
     /**
@@ -139,6 +129,10 @@ final class ConnectionReplySequencer implements AutoCloseable {
      * 与 {@link #shutdownGracefully()} 不同，这里不能取消仍在执行中的槽位，否则会丢掉"已执行未回写"的回复。
      */
     CompletableFuture<Void> closeAfterPendingReplies() {
+        return beginReplyShutdown(false);
+    }
+
+    private CompletableFuture<Void> beginReplyShutdown(boolean cancelIncompleteSlots) {
         synchronized (lock) {
             acceptingRegistrations = false;
             shutdownRequested = true;
@@ -149,8 +143,8 @@ final class ConnectionReplySequencer implements AutoCloseable {
             markChannelClosed(null);
             return shutdownDrained;
         }
-        // 不走 beginShutdownOnEventLoop：那条路径会取消非 READY/WRITING 槽位，半关闭必须等执行完成。
-        executeOnEventLoop(this::drainOnEventLoop);
+        // cancelIncompleteSlots=true 走 beginShutdownOnEventLoop；半关闭必须等执行完成，只 drain。
+        executeOnEventLoop(cancelIncompleteSlots ? this::beginShutdownOnEventLoop : this::drainOnEventLoop);
         return shutdownDrained;
     }
 

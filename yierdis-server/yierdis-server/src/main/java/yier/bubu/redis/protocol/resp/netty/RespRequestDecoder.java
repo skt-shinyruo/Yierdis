@@ -197,8 +197,14 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         parkedRawCharge = 0L;
         ensureCumulator(ctx);
         cumulator.append(parked, InboundBufferLease.admitted(budget, connection.account(), charge));
-        readControl.resumeIngress();
+        // 半关闭后不再打开 autoRead；仅消化已到线字节。
+        if (!inputClosed) {
+            readControl.resumeIngress();
+        }
         process(ctx);
+        if (inputClosed) {
+            finishPeerInputIfIdle(ctx);
+        }
     }
 
     private void releaseParkedRawInput() {
@@ -274,7 +280,7 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     }
 
     /**
-     * 输入已结束后，若没有仍在 handoff/admission 的完整命令，就丢弃残留并通知下游关连接。
+     * 输入已结束后，若没有仍在 handoff/admission/预算等待中的完整命令，就丢弃残留并通知下游关连接。
      */
     private void finishPeerInputIfIdle(ChannelHandlerContext ctx) {
         if (!inputClosed || phase == SimplePhase.CLOSING || peerInputConsumedNotified) {
@@ -282,6 +288,14 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         }
         if (phase instanceof HandoffPhase || phase instanceof AdmissionPhase) {
             // 完整命令仍在准入：等 gate/预算恢复后再由 process 收尾。
+            return;
+        }
+        // parked / consolidation 也持有已到线字节；此时发 PeerInputConsumed 会把 phase 置 CLOSING，
+        // 后续额度恢复后命令再也无法进入 cumulator。
+        if (parkedRawInput != null) {
+            return;
+        }
+        if (cumulator != null && cumulator.hasPendingConsolidation()) {
             return;
         }
         if (phase == SimplePhase.READ_COMMAND) {
@@ -773,9 +787,17 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     private void resumeOnEventLoop(ChannelHandlerContext ctx) {
         if (ctx.executor().inEventLoop()) {
             process(ctx);
+            if (inputClosed) {
+                finishPeerInputIfIdle(ctx);
+            }
             return;
         }
-        ctx.executor().execute(() -> process(ctx));
+        ctx.executor().execute(() -> {
+            process(ctx);
+            if (inputClosed) {
+                finishPeerInputIfIdle(ctx);
+            }
+        });
     }
 
     private void resumeHandoffLater(
@@ -791,6 +813,9 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             ctx.executor().execute(() -> {
                 if (phase == handoff) {
                     process(ctx);
+                }
+                if (inputClosed) {
+                    finishPeerInputIfIdle(ctx);
                 }
             });
         } catch (RuntimeException ignored) {
