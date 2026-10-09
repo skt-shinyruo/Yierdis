@@ -71,7 +71,7 @@ final class NettyExecutionConnection implements ExecutionConnection {
     }
 
     CompletableFuture<Void> shutdownReplyGracefully() {
-        return finishReplies(true);
+        return beginReplyShutdown(true);
     }
 
     /**
@@ -79,10 +79,11 @@ final class NettyExecutionConnection implements ExecutionConnection {
      * 不在这里 markClosing，避免尚未执行完的入队命令被跳过；closing 仍由 closeFuture 监听兜底。
      */
     CompletableFuture<Void> finishAfterPeerInputClosed() {
-        return finishReplies(false);
+        return beginReplyShutdown(false);
     }
 
-    private CompletableFuture<Void> finishReplies(boolean cancelIncompleteSlots) {
+    /** 与 sequencer 半关闭/关停分流同语义：true 取消未完成槽，false 只排空。 */
+    private CompletableFuture<Void> beginReplyShutdown(boolean cancelIncompleteSlots) {
         NettyReplyDecodedMessageGate gate = replyGate;
         if (gate != null) {
             return cancelIncompleteSlots ? gate.shutdownGracefully() : gate.closeAfterPendingReplies();
