@@ -170,6 +170,38 @@ public class HalfCloseIntegrationTest {
     }
 
     @Test
+    public void halfCloseSlowClientStillSubjectToOutputBufferOverLimit() throws Exception {
+        // story 14：半关闭排空期间写缓冲背压仍生效；慢读超过宽限会被关掉，不会留下半开连接。
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(TestServerConfigs.config(
+                "--client-output-buffer-limit-bytes", "1024",
+                "--client-output-buffer-over-limit-millis", "200"
+        ))) {
+            ChildChannelRegistry registry = server.childChannelRegistryForTests();
+            Socket socket = new Socket();
+            // 压低客户端收窗，避免回复全进内核缓冲导致 channel 一直可写、宽限永不触发。
+            socket.setReceiveBufferSize(256);
+            socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2_000);
+            socket.setSoTimeout(5_000);
+            try {
+                ByteArrayOutputStream batch = new ByteArrayOutputStream();
+                for (int index = 0; index < 2_000; index++) {
+                    batch.writeBytes(command("SET", "bp" + index, "xxxxxxxx"));
+                }
+                writeRaw(socket, batch.toByteArray());
+                socket.shutdownOutput();
+
+                // 故意不读：水位超限后宽限到期应关掉连接并释放 maxClients 槽。
+                awaitActiveClients(registry, 0);
+                while (socket.getInputStream().read() >= 0) {
+                    // 排空对端关闭前已入内核的字节，直到 EOF。
+                }
+            } finally {
+                socket.close();
+            }
+        }
+    }
+
+    @Test
     public void halfCloseDrainKeepsReplyBudgetReservedUntilRepliesFlush() throws Exception {
         // story 14：半关闭排空期间回复预算仍记账；全部写出并断连后额度归零。
         int commandCount = 256;
