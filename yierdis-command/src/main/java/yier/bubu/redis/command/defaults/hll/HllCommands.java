@@ -32,7 +32,7 @@ public final class HllCommands {
         Objects.requireNonNull(registration, "registration");
         registration.register(new CommandSpec(syntax("PFADD", CommandArity.min(2), KEY), this::pfadd));
         registration.register(new CommandSpec(syntax("PFCOUNT", CommandArity.min(2), MULTI_KEYS), this::pfcount));
-        registration.register(new CommandSpec(syntax("PFMERGE", CommandArity.min(3), MULTI_KEYS), this::pfmerge));
+        registration.register(new CommandSpec(syntax("PFMERGE", CommandArity.min(2), MULTI_KEYS), this::pfmerge));
     }
 
     private static CommandSyntax syntax(String nameUpper, CommandArity arity, CommandKeySpec keys) {

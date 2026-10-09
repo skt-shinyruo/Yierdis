@@ -482,7 +482,7 @@ public class TransactionCommandTest {
         forEachDb(db -> {
             for (InvalidCommand invalid : List.of(
                     invalid("ERR wrong number of arguments for 'pfcount' command", "PFCOUNT"),
-                    invalid("ERR wrong number of arguments for 'pfmerge' command", "PFMERGE", "dest")
+                    invalid("ERR wrong number of arguments for 'pfmerge' command", "PFMERGE")
             )) {
                 CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
                 TestSession session = new TestSession();

@@ -169,6 +169,45 @@ public class HllCommandTest {
     }
 
     @Test
+    public void pfmergeWithOnlyDestinationCreatesOrKeepsTheHyperLogLog() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            {
+                FastTestClient client = new FastTestClient(dispatcher);
+                // Redis PFMERGE 的 arity 是 -2：只给 dest 时 dest 缺失就建空 sparse HLL（18 字节、TYPE string）。
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(cmd("PFMERGE", "d1"))).value());
+                Assert.assertEquals(1, ((ReplyInteger) client.execute(cmd("EXISTS", "d1"))).value());
+                Assert.assertEquals("string", ((ReplySimpleString) client.execute(cmd("TYPE", "d1"))).value());
+                Assert.assertEquals(0, ((ReplyInteger) client.execute(cmd("PFCOUNT", "d1"))).value());
+                Assert.assertEquals(18, ((ReplyInteger) client.execute(cmd("STRLEN", "d1"))).value());
+
+                // dest 已存在时只与自身合并：内容、计数和 TTL 都不变。
+                client.execute(cmd("PFADD", "d2", "a", "b"));
+                client.execute(cmd("PEXPIRE", "d2", "500000"));
+                byte[] before = ((ReplyBulkString) client.execute(cmd("GET", "d2"))).data();
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(cmd("PFMERGE", "d2"))).value());
+                Assert.assertArrayEquals(before, ((ReplyBulkString) client.execute(cmd("GET", "d2"))).data());
+                Assert.assertEquals(2, ((ReplyInteger) client.execute(cmd("PFCOUNT", "d2"))).value());
+                Assert.assertEquals(24, ((ReplyInteger) client.execute(cmd("STRLEN", "d2"))).value());
+                long pttl = ((ReplyInteger) client.execute(cmd("PTTL", "d2"))).value();
+                Assert.assertTrue("PTTL after PFMERGE: " + pttl, pttl > 0);
+
+                client.execute(cmd("SET", "s", "foo"));
+                Assert.assertEquals(
+                        "WRONGTYPE Key is not a valid HyperLogLog string value.",
+                        ((ReplyError) client.execute(cmd("PFMERGE", "s"))).message());
+                client.execute(cmd("LPUSH", "l", "x"));
+                Assert.assertEquals(
+                        "WRONGTYPE Operation against a key holding the wrong kind of value",
+                        ((ReplyError) client.execute(cmd("PFMERGE", "l"))).message());
+                Assert.assertEquals(
+                        "ERR wrong number of arguments for 'pfmerge' command",
+                        ((ReplyError) client.execute(cmd("PFMERGE"))).message());
+            }
+        });
+    }
+
+    @Test
     public void denseHllSupportsInPlacePfaddAfterPfmergeUnderFfmStorage() {
         YierdisDb db = openFfm(0L);
         try {

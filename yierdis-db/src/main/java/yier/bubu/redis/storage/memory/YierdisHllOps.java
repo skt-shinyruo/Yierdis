@@ -140,9 +140,8 @@ final class YierdisHllOps implements HllOps {
     public WriteResult<Void> pfmerge(byte[] destKeyBytes, List<byte[]> sourceKeys) {
         kernel.checkOwner();
         Objects.requireNonNull(destKeyBytes, "destKeyBytes");
-        if (sourceKeys == null || sourceKeys.isEmpty()) {
-            throw new IllegalArgumentException("sourceKeys must not be empty");
-        }
+        // 空 source 合法（Redis PFMERGE arity -2）：dest 缺失时建空 HLL，已存在时只与自身合并。
+        Objects.requireNonNull(sourceKeys, "sourceKeys");
 
         long now = System.currentTimeMillis();
         kernel.reclaimExpiredBeforeMutation(destKeyBytes, now);
