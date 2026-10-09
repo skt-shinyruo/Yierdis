@@ -47,6 +47,10 @@ final class AccountedRespCumulator implements AutoCloseable {
         return cumulation;
     }
 
+    boolean hasPendingConsolidation() {
+        return pendingConsolidation != null;
+    }
+
     void append(ByteBuf input, InboundBufferLease lease) {
         if (input == null) {
             lease.close();

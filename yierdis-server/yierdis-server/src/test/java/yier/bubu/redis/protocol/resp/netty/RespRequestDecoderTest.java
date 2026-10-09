@@ -1,13 +1,17 @@
 package yier.bubu.redis.protocol.resp.netty;
 
 import io.netty.buffer.Unpooled;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.channel.socket.ChannelInputShutdownEvent;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class RespRequestDecoderTest {
@@ -505,6 +509,76 @@ public class RespRequestDecoderTest {
             channel.finishAndReleaseAll();
             connection.close();
         }
+    }
+
+    @Test
+    public void inputShutdownKeepsParkedRawInputUntilIngressBudgetResumes() {
+        // capacity 要大于单帧 charge（capacity+overhead），否则满额时会走 REQUEST_LIMIT 而不是 WAITING。
+        InboundMemoryBudget budget = new InboundMemoryBudget(256);
+        InboundConnectionMemory blocker = new InboundConnectionMemory(256, Runnable::run, () -> { });
+        InboundConnectionMemory connection = new InboundConnectionMemory(256, Runnable::run, () -> { });
+        Assert.assertEquals(
+                InboundMemoryBudget.ReservationResult.RESERVED,
+                budget.tryReserve(blocker, 200)
+        );
+
+        AtomicBoolean peerInputConsumed = new AtomicBoolean();
+        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                1_024,
+                16,
+                1_024,
+                1_024,
+                budget,
+                connection,
+                RespDecodedMessageGate.PASS_THROUGH,
+                InboundReadControl.NOOP
+        );
+        EmbeddedChannel channel = new EmbeddedChannel(
+                decoder,
+                new ChannelInboundHandlerAdapter() {
+                    @Override
+                    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) {
+                        if (evt instanceof PeerInputConsumedEvent) {
+                            peerInputConsumed.set(true);
+                            return;
+                        }
+                        ctx.fireUserEventTriggered(evt);
+                    }
+                }
+        );
+        ExecutionRequest request = null;
+        try {
+            Assert.assertFalse(channel.writeInbound(Unpooled.copiedBuffer(
+                    "*1\r\n$4\r\nPING\r\n",
+                    StandardCharsets.US_ASCII
+            )));
+            Assert.assertNull(channel.readInbound());
+
+            channel.pipeline().fireUserEventTriggered(ChannelInputShutdownEvent.INSTANCE);
+            channel.runPendingTasks();
+            Assert.assertFalse(
+                    "PeerInputConsumed must wait while raw input is still parked on ingress budget",
+                    peerInputConsumed.get()
+            );
+            Assert.assertNull(channel.readInbound());
+
+            budget.release(blocker, 200);
+            channel.runPendingTasks();
+
+            request = readExecutionRequest(channel);
+            Assert.assertEquals(1, request.argc());
+            Assert.assertArrayEquals(bytes("PING"), request.readOnlyByteArray(0));
+            Assert.assertTrue(peerInputConsumed.get());
+        } finally {
+            if (request != null) {
+                request.close();
+            }
+            channel.finishAndReleaseAll();
+            connection.close();
+            blocker.close();
+        }
+
+        Assert.assertEquals(0L, budget.stats().reservedBytes());
     }
 
     private static RespRequestDecoder decoder(

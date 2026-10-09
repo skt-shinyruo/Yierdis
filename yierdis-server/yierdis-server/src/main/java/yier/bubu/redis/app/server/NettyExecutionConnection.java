@@ -71,21 +71,7 @@ final class NettyExecutionConnection implements ExecutionConnection {
     }
 
     CompletableFuture<Void> shutdownReplyGracefully() {
-        NettyReplyDecodedMessageGate gate = replyGate;
-        if (gate != null) {
-            return gate.shutdownGracefully();
-        }
-
-        CompletableFuture<Void> closed = new CompletableFuture<>();
-        channel.closeFuture().addListener(future -> {
-            if (future.isSuccess()) {
-                closed.complete(null);
-            } else {
-                closed.completeExceptionally(future.cause());
-            }
-        });
-        channel.close();
-        return closed;
+        return finishReplies(true);
     }
 
     /**
@@ -93,11 +79,18 @@ final class NettyExecutionConnection implements ExecutionConnection {
      * 不在这里 markClosing，避免尚未执行完的入队命令被跳过；closing 仍由 closeFuture 监听兜底。
      */
     CompletableFuture<Void> finishAfterPeerInputClosed() {
+        return finishReplies(false);
+    }
+
+    private CompletableFuture<Void> finishReplies(boolean cancelIncompleteSlots) {
         NettyReplyDecodedMessageGate gate = replyGate;
         if (gate != null) {
-            return gate.closeAfterPendingReplies();
+            return cancelIncompleteSlots ? gate.shutdownGracefully() : gate.closeAfterPendingReplies();
         }
+        return closeTransportNow();
+    }
 
+    private CompletableFuture<Void> closeTransportNow() {
         CompletableFuture<Void> closed = new CompletableFuture<>();
         channel.closeFuture().addListener(future -> {
             if (future.isSuccess()) {
