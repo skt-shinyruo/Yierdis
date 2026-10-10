@@ -120,6 +120,19 @@ final class ConnectionReplySequencer implements AutoCloseable {
     }
 
     CompletableFuture<Void> shutdownGracefully() {
+        // server 关停：取消尚未 READY 的槽位，尽快排空。
+        return beginReplyShutdown(ReplyShutdownMode.CANCEL_INCOMPLETE);
+    }
+
+    /**
+     * 对端输入已结束后：停止登记新槽位，但保留已登记（含尚未 READY）的回复，全部写出后再关连接。
+     * 与 {@link #shutdownGracefully()} 不同，这里不能取消仍在执行中的槽位，否则会丢掉"已执行未回写"的回复。
+     */
+    CompletableFuture<Void> closeAfterPendingReplies() {
+        return beginReplyShutdown(ReplyShutdownMode.DRAIN_PENDING);
+    }
+
+    private CompletableFuture<Void> beginReplyShutdown(ReplyShutdownMode mode) {
         synchronized (lock) {
             acceptingRegistrations = false;
             shutdownRequested = true;
@@ -130,8 +143,16 @@ final class ConnectionReplySequencer implements AutoCloseable {
             markChannelClosed(null);
             return shutdownDrained;
         }
-        executeOnEventLoop(this::beginShutdownOnEventLoop);
+        // 半关闭必须等执行完成，只 drain；server 关停才取消未 READY 槽位。
+        executeOnEventLoop(mode == ReplyShutdownMode.CANCEL_INCOMPLETE
+                ? this::beginShutdownOnEventLoop
+                : this::drainOnEventLoop);
         return shutdownDrained;
+    }
+
+    private enum ReplyShutdownMode {
+        CANCEL_INCOMPLETE,
+        DRAIN_PENDING
     }
 
     CompletableFuture<Void> terminationFuture() {

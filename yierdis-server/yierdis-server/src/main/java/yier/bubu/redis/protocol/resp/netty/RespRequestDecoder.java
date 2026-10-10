@@ -5,6 +5,7 @@ import static yier.bubu.redis.common.memory.MemoryUsageSnapshot.addSaturating;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.socket.ChannelInputShutdownEvent;
 import io.netty.util.ReferenceCountUtil;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.common.memory.HeapRequestFootprint;
@@ -45,6 +46,10 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
     private AccountedRespCumulator cumulator;
     private ByteBuf parkedRawInput;
     private long parkedRawCharge;
+    /** 对端已半关闭写端：不再等待更多入站字节。 */
+    private boolean inputClosed;
+    /** 已向下游发出 {@link PeerInputConsumedEvent}，避免重复通知。 */
+    private boolean peerInputConsumedNotified;
 
     public static RespRequestDecoder withIngressAdmission(
             int maxBulkBytes,
@@ -136,6 +141,25 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         super.handlerRemoved(ctx);
     }
 
+    @Override
+    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+        if (evt instanceof ChannelInputShutdownEvent) {
+            // ALLOW_HALF_CLOSURE 下对端 shutdownOutput 会到这里；通道仍可写回复。
+            onPeerInputShutdown(ctx);
+            return;
+        }
+        super.userEventTriggered(ctx, evt);
+    }
+
+    private void onPeerInputShutdown(ChannelHandlerContext ctx) {
+        if (inputClosed) {
+            return;
+        }
+        inputClosed = true;
+        readControl.pauseIngress();
+        processThenFinishPeerInputIfNeeded(ctx);
+    }
+
     private void ensureCumulator(ChannelHandlerContext ctx) {
         if (cumulator == null) {
             cumulator = new AccountedRespCumulator(ctx.alloc(), budget, connection, MAX_COMPONENTS);
@@ -172,8 +196,11 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         parkedRawCharge = 0L;
         ensureCumulator(ctx);
         cumulator.append(parked, InboundBufferLease.admitted(budget, connection.account(), charge));
-        readControl.resumeIngress();
-        process(ctx);
+        // 半关闭后不再打开 autoRead；仅消化已到线字节。
+        if (!inputClosed) {
+            readControl.resumeIngress();
+        }
+        processThenFinishPeerInputIfNeeded(ctx);
     }
 
     private void releaseParkedRawInput() {
@@ -220,6 +247,11 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
 
             if (result == ParseResult.NEED_MORE) {
                 cumulator.discardFullyReadComponents();
+                if (inputClosed) {
+                    // EOF 后不会再有字节：残留半帧直接丢弃，不回协议错误。
+                    quietlyDiscardIncompleteInput(ctx);
+                    return;
+                }
                 readControl.resumeIngressForProgress();
                 return;
             }
@@ -234,9 +266,64 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             }
         }
         cumulator.discardFullyReadComponents();
+        if (inputClosed) {
+            finishPeerInputIfIdle(ctx);
+            return;
+        }
         if (phase != SimplePhase.CLOSING) {
             readControl.resumeIngress();
         }
+    }
+
+    /**
+     * 输入已结束后，若没有仍在 handoff/admission/预算等待中的完整命令，就丢弃残留并通知下游关连接。
+     */
+    private void finishPeerInputIfIdle(ChannelHandlerContext ctx) {
+        if (!inputClosed || phase == SimplePhase.CLOSING || peerInputConsumedNotified) {
+            return;
+        }
+        if (phase instanceof HandoffPhase || phase instanceof AdmissionPhase) {
+            // 完整命令仍在准入：等 gate/预算恢复后再由 process 收尾。
+            return;
+        }
+        // parked / consolidation 也持有已到线字节；此时发 PeerInputConsumed 会把 phase 置 CLOSING，
+        // 后续额度恢复后命令再也无法进入 cumulator。
+        if (parkedRawInput != null) {
+            return;
+        }
+        if (cumulator != null && cumulator.hasPendingConsolidation()) {
+            return;
+        }
+        if (phase == SimplePhase.READ_COMMAND) {
+            if (cumulator != null && cumulator.buffer().isReadable()) {
+                quietlyDiscardIncompleteInput(ctx);
+                return;
+            }
+            notifyPeerInputConsumed(ctx);
+            return;
+        }
+        // Array/Bulk 中途：半帧，安静丢弃。
+        quietlyDiscardIncompleteInput(ctx);
+    }
+
+    private void quietlyDiscardIncompleteInput(ChannelHandlerContext ctx) {
+        releasePhase();
+        releaseParkedRawInput();
+        if (cumulator != null) {
+            cumulator.close();
+            cumulator = null;
+        }
+        notifyPeerInputConsumed(ctx);
+    }
+
+    private void notifyPeerInputConsumed(ChannelHandlerContext ctx) {
+        if (peerInputConsumedNotified) {
+            return;
+        }
+        peerInputConsumedNotified = true;
+        phase = SimplePhase.CLOSING;
+        readControl.pauseIngress();
+        ctx.fireUserEventTriggered(PeerInputConsumedEvent.INSTANCE);
     }
 
     private boolean completeConsolidation(ChannelHandlerContext ctx) {
@@ -526,7 +613,8 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
         return switch (admission) {
             case ADMITTED -> {
                 phase = handoff.terminal() ? SimplePhase.CLOSING : SimplePhase.READ_COMMAND;
-                if (!handoff.terminal()) {
+                // 半关闭后仍继续消化缓冲区内后续完整命令，但不再打开 autoRead。
+                if (!handoff.terminal() && !inputClosed) {
                     readControl.resumeIngress();
                 }
                 yield !handoff.terminal();
@@ -694,10 +782,17 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
 
     private void resumeOnEventLoop(ChannelHandlerContext ctx) {
         if (ctx.executor().inEventLoop()) {
-            process(ctx);
+            processThenFinishPeerInputIfNeeded(ctx);
             return;
         }
-        ctx.executor().execute(() -> process(ctx));
+        ctx.executor().execute(() -> processThenFinishPeerInputIfNeeded(ctx));
+    }
+
+    private void processThenFinishPeerInputIfNeeded(ChannelHandlerContext ctx) {
+        process(ctx);
+        if (inputClosed) {
+            finishPeerInputIfIdle(ctx);
+        }
     }
 
     private void resumeHandoffLater(
@@ -712,7 +807,10 @@ public final class RespRequestDecoder extends ChannelInboundHandlerAdapter {
             // gate 可能同步触发 wake-up；延后到 event loop，避免 tryAdmit 返回前重入同一 handoff。
             ctx.executor().execute(() -> {
                 if (phase == handoff) {
-                    process(ctx);
+                    processThenFinishPeerInputIfNeeded(ctx);
+                } else {
+                    // handoff 已被替换时仍可能需要在半关闭后收尾。
+                    finishPeerInputIfIdle(ctx);
                 }
             });
         } catch (RuntimeException ignored) {

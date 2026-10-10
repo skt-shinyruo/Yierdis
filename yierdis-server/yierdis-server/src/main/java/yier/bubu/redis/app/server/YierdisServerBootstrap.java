@@ -227,6 +227,8 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 .channel(NioServerSocketChannel.class)
                 .childOption(ChannelOption.TCP_NODELAY, true)
                 .childOption(ChannelOption.SO_KEEPALIVE, true)
+                // 对端 shutdownOutput 时保持写半开：完整命令继续执行并回写，而不是立刻拆连接。
+                .childOption(ChannelOption.ALLOW_HALF_CLOSURE, true)
                 .childHandler(new YierdisServerChannelInitializer(
                         runtimeConfig,
                         executor,

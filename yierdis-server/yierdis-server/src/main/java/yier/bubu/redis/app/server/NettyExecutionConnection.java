@@ -75,7 +75,22 @@ final class NettyExecutionConnection implements ExecutionConnection {
         if (gate != null) {
             return gate.shutdownGracefully();
         }
+        return closeTransportNow();
+    }
 
+    /**
+     * 对端半关闭且 decoder 已消费完输入后调用：等已登记回复全部写出再关 transport。
+     * 不在这里 markClosing，避免尚未执行完的入队命令被跳过；closing 仍由 closeFuture 监听兜底。
+     */
+    CompletableFuture<Void> finishAfterPeerInputClosed() {
+        NettyReplyDecodedMessageGate gate = replyGate;
+        if (gate != null) {
+            return gate.closeAfterPendingReplies();
+        }
+        return closeTransportNow();
+    }
+
+    private CompletableFuture<Void> closeTransportNow() {
         CompletableFuture<Void> closed = new CompletableFuture<>();
         channel.closeFuture().addListener(future -> {
             if (future.isSuccess()) {

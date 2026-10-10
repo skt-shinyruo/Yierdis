@@ -2,6 +2,7 @@ package yier.bubu.redis.protocol.resp.netty;
 
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.channel.socket.ChannelInputShutdownEvent;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
@@ -507,6 +508,120 @@ public class RespRequestDecoderTest {
         }
     }
 
+    @Test
+    public void inputShutdownKeepsParkedRawInputUntilIngressBudgetResumes() {
+        // decoder 单元：验证 inputClosed 后仍等待 parked 额度（TCP 半关闭接缝见 HalfCloseIntegrationTest）。
+        // capacity 要大于单帧 charge（capacity+overhead），否则满额时会走 REQUEST_LIMIT 而不是 WAITING。
+        InboundMemoryBudget budget = new InboundMemoryBudget(256);
+        InboundConnectionMemory blocker = new InboundConnectionMemory(256, Runnable::run, () -> { });
+        InboundConnectionMemory connection = new InboundConnectionMemory(256, Runnable::run, () -> { });
+        Assert.assertEquals(
+                InboundMemoryBudget.ReservationResult.RESERVED,
+                budget.tryReserve(blocker, 200)
+        );
+
+        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                1_024,
+                16,
+                1_024,
+                1_024,
+                budget,
+                connection,
+                RespDecodedMessageGate.PASS_THROUGH,
+                InboundReadControl.NOOP
+        );
+        EmbeddedChannel channel = new EmbeddedChannel(decoder);
+        ExecutionRequest request = null;
+        try {
+            Assert.assertFalse(channel.writeInbound(Unpooled.copiedBuffer(
+                    "*1\r\n$4\r\nPING\r\n",
+                    StandardCharsets.US_ASCII
+            )));
+            Assert.assertNull(channel.readInbound());
+
+            channel.pipeline().fireUserEventTriggered(ChannelInputShutdownEvent.INSTANCE);
+            channel.runPendingTasks();
+            // 半关闭时额度尚未恢复：已到线的完整命令仍不得丢失（此时还不能解码出来）。
+            Assert.assertNull(channel.readInbound());
+
+            budget.release(blocker, 200);
+            channel.runPendingTasks();
+
+            request = readExecutionRequest(channel);
+            Assert.assertEquals(1, request.argc());
+            Assert.assertArrayEquals(bytes("PING"), request.readOnlyByteArray(0));
+            Assert.assertNull(channel.readInbound());
+        } finally {
+            if (request != null) {
+                request.close();
+            }
+            channel.finishAndReleaseAll();
+            connection.close();
+            blocker.close();
+        }
+
+        Assert.assertEquals(0L, budget.stats().reservedBytes());
+    }
+
+    @Test
+    public void inputShutdownWaitsForPendingConsolidationBeforeDecodingPeerInput() {
+        // decoder 单元：inputClosed 后若 consolidation 仍在等额度，完整帧不得丢失。
+        InboundMemoryBudget budget = new InboundMemoryBudget(4_096);
+        InboundConnectionMemory blocker = new InboundConnectionMemory(4_096, Runnable::run, () -> { });
+        InboundConnectionMemory connection = new InboundConnectionMemory(4_096, Runnable::run, () -> { });
+        Assert.assertEquals(
+                InboundMemoryBudget.ReservationResult.RESERVED,
+                budget.tryReserve(blocker, 4_000)
+        );
+
+        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                1_024,
+                16,
+                1_024,
+                1_024,
+                budget,
+                connection,
+                RespDecodedMessageGate.PASS_THROUGH,
+                InboundReadControl.NOOP
+        );
+        EmbeddedChannel channel = new EmbeddedChannel(decoder);
+        ExecutionRequest request = null;
+        try {
+            // 恰好 16 字节完整帧 → 16 个 component，触发 consolidation WAITING（MAX_COMPONENTS=16）。
+            byte[] frame = bytes("*1\r\n$6\r\nABCDEF\r\n");
+            Assert.assertEquals(16, frame.length);
+            for (byte value : frame) {
+                Assert.assertFalse(channel.writeInbound(admitted(
+                        budget,
+                        connection,
+                        Unpooled.wrappedBuffer(new byte[]{value})
+                )));
+            }
+            Assert.assertNull(channel.readInbound());
+
+            channel.pipeline().fireUserEventTriggered(ChannelInputShutdownEvent.INSTANCE);
+            channel.runPendingTasks();
+            Assert.assertNull(channel.readInbound());
+
+            budget.release(blocker, 4_000);
+            channel.runPendingTasks();
+
+            request = readExecutionRequest(channel);
+            Assert.assertEquals(1, request.argc());
+            Assert.assertArrayEquals(bytes("ABCDEF"), request.readOnlyByteArray(0));
+            Assert.assertNull(channel.readInbound());
+        } finally {
+            if (request != null) {
+                request.close();
+            }
+            channel.finishAndReleaseAll();
+            connection.close();
+            blocker.close();
+        }
+
+        Assert.assertEquals(0L, budget.stats().reservedBytes());
+    }
+
     private static RespRequestDecoder decoder(
             int maxBulkBytes,
             int maxArgs,
@@ -523,6 +638,14 @@ public class RespRequestDecoderTest {
                 RespDecodedMessageGate.PASS_THROUGH,
                 InboundReadControl.NOOP
         );
+    }
+
+    private static AccountedInboundBuffer admitted(
+            InboundMemoryBudget budget,
+            InboundConnectionMemory connection,
+            io.netty.buffer.ByteBuf buffer
+    ) {
+        return new AccountedInboundBuffer(buffer, InboundBufferLease.admitted(budget, connection.account(), 0L));
     }
 
     private static byte[] bytes(String value) {
