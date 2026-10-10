@@ -15,6 +15,10 @@ import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyError;
 import yier.bubu.redis.testutil.ReplyObject;
 
+import static yier.bubu.redis.testutil.GrowingScanSupport.assertFullSscanAfterBulkInsertReturnsEachMemberExactlyOnce;
+import static yier.bubu.redis.testutil.GrowingScanSupport.assertHscanCoversBaseWhileGrowing;
+import static yier.bubu.redis.testutil.GrowingScanSupport.assertSscanCoversBaseWhileGrowing;
+import static yier.bubu.redis.testutil.GrowingScanSupport.assertZscanCoversBaseWhileGrowing;
 import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestBytes.cmd;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
@@ -39,7 +43,7 @@ public class CollectionScanCommandTest {
                 assertError(client.execute(cmd("SSCAN", "string", "0")), WRONG_TYPE);
                 assertError(client.execute(cmd("ZSCAN", "string", "0")), WRONG_TYPE);
 
-                // 不透明 cursor：任意非负值（含 phase 位超出内部约定的值）都返回合法 scan 窗口，
+                // 不透明 cursor：任意非负值（含超出哈希空间映射范围的值）都返回合法 scan 窗口，
                 // 而不是命令错误；不存在的 key 一律回空窗口且结束 cursor 为 0。
                 assertEmpty(scan(client, "HSCAN", "hash", "8589934592"));
                 assertEmpty(scan(client, "SSCAN", "set", "12884901888"));
@@ -220,7 +224,7 @@ public class CollectionScanCommandTest {
                 client.execute(sadd);
                 client.execute(zadd);
 
-                // 不透明 cursor：phase 位非法值与极大值都必须按重启迭代处理（允许重复），
+                // 不透明 cursor：超出哈希空间可映射范围的值都必须按重启迭代处理（允许重复），
                 // 不得报错，结束仍回 0；集合 scan 与 key SCAN 行为一致。
                 for (String command : new String[]{"HSCAN", "SSCAN", "ZSCAN"}) {
                     String key = switch (command) {
@@ -233,7 +237,7 @@ public class CollectionScanCommandTest {
                             "12884901888",
                             "9223372036854775807"
                     ));
-                    // 伪造一个 generation 匹配但 phase 位非法的 cursor：改写该集合在线 cursor 的 phase 位。
+                    // 给在线 cursor 置高位，使其无法映射到当前表容量掩码范围内的位置。
                     String live = scan(client, command, key, "0", "COUNT", "1").cursor();
                     Assert.assertNotEquals("0", live);
                     cursors.add(Long.toString(Long.parseLong(live) | (2L << 32)));
@@ -330,6 +334,32 @@ public class CollectionScanCommandTest {
     }
 
     @Test
+    public void sscanTerminatesAndCoversBaseMembersWhileWritesOutpaceTheCursor() {
+        forEachDb(db -> assertSscanCoversBaseWhileGrowing(
+                new FastTestClient(TestCommandComposition.createDispatcher(db)),
+                600
+        ));
+    }
+
+    @Test
+    public void fullSscanImmediatelyAfterBulkInsertReturnsEveryMemberExactlyOnce() {
+        forEachDb(db -> assertFullSscanAfterBulkInsertReturnsEachMemberExactlyOnce(
+                new FastTestClient(TestCommandComposition.createDispatcher(db)),
+                200,
+                600
+        ));
+    }
+
+    @Test
+    public void hscanAndZscanCursorSurvivesGrowthBetweenCalls() {
+        forEachDb(db -> {
+            FastTestClient client = new FastTestClient(TestCommandComposition.createDispatcher(db));
+            assertHscanCoversBaseWhileGrowing(client, 520);
+            assertZscanCoversBaseWhileGrowing(client, 200);
+        });
+    }
+
+    @Test
     public void hugeCountRemainsABoundedHintForHashTableEncoding() {
         runDefaultFfm(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
@@ -349,7 +379,11 @@ public class CollectionScanCommandTest {
                         "SSCAN", "large-set", "0", "COUNT", Integer.toString(Integer.MAX_VALUE)
                 );
 
-                Assert.assertEquals(1_024, first.elements().values().size());
+                // COUNT 是 hint；命中上限后仍会扫完当前游标位置（本位槽/双表同位），允许少量超额。
+                int returned = first.elements().values().size();
+                Assert.assertTrue("huge COUNT must stay near the internal match cap, got " + returned, returned <= 1_024 + 64);
+                Assert.assertTrue(returned >= 1_024);
+                Assert.assertTrue(returned < memberCount);
                 Assert.assertNotEquals("0", first.cursor());
             }
         });
@@ -442,7 +476,11 @@ public class CollectionScanCommandTest {
     }
 
     private static Set<String> strings(ReplyArray elements) {
-        Set<String> values = new HashSet<>();
+        return new HashSet<>(listStrings(elements));
+    }
+
+    private static List<String> listStrings(ReplyArray elements) {
+        List<String> values = new ArrayList<>(elements.values().size());
         for (int index = 0; index < elements.values().size(); index++) {
             values.add(bulk(elements, index));
         }

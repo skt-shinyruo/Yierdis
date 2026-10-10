@@ -319,8 +319,8 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
     }
 
     /**
-     * 按底层槽位推进一次 Redis SCAN 风格遍历。返回结果允许重复元素，但 active/old 双表迁移期间不会
-     * 因已迁移槽位从 old 表消失而漏掉持续存在的元素。
+     * 按哈希空间本位槽推进一次 Redis {@code dictScan} 风格遍历，与 key 目录共用
+     * {@link OpenAddressingTopology#scan}。游标在扩容换代后仍可继续，而不是从头重扫。
      */
     public ScanResult scanWithWork(ScanCursorV2 cursor, long maxSteps, ScanConsumer<V> consumer) {
         Objects.requireNonNull(cursor, "cursor");
@@ -329,43 +329,16 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
             throw new IllegalArgumentException("maxSteps must be >= 0");
         }
 
-        ScanCursorV2 start = normalizeScanCursor(cursor);
-        HashTableMetrics metrics = topology.metrics();
-        if (metrics.size() == 0) {
-            return new ScanResult(start, ScanCursorV2.start(), 0L, topology.metrics().generation());
-        }
-
-        int phase = start.phase();
-        long position = start.position();
-        long inspected = 0L;
-        while (true) {
-            Table table = tableForPhase(phase);
-            if (table == null || position >= table.capacity) {
-                if (phase == 0 && old != null) {
-                    phase = 1;
-                    position = 0L;
-                    continue;
-                }
-                return new ScanResult(start, ScanCursorV2.start(), inspected, topology.metrics().generation());
-            }
-
-            if (inspected >= maxSteps) {
-                return new ScanResult(start, cursorFor(phase, position), inspected, topology.metrics().generation());
-            }
-
-            int index = (int) position;
-            position++;
-            inspected++;
-            if (!acceptScanSlot(table, phase, index, consumer)) {
-                if (position >= table.capacity) {
-                    if (phase == 0 && old != null) {
-                        return new ScanResult(start, cursorFor(1, 0L), inspected, topology.metrics().generation());
-                    }
-                    return new ScanResult(start, ScanCursorV2.start(), inspected, topology.metrics().generation());
-                }
-                return new ScanResult(start, cursorFor(phase, position), inspected, topology.metrics().generation());
-            }
-        }
+        OpenAddressingTopology.ScanStep step = topology.scan(cursor.value(), maxSteps, location -> {
+            Table table = table(location.table());
+            return consumer.accept(keyHandleAt(table, location.slot()), valueAt(table, location.slot()));
+        });
+        return new ScanResult(
+                ScanCursorV2.of(step.startCursor()),
+                ScanCursorV2.of(step.nextCursor()),
+                step.inspectedSlots(),
+                topology.metrics().generation()
+        );
     }
 
     public void clear() {
@@ -567,54 +540,6 @@ public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenan
                 consumer.accept(keyHandleAt(table, i), valueAt(table, i));
             }
         }
-    }
-
-    private boolean acceptScanSlot(Table table, int phase, int index, ScanConsumer<V> consumer) {
-        SlotState state = topology.slotState(phase == 0 ? TableSide.ACTIVE : TableSide.OLD, index);
-        if (state == SlotState.FILLED) {
-            return consumer.accept(keyHandleAt(table, index), valueAt(table, index));
-        }
-        if (phase != 1 || state != SlotState.MIGRATED_SCAN_SHADOW) {
-            return true;
-        }
-
-        // shadow 只保留迁移定位信息；active 中的 value 可能已替换，旧 value 甚至已由上层释放。
-        NativeHandle keyHandle = table.keyHandles[index];
-        ProbeResult probe = probeStoredKey(
-                keyHandle,
-                topology.hashAt(new Location(TableSide.OLD, index))
-        );
-        return !probe.found()
-                || consumer.accept(keyHandleAt(active, probe.location().slot()), valueAt(active, probe.location().slot()));
-    }
-
-    private ScanCursorV2 normalizeScanCursor(ScanCursorV2 cursor) {
-        int currentGeneration = wireGeneration();
-        // generation 不匹配时旧表布局已不再可信，只能从当前 active 表重新开始并接受可能的重复。
-        if (cursor.value() == 0L || cursor.generation() != currentGeneration) {
-            return ScanCursorV2.of(currentGeneration, 0, 0L);
-        }
-        // 客户端可把 cursor 当不透明整数乱填：phase 位超出 0/1 时无法映射到当前双表拓扑，
-        // 按从 active 表头重启处理（允许重复），绝不让非法 phase 进入扫描循环。
-        if (cursor.phase() > 1) {
-            return ScanCursorV2.of(currentGeneration, 0, 0L);
-        }
-        if (cursor.phase() == 1 && old == null) {
-            return ScanCursorV2.of(currentGeneration, 0, 0L);
-        }
-        return cursor;
-    }
-
-    private Table tableForPhase(int phase) {
-        return phase == 0 ? active : old;
-    }
-
-    private ScanCursorV2 cursorFor(int phase, long position) {
-        return ScanCursorV2.of(wireGeneration(), phase, position);
-    }
-
-    private int wireGeneration() {
-        return (int) (topology.metrics().generation() & 0x1fff_ffffL);
     }
 
     private void releaseTableKeys(Table table, TableSide side) {

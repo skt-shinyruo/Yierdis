@@ -80,7 +80,7 @@ Type roots
 
 目录的槽位数组（`byte[] states`、`int[] hashes`、key/entry handle 引用）在 heap，只有 key 字节本体是 allocator-backed；所以 `NativeKeyDirectory.nativeBytes()` 恒为 `0L`，"keyspace 在 native" 指的是 key 字节而非 hash slot。删除除了按 key 字节探测，还有"按 entry 持有的 key 句柄 + dict hash 反查"这条路（`removeEntry(keyHandle, keyHash, expectedHandle)`）。
 
-`OpenAddressingTopology` 集中表达 slot state、linear probing、tombstone 复用和 active/old 增量 rehash，不持有 key/value 数组、native handle 或任何 payload ownership。`NativeByteMap` 与 `NativeKeyDirectory` 都把生产 topology 委托给该核心，只保留 payload arrays 与 ownership/lifecycle logic。槽状态有四种：`EMPTY` / `FILLED` / `TOMBSTONE` / `MIGRATED_SCAN_SHADOW`——最后一种是给 SCAN 正确性专设的：迁移后 old 表仍保留 key 用于定位与重放。
+`OpenAddressingTopology` 集中表达 slot state、linear probing、tombstone 复用、active/old 增量 rehash，以及 SCAN 族共用的反向二进制游标扫描（`scan`：按哈希空间本位槽推进，双表期同位覆盖 small/large）。它不持有 key/value 数组、native handle 或任何 payload ownership。`NativeByteMap` 与 `NativeKeyDirectory` 都把生产 topology 与 SCAN 委托给该核心，只保留 payload arrays 与 ownership/lifecycle logic。槽状态有四种：`EMPTY` / `FILLED` / `TOMBSTONE` / `MIGRATED_SCAN_SHADOW`——最后一种标记已迁走但仍占 old 探测链的槽，供删除路径的 `invalidateOldShadow` / 反查使用；当前 SCAN 只交出 `FILLED` 且本位匹配的槽，不再依赖 shadow 做“补扫”。
 
 写路径的 rehash 预算是 `WRITE_REHASH_BUDGET = HashTableWorkBudget.of(2L, Long.MAX_VALUE)`，即每次写顺带推进 2 个 slot；维护节拍另有 64 slot 预算。容量策略由 `HashCapacityPolicy` 决定：`filled > capacity - capacity/4` 则 grow；`tombstones > max(size, capacity / 8)` 则 compact；`capacity > 16 && size < capacity / 8` 则 shrink；容量恒为 2 的幂，范围 `[16, 1 << 30]`。
 
@@ -160,7 +160,7 @@ DbEngine.strings()/hashes()/lists()/sets()/zsets()/hll()/keyspace()/ttl()
 - 普通查询的参数检查、live-entry 解析和结果视图构造都在同一次调用里完成，且位于 owner 检查之后。
 - prepared mutation 会跨越一次调用的生命周期，所以在创建、状态检查与提交入口使用 `YierdisDbKernel.checkOwner()`；scan/result view 则按各自契约持有 epoch 或结果资源。实际变更仍只能通过 `MutationPlan` 进入 executor。
 - 需要拥有结果的 API 会复制 bytes；callback-scoped streaming 可以使用短生命周期 native view。
-- `SCAN` 的 `KeyWindow` 先在 bounded epoch 内 discovery，再按同一 cursor/window 同步 replay 到 sink；window close 后 epoch 才释放，**不能让 slice 或 view 逃逸**。cursor 编码为 `position[31:0] | phase[33:32] | generation[62:34]`（`ScanCursorV2`：`POSITION_BITS = 32`、`PHASE_BITS = 2`、`GENERATION_BITS = 29`）；generation 不匹配或 phase 非法时从 active 表重启，允许重复但绝不因客户端乱填 cursor 抛错。
+- `SCAN` 的 `KeyWindow` 先在 bounded epoch 内 discovery，再按同一 cursor/window 同步 replay 到 sink；window close 后 epoch 才释放，**不能让 slice 或 view 逃逸**。线上 cursor 是哈希空间中的不透明非负整数（与 Redis `dictScan` 同族的反向二进制位置；`0` 表示结束），扩容/缩容/rehash 完成后仍可映射到新表继续扫。无法映射的非负 cursor（例如超出 32 位）按从头重启处理，允许重复，但不因客户端乱填而报命令错误。`ScanCursorV2` 仍保留历史 `generation|phase|position` 打包编解码，仅供单测与解析旧 token，生产 SCAN 不再写入该格式。
 
 ## 7. 写路径
 

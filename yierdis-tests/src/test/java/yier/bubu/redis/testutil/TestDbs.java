@@ -16,6 +16,12 @@ public final class TestDbs {
     private TestDbs() {
     }
 
+    /**
+     * 在默认生产引擎（FFM native）上跑一遍测试。
+     * <p>
+     * 名称保留 {@code forEachDb} 是历史习惯：曾经可能覆盖多种存储表示。当前仓库的命令层集成接缝
+     * 只有 FFM {@link YierdisDb}；heap 后端仅作 memory testkit，不再作为第二套 DB 引擎枚举。
+     */
     public static void forEachDb(Consumer<YierdisDb> test) {
         Objects.requireNonNull(test, "test");
         runDefaultFfm(test);

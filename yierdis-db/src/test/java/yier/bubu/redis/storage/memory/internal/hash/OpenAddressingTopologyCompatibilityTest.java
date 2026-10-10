@@ -160,6 +160,92 @@ public class OpenAddressingTopologyCompatibilityTest {
         }
     }
 
+    @Test
+    public void reverseBinaryScanContinuesAcrossGrowAndShrinkWithoutRestarting() {
+        OpenAddressingTopology topology = new OpenAddressingTopology(16);
+        for (int hash = 0; hash < 12; hash++) {
+            OpenAddressingTopology.ProbeResult probe = topology.probe(hash, ignored -> false);
+            topology.occupyActive(probe.location().slot(), hash);
+        }
+        Assert.assertFalse(topology.metrics().rehashing());
+
+        OpenAddressingTopology.ScanStep mid = topology.scan(0L, 4L, location -> true);
+        Assert.assertNotEquals(0L, mid.nextCursor());
+
+        topology.beginRehash(new OpenAddressingTopology(32));
+        Assert.assertTrue(topology.metrics().rehashing());
+        Set<Integer> seenDuringGrow = new HashSet<>();
+        long cursor = mid.nextCursor();
+        int steps = 0;
+        while (cursor != 0L) {
+            OpenAddressingTopology.ScanStep step = topology.scan(cursor, 2L, location -> {
+                seenDuringGrow.add(topology.hashAt(location));
+                return true;
+            });
+            cursor = step.nextCursor();
+            if (topology.metrics().rehashing()) {
+                topology.advanceRehash(HashTableWorkBudget.of(2L, Long.MAX_VALUE), (from, to) -> {
+                });
+            }
+            Assert.assertTrue(++steps < 128);
+        }
+        Assert.assertFalse(seenDuringGrow.isEmpty());
+
+        while (topology.metrics().rehashing()) {
+            topology.advanceRehash(HashTableWorkBudget.of(8L, Long.MAX_VALUE), (from, to) -> {
+            });
+        }
+        for (int hash = 0; hash < 10; hash++) {
+            int expectedHash = hash;
+            topology.remove(topology.probe(expectedHash, loc -> topology.hashAt(loc) == expectedHash).location());
+        }
+        topology.beginRehash(new OpenAddressingTopology(16));
+        Assert.assertTrue(topology.metrics().rehashing());
+        OpenAddressingTopology.ScanStep afterShrinkStart = topology.scan(0L, 3L, location -> true);
+        Assert.assertNotEquals(0L, afterShrinkStart.nextCursor());
+        cursor = afterShrinkStart.nextCursor();
+        steps = 0;
+        do {
+            OpenAddressingTopology.ScanStep step = topology.scan(cursor, 2L, location -> true);
+            cursor = step.nextCursor();
+            if (topology.metrics().rehashing()) {
+                topology.advanceRehash(HashTableWorkBudget.of(2L, Long.MAX_VALUE), (from, to) -> {
+                });
+            }
+            Assert.assertTrue("shrink-era scan must terminate", ++steps < 128);
+        } while (cursor != 0L);
+    }
+
+    @Test
+    public void fullScanWhileGrowingRehashReturnsEachLiveHashExactlyOnce() {
+        OpenAddressingTopology topology = new OpenAddressingTopology(16);
+        int live = 14;
+        for (int hash = 0; hash < live; hash++) {
+            OpenAddressingTopology.ProbeResult probe = topology.probe(hash, ignored -> false);
+            topology.occupyActive(probe.location().slot(), hash);
+        }
+        topology.beginRehash(new OpenAddressingTopology(32));
+        topology.advanceRehash(HashTableWorkBudget.of(4L, Long.MAX_VALUE), (from, to) -> {
+        });
+        Assert.assertTrue("fixture must remain mid-rehash for the quiescent full scan", topology.metrics().rehashing());
+
+        List<Integer> returned = new ArrayList<>();
+        long cursor = 0L;
+        int steps = 0;
+        do {
+            OpenAddressingTopology.ScanStep step = topology.scan(cursor, 3L, location -> {
+                returned.add(topology.hashAt(location));
+                return true;
+            });
+            cursor = step.nextCursor();
+            Assert.assertTrue("mid-rehash full scan must terminate", ++steps < 256);
+        } while (cursor != 0L);
+
+        Assert.assertTrue("scan must finish while dual-table is still open", topology.metrics().rehashing());
+        Assert.assertEquals(live, new HashSet<>(returned).size());
+        Assert.assertEquals("grow-era dual-table scan must not systematically duplicate", live, returned.size());
+    }
+
     private static void put(
             TopologyFixture topology,
             NativeByteMap<Integer> map,

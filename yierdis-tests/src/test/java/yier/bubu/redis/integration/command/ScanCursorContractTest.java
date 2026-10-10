@@ -7,6 +7,7 @@ import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
 import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyObject;
+import yier.bubu.redis.testutil.ReplySimpleString;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -15,6 +16,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import static yier.bubu.redis.testutil.GrowingScanSupport.assertFullKeyScanAfterBulkInsertReturnsEachKeyExactlyOnce;
+import static yier.bubu.redis.testutil.GrowingScanSupport.assertKeyScanCoversBaseWhileGrowing;
 import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
@@ -41,7 +44,12 @@ public class ScanCursorContractTest {
                         cursor = 0L;
                         break;
                     }
-                    Assert.assertTrue("expected cursor progress, got next=" + next + " from cursor=" + cursor, next > cursor);
+                    // 反向二进制游标的数值不是单调递增的；只要求每次调用都推进到不同位置。
+                    Assert.assertNotEquals(
+                            "expected cursor progress, got next=" + next + " from cursor=" + cursor,
+                            cursor,
+                            next
+                    );
                     cursor = next;
                 }
 
@@ -124,6 +132,135 @@ public class ScanCursorContractTest {
     }
 
     @Test
+    public void scanTerminatesAndCoversBaseKeysWhileWritesOutpaceTheCursor() {
+        forEachDb(db -> assertKeyScanCoversBaseWhileGrowing(
+                new FastTestClient(TestCommandComposition.createDispatcher(db)),
+                null,
+                500
+        ));
+    }
+
+    @Test
+    public void scanWithMatchTerminatesWhileWritesOutpaceTheCursor() {
+        forEachDb(db -> assertKeyScanCoversBaseWhileGrowing(
+                new FastTestClient(TestCommandComposition.createDispatcher(db)),
+                "base:*",
+                500
+        ));
+    }
+
+    @Test
+    public void fullScanImmediatelyAfterBulkInsertReturnsEveryKeyExactlyOnce() {
+        forEachDb(db -> assertFullKeyScanAfterBulkInsertReturnsEachKeyExactlyOnce(
+                new FastTestClient(TestCommandComposition.createDispatcher(db)),
+                30,
+                1_000
+        ));
+    }
+
+    @Test
+    public void scanCursorSurvivesShrinkBetweenCalls() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            FastTestClient client = new FastTestClient(dispatcher);
+            int total = 1_000;
+            int survivors = 40;
+            for (int i = 0; i < total; i++) {
+                client.execute(Arrays.asList(b("SET"), b("k" + i), b("v")));
+            }
+
+            ReplyArray first = (ReplyArray) client.execute(Arrays.asList(
+                    b("SCAN"), b("0"), b("COUNT"), b("10")));
+            String cursor = ((ReplyBulkString) first.values().get(0)).asString();
+            Assert.assertNotEquals("0", cursor);
+
+            for (int i = survivors; i < total; i++) {
+                client.execute(Arrays.asList(b("DEL"), b("k" + i)));
+            }
+            // 只推进少量维护，尽量在仍可能处于缩容 rehash 时续扫；不一次跑完维护。
+            db.runMaintenance();
+
+            Set<String> seen = new HashSet<>(keys(first));
+            int rounds = 0;
+            while (!"0".equals(cursor)) {
+                ReplyArray reply = (ReplyArray) client.execute(Arrays.asList(
+                        b("SCAN"), b(cursor), b("COUNT"), b("10")));
+                seen.addAll(keys(reply));
+                cursor = ((ReplyBulkString) reply.values().get(0)).asString();
+                db.runMaintenance();
+                Assert.assertTrue("SCAN did not terminate across shrink", ++rounds < 5_000);
+            }
+
+            for (int i = 0; i < survivors; i++) {
+                Assert.assertTrue("SCAN missed survivor k" + i, seen.contains("k" + i));
+            }
+        });
+    }
+
+    @Test
+    public void scanInsideMultiExecTerminatesAndCoversStableKeys() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            FastTestClient client = new FastTestClient(dispatcher);
+            int keyCount = 80;
+            for (int i = 0; i < keyCount; i++) {
+                client.execute(Arrays.asList(b("SET"), b("k" + i), b("v")));
+            }
+
+            Set<String> seen = new HashSet<>();
+            String cursor = "0";
+            int rounds = 0;
+            do {
+                Assert.assertEquals(
+                        "OK",
+                        ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value()
+                );
+                Assert.assertEquals(
+                        "QUEUED",
+                        ((ReplySimpleString) client.execute(Arrays.asList(
+                                b("SCAN"), b(cursor), b("COUNT"), b("15")))).value()
+                );
+                ReplyArray exec = (ReplyArray) client.execute(Arrays.asList(b("EXEC")));
+                Assert.assertEquals(1, exec.values().size());
+                ReplyArray reply = (ReplyArray) exec.values().get(0);
+                seen.addAll(keys(reply));
+                cursor = ((ReplyBulkString) reply.values().get(0)).asString();
+                Assert.assertTrue("MULTI/EXEC SCAN did not terminate", ++rounds < 1_000);
+            } while (!"0".equals(cursor));
+
+            Assert.assertEquals(keyCount, seen.size());
+            for (int i = 0; i < keyCount; i++) {
+                Assert.assertTrue(seen.contains("k" + i));
+            }
+        });
+    }
+
+    @Test
+    public void scanTerminatesWhileEveryKeyIsDeletedBetweenCalls() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            FastTestClient client = new FastTestClient(dispatcher);
+            int keyCount = 600;
+            for (int i = 0; i < keyCount; i++) {
+                client.execute(Arrays.asList(b("SET"), b("k" + i), b("v")));
+            }
+
+            int deleted = 0;
+            String cursor = "0";
+            int rounds = 0;
+            do {
+                ReplyArray reply = (ReplyArray) client.execute(Arrays.asList(
+                        b("SCAN"), b(cursor), b("COUNT"), b("10")));
+                cursor = ((ReplyBulkString) reply.values().get(0)).asString();
+                for (int i = 0; i < 25 && deleted < keyCount; i++) {
+                    client.execute(Arrays.asList(b("DEL"), b("k" + deleted++)));
+                }
+                Assert.assertTrue("SCAN did not terminate while keys were deleted", ++rounds < 1_000);
+            } while (!"0".equals(cursor));
+        });
+    }
+
+    @Test
     public void arbitraryNonNegativeCursorRestartsIterationAndTerminatesAtZero() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
@@ -133,14 +270,14 @@ public class ScanCursorContractTest {
                     client.execute(Arrays.asList(b("SET"), b("k" + i), b("v")));
                 }
 
-                // 不透明 cursor：phase 位超出内部 0/1 约定或 generation 不匹配的值都必须按
+                // 不透明 cursor：超出哈希空间可映射范围（>32 位）或乱改高位的值都必须按
                 // 重启迭代处理（允许重复），不得报错，结束仍回 0。
                 List<String> cursors = new ArrayList<>(List.of(
                         "8589934592",
                         "12884901888",
                         "9223372036854775807"
                 ));
-                // 伪造一个 generation 匹配但 phase 位非法的 cursor：改写在线 cursor 的 phase 位。
+                // 给在线 cursor 置高位，使其无法映射到当前表容量掩码范围内的位置。
                 long live = parseCursor((ReplyArray) client.execute(Arrays.asList(
                         b("SCAN"), b("0"), b("COUNT"), b("1"))));
                 Assert.assertNotEquals(0L, live);
@@ -219,6 +356,14 @@ public class ScanCursorContractTest {
                 Assert.assertFalse("KEYS must not return expired names", keyNames.contains("gone"));
             }
         });
+    }
+
+    private static List<String> keys(ReplyArray reply) {
+        List<String> keys = new ArrayList<>();
+        for (ReplyObject key : ((ReplyArray) reply.values().get(1)).values()) {
+            keys.add(((ReplyBulkString) key).asString());
+        }
+        return keys;
     }
 
     private static long parseCursor(ReplyArray reply) {

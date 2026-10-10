@@ -3,22 +3,22 @@ package yier.bubu.redis.storage.api;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Redis SCAN 系列命令的游标 v2（rehash-aware）。
+ * Redis SCAN 系列命令的游标。
  * <p>
  * 兼容 Redis 生态约定：游标仍以“数字字符串”的 bulk string 形式传输；当返回值为 {@code 0} 时表示扫描结束。
  * <p>
- * v2 语义：
- * <ul>
- *   <li>在字典 rehash 的“双表期”，游标会携带 table generation、phase 与 slot position。</li>
- *   <li>该游标用于 best-effort 增量遍历，不提供强一致保证；目标是“可推进、可终止”。</li>
- * </ul>
+ * 线上语义：游标是哈希空间中的不透明位置（与 Redis {@code dictScan} 的反向二进制递增游标同族），
+ * 在表扩容、缩容或 rehash 完成后仍可映射到新表对应位置继续扫描。契约目标是“可推进、可终止”：
+ * 在有限次结构换代与客户端持续调用下，迭代回到 {@code 0}；从迭代开始到结束一直存在的元素至少返回一次。
+ * 对抗性无限增长不在该硬保证范围内（与 Redis SCAN 一致，依赖客户端推进游标）。
  *
- * <p>29 位 generation 有限：只有完整迭代跨越的结构代数少于 {@code 2^29} 时，才保证不会遗漏
- * 全程存在的 key 或集合元素。该 token 不是可跨数据库或集合生命周期保存的书签。</p>
+ * <p>cursor 对客户端是不透明非负整数。命令层先拒绝负数字符串；进入存储层后 {@link #of(long)} 只接受
+ * {@code >= 0}（负数仍抛 {@link IllegalArgumentException}）。无法映射到当前哈希空间的非负 cursor
+ * （例如超出 32 位）由存储层按“从头重启迭代”处理（允许重复，结束仍回 0），不因乱填而报命令错误。</p>
  *
- * <p>cursor 对客户端是不透明非负整数：{@link #of(long)} 接受任意非负值（包括 phase 位超出
- * 内部 0/1 约定的值），绝不因客户端输入抛出异常；无法映射到当前表拓扑的 cursor 由存储层
- * 按“从头重启迭代”处理（允许重复，结束仍回 0）。</p>
+ * <p>{@link #of(int, int, long)} / {@link #generation()} / {@link #phase()} / {@link #position()}
+ * 是历史“代数 + 阶段 + 物理槽位”打包格式的编解码遗留，仅供单测与解析旧 token；
+ * 当前 SCAN 实现不再把 generation/phase 写入线上游标。类名保留 {@code V2} 以免大面积改调用点。</p>
  */
 public final class ScanCursorV2 {
     private static final byte[] ZERO_ASCII = "0".getBytes(StandardCharsets.US_ASCII);

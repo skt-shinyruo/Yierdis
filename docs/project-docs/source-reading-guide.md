@@ -169,7 +169,7 @@ flowchart LR
 进入 `yierdis-db` 模块，理解内存中键空间组织以及各数据类型的物理存储方式。
 
 * **关键设计点**：
-  - **键空间索引**：[`NativeKeyDirectory.java`](../../yierdis-db/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectory.java) 采用开放寻址哈希表（Open Addressing with Linear Probing），内置平滑的渐进式 Rehash 步长与墓碑（Tombstone）复用机制。特别注意专门为保证 `SCAN` 游标正确性而设计的 `MIGRATED_SCAN_SHADOW` 槽位状态。
+  - **键空间索引**：[`NativeKeyDirectory.java`](../../yierdis-db/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectory.java) 采用开放寻址哈希表（Open Addressing with Linear Probing），内置平滑的渐进式 Rehash 步长与墓碑（Tombstone）复用机制。`SCAN` 族游标委托 [`OpenAddressingTopology.scan`](../../yierdis-db/src/main/java/yier/bubu/redis/storage/memory/internal/hash/OpenAddressingTopology.java) 的反向二进制本位槽推进；`MIGRATED_SCAN_SHADOW` 只服务删除/反查路径，不再给 SCAN 补扫。
   - **紧凑 Entry 布局**：[`EntryTable.java`](../../yierdis-db/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryTable.java) 将每个 Key 对应的元数据打包成 72 字节的 `ENTRY_RECORD`（包含 Key/Value Handle、类型、编码、TTL deadline、LRU/LFU 时钟）。
   - **两阶段写入与账本**：在写入变更前计算上界内存预扣（Reserve Upper Bound），执行后收窄，提交后结账。
   - **多数据结构族落地**：各类数据操作通过 Typed Ops 实现，在保证堆外连续存储的同时封装了数据编码。
@@ -292,15 +292,17 @@ flowchart LR
 - **关键断点**：
   - [`YierdisDbMaxmemorySupport.java`](../../yierdis-db/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMaxmemorySupport.java) 的 `performEviction`：观察当内存超出 `maxmemory` 时，如何从随机采样中构建候选淘汰池（Eviction Pool）并挑选空闲时间最长（IDLE 最久）的 Key 进行两阶段删除。
 
-### 4.5 场景五：渐进式 Rehash 与 Scan Shadow 游标演进
-- **测试类**：`HashTableMaintenanceTest`
+### 4.5 场景五：渐进式 Rehash 与反向二进制 SCAN 游标
+- **测试类**：`HashTableMaintenanceTest`、`NativeByteMapTest`、`ScanCursorContractTest`
 - **运行命令**：
   ```bash
   JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-    mvn -pl yierdis-db -am -Dtest=HashTableMaintenanceTest test
+    mvn -pl yierdis-db,yierdis-tests -am \
+    -Dtest=HashTableMaintenanceTest,NativeByteMapTest,ScanCursorContractTest test
   ```
 - **关键断点**：
-  - [`NativeKeyDirectory.java`](../../yierdis-db/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectory.java) 的 `rehashStep`：观察槽位状态在从 `FILLED` 转变为 `MIGRATED_SCAN_SHADOW` 时，反向二进制高位反转游标如何避免客户端 `SCAN` 遗漏或重复。
+  - [`OpenAddressingTopology.java`](../../yierdis-db/src/main/java/yier/bubu/redis/storage/memory/internal/hash/OpenAddressingTopology.java) 的 `scan`：观察反向二进制游标如何在扩容/双表期继续推进，以及 `visitHomeSlot` 为何只交出本位匹配的 `FILLED`。
+  - 同文件的迁移路径：`FILLED` → `MIGRATED_SCAN_SHADOW` 如何保住 old 探测链，供 `invalidateOldShadow` / 反查使用（与 SCAN 发射路径分离）。
 
 ---
 
@@ -352,8 +354,8 @@ flowchart LR
 ### 6.4 存储引擎与内核机制
 - [ ] **问题 12（开放寻址与墓碑机制）**：`NativeKeyDirectory` 采用开放寻址哈希表，在删除 Key 时为什么不能直接将槽位重置为 `EMPTY`，而必须标记为 `TOMBSTONE`？墓碑在什么情况下会被复用，又在什么条件下触发 Compact？  
   *思考线索*：线性探测的冲突探测链连续性、`HashCapacityPolicy`、[`db-internals.md`](./db-internals.md)。
-- [ ] **问题 13（SCAN 游标与 Shadow 槽位）**：增量 Rehash 期间，哈希表槽位状态中专门设计的 `MIGRATED_SCAN_SHADOW` 起到了什么关键作用？如果缺少它，客户端在 `SCAN` 遍历时会遇到什么问题？  
-  *思考线索*：反向二进制高位反转游标算法、两表并发迁移状态下的槽位映射稳定性、[`db-internals.md`](./db-internals.md)。
+- [ ] **问题 13（SCAN 游标与 Shadow 槽位）**：增量 Rehash 期间，`MIGRATED_SCAN_SHADOW` 现在主要保护哪条路径？当前 `SCAN` 为什么可以不依赖 shadow 补扫仍保证“全程存在的元素至少返回一次”？  
+  *思考线索*：反向二进制本位槽扫描、双表同位覆盖 small/large、删除路径的 `invalidateOldShadow`、[`db-internals.md`](./db-internals.md)。
 - [ ] **问题 14（内核写通路与两阶段记账）**：为什么所有的变更（包括淘汰和过期）都必须封装为 `MutationPlan` 走 `YierdisDbKernel.execute`？写前“按上界预扣（Reserve Upper Bound）”和写后“收窄结算（Commit）”如何防止 DB 超额占用堆外内存？  
   *思考线索*：`MutationPlan`、`MemoryLedger` 账本、[`db-internals.md`](./db-internals.md)。
 - [ ] **问题 15（Rehash 坍缩替换）**：在增量 Rehash 尚未完成时，若突发大量新 Key 插入导致旧表和新表同时顶穿容量阈值，`NativeKeyDirectory` 是如何通过“坍缩替换（`collapsedReplacement`）”自救的？  
