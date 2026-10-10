@@ -13,6 +13,7 @@ import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParseException;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
+import yier.bubu.redis.command.api.RedisArgEcho;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.defaults.CommandSupport;
 import yier.bubu.redis.execution.api.CommandResult;
@@ -26,6 +27,16 @@ import yier.bubu.redis.execution.api.ReplyShapes;
 
 /** Transport-neutral connection and DB lifecycle commands. */
 public final class CoreConnectionCommands {
+    // HELP 只列已实现子命令；说明文字对齐 Redis 8.9.241 addReplyHelp 中对应条目。
+    private static final String[] CLIENT_HELP = {
+            "GETNAME",
+            "    Return the name of the current connection.",
+            "SETNAME <name>",
+            "    Assign a name to the current connection.",
+            "SETINFO <attr> <value>",
+            "    Set client library / version metadata attributes."
+    };
+
     private final CommandSupport support;
 
     public CoreConnectionCommands(CommandSupport support) {
@@ -94,27 +105,27 @@ public final class CoreConnectionCommands {
     private Function<CommandSession, PreparedCommand> client(CommandArgs args) {
         if (args.is(1, "SETINFO")) {
             if (args.argc() != 4) {
-                throw new CommandParseException(
+                throw CommandParseException.aborting(
                         "ERR wrong number of arguments for 'client|setinfo' command");
             }
             if (!args.is(2, "LIB-NAME") && !args.is(2, "LIB-VER")) {
-                // 未知属性按用户输入原样回显，与 Redis 的报错文案一致。
+                // 未知属性回显走 RedisArgEcho，与 unknown subcommand 同一套消毒规则。
                 throw new CommandParseException(
-                        "ERR Unrecognized option '" + args.utf8(2) + "'");
+                        "ERR Unrecognized option '"
+                                + RedisArgEcho.echo(args.request(), 2, 128)
+                                + "'");
             }
             return session -> ok();
         }
         if (args.is(1, "SETNAME")) {
             if (args.argc() != 3) {
-                throw new CommandParseException(
+                throw CommandParseException.aborting(
                         "ERR wrong number of arguments for 'client|setname' command");
             }
-            // Redis 只接受 ASCII '!'..'~'。空串是清空名字，不走字符集校验；
-            // EngineSession.setClientName 会把空串收成 null，GETNAME 因此是 nil。
+            // 空串是清空名字：EngineSession.setClientName 会把空串收成 null，GETNAME 因此是 nil。
             byte[] rawName = args.bytes(2);
-            if (rawName.length > 0 && !printableClientName(rawName)) {
-                throw new CommandParseException(
-                        "ERR Client names cannot contain spaces, newlines or special characters.");
+            if (!ConnectionHandshake.validClientName(rawName)) {
+                throw new CommandParseException(ConnectionHandshake.INVALID_CLIENT_NAME);
             }
             String name = rawName.length == 0 ? "" : args.utf8(2);
             return session -> PreparedCommands.action(
@@ -127,7 +138,7 @@ public final class CoreConnectionCommands {
         }
         if (args.is(1, "GETNAME")) {
             if (args.argc() != 2) {
-                throw new CommandParseException(
+                throw CommandParseException.aborting(
                         "ERR wrong number of arguments for 'client|getname' command");
             }
             return session -> {
@@ -138,15 +149,45 @@ public final class CoreConnectionCommands {
                                 RedisReplies.bulkString(name.getBytes(StandardCharsets.UTF_8)));
             };
         }
-        throw new CommandParseException(
-                "ERR unknown subcommand '" + args.utf8(1) + "'. Try CLIENT HELP.");
+        if (args.is(1, "HELP")) {
+            if (args.argc() != 2) {
+                throw CommandParseException.aborting(
+                        "ERR wrong number of arguments for 'client|help' command");
+            }
+            return session -> PreparedCommands.ready(helpReply("CLIENT", CLIENT_HELP));
+        }
+        throw CommandParseException.aborting(
+                "ERR unknown subcommand '"
+                        + RedisArgEcho.echo(args.request(), 1, 128)
+                        + "'. Try CLIENT HELP.");
     }
 
+    private static RedisReply helpReply(String commandUpper, String[] lines) {
+        ArrayList<RedisReply> elements = new ArrayList<>(lines.length + 3);
+        elements.add(RedisReplies.simpleString(
+                commandUpper + " <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"));
+        for (String line : lines) {
+            elements.add(RedisReplies.simpleString(line));
+        }
+        elements.add(RedisReplies.simpleString("HELP"));
+        elements.add(RedisReplies.simpleString("    Print this help."));
+        return RedisReplies.array(elements);
+    }
+
+    // 与 Redis authCommand 同序：先拒多余参数，再处理只给密码的旧形式，最后按用户名认证。
     private Function<CommandSession, PreparedCommand> auth(CommandArgs args) {
-        return session -> error(
-                "ERR AUTH <password> called without any password configured for the default user. "
-                        + "Are you sure your configuration is correct?"
-        );
+        if (args.argc() > 3) {
+            throw new CommandParseException("ERR syntax error");
+        }
+        if (args.argc() == 2) {
+            // Redis 对 nopass default 用户的 AUTH <password> 保留旧报错，提示配置可能写错，而不是直接放行。
+            return session -> error(
+                    "ERR AUTH <password> called without any password configured for the default user. "
+                            + "Are you sure your configuration is correct?"
+            );
+        }
+        boolean accepted = ConnectionHandshake.acceptsCredentials(args.bytes(1));
+        return session -> accepted ? ok() : error(ConnectionHandshake.WRONGPASS);
     }
 
     private Function<CommandSession, PreparedCommand> flushdb(CommandArgs args) {
@@ -212,7 +253,7 @@ public final class CoreConnectionCommands {
         }
         if (args.argc() >= 2 && args.is(1, "INFO")) {
             if (args.argc() == 2) {
-                throw new CommandParseException(
+                throw CommandParseException.aborting(
                         "ERR wrong number of arguments for 'command' command");
             }
             ArrayList<String> names = new ArrayList<>(args.argc() - 2);
@@ -257,16 +298,6 @@ public final class CoreConnectionCommands {
         return upper == null || upper.isBlank()
                 ? null
                 : upper.trim().toUpperCase(Locale.ROOT);
-    }
-
-    private static boolean printableClientName(byte[] rawName) {
-        for (byte value : rawName) {
-            int code = value & 0xff;
-            if (code < '!' || code > '~') {
-                return false;
-            }
-        }
-        return true;
     }
 
     private static PreparedCommand ok() {

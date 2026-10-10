@@ -85,9 +85,10 @@ public class TypedCommandTest {
                     () -> Await.join(connection.auth("secret")),
                     "AUTH <password> called without any password configured"
             );
+            Assert.assertEquals("OK", Await.join(connection.auth("default", "secret")));
             assertServerError(
-                    () -> Await.join(connection.auth("default", "secret")),
-                    "AUTH <password> called without any password configured"
+                    () -> Await.join(connection.auth("bob", "secret")),
+                    "WRONGPASS invalid username-password pair or user is disabled."
             );
 
             Assert.assertEquals("OK", Await.join(connection.set("gone", "v")));
@@ -336,7 +337,7 @@ public class TypedCommandTest {
 
             Assert.assertEquals(Long.valueOf(1), Await.join(connection.del("k", "missing")));
             Assert.assertEquals(Long.valueOf(0), Await.join(connection.exists("k")));
-            assertServerError(() -> Await.join(connection.scan("-1")), "not an integer");
+            assertServerError(() -> Await.join(connection.scan("-1")), "invalid cursor");
             Assert.assertEquals("PONG", Await.join(connection.ping()));
         }
     }

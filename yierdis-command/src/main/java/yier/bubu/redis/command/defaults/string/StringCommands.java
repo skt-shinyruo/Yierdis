@@ -20,6 +20,7 @@ import yier.bubu.redis.execution.api.PreparedCommands;
 import yier.bubu.redis.execution.api.RedisReplies;
 import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.execution.api.ReplyShapes;
+import yier.bubu.redis.storage.api.BitRangeUnit;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.PreparedMutation;
 import yier.bubu.redis.storage.api.SetMode;
@@ -48,7 +49,7 @@ public final class StringCommands {
         registration.register(new CommandSpec(syntax("APPEND", CommandArity.exact(3)), this::append));
         registration.register(new CommandSpec(syntax("SETBIT", CommandArity.exact(4)), this::setbit));
         registration.register(new CommandSpec(syntax("GETBIT", CommandArity.exact(3)), this::getbit));
-        registration.register(new CommandSpec(syntax("BITCOUNT", CommandArity.oneOf(2, 4)), this::bitcount));
+        registration.register(new CommandSpec(syntax("BITCOUNT", CommandArity.min(2)), this::bitcount));
         registration.register(new CommandSpec(syntax("INCR", CommandArity.exact(2)), args -> incrBy(args, 1L)));
         registration.register(new CommandSpec(syntax("DECR", CommandArity.exact(2)), args -> incrBy(args, -1L)));
     }
@@ -66,7 +67,7 @@ public final class StringCommands {
     private record GetBitArgs(byte[] key, long offset) {
     }
 
-    private record BitCountArgs(byte[] key, Long start, Long end) {
+    private record BitCountArgs(byte[] key, Long start, Long end, BitRangeUnit unit) {
     }
 
     private Function<CommandSession, PreparedCommand> set(CommandArgs args) {
@@ -233,17 +234,39 @@ public final class StringCommands {
         }
     }
 
+    // Redis bitcountCommand：arity 只要求 key，其余参数个数（只带 start、或多于 BIT|BYTE）在命令内报 syntax error，
+    // 因此 MULTI 中这些错误会入队、EXEC 时才失败。start/end/unit 都在查 key 之前解析，参数错误优先于 WRONGTYPE。
     private Function<CommandSession, PreparedCommand> bitcount(CommandArgs args) {
-        BitCountArgs parsed = args.argc() == 2
-                ? new BitCountArgs(args.bytes(1), null, null)
-                : new BitCountArgs(args.bytes(1), args.longAt(2), args.longAt(3));
+        int argc = args.argc();
+        BitCountArgs parsed;
+        if (argc == 2) {
+            parsed = new BitCountArgs(args.bytes(1), null, null, BitRangeUnit.BYTE);
+        } else if (argc == 4 || argc == 5) {
+            long start = args.longAt(2);
+            long end = args.longAt(3);
+            BitRangeUnit unit = argc == 5 ? bitRangeUnitAt(args, 4) : BitRangeUnit.BYTE;
+            parsed = new BitCountArgs(args.bytes(1), start, end, unit);
+        } else {
+            throw syntaxFailure();
+        }
         BytesSlice key = args.slice(1);
         return session -> {
             long count = parsed.start() == null
                     ? support.commandDb(session).strings().bitcount(key)
-                    : support.commandDb(session).strings().bitcount(key, parsed.start(), parsed.end());
+                    : support.commandDb(session).strings()
+                            .bitcount(key, parsed.start(), parsed.end(), parsed.unit());
             return PreparedCommands.ready(RedisReplies.integer(count));
         };
+    }
+
+    private static BitRangeUnit bitRangeUnitAt(CommandArgs args, int index) {
+        if (args.is(index, "BIT")) {
+            return BitRangeUnit.BIT;
+        }
+        if (args.is(index, "BYTE")) {
+            return BitRangeUnit.BYTE;
+        }
+        throw syntaxFailure();
     }
 
     private Function<CommandSession, PreparedCommand> incrBy(CommandArgs args, long delta) {

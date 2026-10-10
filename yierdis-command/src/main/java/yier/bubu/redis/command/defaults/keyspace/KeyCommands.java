@@ -15,11 +15,13 @@ import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParseException;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
+import yier.bubu.redis.command.api.RedisArgEcho;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandLimits;
 import yier.bubu.redis.command.api.TransactionPolicy;
 import yier.bubu.redis.command.defaults.CommandSupport;
 import yier.bubu.redis.command.defaults.DbReplies;
+import yier.bubu.redis.command.defaults.ScanArguments;
 import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.PreparedCommand;
@@ -29,7 +31,6 @@ import yier.bubu.redis.execution.api.RedisReply;
 import yier.bubu.redis.execution.api.ReplyShapes;
 import yier.bubu.redis.execution.api.ValidationResult;
 import yier.bubu.redis.storage.api.ExpireCondition;
-import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.api.result.ByteSequenceSource;
@@ -40,9 +41,18 @@ public final class KeyCommands {
     private static final int KEY_WINDOW_DISCOVERY_ATTEMPTS = 2;
     private static final String KEYS_INCOMPLETE_ERROR = "ERR KEYS scan incomplete; use SCAN";
     private static final String SYNTAX_ERROR = "ERR syntax error";
-    private static final String OBJECT_SUBCOMMAND_ERROR =
-            "ERR Unknown subcommand or wrong number of arguments for 'OBJECT'. Try OBJECT HELP.";
-    private static final String INTEGER_ERROR = "ERR value is not an integer or out of range";
+    private static final String[] OBJECT_HELP = {
+            "ENCODING <key>",
+            "    Return the kind of internal representation used in order to store the value",
+            "    associated with a <key>."
+    };
+    private static final String[] MEMORY_HELP = {
+            "STATS",
+            "    Return information about the memory usage of the server.",
+            "USAGE <key> [SAMPLES <count>]",
+            "    Return memory in bytes used by <key> and its value. Nested values are",
+            "    sampled up to <count> times (default: 5, 0 means sample all)."
+    };
     private static final String EXPIRE_UNSUPPORTED_OPTION = "ERR Unsupported option ";
     private static final String EXPIRE_NX_INCOMPATIBLE =
             "ERR NX and XX, GT or LT options at the same time are not compatible";
@@ -105,11 +115,11 @@ public final class KeyCommands {
     private Function<CommandSession, PreparedCommand> memory(CommandArgs args) {
         if (args.is(1, "USAGE")) {
             if (args.argc() < 3) {
-                throw new CommandParseException("ERR wrong number of arguments for 'memory' command");
+                throw wrongSubcommandArity("memory|usage");
             }
             BytesSlice key = args.slice(2);
             // SAMPLES 只被接受，采样个数不改变 memoryUsage 的结果，SAMPLES 0 也合法。
-            // 缺 key 仍是 memory 的参数个数错误；选项写错或负数才是 syntax error。
+            // 缺 key 是 memory|usage 的参数个数错误；选项写错或负数才是 syntax error。
             for (int index = 3; index < args.argc(); index++) {
                 if (!args.is(index, "SAMPLES") || index + 1 >= args.argc()) {
                     throw syntaxFailure();
@@ -127,7 +137,7 @@ public final class KeyCommands {
         }
         if (args.is(1, "STATS")) {
             if (args.argc() != 2) {
-                throw new CommandParseException("ERR wrong number of arguments for 'memory' command");
+                throw wrongSubcommandArity("memory|stats");
             }
             return session -> {
                 ServerInfoProvider infoProvider = support.infoProvider();
@@ -138,7 +148,13 @@ public final class KeyCommands {
                 return PreparedCommands.ready(memoryStats(stats));
             };
         }
-        throw syntaxFailure();
+        if (args.is(1, "HELP")) {
+            if (args.argc() != 2) {
+                throw wrongSubcommandArity("memory|help");
+            }
+            return session -> PreparedCommands.ready(helpReply("MEMORY", MEMORY_HELP));
+        }
+        throw unknownSubcommand(args, "MEMORY");
     }
 
     private static RedisReply memoryStats(YierdisMemoryStats stats) {
@@ -161,17 +177,51 @@ public final class KeyCommands {
     }
 
     private Function<CommandSession, PreparedCommand> object(CommandArgs args) {
-        // 没有子命令时走命令 arity（min 2），到不了这里。已知子命令参数个数不对和未知子命令共用 Redis 这句。
-        if (!(args.is(1, "ENCODING") && args.argc() == 3)) {
-            throw new CommandParseException(OBJECT_SUBCOMMAND_ERROR);
+        // 没有子命令时走命令 arity（min 2），到不了这里。Redis 容器命令把已知子命令的 arity
+        // 与未知子命令拆开：fullname 带 object|encoding，未知名回显原样大小写。
+        if (args.is(1, "ENCODING")) {
+            if (args.argc() != 3) {
+                throw wrongSubcommandArity("object|encoding");
+            }
+            BytesSlice key = args.slice(2);
+            return session -> {
+                String encoding = support.commandDb(session).objectEncoding(key);
+                return PreparedCommands.ready(encoding == null
+                        ? RedisReplies.nullValue()
+                        : RedisReplies.bulkString(encoding.getBytes(StandardCharsets.US_ASCII)));
+            };
         }
-        BytesSlice key = args.slice(2);
-        return session -> {
-            String encoding = support.commandDb(session).objectEncoding(key);
-            return PreparedCommands.ready(encoding == null
-                    ? RedisReplies.nullValue()
-                    : RedisReplies.bulkString(encoding.getBytes(StandardCharsets.US_ASCII)));
-        };
+        if (args.is(1, "HELP")) {
+            if (args.argc() != 2) {
+                throw wrongSubcommandArity("object|help");
+            }
+            return session -> PreparedCommands.ready(helpReply("OBJECT", OBJECT_HELP));
+        }
+        throw unknownSubcommand(args, "OBJECT");
+    }
+
+    private static CommandParseException wrongSubcommandArity(String fullname) {
+        return CommandParseException.aborting(
+                "ERR wrong number of arguments for '" + fullname + "' command");
+    }
+
+    private static CommandParseException unknownSubcommand(CommandArgs args, String parentUpper) {
+        return CommandParseException.aborting(
+                "ERR unknown subcommand '"
+                        + RedisArgEcho.echo(args.request(), 1, 128)
+                        + "'. Try " + parentUpper + " HELP.");
+    }
+
+    private static RedisReply helpReply(String commandUpper, String[] lines) {
+        ArrayList<RedisReply> elements = new ArrayList<>(lines.length + 3);
+        elements.add(RedisReplies.simpleString(
+                commandUpper + " <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"));
+        for (String line : lines) {
+            elements.add(RedisReplies.simpleString(line));
+        }
+        elements.add(RedisReplies.simpleString("HELP"));
+        elements.add(RedisReplies.simpleString("    Print this help."));
+        return RedisReplies.array(elements);
     }
 
     private Function<CommandSession, PreparedCommand> keys(CommandArgs args) {
@@ -205,15 +255,12 @@ public final class KeyCommands {
         };
     }
 
-    private record ScanArgs(long cursor, byte[] match, int count) {
-    }
-
     private Function<CommandSession, PreparedCommand> scan(CommandArgs args) {
-        ScanArgs parsed = scanArgs(args);
+        ScanArguments parsed = ScanArguments.parse(args, 1, ScanArguments.Target.KEYSPACE);
         return session -> {
             for (int attempt = 0; attempt < KEY_WINDOW_DISCOVERY_ATTEMPTS; attempt++) {
                 KeyScanWindow window = support.commandDb(session).keyspace().scan(
-                        ScanCursorV2.of(parsed.cursor()), parsed.match(), parsed.count());
+                        parsed.cursor(), parsed.match(), parsed.types(), parsed.count());
                 if (!window.current()) {
                     window.close();
                     continue;
@@ -223,34 +270,6 @@ public final class KeyCommands {
             return PreparedCommands.ready(RedisReplies.error(
                     "ERR scan window changed before reply preflight"));
         };
-    }
-
-    private static ScanArgs scanArgs(CommandArgs args) {
-        long cursor = args.nonNegativeLongAt(1);
-        byte[] match = null;
-        int count = 10;
-        for (int index = 2; index < args.argc(); index++) {
-            if (args.is(index, "MATCH")) {
-                if (++index >= args.argc()) {
-                    throw syntaxFailure();
-                }
-                match = args.bytes(index);
-                continue;
-            }
-            if (args.is(index, "COUNT")) {
-                if (++index >= args.argc()) {
-                    throw syntaxFailure();
-                }
-                long value = args.positiveLongAt(index);
-                if (value > Integer.MAX_VALUE) {
-                    throw new CommandParseException(INTEGER_ERROR);
-                }
-                count = (int) value;
-                continue;
-            }
-            throw syntaxFailure();
-        }
-        return new ScanArgs(cursor, match, count);
     }
 
     private static PreparedCommand keyWindowReply(KeyScanWindow window) {

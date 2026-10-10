@@ -33,6 +33,9 @@ import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class TransactionCommandTest {
+    private static final String EXEC_WRONG_ARITY_ABORT =
+            "EXECABORT Transaction discarded because of: wrong number of arguments for 'exec' command";
+
     private record InvalidCommand(List<byte[]> args, String message) {
     }
 
@@ -259,15 +262,16 @@ public class TransactionCommandTest {
         });
     }
 
+    // 用假命令测 TransactionPolicy.DISALLOWED_IN_MULTI；真实 HELLO 已是 QUEUEABLE（见 #181）。
     @Test
     public void modulesCanRejectCommandsInsideMultiAndAbortTransaction() {
         forEachDb(db -> {
             CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(
                     db,
                     registration -> registration.register(new CommandSpec(
-                            new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
+                            new CommandSyntax("FORBIDTX", CommandArity.min(1), CommandKeySpec.NONE,
                                     TransactionPolicy.DISALLOWED_IN_MULTI),
-                            args -> session -> PreparedCommands.ready(RedisReplies.simpleString("HELLO"))
+                            args -> session -> PreparedCommands.ready(RedisReplies.simpleString("FORBIDTX"))
                     ))
             );
             TestSession session = new TestSession();
@@ -275,9 +279,9 @@ public class TransactionCommandTest {
                 FastTestClient client = new FastTestClient(dispatcher, session);
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
 
-                ReplyObject hello = client.execute(Arrays.asList(b("HELLO")));
-                Assert.assertTrue(hello instanceof ReplyError);
-                Assert.assertEquals("ERR HELLO is not allowed in MULTI", ((ReplyError) hello).message());
+                ReplyObject forbidden = client.execute(Arrays.asList(b("FORBIDTX")));
+                Assert.assertTrue(forbidden instanceof ReplyError);
+                Assert.assertEquals("ERR FORBIDTX is not allowed in MULTI", ((ReplyError) forbidden).message());
 
                 ReplyObject exec = client.execute(Arrays.asList(b("EXEC")));
                 Assert.assertTrue(exec instanceof ReplyError);
@@ -418,6 +422,40 @@ public class TransactionCommandTest {
     }
 
     @Test
+    public void bitcountUnitAndArgumentErrorsInsideMultiFailOnlyThatCommand() {
+        forEachDb(db -> {
+            // BITCOUNT 的 Redis arity 是 -2：只带 start、多出一个参数或非法 unit 都能入队，EXEC 时才报 syntax error。
+            for (List<byte[]> invalid : List.of(
+                    List.of(b("BITCOUNT"), b("k"), b("0")),
+                    List.of(b("BITCOUNT"), b("k"), b("0"), b("1"), b("FOO")),
+                    List.of(b("BITCOUNT"), b("k"), b("0"), b("1"), b("BIT"), b("extra"))
+            )) {
+                assertContentErrorFailsOnlyThatCommand(db, invalid, "ERR syntax error");
+            }
+            assertContentErrorFailsOnlyThatCommand(
+                    db,
+                    List.of(b("BITCOUNT"), b("k"), b("a"), b("1"), b("BIT")),
+                    "ERR value is not an integer or out of range"
+            );
+
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            TestSession session = new TestSession();
+            FastTestClient client = new FastTestClient(dispatcher, session);
+            Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+            ReplyObject noKey = client.execute(List.of(b("BITCOUNT")));
+            Assert.assertEquals(
+                    "ERR wrong number of arguments for 'bitcount' command",
+                    ((ReplyError) noKey).message()
+            );
+            Assert.assertEquals(0, session.transactionState().size());
+            Assert.assertEquals(
+                    "EXECABORT Transaction discarded because of previous errors.",
+                    ((ReplyError) client.execute(List.of(b("EXEC")))).message()
+            );
+        });
+    }
+
+    @Test
     public void keyspaceArityErrorsInsideMultiAbortBeforeExec() {
         forEachDb(db -> {
             for (List<byte[]> invalid : List.of(
@@ -438,6 +476,44 @@ public class TransactionCommandTest {
                         ((ReplyError) exec).message()
                 );
             }
+        });
+    }
+
+    // Redis 8.9.241：未知命令（含空命令名）、未知子命令和子命令参数个数不对都在入队时拒绝并 EXECABORT；
+    // MEMORY USAGE 的 SAMPLES 取值和选项错误先 QUEUED，EXEC 时只有这一条失败。
+    @Test
+    public void unknownCommandAndSubcommandErrorTextInsideMulti() {
+        forEachDb(db -> {
+            for (InvalidCommand invalid : List.of(
+                    invalid("ERR unknown command 'foo', with args beginning with: 'a' ", "foo", "a"),
+                    invalid("ERR unknown command ''", ""),
+                    invalid("ERR unknown subcommand 'foo'. Try CLIENT HELP.", "CLIENT", "foo"),
+                    invalid("ERR wrong number of arguments for 'client|help' command", "CLIENT", "HELP", "x"),
+                    invalid("ERR unknown subcommand 'foo'. Try OBJECT HELP.", "OBJECT", "foo", "k"),
+                    invalid("ERR wrong number of arguments for 'object|encoding' command", "OBJECT", "ENCODING"),
+                    invalid("ERR unknown subcommand 'foo'. Try MEMORY HELP.", "MEMORY", "foo"),
+                    invalid("ERR wrong number of arguments for 'memory|help' command", "MEMORY", "HELP", "x")
+            )) {
+                CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+                TestSession session = new TestSession();
+                FastTestClient client = new FastTestClient(dispatcher, session);
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+                Assert.assertEquals(invalid.message(), ((ReplyError) client.execute(invalid.args())).message());
+                Assert.assertEquals(0, session.transactionState().size());
+                Assert.assertEquals(
+                        "EXECABORT Transaction discarded because of previous errors.",
+                        ((ReplyError) client.execute(List.of(b("EXEC")))).message()
+                );
+            }
+            assertContentErrorFailsOnlyThatCommand(db,
+                    List.of(b("MEMORY"), b("USAGE"), b("k"), b("SAMPLES"), b("x")),
+                    "ERR value is not an integer or out of range");
+            assertContentErrorFailsOnlyThatCommand(db,
+                    List.of(b("MEMORY"), b("USAGE"), b("k"), b("bad")),
+                    "ERR syntax error");
+            assertContentErrorFailsOnlyThatCommand(db,
+                    List.of(b("LPOP"), b("list"), b("x")),
+                    "ERR value is out of range, must be positive");
         });
     }
 
@@ -468,7 +544,7 @@ public class TransactionCommandTest {
                     Arrays.asList(b("HSCAN"), b("hash"), b("-1")),
                     Arrays.asList(b("HSCAN"), b("hash"), b("0"), b("MATCH")),
                     Arrays.asList(b("HSCAN"), b("hash"), b("0"), b("COUNT"), b("0")),
-                    Arrays.asList(b("SSCAN"), b("set"), b("9223372036854775808")),
+                    Arrays.asList(b("SSCAN"), b("set"), b("18446744073709551616")),
                     Arrays.asList(b("SSCAN"), b("set"), b("0"), b("COUNT")),
                     Arrays.asList(b("SSCAN"), b("set"), b("0"), b("NOVALUES"))
             )) {
@@ -482,7 +558,7 @@ public class TransactionCommandTest {
         forEachDb(db -> {
             for (InvalidCommand invalid : List.of(
                     invalid("ERR wrong number of arguments for 'pfcount' command", "PFCOUNT"),
-                    invalid("ERR wrong number of arguments for 'pfmerge' command", "PFMERGE", "dest")
+                    invalid("ERR wrong number of arguments for 'pfmerge' command", "PFMERGE")
             )) {
                 CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
                 TestSession session = new TestSession();
@@ -527,9 +603,9 @@ public class TransactionCommandTest {
                             "ZRANGEBYSCORE", "z", "-inf", "+inf", "LIMIT", "bad", "1"),
                     invalid("ERR min or max is not a float", "ZREMRANGEBYSCORE", "z", "-inf", "bad"),
                     invalid("ERR value is not an integer or out of range", "ZREMRANGEBYRANK", "z", "bad", "-1"),
-                    invalid("ERR value is not an integer or out of range", "ZSCAN", "z", "-1"),
+                    invalid("ERR invalid cursor", "ZSCAN", "z", "-1"),
                     invalid("ERR syntax error", "ZSCAN", "z", "0", "MATCH"),
-                    invalid("ERR value is not an integer or out of range", "ZSCAN", "z", "0", "COUNT", "0")
+                    invalid("ERR syntax error", "ZSCAN", "z", "0", "COUNT", "0")
             )) {
                 assertContentErrorFailsOnlyThatCommand(db, invalid.args(), invalid.message());
             }
@@ -611,7 +687,7 @@ public class TransactionCommandTest {
     @Test
     public void transactionControlParseErrorsAbortAndDiscardQueuedWrites() {
         forEachDb(db -> {
-            for (String control : List.of("MULTI", "EXEC", "DISCARD")) {
+            for (String control : List.of("MULTI", "DISCARD")) {
                 CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
                 TestSession session = new TestSession();
                 byte[] key = b("dirty:" + control.toLowerCase(java.util.Locale.ROOT));
@@ -639,6 +715,71 @@ public class TransactionCommandTest {
                     Assert.assertSame(ReplyNull.INSTANCE, client.execute(List.of(b("GET"), key)));
                 }
             }
+        });
+    }
+
+    // Redis 8 rejectCommand：被拒的是 EXEC 本身时走 execCommandAbort，立刻丢弃队列并退出 MULTI。
+    @Test
+    public void wrongArityExecInsideMultiDiscardsTransactionAndLeavesMulti() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            TestSession session = new TestSession();
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+                Assert.assertEquals(
+                        "QUEUED",
+                        ((ReplySimpleString) client.execute(List.of(b("SET"), b("k"), b("v")))).value()
+                );
+
+                ReplyError abort = (ReplyError) client.execute(List.of(b("EXEC"), b("extra")));
+                Assert.assertEquals(EXEC_WRONG_ARITY_ABORT, abort.message());
+                Assert.assertFalse(session.transactionState().active());
+
+                Assert.assertEquals("PONG", ((ReplySimpleString) client.execute(List.of(b("PING")))).value());
+                Assert.assertSame(ReplyNull.INSTANCE, client.execute(List.of(b("GET"), b("k"))));
+                Assert.assertEquals(
+                        "ERR EXEC without MULTI",
+                        ((ReplyError) client.execute(List.of(b("EXEC")))).message()
+                );
+                Assert.assertEquals(
+                        "ERR DISCARD without MULTI",
+                        ((ReplyError) client.execute(List.of(b("DISCARD")))).message()
+                );
+            }
+        });
+    }
+
+    @Test
+    public void wrongArityExecAfterAQueueRejectionStillReportsItsOwnReason() {
+        forEachDb(db -> {
+            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
+            TestSession session = new TestSession();
+            {
+                FastTestClient client = new FastTestClient(dispatcher, session);
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+                Assert.assertEquals(
+                        "ERR unknown command 'NOSUCH'",
+                        ((ReplyError) client.execute(List.of(b("NOSUCH")))).message()
+                );
+
+                ReplyError abort = (ReplyError) client.execute(List.of(b("EXEC"), b("x"), b("y")));
+                Assert.assertEquals(EXEC_WRONG_ARITY_ABORT, abort.message());
+                Assert.assertFalse(session.transactionState().active());
+                Assert.assertEquals("PONG", ((ReplySimpleString) client.execute(List.of(b("PING")))).value());
+            }
+        });
+    }
+
+    @Test
+    public void wrongArityExecOutsideMultiUsesTheExecAbortShape() {
+        forEachDb(db -> {
+            TestSession session = new TestSession();
+            FastTestClient client = new FastTestClient(TestCommandComposition.createDispatcher(db), session);
+            ReplyError abort = (ReplyError) client.execute(List.of(b("EXEC"), b("x")));
+            Assert.assertEquals(EXEC_WRONG_ARITY_ABORT, abort.message());
+            Assert.assertFalse(session.transactionState().active());
+            Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
         });
     }
 
@@ -679,6 +820,27 @@ public class TransactionCommandTest {
                 Assert.assertEquals("EXECABORT Transaction discarded because of previous errors.", abort.message());
                 Assert.assertTrue(client.execute(List.of(b("GET"), b("k"))) instanceof ReplyNull);
             }
+        });
+    }
+
+    @Test
+    public void authInsideMultiIsQueuedAndFailsOnlyAtExec() {
+        forEachDb(db -> {
+            FastTestClient client = new FastTestClient(TestCommandComposition.createDispatcher(db));
+            Assert.assertEquals("OK", ((ReplySimpleString) client.execute(List.of(b("MULTI")))).value());
+            Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(List.of(b("AUTH"), b("pw")))).value());
+            Assert.assertEquals(
+                    "QUEUED",
+                    ((ReplySimpleString) client.execute(List.of(b("AUTH"), b("default"), b("pw")))).value()
+            );
+            ReplyArray exec = (ReplyArray) client.execute(List.of(b("EXEC")));
+            Assert.assertEquals(2, exec.values().size());
+            Assert.assertEquals(
+                    "ERR AUTH <password> called without any password configured for the default user. "
+                            + "Are you sure your configuration is correct?",
+                    ((ReplyError) exec.values().get(0)).message()
+            );
+            Assert.assertEquals("OK", ((ReplySimpleString) exec.values().get(1)).value());
         });
     }
 

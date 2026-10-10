@@ -25,8 +25,10 @@ import yier.bubu.redis.storage.api.result.KeyScanWindow;
 
 import java.util.Collection;
 import java.util.Objects;
+import java.util.Set;
 
 final class YierdisKeyspaceOps implements KeyspaceOps {
+    private static final int ALL_TYPES = (1 << ValueType.values().length) - 1;
     private static final long KEYS_SCAN_CHUNK_SLOTS = 1024L;
     private static final long SCAN_MIN_SLOT_BUDGET = 64L;
     private static final long SCAN_SLOT_MULTIPLIER = 10L;
@@ -188,7 +190,7 @@ final class YierdisKeyspaceOps implements KeyspaceOps {
                     break;
                 }
                 KeyScanResult step = keyLifecycle.scanWithWork(next, KEYS_SCAN_CHUNK_SLOTS, (key, record) -> {
-                    if (matchesForWindow(globPattern, key, record, nowMillis)) {
+                    if (matchesForWindow(globPattern, ALL_TYPES, key, record, nowMillis)) {
                         discovery.record(key.length());
                         if (discovery.count >= limit) {
                             return false;
@@ -213,6 +215,7 @@ final class YierdisKeyspaceOps implements KeyspaceOps {
                     start,
                     next,
                     globPattern,
+                    ALL_TYPES,
                     discovery.count,
                     inspected,
                     generation,
@@ -231,12 +234,19 @@ final class YierdisKeyspaceOps implements KeyspaceOps {
     }
 
     @Override
-    public KeyScanWindow scan(ScanCursorV2 cursor, byte[] globPattern, int count) {
+    public KeyScanWindow scan(ScanCursorV2 cursor, byte[] globPattern, Set<ValueType> types, int count) {
         kernel.checkOwner();
-        return scanWithinRead(cursor, globPattern, count);
+        Objects.requireNonNull(types, "types");
+        // window 不能保留集合字段（见 KeysBudgetTest），而 replay 又必须沿用 discovery 时的同一组类型，
+        // 所以在这里折成按 ordinal 的位掩码，调用方之后改动集合也影响不到 window。
+        int typeMask = 0;
+        for (ValueType type : types) {
+            typeMask |= typeBit(type);
+        }
+        return scanWithinRead(cursor, globPattern, typeMask, count);
     }
 
-    private KeyScanWindow scanWithinRead(ScanCursorV2 cursor, byte[] globPattern, int count) {
+    private KeyScanWindow scanWithinRead(ScanCursorV2 cursor, byte[] globPattern, int typeMask, int count) {
         if (count <= 0) {
             throw new IllegalArgumentException("count must be > 0");
         }
@@ -250,7 +260,7 @@ final class YierdisKeyspaceOps implements KeyspaceOps {
                     cursor == null ? ScanCursorV2.start() : cursor,
                     scanSlotBudget(count),
                     (key, record) -> {
-                        if (!matchesForWindow(globPattern, key, record, nowMillis)) {
+                        if (!matchesForWindow(globPattern, typeMask, key, record, nowMillis)) {
                             return true;
                         }
                         discovery.record(key.length());
@@ -263,6 +273,7 @@ final class YierdisKeyspaceOps implements KeyspaceOps {
                     result.startCursor(),
                     result.nextCursor(),
                     globPattern,
+                    typeMask,
                     discovery.count,
                     result.inspectedSlots(),
                     result.tableGeneration(),
@@ -288,6 +299,7 @@ final class YierdisKeyspaceOps implements KeyspaceOps {
                 result.startCursor(),
                 result.nextCursor(),
                 globPattern,
+                ALL_TYPES,
                 0,
                 0L,
                 result.tableGeneration(),
@@ -297,11 +309,22 @@ final class YierdisKeyspaceOps implements KeyspaceOps {
         );
     }
 
-    private boolean matchesForWindow(byte[] globPattern, AllocatorKeyHandle key, EntryRecord record, long expiryEvaluationMillis) {
+    private boolean matchesForWindow(
+            byte[] globPattern,
+            int typeMask,
+            AllocatorKeyHandle key,
+            EntryRecord record,
+            long expiryEvaluationMillis
+    ) {
         return key != null
                 && record != null
+                && (typeMask & typeBit(record.type())) != 0
                 && !keyLifecycle.isKeyExpiredForScan(key, expiryEvaluationMillis)
                 && (globPattern == null || YierdisGlobMatcher.matches(globPattern, key));
+    }
+
+    private static int typeBit(ValueType type) {
+        return 1 << type.ordinal();
     }
 
     private static long deadlineNanos(long timeBudgetNanos) {
@@ -349,6 +372,7 @@ final class YierdisKeyspaceOps implements KeyspaceOps {
         private final ScanCursorV2 startCursor;
         private final ScanCursorV2 nextCursor;
         private final byte[] globPattern;
+        private final int typeMask;
         private final int count;
         private final long inspectedSlots;
         private final long tableGeneration;
@@ -362,6 +386,7 @@ final class YierdisKeyspaceOps implements KeyspaceOps {
                 ScanCursorV2 startCursor,
                 ScanCursorV2 nextCursor,
                 byte[] globPattern,
+                int typeMask,
                 int count,
                 long inspectedSlots,
                 long tableGeneration,
@@ -373,6 +398,7 @@ final class YierdisKeyspaceOps implements KeyspaceOps {
             this.startCursor = Objects.requireNonNull(startCursor, "startCursor");
             this.nextCursor = Objects.requireNonNull(nextCursor, "nextCursor");
             this.globPattern = globPattern;
+            this.typeMask = typeMask;
             this.count = count;
             this.inspectedSlots = inspectedSlots;
             this.tableGeneration = tableGeneration;
@@ -439,7 +465,7 @@ final class YierdisKeyspaceOps implements KeyspaceOps {
             }
             ReplayDiscovery replay = new ReplayDiscovery();
             KeyScanResult result = keyLifecycle.scanWithWork(startCursor, inspectedSlots, (key, record) -> {
-                if (!matchesForWindow(globPattern, key, record, expiryEvaluationMillis)) {
+                if (!matchesForWindow(globPattern, typeMask, key, record, expiryEvaluationMillis)) {
                     return true;
                 }
                 if (replay.count < count) {

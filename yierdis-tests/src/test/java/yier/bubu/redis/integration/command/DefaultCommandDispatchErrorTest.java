@@ -32,9 +32,13 @@ public class DefaultCommandDispatchErrorTest {
     public void commandProcessorRejectsEmptyAndUnknownCommandsBeforeDispatch() {
         withClient(client -> {
             assertError("ERR empty command", client.execute(Collections.emptyList()));
-            assertError("ERR empty command", client.execute(Arrays.asList(b(""))));
+            assertError("ERR unknown command ''", client.execute(Arrays.asList(b(""))));
+            assertError("ERR unknown command '', with args beginning with: 'a' ",
+                    client.execute(Arrays.asList(b(""), b("a"))));
             assertError("ERR unknown command 'NOPE'", client.execute(cmd("NOPE")));
-            assertError("ERR unknown command", client.execute(Arrays.asList(new byte[]{0})));
+            assertError("ERR unknown command 'NOPE', with args beginning with: 'a' 'b' ",
+                    client.execute(cmd("NOPE", "a", "b")));
+            assertError("ERR unknown command ''", client.execute(Arrays.asList(new byte[]{0})));
             assertError("ERR Protocol error: null bulk string", client.execute(Arrays.asList(b("SET"), b("k"), null)));
         });
     }
@@ -50,7 +54,9 @@ public class DefaultCommandDispatchErrorTest {
         errorCase(cases, wrongArity("del"), "DEL");
         errorCase(cases, wrongArity("discard"), "DISCARD", "extra");
         errorCase(cases, wrongArity("echo"), "ECHO");
-        errorCase(cases, wrongArity("exec"), "EXEC", "extra");
+        errorCase(cases,
+                "EXECABORT Transaction discarded because of: wrong number of arguments for 'exec' command",
+                "EXEC", "extra");
         errorCase(cases, wrongArity("exists"), "EXISTS");
         errorCase(cases, wrongArity("expire"), "EXPIRE", "key");
         errorCase(cases, wrongArity("expireat"), "EXPIREAT", "key");
@@ -76,7 +82,7 @@ public class DefaultCommandDispatchErrorTest {
         errorCase(cases, wrongArity("pexpireat"), "PEXPIREAT", "key");
         errorCase(cases, wrongArity("pfadd"), "PFADD");
         errorCase(cases, wrongArity("pfcount"), "PFCOUNT");
-        errorCase(cases, wrongArity("pfmerge"), "PFMERGE", "dst");
+        errorCase(cases, wrongArity("pfmerge"), "PFMERGE");
         errorCase(cases, wrongArity("ping"), "PING", "a", "b");
         errorCase(cases, wrongArity("pttl"), "PTTL");
         errorCase(cases, wrongArity("quit"), "QUIT", "extra");

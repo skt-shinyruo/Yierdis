@@ -181,7 +181,7 @@ public class ZSetCommandTest {
                 Assert.assertEquals(
                         List.of(
                                 "exactzero", "0",
-                                "negzero", "-0",
+                                "negzero", "0",
                                 "subnormal", "1e-323",
                                 "tiny", "1e-7",
                                 "decimal", "1.5",

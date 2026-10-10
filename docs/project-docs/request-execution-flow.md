@@ -223,14 +223,14 @@ backlog 预算由 `ExecutorBacklogBudget` 统一记账：`tryReserve(retainedByt
 
 `CommandDispatcher` 是 command-kernel 的单一入口。`prepare(...)` 的分支顺序固定：
 
-1. argc ≤ 0、`argv[0]` 为 null 或长度为 0 → `ERR empty command`，并在事务中 `markAborted()`；
+1. argc ≤ 0 或 `argv[0]` 为 null → `ERR empty command`，并在事务中 `markAborted()`；长度为 0 的命令名 bulk 不是空命令，走 unknown command `''`；
 2. 命令名按 ASCII 大写归一（非 ASCII 返回 null）；
 3. 除 `PING`/`ECHO` 的第 2 个参数外，出现 null argument → `ERR Protocol error: null bulk string`；
-4. `registry.specByExactUpperName(nameUpper)` 查表；未命中 → `ERR unknown command '<name>'`（名称含不可打印字符或超长时省略引号内内容）；
-5. `spec.syntax().arity().validate(...)`；
-6. 事务策略：`DISALLOWED_IN_MULTI` 报错，`QUEUEABLE` 走 `preflightMultiQueue`（只调用 `handler.parse` 做 preflight）并返回 `prepareRetainedRequestEnqueue`；
+4. `registry.specByExactUpperName(nameUpper)` 查表；未命中 → `ERR unknown command '<name>'`（回显与可选的 `with args beginning with` 均走 `RedisArgEcho`）；
+5. `spec.syntax().arity().validate(...)`（失败抛 `CommandParseException.aborting`；被拒的是 `EXEC` 时走 `prepareRejectedExec`）；
+6. 事务策略：`DISALLOWED_IN_MULTI` 报错，`QUEUEABLE` 走 `preflightMultiQueue`（只调用 `handler.parse` 做 preflight；`abortsMulti()` 才拒绝入队）并返回 `prepareRetainedRequestEnqueue`；
 7. 普通路径：`spec.handler().parse(args)` 得到 `Function<CommandSession, PreparedCommand>`，再 `apply(session)` 得到 `PreparedCommand`；
-8. `CommandParseException` → 可中止的错误回复；`WrongTypeException`/`YierdisCommandException` → 普通 `RedisReply.Error`。
+8. `CommandParseException` → 事务外是错误回复；事务内由 `abortsMulti()` 决定入队拒绝还是先 `QUEUED`；`WrongTypeException`/`YierdisCommandException` → 普通 `RedisReply.Error`。
 
 查到的 `CommandSpec` 只有两部分：
 
@@ -263,7 +263,7 @@ backlog 预算由 `ExecutorBacklogBudget` 统一记账：`tryReserve(retainedByt
 
 ## 事务和 replay
 
-事务队列保存的是自己拥有的 retained `ExecutionRequest`，不是另一套命令 IR。`MULTI` 中的 queueable 命令会先经过同一个 registry lookup、arity 校验和 `handler.parse(CommandArgs)`。参数个数不对拒绝入队并作废事务；其余解析错误仍入队。排队用的 prepared action 在 reply reservation 后调用 `TransactionState.tryEnqueue(request)` 并返回 `QUEUED`。此时不会把 session 应用到 handler 返回的 function，也不会访问 DB。队列满（命令数或字节数超限）时 `tryEnqueue` 置 `aborted` 并返回 `ERR Transaction queue is full`。
+事务队列保存的是自己拥有的 retained `ExecutionRequest`，不是另一套命令 IR。`MULTI` 中的 queueable 命令会先经过同一个 registry lookup、arity 校验和 `handler.parse(CommandArgs)`。`CommandParseException.abortsMulti()` 为真时（参数个数不对、容器命令未知子命令）拒绝入队并作废事务；其余解析错误仍入队。排队用的 prepared action 在 reply reservation 后调用 `TransactionState.tryEnqueue(request)` 并返回 `QUEUED`。此时不会把 session 应用到 handler 返回的 function，也不会访问 DB。队列满（命令数或字节数超限）时 `tryEnqueue` 置 `aborted` 并返回 `ERR Transaction queue is full`。
 
 `EXEC` 重放每条 retained request 时调用 `CommandDispatcher.prepareExecReplay(...)`（复用 `prepare(..., false)`，只跳过再次排队）。每条 child 依次 `validateBeforeExecute()`，`STALE` 时关闭并重试 prepare；随后 `execute(session)`。子命令返回的 `RedisReply` 收集成外层数组，`PreparedExec.execute` 只返回一个聚合结果，executor 最终只调用一次 `RedisReplyRenderer`。
 

@@ -33,7 +33,7 @@ CommandExecutor
 - `CommandSyntax`：name、`CommandArity`、`CommandKeySpec`、`TransactionPolicy` 和 `ReplyAdmissionRequirement`；
 - `CommandHandler`：`parse(CommandArgs)`，成功时返回 `Function<CommandSession, PreparedCommand>`。
 
-`CommandSyntax` 构造时把名称 trim + 大写，并校验非空且全 ASCII；非法名称在启动注册阶段就抛 `IllegalArgumentException`，不会流入运行时。`DefaultCommandModules` 创建的八个命令家族统一使用 `TransactionPolicy.QUEUEABLE` 和 `ReplyAdmissionRequirement.PIPELINED`，只有 `HELLO`（`DISALLOWED_IN_MULTI`）和 `EXEC`（`BARRIER_UNTIL_CLEANUP`）是例外。
+`CommandSyntax` 构造时把名称 trim + 大写，并校验非空且全 ASCII；非法名称在启动注册阶段就抛 `IllegalArgumentException`，不会流入运行时。`DefaultCommandModules` 创建的八个命令家族统一使用 `TransactionPolicy.QUEUEABLE` 和 `ReplyAdmissionRequirement.PIPELINED`；`ServerCommandModule` 的 `HELLO` 也是 `QUEUEABLE`，只有 `EXEC`（`BARRIER_UNTIL_CLEANUP`）是例外。
 
 dispatcher 先检查命令名、null argument、lookup 和 arity，再调用 handler。handler 只读 argv、生成不可变的解析结果，不读 session、不路由 DB、也不调用 server provider。这条限制让普通执行与 `MULTI` 入队 preflight 共用同一套 parse 行为。
 
@@ -62,7 +62,7 @@ parse 阶段只产生 `Function<CommandSession, PreparedCommand>`，不会访问
 `PreparedCommand` 把执行前和执行后的责任分开：
 
 - `reservationShape()` 给出 encoded reply 与 retained source 的容量上界；
-- `replyProtocolVersion()` 可选声明本次回复的目标 RESP 版本（`HELLO` 用它声明协商后版本，其余命令返回空，由 executor 取 session 当前版本）；
+- `replyProtocolVersion()` 可选声明本次回复的目标 RESP 版本（`HELLO` 用它声明协商后版本，`EXEC` 用它固定外层数组的版本，其余命令返回空，由 executor 取 session 当前版本）；
 - `validateBeforeExecute()` 检查 prepare 时观察的状态是否仍可执行；
 - `execute(CommandSession)` 在容量已预留时提交动作，返回 `CommandResult`；
 - `close()` 归还 mutation、DB source、retained request 或其他 owner。
@@ -115,7 +115,7 @@ RESP2 / RESP3 的标量与 aggregate 编码由协议 writer 根据 session versi
 | --- | --- | --- |
 | connection/server | `CoreConnectionCommands`、`ServerCommandModule` | `SELECT`/`FLUSHDB` 用会话与 `flushDb*`；`INFO`/`STATS`/`MEMORY STATS` 走 `ServerInfoProvider`；`PING`/`ECHO`/`COMMAND`/`QUIT`/`CLIENT`/`AUTH`/`HELLO` 不访问 DB |
 | key/TTL | `KeyCommands` | `TYPE`→`keyspace().typeOf`；`KEYS`→`keyspace().keys`；`SCAN`→`keyspace().scan`；`DEL`→`keyspace().del`；`EXISTS`→`keyspace().existsKey`；四个 EXPIRE 系列→`ttl().expire/pexpire/expireAtSeconds/expireAtMillis`；`PERSIST`→`ttl().persist`；`TTL`/`PTTL`→`ttl().ttlSeconds/ttlMillis`；`MEMORY USAGE`→`memoryUsage`；`MEMORY STATS`→`memoryStats`；`OBJECT ENCODING`→`objectEncoding` |
-| string/bitmap | `StringCommands` | `SET`→`prepareSet`；`GET`→`getStringValue`；`STRLEN`→`strlen`；`APPEND`→`append`；`SETBIT`/`GETBIT`→`setBit`/`getBit`；`BITCOUNT`→`bitcount`；`INCR`/`DECR`→`incrBy(key, ±1)` |
+| string/bitmap | `StringCommands` | `SET`→`prepareSet`；`GET`→`getStringValue`；`STRLEN`→`strlen`；`APPEND`→`append`；`SETBIT`/`GETBIT`→`setBit`/`getBit`；`BITCOUNT`→`bitcount`（可带 `BitRangeUnit`）；`INCR`/`DECR`→`incrBy(key, ±1)` |
 | HLL | `HllCommands` | `pfadd`/`pfcount`/`pfmerge` |
 | list | `ListCommands` | `lpush`/`rpush`/`lrange`/`preparePop` |
 | hash | `HashCommands` | `hset`/`hget`/`hgetall`/`hlen`/`hdel`/`hscan` |
@@ -183,32 +183,37 @@ RESP2 / RESP3 的标量与 aggregate 编码由协议 writer 根据 session versi
 - `GET` 在 prepare 阶段取得 `ByteValue`，用 `DbReplies.value(...)` 生成 semantic bulk reply，并以 `PreparedCommands.owned(...)` 持有 source，渲染后释放（native pin 在 `StringRoot.retainedValue` 取出时建立）；
 - `APPEND`、`SETBIT`、`INCR`/`DECR` 等已知 reply 上界的动作在 execute 阶段访问 string typed ops，预留 `ReplyShapes.integerUpperBound()`。
 
-bitmap 是 string bytes 的一种视图，因此 `SETBIT`、`GETBIT`、`BITCOUNT` 与普通 string 命令共享 `ValueType.STRING` 和 wrong-type 约束。`SETBIT` 和 `GETBIT` 在 parse 阶段就拒绝 offset/8 >= 512 MiB（`MAX_STRING_BYTES`），错误文案都是 `ERR bit offset is not an integer or out of range`。`SETBIT` 写路径仍经过 DB mutation、TTL 和 memory ledger；读路径返回 `RedisReply`，不直接编码 RESP。
+bitmap 是 string bytes 的一种视图，因此 `SETBIT`、`GETBIT`、`BITCOUNT` 与普通 string 命令共享 `ValueType.STRING` 和 wrong-type 约束。`SETBIT` 和 `GETBIT` 在 parse 阶段就拒绝 offset/8 >= 512 MiB（`MAX_STRING_BYTES`），错误文案都是 `ERR bit offset is not an integer or out of range`。`BITCOUNT key [start end [BIT|BYTE]]` 的 unit 不区分大小写、默认 `BYTE`，在 parse 阶段转成 `BitRangeUnit` 交给 `bitcount(key, start, end, unit)`；arity 与 Redis 一样只要求 key，只带 start、unit 非法或参数多于 5 个时由 handler 报 `ERR syntax error`，所以在 `MULTI` 里会入队、EXEC 时只让这一条失败。start/end/unit 都在查 key 之前解析，参数错误优先于 `WRONGTYPE`。区间规则照搬 Redis 8 `bitcountCommand`：start、end 原值都为负且 start > end 时直接回 0；否则按单位（BIT 下是总位数）换算负下标并钳位。`SETBIT` 写路径仍经过 DB mutation、TTL 和 memory ledger；读路径返回 `RedisReply`，不直接编码 RESP。
 
 `SET` 的选项解析有一条实现上的边界值得记住：`EX`/`PX`/`EXAT`/`PXAT` 要求参数为正，因此过去但为正的 `EXAT`/`PXAT` 不在 parse 阶段失败，而会在 execute 时先写后过期——这样 `MULTI` preflight 不会因为入队时刻的时钟把整个事务判成 `EXECABORT`。
 
 ## HLL 和 string
 
-HLL 没有独立 `ValueType`。命令层由 `HllCommands` 表达语义，DB 层由 `HllOps` 处理，但底层对象仍是 `ValueType.STRING`；payload 是否为有效 HLL 由格式约定判断。payload 格式与 Redis 对齐（`HYLL` header、sparse/dense 编码），因此 PF* 对相同 member 给出 Redis 类计数。把普通 string 当作 HLL 使用会走 HLL 的格式校验并可能返回 `WRONGTYPE Key is not a valid HyperLogLog string value.`。
+HLL 没有独立 `ValueType`。命令层由 `HllCommands` 表达语义，DB 层由 `HllOps` 处理，但底层对象仍是 `ValueType.STRING`；payload 是否为有效 HLL 由格式约定判断。payload 格式与 Redis 对齐（`HYLL` header、sparse/dense 编码），因此 PF* 对相同 member 给出 Redis 类计数。把普通 string 当作 HLL 使用会走 HLL 的格式校验：header（`HYLL` magic、encoding、dense 长度）不合法时返回 `WRONGTYPE Key is not a valid HyperLogLog string value.`；header 合法但 sparse 游程损坏（例如 PFADD 之后 APPEND）时，读 body 的 PFCOUNT/PFMERGE（以及带 element 的 PFADD）返回 `INVALIDOBJ Corrupted HLL object detected`。例外：无 element 的 `PFADD key` 与 Redis 一样只校验 header，不读 sparse body，因此损坏 body 时仍回 `0`。非 string 类型仍是通用 `WRONGTYPE`。多 key 的 PFCOUNT/PFMERGE 按参数顺序校验（PFMERGE 先查 dest），第一个出错的 key 决定回复。
 
 命令家族因此可以独立演进，主类型系统也不必为 bitmap 和 HLL 增加额外逻辑类型。
 
-## HSCAN、SSCAN 和 ZSCAN
+## SCAN 系列的参数
 
-三条命令复用 `CollectionScanCommandSupport` 的参数规则：
+`SCAN`、`HSCAN`、`SSCAN`、`ZSCAN` 的 cursor 与 option 都由 `ScanArguments.parse` 解析，对应 Redis `scanGenericCommand` 的同一条 option 路径，错误文案也一致：
 
 ```text
+SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]
 HSCAN key cursor [MATCH pattern] [COUNT count] [NOVALUES]
 SSCAN key cursor [MATCH pattern] [COUNT count]
 ZSCAN key cursor [MATCH pattern] [COUNT count]
 ```
 
-规则：
+- `cursor` 先于 option 校验，规则同 Redis `parseScanCursorOrReply`：参数按 C 字符串处理（第一个 NUL 之后不算）；先按 `string2ll` 解析，能解析出的负数报 `ERR invalid cursor`；解析不了再退回 `strtoull`，所以 `" 1"`、`"+1"`、`"01"`、`"-0"` 可以通过，超出 u64、非数字、空串都报 `ERR invalid cursor`。
+- cursor 对客户端不透明。Yierdis 发出的 cursor 只用低 63 位，大于 `Long.MAX_VALUE` 的 u64 会被钳成 `Long.MAX_VALUE`；它和其他无法映射到当前表拓扑的 cursor 一样，由存储层从头重启迭代（允许重复，结束仍回 `0`），不会报错。
+- option 从左到右逐个解析，第一个失败的 option 决定错误。`COUNT`、`MATCH`、`TYPE` 缺值，或出现未知 option，都报 `ERR syntax error`。
+- `COUNT` 默认 10。不是整数（包括 `+5`、`010` 这类非规范写法）或超出 long 时报 `ERR value is not an integer or out of range`；小于 1 报 `ERR syntax error`。超过 `Integer.MAX_VALUE` 的值按 `Integer.MAX_VALUE` 处理，它只是工作量 hint。
+- `MATCH` 在集合 scan 上只匹配 field/member，不匹配 hash value 或 zset score。
+- `NOVALUES` 只适用于 `HSCAN`，在 `SCAN`/`SSCAN`/`ZSCAN` 上报 `ERR NOVALUES option can only be used in HSCAN`。
+- `TYPE` 只适用于 `SCAN`，在集合 scan 上报 `ERR syntax error`。它按 key 的值类型过滤，类型名不分大小写：`string`、`list`、`set`、`zset`、`hash`。HLL key 的类型是 `string`。过滤在 `KeyspaceOps.scan(cursor, glob, types, count)` 里做，discovery 和 replay 用同一组类型。未知类型名不报错，和 Redis 8 一样只是不匹配任何 key，cursor 照常推进到 `0`。`stream` 这类 Yierdis 不存储的 Redis 类型也一样。重复 `TYPE` 时以最后一个为准。
+- 这些都是 handler parse 阶段的错误，不访问 DB。所以集合 scan 遇到不存在的 key 或类型不符的 key 时，参数错误先报出；Redis 则先回空 scan 或 `WRONGTYPE`。在 `MULTI` 里这类错误照常 `QUEUED`，只在 `EXEC` 时让这一条失败。
 
-- `cursor` 由 `ScanCursorV2.of(args.nonNegativeLongAt(2))` 解析，即不透明非负整数；负数与溢出报 `ERR value is not an integer or out of range`。旧 cursor 无法映射到当前表拓扑时由存储层按重启迭代处理，不会报错；
-- `MATCH` 只匹配 field/member，不匹配 hash value 或 zset score；
-- `COUNT` 默认 10（`DEFAULT_COUNT`），必须为正，超过 `Integer.MAX_VALUE` 报整数错误；
-- option 可以换序；`NOVALUES` 只适用于 `HSCAN`，`SSCAN`/`ZSCAN` 上出现报 `ERR syntax error`。
+## HSCAN、SSCAN 和 ZSCAN
 
 三条命令都返回两元素 array：下一 cursor（bulk string）和元素 sequence。元素形状分别为：
 

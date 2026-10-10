@@ -777,7 +777,8 @@ public class ZSetValueTest {
                 }
 
                 Assert.assertEquals(0L, allocator.allocationAttempts());
-                Assert.assertEquals("-0", scoreFor(zset, "zero-member"));
+                // Redis listpack 把整数值 score 存成整数，-0 写进去就成了 0；skiplist 保留 double 原值。
+                Assert.assertEquals(factory.skiplist ? "-0" : "0", scoreFor(zset, "zero-member"));
                 RecordingSink zeroRange = new RecordingSink();
                 zset.zrangeByScoreWriteTo(-0.0d, false, +0.0d, false, false, 0, 10, zeroRange);
                 Assert.assertEquals(List.of("zero-member"), zeroRange.values);

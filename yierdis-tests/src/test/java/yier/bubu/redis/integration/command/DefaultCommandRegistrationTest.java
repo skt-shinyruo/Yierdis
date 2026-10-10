@@ -98,7 +98,7 @@ public class DefaultCommandRegistrationTest {
             assertMetadata(byName.get("SET"), -3, 1, 1, 1);
             assertMetadata(byName.get("EXPIRE"), -3, 1, 1, 1);
             assertMetadata(byName.get("DEL"), -2, 1, -1, 1);
-            assertMetadata(byName.get("PFMERGE"), -3, 1, -1, 1);
+            assertMetadata(byName.get("PFMERGE"), -2, 1, -1, 1);
             assertMetadata(byName.get("PING"), -1, 0, 0, 0);
             assertMetadata(byName.get("MULTI"), 1, 0, 0, 0);
             assertMetadata(byName.get("YDRECONCILE"), 1, 0, 0, 0);

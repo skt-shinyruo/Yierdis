@@ -48,11 +48,11 @@ public class CollectionScanCommandTest {
                 assertEmpty(scan(client, "HSCAN", "hash", "8589934592"));
                 assertEmpty(scan(client, "SSCAN", "set", "12884901888"));
                 assertEmpty(scan(client, "ZSCAN", "zset", "9223372036854775807"));
+                assertError(client.execute(cmd("SSCAN", "set", "0", "COUNT", "0")), "ERR syntax error");
                 assertError(
-                        client.execute(cmd("SSCAN", "set", "0", "COUNT", "0")),
-                        "ERR value is not an integer or out of range"
+                        client.execute(cmd("ZSCAN", "zset", "0", "NOVALUES")),
+                        "ERR NOVALUES option can only be used in HSCAN"
                 );
-                assertError(client.execute(cmd("ZSCAN", "zset", "0", "NOVALUES")), "ERR syntax error");
 
                 client.execute(cmd(
                         "HSET", "hash",

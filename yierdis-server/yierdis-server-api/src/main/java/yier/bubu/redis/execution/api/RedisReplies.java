@@ -54,6 +54,10 @@ public final class RedisReplies {
         return new RedisReply.Aggregate(ReplyShape.AggregateKind.MAP, fieldValues);
     }
 
+    public static RedisReply protocolVersioned(int protocolVersion, RedisReply reply) {
+        return new RedisReply.ProtocolVersioned(protocolVersion, reply);
+    }
+
     public static RedisReply byteAggregate(
             ReplyShape.ByteAggregateKind kind,
             int count,

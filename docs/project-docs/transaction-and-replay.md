@@ -93,12 +93,15 @@ CommandExecutor
 
 - empty 或 unknown command（`ERR empty command` / `ERR unknown command ...`）；
 - illegal null bulk argument（`ERR Protocol error: null bulk string`）；
-- wrong arity（`CommandArity`，或 handler parse 文案里的 `wrong number of arguments`）；
+- wrong arity（`CommandArity`，或 `CommandParseException.aborting(...)`）；
+- 容器命令的未知子命令（`CommandParseException.aborting(...)`，与 Redis 容器命令 lookup 失败一致）；
 - `TransactionPolicy.DISALLOWED_IN_MULTI`（`ERR <NAME> is not allowed in MULTI`）。
 
 参数内容、选项冲突、取值范围和语法错误不是入队拒绝。它们返回 `QUEUED`，`EXEC` 的数组里只有那一条是错误，同一笔事务的其他命令照常执行。依赖墙钟的 `EXAT`/`PXAT` 比较留在执行时。
 
 这些错误都用 `abortingError`，`markAborted()` 推迟到错误回复获得容量并进入执行之后，prepare 阶段不碰 session。
+
+例外是 `EXEC` 自己参数个数不对（如 `EXEC extra`）。它对齐 Redis `rejectCommand` → `execCommandAbort`：dispatcher 调 `TransactionCommands.prepareRejectedExec`，回复 `EXECABORT Transaction discarded because of: wrong number of arguments for 'exec' command`，执行时 `tx.discard()` 丢弃队列并回到普通模式，之后的命令不再 `QUEUED`。不在 `MULTI` 里时回复同一条 `EXECABORT`，而不是 `ERR EXEC without MULTI`。`MULTI extra`、`DISCARD extra` 仍按上面的规则只标记 aborted。
 
 queue 条数或字节超限由 `TransactionState.tryEnqueue(...)` 返回 `ERR Transaction queue is full` 并标记 aborted。`TRANSACTION_CONTROL` 命令不进入 queueable 分支，立即应用各自的准备函数。
 
@@ -138,9 +141,10 @@ queue 条数或字节超限由 `TransactionState.tryEnqueue(...)` 返回 `ERR Tr
 3. `prepareCurrentChild` 是无限循环：`dispatcher.prepareExecReplay(session, request)` 得到 child，调 `validateBeforeExecute()`；`STALE` 就 `closeSuppressing(null, child::close)` 后重来，非 STALE 才返回。当前 child 执行完成后才准备下一个，因此前一个 child 的 session 或 DB side effect 对后一个 child 的准备和执行可见；
 4. 每个 child 都用 `addOwnedChild(children, child)` 发布到清理列表（发布失败时在**当前栈帧**归还 child owner），然后把同一个 `session` 直接传给 `child.execute(session)`；
 5. child execute 返回 `CommandResult`；若 reply 是 `RedisReply.ControlError`，降级为 `RedisReplies.error(controlError.message())` 再放进数组，因为 control error 依赖顶层预留槽位，在 aggregate 里只能当普通 error；
-6. 所有 child reply 聚合为一个 `RedisReply.Aggregate(ARRAY, ...)`；
-7. 所有 child 的 `closeAfterReply` 做 OR，决定外层 `CommandResult` 是否 close-after-reply；
-8. 外层 executor 调用一次 `RedisReplyRenderer` 渲染整个 array。
+6. child 执行后若 session 的 RESP 版本已不同于 `EXEC` prepare 时声明的外层版本（排队的 `HELLO` 切换了协议），这条 reply 包成 `RedisReply.ProtocolVersioned` 按新版本编码，与 Redis 一致；
+7. 所有 child reply 聚合为一个 `RedisReply.Aggregate(ARRAY, ...)`；
+8. 所有 child 的 `closeAfterReply` 做 OR，决定外层 `CommandResult` 是否 close-after-reply；
+9. 外层 executor 调用一次 `RedisReplyRenderer` 渲染整个 array。
 
 `prepareExecReplay(...)` 仍复用：空命令、null argument 与 name 安全检查；同一个 `CommandRegistry` 与 `CommandSpec`；同一个 `CommandArity` 和 `handler.parse(CommandArgs)`；handler 返回的准备函数及其 `apply(session)`；`PreparedCommand` validation/execution 语义；相同的 DB mutation path。reply reservation 由外层 `PreparedExec` 统一拥有。
 
@@ -168,7 +172,8 @@ renderer 先输出完整的 `EXEC` array，executor 再根据外层 result flag 
 
 - nested `MULTI`：`ERR MULTI calls can not be nested`；
 - `EXEC` without `MULTI`：`ERR EXEC without MULTI`；
-- aborted `EXEC`：discard 后返回 `EXECABORT Transaction discarded because of previous errors.`。
+- aborted `EXEC`：discard 后返回 `EXECABORT Transaction discarded because of previous errors.`；
+- 参数个数不对的 `EXEC`（事务内外相同）：discard 后返回 `EXECABORT Transaction discarded because of: wrong number of arguments for 'exec' command`。
 
 `WATCH`/`UNWATCH` 在当前实现里完全不存在（全仓库没有注册，也没有 match 到任何源码引用）。这意味着 `EXEC` 没有“被其他连接修改则放弃”的语义：只要队列未被 abort，`EXEC` 一定执行全部 child。要做条件执行只能靠命令自身的 `PreparedMutation` preview/isCurrent 校验，或客户端自己比较。
 

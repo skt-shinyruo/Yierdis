@@ -11,6 +11,7 @@ import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.bytes.String2ll;
+import yier.bubu.redis.storage.api.BitRangeUnit;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.PreparedMutation;
@@ -527,8 +528,9 @@ final class YierdisStringOps implements StringOps {
     }
 
     @Override
-    public long bitcount(BytesView keyView, long start, long end) {
+    public long bitcount(BytesView keyView, long start, long end, BitRangeUnit unit) {
         kernel.checkOwner();
+        Objects.requireNonNull(unit, "unit");
         EntryRecord record = liveTouchedStringRecord(kernel, keyView);
         if (record == null) {
             return 0L;
@@ -539,32 +541,48 @@ final class YierdisStringOps implements StringOps {
             return 0L;
         }
 
+        // Redis bitops.c 在单位换算和负下标换算之前先看原始参数：两端都为负且 start > end 时直接回 0，
+        // 不能交给后面的钳位，否则 end 钳到 0 后会统计第一个字节/位。
+        if (start < 0 && end < 0 && start > end) {
+            return 0L;
+        }
+        boolean bitUnit = unit == BitRangeUnit.BIT;
+        // BIT 单位下负下标和越界钳位都按总位数计算；len 不超过 Integer.MAX_VALUE，左移 3 位不会溢出 long。
+        long total = bitUnit ? (long) len << 3 : len;
         long s = start;
         long ed = end;
         if (s < 0) {
-            s = len + s;
+            s = total + s;
         }
         if (ed < 0) {
-            ed = len + ed;
+            ed = total + ed;
         }
         if (s < 0) {
             s = 0;
         }
-        // Redis bitops.c 在负索引换算之后把仍小于 0 的 end 钳到 0，因此会统计第一个字节。
+        // Redis bitops.c 在负索引换算之后把仍小于 0 的 end 钳到 0，因此会统计第一个字节（BIT 单位下是第一位）。
         // start 大于这个 end 时仍走下面的空区间，start 侧钳位不变。
         if (ed < 0) {
             ed = 0;
         }
-        if (s >= len) {
-            return 0L;
-        }
-        if (ed >= len) {
-            ed = len - 1L;
+        if (ed >= total) {
+            ed = total - 1L;
         }
         if (s > ed) {
             return 0L;
         }
-        return bitcountRange(bytes, (int) s, (int) ed);
+        if (!bitUnit) {
+            return bitcountRange(bytes, (int) s, (int) ed);
+        }
+        int firstByte = (int) (s >>> 3);
+        int lastByte = (int) (ed >>> 3);
+        // 先整字节统计 [firstByte, lastByte]，再减掉首字节中 start 之前的高位、末字节中 end 之后的低位；
+        // 位序与 SETBIT/GETBIT 一致，offset 0 是首字节最高位。
+        int beforeStartMask = ~((1 << (8 - (int) (s & 7))) - 1) & 0xFF;
+        int afterEndMask = (1 << (7 - (int) (ed & 7))) - 1;
+        return bitcountRange(bytes, firstByte, lastByte)
+                - Integer.bitCount(bytes[firstByte] & beforeStartMask)
+                - Integer.bitCount(bytes[lastByte] & afterEndMask);
     }
 
     private EntryRecord liveTouchedStringRecord(YierdisDbKernel kernel, byte[] keyBytes) {

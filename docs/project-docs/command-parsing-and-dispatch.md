@@ -89,18 +89,18 @@ CommandSession capabilities (连接状态)
 
 `prepare(session, request)` 等价于 `prepare(session, request, true)`；事务 replay 走 `prepareExecReplay(session, request)`，即 `prepare(session, request, false)`，唯一差别是跳过事务策略分支（队列已经 drain，不必再次排队）。私有 `prepare` 的顺序是：
 
-1. **空命令**：`argc() <= 0`、`request.isNull(0)` 或 `request.len(0) == 0` 三者任一成立，返回 `abortingError(session, "ERR empty command")`。空 RESP array（`*0\r\n`）和空字符串命令名（`*1\r\n$0\r\n\r\n`）都落在这里。
+1. **空命令**：`argc() <= 0` 或 `request.isNull(0)` 时返回 `abortingError(session, "ERR empty command")`。只有空 RESP array（`*0\r\n`）和 null 命令名落在这里；长度为 0 的 bulk（`*1\r\n$0\r\n\r\n`）以及仅 NUL 截断后的空名走下面的 unknown command `''`。
 2. **名称规范化**：`exactUpperAsciiName(request)` 逐字节把 `argv[0]` 转成大写 ASCII；任一字节能值 `> 0x7f` 就返回 `null`。
 3. **非法 null**：`hasIllegalNullArgument(request, nameUpper)` 逐参数检查。只有 `argc == 2` 且名称是 `PING` 或 `ECHO` 时，`argv[1]` 才允许是 null bulk string。命中则返回 `abortingError(session, "ERR Protocol error: null bulk string")`。注意非 ASCII 名称会让 `nameUpper` 为 `null`，`"PING".equals(null)` 为假，所以非法 null 在名称检查之前就报出来，不会先报 unknown command。
-4. **查表**：`registry.specByExactUpperName(nameUpper)`。未命中返回 `abortingError(session, unknownCommandMessage(request))`。
-5. **arity 校验**：`spec.syntax().arity().validate(spec.syntax().nameLower(), args)`，不满足抛 `CommandParseException("ERR wrong number of arguments for '<nameLower>' command")`。
+4. **查表**：`registry.specByExactUpperName(nameUpper)`。未命中（含空名、`nameUpper == null`）返回 `abortingError(session, unknownCommandMessage(request))`。
+5. **arity 校验**：`spec.syntax().arity().validate(spec.syntax().nameLower(), args)`，不满足抛 `CommandParseException.aborting("ERR wrong number of arguments for '<nameLower>' command")`。
 6. **事务策略**：仅当 `applyTransactionPolicy && transaction.active()` 时生效，见下文「事务排队 preflight」。
 7. **handler parse**：`spec.handler().parse(args)` 得到准备函数，`null` 会触发 `NullPointerException("command handler returned null")`。
 8. **apply**：`invocation.apply(session)` 得到 `PreparedCommand`，`null` 触发 `NullPointerException("command invocation returned null")`。
 
 异常分类决定了回复是否 abort 事务：
 
-- `CommandParseException` → 事务外是这条命令自己的错误。事务内只有参数个数不对（错误文案含 `wrong number of arguments`，含 `OBJECT` 的子命令个数/未知子命令）走 `abortingError`；其余解析错误先入队，`EXEC` 时只有那一条失败；
+- `CommandParseException` → 事务外是这条命令自己的错误。事务内看 `abortsMulti()`：arity（`CommandArity` / `CommandParseException.aborting`）与未知子命令整笔入队拒绝；其余解析错误先入队，`EXEC` 时只有那一条失败；
 - `WrongTypeException` 与 `YierdisCommandException` → `error(failure.getMessage())`，是普通 ready error，**不** abort 事务；
 - 其他未预期异常不在这里吞掉，继续交给 executor 的 terminal failure 路径，不能误报为确定的业务失败。
 
@@ -158,7 +158,7 @@ parse 阶段的错误文案按来源分三类：
 - 参数方言：`ERR syntax error`（handler 自己）、`ERR value is not an integer or out of range`（`CommandArgs`）、`ERR value is out of range, must be positive`（LPOP/RPOP 负 count）、`ERR bit offset is not an integer or out of range`（SETBIT/GETBIT 非法 offset）；
 - 命令家族定义的专用 parse error（`CommandParseException(replyMessage)`）。
 
-不是所有错误都在 parse 期抛出。`ERR increment or decrement would overflow` 由 `YierdisStringOps` 在执行期抛出；`WRONGTYPE Key is not a valid HyperLogLog string value.` 来自 `YierdisHyperLogLog`，也不是 handler parse。
+不是所有错误都在 parse 期抛出。`ERR increment or decrement would overflow` 由 `YierdisStringOps` 在执行期抛出；`WRONGTYPE Key is not a valid HyperLogLog string value.` 和 `INVALIDOBJ Corrupted HLL object detected` 来自 `YierdisHyperLogLog`，也不是 handler parse。
 
 所有 error 文字最终都过 `ReplyShapes.normalizeError`：`\r`/`\n` 替换成空格、缺少 Redis 错误前缀时补 `ERR `、超 512 字节按 UTF-8 码点边界截断。前缀判定 `hasRedisErrorPrefix` 要求首个空白分隔 token 只由 `-`、`_`、数字、大写字母组成，所以 `NOPROTO ...` 这类自带前缀的错误不会被重复加 `ERR `。
 
@@ -181,7 +181,7 @@ execute(CommandSession)
 
 只读命令可以在 apply 时取得 DB source，并由 `PreparedCommand` 持有到渲染完成。需要 optimistic preview 的写命令可以准备 `PreparedMutation`，把 `isCurrent()` 接到 `validateBeforeExecute()`，真正的 commit 留到 execute。无需状态预读的写命令也可以返回带上界 shape 的 action，在 execute 时直接调用 DB capability。
 
-`PreparedCommand.replyProtocolVersion()` 是给“execute 期才切换协议版本”的命令（`HELLO`）用的：默认空表示按 prepare/预留时刻捕获的 session 版本算容量；`HELLO` 在 prepare 时就声明协商后的目标版本，让容量预留和实际写出用同一个版本。
+`PreparedCommand.replyProtocolVersion()` 是给“execute 期才切换协议版本”的命令（`HELLO`）用的：默认空表示按 prepare/预留时刻捕获的 session 版本算容量；`HELLO` 在 prepare 时就声明协商后的目标版本，让容量预留和实际写出用同一个版本。`EXEC` 也显式声明 prepare 时的外层版本；队列里的 `HELLO` 切换版本后，之后的 child 回复用 `RedisReply.ProtocolVersioned` 按各自版本编码（见 [`protocol-reference.md`](./protocol-reference.md#hello-2--hello-3)）。
 
 `PreparedCommands` 提供四种现成形状：`ready(result)`（结果已定，shape 取 result 的 shape）、`action(shape, fn)`、`action(shape, version, fn)`、`owned(result, owner)` / `ownedAction(shape, owner, validation, fn)`。owner 的 `close()` 由 prepared command 的 `close()` 幂等触发一次，`null` owner 时 `close()` 是空操作。
 
@@ -215,7 +215,7 @@ execute(CommandSession)
 
 ## 未知命令、null argument 和运行时错误
 
-unknown command 文案由 `unknownCommandMessage` 决定：名称长度 `<= 64` 且每个字节都在 `0x20..0x7e` 之间、且不是 `'` 或 `\` 时回显原名（`ERR unknown command '<name>'`）；否则返回不带原始内容的 `ERR unknown command`。这样控制字符、引号和反斜杠不会进入错误流。
+unknown command 文案由 `unknownCommandMessage` 决定：始终是 `ERR unknown command '<name>'`，若还有参数再追加 `, with args beginning with: '<a>' '<b>' ...`（参数回显累计 128 字节预算）。命令名与每个参数的回显都走 `RedisArgEcho`（NUL 截断该段、CR/LF→空格、非 ASCII→`?`，单段最多 128 字符），与 unknown subcommand / HELLO option / CLIENT SETINFO 未知属性共用同一套规则。
 
 RESP decoder 会忠实保留 array 中的 null bulk string。命令级合法性判断都在 dispatcher 里：二参数 `PING` / `ECHO` 可以带 null，其余位置出现 null 时返回 `ERR Protocol error: null bulk string`。frame 本身非法的 protocol error（非法长度、缺 `$`、缺终止符等）仍由 decoder/ingress 处理，不进入 dispatcher。
 
@@ -223,11 +223,11 @@ RESP decoder 会忠实保留 array 中的 null bulk string。命令级合法性�
 
 ## 事务排队 preflight
 
-transaction active 时，dispatcher 仍先完成命令名检查、registry lookup 和 arity validation。之后按 `CommandSyntax.transactionPolicy()` 分支：
+transaction active 时，dispatcher 仍先完成命令名检查、registry lookup 和 arity validation（`EXEC` 自身 arity 不对时不论事务是否 active 都走 `TransactionCommands.prepareRejectedExec`，丢弃事务并回复 `EXECABORT Transaction discarded because of: ...`）。之后按 `CommandSyntax.transactionPolicy()` 分支：
 
 - `TRANSACTION_CONTROL`（`MULTI`/`EXEC`/`DISCARD`）：立即应用各自的准备函数，不重新排队；
 - `DISALLOWED_IN_MULTI`：准备 `abortingError`，文案 `ERR <NAME> is not allowed in MULTI`，执行时标记 aborted；
-- `QUEUEABLE`：调用同一个 `handler.parse(CommandArgs)`，但不应用其返回的准备函数。参数个数不对则拒绝入队并作废事务；参数内容、选项冲突、取值范围和语法错误不在这里拒绝。
+- `QUEUEABLE`：调用同一个 `handler.parse(CommandArgs)`，但不应用其返回的准备函数。参数个数不对或未知子命令则拒绝入队并作废事务；参数内容、选项冲突、取值范围和语法错误不在这里拒绝。
 
 queueable preflight 成功后，dispatcher 返回 `prepareRetainedRequestEnqueue` 构造的 action，预留形状是 `ReplyShapes.errorUpperBound()`（错误上限 512 字节，足以覆盖 `QUEUED` 和 queue-full 错误）。该 action 在执行期调用 `transaction.tryEnqueue(request)`：
 

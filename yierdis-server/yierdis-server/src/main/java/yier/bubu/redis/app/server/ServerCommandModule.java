@@ -9,10 +9,12 @@ import java.util.function.Function;
 import yier.bubu.redis.command.api.CommandKeySpec;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParseException;
+import yier.bubu.redis.command.api.RedisArgEcho;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.CommandSyntax;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.TransactionPolicy;
+import yier.bubu.redis.command.defaults.connection.ConnectionHandshake;
 import yier.bubu.redis.execution.api.CommandResult;
 import yier.bubu.redis.execution.api.CommandSession;
 import yier.bubu.redis.execution.api.PreparedCommand;
@@ -42,7 +44,7 @@ final class ServerCommandModule implements CommandModule {
         Objects.requireNonNull(registration, "registration");
         registration.register(new CommandSpec(
                 new CommandSyntax("HELLO", CommandArity.min(1), CommandKeySpec.NONE,
-                        TransactionPolicy.DISALLOWED_IN_MULTI),
+                        TransactionPolicy.QUEUEABLE),
                 this::hello
         ));
         registration.register(new CommandSpec(
@@ -65,41 +67,48 @@ final class ServerCommandModule implements CommandModule {
         return session -> PreparedCommands.ready(infoProvider.stats(session));
     }
 
+    // 与 Redis helloCommand 同序：版本号 → 逐个选项（SETNAME 名字在这里校验）→ 认证 → 改名 → 切协议。
+    // parse 失败（版本/选项/非法 SETNAME）立刻抛错；WRONGPASS 推迟到 execute，以便 SETNAME 校验先于认证。
+    // 任一失败都不改连接名、不切协议。
     private Function<CommandSession, PreparedCommand> hello(CommandArgs args) {
         Integer requestedVersion = null;
         int index = 1;
         String requestedClientName = null;
         boolean setClientName = false;
+        byte[] authUsername = null;
         if (args.argc() >= 2) {
-            String version = args.utf8(1);
-            if ("2".equals(version)) {
-                requestedVersion = 2;
-                index = 2;
-            } else if ("3".equals(version)) {
-                requestedVersion = 3;
-                index = 2;
-            } else {
-                throw new CommandParseException("NOPROTO unsupported protocol version");
-            }
+            requestedVersion = helloProtocolVersion(args);
+            index = 2;
         }
         while (index < args.argc()) {
-            if (args.is(index, "SETNAME") && index + 1 < args.argc()) {
-                requestedClientName = args.utf8(index + 1);
+            int moreArgs = args.argc() - 1 - index;
+            if (args.is(index, "AUTH") && moreArgs >= 2) {
+                authUsername = args.bytes(index + 1);
+                index += 3;
+                continue;
+            }
+            if (args.is(index, "SETNAME") && moreArgs >= 1) {
+                byte[] rawName = args.bytes(index + 1);
+                if (!ConnectionHandshake.validClientName(rawName)) {
+                    throw new CommandParseException(ConnectionHandshake.INVALID_CLIENT_NAME);
+                }
+                requestedClientName = rawName.length == 0 ? "" : args.utf8(index + 1);
                 setClientName = true;
                 index += 2;
                 continue;
             }
-            if (args.is(index, "AUTH")) {
-                throw new CommandParseException(
-                        "ERR AUTH <password> called without any password configured for the default user. "
-                                + "Are you sure your configuration is correct?"
-                );
-            }
-            throw new CommandParseException("ERR syntax error");
+            throw new CommandParseException(
+                    "ERR Syntax error in HELLO option '"
+                            + RedisArgEcho.echo(args.request(), index, 128)
+                            + "'");
         }
+        boolean authRejected = authUsername != null && !ConnectionHandshake.acceptsCredentials(authUsername);
 
         HelloArgs hello = new HelloArgs(requestedVersion, setClientName, requestedClientName);
         return session -> {
+            if (authRejected) {
+                return PreparedCommands.ready(CommandResult.error(ConnectionHandshake.WRONGPASS));
+            }
             int targetRespVersion = hello.requestedVersion() == null
                     ? session.respVersion()
                     : hello.requestedVersion();
@@ -113,6 +122,19 @@ final class ServerCommandModule implements CommandModule {
                 return CommandResult.reply(reply);
             });
         };
+    }
+
+    private static int helloProtocolVersion(CommandArgs args) {
+        long version;
+        try {
+            version = args.longAt(1);
+        } catch (CommandParseException notAnInteger) {
+            throw new CommandParseException("ERR Protocol version is not an integer or out of range");
+        }
+        if (version != 2 && version != 3) {
+            throw new CommandParseException("NOPROTO unsupported protocol version");
+        }
+        return (int) version;
     }
 
     private static RedisReply helloReply(int targetRespVersion) {

@@ -13,7 +13,11 @@ public interface StringOps {
 
     long bitcount(BytesView keyView);
 
-    long bitcount(BytesView keyView, long start, long end);
+    default long bitcount(BytesView keyView, long start, long end) {
+        return bitcount(keyView, start, end, BitRangeUnit.BYTE);
+    }
+
+    long bitcount(BytesView keyView, long start, long end, BitRangeUnit unit);
 
     WriteResult<SetStringValue> set(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption);
 
