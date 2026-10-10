@@ -16,6 +16,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import static yier.bubu.redis.testutil.GrowingScanSupport.assertFullKeyScanAfterBulkInsertReturnsEachKeyExactlyOnce;
 import static yier.bubu.redis.testutil.GrowingScanSupport.assertKeyScanCoversBaseWhileGrowing;
 import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
@@ -150,36 +151,11 @@ public class ScanCursorContractTest {
 
     @Test
     public void fullScanImmediatelyAfterBulkInsertReturnsEveryKeyExactlyOnce() {
-        forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
-            FastTestClient client = new FastTestClient(dispatcher);
-            // 刚写入足够多 key 后立刻全量扫：写路径每次只推进少量 rehash，扫描常落在双表期。
-            // 双表/扩容期的严格断言见 NativeByteMapTest.scanContinuesAcrossRehashWithoutLosingEntries。
-            for (int keyCount : new int[]{30, 1_000}) {
-                client.execute(Arrays.asList(b("FLUSHALL")));
-                for (int i = 0; i < keyCount; i++) {
-                    client.execute(Arrays.asList(b("SET"), b("k" + i), b("v")));
-                }
-
-                List<String> returned = new ArrayList<>();
-                String cursor = "0";
-                int rounds = 0;
-                do {
-                    ReplyArray reply = (ReplyArray) client.execute(Arrays.asList(
-                            b("SCAN"), b(cursor), b("COUNT"), b("10")));
-                    returned.addAll(keys(reply));
-                    cursor = ((ReplyBulkString) reply.values().get(0)).asString();
-                    Assert.assertTrue("SCAN did not terminate", ++rounds < 10_000);
-                } while (!"0".equals(cursor));
-
-                Assert.assertEquals(keyCount, new HashSet<>(returned).size());
-                Assert.assertEquals(
-                        "SCAN over a quiescent keyspace of " + keyCount + " keys returned duplicates",
-                        keyCount,
-                        returned.size()
-                );
-            }
-        });
+        forEachDb(db -> assertFullKeyScanAfterBulkInsertReturnsEachKeyExactlyOnce(
+                new FastTestClient(TestCommandComposition.createDispatcher(db)),
+                30,
+                1_000
+        ));
     }
 
     @Test

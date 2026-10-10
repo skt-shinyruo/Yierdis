@@ -15,6 +15,7 @@ import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyError;
 import yier.bubu.redis.testutil.ReplyObject;
 
+import static yier.bubu.redis.testutil.GrowingScanSupport.assertFullSscanAfterBulkInsertReturnsEachMemberExactlyOnce;
 import static yier.bubu.redis.testutil.GrowingScanSupport.assertHscanCoversBaseWhileGrowing;
 import static yier.bubu.redis.testutil.GrowingScanSupport.assertSscanCoversBaseWhileGrowing;
 import static yier.bubu.redis.testutil.GrowingScanSupport.assertZscanCoversBaseWhileGrowing;
@@ -342,38 +343,11 @@ public class CollectionScanCommandTest {
 
     @Test
     public void fullSscanImmediatelyAfterBulkInsertReturnsEveryMemberExactlyOnce() {
-        forEachDb(db -> {
-            CommandDispatcher dispatcher = TestCommandComposition.createDispatcher(db);
-            FastTestClient client = new FastTestClient(dispatcher);
-            // 刚写入大集合后立刻全量扫：常落在 hashtable 扩容/双表期；严格 rehash 断言见 NativeByteMapTest。
-            for (int memberCount : new int[]{200, 600}) {
-                client.execute(cmd("DEL", "set"));
-                List<byte[]> sadd = new ArrayList<>(memberCount + 2);
-                sadd.add(b("SADD"));
-                sadd.add(b("set"));
-                for (int i = 0; i < memberCount; i++) {
-                    sadd.add(b("m" + i));
-                }
-                client.execute(sadd);
-
-                List<String> returned = new ArrayList<>();
-                String cursor = "0";
-                int rounds = 0;
-                do {
-                    ScanReply reply = scan(client, "SSCAN", "set", cursor, "COUNT", "10");
-                    returned.addAll(listStrings(reply.elements()));
-                    cursor = reply.cursor();
-                    Assert.assertTrue("SSCAN did not terminate", ++rounds < 10_000);
-                } while (!"0".equals(cursor));
-
-                Assert.assertEquals(memberCount, new HashSet<>(returned).size());
-                Assert.assertEquals(
-                        "SSCAN over a quiescent set of " + memberCount + " members returned duplicates",
-                        memberCount,
-                        returned.size()
-                );
-            }
-        });
+        forEachDb(db -> assertFullSscanAfterBulkInsertReturnsEachMemberExactlyOnce(
+                new FastTestClient(TestCommandComposition.createDispatcher(db)),
+                200,
+                600
+        ));
     }
 
     @Test

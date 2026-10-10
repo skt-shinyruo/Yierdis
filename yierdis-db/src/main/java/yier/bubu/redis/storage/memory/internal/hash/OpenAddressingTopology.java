@@ -239,6 +239,11 @@ public final class OpenAddressingTopology {
         return new ScanStep(start, position, run.inspected);
     }
 
+    /**
+     * Redis {@code dictScan} 同族的反向二进制步进：在 {@code mask} 覆盖的低位空间里，
+     * 按“位反转后的自然序”前进一格。扩容后新表多出的高位桶会排在旧游标之后，因此已扫过的
+     * 前缀不必重扫；缩容时部分高位塌缩，允许重复。
+     */
     private static int reverseIncrement(int position, int mask) {
         return Integer.reverse(Integer.reverse(position | ~mask) + 1);
     }

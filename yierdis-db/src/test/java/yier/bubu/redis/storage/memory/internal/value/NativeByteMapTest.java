@@ -870,7 +870,7 @@ public class NativeByteMapTest {
     @Test
     public void scanSeesReplacedValueWhileRehashIsInProgress() {
         List<byte[]> keys = collidingKeys(13, 1, "field-");
-        try (TestBackend runtime = TestBackend.open("native-byte-map-scan-shadow-value");
+        try (TestBackend runtime = TestBackend.open("native-byte-map-scan-replaced-value-during-rehash");
              StableMemoryBackend allocator = runtime.backend()) {
             NativeByteStore keyStore = new NativeByteStore(allocator, NativeObjectKind.HASH_FIELD_BYTES);
             NativeByteStore valueStore = new NativeByteStore(allocator, NativeObjectKind.HASH_VALUE_BYTES);
